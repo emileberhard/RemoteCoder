@@ -4,6 +4,7 @@ use crate::notifications::history::{NotificationOrigin, Recorded, ReplayRequest}
 use crate::notifications::{notification_thread_id, should_store_notification_method};
 use crate::storage::tool_media::ToolMediaStore;
 use crate::time::unix_seconds;
+use crate::wire::tool_media::may_carry_tool_media;
 use anyhow::Result;
 use serde_json::Value;
 use tracing::warn;
@@ -203,7 +204,7 @@ pub(super) async fn compact_notification(
     message: &Value,
     media: Option<&ToolMediaStore>,
 ) -> Result<Option<(ClientFrame, Value)>> {
-    if !raw.contains("mcpToolCall") && !raw.contains("dynamicToolCall") {
+    if !may_carry_tool_media(raw) {
         return Ok(None);
     }
     let mut compacted = message.clone();

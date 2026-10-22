@@ -1863,14 +1863,18 @@ App-facing tool-call items replace inline MCP image `data`, tool-surface
 screenshot `url`, and dynamic-tool `inputImage.imageUrl` with `""` plus a sibling
 `rcImageOmitted: {mimeType, omittedBytes}`, where `omittedBytes` counts UTF-8 bytes
 of the replaced encoded string; nested MCP JSON-text results follow the same
-contract. Compaction precedes page-size checks and replay storage; internal
-consumers retain original items, and user attachments, `imageView` items and
-non-data URLs stay unchanged.
+contract. An `imageView` item's `imageUrl` follows the same contract, and a
+Codex `imageView`'s `savedPath`, the runtime's immutable snapshot of the image
+the model received, is listed under `rcMedia` without a copy.
+Compaction precedes page-size checks and replay storage; internal consumers
+retain original items, and user attachments and non-data URLs stay unchanged.
 
 ### Tool media
 
-The same compaction keeps what it removes from MCP image content and
-dynamic-tool `inputImage` data URLs: `ToolMediaStore`
+The same compaction keeps what it removes from MCP image content,
+dynamic-tool `inputImage` data URLs and an `imageView`'s `imageUrl` (the image
+the model received, which the app shows instead of the file at the item's
+path): `ToolMediaStore`
 (`host-daemon-rs/src/storage/tool_media.rs`) writes each PNG, JPEG, GIF, WebP or
 PDF of at most 32 MiB once as a read-only `~/.remote-coder/tool-media/<sha256>.<ext>`,
 and the item gains `rcMedia: [{path, mimeType}]`. The Claude translator emits a

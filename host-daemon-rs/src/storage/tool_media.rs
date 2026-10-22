@@ -24,6 +24,14 @@ const TYPES: [(&str, &str); 5] = [
     ("application/pdf", "pdf"),
 ];
 
+pub(crate) fn media_type_for_path(path: &str) -> Option<&'static str> {
+    let (_, extension) = path.rsplit_once('.')?;
+    TYPES
+        .iter()
+        .find(|(_, known)| *known == extension)
+        .map(|(mime_type, _)| *mime_type)
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct ToolMediaStore {
     state_directory: PathBuf,

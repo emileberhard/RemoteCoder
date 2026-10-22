@@ -1236,7 +1236,10 @@ Claude. The `RC_CLAUDE_*` settings are in
   the app already renders (`src/providers/claude/translate.rs`), so timelines, replay,
   APNs and Live Activities need no app-side special cases. A successful `Read`
   whose `toolUseResult` is an image completes as Codex's `imageView` item with
-  its absolute path; it starts as the ordinary `Read` tool call. A turn that
+  its absolute path and the tool result's image as `imageUrl`, which tool
+  media compaction turns into `rcMedia`, where the Codex fork's `view_image`
+  names its saved snapshot as `savedPath`; it starts as the ordinary `Read`
+  tool call. A turn that
   fails while its latest assistant stop is a `cyber` refusal
   (`stop_details.category`) carries upstream's `codexErrorInfo: "cyberPolicy"`;
   automations switch to their refusal fallback on that code.

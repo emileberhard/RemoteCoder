@@ -1534,6 +1534,30 @@ async fn tool_images_are_compact_in_forwarding_and_control_recorded_replay() {
 }
 
 #[tokio::test]
+async fn codex_image_views_forward_their_saved_snapshot() {
+    let gateway = test_gateway();
+    let original = json!({"method": "item/completed", "params": {
+        "threadId": "thread-images", "turnId": "turn-images", "item": {
+            "id": "view", "type": "imageView", "path": "/tmp/view.png",
+            "savedPath": "/codex/viewed_images/thread-images/abc.png"
+        }
+    }});
+    let forwarded = gateway
+        .prepare_forwarded_notification(&original.to_string(), &original, PHONE)
+        .await
+        .expect("forwarded image view");
+    let forwarded: Value = serde_json::from_str(forwarded.text().unwrap()).expect("forwarded JSON");
+    assert_eq!(
+        forwarded["params"]["item"],
+        json!({
+            "id": "view", "type": "imageView", "path": "/tmp/view.png",
+            "savedPath": "/codex/viewed_images/thread-images/abc.png",
+            "rcMedia": [{"path": "/codex/viewed_images/thread-images/abc.png", "mimeType": "image/png"}]
+        })
+    );
+}
+
+#[tokio::test]
 async fn a_broadcast_a_client_cannot_queue_closes_its_connection() {
     let gateway = test_gateway();
     let (tx, _rx) = mpsc::channel(1);

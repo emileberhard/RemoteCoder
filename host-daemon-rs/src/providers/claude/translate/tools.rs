@@ -188,7 +188,11 @@ fn read_item(tool_use_id: &str, input: &Value, outcome: &ToolOutcome) -> Value {
         .and_then(Value::as_str);
     match (kind, path) {
         (Some("image"), Some(path)) => {
-            json!({ "type": "imageView", "id": tool_use_id, "path": path })
+            let mut item = json!({ "type": "imageView", "id": tool_use_id, "path": path });
+            if let Some(image) = outcome.images().first() {
+                item["imageUrl"] = json!(data_url(image));
+            }
+            item
         }
         (Some("pdf" | "parts"), Some(path)) => {
             let name = std::path::Path::new(path)
@@ -405,13 +409,11 @@ fn dynamic_tool_call_item(
         let content: Vec<Value> = result_text
             .iter()
             .map(|text| json!({ "type": "inputText", "text": text }))
-            .chain(images.iter().map(|image| {
-                json!({ "type": "inputImage", "imageUrl": format!(
-                    "data:{};base64,{}",
-                    image["mimeType"].as_str().unwrap_or_default(),
-                    image["data"].as_str().unwrap_or_default()
-                ) })
-            }))
+            .chain(
+                images
+                    .iter()
+                    .map(|image| json!({ "type": "inputImage", "imageUrl": data_url(image) })),
+            )
             .collect();
         if !content.is_empty() {
             item.insert("contentItems".to_string(), Value::Array(content));
@@ -443,6 +445,14 @@ fn plan_notification(input: &Value) -> Option<Vec<Value>> {
         })
         .collect();
     Some(plan)
+}
+
+fn data_url(image: &Value) -> String {
+    format!(
+        "data:{};base64,{}",
+        image["mimeType"].as_str().unwrap_or_default(),
+        image["data"].as_str().unwrap_or_default()
+    )
 }
 
 pub(crate) fn tool_result_images(block: &Value) -> Vec<Value> {
@@ -553,7 +563,8 @@ mod tests {
         assert_eq!(methods(&completed.notifications), vec!["item/completed"]);
         assert_eq!(
             completed.notifications[0]["params"]["item"],
-            json!({"type":"imageView","id":"toolu_i","path":"/tmp/chart.png"})
+            json!({"type":"imageView","id":"toolu_i","path":"/tmp/chart.png",
+                   "imageUrl":"data:image/png;base64,iVBOR"})
         );
     }
 

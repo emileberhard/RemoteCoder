@@ -1,6 +1,6 @@
 use super::json::{EncodedJson, encode};
 use crate::agents::tools::{NAMESPACE, PUBLISH_VISUAL};
-use crate::storage::tool_media::{MediaBatch, ToolMediaStore};
+use crate::storage::tool_media::{MediaBatch, ToolMediaStore, media_type_for_path};
 use serde_json::{Map, Value, json};
 use tracing::warn;
 
@@ -8,6 +8,12 @@ use tracing::warn;
 pub(crate) enum CompactionError {
     Capacity { bytes: usize },
     Encoding(anyhow::Error),
+}
+
+pub(crate) fn may_carry_tool_media(raw: &str) -> bool {
+    ["mcpToolCall", "dynamicToolCall", "imageView"]
+        .iter()
+        .any(|kind| raw.contains(kind))
 }
 
 pub(crate) async fn compact_tool_media(
@@ -91,7 +97,9 @@ fn compact(value: &mut Value, kept: &mut Kept) -> Result<bool, CompactionError> 
                     if let Some(Value::Array(items)) = object.get_mut("contentItems") {
                         for item in items {
                             if item["type"] == "inputImage"
-                                && let Some(url) = take_data_url(item, "imageUrl")
+                                && let Some(url) = item
+                                    .as_object_mut()
+                                    .and_then(|item| take_data_url(item, "imageUrl"))
                             {
                                 kept.stage(&url, None, &mut media);
                                 changed = true;
@@ -99,6 +107,20 @@ fn compact(value: &mut Value, kept: &mut Kept) -> Result<bool, CompactionError> 
                         }
                     }
                     return Ok(attach_media(object, media) | changed | visual_changed);
+                }
+                Some("imageView") => {
+                    let mut media = Vec::new();
+                    if let Some(url) = take_data_url(object, "imageUrl") {
+                        kept.stage(&url, None, &mut media);
+                        attach_media(object, media);
+                        return Ok(true);
+                    }
+                    if let Some(path) = object.get("savedPath").and_then(Value::as_str)
+                        && let Some(mime_type) = media_type_for_path(path)
+                    {
+                        media.push(json!({"path": path, "mimeType": mime_type}));
+                    }
+                    return Ok(attach_media(object, media));
                 }
                 Some(_) => return Ok(false),
                 None => {}
@@ -236,13 +258,16 @@ fn compact_mcp_result(
         }
     }
     if let Some(screenshot) = result.pointer_mut("/_meta/codex~1toolSurface/screenshot") {
-        changed |= take_data_url(screenshot, "url").is_some();
+        changed |= screenshot
+            .as_object_mut()
+            .and_then(|screenshot| take_data_url(screenshot, "url"))
+            .is_some();
     }
     Ok(changed)
 }
 
-fn take_data_url(value: &mut Value, key: &str) -> Option<String> {
-    let Some(Value::String(url)) = value.get_mut(key) else {
+fn take_data_url(object: &mut Map<String, Value>, key: &str) -> Option<String> {
+    let Some(Value::String(url)) = object.get_mut(key) else {
         return None;
     };
     let (header, _) = url.strip_prefix("data:")?.split_once(',')?;
@@ -253,7 +278,10 @@ fn take_data_url(value: &mut Value, key: &str) -> Option<String> {
         .unwrap_or("text/plain")
         .to_owned();
     let url = std::mem::take(url);
-    value["rcImageOmitted"] = json!({"mimeType": mime_type, "omittedBytes": url.len()});
+    object.insert(
+        "rcImageOmitted".to_owned(),
+        json!({"mimeType": mime_type, "omittedBytes": url.len()}),
+    );
     Some(url)
 }
 
@@ -472,7 +500,9 @@ mod tests {
                 {"type": "text", "text": nested}
             ]}},
             {"type": "dynamicToolCall", "rcMedia": [{"path": "/tmp/a.pdf", "mimeType": "application/pdf"}],
-             "contentItems": [{"type": "inputImage", "imageUrl": "data:image/gif;base64,Z2hp"}]}
+             "contentItems": [{"type": "inputImage", "imageUrl": "data:image/gif;base64,Z2hp"}]},
+            {"type": "imageView", "id": "view", "path": "/tmp/sheet.png", "imageUrl": "data:image/png;base64,amts"},
+            {"type": "imageView", "id": "saved", "path": "/tmp/sheet.png", "savedPath": "/codex/viewed_images/t/a.jpg"}
         ]}});
         assert!(compact_tool_media(&mut frame, Some(&store)).await.unwrap());
         let items = &frame["result"]["data"];
@@ -490,7 +520,21 @@ mod tests {
                 media(b"ghi", "gif", "image/gif")
             ])
         );
-        for entry in [&items[0]["rcMedia"][1], &items[1]["rcMedia"][1]] {
+        assert_eq!(
+            items[2]["rcMedia"],
+            json!([media(b"jkl", "png", "image/png")])
+        );
+        assert_eq!(items[2]["path"], "/tmp/sheet.png");
+        assert_eq!(items[2]["imageUrl"], "");
+        assert_eq!(
+            items[3]["rcMedia"],
+            json!([{"path": "/codex/viewed_images/t/a.jpg", "mimeType": "image/jpeg"}])
+        );
+        for entry in [
+            &items[0]["rcMedia"][1],
+            &items[1]["rcMedia"][1],
+            &items[2]["rcMedia"][0],
+        ] {
             assert!(std::path::Path::new(entry["path"].as_str().unwrap()).is_file());
         }
         let compacted = frame.clone();
@@ -518,10 +562,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn user_images_image_views_and_tool_arguments_are_unchanged() {
+    async fn user_images_and_tool_arguments_are_unchanged() {
         let mut frame = json!({"result": {"data": [
             {"type": "userMessage", "content": [{"type": "inputImage", "imageUrl": "data:image/png;base64,YWJj"}]},
-            {"type": "imageView", "url": "data:image/png;base64,YWJj"},
             {"type": "mcpToolCall", "arguments": {"data": "YWJj"}, "result": {"content": [{"type": "text", "text": " { \"content\": [] } "}]}},
             {"type": "mcpToolCall", "result": {"_meta": {"codex/toolSurface": {"screenshot": {"url": "file:///tmp/image.png"}}}}}
         ]}});
