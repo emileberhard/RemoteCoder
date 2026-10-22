@@ -1,0 +1,13 @@
+{
+  "id": 23,
+  "error": {
+    "code": -32003,
+    "message": "History page exceeds the response budget. Request fewer items.",
+    "data": {
+      "kind": "historyPageTooLarge",
+      "actualBytes": 33000000,
+      "limitBytes": 25165824,
+      "retryable": false
+    }
+  }
+}

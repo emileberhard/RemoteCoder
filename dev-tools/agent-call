@@ -1,0 +1,7 @@
+#!/bin/bash
+set -euo pipefail
+tool_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ "$#" -eq 1 && ( "$1" == "--worker" || "$1" == "--worker-contract" ) ]]; then
+    exec "$tool_dir/../agent-calls/.venv/bin/python" -I -m agent_calls.cli "$@"
+fi
+exec uv run --project "$tool_dir/../agent-calls" --locked --no-dev python -I -m agent_calls.cli "$@"

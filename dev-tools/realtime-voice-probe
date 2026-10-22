@@ -1,0 +1,223 @@
+#!/bin/zsh
+set -euo pipefail
+
+readonly this_dir="$(cd -- "$(dirname -- "$0")" && pwd)"
+readonly repo_root="$(cd -- "${this_dir}/.." && pwd)"
+readonly source_file="${repo_root}/RemoteCoder/Services/RealtimeVoice/RealtimeWebRTCSession.swift"
+readonly history_source_file="${repo_root}/Core/Sources/RemoteCoderCore/Voice/RealtimeVoiceConversationHistory.swift"
+readonly voice_wire_source_file="${repo_root}/Core/Sources/RemoteCoderCore/Wire/Extensions/RealtimeVoiceWire.swift"
+readonly probe_file="${this_dir}/realtime_voice_probe.swift"
+readonly assertions_file="${this_dir}/realtime_probe_assertions.swift"
+readonly options_file="${this_dir}/realtime_probe_options.swift"
+readonly derived_data_root="${HOME}/Library/Developer/Xcode/DerivedData"
+readonly build_dir="$(mktemp -d /tmp/remotecoder-realtime-probe.XXXXXX)"
+fixture_path=''
+previous_input=''
+previous_output=''
+
+cleanup() {
+  local probe_exit_code=$? restore_failed=false
+  if [[ -n "${previous_input}" ]]; then
+    { SwitchAudioSource -s "${previous_input}" -t input >/dev/null 2>&1 && [[ "$(SwitchAudioSource -c -t input)" == "${previous_input}" ]]; } || {
+      print -u2 -- "FAIL restoring audio input ${previous_input}"
+      restore_failed=true
+    }
+  fi
+  if [[ -n "${previous_output}" ]]; then
+    { SwitchAudioSource -s "${previous_output}" -t output >/dev/null 2>&1 && [[ "$(SwitchAudioSource -c -t output)" == "${previous_output}" ]]; } || {
+      print -u2 -- "FAIL restoring audio output ${previous_output}"
+      restore_failed=true
+    }
+  fi
+  rm -rf -- "${build_dir}"
+  if [[ "${restore_failed}" == true && "${probe_exit_code}" -eq 0 ]]; then
+    exit 1
+  fi
+}
+trap cleanup EXIT
+
+media_mode=false
+handoff_mode=false
+context_mode=false
+silent_mode=false
+build_only=false
+
+usage() {
+  cat <<'EOF'
+Usage: realtime-voice-probe [--media] [--handoff] [--claude] [--resume-context] [--silent]
+
+  --media    Verify bidirectional RTP and transcripts with a cached speech fixture.
+  --handoff  Also require one Codex delegation and its spoken result.
+  --claude   Run the handoff probe with Claude Code as the delegated agent.
+  --resume-context
+             Require GPT Live to answer from bounded context built by the iOS history code.
+  --silent   Require BlackHole input/output and existing cached media; never generate a fixture.
+  --cwd PATH Use this host directory for the thread and voice session (default: gateway home).
+  --build-only
+             Compile on the MacBook, without audio routes, fixtures or live sessions.
+  -h, --help Show this help.
+EOF
+}
+
+probe_arguments=("$@")
+while (( $# > 0 )); do
+  argument="$1"
+  case "${argument}" in
+    --media)
+      media_mode=true
+      ;;
+    --handoff)
+      media_mode=true
+      handoff_mode=true
+      ;;
+    --claude)
+      media_mode=true
+      handoff_mode=true
+      ;;
+    --resume-context)
+      media_mode=true
+      context_mode=true
+      ;;
+    --cwd)
+      if (( $# < 2 )); then
+        print -u2 -- '--cwd requires a path'
+        exit 2
+      fi
+      shift
+      ;;
+    --build-only)
+      build_only=true
+      ;;
+    --silent)
+      silent_mode=true
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      print -u2 -- "unknown argument: ${argument}"
+      usage >&2
+      exit 2
+      ;;
+  esac
+  shift
+done
+
+if [[ "${context_mode}" == true ]]; then
+  handoff_mode=false
+fi
+
+probe_host="$(hostname)"
+if [[ "${probe_host:l}" != *macbook* ]]; then
+  print -u2 -- 'Run realtime-voice-probe on the MacBook; the Mini is a services host.'
+  exit 2
+fi
+
+if [[ "${build_only}" != true && ( "${media_mode}" == true || "${silent_mode}" == true ) ]]; then
+  command -v SwitchAudioSource >/dev/null || {
+    print -u2 -- 'SwitchAudioSource is required for media or silent mode.'
+    exit 2
+  }
+  for route in input output; do
+    SwitchAudioSource -a -t "${route}" | grep -Fxq 'BlackHole 2ch' || {
+      print -u2 -- "BlackHole 2ch is required on audio ${route} for isolated probes."
+      exit 2
+    }
+  done
+
+  readonly fixture_directory="${HOME}/Library/Caches/RemoteCoder/realtime-voice-probe"
+  mkdir -p -- "${fixture_directory}"
+  zmodload zsh/system
+  (umask 077; : >> "${fixture_directory}/media-probe.lock")
+  zsystem flock -t 0 -f media_lease "${fixture_directory}/media-probe.lock" || {
+    print -u2 -- 'Another media probe owns the audio route; wait for it to finish.'
+    exit 2
+  }
+  if [[ "${media_mode}" == true ]]; then
+    fixture_text='Reply with just the single word test.'
+    fixture_path="${fixture_directory}/reply-test-david-v1.mp3"
+    if [[ "${handoff_mode}" == true ]]; then
+      fixture_text='Ask the coding agent to run the shell command echo voice probe done, then tell me the result.'
+      fixture_path="${fixture_directory}/command-david-v1.mp3"
+    fi
+    if [[ "${context_mode}" == true ]]; then
+      fixture_text='What is the secret word? Reply with just the word.'
+      fixture_path="${fixture_directory}/resume-context-david-v1.mp3"
+    fi
+    if [[ ! -s "${fixture_path}" ]]; then
+      if [[ "${silent_mode}" == true ]]; then
+        print -u2 -- "Silent media probe requires existing cached fixture: ${fixture_path}"
+        exit 2
+      fi
+      : "${ELEVENLABS_API_KEY:?ELEVENLABS_API_KEY is required to create the cached media fixture}"
+      readonly pending_fixture="${fixture_path}.pending"
+      jq -n --arg text "${fixture_text}" '{
+        text: $text,
+        model_id: "eleven_multilingual_v2",
+        voice_settings: {stability: 0.6, similarity_boost: 0.75, speed: 1.1}
+      }' \
+        | curl -fsS \
+            -X POST 'https://api.elevenlabs.io/v1/text-to-speech/WdZjiN0nNcik2LBjOHiv?output_format=mp3_44100_128' \
+            -H "xi-api-key: ${ELEVENLABS_API_KEY}" \
+            -H 'Content-Type: application/json' \
+            --data-binary @- \
+            --output "${pending_fixture}"
+      mv -- "${pending_fixture}" "${fixture_path}"
+    fi
+
+    probe_arguments+=(--fixture "${fixture_path}")
+  fi
+
+  previous_input="$(SwitchAudioSource -c -t input)"
+  previous_output="$(SwitchAudioSource -c -t output)"
+  [[ -n "${previous_input}" && -n "${previous_output}" ]] || {
+    print -u2 -- 'Existing audio routes are unknown; no route changed or session started.'
+    exit 2
+  }
+  SwitchAudioSource -s 'BlackHole 2ch' -t input >/dev/null
+  SwitchAudioSource -s 'BlackHole 2ch' -t output >/dev/null
+  [[ "$(SwitchAudioSource -c -t input)" == 'BlackHole 2ch' && "$(SwitchAudioSource -c -t output)" == 'BlackHole 2ch' ]] || {
+    print -u2 -- 'Isolated audio route readback failed; no session started.'
+    exit 2
+  }
+fi
+
+framework_dir="$(
+  find "${derived_data_root}" \
+    -path '*/SourcePackages/artifacts/webrtc/WebRTC/WebRTC.xcframework/macos-x86_64_arm64' \
+    -type d \
+    -print0 2>/dev/null \
+    | xargs -0 stat -f '%m %N' \
+    | sort -rn \
+    | head -n 1 \
+    | cut -d ' ' -f 2-
+)"
+
+if [[ -z "${framework_dir}" || ! -d "${framework_dir}/WebRTC.framework" ]]; then
+  print -u2 -- "WebRTC macOS framework not found in Xcode DerivedData. Build RemoteCoder once first."
+  exit 2
+fi
+
+readonly executable="${build_dir}/realtime-voice-probe"
+xcrun swiftc \
+  -parse-as-library \
+  -swift-version 6 \
+  -F "${framework_dir}" \
+  -framework WebRTC \
+  -Xlinker -rpath \
+  -Xlinker "${framework_dir}" \
+  "${source_file}" \
+  "${history_source_file}" \
+  "${voice_wire_source_file}" \
+  "${assertions_file}" \
+  "${options_file}" \
+  "${probe_file}" \
+  -o "${executable}"
+
+if [[ "${build_only}" == true ]]; then
+  print -- 'PASS realtime voice probe compiled; no live session started.'
+  exit 0
+fi
+
+"${executable}" "${probe_arguments[@]}"

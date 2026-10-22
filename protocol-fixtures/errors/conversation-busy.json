@@ -1,0 +1,12 @@
+{
+  "id": 25,
+  "error": {
+    "code": -32003,
+    "message": "This conversation has a pending command; retry after it finishes",
+    "data": {
+      "kind": "conversationBusy",
+      "retryable": true,
+      "retryAfterMs": 2000
+    }
+  }
+}

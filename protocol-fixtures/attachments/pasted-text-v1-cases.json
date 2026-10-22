@@ -1,0 +1,114 @@
+[
+  {
+    "name": "attachment-only",
+    "prompt": "<remotecoder_pasted_text_v1>\n[{\"id\":\"77777777-2222-3333-4444-555555555555\",\"text\":\"First pasted line\\nAnother line\"}]\n</remotecoder_pasted_text_v1>",
+    "body": "",
+    "pasted": true,
+    "summary": "Pasted text"
+  },
+  {
+    "name": "caption",
+    "prompt": "Caption\n\n<remotecoder_pasted_text_v1>\n[{\"id\":\"77777777-2222-3333-4444-555555555555\",\"text\":\"First pasted line\\nAnother line\"}]\n</remotecoder_pasted_text_v1>",
+    "body": "Caption",
+    "pasted": true,
+    "summary": "Caption"
+  },
+  {
+    "name": "long-caption",
+    "prompt": "åååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååå\n\n<remotecoder_pasted_text_v1>\n[{\"id\":\"77777777-2222-3333-4444-555555555555\",\"text\":\"First pasted line\\nAnother line\"}]\n</remotecoder_pasted_text_v1>",
+    "body": "åååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååå",
+    "pasted": true,
+    "summary": "åååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååååå"
+  },
+  {
+    "name": "paste-and-file",
+    "prompt": "<remotecoder_pasted_text_v1>\n[{\"id\":\"77777777-2222-3333-4444-555555555555\",\"text\":\"First pasted line\\nAnother line\"}]\n</remotecoder_pasted_text_v1>\n\nAttached files (uploaded to this host; use these absolute paths):\n- /host/report.txt",
+    "body": "",
+    "pasted": true,
+    "summary": "Pasted text"
+  },
+  {
+    "name": "not-json",
+    "prompt": "<remotecoder_pasted_text_v1>\nnot JSON\n</remotecoder_pasted_text_v1>",
+    "body": "<remotecoder_pasted_text_v1>\nnot JSON\n</remotecoder_pasted_text_v1>",
+    "pasted": false,
+    "summary": "<remotecoder_pasted_text_v1>\nnot JSON\n</remotecoder_pasted_text_v1>"
+  },
+  {
+    "name": "empty-array",
+    "prompt": "<remotecoder_pasted_text_v1>\n[]\n</remotecoder_pasted_text_v1>",
+    "body": "<remotecoder_pasted_text_v1>\n[]\n</remotecoder_pasted_text_v1>",
+    "pasted": false,
+    "summary": "<remotecoder_pasted_text_v1>\n[]\n</remotecoder_pasted_text_v1>"
+  },
+  {
+    "name": "duplicate-ids",
+    "prompt": "<remotecoder_pasted_text_v1>\n[{\"id\":\"77777777-2222-3333-4444-555555555555\",\"text\":\"first\"},{\"id\":\"77777777-2222-3333-4444-555555555555\",\"text\":\"second\"}]\n</remotecoder_pasted_text_v1>",
+    "body": "<remotecoder_pasted_text_v1>\n[{\"id\":\"77777777-2222-3333-4444-555555555555\",\"text\":\"first\"},{\"id\":\"77777777-2222-3333-4444-555555555555\",\"text\":\"second\"}]\n</remotecoder_pasted_text_v1>",
+    "pasted": false,
+    "summary": "<remotecoder_pasted_text_v1>\n[{\"id\":\"77777777-2222-3333-4444-555555555555\",\"text\":\"first\"},{\"id\":\"77777777-2222-3333-4444-555555555555\",\"text\":\"second\"}]\n</remotecoder_pasted_text_v1>"
+  },
+  {
+    "name": "duplicate-case-insensitive-ids",
+    "prompt": "<remotecoder_pasted_text_v1>\n[{\"id\":\"AAAAAAAA-2222-3333-4444-555555555555\",\"text\":\"first\"},{\"id\":\"aaaaaaaa-2222-3333-4444-555555555555\",\"text\":\"second\"}]\n</remotecoder_pasted_text_v1>",
+    "body": "<remotecoder_pasted_text_v1>\n[{\"id\":\"AAAAAAAA-2222-3333-4444-555555555555\",\"text\":\"first\"},{\"id\":\"aaaaaaaa-2222-3333-4444-555555555555\",\"text\":\"second\"}]\n</remotecoder_pasted_text_v1>",
+    "pasted": false,
+    "summary": "<remotecoder_pasted_text_v1>\n[{\"id\":\"AAAAAAAA-2222-3333-4444-555555555555\",\"text\":\"first\"},{\"id\":\"aaaaaaaa-2222-3333-4444-555555555555\",\"text\":\"second\"}]\n</remotecoder_pasted_text_v1>"
+  },
+  {
+    "name": "whitespace-only",
+    "prompt": "<remotecoder_pasted_text_v1>\n[{\"id\":\"77777777-2222-3333-4444-555555555555\",\"text\":\" \\t\\n\\r\"}]\n</remotecoder_pasted_text_v1>",
+    "body": "<remotecoder_pasted_text_v1>\n[{\"id\":\"77777777-2222-3333-4444-555555555555\",\"text\":\" \\t\\n\\r\"}]\n</remotecoder_pasted_text_v1>",
+    "pasted": false,
+    "summary": "<remotecoder_pasted_text_v1>\n[{\"id\":\"77777777-2222-3333-4444-555555555555\",\"text\":\" \\t\\n\\r\"}]\n</remotecoder_pasted_text_v1>"
+  },
+  {
+    "name": "invalid-id",
+    "prompt": "<remotecoder_pasted_text_v1>\n[{\"id\":\"unknown\",\"text\":\"known text\"}]\n</remotecoder_pasted_text_v1>",
+    "body": "<remotecoder_pasted_text_v1>\n[{\"id\":\"unknown\",\"text\":\"known text\"}]\n</remotecoder_pasted_text_v1>",
+    "pasted": false,
+    "summary": "<remotecoder_pasted_text_v1>\n[{\"id\":\"unknown\",\"text\":\"known text\"}]\n</remotecoder_pasted_text_v1>"
+  },
+  {
+    "name": "missing-text",
+    "prompt": "<remotecoder_pasted_text_v1>\n[{\"id\":\"77777777-2222-3333-4444-555555555555\"}]\n</remotecoder_pasted_text_v1>",
+    "body": "<remotecoder_pasted_text_v1>\n[{\"id\":\"77777777-2222-3333-4444-555555555555\"}]\n</remotecoder_pasted_text_v1>",
+    "pasted": false,
+    "summary": "<remotecoder_pasted_text_v1>\n[{\"id\":\"77777777-2222-3333-4444-555555555555\"}]\n</remotecoder_pasted_text_v1>"
+  },
+  {
+    "name": "non-object-entry",
+    "prompt": "<remotecoder_pasted_text_v1>\n[17]\n</remotecoder_pasted_text_v1>",
+    "body": "<remotecoder_pasted_text_v1>\n[17]\n</remotecoder_pasted_text_v1>",
+    "pasted": false,
+    "summary": "<remotecoder_pasted_text_v1>\n[17]\n</remotecoder_pasted_text_v1>"
+  },
+  {
+    "name": "overlapping-markers",
+    "prompt": "<remotecoder_pasted_text_v1>\n</remotecoder_pasted_text_v1>",
+    "body": "<remotecoder_pasted_text_v1>\n</remotecoder_pasted_text_v1>",
+    "pasted": false,
+    "summary": "<remotecoder_pasted_text_v1>\n</remotecoder_pasted_text_v1>"
+  },
+  {
+    "name": "overlapping-markers-caption",
+    "prompt": "Caption\n\n<remotecoder_pasted_text_v1>\n</remotecoder_pasted_text_v1>",
+    "body": "Caption\n\n<remotecoder_pasted_text_v1>\n</remotecoder_pasted_text_v1>",
+    "pasted": false,
+    "summary": "Caption\n\n<remotecoder_pasted_text_v1>\n</remotecoder_pasted_text_v1>"
+  },
+  {
+    "name": "marker-in-ordinary-text",
+    "prompt": "Explain <remotecoder_pasted_text_v1>\n[{\"id\":\"77777777-2222-3333-4444-555555555555\",\"text\":\"First pasted line\\nAnother line\"}]\n</remotecoder_pasted_text_v1>",
+    "body": "Explain <remotecoder_pasted_text_v1>\n[{\"id\":\"77777777-2222-3333-4444-555555555555\",\"text\":\"First pasted line\\nAnother line\"}]\n</remotecoder_pasted_text_v1>",
+    "pasted": false,
+    "summary": "Explain <remotecoder_pasted_text_v1>\n[{\"id\":\"77777777-2222-3333-4444-555555555555\",\"text\":\"First pasted line\\nAnother line\"}]\n</remotecoder_pasted_text_v1>"
+  },
+  {
+    "name": "unmarked-fenced-text",
+    "prompt": "Attachment 1:\n```\njust an example\n```",
+    "body": "Attachment 1:\n```\njust an example\n```",
+    "pasted": false,
+    "summary": "Attachment 1:\n```\njust an example\n```"
+  }
+]

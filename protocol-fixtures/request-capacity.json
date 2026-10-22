@@ -1,0 +1,11 @@
+{
+  "id": 19,
+  "error": {
+    "code": -32001,
+    "message": "Too many active requests.",
+    "data": {
+      "kind": "capacity",
+      "retryable": true
+    }
+  }
+}

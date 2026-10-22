@@ -1,0 +1,11 @@
+{
+  "selection": {
+    "sessionID": "claude_fixture",
+    "modelID": "opus",
+    "reasoningSelectionID": "effort-high",
+    "fastModeEnabled": false,
+    "source": "selection"
+  },
+  "expectedRevision": 7,
+  "mutationId": "fixture-installation-8"
+}

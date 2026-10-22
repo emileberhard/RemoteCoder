@@ -1,0 +1,13 @@
+{
+  "id": 21,
+  "error": {
+    "code": -32600,
+    "message": "no active turn to steer",
+    "data": {
+      "kind": "turnNotRunning",
+      "retryable": false,
+      "threadId": "thread-1",
+      "turnId": "turn-1"
+    }
+  }
+}

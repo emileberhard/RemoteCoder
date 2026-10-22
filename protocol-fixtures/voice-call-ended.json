@@ -1,0 +1,11 @@
+{
+  "id": 18,
+  "error": {
+    "code": -32010,
+    "message": "The agent finished this call.",
+    "data": {
+      "kind": "voiceCallEnded",
+      "retryable": false
+    }
+  }
+}

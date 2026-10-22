@@ -1,0 +1,12 @@
+{
+  "id": 27,
+  "error": {
+    "code": -32003,
+    "message": "The queue change could not be confirmed; refresh this conversation before retrying: Codex did not answer the queued message change",
+    "data": {
+      "kind": "queueChangeUncertain",
+      "retryable": false,
+      "threadId": "thread-1"
+    }
+  }
+}

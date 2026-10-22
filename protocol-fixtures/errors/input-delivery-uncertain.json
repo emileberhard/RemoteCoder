@@ -1,0 +1,11 @@
+{
+  "id": 28,
+  "error": {
+    "code": -32003,
+    "message": "Claude has not read its input for 10 s, so delivery is unconfirmed; the input stays queued and reaches Claude if it resumes. A macOS permission prompt on the host can cause this",
+    "data": {
+      "kind": "inputDeliveryUncertain",
+      "retryable": false
+    }
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "epoch": "6f0f4b1e-2c1a-4f6e-9d55-0a1b2c3d4e5f",
+  "revision": 1,
+  "generatedAtUnixSeconds": 1790330861.099,
+  "activeTurns": [
+    {
+      "threadId": "thread-1",
+      "turnId": "turn-1",
+      "startedAtUnixSeconds": null,
+      "startedAtSequence": null,
+      "lastSeenAtUnixSeconds": 1790330800,
+      "promptPreview": "working",
+      "cwd": null,
+      "source": "appServer"
+    }
+  ],
+  "agentOwners": {},
+  "appServerInventoryAvailable": true,
+  "coverage": {
+    "codex": true,
+    "claude": true
+  },
+  "externalActivity": {
+    "sessions": [],
+    "claudeAvailable": true,
+    "codexAvailable": true
+  }
+}

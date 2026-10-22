@@ -1,0 +1,36 @@
+{
+  "threadId": "thread",
+  "epoch": "fixture-epoch",
+  "revision": 3,
+  "coverage": "ready",
+  "reason": null,
+  "records": [
+    {
+      "itemId": "call_question",
+      "turnId": "turn",
+      "ordinal": 956,
+      "askedAtMs": null,
+      "revision": 2,
+      "questions": [
+        {
+          "index": 0,
+          "title": "Which deployment?",
+          "options": [
+            "Internal",
+            "External"
+          ],
+          "resolution": "answered",
+          "answer": {
+            "text": "External",
+            "itemId": "canonical-answer",
+            "clientId": "AEBB5622-FEB5-434C-8F99-497A5C08552C",
+            "ordinal": 976,
+            "atMs": null
+          }
+        }
+      ]
+    }
+  ],
+  "pendingItemIds": [],
+  "missingItemIds": []
+}

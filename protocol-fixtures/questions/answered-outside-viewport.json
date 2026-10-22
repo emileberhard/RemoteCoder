@@ -1,0 +1,858 @@
+{
+  "threadId": "thread",
+  "turnId": "turn",
+  "summary": {
+    "id": "turn",
+    "status": "inProgress",
+    "itemsView": "summary",
+    "items": [
+      {
+        "type": "userMessage",
+        "id": "opening",
+        "content": [
+          {
+            "type": "text",
+            "text": "Prepare a release",
+            "text_elements": []
+          }
+        ]
+      },
+      {
+        "type": "agentMessage",
+        "id": "call_question",
+        "text": "Which deployment?\n- Internal\n- External",
+        "phase": "final_answer",
+        "delivery": "async",
+        "questions": [
+          {
+            "title": "Which deployment?",
+            "options": [
+              "Internal",
+              "External"
+            ]
+          }
+        ]
+      }
+    ],
+    "startedAt": null,
+    "completedAt": null,
+    "durationMs": null,
+    "error": null
+  },
+  "canonicalItems": [
+    {
+      "turnId": "turn",
+      "item": {
+        "type": "userMessage",
+        "id": "opening",
+        "content": [
+          {
+            "type": "text",
+            "text": "Prepare a release",
+            "text_elements": []
+          }
+        ]
+      },
+      "startedAtOrdinal": 0,
+      "startedAtMs": null,
+      "completedAtMs": null,
+      "isComplete": true
+    },
+    {
+      "turnId": "turn",
+      "item": {
+        "type": "agentMessage",
+        "id": "call_question",
+        "text": "Which deployment?\n- Internal\n- External",
+        "phase": "final_answer",
+        "delivery": "async",
+        "questions": [
+          {
+            "title": "Which deployment?",
+            "options": [
+              "Internal",
+              "External"
+            ]
+          }
+        ]
+      },
+      "startedAtOrdinal": 956,
+      "startedAtMs": null,
+      "completedAtMs": null,
+      "isComplete": true
+    },
+    {
+      "turnId": "turn",
+      "item": {
+        "type": "userMessage",
+        "id": "canonical-answer",
+        "clientId": "AEBB5622-FEB5-434C-8F99-497A5C08552C",
+        "content": [
+          {
+            "type": "text",
+            "text": "<send_user_message_question_reply>\n[{\"questionItemId\":\"[\\\"request_user_input_async\\\",\\\"call_question\\\",0]\",\"question\":\"Which deployment?\",\"answer\":\"External\"}]\n</send_user_message_question_reply>",
+            "text_elements": []
+          }
+        ]
+      },
+      "startedAtOrdinal": 976,
+      "startedAtMs": null,
+      "completedAtMs": null,
+      "isComplete": true
+    },
+    {
+      "turnId": "turn",
+      "item": {
+        "type": "agentMessage",
+        "id": "progress-0",
+        "text": "Still working",
+        "phase": "commentary",
+        "delivery": null,
+        "questions": null
+      },
+      "startedAtOrdinal": 985,
+      "startedAtMs": null,
+      "completedAtMs": null,
+      "isComplete": true
+    },
+    {
+      "turnId": "turn",
+      "item": {
+        "type": "agentMessage",
+        "id": "progress-1",
+        "text": "Still working",
+        "phase": "commentary",
+        "delivery": null,
+        "questions": null
+      },
+      "startedAtOrdinal": 986,
+      "startedAtMs": null,
+      "completedAtMs": null,
+      "isComplete": true
+    },
+    {
+      "turnId": "turn",
+      "item": {
+        "type": "agentMessage",
+        "id": "progress-2",
+        "text": "Still working",
+        "phase": "commentary",
+        "delivery": null,
+        "questions": null
+      },
+      "startedAtOrdinal": 987,
+      "startedAtMs": null,
+      "completedAtMs": null,
+      "isComplete": true
+    },
+    {
+      "turnId": "turn",
+      "item": {
+        "type": "agentMessage",
+        "id": "progress-3",
+        "text": "Still working",
+        "phase": "commentary",
+        "delivery": null,
+        "questions": null
+      },
+      "startedAtOrdinal": 988,
+      "startedAtMs": null,
+      "completedAtMs": null,
+      "isComplete": true
+    },
+    {
+      "turnId": "turn",
+      "item": {
+        "type": "agentMessage",
+        "id": "progress-4",
+        "text": "Still working",
+        "phase": "commentary",
+        "delivery": null,
+        "questions": null
+      },
+      "startedAtOrdinal": 989,
+      "startedAtMs": null,
+      "completedAtMs": null,
+      "isComplete": true
+    },
+    {
+      "turnId": "turn",
+      "item": {
+        "type": "agentMessage",
+        "id": "progress-5",
+        "text": "Still working",
+        "phase": "commentary",
+        "delivery": null,
+        "questions": null
+      },
+      "startedAtOrdinal": 990,
+      "startedAtMs": null,
+      "completedAtMs": null,
+      "isComplete": true
+    },
+    {
+      "turnId": "turn",
+      "item": {
+        "type": "agentMessage",
+        "id": "progress-6",
+        "text": "Still working",
+        "phase": "commentary",
+        "delivery": null,
+        "questions": null
+      },
+      "startedAtOrdinal": 991,
+      "startedAtMs": null,
+      "completedAtMs": null,
+      "isComplete": true
+    },
+    {
+      "turnId": "turn",
+      "item": {
+        "type": "agentMessage",
+        "id": "progress-7",
+        "text": "Still working",
+        "phase": "commentary",
+        "delivery": null,
+        "questions": null
+      },
+      "startedAtOrdinal": 992,
+      "startedAtMs": null,
+      "completedAtMs": null,
+      "isComplete": true
+    },
+    {
+      "turnId": "turn",
+      "item": {
+        "type": "agentMessage",
+        "id": "progress-8",
+        "text": "Still working",
+        "phase": "commentary",
+        "delivery": null,
+        "questions": null
+      },
+      "startedAtOrdinal": 993,
+      "startedAtMs": null,
+      "completedAtMs": null,
+      "isComplete": true
+    },
+    {
+      "turnId": "turn",
+      "item": {
+        "type": "agentMessage",
+        "id": "progress-9",
+        "text": "Still working",
+        "phase": "commentary",
+        "delivery": null,
+        "questions": null
+      },
+      "startedAtOrdinal": 994,
+      "startedAtMs": null,
+      "completedAtMs": null,
+      "isComplete": true
+    },
+    {
+      "turnId": "turn",
+      "item": {
+        "type": "agentMessage",
+        "id": "progress-10",
+        "text": "Still working",
+        "phase": "commentary",
+        "delivery": null,
+        "questions": null
+      },
+      "startedAtOrdinal": 995,
+      "startedAtMs": null,
+      "completedAtMs": null,
+      "isComplete": true
+    },
+    {
+      "turnId": "turn",
+      "item": {
+        "type": "agentMessage",
+        "id": "progress-11",
+        "text": "Still working",
+        "phase": "commentary",
+        "delivery": null,
+        "questions": null
+      },
+      "startedAtOrdinal": 996,
+      "startedAtMs": null,
+      "completedAtMs": null,
+      "isComplete": true
+    },
+    {
+      "turnId": "turn",
+      "item": {
+        "type": "agentMessage",
+        "id": "progress-12",
+        "text": "Still working",
+        "phase": "commentary",
+        "delivery": null,
+        "questions": null
+      },
+      "startedAtOrdinal": 997,
+      "startedAtMs": null,
+      "completedAtMs": null,
+      "isComplete": true
+    },
+    {
+      "turnId": "turn",
+      "item": {
+        "type": "agentMessage",
+        "id": "progress-13",
+        "text": "Still working",
+        "phase": "commentary",
+        "delivery": null,
+        "questions": null
+      },
+      "startedAtOrdinal": 998,
+      "startedAtMs": null,
+      "completedAtMs": null,
+      "isComplete": true
+    },
+    {
+      "turnId": "turn",
+      "item": {
+        "type": "agentMessage",
+        "id": "progress-14",
+        "text": "Still working",
+        "phase": "commentary",
+        "delivery": null,
+        "questions": null
+      },
+      "startedAtOrdinal": 999,
+      "startedAtMs": null,
+      "completedAtMs": null,
+      "isComplete": true
+    },
+    {
+      "turnId": "turn",
+      "item": {
+        "type": "agentMessage",
+        "id": "progress-15",
+        "text": "Still working",
+        "phase": "commentary",
+        "delivery": null,
+        "questions": null
+      },
+      "startedAtOrdinal": 1000,
+      "startedAtMs": null,
+      "completedAtMs": null,
+      "isComplete": true
+    },
+    {
+      "turnId": "turn",
+      "item": {
+        "type": "agentMessage",
+        "id": "progress-16",
+        "text": "Still working",
+        "phase": "commentary",
+        "delivery": null,
+        "questions": null
+      },
+      "startedAtOrdinal": 1001,
+      "startedAtMs": null,
+      "completedAtMs": null,
+      "isComplete": true
+    },
+    {
+      "turnId": "turn",
+      "item": {
+        "type": "agentMessage",
+        "id": "progress-17",
+        "text": "Still working",
+        "phase": "commentary",
+        "delivery": null,
+        "questions": null
+      },
+      "startedAtOrdinal": 1002,
+      "startedAtMs": null,
+      "completedAtMs": null,
+      "isComplete": true
+    },
+    {
+      "turnId": "turn",
+      "item": {
+        "type": "agentMessage",
+        "id": "progress-18",
+        "text": "Still working",
+        "phase": "commentary",
+        "delivery": null,
+        "questions": null
+      },
+      "startedAtOrdinal": 1003,
+      "startedAtMs": null,
+      "completedAtMs": null,
+      "isComplete": true
+    },
+    {
+      "turnId": "turn",
+      "item": {
+        "type": "agentMessage",
+        "id": "progress-19",
+        "text": "Still working",
+        "phase": "commentary",
+        "delivery": null,
+        "questions": null
+      },
+      "startedAtOrdinal": 1004,
+      "startedAtMs": null,
+      "completedAtMs": null,
+      "isComplete": true
+    },
+    {
+      "turnId": "turn",
+      "item": {
+        "type": "agentMessage",
+        "id": "progress-20",
+        "text": "Still working",
+        "phase": "commentary",
+        "delivery": null,
+        "questions": null
+      },
+      "startedAtOrdinal": 1005,
+      "startedAtMs": null,
+      "completedAtMs": null,
+      "isComplete": true
+    },
+    {
+      "turnId": "turn",
+      "item": {
+        "type": "agentMessage",
+        "id": "progress-21",
+        "text": "Still working",
+        "phase": "commentary",
+        "delivery": null,
+        "questions": null
+      },
+      "startedAtOrdinal": 1006,
+      "startedAtMs": null,
+      "completedAtMs": null,
+      "isComplete": true
+    },
+    {
+      "turnId": "turn",
+      "item": {
+        "type": "agentMessage",
+        "id": "progress-22",
+        "text": "Still working",
+        "phase": "commentary",
+        "delivery": null,
+        "questions": null
+      },
+      "startedAtOrdinal": 1007,
+      "startedAtMs": null,
+      "completedAtMs": null,
+      "isComplete": true
+    },
+    {
+      "turnId": "turn",
+      "item": {
+        "type": "agentMessage",
+        "id": "progress-23",
+        "text": "Still working",
+        "phase": "commentary",
+        "delivery": null,
+        "questions": null
+      },
+      "startedAtOrdinal": 1008,
+      "startedAtMs": null,
+      "completedAtMs": null,
+      "isComplete": true
+    },
+    {
+      "turnId": "turn",
+      "item": {
+        "type": "agentMessage",
+        "id": "progress-24",
+        "text": "Still working",
+        "phase": "commentary",
+        "delivery": null,
+        "questions": null
+      },
+      "startedAtOrdinal": 1009,
+      "startedAtMs": null,
+      "completedAtMs": null,
+      "isComplete": true
+    },
+    {
+      "turnId": "turn",
+      "item": {
+        "type": "agentMessage",
+        "id": "progress-25",
+        "text": "Still working",
+        "phase": "commentary",
+        "delivery": null,
+        "questions": null
+      },
+      "startedAtOrdinal": 1010,
+      "startedAtMs": null,
+      "completedAtMs": null,
+      "isComplete": true
+    },
+    {
+      "turnId": "turn",
+      "item": {
+        "type": "agentMessage",
+        "id": "progress-26",
+        "text": "Still working",
+        "phase": "commentary",
+        "delivery": null,
+        "questions": null
+      },
+      "startedAtOrdinal": 1011,
+      "startedAtMs": null,
+      "completedAtMs": null,
+      "isComplete": true
+    },
+    {
+      "turnId": "turn",
+      "item": {
+        "type": "agentMessage",
+        "id": "progress-27",
+        "text": "Still working",
+        "phase": "commentary",
+        "delivery": null,
+        "questions": null
+      },
+      "startedAtOrdinal": 1012,
+      "startedAtMs": null,
+      "completedAtMs": null,
+      "isComplete": true
+    },
+    {
+      "turnId": "turn",
+      "item": {
+        "type": "agentMessage",
+        "id": "progress-28",
+        "text": "Still working",
+        "phase": "commentary",
+        "delivery": null,
+        "questions": null
+      },
+      "startedAtOrdinal": 1013,
+      "startedAtMs": null,
+      "completedAtMs": null,
+      "isComplete": true
+    },
+    {
+      "turnId": "turn",
+      "item": {
+        "type": "agentMessage",
+        "id": "progress-29",
+        "text": "Still working",
+        "phase": "commentary",
+        "delivery": null,
+        "questions": null
+      },
+      "startedAtOrdinal": 1014,
+      "startedAtMs": null,
+      "completedAtMs": null,
+      "isComplete": true
+    },
+    {
+      "turnId": "turn",
+      "item": {
+        "type": "agentMessage",
+        "id": "progress-30",
+        "text": "Still working",
+        "phase": "commentary",
+        "delivery": null,
+        "questions": null
+      },
+      "startedAtOrdinal": 1015,
+      "startedAtMs": null,
+      "completedAtMs": null,
+      "isComplete": true
+    },
+    {
+      "turnId": "turn",
+      "item": {
+        "type": "agentMessage",
+        "id": "progress-31",
+        "text": "Still working",
+        "phase": "commentary",
+        "delivery": null,
+        "questions": null
+      },
+      "startedAtOrdinal": 1016,
+      "startedAtMs": null,
+      "completedAtMs": null,
+      "isComplete": true
+    },
+    {
+      "turnId": "turn",
+      "item": {
+        "type": "agentMessage",
+        "id": "progress-32",
+        "text": "Still working",
+        "phase": "commentary",
+        "delivery": null,
+        "questions": null
+      },
+      "startedAtOrdinal": 1017,
+      "startedAtMs": null,
+      "completedAtMs": null,
+      "isComplete": true
+    },
+    {
+      "turnId": "turn",
+      "item": {
+        "type": "agentMessage",
+        "id": "progress-33",
+        "text": "Still working",
+        "phase": "commentary",
+        "delivery": null,
+        "questions": null
+      },
+      "startedAtOrdinal": 1018,
+      "startedAtMs": null,
+      "completedAtMs": null,
+      "isComplete": true
+    },
+    {
+      "turnId": "turn",
+      "item": {
+        "type": "agentMessage",
+        "id": "progress-34",
+        "text": "Still working",
+        "phase": "commentary",
+        "delivery": null,
+        "questions": null
+      },
+      "startedAtOrdinal": 1019,
+      "startedAtMs": null,
+      "completedAtMs": null,
+      "isComplete": true
+    },
+    {
+      "turnId": "turn",
+      "item": {
+        "type": "agentMessage",
+        "id": "progress-35",
+        "text": "Still working",
+        "phase": "commentary",
+        "delivery": null,
+        "questions": null
+      },
+      "startedAtOrdinal": 1020,
+      "startedAtMs": null,
+      "completedAtMs": null,
+      "isComplete": true
+    },
+    {
+      "turnId": "turn",
+      "item": {
+        "type": "agentMessage",
+        "id": "progress-36",
+        "text": "Still working",
+        "phase": "commentary",
+        "delivery": null,
+        "questions": null
+      },
+      "startedAtOrdinal": 1021,
+      "startedAtMs": null,
+      "completedAtMs": null,
+      "isComplete": true
+    },
+    {
+      "turnId": "turn",
+      "item": {
+        "type": "agentMessage",
+        "id": "progress-37",
+        "text": "Still working",
+        "phase": "commentary",
+        "delivery": null,
+        "questions": null
+      },
+      "startedAtOrdinal": 1022,
+      "startedAtMs": null,
+      "completedAtMs": null,
+      "isComplete": true
+    },
+    {
+      "turnId": "turn",
+      "item": {
+        "type": "agentMessage",
+        "id": "progress-38",
+        "text": "Still working",
+        "phase": "commentary",
+        "delivery": null,
+        "questions": null
+      },
+      "startedAtOrdinal": 1023,
+      "startedAtMs": null,
+      "completedAtMs": null,
+      "isComplete": true
+    },
+    {
+      "turnId": "turn",
+      "item": {
+        "type": "agentMessage",
+        "id": "progress-39",
+        "text": "Still working",
+        "phase": "commentary",
+        "delivery": null,
+        "questions": null
+      },
+      "startedAtOrdinal": 1024,
+      "startedAtMs": null,
+      "completedAtMs": null,
+      "isComplete": true
+    },
+    {
+      "turnId": "turn",
+      "item": {
+        "type": "agentMessage",
+        "id": "progress-40",
+        "text": "Still working",
+        "phase": "commentary",
+        "delivery": null,
+        "questions": null
+      },
+      "startedAtOrdinal": 1025,
+      "startedAtMs": null,
+      "completedAtMs": null,
+      "isComplete": true
+    },
+    {
+      "turnId": "turn",
+      "item": {
+        "type": "agentMessage",
+        "id": "progress-41",
+        "text": "Still working",
+        "phase": "commentary",
+        "delivery": null,
+        "questions": null
+      },
+      "startedAtOrdinal": 1026,
+      "startedAtMs": null,
+      "completedAtMs": null,
+      "isComplete": true
+    },
+    {
+      "turnId": "turn",
+      "item": {
+        "type": "agentMessage",
+        "id": "progress-42",
+        "text": "Still working",
+        "phase": "commentary",
+        "delivery": null,
+        "questions": null
+      },
+      "startedAtOrdinal": 1027,
+      "startedAtMs": null,
+      "completedAtMs": null,
+      "isComplete": true
+    },
+    {
+      "turnId": "turn",
+      "item": {
+        "type": "agentMessage",
+        "id": "progress-43",
+        "text": "Still working",
+        "phase": "commentary",
+        "delivery": null,
+        "questions": null
+      },
+      "startedAtOrdinal": 1028,
+      "startedAtMs": null,
+      "completedAtMs": null,
+      "isComplete": true
+    },
+    {
+      "turnId": "turn",
+      "item": {
+        "type": "agentMessage",
+        "id": "progress-44",
+        "text": "Still working",
+        "phase": "commentary",
+        "delivery": null,
+        "questions": null
+      },
+      "startedAtOrdinal": 1029,
+      "startedAtMs": null,
+      "completedAtMs": null,
+      "isComplete": true
+    },
+    {
+      "turnId": "turn",
+      "item": {
+        "type": "agentMessage",
+        "id": "progress-45",
+        "text": "Still working",
+        "phase": "commentary",
+        "delivery": null,
+        "questions": null
+      },
+      "startedAtOrdinal": 1030,
+      "startedAtMs": null,
+      "completedAtMs": null,
+      "isComplete": true
+    },
+    {
+      "turnId": "turn",
+      "item": {
+        "type": "agentMessage",
+        "id": "progress-46",
+        "text": "Still working",
+        "phase": "commentary",
+        "delivery": null,
+        "questions": null
+      },
+      "startedAtOrdinal": 1031,
+      "startedAtMs": null,
+      "completedAtMs": null,
+      "isComplete": true
+    },
+    {
+      "turnId": "turn",
+      "item": {
+        "type": "agentMessage",
+        "id": "progress-47",
+        "text": "Still working",
+        "phase": "commentary",
+        "delivery": null,
+        "questions": null
+      },
+      "startedAtOrdinal": 1032,
+      "startedAtMs": null,
+      "completedAtMs": null,
+      "isComplete": true
+    },
+    {
+      "turnId": "turn",
+      "item": {
+        "type": "agentMessage",
+        "id": "progress-48",
+        "text": "Still working",
+        "phase": "commentary",
+        "delivery": null,
+        "questions": null
+      },
+      "startedAtOrdinal": 1033,
+      "startedAtMs": null,
+      "completedAtMs": null,
+      "isComplete": true
+    },
+    {
+      "turnId": "turn",
+      "item": {
+        "type": "agentMessage",
+        "id": "progress-49",
+        "text": "Still working",
+        "phase": "commentary",
+        "delivery": null,
+        "questions": null
+      },
+      "startedAtOrdinal": 1034,
+      "startedAtMs": null,
+      "completedAtMs": null,
+      "isComplete": true
+    }
+  ],
+  "laterPage": {
+    "nextCursor": "opaque-older-page",
+    "backwardsCursor": null
+  }
+}

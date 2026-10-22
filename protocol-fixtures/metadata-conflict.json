@@ -1,0 +1,21 @@
+{
+  "id": 17,
+  "error": {
+    "code": -32009,
+    "message": "Settings changed on another client.",
+    "data": {
+      "kind": "metadataConflict",
+      "retryable": false,
+      "current": {
+        "sessionID": "claude_fixture",
+        "modelID": "opus",
+        "reasoningSelectionID": "effort-high",
+        "fastModeEnabled": false,
+        "source": "selection",
+        "updatedAt": 1789851600.0,
+        "serverRevision": 8,
+        "mutationId": "fixture-installation-8"
+      }
+    }
+  }
+}

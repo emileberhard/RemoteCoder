@@ -1,0 +1,11 @@
+{
+  "id": 22,
+  "error": {
+    "code": -32600,
+    "message": "invalid cursor: anchor turn is no longer present",
+    "data": {
+      "kind": "historyCursorInvalid",
+      "retryable": false
+    }
+  }
+}

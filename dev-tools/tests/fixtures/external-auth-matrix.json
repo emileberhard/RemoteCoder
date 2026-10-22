@@ -1,0 +1,386 @@
+{
+  "description": "Invented validator inputs, not execution receipts or live acceptance evidence.",
+  "baseline": {
+    "diskAuthAbsent": true,
+    "refreshRequests": {
+      "owner": 1,
+      "consumer": 1
+    },
+    "backendRequests": [
+      {
+        "method": "POST"
+      }
+    ],
+    "previousAccountIds": [
+      "phase0-account"
+    ],
+    "inference": [
+      {
+        "token": "initial",
+        "toolOutput": false
+      },
+      {
+        "token": "renewed",
+        "toolOutput": false
+      }
+    ],
+    "case": "race",
+    "turns": [
+      {
+        "status": "completed"
+      }
+    ]
+  },
+  "cases": [
+    {
+      "diskAuthAbsent": true,
+      "refreshRequests": {
+        "owner": 1,
+        "consumer": 0
+      },
+      "backendRequests": [
+        {
+          "method": "POST"
+        }
+      ],
+      "previousAccountIds": [
+        "phase0-account"
+      ],
+      "inference": [
+        {
+          "token": "initial",
+          "toolOutput": false
+        },
+        {
+          "token": "renewed",
+          "toolOutput": false
+        }
+      ],
+      "case": "race",
+      "turns": [
+        {
+          "status": "completed"
+        }
+      ]
+    },
+    {
+      "diskAuthAbsent": true,
+      "refreshRequests": {
+        "owner": 0,
+        "consumer": 0
+      },
+      "backendRequests": [
+        {
+          "method": "POST"
+        }
+      ],
+      "previousAccountIds": [
+        "phase0-account"
+      ],
+      "inference": [
+        {
+          "token": "initial",
+          "toolOutput": false
+        }
+      ],
+      "case": "owner_gone",
+      "turns": [
+        {
+          "status": "failed"
+        }
+      ],
+      "elapsedSeconds": 0.5
+    },
+    {
+      "diskAuthAbsent": true,
+      "refreshRequests": {
+        "owner": 1,
+        "consumer": 0
+      },
+      "backendRequests": [
+        {
+          "method": "POST"
+        }
+      ],
+      "previousAccountIds": [
+        "phase0-account"
+      ],
+      "inference": [
+        {
+          "token": "initial",
+          "toolOutput": false
+        }
+      ],
+      "case": "owner_disconnect",
+      "turns": [
+        {
+          "status": "failed"
+        }
+      ],
+      "elapsedSeconds": 0.5
+    },
+    {
+      "diskAuthAbsent": true,
+      "refreshRequests": {
+        "owner": 1,
+        "consumer": 0
+      },
+      "backendRequests": [
+        {
+          "method": "POST"
+        }
+      ],
+      "previousAccountIds": [
+        "phase0-account"
+      ],
+      "inference": [
+        {
+          "token": "initial",
+          "toolOutput": false
+        },
+        {
+          "token": "renewed",
+          "toolOutput": false
+        },
+        {
+          "token": "renewed",
+          "toolOutput": false
+        }
+      ],
+      "case": "concurrent",
+      "turns": [
+        {
+          "status": "completed"
+        },
+        {
+          "status": "completed"
+        }
+      ]
+    },
+    {
+      "diskAuthAbsent": true,
+      "refreshRequests": {
+        "owner": 1,
+        "consumer": 0
+      },
+      "backendRequests": [
+        {
+          "method": "POST"
+        }
+      ],
+      "previousAccountIds": [
+        "phase0-account"
+      ],
+      "inference": [
+        {
+          "token": "initial",
+          "toolOutput": false
+        }
+      ],
+      "case": "timeout_late",
+      "turns": [
+        {
+          "status": "failed",
+          "error": {
+            "message": "refresh timed out"
+          }
+        }
+      ],
+      "elapsedSeconds": 0.5,
+      "lateSuccessInstalled": false,
+      "afterExplicitLogin": {
+        "status": "completed"
+      }
+    },
+    {
+      "diskAuthAbsent": true,
+      "refreshRequests": {
+        "owner": 1,
+        "consumer": 0
+      },
+      "backendRequests": [
+        {
+          "method": "POST"
+        }
+      ],
+      "previousAccountIds": [
+        "phase0-account"
+      ],
+      "inference": [
+        {
+          "token": "initial",
+          "toolOutput": false
+        }
+      ],
+      "case": "wrong_account",
+      "turns": [
+        {
+          "status": "failed"
+        }
+      ],
+      "elapsedSeconds": 0.5,
+      "accountAfter": {
+        "result": {
+          "account": null
+        }
+      },
+      "finalTokenLabel": "absent"
+    },
+    {
+      "diskAuthAbsent": true,
+      "refreshRequests": {
+        "owner": 0,
+        "consumer": 0
+      },
+      "backendRequests": [
+        {
+          "method": "POST"
+        }
+      ],
+      "previousAccountIds": [
+        "phase0-account"
+      ],
+      "inference": [
+        {
+          "token": "initial",
+          "toolOutput": false
+        }
+      ],
+      "case": "expired_reads",
+      "accountRead": {
+        "result": {
+          "account": {
+            "type": "chatgpt"
+          }
+        }
+      },
+      "rateLimitsExpired": {
+        "error": {
+          "code": -32603,
+          "message": "HTTP 401"
+        }
+      },
+      "rateLimitsRenewed": {
+        "result": {
+          "rateLimits": {
+            "primary": {
+              "usedPercent": 17
+            }
+          }
+        }
+      }
+    },
+    {
+      "diskAuthAbsent": true,
+      "refreshRequests": {
+        "owner": 1,
+        "consumer": 0
+      },
+      "backendRequests": [
+        {
+          "method": "POST"
+        }
+      ],
+      "previousAccountIds": [
+        "phase0-account"
+      ],
+      "inference": [
+        {
+          "token": "initial",
+          "toolOutput": false
+        }
+      ],
+      "case": "restart",
+      "beforeInstall": {
+        "result": {
+          "account": null
+        }
+      },
+      "restartBeforeInstall": {
+        "result": {
+          "account": null
+        }
+      },
+      "restartAfterInstall": {
+        "result": {
+          "account": null
+        }
+      },
+      "sourceTurn": {
+        "status": "completed"
+      },
+      "resumeBeforeLogin": "result",
+      "unauthenticatedTurn": {
+        "status": "failed"
+      },
+      "turnAfterLogin": {
+        "status": "completed"
+      }
+    },
+    {
+      "diskAuthAbsent": true,
+      "refreshRequests": {
+        "owner": 1,
+        "consumer": 0
+      },
+      "backendRequests": [
+        {
+          "method": "POST"
+        }
+      ],
+      "previousAccountIds": [
+        "phase0-account"
+      ],
+      "inference": [
+        {
+          "token": "initial",
+          "toolOutput": false
+        },
+        {
+          "token": "renewed",
+          "toolOutput": true
+        }
+      ],
+      "case": "sibling_relogin",
+      "siblingLiveDuringLogin": true,
+      "otherTurn": {
+        "status": "completed"
+      },
+      "siblingTurn": {
+        "status": "completed"
+      }
+    },
+    {
+      "diskAuthAbsent": true,
+      "refreshRequests": {
+        "owner": 1,
+        "consumer": 0
+      },
+      "backendRequests": [
+        {
+          "method": "POST"
+        }
+      ],
+      "previousAccountIds": [
+        "phase0-account"
+      ],
+      "inference": [
+        {
+          "token": "initial",
+          "toolOutput": false
+        },
+        {
+          "token": "proactive",
+          "toolOutput": false
+        }
+      ],
+      "case": "refresh_then_relogin",
+      "turns": [
+        {
+          "status": "completed"
+        }
+      ],
+      "finalTokenLabel": "proactive"
+    }
+  ]
+}

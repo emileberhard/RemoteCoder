@@ -1,0 +1,29 @@
+{
+  "epoch": "6f0f4b1e-2c1a-4f6e-9d55-0a1b2c3d4e5f",
+  "revision": 2,
+  "generatedAtUnixSeconds": 1790330861.099,
+  "activeTurns": [
+    {
+      "threadId": "claude_11111111-2222-4333-8444-555555555555",
+      "turnId": "claude-turn-1",
+      "startedAtUnixSeconds": 1790330800.0,
+      "startedAtSequence": 41,
+      "lastSeenAtUnixSeconds": 1790330800.0,
+      "promptPreview": "working",
+      "cwd": null,
+      "source": "gateway"
+    }
+  ],
+  "agentOwners": {},
+  "agentOwnersCoverage": "complete",
+  "appServerInventoryAvailable": false,
+  "coverage": {
+    "codex": false,
+    "claude": true
+  },
+  "externalActivity": {
+    "sessions": [],
+    "claudeAvailable": true,
+    "codexAvailable": true
+  }
+}

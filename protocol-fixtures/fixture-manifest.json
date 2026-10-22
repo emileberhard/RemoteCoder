@@ -1,0 +1,138 @@
+{
+  "fixtures": [
+    {
+      "path": "activity/active-turn-null-start.json",
+      "contract": "An active-turn record whose start is null decodes and re-encodes without dropping fields.",
+      "consumers": ["Core/Tests/RemoteCoderCoreTests/Gateway/GatewayOwnedContractTests.swift"]
+    },
+    {
+      "path": "activity/coverage.json",
+      "contract": "The activity snapshot carries the gateway's epoch, a revision seeded from wall-clock milliseconds and incremented per change, per-provider and agent-ownership coverage and each gateway turn's start sequence.",
+      "consumers": ["host-daemon-rs/src/gateway/activity.rs", "Core/Tests/RemoteCoderCoreTests/Gateway/GatewayOwnedContractTests.swift"]
+    },
+    {
+      "path": "attached-files-block.json",
+      "contract": "The plain-text block and message the composer appends for uploaded files; the app and the live upload probe send the same bytes.",
+      "consumers": ["dev-tools/tests/test_rc_gateway.py", "Core/Tests/RemoteCoderCoreTests/Files/FileAttachmentTests.swift", "web-client/tests/turn-dispatcher.test.ts"]
+    },
+    {
+      "path": "attachments/pasted-text-v1-cases.json",
+      "contract": "Swift history projection and Claude header summaries accept the same valid pasted-text envelopes and preserve malformed or ordinary marker-shaped text.",
+      "consumers": ["Core/Tests/RemoteCoderCoreTests/Conversations/MessageAttachmentTests.swift", "host-daemon-rs/src/providers/claude/history.rs"]
+    },
+    {
+      "path": "attachments/pasted-text-v2-cases.json",
+      "contract": "Length-delimited inline pastes and escaped literal text preserve UTF-8 payloads and composed order, including nested reserved tags; malformed markers remain ordinary text. Swift projection, Claude headers and APNs summaries agree.",
+      "consumers": ["Core/Tests/RemoteCoderCoreTests/Conversations/InlinePastedTextTests.swift", "host-daemon-rs/src/providers/claude/history.rs", "host-daemon-rs/src/gateway/tests.rs"]
+    },
+    {
+      "path": "checkpoints/inline-literal-text-v2.json",
+      "contract": "Typed v1/v2 markers remain literal text around an ordered paste; current checkpoints retain chip identity and old decoders receive readable expanded text.",
+      "consumers": ["Core/Tests/RemoteCoderCoreTests/Conversations/AttachmentCheckpointCompatibilityTests.swift"]
+    },
+    {
+      "path": "checkpoints/inline-pasted-text-v2.json",
+      "contract": "An ordered inline pasted-text message persists exact paste identity and order while old decoders receive expanded readable text.",
+      "consumers": ["Core/Tests/RemoteCoderCoreTests/Conversations/AttachmentCheckpointCompatibilityTests.swift"]
+    },
+    {
+      "path": "checkpoints/main-9db89687.json",
+      "contract": "A checkpoint written by main 9db89687 loads without inventing attachments for unmarked historical pasted text.",
+      "consumers": ["Core/Tests/RemoteCoderCoreTests/Conversations/AttachmentCheckpointCompatibilityTests.swift"]
+    },
+    {
+      "path": "checkpoints/sent-attachments-v1.json",
+      "contract": "Sent attachment checkpoints preserve the original body and attachment order while retaining readable legacy text, image and file fields for rollback builds.",
+      "consumers": ["Core/Tests/RemoteCoderCoreTests/Conversations/AttachmentCheckpointCompatibilityTests.swift"]
+    },
+    {
+      "path": "devices/register.json",
+      "contract": "The per-device registration the app sends to each host: one deviceId, the bundle, the APNs environment, the app's host id and the device's alert, Live Activity, VoIP and location tokens (the location token carries its navigation start inputs).",
+      "consumers": ["host-daemon-rs/src/gateway/tests.rs", "host-daemon-rs/src/devices/tests.rs", "Core/Tests/RemoteCoderCoreTests/Notifications/DeviceRegistrationTests.swift"]
+    },
+    {
+      "path": "errors/conversation-busy.json",
+      "contract": "A conversation with a pending exclusive command refuses transiently and says when to retry.",
+      "consumers": ["host-daemon-rs/src/rpc/error.rs", "Core/Tests/RemoteCoderCoreTests/Gateway/GatewayOwnedContractTests.swift"]
+    },
+    {
+      "path": "errors/history-cursor-invalid.json",
+      "contract": "A history cursor whose anchor is gone or unparseable.",
+      "consumers": ["host-daemon-rs/src/rpc/error.rs", "Core/Tests/RemoteCoderCoreTests/Gateway/GatewayOwnedContractTests.swift"]
+    },
+    {
+      "path": "errors/history-page-too-large.json",
+      "contract": "A history page over the response budget reports its measured size.",
+      "consumers": ["host-daemon-rs/src/rpc/mod.rs", "Core/Tests/RemoteCoderCoreTests/Gateway/GatewayOwnedContractTests.swift"]
+    },
+    {
+      "path": "errors/queue-change-uncertain.json",
+      "contract": "A queued-message add, start or delete whose outcome Codex never confirmed; the client rereads the queue instead of retrying.",
+      "consumers": ["host-daemon-rs/src/rpc/error.rs", "Core/Tests/RemoteCoderCoreTests/Gateway/GatewayOwnedContractTests.swift"]
+    },
+    {
+      "path": "errors/input-delivery-uncertain.json",
+      "contract": "Claude stopped reading its input after the gateway queued this one; it still arrives if Claude resumes, so the client treats delivery as unconfirmed and never resends it.",
+      "consumers": ["host-daemon-rs/src/rpc/error.rs", "Core/Tests/RemoteCoderCoreTests/Gateway/GatewayOwnedContractTests.swift"]
+    },
+    {
+      "path": "errors/turn-not-running.json",
+      "contract": "A steer or Stop that names a turn that is not running.",
+      "consumers": ["host-daemon-rs/src/rpc/error.rs", "host-daemon-rs/src/rpc/error.rs", "Core/Tests/RemoteCoderCoreTests/Gateway/GatewayOwnedContractTests.swift"]
+    },
+    {
+      "path": "metadata-conflict.json",
+      "contract": "Owned error payload for a conversation metadata revision conflict.",
+      "consumers": ["host-daemon-rs/src/gateway/tests.rs", "Core/Tests/RemoteCoderCoreTests/Gateway/GatewayOwnedContractTests.swift"]
+    },
+    {
+      "path": "metadata-record.json",
+      "contract": "A stored conversation metadata record round-trips without renaming or dropping fields.",
+      "consumers": ["host-daemon-rs/src/conversations.rs", "Core/Tests/RemoteCoderCoreTests/Gateway/GatewayOwnedContractTests.swift"]
+    },
+    {
+      "path": "metadata-update.json",
+      "contract": "A conversation metadata mutation round-trips without renaming or dropping fields.",
+      "consumers": ["host-daemon-rs/src/conversations.rs", "host-daemon-rs/src/gateway/tests.rs", "Core/Tests/RemoteCoderCoreTests/Gateway/GatewayOwnedContractTests.swift"]
+    },
+    {
+      "path": "questions/answered-outside-viewport.json",
+      "contract": "Sanitized incident: a question answered outside the history viewport the app had loaded.",
+      "consumers": [
+        "host-daemon-rs/src/gateway/question_gateway/tests.rs",
+        "host-daemon-rs/src/questions/tests.rs",
+        "Core/Tests/RemoteCoderCoreTests/Questions/QuestionLifecycleTests.swift"
+      ]
+    },
+    {
+      "path": "questions/answered-snapshot.json",
+      "contract": "The host question snapshot after that answer.",
+      "consumers": ["Core/Tests/RemoteCoderCoreTests/Questions/QuestionLifecycleTests.swift"]
+    },
+    {
+      "path": "replay/epoch-reset.json",
+      "contract": "Notification replay page after the gateway epoch changed.",
+      "consumers": ["Core/Tests/RemoteCoderCoreTests/Gateway/ReplayProgressTests.swift", "host-daemon-rs/src/gateway/tests.rs"]
+    },
+    {
+      "path": "replay/page-has-more.json",
+      "contract": "Notification replay page that is full and has more to read.",
+      "consumers": ["Core/Tests/RemoteCoderCoreTests/Gateway/ReplayProgressTests.swift", "host-daemon-rs/src/gateway/tests.rs"]
+    },
+    {
+      "path": "replay/skipped.json",
+      "contract": "Notification replay page that skipped one thread and marks only it for recovery.",
+      "consumers": ["Core/Tests/RemoteCoderCoreTests/Gateway/ReplayProgressTests.swift", "host-daemon-rs/src/gateway/tests.rs"]
+    },
+    {
+      "path": "request-capacity.json",
+      "contract": "Owned error payload for a request refused for capacity.",
+      "consumers": ["host-daemon-rs/src/gateway/tests.rs", "Core/Tests/RemoteCoderCoreTests/Gateway/GatewayOwnedContractTests.swift"]
+    },
+    {
+      "path": "voice-call-ended.json",
+      "contract": "Owned error payload for a voice call that has ended.",
+      "consumers": ["host-daemon-rs/src/gateway/tests.rs", "Core/Tests/RemoteCoderCoreTests/Gateway/GatewayOwnedContractTests.swift"]
+    }
+  ]
+}

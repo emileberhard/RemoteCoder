@@ -1,0 +1,25 @@
+{
+  "cases": [
+    {
+      "name": "two files after a message",
+      "body": "Summarize this",
+      "paths": ["/a/one.pdf", "/b/two.csv"],
+      "block": "Attached files (uploaded to this host; use these absolute paths):\n- /a/one.pdf\n- /b/two.csv",
+      "message": "Summarize this\n\nAttached files (uploaded to this host; use these absolute paths):\n- /a/one.pdf\n- /b/two.csv"
+    },
+    {
+      "name": "one file without a message",
+      "body": "",
+      "paths": ["/a/one.pdf"],
+      "block": "Attached files (uploaded to this host; use these absolute paths):\n- /a/one.pdf",
+      "message": "Attached files (uploaded to this host; use these absolute paths):\n- /a/one.pdf"
+    },
+    {
+      "name": "no files leaves the message unchanged",
+      "body": "No files",
+      "paths": [],
+      "block": "Attached files (uploaded to this host; use these absolute paths):",
+      "message": "No files"
+    }
+  ]
+}
