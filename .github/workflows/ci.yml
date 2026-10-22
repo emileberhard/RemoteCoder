@@ -64,6 +64,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Check native subprocess tools
+        run: |
+          /usr/bin/time -p /usr/bin/git --version
+          /usr/bin/time -p /usr/bin/python3 -c 'import json, pathlib'
       - run: rustup show
       - run: cargo fmt --manifest-path host-daemon-rs/Cargo.toml --check
       - run: cargo clippy --manifest-path host-daemon-rs/Cargo.toml --locked --all-targets --all-features -- -D warnings
