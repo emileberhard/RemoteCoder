@@ -5,46 +5,46 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.86"
-axum = { version = "0.7.7", features = ["ws"] }
-base64 = "0.22.1"
-blake3 = "=1.8.2"
-chacha20poly1305 = "0.10.1"
+axum = { version = "0.8.9", features = ["ws"] }
+base64 = "0.23.1"
+blake3 = "=1.8.7"
+chacha20poly1305 = "0.11.0"
 clap = { version = "4.5.23", features = ["derive"] }
 dashmap = "6.1.0"
 futures-util = "0.3.30"
-hkdf = "0.12.4"
+hkdf = "0.13.0"
 hyper = { version = "1.9.0", features = ["http1", "server"] }
 hyper-util = { version = "0.1.20", features = ["service", "tokio"] }
 indexmap = "2.7.0"
 libc = "0.2.169"
-nix = { version = "0.29.0", features = ["fs", "hostname", "process", "signal", "socket", "user"] }
+nix = { version = "0.31.3", features = ["fs", "hostname", "process", "signal", "socket", "user"] }
 rcgen = { version = "0.14.10", default-features = false, features = ["ring"] }
 regex = "1.11.1"
 reqwest = { version = "0.12.9", default-features = false, features = ["http2", "json", "rustls-tls", "stream"] }
 serde = { version = "1.0.215", features = ["derive"] }
 serde_json = { version = "1.0.133", features = ["raw_value"] }
-time = { version = "=0.3.53", features = ["parsing", "formatting"] }
-sha2 = "0.10.8"
+time = { version = "=0.3.55", features = ["parsing", "formatting"] }
+sha2 = "0.11.1"
 subtle = "2.6.1"
 tokio = { version = "1.41.1", features = ["full"] }
 tokio-rustls = { version = "0.26.4", default-features = false, features = ["ring"] }
 tokio-util = { version = "0.7.18", features = ["rt"] }
-toml = "=0.9.11"
-tokio-tungstenite = { version = "0.24.0", features = ["rustls-tls-webpki-roots"] }
+toml = "=1.1.8"
+tokio-tungstenite = { version = "0.29.0", features = ["rustls-tls-webpki-roots"] }
 tracing = "0.1.41"
 tracing-appender = "0.2.4"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 walkdir = "2.5.0"
-x25519-dalek = { version = "2.0.1", features = ["static_secrets"] }
+x25519-dalek = { version = "3.0.0", features = ["static_secrets"] }
 rand_core = { version = "0.6.4", features = ["getrandom"] }
-zstd = "0.13"
+zstd = "0.14"
 html5ever = { version = "=0.40.1", default-features = false }
 cssparser = { version = "=0.38.0", default-features = false }
 lol_html = "=3.0.1"
 url = "2.5.8"
 
 [build-dependencies]
-sha2 = "0.10.8"
+sha2 = "0.11.1"
 serde_json = "1.0.133"
 
 [dev-dependencies]
