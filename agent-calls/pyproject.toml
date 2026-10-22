@@ -21,7 +21,7 @@ packages = ["agent_calls"]
 remotecoder-tools = { path = "../dev-tools", editable = true }
 
 [dependency-groups]
-worker-build = ["hatchling==1.32.4", "editables==0.5"]
+worker-build = ["hatchling==1.32.4", "editables==0.6"]
 dev = ["pytest>=8", "pytest-asyncio>=1", "ruff>=0.12", "ty>=0.0.1"]
 
 [tool.pytest.ini_options]
