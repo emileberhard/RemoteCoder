@@ -3,13 +3,13 @@
   "component": "remote-coder-codex-gateway",
   "chatgptBuild": "26.1016.51333",
   "codexCliVersion": "0.163.0-alpha.11",
-  "codexForkCommit": "a1589fd975f391084bc3836fecdf9d7436a1d70a",
+  "codexForkCommit": "78b8045a85ff362e30d8d4c18d5a89b52ead58ab",
   "codexUpstreamBaseCommit": "5425d3e625daa58eea3ad1de27c087eb3b2ffbd3",
   "codexAppServerTransport": "websocket-over-unix",
   "codexAppServerSocket": "~/.codex/app-server-control/app-server-control.sock",
   "runtimeHashes": {
-    "bin/codex": "c4dde3200289fee0a6a995681f3cc66cf66227c6c6b7e6bfb9a2a7e3ec2d059d",
-    "bin/codex-code-mode-host": "609b6704e0860be13e90872ef26ca60399acded83b8b9572d16096338122d3df"
+    "bin/codex": "ba28a8a227cbdbc35a50ea269a36636ddc98e5bdf6d66726770108ecd7d228d7",
+    "bin/codex-code-mode-host": "611295b6714b9c0ffbb466270a66ce0865203195287db1389b124ee075df6441"
   },
   "status": "runtime-identity-only",
   "externalAuthAcceptance": {
@@ -45,5 +45,5 @@
     "status": "operator-acceptance-not-published",
     "liveAcceptanceStatus": "not-published"
   },
-  "runtimePackageSHA256": "838ed3f9fc8eb861712bba77d1d5bef8be3fc65702fc730f9613e81b604e85fc"
+  "runtimePackageSHA256": "31287495585c573f30ce2a120d6f17af4ac3326d123ab8ff838ad0291a535470"
 }
