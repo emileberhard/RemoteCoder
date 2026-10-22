@@ -1,0 +1,32 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+  - package-ecosystem: cargo
+    directory: /host-daemon-rs
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+  - package-ecosystem: bun
+    directory: /web-client
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+  - package-ecosystem: bundler
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+  - package-ecosystem: uv
+    directory: /dev-tools
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+  - package-ecosystem: uv
+    directory: /agent-calls
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
