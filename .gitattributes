@@ -1,0 +1,24 @@
+build/swift-core/** worktree-gc-regenerable
+build/ios-build-derived/** worktree-gc-regenerable
+build/mac-build-derived/** worktree-gc-regenerable
+build/ios-test-derived/** worktree-gc-regenerable
+build/perf-sim-derived/** worktree-gc-regenerable
+build/mac-bench/*/RemoteCoder.app/** worktree-gc-regenerable
+build/codex-schema/** worktree-gc-regenerable
+RemoteCoder.xcodeproj/project.pbxproj worktree-gc-regenerable
+RemoteCoder.xcodeproj/project.xcworkspace/contents.xcworkspacedata worktree-gc-regenerable
+RemoteCoder.xcodeproj/xcshareddata/xcschemes/RemoteCoder.xcscheme worktree-gc-regenerable
+RemoteCoder.xcodeproj/xcshareddata/xcschemes/RemoteCoderMac.xcscheme worktree-gc-regenerable
+RemoteCoder.xcodeproj/xcshareddata/xcschemes/RemoteCoderUITests.xcscheme worktree-gc-regenerable
+RemoteCoder.xcodeproj/xcshareddata/xcschemes/RemoteCoderLiveActivities.xcscheme worktree-gc-regenerable
+RemoteCoder.xcodeproj/xcshareddata/xcschemes/RemoteCoderLocationPushService.xcscheme worktree-gc-regenerable
+RemoteCoder.xcodeproj/xcshareddata/xcschemes/RemoteCoderNotificationService.xcscheme worktree-gc-regenerable
+RemoteCoder.xcodeproj/xcshareddata/xcschemes/RemoteCoderShareExtension.xcscheme worktree-gc-regenerable
+RemoteCoder.xcodeproj/xcshareddata/xcschemes/RemoteCoderCaptureExtension.xcscheme worktree-gc-regenerable
+RemoteCoder.xcodeproj/xcuserdata/*.xcuserdatad/xcschemes/xcschememanagement.plist worktree-gc-regenerable
+RemoteCoder.xcworkspace/contents.xcworkspacedata worktree-gc-regenerable
+RemoteCoder.xcworkspace/xcshareddata/WorkspaceSettings.xcsettings worktree-gc-regenerable
+RemoteCoder.xcworkspace/xcshareddata/swiftpm/Package.resolved worktree-gc-regenerable
+"RemoteCoder.xcworkspace/xcshareddata/xcschemes/Generate Project.xcscheme" worktree-gc-regenerable
+RemoteCoder.xcworkspace/xcshareddata/xcschemes/RemoteCoder-Workspace.xcscheme worktree-gc-regenerable
+RemoteCoder.xcworkspace/xcuserdata/*.xcuserdatad/xcschemes/xcschememanagement.plist worktree-gc-regenerable

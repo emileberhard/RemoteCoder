@@ -1,0 +1,7 @@
+DEVELOPMENT_TEAM =
+RC_BUNDLE_ID = com.example.RemoteCoder
+RC_APP_GROUP = group.$(RC_BUNDLE_ID)
+RC_ICLOUD_CONTAINER = iCloud.$(RC_BUNDLE_ID)
+RC_NOTIFICATION_SOUND_ORIGINS =
+
+#include? "Local.xcconfig"

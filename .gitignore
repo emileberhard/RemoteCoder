@@ -1,0 +1,58 @@
+# Xcode
+.DS_Store
+*.xcuserstate
+*.xcworkspace
+xcuserdata/
+DerivedData/
+RemoteCoder.xcodeproj/
+Derived/
+
+# Swift Package Manager
+.build/
+.swiftpm/
+
+# Python
+.venv/
+
+# Ruby/Bundler
+.bundle/
+vendor/bundle/
+
+# Secrets
+**/Secrets.swift
+RemoteCoder/Resources/RemoteCoderLocalConfig.json
+.private/
+
+# Local Xcode build server metadata
+buildServer.json
+
+# Build artifacts
+build/release/
+*.ipa
+*.dSYM.zip
+
+# Fastlane
+fastlane/report.xml
+
+# Python (host daemon)
+**/__pycache__/
+*.pyc
+
+# Rust (host daemon)
+host-daemon-rs/target/
+
+# Local test artifacts
+test-results/
+debug-log-captures/
+
+# Worktree build receipts and intermediate artifacts
+build/
+
+Core/.build/
+Core/.swiftpm/
+
+Config/Local.xcconfig
+
+notes/
+experiments/
+web-client/evidence/

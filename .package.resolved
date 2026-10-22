@@ -1,0 +1,42 @@
+{
+  "originHash" : "8431e191660b92868a7a4126b84ad3c95a9c5e487164051874bd3de5879ddc23",
+  "pins" : [
+    {
+      "identity" : "ios-maps-sdk",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/googlemaps/ios-maps-sdk",
+      "state" : {
+        "revision" : "bb35529d3660739497b35d5de53dc7e6c5942198",
+        "version" : "11.1.0"
+      }
+    },
+    {
+      "identity" : "ios-navigation-sdk",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/googlemaps/ios-navigation-sdk",
+      "state" : {
+        "revision" : "2964b585f8a58843d1f1260934af2e1f38a45f6c",
+        "version" : "11.1.0"
+      }
+    },
+    {
+      "identity" : "speechkit",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/emileberhard/SpeechKit.git",
+      "state" : {
+        "revision" : "d5e03d9701bb324fefc40edd42d0291ac2b618ab",
+        "version" : "0.1.0"
+      }
+    },
+    {
+      "identity" : "webrtc",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/stasel/WebRTC.git",
+      "state" : {
+        "revision" : "1d04692697cb642bfebf6ad2dd99fe52649c3d6d",
+        "version" : "152.0.0"
+      }
+    }
+  ],
+  "version" : 3
+}
