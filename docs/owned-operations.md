@@ -360,8 +360,9 @@ Bazel server, keeps the descriptors but not the leases. Two build-capacity slots
 each build host; each build uses the host's compiler parallelism, so a lone
 build is never held to a share of it. Worker environments preserve configured
 `EMIL_BUILD_JOBS` and `CARGO_BUILD_JOBS` limits. `scripts/gateway-check.py` defaults
-`RUST_TEST_THREADS` to four for that gate; the host environment does not limit
-other Rust tests. CI, agent and Terminal builds all use normal scheduling.
+`RUST_TEST_THREADS` to four for that gate, and `just codex-fork-run` defaults
+`NEXTEST_TEST_THREADS` to the host's `EMIL_BUILD_JOBS` (four when unset); the host
+environment does not limit other Rust tests. CI, agent and Terminal builds all use normal scheduling.
 The operator owns runner scheduling and any shared sccache server; the build
 worker and workflows add no priority clamp, because real-time gate tests can
 miss their windows under one. Maintainer policies live in the private

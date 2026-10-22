@@ -394,6 +394,7 @@ codex-fork-run codex_source +command:
     eval "$(python3 "$tools/rusty-v8-artifacts.py" --codex-repo src --cache-dir ../rusty_v8)"
     ulimit -n 8192
     export CARGO_TARGET_DIR="$PWD/target"
+    export NEXTEST_TEST_THREADS="${NEXTEST_TEST_THREADS:-${EMIL_BUILD_JOBS:-4}}"
     cd src/codex-rs
     "$@"
     OWNED
