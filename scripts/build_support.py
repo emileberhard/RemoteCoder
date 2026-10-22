@@ -183,6 +183,7 @@ def file_lease(path: Path):
                 reclaim_expired_measurements()
                 time.sleep(0.05)
         yield lease.fileno()
+        fcntl.flock(lease, fcntl.LOCK_UN)
 
 
 def reclaim_expired_measurements():
@@ -332,6 +333,7 @@ def build_capacity(background: bool = False):
         if lease is not None:
             try:
                 yield lease.fileno()
+                fcntl.flock(lease, fcntl.LOCK_UN)
             finally:
                 lease.close()
             return

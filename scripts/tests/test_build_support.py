@@ -287,6 +287,98 @@ sys.exit(result)
                     owner.kill()
                 owner.communicate(timeout=60)
 
+    def leased_job(self, root: Path, mode: str):
+        leader = """import os,subprocess,sys,time
+from pathlib import Path
+root, mode = Path(sys.argv[1]), sys.argv[2]
+root.joinpath('leader.pid').write_text(str(os.getpid()))
+descendant = "import os,sys,time; from pathlib import Path; p=Path(sys.argv[1]); t=p.with_suffix('.tmp'); t.write_text(str(os.getpid())); t.replace(p); time.sleep(600)"
+subprocess.Popen([sys.executable, '-c', descendant, str(root / 'descendant.pid')], close_fds=False, start_new_session=mode == 'daemon')
+while not root.joinpath('descendant.pid').exists(): time.sleep(0.01)
+if mode == 'child': time.sleep(600)
+"""
+        return subprocess.Popen(
+            [
+                sys.executable,
+                str(SCRIPTS / "build_support.py"),
+                "--lease",
+                str(root / "build.lock"),
+                "--",
+                sys.executable,
+                "-c",
+                leader,
+                str(root),
+                mode,
+            ],
+            env=os.environ | {"HOME": str(root)},
+            stdout=subprocess.DEVNULL,
+            stderr=(root / "owner.err").open("w"),
+        )
+
+    def assert_lease_available(self, path: Path, available: bool):
+        with path.open("a") as lease:
+            if available:
+                fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            else:
+                with self.assertRaises(BlockingIOError):
+                    fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    def test_a_daemon_that_leaves_the_job_does_not_keep_its_leases(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            owner = self.leased_job(root, "daemon")
+            try:
+                self.assertEqual(
+                    owner.wait(timeout=60), 0, (root / "owner.err").read_text()
+                )
+                daemon = int((root / "descendant.pid").read_text())
+                os.kill(daemon, 0)
+                self.assert_lease_available(root / "build.lock", True)
+                self.assert_lease_available(
+                    root / "Library/Caches/RemoteCoder-Build/capacity/0.lock", True
+                )
+            finally:
+                if owner.poll() is None:
+                    owner.kill()
+                if (root / "descendant.pid").exists():
+                    try:
+                        os.kill(int((root / "descendant.pid").read_text()), signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+
+    def test_a_killed_owner_leaves_its_lease_with_the_running_job(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            owner = self.leased_job(root, "child")
+            group = None
+            try:
+                deadline = time.monotonic() + 60
+                while not (root / "descendant.pid").exists():
+                    self.assertIsNone(owner.poll(), (root / "owner.err").read_text())
+                    self.assertLess(time.monotonic(), deadline)
+                    time.sleep(0.01)
+                group = int((root / "leader.pid").read_text())
+                owner.kill()
+                owner.wait(timeout=60)
+                self.assert_lease_available(root / "build.lock", False)
+                os.killpg(group, signal.SIGKILL)
+                deadline = time.monotonic() + 10
+                while True:
+                    try:
+                        self.assert_lease_available(root / "build.lock", True)
+                        break
+                    except BlockingIOError:
+                        self.assertLess(time.monotonic(), deadline)
+                        time.sleep(0.05)
+            finally:
+                if owner.poll() is None:
+                    owner.kill()
+                if group is not None:
+                    try:
+                        os.killpg(group, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+
     def test_waiting_worktree_does_not_reserve_an_interactive_slot(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

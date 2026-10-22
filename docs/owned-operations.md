@@ -352,7 +352,11 @@ inventory timestamp after refresh. Failed MDM recovery preserves the previous
 accepted or completed receipt for a later readback attempt.
 
 Every run has immutable source input and a fingerprint. Worktree-scoped leases
-protect stable mutable mirrors and compiler caches. Two build-capacity slots bound
+protect stable mutable mirrors and compiler caches. A job's processes inherit its
+source and capacity leases, so a killed owner leaves them held until those
+processes exit. After a normal finish the owner, which has drained the job's
+process group, releases them explicitly; a daemon that left the group, such as a
+Bazel server, keeps the descriptors but not the leases. Two build-capacity slots bound
 each build host; each build uses the host's compiler parallelism, so a lone
 build is never held to a share of it. Worker environments preserve configured
 `EMIL_BUILD_JOBS` and `CARGO_BUILD_JOBS` limits. `scripts/gateway-check.py` defaults
