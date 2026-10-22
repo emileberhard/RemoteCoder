@@ -48,11 +48,14 @@ class PipelineRecipesTests(unittest.TestCase):
             home = root / "home"
             home.mkdir()
             result_path = root / "result.txt"
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            (bin_dir / "bash").symlink_to("/bin/bash")
             result = subprocess.run(
                 ["just", "codex-fork-run", str(source.parent), sys.executable, "-c",
                  "from pathlib import Path; import sys; Path(sys.argv[1]).write_text(Path('fixture.txt').read_text())", str(result_path)],
                 cwd=root,
-                env={"PATH": os.environ["PATH"], "HOME": str(home), "RC_GATEWAY_BUILD_HOST": "local", "ZDOTDIR": str(root)},
+                env={"PATH": f"{bin_dir}:{os.environ['PATH']}", "HOME": str(home), "RC_GATEWAY_BUILD_HOST": "local", "ZDOTDIR": str(root)},
                 capture_output=True, text=True, check=False,
             )
             self.assertEqual(result.returncode, 0, result.stderr)

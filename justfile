@@ -366,15 +366,16 @@ codex-fork-run codex_source +command:
     cache="Library/Caches/RemoteCoder-Build/codex-fork-check"
     run="runs/$(uuidgen)"
     destination="$host:$cache/$run/"
-    sync_options=(--rsync-path="python3 $cache/$run/.remotecoder-build-tools/rsync-source.py")
+    sync=(python3 scripts/rsync-source.py sync)
     if [[ "$local_host" == 1 ]]; then
         destination="$HOME/$cache/$run/"
-        sync_options=()
+    else
+        sync+=(--rsync-path="python3 $cache/$run/.remotecoder-build-tools/rsync-source.py")
     fi
     on_builder "mkdir -p $cache/src $cache/$run/.remotecoder-build-tools"
     trap 'on_builder "rm -rf $cache/$run"' EXIT
     rsync -a scripts/rusty-v8-artifacts.py scripts/build_support.py scripts/job_power.py scripts/process_group.py scripts/codex-cache.py scripts/rsync-source.py "${destination}.remotecoder-build-tools/"
-    python3 scripts/rsync-source.py sync "${sync_options[@]}" --exclude target --exclude .git --link-dest=../../src "$source_dir/" "$destination"
+    "${sync[@]}" --exclude target --exclude .git --link-dest=../../src "$source_dir/" "$destination"
     on_builder "cd $cache && bash -s -- $(printf '%q ' "$run" "$@")" <<'REMOTE'
     set -euo pipefail
     tools="$PWD/$1/.remotecoder-build-tools"
