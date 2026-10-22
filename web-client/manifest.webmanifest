@@ -1,0 +1,9 @@
+{
+  "name": "RemoteCoder",
+  "short_name": "RemoteCoder",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f7f8fa",
+  "theme_color": "#394a5c",
+  "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}
