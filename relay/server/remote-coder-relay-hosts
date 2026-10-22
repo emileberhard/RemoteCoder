@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -euo pipefail
+sed -i '/^# remote-coder-relay begin$/,/^# remote-coder-relay end$/d' /etc/hosts
+{ echo '# remote-coder-relay begin'; cat /etc/remote-coder-relay/hosts; echo '# remote-coder-relay end'; } >> /etc/hosts

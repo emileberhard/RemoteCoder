@@ -1,0 +1,20 @@
+{
+  "server": {
+    "address": "192.0.2.20",
+    "provisioner": "workstation",
+    "sshPort": 22,
+    "proxyPort": 443,
+    "adminKeyFile": "~/.ssh/relay-admin-ed25519",
+    "certificateName": "relay.example.test"
+  },
+  "hosts": {
+    "workstation": {
+      "target": "workstation.relay.example.test",
+      "port": 20001
+    },
+    "laptop": {
+      "target": "laptop.relay.example.test",
+      "port": 20002
+    }
+  }
+}

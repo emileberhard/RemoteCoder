@@ -1,0 +1,11 @@
+[Unit]
+Description=RemoteCoder relay names in /etc/hosts
+After=cloud-init-network.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/remote-coder-relay-hosts
+
+[Install]
+WantedBy=multi-user.target
