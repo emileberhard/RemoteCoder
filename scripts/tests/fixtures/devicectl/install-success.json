@@ -1,0 +1,34 @@
+{
+  "info": {
+    "arguments": [
+      "devicectl",
+      "device",
+      "install",
+      "app",
+      "--device",
+      "fixture-device",
+      "/fixture/RemoteCoder.app",
+      "--json-output",
+      "/fixture/install.json",
+      "--quiet"
+    ],
+    "commandType": "devicectl.device.install.app",
+    "environment": {},
+    "jsonVersion": 5,
+    "outcome": "success",
+    "version": "642.16"
+  },
+  "result": {
+    "deviceIdentifier": "fixture-device",
+    "installedApplications": [
+      {
+        "bundleID": "com.example.RemoteCoder",
+        "databaseSequenceNumber": 4556,
+        "databaseUUID": "00000000-0000-4000-8000-000000000002",
+        "installationURL": "file:///private/var/containers/Bundle/Application/00000000-0000-4000-8000-000000000001/RemoteCoder.app/",
+        "launchServicesIdentifier": "unknown",
+        "options": {}
+      }
+    ]
+  }
+}

@@ -1,0 +1,378 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.14"
+# dependencies = ["pydantic>=2.12,<3"]
+# ///
+
+import argparse
+import hashlib
+import json
+import os
+import stat
+import sys
+import tempfile
+from pathlib import Path
+from typing import Annotated, Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
+from build_artifacts import tree_digest
+
+Sha256 = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
+GitCommit = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{40}$")]
+CodexVersion = Annotated[
+    str, StringConstraints(pattern=r"^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$")
+]
+
+
+class ApprovalError(RuntimeError):
+    pass
+
+
+class Binary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    sha256: Sha256
+
+
+class PackageManifest(BaseModel):
+    """The package fields that authorize a matched runtime."""
+
+    model_config = ConfigDict(extra="forbid")
+    layout_version: Literal[1] = Field(alias="layoutVersion")
+    version: CodexVersion
+    target: Literal["aarch64-apple-darwin"]
+    variant: Literal["codex"]
+    entrypoint: Literal["bin/codex"]
+    resources_dir: Literal["codex-resources"] = Field(alias="resourcesDir")
+    path_dir: Literal["codex-path"] = Field(alias="pathDir")
+    source_commit: GitCommit = Field(alias="sourceCommit")
+    binaries: dict[str, Binary]
+
+
+class RuntimeHashes(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    codex: Sha256 = Field(alias="bin/codex")
+    code_mode_host: Sha256 = Field(alias="bin/codex-code-mode-host")
+
+
+class Compatibility(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    version: CodexVersion = Field(alias="codexCliVersion")
+    source_commit: GitCommit = Field(alias="codexForkCommit")
+    hashes: RuntimeHashes = Field(alias="runtimeHashes")
+    package_sha256: Sha256 | None = Field(default=None, alias="runtimePackageSHA256")
+
+
+class Approval(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    version: CodexVersion
+    source_commit: GitCommit
+    codex_sha256: Sha256
+    code_mode_host_sha256: Sha256
+
+
+def compatibility_path(root: Path) -> Path:
+    path = root.resolve() / "docs/codex/compatibility.json"
+    if not path.is_file():
+        raise ApprovalError(f"missing approval file: {path}")
+    return path
+
+
+def parser() -> argparse.ArgumentParser:
+    command = argparse.ArgumentParser(
+        description="Validate or update RemoteCoder's matched Codex runtime approval.",
+        epilog=(
+            "Examples:\n"
+            "  codex-runtime-approval check --json\n"
+            "  codex-runtime-approval check --package /tmp/codex-package\n"
+            "  codex-runtime-approval apply --package /tmp/codex-package --json"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument(
+        "--repo-root",
+        type=Path,
+        default=Path(__file__).resolve().parent.parent,
+        help="RemoteCoder root (default: inferred from this script)",
+    )
+    common.add_argument("--json", action="store_true", help="emit stable JSON")
+    subcommands = command.add_subparsers(dest="command", required=True)
+    check = subcommands.add_parser(
+        "check", parents=[common], help="validate the approval record"
+    )
+    check.add_argument(
+        "--package", type=Path, help="also verify and compare a built package"
+    )
+    apply = subcommands.add_parser(
+        "apply", parents=[common], help="set the approval from a verified package"
+    )
+    apply.add_argument("--package", type=Path, required=True)
+    install = subcommands.add_parser(
+        "install-record", parents=[common], help="install immutable approval beside an already approved package"
+    )
+    install.add_argument("--package", type=Path, required=True)
+    resolve = subcommands.add_parser(
+        "resolve", parents=[common], help="resolve the approved immutable build package"
+    )
+    resolve.add_argument(
+        "--packages-dir", type=Path,
+        default=Path.home() / "Library/Caches/RemoteCoder-Build/codex-runtime/packages",
+    )
+    resolve.set_defaults(package=None)
+    return command
+
+
+def load_json(path: Path) -> Any:
+    try:
+        return json.loads(path.read_text())
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise ApprovalError(f"cannot read valid JSON from {path}: {error}") from error
+
+
+def file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    try:
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except OSError as error:
+        raise ApprovalError(f"cannot hash {path}: {error}") from error
+    return digest.hexdigest()
+
+
+def package_approval(package: Path) -> Approval:
+    package = package.resolve()
+    manifest_path = package / "codex-package.json"
+    try:
+        manifest = PackageManifest.model_validate(load_json(manifest_path))
+    except ValidationError as error:
+        raise ApprovalError(
+            f"invalid package manifest {manifest_path}: {error}"
+        ) from error
+
+    expected_paths = {"bin/codex", "bin/codex-code-mode-host"}
+    if set(manifest.binaries) != expected_paths:
+        raise ApprovalError(
+            "package must contain exactly bin/codex and bin/codex-code-mode-host"
+        )
+    for relative_path, record in manifest.binaries.items():
+        binary = package / relative_path
+        if not binary.is_file() or not os.access(binary, os.X_OK):
+            raise ApprovalError(
+                f"package binary is missing or not executable: {binary}"
+            )
+        actual = file_sha256(binary)
+        if actual != record.sha256:
+            raise ApprovalError(
+                f"hash mismatch for {relative_path}: manifest={record.sha256} actual={actual}"
+            )
+    return Approval(
+        version=manifest.version,
+        source_commit=manifest.source_commit,
+        codex_sha256=manifest.binaries["bin/codex"].sha256,
+        code_mode_host_sha256=manifest.binaries["bin/codex-code-mode-host"].sha256,
+    )
+
+
+def repo_approval(path: Path) -> Approval:
+    try:
+        compatibility = Compatibility.model_validate(load_json(path))
+    except ValidationError as error:
+        raise ApprovalError(f"invalid compatibility approval: {error}") from error
+    return Approval(
+        version=compatibility.version,
+        source_commit=compatibility.source_commit,
+        codex_sha256=compatibility.hashes.codex,
+        code_mode_host_sha256=compatibility.hashes.code_mode_host,
+    )
+
+
+def write_atomic(path: Path, content: str) -> None:
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile("w", dir=path.parent, delete=False) as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+            temporary = Path(handle.name)
+        temporary.chmod(path.stat().st_mode & 0o777)
+        os.replace(temporary, path)
+    except OSError as error:
+        if temporary:
+            temporary.unlink(missing_ok=True)
+        raise ApprovalError(f"cannot update {path}: {error}") from error
+
+
+def install_record(package: Path, approval: Approval) -> None:
+    package = package.resolve()
+    directory_path = package.parent / "approvals"
+    directory_path.mkdir(exist_ok=True)
+    path = directory_path / f"{file_sha256(package / 'codex-package.json')}.json"
+    record = {
+        "codexCliVersion": approval.version,
+        "codexForkCommit": approval.source_commit,
+        "runtimeHashes": {
+            "bin/codex": approval.codex_sha256,
+            "bin/codex-code-mode-host": approval.code_mode_host_sha256,
+        },
+    }
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile("w", dir=directory_path, delete=False) as handle:
+            json.dump(record, handle, indent=2)
+            handle.write("\n")
+            handle.flush()
+            os.fchmod(handle.fileno(), 0o444)
+            os.fsync(handle.fileno())
+            temporary = Path(handle.name)
+        try:
+            os.link(temporary, path)
+        except FileExistsError:
+            metadata = path.lstat()
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_mode & 0o222:
+                raise ApprovalError("installed approval must be a read-only regular file")
+            if load_json(path) != record:
+                raise ApprovalError("installed approval differs; refusing to replace it")
+        directory = os.open(directory_path, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
+def resolve_package(path: Path, packages: Path) -> Path:
+    compatibility = Compatibility.model_validate(load_json(path))
+    if compatibility.package_sha256 is None:
+        raise ApprovalError("compatibility record has no runtimePackageSHA256")
+    expected = repo_approval(path)
+    for package in sorted(packages.glob("*")):
+        if not package.is_dir():
+            continue
+        try:
+            if package_approval(package) == expected and tree_digest(package) == compatibility.package_sha256:
+                return package.resolve()
+        except (ApprovalError, OSError, ValueError):
+            continue
+    raise ApprovalError(
+        f"approved immutable package {compatibility.source_commit} "
+        f"with fingerprint {compatibility.package_sha256} is absent from {packages}"
+    )
+
+
+def apply(path: Path, approval: Approval, package_sha256: str) -> None:
+    try:
+        previous_approval = repo_approval(path)
+    except ApprovalError:
+        previous_approval = None
+    compatibility = load_json(path)
+    if not isinstance(compatibility, dict) or not isinstance(
+        compatibility.get("runtimeHashes"), dict
+    ):
+        raise ApprovalError("compatibility record has no runtimeHashes object")
+    previous_package_sha256 = compatibility.get("runtimePackageSHA256")
+    compatibility["codexCliVersion"] = approval.version
+    compatibility["codexForkCommit"] = approval.source_commit
+    compatibility["runtimePackageSHA256"] = package_sha256
+    compatibility["runtimeHashes"].update(
+        {
+            "bin/codex": approval.codex_sha256,
+            "bin/codex-code-mode-host": approval.code_mode_host_sha256,
+        }
+    )
+    if previous_approval != approval or (
+        previous_package_sha256 is not None and previous_package_sha256 != package_sha256
+    ):
+        compatibility["status"] = "candidate-unvalidated"
+        compatibility["validatedOnCommit"] = None
+        compatibility["validatedAtUtc"] = None
+        compatibility["verification"] = {
+            "gatewayRestartedAfterInstall": False,
+            "hosts": [],
+            "smokeTests": [],
+        }
+        compatibility["notes"] = (
+            "Runtime identity was prepared from a verified package; host acceptance is pending."
+        )
+        external = compatibility.get("externalAuthAcceptance")
+        if external is not None:
+            if not isinstance(external, dict):
+                raise ApprovalError("externalAuthAcceptance must be an object")
+            contract = {
+                "required",
+                "gate",
+                "probe",
+                "isolation",
+                "matrix",
+                "phase0Evidence",
+                "executionHost",
+                "artifactMatch",
+                "liveAcceptanceRequired",
+            }
+            compatibility["externalAuthAcceptance"] = {
+                **{key: value for key, value in external.items() if key in contract},
+                "verifiedHosts": [],
+                "status": "pending-host-acceptance",
+                "liveAcceptanceStatus": "pending",
+            }
+
+    write_atomic(path, json.dumps(compatibility, indent=2, ensure_ascii=False) + "\n")
+
+
+def emit(payload: dict[str, Any], as_json: bool) -> None:
+    if as_json:
+        print(json.dumps(payload, sort_keys=True))
+    else:
+        print(payload["message"])
+        print(json.dumps(payload["approval"], indent=2, sort_keys=True))
+
+
+def main() -> int:
+    args = parser().parse_args()
+    try:
+        path = compatibility_path(args.repo_root)
+        if args.command == "resolve":
+            args.package = resolve_package(path, args.packages_dir)
+        expected = package_approval(args.package) if args.package else None
+        if args.command == "apply":
+            if expected is None:
+                raise ApprovalError("apply requires a verified package")
+            apply(path, expected, tree_digest(args.package))
+        actual = repo_approval(path)
+        if expected is not None and actual != expected:
+            raise ApprovalError(
+                "repository approval does not match the verified package"
+            )
+        if args.command == "install-record":
+            install_record(args.package, actual)
+        if args.command == "resolve" and not args.json:
+            print(args.package)
+            return 0
+        emit(
+            {
+                "ok": True,
+                "message": (
+                    "updated and verified the Codex runtime approval"
+                    if args.command == "apply"
+                    else "installed immutable Codex runtime approval"
+                    if args.command == "install-record"
+                    else "Codex runtime approval record is valid"
+                ),
+                "approval": actual.model_dump(),
+                "package": str(args.package.resolve()) if args.package else None,
+            },
+            args.json,
+        )
+        return 0
+    except (ApprovalError, OSError, UnicodeError, ValidationError) as error:
+        if args.json:
+            print(json.dumps({"ok": False, "error": str(error)}, sort_keys=True))
+        else:
+            print(f"Codex runtime approval failed: {error}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

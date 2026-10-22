@@ -1,0 +1,71 @@
+#!/usr/bin/env python3
+
+import re
+from pathlib import Path
+
+from swift_sources import source_files
+
+
+ROOT = Path(__file__).resolve().parent.parent
+PLATFORM = frozenset(
+    ("UIKit", "AppKit", "ActivityKit", "CallKit", "PushKit", "LiveCommunicationKit", "CoreHaptics", "GoogleNavigation")
+)
+UI = PLATFORM | {"SwiftUI", "WidgetKit"}
+IMPORT = re.compile(r"^[ \t]*(?:@\w+[ \t]+)*import[ \t]+(\w+)\b", re.MULTILINE)
+BRIDGES = frozenset(
+    (
+        "ConversationDrawer.swift",
+        "ConversationRowContextMenu.swift",
+        "HostFilePresentation.swift",
+    )
+)
+SEAM_DEBT = frozenset(
+    (
+        "App.swift",
+        "RemoteCoderQuickActions.swift",
+    )
+)
+EXEMPT_ROOTS = frozenset(
+    (
+        "RemoteCoderLiveActivities",
+        "RemoteCoderNotificationService",
+        "RemoteCoderLocationPushService",
+        "RemoteCoderShareExtension",
+        "RemoteCoderCaptureExtension",
+        "RemoteCoderTests",
+        "RemoteCoderUITests",
+        "Shared",
+    )
+)
+
+
+def reports(path: Path, source: str) -> list[str]:
+    core = path.parts[:2] == ("Core", "Sources")
+    platform_owner = path.parts[:2] in (("RemoteCoder", "Platform"), ("RemoteCoder", "Services"))
+    exempt = path.parts[0] in EXEMPT_ROOTS
+    findings = []
+    for match in IMPORT.finditer(source):
+        module = match.group(1)
+        disallowed = module in UI if core else module in PLATFORM and not (
+            platform_owner or exempt or path.name in BRIDGES or path.name in SEAM_DEBT
+        )
+        if disallowed:
+            findings.append(f"{path}:{source.count(chr(10), 0, match.start()) + 1}: import {module}")
+    return findings
+
+
+def main() -> int:
+    findings = [
+        finding
+        for path in source_files(ROOT)
+        for finding in reports(path, (ROOT / path).read_text())
+    ]
+    if findings:
+        print("\n".join(findings))
+        return 1
+    print("lint-platform-imports: no platform imports outside their owners")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

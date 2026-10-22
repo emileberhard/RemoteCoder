@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")/.."
+./scripts/lint-glass
+./scripts/lint-haptics
+./scripts/lint-interface-scale
+exec python3 scripts/remote-build.py ios-install "$@"

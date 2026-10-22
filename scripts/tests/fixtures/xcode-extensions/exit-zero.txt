@@ -1,0 +1,8 @@
+error: the following command failed with exit code 0 but produced no further output
+Ld normal arm64 (in target 'RemoteCoder' from project 'RemoteCoder')
+error: the following command failed with exit code 0 but produced no further output
+Ld normal arm64 (in target 'RemoteCoderNotificationService' from project 'RemoteCoder')
+error: the following command failed with exit code 0 but produced no further output
+Ld normal arm64 (in target 'RemoteCoderLocationPushService' from project 'RemoteCoder')
+error: the following command failed with exit code 0 but produced no further output
+Ld normal arm64 (in target 'RemoteCoderLiveActivities' from project 'RemoteCoder')

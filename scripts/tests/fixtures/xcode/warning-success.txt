@@ -1,0 +1,16 @@
+SwiftCompile normal arm64 Compiling\ ThreadFixture.swift,\ WorkspaceTestFixture.swift,\ AccountIsolationTests.swift,\ ActiveTasksLiveActivityScopeTests.swift,\ AgentIncomingCallTests.swift,\ AttachmentFeedbackTests.swift,\ ChatHistoryReadTests.swift /fixture/RemoteCoderTests/Support/ThreadFixture.swift /fixture/RemoteCoderTests/Support/WorkspaceTestFixture.swift /fixture/RemoteCoderTests/AccountIsolationTests.swift /fixture/RemoteCoderTests/ActiveTasksLiveActivityScopeTests.swift /fixture/RemoteCoderTests/AgentIncomingCallTests.swift /fixture/RemoteCoderTests/AttachmentFeedbackTests.swift /fixture/RemoteCoderTests/ChatHistoryReadTests.swift (in target 'RemoteCoderTests' from project 'RemoteCoder')
+macro expansion #expect:1:22: warning: no calls to throwing functions occur within 'try' expression [#UnnecessaryEffectMarker]
+`- /fixture/RemoteCoderTests/AccountIsolationTests.swift:247:127: note: expanded code originates here
+245 |         source.input = "Continue on the host"
+246 |         #expect(await workspace.send(from: source))
+247 |         #expect(try await waitUntil { await gateway.steers == [.init(threadID: claudeThread, text: "Continue on the host")] })
+    |         `- note: in expansion of macro 'expect' here
+    +--- macro expansion #expect ---------------------------------------
+    |1 | Testing.__checkValue(try await waitUntil { await gateway.steers == [.init(threadID: claudeThread, text: "Continue on the host")] },expression: .__fromSyntaxNode(#"try await waitUntil { await gateway.steers == [.init(threadID: claudeThread, text: "Continue on the host")] }"#),comments: [],isRequired: false,sourceLocation: Testing.SourceLocation.__here()).__expected()
+    |  |                      `- warning: no calls to throwing functions occur within 'try' expression [#UnnecessaryEffectMarker]
+    +-------------------------------------------------------------------
+248 |     }
+249 |
+
+macro expansion #expect:1:22: warning: no calls to throwing functions occur within 'try' expression [#UnnecessaryEffectMarker]
+** TEST BUILD SUCCEEDED **

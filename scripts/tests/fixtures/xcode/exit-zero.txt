@@ -1,0 +1,14 @@
+error: the following command failed with exit code 0 but produced no further output
+SwiftCompile normal x86_64 /fixture/RemoteCoderTests/HapticOwnershipTests.swift (in target 'RemoteCoderTests' from project 'RemoteCoder')
+error: the following command failed with exit code 0 but produced no further output
+SwiftCompile normal x86_64 /fixture/RemoteCoderTests/HapticServiceTests.swift (in target 'RemoteCoderTests' from project 'RemoteCoder')
+error: the following command failed with exit code 0 but produced no further output
+SwiftCompile normal x86_64 /fixture/RemoteCoderTests/HistoryRefreshTimingTests.swift (in target 'RemoteCoderTests' from project 'RemoteCoder')
+error: the following command failed with exit code 0 but produced no further output
+SwiftCompile normal x86_64 /fixture/RemoteCoderTests/HistoryServiceTests.swift (in target 'RemoteCoderTests' from project 'RemoteCoder')
+error: the following command failed with exit code 0 but produced no further output
+SwiftCompile normal x86_64 /fixture/RemoteCoderTests/HostFileOpenerTests.swift (in target 'RemoteCoderTests' from project 'RemoteCoder')
+error: the following command failed with exit code 0 but produced no further output
+SwiftCompile normal x86_64 /fixture/RemoteCoderTests/HostFileTests.swift (in target 'RemoteCoderTests' from project 'RemoteCoder')
+error: the following command failed with exit code 0 but produced no further output
+SwiftCompile normal x86_64 /fixture/RemoteCoderTests/HostScopedStateTests.swift (in target 'RemoteCoderTests' from project 'RemoteCoder')

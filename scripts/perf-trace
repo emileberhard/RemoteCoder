@@ -1,0 +1,1104 @@
+#!/usr/bin/env python3
+"""Record and summarize an Instruments trace of RemoteCoder on an iPhone, iPad or Mac.
+
+The trace is recorded and summarized on the Mac the iOS device is attached to, the
+Mac mini for the agent iPad, or for --mac on the MacBook that runs the Mac app,
+because a system-wide export is too large to move between hosts. The summary reports the app's CPU time by thread, its
+Core Animation commits, GPU time, and hitches, plus the render server's CPU time
+when the trace covers it (an iPhone recording is system-wide and includes
+backboardd; a Mac recording attaches to the app, so WindowServer is unknown), so
+two runs of the same journey can be compared. A Mac recording also samples the
+app's CPU and idle wakeups with top over the recording window. --swiftui checks
+the target's support and attributes SwiftUI update counts and durations. Frames
+are symbolicated with atos from the retained dSYMs and Xcode's iOS DeviceSupport
+symbols whose UUIDs match the trace's images; the trace itself is never modified.
+
+The app's TranscriptScroll Points of Interest intervals bound its motion windows,
+over which the summary reports Apple's hitch rate in ms/s with its rating, the main
+thread's CPU share and commits per second, so runs compare only the scrolling, not
+idle time around it. Samples whose stacks run in XCTest's automation frameworks
+(agent-device, XCUITest or Xcode device interaction snapshotting the app's
+accessibility tree on its main thread) are attributed separately, and a trace that
+contains them is rejected, because its CPU, commit and hitch figures are not the
+app's own.
+
+Every xctrace export loads the whole trace, so exports run one at a time and stop
+at a quarter of the host's memory or after 120 seconds. One recording or summary
+runs per host, and a remote run stops when its SSH client disconnects.
+"""
+
+import argparse
+import bisect
+import contextlib
+import fcntl
+import hashlib
+import json
+import math
+import re
+import shlex
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import xml.etree.ElementTree as ET
+from collections import Counter, defaultdict
+from collections.abc import Iterable
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+from statistics import median
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from build_hosts import MAC_GUI_HOST, TEST_DEVICE_HOST, is_local
+
+
+APP = "RemoteCoder"
+MAC_APP_EXECUTABLE = f"/{APP}.app/Contents/MacOS/{APP}"
+IPHONE_RENDER_SERVER = "backboardd"
+MAC_RENDER_SERVER = "WindowServer"
+INSTRUMENTS = ["Hitches", "GPU", "Thermal State"]
+DEVELOPER_TOOLING = re.compile(r"/Developer/Library/(Private)?Frameworks/")
+SIGNPOST_SUBSYSTEM = "RemoteCoder"
+MOTION_SIGNPOST = "TranscriptScroll"
+HITCH_RATE_RATINGS = ((10, "good"), (25, "warning"), (50, "critical"))
+SWIFTUI_UPDATES = "swiftui-updates"
+SSH = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "-o", "ServerAliveInterval=10", "-o", "ServerAliveCountMax=3"]
+TRACE_ROOT = "perf-traces/remotecoder"
+HOST_LOCK = ".perf-trace.lock"
+EXPORT_MEMORY_FRACTION = 0.25
+EXPORT_TIMEOUT_SECONDS = 120
+CAPABILITY_TIMEOUT_SECONDS = 30
+PROBE_TIMEOUT_SECONDS = 2
+MINIMUM_AVAILABLE_MEMORY_PERCENT = 25
+STARTING_AVAILABLE_MEMORY_PERCENT = 50
+REMOTE_BOOTSTRAP = """\
+import json, os, signal, sys, threading, traceback, types
+payload = json.loads(sys.stdin.buffer.read(int(sys.argv[1])))
+for name, module_source in payload["modules"].items():
+    sys.modules[name] = types.ModuleType(name)
+    exec(compile(module_source, name + ".py", "exec"), sys.modules[name].__dict__)
+__file__ = "perf-trace"
+def stop_when_client_disconnects():
+    while sys.stdin.buffer.read1(65536):
+        pass
+    os.killpg(0, signal.SIGKILL)
+threading.Thread(target=stop_when_client_disconnects, daemon=True).start()
+sys.argv = ["perf-trace", *sys.argv[2:]]
+code = 0
+try:
+    exec(compile(payload["script"], "perf-trace", "exec"))
+except SystemExit as stop:
+    if stop.code is None or isinstance(stop.code, int):
+        code = stop.code or 0
+    else:
+        print(stop.code, file=sys.stderr)
+        code = 1
+except BaseException:
+    traceback.print_exc()
+    code = 1
+sys.stdout.flush()
+sys.stderr.flush()
+os._exit(code)
+"""
+DSYM_ROOT = "Library/Logs/remote-coder/deployments"
+BUILD_RUN_ROOT = "Library/Caches/RemoteCoder-Build/runs"
+DEVICE_SUPPORT_ROOT = "Library/Developer/Xcode/iOS DeviceSupport"
+ATOS_SEPARATOR = "\x1e"
+TRACE_COMPLETE = "Time limit reached"
+RECORDING_STARTED = "Ctrl-C to stop the recording"
+
+
+@dataclass(frozen=True)
+class Binary:
+    name: str
+    uuid: str
+    arch: str
+    load_address: int
+    path: str
+
+
+@dataclass(frozen=True, eq=False)
+class Frame:
+    address: int
+    binary: Binary | None
+    name: str
+
+
+@dataclass(frozen=True)
+class Sample:
+    time_ns: float | None
+    thread: str
+    weight_ms: float
+    stack: tuple
+    automation: bool
+
+
+@dataclass(frozen=True)
+class Run:
+    seconds: float
+    end_reason: str
+    platform: str
+    schemas: frozenset[str]
+    started_at: str
+
+
+def sysctl_number(name: str) -> int:
+    return int(subprocess.run(["sysctl", "-n", name], check=True, capture_output=True, text=True,
+                              timeout=PROBE_TIMEOUT_SECONDS).stdout)
+
+
+def resident_bytes(pid: int) -> int:
+    output = subprocess.run(["ps", "-o", "rss=", "-p", str(pid)], check=True, capture_output=True, text=True,
+                            timeout=PROBE_TIMEOUT_SECONDS).stdout.strip()
+    return int(output) * 1024
+
+
+@contextlib.contextmanager
+def guarded_export(arguments: list[str], label: str):
+    limit = int(sysctl_number("hw.memsize") * EXPORT_MEMORY_FRACTION)
+    command = ["xcrun", "xctrace", "export", *arguments]
+    stop = threading.Event()
+    peak = 0
+    breach = None
+    failure_lock = threading.Lock()
+    started = time.monotonic()
+    with subprocess.Popen(command, stdout=subprocess.PIPE) as export:
+        def stop_export(reason: str) -> None:
+            nonlocal breach
+            with failure_lock:
+                if not stop.is_set():
+                    breach = reason
+                    stop.set()
+                    export.kill()
+
+        def deadline() -> None:
+            if not stop.wait(EXPORT_TIMEOUT_SECONDS):
+                elapsed = time.monotonic() - started
+                stop_export(f"stopped exporting {label} after {elapsed:.1f} seconds "
+                            f"(limit {EXPORT_TIMEOUT_SECONDS} seconds); record a shorter trace")
+
+        def watch() -> None:
+            nonlocal peak
+            while not stop.wait(0.5):
+                if export.poll() is not None:
+                    return
+                try:
+                    peak = max(peak, resident_bytes(export.pid))
+                    if stop.is_set():
+                        return
+                    available = sysctl_number("kern.memorystatus_level")
+                except (OSError, ValueError, subprocess.SubprocessError) as error:
+                    if export.poll() is None:
+                        stop_export(f"stopped exporting {label}: memory probe failed: {error}; "
+                                    "restore host monitoring before tracing again")
+                    return
+                if peak > limit or available < MINIMUM_AVAILABLE_MEMORY_PERCENT:
+                    stop_export(f"stopped exporting {label}: xctrace reached {peak / 2**30:.1f} GiB (limit "
+                                f"{limit / 2**30:.0f} GiB) with {available}% of memory available; record a shorter trace")
+                    return
+
+        guards = []
+        try:
+            for target in (watch, deadline):
+                guard = threading.Thread(target=target, daemon=True)
+                guards.append(guard)
+                guard.start()
+            yield export
+            export.wait()
+        except BaseException:
+            export.kill()
+            if breach is None:
+                raise
+        finally:
+            stop.set()
+            for guard in reversed(guards):
+                if guard.ident is not None:
+                    guard.join()
+    if breach is not None:
+        sys.exit(breach)
+    print(f"exported {label} in {time.monotonic() - started:.1f} s, peak {peak / 2**30:.1f} GiB", file=sys.stderr)
+    if export.returncode != 0:
+        raise subprocess.CalledProcessError(export.returncode, command)
+
+
+def table_rows(trace: str, schema: str, columns: set[str]):
+    xpath = f'/trace-toc/run[@number="1"]/data/table[@schema="{schema}"]'
+    values: dict[str, object] = {}
+    mnemonics: list[str] = []
+    kinds: set[str] = set()
+
+    def resolve(element: ET.Element):
+        identifier = element.get("ref") or element.get("id")
+        return element if identifier is None else values[identifier]
+
+    with guarded_export(["--input", trace, "--xpath", xpath], schema) as export:
+        for _, element in ET.iterparse(export.stdout):
+            if element.tag == "schema":
+                layout = [(column.findtext("mnemonic"), column.findtext("engineering-type")) for column in element.findall("col")]
+                mnemonics = [mnemonic for mnemonic, _ in layout]
+                kinds = {kind for mnemonic, kind in layout if mnemonic in columns}
+            elif element.tag == "row":
+                yield {column: resolve(child) for column, child in zip(mnemonics, element) if column in columns}
+                element.clear()
+            elif (identifier := element.get("id")) is None:
+                continue
+            elif element.tag == "binary":
+                values[identifier] = Binary(
+                    element.get("name"), element.get("UUID"), element.get("arch"),
+                    int(element.get("load-addr"), 16), element.get("path"),
+                )
+            elif element.tag == "frame":
+                binary = element.find("binary")
+                values[identifier] = Frame(
+                    int(element.get("addr"), 16), None if binary is None else resolve(binary), element.get("name") or "",
+                )
+            elif element.tag in ("backtrace", "tagged-backtrace"):
+                values[identifier] = tuple(resolve(frame) for frame in element.iter("frame"))
+            elif element.tag in kinds:
+                values[identifier] = element
+
+
+def symbol_files(binaries, apps: list[Path]) -> dict[str, Path]:
+    home = Path.home()
+    device_support = home / DEVICE_SUPPORT_ROOT
+    roots = [*device_support.glob("*/Symbols"), *device_support.glob("*/*/Symbols")]
+    candidates = [*(home / DSYM_ROOT).glob("*/symbols/*.dSYM/Contents/Resources/DWARF/*")]
+    candidates += (home / BUILD_RUN_ROOT).glob("*/symbols/*.dSYM/Contents/Resources/DWARF/*")
+    candidates += [path for app in apps for path in (app / APP, app / f"{APP}.debug.dylib") if path.is_file()]
+    for binary in binaries:
+        local = Path(binary.path)
+        candidates += [local] if local.is_file() else []
+        candidates += [path for root in roots if (path := root / binary.path.lstrip("/")).is_file()]
+    if not candidates:
+        return {}
+    output = subprocess.run(
+        ["xcrun", "dwarfdump", "--uuid", *map(str, candidates)],
+        stdout=subprocess.PIPE, text=True,
+    ).stdout
+    files: dict[str, Path] = {}
+    for line in output.splitlines():
+        _, uuid, _, path = line.split(" ", 3)
+        files.setdefault(uuid, Path(path))
+    return files
+
+
+def atos(file: Path, binary: Binary, addresses: list[int]) -> list[tuple[str, ...]]:
+    output = subprocess.run(
+        ["xcrun", "atos", "-i", "-d", ATOS_SEPARATOR, "-o", str(file), "-arch", binary.arch,
+         "-l", hex(binary.load_address)],
+        input="\n".join(map(hex, addresses)), stdout=subprocess.PIPE, text=True, check=True,
+    ).stdout
+    blocks = output.split(f"{ATOS_SEPARATOR}\n")[:-1]
+    if len(blocks) != len(addresses):
+        raise RuntimeError(f"atos returned {len(blocks)} results for {len(addresses)} addresses in {file}")
+    return [
+        tuple(name for line in block.splitlines() if is_symbol(name := line.split(" (in ", 1)[0]))
+        for block in blocks
+    ]
+
+
+def is_symbol(name: str) -> bool:
+    return bool(name) and not name.startswith(("0x", "<"))
+
+
+def symbolicate(frames: set[Frame], apps: list[Path]) -> dict[Frame, tuple[str, ...]]:
+    names = {frame: (frame.name,) for frame in frames if is_symbol(frame.name)}
+    by_binary: defaultdict[Binary, list[Frame]] = defaultdict(list)
+    for frame in frames:
+        if frame.binary is not None:
+            by_binary[frame.binary].append(frame)
+    files = symbol_files(by_binary, apps)
+    if missing := sorted({binary.name for binary in by_binary if binary.uuid not in files}):
+        print(f"warning: no symbols with a matching UUID for {', '.join(missing)}", file=sys.stderr)
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        results = {
+            binary: pool.submit(atos, file, binary, [frame.address for frame in binary_frames])
+            for binary, binary_frames in by_binary.items()
+            if (file := files.get(binary.uuid)) is not None
+        }
+    for binary, result in results.items():
+        names.update(zip(by_binary[binary], result.result(), strict=True))
+    return names
+
+
+def process_name(element) -> str:
+    if element is None or element.tag == "sentinel":
+        return ""
+    return (element.get("fmt") or "").rsplit(" (", 1)[0]
+
+
+def app_bundle_roots(frames: Iterable[Frame]) -> set[str]:
+    return {str(parent) for frame in frames
+            if (binary := frame.binary) is not None and binary.name in (APP, f"{APP}.debug.dylib")
+            for parent in Path(binary.path).parents if parent.suffix == ".app"}
+
+
+def frame_owner(frame: Frame, app_roots: set[str]) -> str:
+    binary = frame.binary
+    return "app" if binary is not None and (binary.name in (APP, f"{APP}.debug.dylib")
+                                             or f"/{APP}.app/" in binary.path
+                                             or any(binary.path.startswith(root + "/") for root in app_roots)) else "system"
+
+
+def heaviest(counters: dict[str, Counter], count: int) -> dict[str, dict[str, float]]:
+    return {bucket: {key: round(ms, 1) for key, ms in counter.most_common(count)} for bucket, counter in counters.items()}
+
+
+def recorded_run(trace: str) -> Run:
+    with guarded_export(["--input", trace, "--toc"], "table of contents") as export:
+        toc = export.stdout.read()
+    run = ET.fromstring(toc).find("run")
+    summary = run.find("info/summary")
+    return Run(
+        float(summary.findtext("duration")), summary.findtext("end-reason"),
+        run.find("info/target/device").get("platform"),
+        frozenset(table.get("schema") for table in run.iterfind("data/table")),
+        summary.findtext("start-date"),
+    )
+
+
+def is_developer_tooling(frame: Frame) -> bool:
+    return frame.binary is not None and DEVELOPER_TOOLING.search(frame.binary.path) is not None
+
+
+def time_profile(trace: str) -> tuple[Counter, Counter, list[Sample], Counter]:
+    cpu_ms = Counter()
+    unweighted = Counter()
+    samples = []
+    automation_samples = Counter()
+    for row in table_rows(trace, "time-profile", {"time", "thread", "process", "weight", "stack"}):
+        process = process_name(row.get("process"))
+        weight = trace_number(row.get("weight"))
+        if weight is None:
+            unweighted[process] += 1
+        else:
+            cpu_ms[process] += weight / 1e6
+        if process != APP:
+            continue
+        thread = row.get("thread")
+        name = (thread.get("fmt") or "") if thread is not None else ""
+        name = "main" if "Main Thread" in name else name.split(" (0x", 1)[0] or "other"
+        stack = row.get("stack")
+        stack = stack if isinstance(stack, tuple) else ()
+        automation = any(map(is_developer_tooling, stack))
+        if automation:
+            automation_samples[name] += 1
+        if weight is not None:
+            samples.append(Sample(trace_number(row.get("time")), name, weight / 1e6, stack, automation))
+    return cpu_ms, unweighted, samples, automation_samples
+
+
+def thread_ms(samples: Iterable[Sample]) -> Counter:
+    totals = Counter()
+    for sample in samples:
+        totals[sample.thread] += sample.weight_ms
+    return totals
+
+
+def automation_summary(samples: list[Sample], counts: Counter) -> dict:
+    by_thread = thread_ms(sample for sample in samples if sample.automation)
+    complete = counts.total() == sum(sample.automation for sample in samples)
+    return {
+        "samples": counts.total(),
+        "samplesByThread": dict(counts.most_common(8)),
+        "cpuMs": round(by_thread.total(), 1) if complete else None,
+        "cpuMsByThread": {name: round(ms, 1) for name, ms in by_thread.most_common(8)} if complete else None,
+        "source": "app samples whose stack includes a framework under /Developer/Library (XCTest automation)",
+    }
+
+
+def top_functions(samples: list[Sample], names: dict, count: int) -> dict[str, float]:
+    self_ms = Counter()
+    for sample in samples:
+        leaf = sample.stack[0] if sample.stack else None
+        if leaf is None:
+            label = "<no stack>"
+        elif symbols := names.get(leaf):
+            label = symbols[0]
+        else:
+            label = f"<unsymbolicated {leaf.binary.name if leaf.binary is not None else "frame without a binary"}>"
+        self_ms[label] += sample.weight_ms
+    return {label: round(ms, 1) for label, ms in self_ms.most_common(count)}
+
+
+def element_text(element) -> str | None:
+    if element is None or element.tag == "sentinel":
+        return None
+    return element.get("fmt") or element.text
+
+
+def operation_intervals(trace: str, schemas: frozenset[str], name: str) -> list[tuple[float, float]] | None:
+    if "OSSignpostIntervals" not in schemas:
+        return None
+    intervals = []
+    for row in table_rows(trace, "OSSignpostIntervals", {"start", "duration", "name", "subsystem", "process"}):
+        if (process_name(row.get("process")) != APP or element_text(row.get("subsystem")) != SIGNPOST_SUBSYSTEM
+                or element_text(row.get("name")) != name):
+            continue
+        start, duration = trace_number(row.get("start")), trace_number(row.get("duration"))
+        if start is not None and duration is not None and duration > 0:
+            intervals.append((start, start + duration))
+    merged: list[tuple[float, float]] = []
+    for start, end in sorted(intervals):
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(end, merged[-1][1]))
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def within(intervals: list[tuple[float, float]]):
+    starts = [start for start, _ in intervals]
+
+    def contains(time_ns: float) -> bool:
+        index = bisect.bisect_right(starts, time_ns) - 1
+        return index >= 0 and time_ns <= intervals[index][1]
+    return contains
+
+
+def overlap_ns(intervals: list[tuple[float, float]], start: float, end: float) -> float:
+    return sum(max(0.0, min(end, right) - max(start, left)) for left, right in intervals)
+
+
+def hitch_rating(rate: float) -> str:
+    return next((label for limit, label in HITCH_RATE_RATINGS if rate <= limit), "severe")
+
+
+def hitch_updates(trace: str) -> tuple[Counter, set[tuple], list[float | None]]:
+    commits = Counter()
+    app_frames = set()
+    app_commit_starts = []
+    for row in table_rows(trace, "hitches-updates", {"start", "process", "display", "swap-id", "surface-id"}):
+        process = process_name(row.get("process"))
+        commits[process] += 1
+        if process == APP:
+            app_commit_starts.append(trace_number(row.get("start")))
+            if (key := frame_key(row)) is not None:
+                app_frames.add(key)
+    return commits, app_frames, app_commit_starts
+
+
+def trace_number(element) -> float | None:
+    if element is None or element.tag == "sentinel" or not element.text:
+        return None
+    try:
+        value = float(element.text)
+    except ValueError:
+        return None
+    return value if math.isfinite(value) else None
+
+
+@dataclass(frozen=True)
+class Hitch:
+    start_ns: float | None
+    duration_ns: float | None
+    issue: str | None
+
+
+def app_hitch_rows(trace: str, schemas: frozenset[str]) -> list[Hitch] | None:
+    if "hitches" not in schemas:
+        return None
+    return [
+        Hitch(trace_number(row.get("start")), trace_number(row.get("duration")), element_text(row.get("narrative-description")))
+        for row in table_rows(trace, "hitches", {"start", "process", "duration", "narrative-description"})
+        if process_name(row.get("process")) == APP
+    ]
+
+
+def hitch_category(issue: str | None) -> str:
+    commit = issue is not None and "Potentially expensive app update(s)" in issue
+    render = issue is not None and "Potentially expensive render" in issue
+    return "commit+render" if commit and render else "commit" if commit else "render" if render else "unknown"
+
+
+def app_hitches(rows: list[Hitch] | None) -> dict:
+    if rows is None:
+        return {"hitches": None, "hitchMs": None, "hitchesByType": None, "hitchIssues": None}
+    durations = []
+    by_type = defaultdict(list)
+    unknown_durations = 0
+    issues = Counter()
+    for row in rows:
+        duration = row.duration_ns
+        label = row.issue
+        issues[label or "unknown"] += 1
+        by_type[hitch_category(label)].append(duration)
+        if duration is None:
+            unknown_durations += 1
+        else:
+            durations.append(duration / 1e6)
+    return {
+        "hitches": len(durations) + unknown_durations,
+        "hitchMs": None if unknown_durations else round(sum(durations), 1),
+        "hitchesByType": {
+            label: {"count": len(values), "ms": None if any(value is None for value in values)
+                    else round(sum(values) / 1e6, 1)}
+            for label, values in sorted(by_type.items())
+        },
+        "hitchIssues": dict(issues),
+        "hitchTypeColumn": "hitches.narrative-description",
+    }
+
+
+def interval_statistics(intervals_ns: list[float]) -> dict | None:
+    if not intervals_ns:
+        return None
+    ordered = sorted(intervals_ns)
+    return {
+        "count": len(intervals_ns),
+        "medianMs": round(median(intervals_ns) / 1e6, 3),
+        "p95Ms": round(ordered[math.ceil(len(ordered) * 0.95) - 1] / 1e6, 3),
+    }
+
+
+def frame_key(row: dict) -> tuple | None:
+    display = row.get("display")
+    swap = trace_number(row.get("swap-id"))
+    surface = trace_number(row.get("surface-id"))
+    if display is None or display.tag == "sentinel" or swap is None or surface is None:
+        return None
+    return (display.text or display.get("fmt"), swap, surface)
+
+
+def presented_frames(trace: str, run: Run, scroll: dict | None, keys: set[tuple]) -> dict:
+    required = {"hitches-updates", "hitches-framewait"}
+    result = {
+        "medianMs": None, "p95Ms": None, "within120HzShare": None, "within60HzShare": None,
+        "effectiveFpsWhileScrolling": None,
+        "reason": "available tables do not establish coverage of every app presentation",
+        "frameWait": None,
+    }
+    if not required <= run.schemas:
+        result["reason"] = "trace lacks app ownership or frame-wait table"
+        return result
+    by_display = defaultdict(dict)
+    for row in table_rows(trace, "hitches-framewait", {"start", "duration", "display", "swap-id", "surface-id"}):
+        key = frame_key(row)
+        if key not in keys:
+            continue
+        start = trace_number(row.get("start"))
+        duration = trace_number(row.get("duration"))
+        if start is not None and duration is not None and duration >= 0:
+            by_display[key[0]][(start, duration)] = start + duration
+    window = None
+    if scroll is not None and scroll.get("status") == "completed":
+        origin = datetime.fromisoformat(run.started_at)
+        window = tuple((datetime.fromisoformat(scroll[key]) - origin).total_seconds() * 1e9
+                       for key in ("startedAt", "endedAt"))
+
+    def distribution(waits: dict, window: tuple[float, float] | None) -> dict | None:
+        selected = {(start, duration): end for (start, duration), end in waits.items()
+                    if window is None or window[0] <= end <= window[1]}
+        if not selected:
+            return None
+        ends = sorted(set(selected.values()))
+        return {
+            "waitDurations": interval_statistics([duration for _, duration in selected]),
+            "observedWaitEndIntervals": interval_statistics([right - left for left, right in zip(ends, ends[1:])]),
+        }
+
+    if by_display:
+        result["frameWait"] = {
+            "source": "hitches-updates joined to hitches-framewait by display, swap-id, surface-id; nanoseconds",
+            "wholeTrace": {display: distribution(waits, None) for display, waits in by_display.items()},
+            "whileScrolling": {display: distribution(waits, window) for display, waits in by_display.items()}
+                              if window is not None else None,
+        }
+    return result
+
+
+def scroll_receipt(trace: str) -> dict | None:
+    path = Path(trace).with_suffix(".scroll.json")
+    return json.loads(path.read_text()) if path.is_file() else None
+
+
+def gpu_ms_by_process(trace: str) -> tuple[Counter, Counter]:
+    gpu_ms = Counter()
+    unavailable = Counter()
+    for row in table_rows(trace, "metal-gpu-intervals", {"process", "event-depth", "duration"}):
+        depth = row.get("event-depth")
+        if depth is not None and depth.text not in (None, "0"):
+            continue
+        process = process_name(row.get("process"))
+        duration = trace_number(row.get("duration"))
+        if duration is None:
+            unavailable[process] += 1
+        else:
+            gpu_ms[process] += duration / 1e6
+    return gpu_ms, unavailable
+
+
+def swiftui_updates(trace: str, seconds: float) -> dict | None:
+    types = Counter()
+    descriptions = Counter()
+    durations_by_type = Counter()
+    durations_by_description = Counter()
+    unavailable_types = Counter()
+    unavailable_descriptions = Counter()
+    for row in table_rows(trace, SWIFTUI_UPDATES, {"process", "update-type", "description", "duration"}):
+        if process_name(row.get("process")) != APP:
+            continue
+        update = row.get("update-type")
+        description = row.get("description")
+        kind = (update.get("fmt") or update.text) if update is not None and update.tag != "sentinel" else None
+        label = (description.get("fmt") or description.text) if description is not None and description.tag != "sentinel" else None
+        kind = kind or "<unknown>"
+        label = label or "<none>"
+        types[kind] += 1
+        descriptions[label] += 1
+        durations_by_type[kind] += 0
+        durations_by_description[label] += 0
+        duration = trace_number(row.get("duration"))
+        if duration is None or duration < 0:
+            unavailable_types[kind] += 1
+            unavailable_descriptions[label] += 1
+        else:
+            durations_by_type[kind] += duration
+            durations_by_description[label] += duration
+    if not types:
+        return None
+    return {
+        "updates": types.total(),
+        "updatesPerSecond": round(types.total() / seconds, 2),
+        "updatesByType": dict(types.most_common()),
+        "topDescriptions": dict(descriptions.most_common(10)),
+        "updateMs": None if unavailable_types else round(durations_by_type.total() / 1e6, 3),
+        "updatesWithUnavailableDuration": unavailable_types.total(),
+        "updateMsByType": {kind: None if unavailable_types[kind] else round(duration / 1e6, 3)
+                           for kind, duration in durations_by_type.most_common()},
+        "topDescriptionsByUpdateMs": {label: None if unavailable_descriptions[label] else round(duration / 1e6, 3)
+                                      for label, duration in durations_by_description.most_common(10)},
+    }
+
+
+def nearest_app_callers(stacks: dict[str, Counter], names: dict, pattern: str) -> dict[str, Counter]:
+    regex = re.compile(pattern)
+    app_roots = app_bundle_roots(frame for counter in stacks.values() for stack in counter for frame in stack)
+    callers = {bucket: Counter() for bucket in stacks}
+    for bucket, counter in stacks.items():
+        for stack, weight_ms in counter.items():
+            index = next((i for i, frame in enumerate(stack) if any(map(regex.search, names.get(frame, ())))), None)
+            if index is None:
+                continue
+            caller = next((frame for frame in stack[index + 1:] if frame_owner(frame, app_roots) == "app"), None)
+            label = next(iter(names.get(caller, ())), f"{caller.address:#x}") if caller else "<no app caller>"
+            callers[bucket][label] += weight_ms
+    return callers
+
+
+def motion_hitches(intervals: list[tuple[float, float]], rows: list[Hitch] | None, seconds: float) -> dict:
+    if rows is None:
+        return {"hitchesUnavailableReason": "trace did not collect hitches"}
+    if unlocated := sum(row.start_ns is None or row.duration_ns is None for row in rows):
+        return {"hitchesUnavailableReason": f"{unlocated} app hitch rows have no start or duration"}
+    by_type = defaultdict(lambda: [0, 0.0])
+    for row in rows:
+        if (ns := overlap_ns(intervals, row.start_ns, row.start_ns + row.duration_ns)) > 0:
+            totals = by_type[hitch_category(row.issue)]
+            totals[0] += 1
+            totals[1] += ns / 1e6
+    hitch_ms = sum(ms for _, ms in by_type.values())
+    return {
+        "hitches": sum(count for count, _ in by_type.values()),
+        "hitchMs": round(hitch_ms, 1),
+        "hitchesByType": {label: {"count": count, "ms": round(ms, 1)} for label, (count, ms) in sorted(by_type.items())},
+        "hitchRateMsPerSecond": round(hitch_ms / seconds, 2),
+        "hitchRateRating": hitch_rating(hitch_ms / seconds),
+    }
+
+
+def motion_summary(intervals: list[tuple[float, float]], samples: list[Sample], cpu_unavailable: str | None,
+                   hitch_rows: list[Hitch] | None, commit_starts: list[float | None] | None, names: dict,
+                   frames: int) -> dict:
+    inside = within(intervals)
+    seconds = sum(end - start for start, end in intervals) / 1e9
+    summary = {
+        "source": f"{SIGNPOST_SUBSYSTEM} {MOTION_SIGNPOST} Points of Interest intervals, merged; "
+                  "hitch time counts only its overlap with them",
+        "intervals": len(intervals),
+        "seconds": round(seconds, 2),
+    }
+    if cpu_unavailable:
+        summary["cpuUnavailableReason"] = cpu_unavailable
+    elif unlocated := sum(sample.time_ns is None for sample in samples):
+        summary["cpuUnavailableReason"] = f"{unlocated} app samples have no time"
+    else:
+        moving = [sample for sample in samples if inside(sample.time_ns)]
+        main = [sample for sample in moving if sample.thread == "main"]
+        main_ms = sum(sample.weight_ms for sample in main)
+        summary |= {
+            "appCpuMs": round(sum(sample.weight_ms for sample in moving), 1),
+            "mainThreadCpuMs": round(main_ms, 1),
+            "mainThreadBusyShare": round(main_ms / (seconds * 1000), 3),
+            "automationCpuMs": round(sum(sample.weight_ms for sample in moving if sample.automation), 1),
+            "mainTopFunctionsSelfMs": top_functions(main, names, frames) if frames else None,
+        }
+    if commit_starts is None:
+        summary["commitsUnavailableReason"] = "trace did not collect hitches-updates"
+    elif unlocated := sum(start is None for start in commit_starts):
+        summary["commitsUnavailableReason"] = f"{unlocated} app commits have no start"
+    else:
+        commits = sum(map(inside, commit_starts))
+        summary |= {"commits": commits, "commitsPerSecond": round(commits / seconds, 2)}
+    return summary | motion_hitches(intervals, hitch_rows, seconds)
+
+
+def frame_statistics(samples: list[Sample], names: dict):
+    stacks = {"main": Counter(), "background": Counter()}
+    for sample in samples:
+        stacks["main" if sample.thread == "main" else "background"][sample.stack] += sample.weight_ms
+    app_roots = app_bundle_roots(frame for sample in samples for frame in sample.stack)
+    inclusive = {owner: {bucket: Counter() for bucket in stacks} for owner in ("app", "system")}
+    self_by_binary = {bucket: Counter() for bucket in stacks}
+    for bucket, counter in stacks.items():
+        for stack, weight_ms in counter.items():
+            for owner, symbol in {(frame_owner(frame, app_roots), symbol) for frame in stack for symbol in names.get(frame, ())}:
+                inclusive[owner][bucket][symbol] += weight_ms
+            leaf = stack[0].binary if stack else None
+            self_by_binary[bucket][leaf.name if leaf is not None else "?"] += weight_ms
+    return stacks, inclusive, self_by_binary
+
+
+def summarize(trace: str, frames: int, callers: list[str], apps: list[Path]) -> dict:
+    run = recorded_run(trace)
+    scroll = scroll_receipt(trace)
+    render_server = MAC_RENDER_SERVER if run.platform == "macOS" else IPHONE_RENDER_SERVER
+    cpu_ms, unweighted, samples, automation_samples = time_profile(trace)
+    app_threads = thread_ms(samples)
+    commits, app_frames, commit_starts = (hitch_updates(trace) if "hitches-updates" in run.schemas
+                                          else (None, set(), None))
+    gpu_ms, unavailable_gpu = gpu_ms_by_process(trace) if "metal-gpu-intervals" in run.schemas else (None, Counter())
+    hitch_rows = app_hitch_rows(trace, run.schemas)
+    hitches = app_hitches(hitch_rows)
+    cadence = presented_frames(trace, run, scroll, app_frames)
+    swiftui = swiftui_updates(trace, run.seconds) if SWIFTUI_UPDATES in run.schemas else None
+    intervals = operation_intervals(trace, run.schemas, MOTION_SIGNPOST)
+    journey_intervals = operation_intervals(trace, run.schemas, "ReplayJourney")
+
+    all_frames = {frame for sample in samples for frame in sample.stack}
+    names = symbolicate(all_frames, apps) if frames or callers else {}
+    stacks, inclusive, self_by_binary = frame_statistics(samples, names)
+
+    def rate(value: float) -> float:
+        return round(value / run.seconds, 2)
+
+    def cpu_summary(process: str) -> dict:
+        reason = f"time-profile has {unweighted[process]} samples without a weight for {process}" if unweighted[process] else None
+        return {
+            "cpuMs": None if reason else round(cpu_ms[process], 1),
+            "cpuMsPerSecond": None if reason else rate(cpu_ms[process]),
+            "cpuUnavailableReason": reason,
+        }
+
+    def gpu_summary(process: str) -> dict:
+        reason = (
+            "trace did not collect metal-gpu-intervals" if gpu_ms is None else
+            f"metal-gpu-intervals has {unavailable_gpu[process]} contributing rows with unavailable durations for {process}"
+            if unavailable_gpu[process] else None
+        )
+        return {
+            "gpuMs": None if reason else round(gpu_ms[process], 1),
+            "gpuMsUnavailableReason": reason,
+        }
+
+    app_cpu = cpu_summary(APP)
+    journey = None
+    if journey_intervals:
+        journey = motion_summary(journey_intervals, samples, app_cpu["cpuUnavailableReason"], hitch_rows, commit_starts, names, frames)
+        journey["source"] = f"{SIGNPOST_SUBSYSTEM} ReplayJourney Points of Interest intervals"
+        journey.pop("hitchRateRating", None)
+        if not app_cpu["cpuUnavailableReason"] and all(sample.time_ns is not None for sample in samples):
+            inside = within(journey_intervals)
+            scoped = [sample for sample in samples if inside(sample.time_ns)]
+            scoped_stacks, scoped_inclusive, scoped_self = frame_statistics(scoped, names)
+            journey["cpuMsByThread"] = dict(thread_ms(scoped).most_common())
+            journey["appFramesInclusiveMs"] = heaviest(scoped_inclusive["app"], frames)
+            journey["systemFramesInclusiveMs"] = heaviest(scoped_inclusive["system"], frames)
+            journey["selfMsByBinary"] = heaviest(scoped_self, 30)
+            journey["nearestAppCallersMs"] = {pattern: heaviest(nearest_app_callers(scoped_stacks, names, pattern), frames or 10) for pattern in callers}
+    return {
+        "trace": trace,
+        "seconds": round(run.seconds, 2),
+        "endReason": run.end_reason,
+        "platform": run.platform,
+        "scriptedScroll": scroll,
+        "journey": journey,
+        "app": {
+            **app_cpu,
+            "cpuMsByThread": None if unweighted[APP] else {name: round(ms, 1) for name, ms in app_threads.most_common(8)},
+            "automation": automation_summary(samples, automation_samples),
+            "commits": commits[APP] if commits is not None else None,
+            "commitsPerSecond": rate(commits[APP]) if commits is not None else None,
+            "commitsUnavailableReason": "trace did not collect hitches-updates" if commits is None else None,
+            **gpu_summary(APP),
+            **hitches,
+            "presentedFrames": cadence,
+        },
+        "motion": motion_summary(intervals, samples, app_cpu["cpuUnavailableReason"], hitch_rows, commit_starts, names,
+                                 frames) if intervals else None,
+        "motionUnavailableReason": (
+            "trace has no OSSignpostIntervals table" if intervals is None else
+            f"no {MOTION_SIGNPOST} interval completed in {APP}" if not intervals else None
+        ),
+        "mainTopFunctionsSelfMs": top_functions([sample for sample in samples if sample.thread == "main"], names, frames)
+                                  if frames else None,
+        "appFramesInclusiveMs": heaviest(inclusive["app"], frames),
+        "systemFramesInclusiveMs": heaviest(inclusive["system"], frames),
+        "appSelfMsByBinary": heaviest(self_by_binary, 10),
+        "nearestAppCallersMs": {
+            pattern: heaviest(nearest_app_callers(stacks, names, pattern), frames or 10) for pattern in callers
+        },
+        "renderServer": {
+            "process": render_server,
+            **cpu_summary(render_server),
+            **gpu_summary(render_server),
+        } if render_server in cpu_ms or unweighted[render_server] else None,
+        "swiftui": swiftui,
+    }
+
+
+def remote(host: str, arguments: list[str]) -> int:
+    script = Path(__file__).read_text()
+    source = (Path(__file__).resolve().parent.parent / "dev-tools/mac-scroll-driver.swift").read_text()
+    head, guard, tail = script.rpartition('if __name__ == "__main__":')
+    payload = json.dumps({
+        "script": f"{head}SCROLL_SOURCE = {source!r}\n\n{guard}{tail}",
+        "modules": {"build_hosts": Path(__file__).with_name("build_hosts.py").read_text()},
+    }).encode()
+    command = SSH + [host, shlex.join(["python3", "-c", REMOTE_BOOTSTRAP, str(len(payload)), *arguments])]
+    with subprocess.Popen(command, stdin=subprocess.PIPE) as client:
+        client.stdin.write(payload)
+        client.stdin.flush()
+        return client.wait()
+
+
+@contextlib.contextmanager
+def exclusive_host():
+    directory = Path.home() / TRACE_ROOT
+    directory.mkdir(parents=True, exist_ok=True)
+    with open(directory / HOST_LOCK, "w") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            sys.exit("another perf-trace recording or summary is running on this host; wait for it to finish")
+        available = sysctl_number("kern.memorystatus_level")
+        if available < STARTING_AVAILABLE_MEMORY_PERCENT:
+            sys.exit(f"only {available}% of memory is available; free memory before tracing")
+        yield
+
+
+def new_trace(label: str) -> Path:
+    directory = Path.home() / TRACE_ROOT
+    directory.mkdir(parents=True, exist_ok=True)
+    trace = directory / f"{label}.trace"
+    if trace.exists() or trace.with_suffix(".scroll.json").exists():
+        sys.exit(f"{trace} already exists; choose another label")
+    return trace
+
+
+def require_swiftui(command: list[str]) -> None:
+    check = [*command, "--show-recording-options", "--no-prompt"]
+    try:
+        result = subprocess.run(check, capture_output=True, text=True, timeout=CAPABILITY_TIMEOUT_SECONDS, check=False)
+        if result.returncode != 0:
+            raise ValueError(result.stderr.strip() or result.stdout.strip() or f"xctrace exited {result.returncode}")
+        options = json.loads(result.stdout)
+        if not isinstance(options, dict) or not isinstance(options.get("SwiftUI"), dict):
+            raise TypeError("the selected template did not expose SwiftUI recording options")
+    except (ValueError, TypeError, subprocess.TimeoutExpired) as error:
+        sys.exit(f"SwiftUI capability check failed: {error}; select a supported Xcode/device and keep the device "
+                 f"connected and unlocked, or omit --swiftui. Check with: {shlex.join(check)}")
+
+
+@contextlib.contextmanager
+def recording(trace: Path, seconds: int, target: list[str], instruments: list[str]):
+    command = ["xcrun", "xctrace", "record", *target, "--template", "Time Profiler",
+               *(argument for instrument in instruments for argument in ("--instrument", instrument))]
+    if "SwiftUI" in instruments:
+        require_swiftui(command)
+    command += ["--time-limit", f"{seconds}s", "--output", str(trace)]
+    with subprocess.Popen(command, stdout=subprocess.PIPE, text=True) as recorder:
+        for line in recorder.stdout:
+            sys.stderr.write(line)
+            if line.startswith(RECORDING_STARTED):
+                break
+        else:
+            sys.exit(f"xctrace exited ({recorder.wait()}) before it started recording {trace}")
+        try:
+            yield
+        finally:
+            sys.stderr.writelines(recorder.stdout)
+    if recorder.returncode != 0:
+        raise subprocess.CalledProcessError(recorder.returncode, command)
+
+
+def reject_automation(summary: dict) -> None:
+    automation = summary["app"]["automation"]
+    if automation["samples"]:
+        sys.exit(f"{summary['trace']} is not a measurement of {APP}: {automation['samples']} of its samples "
+                 f"({automation['samplesByThread']}, {automation['cpuMs']} ms) ran inside XCTest automation, "
+                 "such as the accessibility snapshots "
+                 "agent-device, XCUITest or Xcode device interaction take on the app's main thread, so its CPU, commit "
+                 "and hitch figures are not the app's. Drive the journey with perf-sim's in-app harness or by hand, "
+                 "then record again")
+
+
+def report(summary: dict, remedy: str) -> None:
+    print(json.dumps(summary, indent=2))
+    if summary["endReason"] != TRACE_COMPLETE:
+        sys.exit(f"{summary['trace']} stopped after {summary['seconds']} s: {summary['endReason']}; {remedy}")
+    reject_automation(summary)
+
+
+def record_device(device: str, label: str, seconds: int, frames: int, callers: list[str], apps: list[Path], swiftui: bool) -> None:
+    trace = new_trace(label)
+    with recording(trace, seconds, ["--device", device, "--all-processes"], [*INSTRUMENTS, *(["SwiftUI"] if swiftui else [])]):
+        pass
+    summary = summarize(str(trace), frames, callers, apps)
+    report(summary, "keep the device connected and unlocked, then record again")
+    if swiftui and summary["swiftui"] is None:
+        sys.exit(f"{trace} has no swiftui-updates for {APP}; keep the app in the foreground and exercise its views, "
+                 "then retry on a supported iOS/Xcode version, or omit --swiftui")
+
+
+def mac_app_pid() -> int:
+    listing = subprocess.run(["ps", "-axo", "pid=,comm="], check=True, capture_output=True, text=True).stdout
+    processes = [(int(pid), path) for pid, path in (line.split(None, 1) for line in listing.splitlines())
+                 if Path(path).name == APP]
+    if not processes:
+        sys.exit(f"{APP} is not running on this Mac; open it, then record again")
+    if len(processes) > 1 or not processes[0][1].endswith(MAC_APP_EXECUTABLE):
+        found = "; ".join(f"{pid} {path}" for pid, path in processes)
+        sys.exit(f"the summary matches processes by name, so the Mac app must be the only process named {APP}; "
+                 f"found {found}")
+    return processes[0][0]
+
+
+def top_window(pid: int, seconds: int) -> dict:
+    output = subprocess.run(
+        ["top", "-l", "2", "-s", str(seconds), "-c", "d", "-pid", str(pid), "-stats", "pid,cpu,idlew"],
+        check=True, capture_output=True, text=True,
+    ).stdout
+    samples = [fields for line in output.splitlines() if (fields := line.split())[:1] == [str(pid)]]
+    if len(samples) != 2:
+        sys.exit(f"{APP} ({pid}) exited while top sampled it")
+    _, cpu_percent, idle_wakeups = samples[1]
+    return {
+        "pid": pid,
+        "seconds": seconds,
+        "cpuPercent": float(cpu_percent),
+        "idleWakeupsPerSecond": round(int(idle_wakeups) / seconds, 2),
+    }
+
+
+def scroll_driver() -> Path:
+    source = globals().get("SCROLL_SOURCE")
+    if source is None:
+        source = (Path(__file__).resolve().parent.parent / "dev-tools/mac-scroll-driver.swift").read_text()
+    digest = hashlib.sha256(source.encode()).hexdigest()
+    cache = Path.home() / "Library/Caches/RemoteCoder/mac-scroll-driver" / digest
+    cache.mkdir(parents=True, exist_ok=True)
+    binary = cache / "mac-scroll-driver"
+    if not binary.is_file():
+        with tempfile.TemporaryDirectory(dir=cache) as temporary:
+            root = Path(temporary)
+            swift = root / "driver.swift"
+            swift.write_text(source)
+            subprocess.run(["xcrun", "swiftc", "-swift-version", "6", "-O", str(swift), "-o", str(root / binary.name)], check=True)
+            (root / binary.name).replace(binary)
+    return binary
+
+
+def record_mac(label: str, seconds: int, frames: int, callers: list[str], apps: list[Path], args) -> None:
+    pid = mac_app_pid()
+    driver = scroll_driver() if args.scroll else None
+    trace = new_trace(label)
+    scroll = None
+    with recording(trace, seconds, ["--attach", str(pid)], [*INSTRUMENTS, *(["SwiftUI"] if args.swiftui else [])]):
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            sampling = pool.submit(top_window, pid, seconds)
+            if driver is not None:
+                time.sleep(2)
+                command = [str(driver), "--pid", str(pid), "--seconds", str(seconds - 4),
+                           "--velocity", str(args.scroll_velocity), "--swipe-seconds", str(args.scroll_swipe_seconds),
+                           "--idle-seconds", str(args.scroll_idle_seconds)]
+                if args.force:
+                    command.append("--force")
+                outcome = subprocess.run(command, capture_output=True, text=True)
+                scroll = json.loads(outcome.stdout) if outcome.stdout.strip() else {
+                    "status": "failed", "error": outcome.stderr.strip(), "command": command,
+                }
+                scroll["exitCode"] = outcome.returncode
+                scroll["sourceHash"] = driver.parent.name
+                Path(trace).with_suffix(".scroll.json").write_text(json.dumps(scroll, indent=2) + "\n")
+                if outcome.stderr:
+                    sys.stderr.write(outcome.stderr)
+            top = sampling.result()
+    report({**summarize(str(trace), frames, callers, apps), "top": top}, "record again")
+    if scroll is not None and scroll["exitCode"] != 0:
+        sys.exit("scripted scroll failed; see scriptedScroll in the summary")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--host",
+                        help=f"host the iPhone/iPad is attached to (default {TEST_DEVICE_HOST}) or whose Mac app "
+                             f"--mac traces (default {MAC_GUI_HOST}); 'local' runs here")
+    parser.add_argument("--frames", type=int, default=0, help="also list the N heaviest app and system frames by inclusive CPU time, "
+                        "and the main thread's top functions by self time")
+    parser.add_argument("--callers", action="append", default=[], metavar="REGEX",
+                        help="attribute time in frames matching REGEX to their nearest RemoteCoder caller; repeatable")
+    parser.add_argument("--symbols", action="append", default=[], type=Path, metavar="APP",
+                        help="RemoteCoder.app build of the traced install that has no retained dSYM, e.g. a perf-sim build")
+    commands = parser.add_subparsers(dest="command", required=True)
+    record_parser = commands.add_parser("record", help="record a system-wide trace of the current journey, then summarize it")
+    record_parser.add_argument("label", help="trace name, e.g. before-streaming")
+    target = record_parser.add_mutually_exclusive_group(required=True)
+    target.add_argument("--device", help="iPhone/iPad UDID or name as xctrace lists it")
+    target.add_argument("--mac", action="store_true", help=f"trace the host Mac and its running {APP} app")
+    record_parser.add_argument("--seconds", type=int, default=30)
+    record_parser.add_argument("--swiftui", action="store_true", help="add SwiftUI on a supported device or Mac template; its tables are large")
+    record_parser.add_argument("--scroll", action="store_true", help="drive alternating pixel swipes after recording starts (--mac only)")
+    record_parser.add_argument("--scroll-velocity", type=float, default=900, metavar="PIXELS_PER_SECOND")
+    record_parser.add_argument("--scroll-swipe-seconds", type=float, default=2)
+    record_parser.add_argument("--scroll-idle-seconds", type=float, default=10)
+    record_parser.add_argument("--force", action="store_true", help="skip only the scripted scroll's initial HID idle gate")
+    summarize_parser = commands.add_parser("summarize", help="summarize an existing trace on the host")
+    summarize_parser.add_argument("trace")
+    args = parser.parse_args()
+
+    if args.command == "record":
+        if args.seconds <= 0:
+            parser.error("--seconds must be positive")
+        if args.scroll and args.seconds > 3600:
+            parser.error("scripted scroll duration must not exceed 3600 seconds")
+        if args.scroll and (not args.mac or args.seconds < 6):
+            parser.error("--scroll requires --mac and at least 6 seconds (2 seconds warmup and tail)")
+        if args.scroll_swipe_seconds < 0.1:
+            parser.error("--scroll-swipe-seconds must be at least 0.1")
+        if args.force and not args.scroll:
+            parser.error("--force requires --scroll")
+        for name in ("scroll_velocity", "scroll_swipe_seconds", "scroll_idle_seconds"):
+            value = getattr(args, name)
+            if not math.isfinite(value) or value < 0 or (name != "scroll_idle_seconds" and value == 0):
+                parser.error(f"--{name.replace('_', '-')} must be finite and positive (idle may be zero)")
+    host = args.host or (MAC_GUI_HOST if getattr(args, "mac", False) else TEST_DEVICE_HOST)
+    if not is_local(host):
+        split = sys.argv.index(args.command, 1)
+        forwarded = [*sys.argv[1:split], "--host", "local", *sys.argv[split:]]
+        sys.exit(remote(host, forwarded))
+    with exclusive_host():
+        if args.command == "summarize":
+            summary = summarize(args.trace, args.frames, args.callers, args.symbols)
+            print(json.dumps(summary, indent=2))
+            reject_automation(summary)
+        elif args.mac:
+            record_mac(args.label, args.seconds, args.frames, args.callers, args.symbols, args)
+        else:
+            record_device(args.device, args.label, args.seconds, args.frames, args.callers, args.symbols, args.swiftui)
+
+
+if __name__ == "__main__":
+    main()

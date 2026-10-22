@@ -1,0 +1,2 @@
+app_identifier(ENV["RC_BUNDLE_ID"])
+team_id(ENV["DEVELOPMENT_TEAM"])

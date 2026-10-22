@@ -1,0 +1,364 @@
+#!/bin/bash
+# install-device: Build and install RemoteCoder to a connected iOS device
+#
+# Usage:
+#   ./scripts/install-device [--device <CoreDevice-id|UDID|name>] [--optimized|--incremental-optimized|--unoptimized]
+#
+# Default behavior:
+#   1. Verify configuration and build or reuse an exact signed device app.
+#   2. Retain immutable app, symbols and provenance independently of a phone.
+#   3. Unless --build-only, deliver through the selected direct or MDM transport.
+#
+# This is the per-host implementation; ./scripts/install-dev wraps it to prefer
+# the repository's configured iPhone build worker.
+
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+if [[ "${RC_INSTALL_SOURCE_LEASED:-}" != "1" ]]; then
+    exec python3 scripts/remote-build.py local-install "$@"
+fi
+./scripts/lint-haptics
+./scripts/lint-interface-scale
+
+DEFAULT_XCODE_DEVELOPER_DIR="/Applications/Xcode-$(cat .xcode-version).app/Contents/Developer"
+export DEVELOPER_DIR="${RC_XCODE_DEVELOPER_DIR:-${DEVELOPER_DIR:-$DEFAULT_XCODE_DEVELOPER_DIR}}"
+if [[ ! -x "$DEVELOPER_DIR/usr/bin/xcodebuild" ]]; then
+    echo "Required Xcode 27 toolchain not found at $DEVELOPER_DIR" >&2
+    echo "Set RC_XCODE_DEVELOPER_DIR to the Xcode 27 Developer directory." >&2
+    exit 1
+fi
+SWIFT_TOOLCHAIN_VERSION="$(xcrun swift --version 2>/dev/null | head -n 1)"
+if [[ "$SWIFT_TOOLCHAIN_VERSION" != *"Apple Swift version 6.4"* ]]; then
+    echo "RemoteCoder requires Swift 6.4; selected toolchain reports: $SWIFT_TOOLCHAIN_VERSION" >&2
+    exit 1
+fi
+if [[ "$(tuist version)" != "$(cat .tuist-version)" ]]; then
+    echo "Tuist version does not match .tuist-version" >&2
+    exit 1
+fi
+
+SCHEME="RemoteCoder"
+PROJECT="RemoteCoder.xcodeproj"
+DERIVED_DATA="${RC_DERIVED_DATA:?The source owner must select DerivedData}"
+APP_PATH="$DERIVED_DATA/Build/Products/Debug-iphoneos/RemoteCoder.app"
+DEPLOY_LOG_DIR="${RC_DEPLOY_LOG_DIR:-$HOME/Library/Logs/remote-coder/deployments}"
+mkdir -p "$DEPLOY_LOG_DIR"
+BUILD_LOG="${RC_IOS_BUILD_LOG:-$DEPLOY_LOG_DIR/ios-device-build-$(date -u +%Y-%m-%dT%H-%M-%SZ).log}"
+REQUESTED_DEVICE=""
+OPTIMIZED=true
+COMPILATION_MODE=singlefile
+MODE_FLAG=""
+BUILD_ONLY=false
+DELIVERY=auto
+FORCE_BUILD=false
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+usage() {
+    cat <<'EOF'
+install-device: Build a signed RemoteCoder app, then optionally deliver it to an iPhone.
+
+Usage:
+  ./scripts/install-device [--build-only] [--delivery auto|direct|mdm] [--force-build]
+                          [--device <CoreDevice-id|UDID|name>] [--optimized|--incremental-optimized|--unoptimized]
+
+Options:
+  --device  Select a specific connected iOS device by CoreDevice identifier, UDID, or name.
+  --optimized
+            Whole-module optimized physical development build.
+            Keeps the existing Debug configuration and device-signing workflow.
+            This does not archive or release the app.
+  --build-only
+            Build and retain a signed app without discovering or changing a phone.
+  --delivery auto|direct|mdm
+            Select delivery after a successful build (default: auto).
+  --force-build
+            Run Xcode even when an identical signed artifact is reusable.
+  --incremental-optimized
+            Keep speed optimization while rebuilding changed Swift files incrementally (default).
+  --unoptimized
+            Disable optimization explicitly for breakpoint-heavy debugging.
+  -h, --help
+            Show this help.
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --device)
+            REQUESTED_DEVICE="${2:-}"
+            if [[ -z "$REQUESTED_DEVICE" ]]; then
+                echo "--device requires a value" >&2
+                exit 2
+            fi
+            shift 2
+            ;;
+        --build-only)
+            BUILD_ONLY=true
+            shift
+            ;;
+        --force-build)
+            FORCE_BUILD=true
+            shift
+            ;;
+        --delivery)
+            DELIVERY="${2:-}"
+            case "$DELIVERY" in auto|direct|mdm) ;; *) echo "--delivery requires auto, direct or mdm" >&2; exit 2 ;; esac
+            shift 2
+            ;;
+        --optimized|--incremental-optimized|--unoptimized)
+            if [[ -n "$MODE_FLAG" && "$MODE_FLAG" != "$1" ]]; then
+                echo "Select only one optimization mode" >&2
+                exit 2
+            fi
+            MODE_FLAG="$1"
+            OPTIMIZED=true
+            COMPILATION_MODE=wholemodule
+            if [[ "$1" == "--unoptimized" ]]; then OPTIMIZED=false; fi
+            if [[ "$1" != "--optimized" ]]; then COMPILATION_MODE=singlefile; fi
+            shift
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "Unknown argument: $1" >&2
+            usage >&2
+            exit 2
+            ;;
+    esac
+done
+
+if [[ "${RC_IOS_DEVICE_VARIANT_SET:-}" != "1" ]]; then
+    if [[ "$OPTIMIZED" != "true" ]]; then
+        DERIVED_DATA="${DERIVED_DATA}-ios-unoptimized"
+    elif [[ "$COMPILATION_MODE" == "singlefile" ]]; then
+        DERIVED_DATA="${DERIVED_DATA}-ios-incremental-optimized"
+    fi
+    export RC_DERIVED_DATA="$DERIVED_DATA"
+fi
+APP_PATH="$DERIVED_DATA/Build/Products/Debug-iphoneos/RemoteCoder.app"
+
+phase_start() { python3 -c 'import time; print(time.monotonic())'; }
+phase_finish() { python3 scripts/ios-device-artifact.py phase --phase "$1" --started "$2"; }
+
+prepare_signing_keychain() {
+    local helper="$HOME/configs/skills/apple-devops/scripts/ensure-signing-keychain"
+    if [[ ! -x "$helper" ]]; then
+        echo -e "${RED}Missing canonical signing helper: $helper${NC}" >&2
+        return 1
+    fi
+    "$helper"
+}
+
+# Generation depends on manifests, the local-config bundling choice and paths
+# matched by explicit globs. Buildable folders handle their own file changes.
+GENERATE_FINGERPRINT_FILE="$DERIVED_DATA/tuist-generate.fingerprint"
+
+project_generate_fingerprint() {
+    {
+        shasum -a 256 Project.swift Tuist.swift .package.resolved Core/Package.swift .tuist-version scripts/install-device
+        find Config -name '*.xcconfig' -type f -exec shasum -a 256 {} + 2>/dev/null || true
+        tuist version
+        if [[ -f RemoteCoder/Resources/RemoteCoderLocalConfig.json ]]; then
+            printf '%s\n' bundle-local-config
+        fi
+        find Shared RemoteCoder/Resources RemoteCoder/Assets.xcassets \
+            RemoteCoderLiveActivities RemoteCoderLocationPushService \
+            RemoteCoderNotificationService RemoteCoderShareExtension RemoteCoderCaptureExtension protocol-fixtures \
+            -type f -not -name .DS_Store 2>/dev/null | LC_ALL=C sort
+    } | shasum -a 256 | awk '{ print $1 }'
+}
+
+project_generate() {
+    [[ -f Project.swift ]] || return 0
+    local fingerprint
+    fingerprint="$(project_generate_fingerprint)"
+    if [[ "${RC_FORCE_GENERATE:-}" != "1" \
+        && -f "$PROJECT/project.pbxproj" \
+        && -f "$GENERATE_FINGERPRINT_FILE" \
+        && "$(cat "$GENERATE_FINGERPRINT_FILE")" == "$fingerprint" ]]; then
+        echo -e "${GREEN}Xcode project is current; skipping Tuist generate${NC}"
+        return 0
+    fi
+    echo -e "${GREEN}Generating Xcode project with Tuist...${NC}"
+    if [[ -f RemoteCoder/Resources/RemoteCoderLocalConfig.json ]]; then
+        TUIST_REMOTE_CODER_BUNDLE_LOCAL_CONFIG=1 tuist generate --no-open
+    else
+        env -u TUIST_REMOTE_CODER_BUNDLE_LOCAL_CONFIG tuist generate --no-open
+    fi
+    settle_generated_project_files
+    mkdir -p "$DERIVED_DATA"
+    project_generate_fingerprint >"$GENERATE_FINGERPRINT_FILE"
+}
+
+settle_generated_project_files() {
+    # Tuist writes generated project support files immediately before xcodebuild.
+    # Give the filesystem timestamp window a chance to close so Xcode does not
+    # misclassify generated signing inputs as modified during the build.
+    [[ -d Derived ]] || return 0
+    sleep 1
+}
+
+xcode_auth_flags() {
+    if [[ -f "$HOME/configs/shared-env.sh" ]]; then
+        bash --noprofile --norc -c 'source "$HOME/configs/shared-env.sh" >/dev/null; [[ -n "${APP_STORE_CONNECT_KEY_ID:-}" && -n "${APP_STORE_CONNECT_ISSUER_ID:-}" && -f "${APP_STORE_CONNECT_KEY_PATH:-}" ]] || exit 0; printf "%s\0" -authenticationKeyIssuerID "$APP_STORE_CONNECT_ISSUER_ID" -authenticationKeyID "$APP_STORE_CONNECT_KEY_ID" -authenticationKeyPath "$APP_STORE_CONNECT_KEY_PATH"'
+        return
+    fi
+    [[ -n "${APP_STORE_CONNECT_KEY_ID:-}" ]] || return 0
+    [[ -n "${APP_STORE_CONNECT_ISSUER_ID:-}" ]] || return 0
+    [[ -n "${APP_STORE_CONNECT_KEY_PATH:-}" ]] || return 0
+
+    local key_path="${APP_STORE_CONNECT_KEY_PATH/#\~/$HOME}"
+    [[ -f "$key_path" ]] || return 0
+
+    printf '%s\0' \
+        -authenticationKeyIssuerID "$APP_STORE_CONNECT_ISSUER_ID" \
+        -authenticationKeyID "$APP_STORE_CONNECT_KEY_ID" \
+        -authenticationKeyPath "$key_path"
+}
+
+run_xcodebuild_build() {
+    local allow_entitlements_modification="${1:-false}"
+    local allow_provisioning_updates="${2:-false}"
+    local auth_flags=()
+    while IFS= read -r -d '' flag; do
+        auth_flags+=("$flag")
+    done < <(xcode_auth_flags)
+
+    local xcodebuild_args=(
+        -jobs "${EMIL_BUILD_JOBS:-4}"
+        -workspace RemoteCoder.xcworkspace
+        -scheme "$SCHEME"
+        -destination "generic/platform=iOS"
+        -derivedDataPath "$DERIVED_DATA"
+        # Pinned packages need no re-resolution or plugin/macro trust prompts,
+        # and a device build never reads the index store.
+        -onlyUsePackageVersionsFromResolvedFile
+        -skipPackagePluginValidation
+        -skipMacroValidation
+        COMPILER_INDEX_STORE_ENABLE=NO
+        DEBUG_INFORMATION_FORMAT=dwarf-with-dsym
+        "${BUILD_IDENTITY_FLAGS[@]}"
+    )
+    if [[ "$OPTIMIZED" == "true" ]]; then
+        # Optimize without switching to the distribution-only Release configuration.
+        xcodebuild_args+=(SWIFT_OPTIMIZATION_LEVEL=-O "SWIFT_COMPILATION_MODE=$COMPILATION_MODE")
+    else
+        xcodebuild_args+=(SWIFT_OPTIMIZATION_LEVEL=-Onone SWIFT_COMPILATION_MODE=singlefile)
+    fi
+    if [[ "$allow_provisioning_updates" == "true" ]]; then
+        # Portal round trips cost seconds per build, so they run only after a
+        # provisioning failure (expired profile, unregistered device, ...).
+        xcodebuild_args+=(
+            -allowProvisioningUpdates
+            -allowProvisioningDeviceRegistration
+        )
+        xcodebuild_args+=(${auth_flags[@]+"${auth_flags[@]}"})
+    fi
+    if [[ "$allow_entitlements_modification" == "true" ]]; then
+        xcodebuild_args+=("CODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION=YES")
+    fi
+
+    local settings="${BUILD_LOG%.log}-settings.json"
+    local settings_started
+    settings_started="$(phase_start)"
+    xcodebuild "${xcodebuild_args[@]}" -showBuildSettings -json >"$settings"
+    python3 scripts/device-build-identity.py verify "$BUILD_IDENTITY" "$settings" "$RC_BUILD_SETTINGS_EVIDENCE" --target RemoteCoder
+
+    phase_finish settings "$settings_started"
+    local compile_started
+    compile_started="$(phase_start)"
+    set +e
+    xcodebuild "${xcodebuild_args[@]}" build 2>&1 | tee "$BUILD_LOG" | { grep -E "(error:|warning:|BUILD)" | tail -20 || true; }
+    local build_status="${PIPESTATUS[0]}"
+    set -e
+    phase_finish compile "$compile_started"
+    return "$build_status"
+}
+
+build_app() {
+    echo -e "${GREEN}Building $SCHEME...${NC}"
+    local generate_started
+    generate_started="$(phase_start)"
+    project_generate
+    phase_finish generation "$generate_started"
+    prepare_signing_keychain
+    BUILD_IDENTITY="${BUILD_LOG%.log}-identity.json"
+    export RC_BUILD_SETTINGS_EVIDENCE="${BUILD_LOG%.log}-verified-settings.json"
+    local identity_command=(python3 scripts/device-build-identity.py prepare "$BUILD_IDENTITY")
+    if [[ -n "$MODE_FLAG" ]]; then identity_command+=("$MODE_FLAG"); fi
+    local flags
+    flags="$("${identity_command[@]}")"
+    BUILD_IDENTITY_FLAGS=()
+    while IFS= read -r flag; do BUILD_IDENTITY_FLAGS+=("$flag"); done <<<"$flags"
+
+    if run_xcodebuild_build false false; then
+        echo -e "${GREEN}Build succeeded!${NC}"
+        return 0
+    fi
+
+    local signing_pattern='provisioning profile|No profiles for|No signing certificate|not registered|Automatic signing|requires a development team'
+    if rg -q -i "$signing_pattern" "$BUILD_LOG" 2>/dev/null \
+        && ! { rg 'error:' "$BUILD_LOG" 2>/dev/null || true; } | rg -q -v -i "$signing_pattern"; then
+        # Only signing errors: a compile error would fail identically with portal access.
+        cp "$BUILD_LOG" "${BUILD_LOG%.log}-attempt1.log"
+        echo -e "${YELLOW}Signing needs a provisioning update; retrying once with portal access.${NC}" >&2
+        if run_xcodebuild_build false true; then
+            echo -e "${GREEN}Build succeeded after provisioning update!${NC}"
+            return 0
+        fi
+    fi
+
+    if rg -q 'Entitlements file ".*" was modified during the build' "$BUILD_LOG" 2>/dev/null; then
+        echo -e "${YELLOW}Xcode reported generated entitlements changed during build; retrying once with Xcode's local-build override.${NC}" >&2
+        project_generate
+        if run_xcodebuild_build true true; then
+            echo -e "${GREEN}Build succeeded on entitlements-race retry!${NC}"
+            return 0
+        fi
+    fi
+
+    if [[ ! -d "$APP_PATH" ]]; then
+        echo -e "${RED}Build failed!${NC}"
+        if rg -q "errSecInternalComponent" "$BUILD_LOG" 2>/dev/null; then
+            echo -e "${YELLOW}Hint: signing keychain access failed. Run ~/configs/skills/apple-devops/scripts/ensure-signing-keychain; never unlock the login keychain for signing.${NC}" >&2
+        fi
+        exit 1
+    fi
+
+    echo -e "${RED}Build failed!${NC}"
+    exit 1
+}
+
+# Build admission is independent of phone reachability; delivery owns its transport.
+python3 scripts/google-maps-config.py sync RemoteCoder/Resources/RemoteCoderLocalConfig.json
+unset REMOTE_CODER_GOOGLE_MAPS_API_KEY GOOGLE_MAPS_IOS_API_KEY
+python3 scripts/release-config.py verify-development RemoteCoder/Resources/RemoteCoderLocalConfig.json
+artifact_args=()
+if [[ "$OPTIMIZED" != "true" ]]; then
+    artifact_args+=(--unoptimized)
+elif [[ "$COMPILATION_MODE" == "singlefile" ]]; then
+    artifact_args+=(--incremental-optimized)
+else
+    artifact_args+=(--optimized)
+fi
+if [[ "$FORCE_BUILD" != "true" ]] && ARTIFACT="$(python3 scripts/ios-device-artifact.py reuse ${artifact_args[@]+"${artifact_args[@]}"})"; then
+    echo "Reusing exact signed device artifact: $ARTIFACT" >&2
+else
+    reuse_status=$?
+    if [[ "$FORCE_BUILD" != "true" && "$reuse_status" != "3" ]]; then exit "$reuse_status"; fi
+    build_app
+    ARTIFACT="$(python3 scripts/ios-device-artifact.py publish ${artifact_args[@]+"${artifact_args[@]}"} --app "$APP_PATH" --settings "$RC_BUILD_SETTINGS_EVIDENCE")"
+fi
+if [[ "$BUILD_ONLY" == "true" ]]; then
+    echo "Signed app built; no phone installation requested. Artifact: $ARTIFACT"
+else
+    python3 scripts/deliver-ios-app.py --artifact "$ARTIFACT" --delivery "$DELIVERY" --device "$REQUESTED_DEVICE"
+fi

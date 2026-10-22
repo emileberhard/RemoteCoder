@@ -1,0 +1,43 @@
+{
+  "info": {
+    "arguments": [
+      "devicectl",
+      "device",
+      "info",
+      "apps",
+      "--device",
+      "fixture-device",
+      "--json-output",
+      "/fixture/apps.json",
+      "--quiet"
+    ],
+    "commandType": "devicectl.device.info.apps",
+    "environment": {},
+    "jsonVersion": 5,
+    "outcome": "success",
+    "version": "642.16"
+  },
+  "result": {
+    "apps": [
+      {
+        "appClip": false,
+        "builtByDeveloper": true,
+        "bundleIdentifier": "com.example.RemoteCoder",
+        "bundleVersion": "3036001",
+        "containerAccessible": true,
+        "defaultApp": false,
+        "hidden": false,
+        "internalApp": false,
+        "name": "RemoteCoder",
+        "removable": true,
+        "url": "file:///private/var/containers/Bundle/Application/00000000-0000-4000-8000-000000000001/RemoteCoder.app/",
+        "version": "3.36.1"
+      }
+    ],
+    "defaultAppsIncluded": false,
+    "deviceIdentifier": "fixture-device",
+    "hiddenAppsIncluded": false,
+    "internalAppsIncluded": false,
+    "removableAppsIncluded": true
+  }
+}

@@ -1,0 +1,67 @@
+{
+  "error": {
+    "code": 12040,
+    "domain": "com.apple.dt.CoreDeviceError",
+    "userInfo": {
+      "DeviceIdentifier": {
+        "string": "fixture-device"
+      },
+      "NSLocalizedDescription": {
+        "string": "The developer disk image could not be mounted on this device."
+      },
+      "NSUnderlyingError": {
+        "error": {
+          "code": 12040,
+          "domain": "com.apple.dt.CoreDeviceError",
+          "userInfo": {
+            "DeviceIdentifier": {
+              "string": "fixture-device"
+            },
+            "NSLocalizedDescription": {
+              "string": "The developer disk image could not be mounted on this device."
+            },
+            "NSURL": {
+              "url": "file:///Library/Developer/DeveloperDiskImages/iOS_DDI/"
+            },
+            "NSUnderlyingError": {
+              "error": {
+                "code": 10003,
+                "domain": "com.apple.dt.CoreDeviceError",
+                "userInfo": {
+                  "NSLocalizedDescription": {
+                    "string": "The operation failed because the device was still locked."
+                  },
+                  "NSLocalizedFailureReason": {
+                    "string": "The device is currently locked."
+                  },
+                  "NSLocalizedRecoverySuggestion": {
+                    "string": "Unlock the device and try again."
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "info": {
+    "arguments": [
+      "devicectl",
+      "device",
+      "install",
+      "app",
+      "--device",
+      "fixture-device",
+      "/fixture/RemoteCoder.app",
+      "--json-output",
+      "/fixture/install.json",
+      "--quiet"
+    ],
+    "commandType": "devicectl.device.install.app",
+    "environment": {},
+    "jsonVersion": 5,
+    "outcome": "failed",
+    "version": "642.16"
+  }
+}

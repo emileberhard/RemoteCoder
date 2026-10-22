@@ -1,0 +1,353 @@
+require "fileutils"
+require "json"
+require "open3"
+require "shellwords"
+
+ENV["FASTLANE_SKIP_DOCS"] = "1"
+
+PROJECT_ROOT = File.expand_path("..", __dir__)
+MAINTAINER = JSON.parse(IO.popen(["python3", File.join(PROJECT_ROOT, "scripts/maintainer_config.py"), "show"], &:read))
+IDENTITY = MAINTAINER.fetch("xcodeSettings", {})
+APP_IDENTIFIER = IDENTITY.fetch("RC_BUNDLE_ID", "com.example.RemoteCoder")
+TEAM_ID = IDENTITY.fetch("DEVELOPMENT_TEAM", "")
+APPLE_DEVOPS_SCRIPTS = File.expand_path("~/configs/skills/apple-devops/scripts")
+LOCAL_CONFIG = File.join(PROJECT_ROOT, "RemoteCoder/Resources/RemoteCoderLocalConfig.json")
+PACKAGE_FLAGS = "-disableAutomaticPackageResolution -onlyUsePackageVersionsFromResolvedFile -skipPackageUpdates"
+SIGNING_TARGETS = {
+  APP_IDENTIFIER => "RC_PROFILE_REMOTECODER_APP",
+  "#{APP_IDENTIFIER}.RemoteCoderNotificationService" => "RC_PROFILE_NOTIFICATION_SERVICE",
+  "#{APP_IDENTIFIER}.RemoteCoderLiveActivities" => "RC_PROFILE_LIVE_ACTIVITIES",
+  "#{APP_IDENTIFIER}.RemoteCoderLocationPushService" => "RC_PROFILE_LOCATION_PUSH_SERVICE",
+  "#{APP_IDENTIFIER}.RemoteCoderShareExtension" => "RC_PROFILE_SHARE_EXTENSION",
+  "#{APP_IDENTIFIER}.RemoteCoderCaptureExtension" => "RC_PROFILE_CAPTURE_EXTENSION"
+}.freeze
+MAC_SCHEME = "RemoteCoderMac"
+MAC_PROFILE_NAME = "#{APP_IDENTIFIER} Mac AppStore"
+MAC_PROFILE_SETTING = "RC_PROFILE_REMOTECODER_MAC"
+MAC_DIRECT_PROFILE_NAME = "#{APP_IDENTIFIER} Mac DeveloperID"
+PLATFORMS = {
+  "ios" => { artifact: "RemoteCoder.ipa", direct: "RemoteCoder-direct.ipa", connect: "IOS", upload: "ios" },
+  "mac" => { artifact: "RemoteCoderMac.pkg", direct: "RemoteCoderMac-direct.app", connect: "MAC_OS", upload: "osx" }
+}.freeze
+
+def required_env(name)
+  value = ENV[name].to_s.strip
+  UI.user_error!("Set #{name}.") if value.empty?
+  value
+end
+
+Release = Struct.new(:version, :build_number, :commit, :directory, keyword_init: true)
+
+def tagged_release
+  UI.user_error!("Configure the maintainer development team and bundle identifier before signing.") if TEAM_ID.empty? || APP_IDENTIFIER.start_with?("com.example.", "org.example.")
+  version = required_env("RC_RELEASE_VERSION")
+  parts = version.match(/\A(0|[1-9]\d{0,2})\.(0|[1-9]\d{0,2})\.(0|[1-9]\d{0,2})\z/)
+  UI.user_error!("RC_RELEASE_VERSION must be X.Y.Z with each part at most 999.") unless parts
+  directory = required_env("RC_RELEASE_DIR")
+  commit = required_env("RC_SOURCE_COMMIT")
+  UI.user_error!("The release directory belongs to another commit.") unless File.read(File.join(directory, "commit")).strip == commit
+  Release.new(
+    version: version,
+    build_number: (parts[1].to_i * 1_000_000 + parts[2].to_i * 1_000 + parts[3].to_i).to_s,
+    commit: commit,
+    directory: directory
+  )
+end
+
+def write_release_config
+  sh(["python3", File.join(PROJECT_ROOT, "scripts/maintainer_config.py"), "configure", "--required"].shelljoin)
+  config = MAINTAINER.fetch("releaseConfig")
+  File.write(LOCAL_CONFIG, JSON.pretty_generate(config) + "\n", perm: 0600)
+  sh(["python3", File.join(PROJECT_ROOT, "scripts/google-maps-config.py"), "sync", LOCAL_CONFIG].shelljoin)
+  sh(["python3", File.join(PROJECT_ROOT, "scripts/release-config.py"), "verify", LOCAL_CONFIG].shelljoin)
+end
+
+def generate_project(packages)
+  Dir.chdir(PROJECT_ROOT) do
+    sh("just generate")
+    command = ["xcodebuild", "-resolvePackageDependencies", "-workspace", "RemoteCoder.xcworkspace", "-scheme", "RemoteCoder",
+               "-clonedSourcePackagesDirPath", packages, "-onlyUsePackageVersionsFromResolvedFile"]
+    names = JSON.parse(IO.popen(["python3", "-c", "import json,sys; sys.path.insert(0, 'scripts'); from build_support import BUILD_ENV_NAMES; print(json.dumps(sorted(BUILD_ENV_NAMES)))"], &:read))
+    environment = ENV.to_h.select { |name, _| names.include?(name) }
+    environment["ZDOTDIR"] = File.join(File.dirname(packages), "empty-shell")
+    FileUtils.mkdir_p(environment["ZDOTDIR"])
+    UI.user_error!("Package resolution failed.") unless system(environment, *command, unsetenv_others: true)
+    sh("git diff --exit-code -- .package.resolved")
+  end
+end
+
+def asc(*arguments)
+  output, error, status = Open3.capture3(
+    "uv", "run", "--quiet", File.join(APPLE_DEVOPS_SCRIPTS, "asc_api.py"), *arguments
+  )
+  UI.user_error!("App Store Connect: #{error.strip}") unless status.success?
+  UI.important(error.strip) unless error.strip.empty?
+  output
+end
+
+def install_profile(name, type, bundle_id)
+  asc("install-profile", "--name", name, "--type", type, "--bundle-id", bundle_id)
+  name
+end
+
+def signing_keychain
+  helper = File.join(APPLE_DEVOPS_SCRIPTS, "ensure-signing-keychain").shellescape
+  sh(helper, log: false)
+  keychain = sh("#{helper} --path", log: false).strip
+  UI.user_error!("The canonical signing keychain is missing.") unless keychain && File.file?(keychain)
+  keychain
+end
+
+def release_settings(release, keychain)
+  {
+    "MARKETING_VERSION" => release.version,
+    "CURRENT_PROJECT_VERSION" => release.build_number,
+    "RC_SOURCE_COMMIT" => release.commit,
+    "RC_SOURCE_MODIFIED" => "false",
+    "DEVELOPMENT_TEAM" => TEAM_ID,
+    "OTHER_CODE_SIGN_FLAGS" => "--keychain #{keychain}"
+  }
+end
+
+def xcargs(settings)
+  [PACKAGE_FLAGS, *settings.map { |name, value| "#{name}=#{value.shellescape}" }].join(" ")
+end
+
+def verify_stamps(release)
+  {
+    "CFBundleIdentifier" => APP_IDENTIFIER,
+    "CFBundleShortVersionString" => release.version,
+    "CFBundleVersion" => release.build_number,
+    "RemoteCoderSourceCommit" => release.commit,
+    "RemoteCoderSourceModified" => "false",
+    "DTXcodeBuild" => required_env("EXPECTED_XCODE_BUILD")
+  }.each do |name, expected|
+    actual = yield(name).to_s
+    UI.user_error!("Built #{name}: expected #{expected}, got #{actual}.") unless actual == expected
+  end
+end
+
+def retain_release_symbols(archive, platform, release)
+  sh(["python3", File.join(PROJECT_ROOT, "scripts/release-cache.py"), "retain-symbols", platform, release.version, archive].shelljoin)
+end
+
+# Artifacts move into the release directory only after verification, so a
+# retry reuses exactly the bytes that may already have been uploaded. The
+# direct-install export moves first: the App Store artifact marks the platform done.
+def publish(release, platform, direct, built)
+  spec = PLATFORMS.fetch(platform)
+  [[direct, spec[:direct]], [built, spec[:artifact]]].each do |source, name|
+    destination = File.join(release.directory, name)
+    FileUtils.rm_rf("#{destination}.partial")
+    FileUtils.mv(source, "#{destination}.partial")
+    File.rename("#{destination}.partial", destination)
+  end
+  UI.success("#{platform} #{release.version} (#{release.build_number}) archived from #{release.commit}.")
+end
+
+def build_ios(release, keychain, cache, work)
+  profiles = SIGNING_TARGETS.to_h do |bundle_id, _|
+    [bundle_id, install_profile("#{bundle_id} AppStore", "IOS_APP_STORE", bundle_id)]
+  end
+  settings = release_settings(release, keychain)
+  SIGNING_TARGETS.each { |bundle_id, setting| settings[setting] = profiles.fetch(bundle_id) }
+  archive = File.join(work, "RemoteCoder.xcarchive")
+  ipa = build_app(
+    workspace: "RemoteCoder.xcworkspace",
+    scheme: "RemoteCoder",
+    configuration: "Release",
+    destination: "generic/platform=iOS",
+    derived_data_path: File.join(cache, "derived-ios"),
+    cloned_source_packages_path: File.join(cache, "source-packages"),
+    skip_package_dependencies_resolution: true,
+    build_path: work,
+    archive_path: archive,
+    output_directory: File.join(work, "export"),
+    buildlog_path: File.join(work, "logs"),
+    export_method: "app-store",
+    export_options: { signingStyle: "manual", teamID: TEAM_ID, provisioningProfiles: profiles },
+    xcargs: xcargs(settings),
+    xcodebuild_formatter: ""
+  )
+  direct_profiles = SIGNING_TARGETS.to_h do |bundle_id, _|
+    [bundle_id, install_profile("#{bundle_id} AdHoc", "IOS_APP_ADHOC", bundle_id)]
+  end
+  direct = build_app(
+    workspace: "RemoteCoder.xcworkspace",
+    scheme: "RemoteCoder",
+    configuration: "Release",
+    skip_build_archive: true,
+    archive_path: archive,
+    output_directory: File.join(work, "direct"),
+    buildlog_path: File.join(work, "logs"),
+    export_method: "ad-hoc",
+    export_options: { signingStyle: "manual", teamID: TEAM_ID, provisioningProfiles: direct_profiles },
+    xcodebuild_formatter: ""
+  )
+  [[ipa, "app-store"], [direct, "ad-hoc"]].each do |exported, distribution|
+    verify_stamps(release) { |name| get_ipa_info_plist_value(ipa: exported, key: name) }
+    sh(["python3", File.join(PROJECT_ROOT, "scripts/google-maps-config.py"), "verify", LOCAL_CONFIG, "--ipa", exported].shelljoin)
+    sh(["python3", File.join(PROJECT_ROOT, "scripts/release-config.py"), "verify-ipa", exported].shelljoin)
+    sh(["python3", File.join(PROJECT_ROOT, "scripts/verify-release-entitlements.py"), "--platform", "ios", "--distribution", distribution, "--ipa", exported].shelljoin)
+  end
+  sh(["codesign", "--verify", "--deep", "--strict", File.join(archive, "Products/Applications/RemoteCoder.app")].shelljoin)
+  retain_release_symbols(archive, "ios", release)
+  publish(release, "ios", direct, ipa)
+end
+
+def build_mac(release, keychain, cache, work)
+  settings = release_settings(release, keychain)
+  settings[MAC_PROFILE_SETTING] = install_profile(MAC_PROFILE_NAME, "MAC_APP_STORE", APP_IDENTIFIER)
+  archive = File.join(work, "#{MAC_SCHEME}.xcarchive")
+  build_mac_app(
+    workspace: "RemoteCoder.xcworkspace",
+    scheme: MAC_SCHEME,
+    configuration: "Release",
+    destination: "generic/platform=macOS",
+    derived_data_path: File.join(cache, "derived-mac"),
+    cloned_source_packages_path: File.join(cache, "source-packages"),
+    skip_package_dependencies_resolution: true,
+    build_path: work,
+    archive_path: archive,
+    output_directory: File.join(work, "export"),
+    buildlog_path: File.join(work, "logs"),
+    export_method: "app-store",
+    export_options: { signingStyle: "manual", teamID: TEAM_ID, provisioningProfiles: { APP_IDENTIFIER => MAC_PROFILE_NAME } },
+    xcargs: xcargs(settings),
+    xcodebuild_formatter: ""
+  )
+  pkg = Actions.lane_context[SharedValues::PKG_OUTPUT_PATH]
+  UI.user_error!("The Mac export produced no installer package.") unless pkg && File.file?(pkg)
+  apps = Dir.glob(File.join(archive, "Products", "Applications", "*.app"))
+  UI.user_error!("Expected exactly one archived Mac app, found #{apps.length}.") unless apps.length == 1
+  verify_stamps(release) { |name| get_info_plist_value(path: File.join(apps.first, "Contents", "Info.plist"), key: name) }
+  sh(["codesign", "--verify", "--deep", "--strict", apps.first].shelljoin)
+  sh(["python3", File.join(PROJECT_ROOT, "scripts/verify-release-entitlements.py"), "--platform", "mac", "--distribution", "app-store", "--app", apps.first].shelljoin)
+  sh(["pkgutil", "--check-signature", pkg].shelljoin)
+  Dir.glob(File.join(apps.first, "**", "RemoteCoderLocalConfig.json")).each do |config|
+    sh(["python3", File.join(PROJECT_ROOT, "scripts/release-config.py"), "verify", config].shelljoin)
+  end
+  build_mac_app(
+    workspace: "RemoteCoder.xcworkspace",
+    scheme: MAC_SCHEME,
+    configuration: "Release",
+    skip_build_archive: true,
+    archive_path: archive,
+    output_directory: File.join(work, "direct"),
+    buildlog_path: File.join(work, "logs"),
+    export_method: "developer-id",
+    export_options: {
+      signingStyle: "manual",
+      teamID: TEAM_ID,
+      signingCertificate: "Developer ID Application",
+      provisioningProfiles: { APP_IDENTIFIER => install_profile(MAC_DIRECT_PROFILE_NAME, "MAC_APP_DIRECT", APP_IDENTIFIER) }
+    },
+    xcodebuild_formatter: ""
+  )
+  direct = Dir.glob(File.join(work, "direct", "*.app"))
+  UI.user_error!("Expected exactly one Developer ID Mac app, found #{direct.length}.") unless direct.length == 1
+  verify_stamps(release) { |name| get_info_plist_value(path: File.join(direct.first, "Contents", "Info.plist"), key: name) }
+  sh(["codesign", "--verify", "--deep", "--strict", direct.first].shelljoin)
+  sh(["python3", File.join(PROJECT_ROOT, "scripts/verify-release-entitlements.py"), "--platform", "mac", "--distribution", "developer-id", "--app", direct.first].shelljoin)
+  authority = sh(["codesign", "--display", "--verbose=2", direct.first].shelljoin + " 2>&1", log: false)
+  UI.user_error!("The direct Mac app is not signed with Developer ID.") unless authority.include?("Authority=Developer ID Application: ")
+  retain_release_symbols(archive, "mac", release)
+  publish(release, "mac", direct.first, pkg)
+end
+
+def connect_api_key
+  app_store_connect_api_key(
+    key_id: required_env("APP_STORE_CONNECT_KEY_ID"),
+    issuer_id: required_env("APP_STORE_CONNECT_ISSUER_ID"),
+    key_filepath: File.expand_path(required_env("APP_STORE_CONNECT_KEY_PATH"))
+  )
+end
+
+def uploaded_build(app, platform, release)
+  builds = Spaceship::ConnectAPI::Build.all(
+    app_id: app.id, version: release.version, build_number: release.build_number, platform: platform
+  )
+  UI.user_error!("App Store Connect has #{builds.length} #{platform} builds numbered #{release.build_number}.") if builds.length > 1
+  builds.first
+end
+
+desc "Archive, sign and verify both apps for the tagged release, in parallel unless the host caps build jobs, reusing artifacts a previous attempt finished"
+lane :build do
+  release = tagged_release
+  pending = PLATFORMS.keys.reject { |platform| File.file?(File.join(release.directory, PLATFORMS[platform][:artifact])) }
+  next UI.message("Both app archives for #{release.version} already exist.") if pending.empty?
+
+  write_release_config
+  generate_project(File.join(required_env("RC_RELEASE_CACHE"), "source-packages"))
+  compiler_names = JSON.parse(IO.popen(["python3", "-c", "import json,sys; sys.path.insert(0, 'scripts'); from build_support import BUILD_ENV_NAMES; print(json.dumps(sorted(BUILD_ENV_NAMES)))"], chdir: PROJECT_ROOT, &:read))
+  compiler_names += %w[BUNDLE_PATH BUNDLE_FROZEN BUNDLE_GEMFILE GEM_HOME GEM_PATH RBENV_ROOT RBENV_VERSION LANG LC_ALL FASTLANE_SKIP_UPDATE_CHECK FASTLANE_SKIP_DOCS RC_RELEASE_DIR RC_RELEASE_CACHE RC_SIGNING_KEYCHAIN EXPECTED_XCODE_BUILD APP_STORE_CONNECT_KEY_ID APP_STORE_CONNECT_ISSUER_ID APP_STORE_CONNECT_KEY_PATH]
+  environment = ENV.to_h.select { |name, _| compiler_names.include?(name) }.merge("RC_SIGNING_KEYCHAIN" => signing_keychain, "ZDOTDIR" => File.join(required_env("RC_RELEASE_CACHE"), "empty-shell"))
+  FileUtils.mkdir_p(environment["ZDOTDIR"])
+  start = lambda do |platform|
+    log = File.join(release.directory, "archive-#{platform}.log")
+    pid = Process.spawn(environment, "bundle", "exec", "fastlane", "archive", "platform:#{platform}",
+                        chdir: PROJECT_ROOT, out: log, err: %i[child out], unsetenv_others: true)
+    [platform, log, pid]
+  end
+  failure = lambda do |(platform, log, pid)|
+    _, status = Process.wait2(pid)
+    $stdout.puts("--- #{platform} archive ---", File.read(log))
+    platform unless status.success?
+  end
+  failed = if ENV["EMIL_BUILD_JOBS"].to_s.strip.empty?
+             pending.map(&start).filter_map(&failure)
+           else
+             pending.filter_map { |platform| failure.call(start.call(platform)) }
+           end
+  UI.user_error!("Archiving #{failed.join(' and ')} failed; its log is above.") unless failed.empty?
+end
+
+desc "Archive, sign and verify one platform in the project the build lane generated"
+lane :archive do |options|
+  platform = options.fetch(:platform)
+  PLATFORMS.fetch(platform)
+  release = tagged_release
+  work = File.join(release.directory, "work-#{platform}")
+  FileUtils.rm_rf(work)
+  arguments = [release, required_env("RC_SIGNING_KEYCHAIN"), required_env("RC_RELEASE_CACHE"), work]
+  platform == "ios" ? build_ios(*arguments) : build_mac(*arguments)
+  FileUtils.rm_rf(work)
+end
+
+desc "Upload one platform's archive unless App Store Connect already has it, then wait until TestFlight processed it"
+lane :upload do |options|
+  platform = options.fetch(:platform)
+  spec = PLATFORMS.fetch(platform)
+  release = tagged_release
+  artifact = File.join(release.directory, spec[:artifact])
+  UI.user_error!("Missing verified #{platform} archive #{artifact}.") unless File.file?(artifact)
+  api_key = connect_api_key
+  app = Spaceship::ConnectAPI::App.find(APP_IDENTIFIER)
+
+  build = uploaded_build(app, spec[:connect], release)
+  if build.nil?
+    upload_to_testflight(
+      api_key: api_key,
+      app_identifier: APP_IDENTIFIER,
+      app_platform: spec[:upload],
+      **(platform == "ios" ? { ipa: artifact } : { pkg: artifact }),
+      uses_non_exempt_encryption: false,
+      skip_waiting_for_build_processing: false,
+      wait_processing_timeout_duration: 1800,
+      distribute_external: false
+    )
+  else
+    UI.important("#{platform} #{release.version} (#{release.build_number}) is already in App Store Connect as #{build.processing_state}.")
+  end
+
+  deadline = Time.now + 1800
+  loop do
+    build = uploaded_build(app, spec[:connect], release)
+    state = build&.processing_state
+    break if state == Spaceship::ConnectAPI::Build::ProcessingState::VALID
+    UI.user_error!("#{platform} build #{release.build_number} is #{state}; fix it and release the next patch version.") if [Spaceship::ConnectAPI::Build::ProcessingState::FAILED, Spaceship::ConnectAPI::Build::ProcessingState::INVALID].include?(state)
+    UI.user_error!("#{platform} build #{release.build_number} did not finish processing in time; rerun the job to keep waiting.") if Time.now > deadline
+    sleep(30)
+  end
+  UI.success("TestFlight #{platform} #{release.version} (#{release.build_number}) is valid.")
+end

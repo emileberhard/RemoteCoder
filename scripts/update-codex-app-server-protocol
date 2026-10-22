@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+codex_bin="${CODEX_BIN:-codex}"
+codex_version="$("$codex_bin" --version | awk '{print $2}')"
+if [[ ! "$codex_version" =~ ^[A-Za-z0-9][A-Za-z0-9._+-]*$ ]]; then
+  echo "Invalid Codex version: $codex_version" >&2
+  exit 1
+fi
+schema_root="$repo_root/build/codex-schema"
+schema_dir="$schema_root/$codex_version"
+mkdir -p "$schema_root"
+tmp_dir="$(mktemp -d "$schema_root/.generate.XXXXXX")"
+trap 'rm -rf "$tmp_dir"' EXIT
+
+"$codex_bin" app-server generate-json-schema --experimental --out "$tmp_dir"
+
+rm -rf "$schema_dir"
+mv "$tmp_dir" "$schema_dir"
+
+echo "Generated Codex app-server schema at $schema_dir"

@@ -1,0 +1,114 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.14"
+# dependencies = []
+# ///
+"""Install call delivery configuration without starting or dialing a call."""
+
+import argparse
+import json
+import os
+import socket
+import subprocess
+from pathlib import Path
+
+
+def write_private(path: Path, value: dict):
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    staged = path.with_suffix(".new")
+    with os.fdopen(os.open(staged, os.O_CREAT | os.O_TRUNC | os.O_WRONLY, 0o600), "w") as file:
+        json.dump(value, file, indent=2)
+        file.write("\n")
+        file.flush()
+        os.fsync(file.fileno())
+    os.replace(staged, path)
+    directory = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--origin-host", required=True)
+    parser.add_argument("--worker-host", required=True)
+    parser.add_argument("--worker-config", type=Path, required=True)
+    parser.add_argument("--public-base-url")
+    parser.add_argument("--credential-source", type=Path)
+    parser.add_argument("--voice-number-id", help="With websocket-number-id, provision carrier configuration on this host")
+    parser.add_argument("--websocket-number-id")
+    args = parser.parse_args()
+    if socket.gethostname().split(".")[0] != args.origin_host:
+        parser.error("Run the installer on the selected originating host")
+    if bool(args.voice_number_id) != bool(args.websocket_number_id):
+        parser.error("Both carrier number IDs are required together")
+    if not args.worker_config.is_absolute():
+        parser.error("--worker-config must be an absolute path on the worker host")
+    if args.voice_number_id and args.worker_host not in {args.origin_host, "localhost", "127.0.0.1"}:
+        parser.error("Run carrier provisioning on its worker host")
+    if args.voice_number_id and (not args.public_base_url or not args.credential_source or not args.credential_source.is_absolute()):
+        parser.error("Carrier provisioning requires --public-base-url and an absolute --credential-source")
+    tailnet = json.loads(subprocess.run(
+        ["tailscale", "status", "--json"], check=True, capture_output=True, text=True, timeout=15
+    ).stdout)
+    identity = tailnet["Self"]
+    origin_dns = identity["DNSName"].rstrip(".")
+    if identity["HostName"] != args.origin_host or not origin_dns:
+        parser.error("Tailscale identity does not match the selected originating host")
+    repo = Path(__file__).resolve().parent.parent
+    home = Path.home()
+    carrier_path = args.worker_config
+    if args.voice_number_id:
+        registry = home / "configs/scripts/mac-mini-service-ports"
+        if registry.is_file():
+            subprocess.run([str(registry), "claim", "remote-coder-call-media", "127.0.0.1", "8788"], check=True)
+        write_private(carrier_path, {
+            "voiceNumberId": args.voice_number_id,
+            "websocketNumberId": args.websocket_number_id,
+            "publicBaseURL": args.public_base_url,
+            "bindHost": "127.0.0.1", "bindPort": 8788,
+            "stateDirectory": str(home / ".local/state/agent-calls"),
+            "credentialSource": str(args.credential_source),
+        })
+    subprocess.run(["uv", "sync", "--project", str(repo / "agent-calls"), "--locked", "--no-dev"], check=True)
+    subprocess.run([str(repo / "dev-tools/agent-call"), "--help"], check=True, stdout=subprocess.DEVNULL)
+    endpoint_script = """import asyncio, json, sys
+from pathlib import Path
+from remotecoder_tools.config import resolve_gateway_config
+cfg = resolve_gateway_config(sys.argv[1], sys.argv[2], Path(sys.argv[3]))
+async def version():
+    async with cfg.http_client(5) as client:
+        response = await client.get(cfg.http_base + '/version', headers={'Authorization': 'Bearer ' + cfg.token})
+        response.raise_for_status()
+        return response.json()
+print(json.dumps({'url': cfg.ws_url, 'workerHash': asyncio.run(version())['workerHash']}))
+"""
+    endpoint = json.loads(subprocess.run(
+        ["uv", "run", "--project", str(repo / "dev-tools"), "--locked", "python", "-c", endpoint_script,
+         origin_dns, args.origin_host, str(repo / "RemoteCoder/Resources/RemoteCoderLocalConfig.json")],
+        check=True, capture_output=True, text=True, timeout=30,
+    ).stdout)
+    gateway = home / "localbin/remote-coder-gateway/remote-coder-codex-gateway"
+    identity = json.loads(subprocess.run([str(gateway), "--version"], check=True, capture_output=True, text=True, timeout=5).stdout)
+    if identity["workerHash"] != endpoint["workerHash"]:
+        parser.error("Installed gateway and served worker identity differ")
+    worker = json.loads(subprocess.run([str(gateway), "runtime", "install-call-worker", "--worker-host", args.worker_host],
+                                      check=True, capture_output=True, text=True, timeout=600).stdout)
+    if worker["workerHash"] != endpoint["workerHash"]:
+        parser.error("Installed worker does not match the originating gateway")
+    delivery = {
+        "originGatewayUrl": endpoint["url"],
+        "workerHost": args.worker_host,
+        "workerPath": worker["workerPath"],
+        "workerConfigPath": str(carrier_path),
+    }
+    configured = json.loads(subprocess.run([str(gateway), "runtime", "configure-call-delivery"],
+                                          input=json.dumps(delivery), check=True, capture_output=True,
+                                          text=True, timeout=30).stdout)
+    path = configured["deliveryConfig"]
+    print(json.dumps({"installed": True, "host": args.origin_host, "deliveryConfig": str(path), "carrierConfigured": bool(args.voice_number_id)}))
+
+
+if __name__ == "__main__":
+    main()

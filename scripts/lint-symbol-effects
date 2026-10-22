@@ -1,0 +1,57 @@
+#!/usr/bin/env python3
+
+import argparse
+import re
+from pathlib import Path
+
+from swift_sources import code_only, source_files
+
+
+EFFECT = re.compile(r"\.(?:symbolEffect|addSymbolEffect)\s*\(")
+OWNER_PATHS = {
+    Path("RemoteCoder/Platform/iOS/WorkingSymbol.swift"),
+    Path("RemoteCoder/Platform/macOS/WorkingSymbol.swift"),
+}
+
+
+def violations(path: Path, source: str) -> list[str]:
+    if path in OWNER_PATHS:
+        return []
+    code = code_only(source)
+    errors = []
+    for match in EFFECT.finditer(code):
+        depth = 1
+        end = match.end()
+        while end < len(code) and depth:
+            depth += (code[end] == "(") - (code[end] == ")")
+            end += 1
+        arguments = code[match.end():end - 1]
+        repeating = re.search(r"\.repeat(?:ing)?\b|\.continuous\b", arguments)
+        finite = re.search(r"\bvalue\s*:|\.nonRepeating\b", arguments)
+        transition = re.match(r"\s*\.(?:replace|appear|disappear)\b", arguments)
+        if repeating or (not finite and not transition):
+            line = code.count("\n", 0, match.start()) + 1
+            errors.append(f"{path}:{line}: Use WorkingSymbol for repeating symbol effects.")
+    return errors
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Keep repeating symbol effects inside WorkingSymbol.")
+    parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parent.parent)
+    root = parser.parse_args().root
+    if not (root / "RemoteCoder").is_dir():
+        parser.error(f"Missing app sources at {root / 'RemoteCoder'}")
+    errors = [
+        error
+        for path in source_files(root)
+        for error in violations(path, (root / path).read_text())
+    ]
+    if errors:
+        print("\n".join(errors))
+        return 1
+    print("lint-symbol-effects: repeating symbol effects use WorkingSymbol.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

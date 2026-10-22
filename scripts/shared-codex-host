@@ -1,0 +1,317 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "$0")/.." && pwd)"
+ssh_options=(-o BatchMode=yes -o ConnectTimeout=5)
+installed_gateway='$HOME/localbin/remote-coder-gateway/remote-coder-codex-gateway'
+installer_paths=(
+    docs/codex/compatibility.json
+    host-daemon-rs/RemoteCoderGateway.template
+    host-daemon-rs/config
+    host-daemon-rs/launchd
+    host-daemon-rs/scripts
+    scripts/build_artifacts.py
+)
+external_auth_inputs=(
+    docs/codex/compatibility.json
+    scripts/build_support.py
+    scripts/process_group.py
+    scripts/job_power.py
+    dev-tools/pyproject.toml
+    dev-tools/uv.lock
+    dev-tools/src/remotecoder_tools/__init__.py
+    dev-tools/src/remotecoder_tools/external_auth_identity.py
+    dev-tools/src/remotecoder_tools/external_auth_probe.py
+)
+
+usage() {
+    cat >&2 <<'EOF'
+usage:
+  shared-codex-host deploy <host|local> <codex-package> <gateway-bundle>
+  shared-codex-host status [host|local]
+  shared-codex-host check [host|local]
+EOF
+}
+
+is_local_target() {
+    local target="$1"
+    [[ "$target" == "local" || "$target" == "$(hostname)" || "$target" == "$(hostname -s)" ]]
+}
+
+same_host() {
+    [[ "$1" == "$2" ]] || { is_local_target "$1" && is_local_target "$2"; }
+}
+
+run_on() {
+    if is_local_target "$1"; then
+        /bin/zsh -lc "$2"
+    else
+        ssh "${ssh_options[@]}" "$1" "$2"
+    fi
+}
+
+destination() {
+    if is_local_target "$1"; then
+        printf '%s/%s' "$HOME" "$2"
+    else
+        printf '%s:%s' "$1" "$2"
+    fi
+}
+
+gateway_request() {
+    run_on "$1" 'set -euo pipefail
+set -a
+source "$HOME/.remote-coder/codex-gateway.env"
+set +a
+host="${RC_CODEX_GATEWAY_BIND_HOST:-127.0.0.1}"
+[[ "$host" != "0.0.0.0" && "$host" != "::" ]] || host=127.0.0.1
+curl --fail --silent --show-error --max-time 6 \
+  --header "Authorization: Bearer ${RC_CODEX_GATEWAY_AUTH_TOKEN}" \
+  "http://${host}:${RC_CODEX_GATEWAY_PORT}'"$2"'"'
+}
+
+status_host() {
+    local target="${1:-local}"
+    run_on "$target" "set -euo pipefail
+gateway=\"$installed_gateway\"
+env_file=\"\$HOME/.remote-coder/codex-gateway.env\"
+desktop_mode=\"\$(\"\$gateway\" --env-file \"\$env_file\" runtime desktop mode)\"
+if [[ \"\$desktop_mode\" == disabled ]]; then
+  echo \"ChatGPT Desktop: disabled on this host by host-daemon-rs/config/host-profiles.json\"
+else
+  \"\$gateway\" --env-file \"\$env_file\" runtime desktop check >/dev/null 2>&1
+  echo \"ChatGPT Desktop: attached to the shared app-server\"
+fi"
+    gateway_request "$target" /health
+}
+
+check_external_auth() (
+    local target="$1" managed_pid="$2" stage receipt execution_host local_stage identity package_sha evidence passed
+    execution_host="$(tr -d '\r\n' < "$repo_root/scripts/build-host")"
+    [[ -n "$execution_host" && "$target" =~ ^[a-zA-Z0-9_.-]+$ ]] || {
+        echo "External-token verification requires a build host in scripts/build-host and a valid requested host" >&2
+        return 1
+    }
+    stage="Library/Caches/RemoteCoder-Build/external-auth/$(uuidgen)"
+    receipt="Library/Logs/remote-coder/compatibility/external-auth-$(uuidgen).json"
+    local_stage="$(mktemp -d "${TMPDIR:-/tmp}/external-auth-gate.XXXXXX")"
+    cleanup_external_auth() {
+        local result="$?"
+        rm -rf -- "$local_stage"
+        run_on "$execution_host" "rm -rf -- \"\$HOME/$stage\"" || true
+        if ! same_host "$target" "$execution_host"; then
+            run_on "$target" "rm -rf -- \"\$HOME/$stage\"" || true
+        fi
+        exit "$result"
+    }
+    trap cleanup_external_auth EXIT
+    run_on "$execution_host" "umask 077; mkdir -p \"\$HOME/$stage\""
+    (cd "$repo_root" && rsync -aR "${external_auth_inputs[@]}" "$(destination "$execution_host" "$stage")/")
+    if ! same_host "$target" "$execution_host"; then
+        run_on "$target" "umask 077; mkdir -p \"\$HOME/$stage\""
+        (cd "$repo_root" && rsync -aR \
+            docs/codex/compatibility.json \
+            dev-tools/src/remotecoder_tools/external_auth_identity.py \
+            "$(destination "$target" "$stage")/")
+    fi
+    identity="$(run_on "$target" "python3 \"\$HOME/$stage/dev-tools/src/remotecoder_tools/external_auth_identity.py\" \
+        --package \"\$HOME/.codex/packages/standalone/current\" \
+        --approval \"\$HOME/$stage/docs/codex/compatibility.json\" \
+        --requested-host '$target' --managed-pid '$managed_pid'")"
+    printf '%s\n' "$identity" > "$local_stage/requested-identity.json"
+    package_sha="$(jq -er '.packageSHA256 | select(test("^[0-9a-f]{64}$"))' <<<"$identity")"
+    evidence="Library/Caches/RemoteCoder-Build/external-auth/passed/$(
+        {
+            printf '%s\n' "$package_sha" "$execution_host"
+            (cd "$repo_root" && shasum -a 256 "${external_auth_inputs[@]}")
+        } | shasum -a 256 | awk '{print $1}'
+    )"
+    passed="$(run_on "$execution_host" "evidence=\"\$HOME/$evidence\"
+[[ -f \"\$evidence\" ]] && receipt=\"\$(cat \"\$evidence\")\" && [[ -f \"\$receipt\" ]] && printf '%s\\n' \"\$receipt\"" || true)"
+    if [[ "$passed" == /*/external-auth-*.json ]]; then
+        echo "External auth matrix already passed for this package on $execution_host: $passed"
+        return 0
+    fi
+    rsync -a "$local_stage/requested-identity.json" "$(destination "$execution_host" "$stage")/"
+    local probe_package='$HOME/.codex/packages/standalone/current'
+    if ! same_host "$target" "$execution_host"; then
+        rsync -a "$(destination "$target" ".codex/packages/standalone/current")/" "$local_stage/package/"
+        rsync -a "$local_stage/package/" "$(destination "$execution_host" "$stage/package")/"
+        probe_package="\$HOME/$stage/package"
+    fi
+    run_on "$execution_host" "set -euo pipefail
+umask 077
+stage=\"\$HOME/$stage\"
+mkdir -p \"\$HOME/Library/Logs/remote-coder/compatibility\"
+cd \"\$stage\"
+python3 \"\$stage/scripts/build_support.py\" --background --lease \"\$stage/probe.lock\" -- \
+  uv run --project \"\$stage/dev-tools\" --locked --quiet python -m remotecoder_tools.external_auth_probe \
+  --package \"$probe_package\" \
+  --approval \"\$stage/docs/codex/compatibility.json\" \
+  --requested-host-identity \"\$stage/requested-identity.json\" \
+  --output \"\$HOME/$receipt\"
+mkdir -p \"\$(dirname \"\$HOME/$evidence\")\"
+printf '%s\\n' \"\$HOME/$receipt\" > \"\$HOME/$evidence\"
+echo \"External auth receipt ($target, executed on $execution_host): \$HOME/$receipt\""
+)
+
+check_host() {
+    local target="${1:-local}"
+    local health host_name managed_pid
+    health="$(status_host "$target")"
+    printf '%s\n' "$health"
+    printf '%s\n' "$health" | python3 -c '
+import json, sys
+health = json.loads(sys.stdin.read().split("\n", 1)[1])
+expected = json.load(open(sys.argv[1]))["codexCliVersion"]
+problems = []
+if health.get("status") != "ok" or health.get("draining") is not False:
+    problems.append("gateway is not ready")
+if health.get("codexVersion") != expected:
+    problems.append(f"Codex version does not match approved {expected}")
+if not isinstance(health.get("codexPid"), int) or health["codexPid"] <= 0:
+    problems.append("managed daemon PID is unavailable")
+if health.get("activeTurnInventoryAvailable") is not True:
+    problems.append("active-turn inventory is unavailable")
+access = health.get("fullDiskAccess")
+if not isinstance(access, dict) or not isinstance(access.get("required"), bool):
+    problems.append("Full Disk Access is not reported")
+elif access["required"] and access.get("state") != "granted":
+    state = access.get("state")
+    detail = access.get("detail")
+    problems.append(
+        f"this host requires Full Disk Access for the gateway signing identity, but it is {state}"
+        + (f" ({detail})" if detail else "")
+        + "; apply the Mac mini automation PPPC profile"
+    )
+if problems:
+    sys.exit("Shared Codex check failed: " + "; ".join(problems))
+print("PASS approved runtime health")
+' "$repo_root/docs/codex/compatibility.json"
+
+    managed_pid="$(printf '%s\n' "$health" | python3 -c 'import json,sys; print(json.loads(sys.stdin.read().split("\n", 1)[1])["codexPid"])')"
+    check_external_auth "$target" "$managed_pid"
+
+    if is_local_target "$target"; then
+        "$repo_root/dev-tools/rc-gateway" e2e-reads
+    else
+        host_name="$(ssh -T "${ssh_options[@]}" -G "$target" | awk '$1 == "hostname" {print $2}')"
+        [[ -n "$host_name" ]] || {
+            echo "SSH did not resolve a HostName for $target" >&2
+            return 1
+        }
+        "$repo_root/dev-tools/rc-gateway" --host "$host_name" --ssh-host "$target" e2e-reads
+    fi
+}
+
+install_on() {
+    local target="$1" package_dir="$2" gateway_bundle="$3"
+    local stage package_hash package_state
+    stage="Library/Caches/RemoteCoder-Build/deploy/$(uuidgen)"
+    run_on "$target" "mkdir -p \"\$HOME/$stage/gateway\""
+    (cd "$repo_root" && rsync -aR "${installer_paths[@]}" "$(destination "$target" "$stage/source")/")
+    package_hash="$(python3 "$repo_root/scripts/build_artifacts.py" "$package_dir")"
+    package_state="$(run_on "$target" \
+        "python3 \"\$HOME/$stage/source/scripts/build_artifacts.py\" --reuse-installed \"\$HOME/$stage/package\" --expect '$package_hash'")"
+    if [[ "$package_state" != "reused" ]]; then
+        rsync -a --delete "$package_dir/" "$(destination "$target" "$stage/package")/"
+        run_on "$target" \
+            "python3 \"\$HOME/$stage/source/scripts/build_artifacts.py\" \"\$HOME/$stage/package\" --expect '$package_hash' >/dev/null"
+    fi
+    rsync -a --delete "$gateway_bundle/" "$(destination "$target" "$stage/gateway/$gateway_bundle_name")/"
+    run_on "$target" \
+        "\"\$HOME/$stage/source/host-daemon-rs/scripts/install-shared-codex-stack.zsh\" start \"\$HOME/$stage/package\" \"\$HOME/$stage/gateway/$gateway_bundle_name\""
+
+    local status_command output state exit_code
+    status_command='launchctl print "gui/$(id -u)/com.remote-coder.shared-codex-install"'
+    for ((attempt = 0; attempt < 450; attempt += 1)); do
+        output="$(run_on "$target" "$status_command" 2>&1 || true)"
+        state="$(sed -n 's/^[[:space:]]*state = //p' <<<"$output" | head -n 1)"
+        if [[ -n "$state" && "$state" != "running" && "$state" != "xpcproxy" ]]; then
+            exit_code="$(sed -n 's/^[[:space:]]*last exit code = //p' <<<"$output" | head -n 1)"
+            run_on "$target" "rm -rf -- \"\$HOME/$stage\""
+            if [[ "$exit_code" != "0" ]]; then
+                run_on "$target" 'tail -120 "$HOME/Library/Logs/remote-coder/deployments/shared-codex-install.err.log"' >&2 || true
+                echo "Shared Codex installer exited with ${exit_code:-an unknown status}" >&2
+                return 1
+            fi
+            return 0
+        fi
+        sleep 2
+    done
+    echo "Timed out waiting for the detached shared Codex installer; its staging is $(destination "$target" "$stage")" >&2
+    return 1
+}
+
+deploy_host() {
+    [[ "$#" -eq 3 ]] || {
+        usage
+        return 2
+    }
+
+    source "$repo_root/host-daemon-rs/scripts/gateway-bundle.sh"
+    local target="$1" package_dir gateway_bundle gateway_binary
+    package_dir="$(cd "$2" && pwd)"
+    gateway_bundle="$(cd "$3" && pwd)"
+    verify_gateway_bundle "$gateway_bundle"
+    gateway_binary="$gateway_bundle/Contents/MacOS/$gateway_executable_name"
+    [[ -f "$package_dir/codex-package.json" ]] || {
+        echo "Codex package is incomplete: $package_dir" >&2
+        return 1
+    }
+
+    local identity candidate_hash installed_hash
+    identity="$("$gateway_binary" --version)"
+    candidate_hash="$(shasum -a 256 "$gateway_binary" | awk '{print $1}')"
+    installed_hash="$(run_on "$target" "shasum -a 256 \"$installed_gateway\" 2>/dev/null | awk '{print \$1}'" || true)"
+    if [[ "$installed_hash" == "$candidate_hash" ]]; then
+        run_on "$target" 'set -euo pipefail
+binary="$HOME/localbin/remote-coder-gateway/remote-coder-codex-gateway"
+bundle="${binary:A:h:h:h}"
+[[ -f "$bundle/Contents/Info.plist" ]]
+codesign --verify --strict "$bundle"'
+        echo "$target already runs gateway $candidate_hash"
+        run_on "$target" "\"$installed_gateway\" runtime install-call-worker" | python3 -c '
+import json,sys
+worker, gateway = json.load(sys.stdin), json.loads(sys.argv[1])
+if worker["workerHash"] != gateway["workerHash"]:
+    sys.exit("Installed worker does not match gateway identity")
+print("PASS worker identity", worker["workerHash"])
+' "$identity"
+    else
+        install_on "$target" "$package_dir" "$gateway_bundle"
+    fi
+
+    check_host "$target"
+    gateway_request "$target" /version | python3 -c '
+import json, sys
+served, expected = json.load(sys.stdin), json.loads(sys.argv[1])
+if served != expected:
+    sys.exit(f"Gateway serves {served}, expected {expected}")
+print("PASS gateway identity", json.dumps(served))
+' "$identity"
+}
+
+case "${1:-}" in
+    deploy)
+        shift
+        deploy_host "$@"
+        ;;
+    status|check)
+        operation="$1"
+        shift
+        [[ "$#" -le 1 ]] || {
+            usage
+            exit 2
+        }
+        if [[ "$operation" == check ]]; then
+            check_host "${1:-local}"
+        else
+            status_host "${1:-local}"
+        fi
+        ;;
+    *)
+        usage
+        exit 2
+        ;;
+esac

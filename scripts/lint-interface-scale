@@ -1,0 +1,46 @@
+#!/usr/bin/env python3
+"""Keep shared and macOS text and metrics behind the interface-zoom owner."""
+
+import argparse
+import re
+from pathlib import Path
+
+from swift_sources import code_only, source_files
+
+TOKENS = re.compile(r"\.font\(|@ScaledMetric\b")
+OWNER = re.compile(r"\bstruct\s+InterfaceScaledMetric\b")
+UNZOOMED = ("RemoteCoder/Platform/iOS/",)
+
+
+def violations(path: Path, source: str) -> list[str]:
+    if not path.as_posix().startswith("RemoteCoder/") or path.as_posix().startswith(UNZOOMED):
+        return []
+    code = code_only(source)
+    if OWNER.search(code):
+        return []
+    result = []
+    for match in TOKENS.finditer(code):
+        line = code.count("\n", 0, match.start()) + 1
+        replacement = "scaledFont(_:)" if match.group().startswith(".font") else "@InterfaceScaledMetric"
+        result.append(f"{path}:{line}: Use {replacement} so the Mac interface zoom applies.")
+    return result
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parent.parent)
+    root = parser.parse_args().root
+    if not (root / "RemoteCoder").is_dir():
+        parser.error(f"Missing iOS sources at {root / 'RemoteCoder'}")
+    errors = []
+    for path in source_files(root):
+        errors.extend(violations(path, (root / path).read_text()))
+    if errors:
+        print("\n".join(errors))
+        return 1
+    print("lint-interface-scale: fonts and scaled metrics follow the interface zoom.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

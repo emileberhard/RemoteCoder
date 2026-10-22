@@ -1,0 +1,38 @@
+#!/usr/bin/env python3
+
+import re
+from pathlib import Path
+
+from swift_sources import code_only, source_files
+
+
+ROOT = Path(__file__).resolve().parent.parent
+RAW_GLASS = re.compile(r"\.glassEffect\s*\(|\.buttonStyle\s*\(\s*\.glass(?:Prominent)?\b")
+OWNER = re.compile(r"\bstruct\s+AppGlassButtonStyle\b")
+
+
+def violations(path: Path, source: str) -> list[str]:
+    code = code_only(source)
+    if OWNER.search(code):
+        return []
+    return [
+        f"{path}:{code.count(chr(10), 0, match.start()) + 1}: Use AppGlass for Liquid Glass."
+        for match in RAW_GLASS.finditer(code)
+    ]
+
+
+def main() -> int:
+    errors = [
+        error
+        for path in source_files(ROOT)
+        for error in violations(path, (ROOT / path).read_text())
+    ]
+    if errors:
+        print("\n".join(errors))
+        return 1
+    print("lint-glass: Liquid Glass uses AppGlass.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

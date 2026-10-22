@@ -1,0 +1,57 @@
+#!/usr/bin/env python3
+"""Keep native menus and app-owned haptic recipes behind their design-system owners."""
+
+import argparse
+import re
+from pathlib import Path
+
+from swift_sources import code_only, source_files
+
+TOKENS = re.compile(r"\b(?:Menu|sensoryFeedback|SensoryFeedback|UIImpactFeedbackGenerator|UISelectionFeedbackGenerator|UINotificationFeedbackGenerator|CHHaptic\w+)\b")
+MENU_OWNER = re.compile(r"\bstruct\s+AppMenu\s*<")
+HAPTIC_OWNERS = (
+    re.compile(r"\b(?:final\s+class|extension)\s+HapticService\b"),
+    re.compile(r"\b(?:enum|extension)\s+HapticRecipe\b"),
+    re.compile(r"\bstruct\s+AppPressFeedback\b"),
+    re.compile(r"\bfinal\s+class\s+PreparedHapticPlayer\b"),
+)
+
+
+def violations(path: Path, source: str) -> list[str]:
+    code = code_only(source)
+    owns_menu = MENU_OWNER.search(code) is not None
+    owns_haptics = any(owner.search(code) for owner in HAPTIC_OWNERS)
+    result = []
+    for match in TOKENS.finditer(code):
+        token = match.group()
+        if token == "Menu":
+            if owns_menu:
+                continue
+            message = "Use AppMenu; it owns native menu trigger feedback."
+        else:
+            if owns_haptics:
+                continue
+            message = "Use HapticService/HapticEvent or appPressFeedback; recipes and hardware belong to their owners."
+        line = code.count("\n", 0, match.start()) + 1
+        result.append(f"{path}:{line}: {message}")
+    return result
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parent.parent)
+    root = parser.parse_args().root
+    if not (root / "RemoteCoder").is_dir():
+        parser.error(f"Missing iOS sources at {root / 'RemoteCoder'}")
+    errors = []
+    for path in source_files(root):
+        errors.extend(violations(path, (root / path).read_text()))
+    if errors:
+        print("\n".join(errors))
+        return 1
+    print("lint-haptics: native menus and feedback use their shared owners.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

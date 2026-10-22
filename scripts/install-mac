@@ -1,0 +1,220 @@
+#!/usr/bin/env python3
+
+import argparse
+import importlib.util
+import json
+import os
+import plistlib
+import re
+import shutil
+import subprocess
+import tempfile
+import uuid
+from dataclasses import dataclass
+from pathlib import Path
+
+from bench_lab import LabConfigError, LabConfiguration, load_config
+
+ROOT = Path(__file__).resolve().parents[1]
+TARGET = Path("/Applications/RemoteCoder.app")
+SCHEME = "RemoteCoderMac"
+CONFIG = "Contents/Resources/RemoteCoderLocalConfig.json"
+KEYCHAIN_HELPER = Path.home() / "configs/skills/apple-devops/scripts/ensure-signing-keychain"
+DEVELOPMENT_CONFIG = Path.home() / "RemoteCoder/RemoteCoder/Resources/RemoteCoderLocalConfig.json"
+NESTED_CODE = {".dylib", ".framework"}
+UNSUPPORTED_NESTED_CODE = {".app", ".appex", ".xpc"}
+
+
+@dataclass(frozen=True)
+class Release:
+    team: str
+    entitlements: Path
+    profile: Path
+    config: Path
+    reference: dict
+
+
+def load(name: str, file: str):
+    spec = importlib.util.spec_from_file_location(name, ROOT / "scripts" / file)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def signing_keychain() -> Path:
+    subprocess.run([str(KEYCHAIN_HELPER)], check=True)
+    keychain = Path(subprocess.check_output([str(KEYCHAIN_HELPER), "--path"], text=True).strip())
+    if not keychain.is_file():
+        raise SystemExit(f"The canonical signing keychain {keychain} is missing")
+    return keychain
+
+
+def published_release(run: Path) -> Release:
+    with load("release_cache", "release-cache.py").reference() as reference:
+        app = Path(reference["app"])
+        entitlements = run / "entitlements.plist"
+        signed = subprocess.check_output(["codesign", "-d", "--entitlements", "-", "--xml", str(app)])
+        entitlements.write_bytes(plistlib.dumps(plistlib.loads(signed)))
+        profile = run / "embedded.provisionprofile"
+        shutil.copy2(app / "Contents/embedded.provisionprofile", profile)
+        config = run / "release-config.json"
+        shutil.copy2(app / CONFIG, config)
+        (run / "release-reference.json").write_text(json.dumps(reference, indent=2) + "\n")
+        return Release(reference["team"], entitlements, profile, config, reference)
+
+
+def signer(keychain: Path, team: str) -> str:
+    listed = subprocess.check_output(["security", "find-identity", "-v", "-p", "codesigning", str(keychain)], text=True)
+    identities = re.findall(
+        r'^\s*\d+\) ([0-9A-F]{40}) "Developer ID Application: .*\(' + re.escape(team) + r'\)"$', listed, re.MULTILINE
+    )
+    if len(identities) != 1:
+        raise SystemExit(f"Expected one Developer ID Application identity for team {team} in {keychain}, found {len(identities)}")
+    return identities[0]
+
+
+def build(run: Path, bench: bool) -> tuple[Path, dict]:
+    identity = run / "identity.json"
+    flags = subprocess.check_output(
+        ["python3", "scripts/device-build-identity.py", "prepare", "--release" if bench else "--optimized", str(identity)],
+        text=True,
+    ).split()
+    derived = Path(os.environ["RC_DERIVED_DATA"] + "-mac-optimized")
+    arguments = [
+        "xcodebuild", "-workspace", "RemoteCoder.xcworkspace", "-scheme", SCHEME,
+        "-configuration", "Release" if bench else "Debug",
+        "-destination", "generic/platform=macOS", "-derivedDataPath", str(derived),
+        "-onlyUsePackageVersionsFromResolvedFile", "-skipPackagePluginValidation", "-skipMacroValidation",
+        "CODE_SIGNING_ALLOWED=NO", "COMPILER_INDEX_STORE_ENABLE=NO", "DEBUG_INFORMATION_FORMAT=dwarf-with-dsym",
+        "SWIFT_OPTIMIZATION_LEVEL=-O", "SWIFT_COMPILATION_MODE=wholemodule", "RC_APNS_ENVIRONMENT=production",
+        *flags,
+    ]
+    if bench:
+        arguments.append("SWIFT_ACTIVE_COMPILATION_CONDITIONS=$(inherited) RC_PERF_HARNESS")
+    subprocess.run(["just", "generate"], check=True)
+    settings = run / "settings.json"
+    settings.write_text(subprocess.check_output([*arguments, "-showBuildSettings", "-json"], text=True))
+    evidence = run / "verified-settings.json"
+    subprocess.run(
+        ["python3", "scripts/device-build-identity.py", "verify", str(identity), str(settings), str(evidence),
+         "--target", SCHEME],
+        check=True,
+    )
+    subprocess.run([*arguments, "build"], check=True)
+    product = next(entry["buildSettings"] for entry in json.loads(settings.read_text()) if entry.get("target") == SCHEME)
+    return Path(product["TARGET_BUILD_DIR"]) / product["FULL_PRODUCT_NAME"], json.loads(evidence.read_text())
+
+
+def sign(app: Path, identity: str, keychain: Path, release: Release) -> None:
+    command = ["codesign", "--force", "--sign", identity, "--keychain", str(keychain), "--timestamp"]
+    contents = app / "Contents"
+    unsupported = [path for path in contents.rglob("*") if path.suffix in UNSUPPORTED_NESTED_CODE]
+    if unsupported:
+        raise SystemExit(f"Nested bundles need their own entitlements, which this install does not sign: {unsupported}")
+    nested = [path for path in contents.rglob("*") if path.suffix in NESTED_CODE and not path.is_symlink()]
+    for path in sorted(nested, key=lambda path: len(path.parts), reverse=True):
+        subprocess.run([*command, str(path)], check=True)
+    shutil.copy2(release.profile, contents / "embedded.provisionprofile")
+    subprocess.run([*command, "--entitlements", str(release.entitlements), str(app)], check=True)
+    subprocess.run(["codesign", "--verify", "--deep", "--strict", str(app)], check=True)
+
+
+def bench_config(run: Path) -> Path:
+    config = run / "RemoteCoderLocalConfig.json"
+    shutil.copy2(DEVELOPMENT_CONFIG, config)
+    subprocess.run(["python3", "scripts/release-config.py", "verify-development", str(config)], check=True)
+    return config
+
+
+def lab_config(path: Path) -> LabConfiguration:
+    try:
+        return load_config(path, ROOT, load("release_config", "release-config.py").validate_development)
+    except LabConfigError as error:
+        raise SystemExit("Invalid lab configuration: " + str(error)) from None
+
+
+def cdhash(app: Path) -> str:
+    details = subprocess.run(["codesign", "--display", "--verbose=3", str(app)], capture_output=True, text=True, check=True).stderr
+    found = re.search(r"^CDHash=([0-9a-f]+)$", details, re.MULTILINE)
+    if found is None:
+        raise SystemExit(f"{app} has no CDHash")
+    return found[1]
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Build the Mac app optimized from this snapshot, sign it like the newest published release with its "
+        "entitlements, profile and configuration, then replace and launch it on this Mac."
+    )
+    parser.add_argument("--bench", action="store_true",
+                        help="build the RC_PERF_HARNESS app with this host's development configuration and leave the "
+                        "signed app in the run directory for dev-tools/mac-bench instead of installing it")
+    parser.add_argument("--lab-config", type=Path,
+                        help="bench only: use this private MacBook loopback configuration and keep the signed app "
+                        "in its lab directory")
+    args = parser.parse_args()
+    if args.lab_config is not None and not args.bench:
+        parser.error("--lab-config requires --bench")
+    lab = lab_config(args.lab_config) if args.lab_config is not None else None
+    bench = args.bench
+    provenance = os.environ.get("RC_BUILD_PROVENANCE")
+    if not provenance:
+        raise SystemExit("Run through `just install-mac`, which provides the source snapshot's RC_BUILD_PROVENANCE")
+    run = Path(provenance).parent
+    keychain = signing_keychain()
+    release = published_release(run)
+    identity = signer(keychain, release.team)
+    built, evidence = build(run, bench)
+    artifact_directory = (Path(tempfile.mkdtemp(prefix="bench-", dir=lab.directory)) if lab is not None else run)
+    app = artifact_directory / "RemoteCoder.app"
+    shutil.rmtree(app, ignore_errors=True)
+    subprocess.run(["ditto", str(built), str(app)], check=True)
+    if lab is not None:
+        (app / CONFIG).write_bytes(lab.data)
+        (app / CONFIG).chmod(0o600)
+    else:
+        shutil.copy2(bench_config(run) if bench else release.config, app / CONFIG)
+    info = plistlib.loads((app / "Contents/Info.plist").read_bytes())
+    load("device_build_identity", "device-build-identity.py").verify_bundle(info, evidence)
+    sign(app, identity, keychain, release)
+    built_app = load("install_built_app", "install-built-app.py")
+    deployment = run if bench else built_app.DEPLOYMENTS / ("mac-" + uuid.uuid4().hex)
+    if not bench:
+        deployment.mkdir(parents=True)
+        built_app.retire_expired_deployments()
+    symbols = built_app.retain_symbols(
+        app / "Contents/MacOS", built.parent, deployment / "symbols"
+    )
+    if bench:
+        receipt = {
+            "app": str(app), "cdhash": cdhash(app), "releaseReference": release.reference,
+            "symbolsDirectory": str(run / "symbols"), "retainedSymbols": symbols,
+        }
+        if lab is not None:
+            receipt["artifactLocation"] = "lab"
+        (run / "bench.json").write_text(json.dumps(receipt) + "\n")
+        print(json.dumps({"app": str(app), "version": info.get("CFBundleVersion")}))
+        return
+    installer = load("install_release", "install-release.py")
+    with installer.mac_target_lease(TARGET):
+        print(installer.replace_mac_app(app, TARGET))
+        if not installer.running_pids(TARGET):
+            installer.open_in_login_session(TARGET)
+        installed = plistlib.loads((TARGET / "Contents/Info.plist").read_bytes())
+        receipt = {
+            "installed": True,
+            "version": installer.version(installed),
+            "sourceCommit": installed.get("RemoteCoderSourceCommit"),
+            "sourceModified": installed.get("RemoteCoderSourceModified"),
+            "optimization": installed.get("RemoteCoderBuildOptimization"),
+            "running": installer.running_pids(TARGET),
+            "retainedSymbols": symbols,
+            "buildSettings": evidence["settings"],
+            "releaseReference": release.reference,
+        }
+    (deployment / "receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
+    print(json.dumps({key: receipt[key] for key in ("version", "sourceCommit", "sourceModified", "optimization", "running")}))
+
+
+if __name__ == "__main__":
+    main()
