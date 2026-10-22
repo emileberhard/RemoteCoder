@@ -22,7 +22,7 @@ remotecoder-tools = { path = "../dev-tools", editable = true }
 
 [dependency-groups]
 worker-build = ["hatchling==1.32.4", "editables==0.5"]
-dev = ["pytest>=8", "pytest-asyncio>=1", "ruff>=0.12", "ty>=0.0.1"]
+dev = ["pytest>=8", "pytest-asyncio>=1", "ruff>=0.17.1", "ty>=0.0.1"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
