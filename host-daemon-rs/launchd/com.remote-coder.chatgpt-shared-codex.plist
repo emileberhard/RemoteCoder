@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.remote-coder.chatgpt-shared-codex</string>
+  <key>LimitLoadToSessionType</key>
+  <string>Aqua</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/zsh</string>
+    <string>-lc</string>
+    <string>logs_dir="$HOME/Library/Logs/remote-coder"; mkdir -p "$logs_dir"; for log in "$logs_dir/chatgpt-shared-codex.log" "$logs_dir/chatgpt-shared-codex.error.log"; do if [ -f "$log" ] &amp;&amp; [ "$(stat -f %z "$log")" -gt 10485760 ]; then mv -f "$log" "$log.previous"; fi; done; exec "$HOME/localbin/remote-coder-gateway/remote-coder-codex-gateway" --env-file "$HOME/.remote-coder/codex-gateway.env" runtime desktop launch &gt;&gt;"$logs_dir/chatgpt-shared-codex.log" 2&gt;&gt;"$logs_dir/chatgpt-shared-codex.error.log"</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <!-- Separates the five-minute launchd check from a hand-run one in the
+         desktop journal, so a relaunch can be attributed to its trigger. -->
+    <key>RC_DESKTOP_TRIGGER</key>
+    <string>periodic</string>
+  </dict>
+  <key>ProcessType</key>
+  <string>Standard</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StartInterval</key>
+  <integer>300</integer>
+</dict>
+</plist>

@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.remote-coder.codex-gateway</string>
+
+  <key>AssociatedBundleIdentifiers</key>
+  <array>
+    <string>com.remote-coder.codex-gateway</string>
+  </array>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/zsh</string>
+    <string>-lc</string>
+		<string>shared_env="${RC_CODEX_GATEWAY_SHARED_ENV_FILE:-$HOME/.remote-coder/codex-gateway.shared-env}"; if [ -f "$shared_env" ]; then source "$shared_env"; fi; logs_dir="$HOME/Library/Logs/remote-coder"; mkdir -p "$logs_dir"; for log in "$logs_dir/codex-gateway.out.log" "$logs_dir/codex-gateway.err.log"; do if [ -f "$log" ] &amp;&amp; [ "$(stat -f %z "$log")" -gt 10485760 ]; then mv -f "$log" "$log.previous"; fi; done; exec "$HOME/localbin/remote-coder-gateway/launch-codex-gateway" "$HOME/.remote-coder/codex-gateway.env" &gt;&gt;"$logs_dir/codex-gateway.out.log" 2&gt;&gt;"$logs_dir/codex-gateway.err.log"</string>
+  </array>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>KeepAlive</key>
+  <true/>
+
+  <key>ThrottleInterval</key>
+  <integer>1</integer>
+
+  <key>ProcessType</key>
+  <string>Interactive</string>
+
+  <!-- SIGTERM interrupts active work immediately for automatic resume; the
+       in-process Codex handoff is bounded at 35 seconds, well inside this
+       explicit stop window. -->
+  <key>ExitTimeOut</key>
+  <integer>60</integer>
+
+  <!-- Launchd jobs default to a low soft maxfiles limit (often 256) which is easy to hit with
+       multiple websocket clients + upstream sockets. Raise it to avoid "Too many open files". -->
+  <key>SoftResourceLimits</key>
+  <dict>
+    <key>NumberOfFiles</key>
+    <integer>8192</integer>
+  </dict>
+
+  <key>HardResourceLimits</key>
+  <dict>
+    <key>NumberOfFiles</key>
+    <integer>8192</integer>
+  </dict>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <!-- LaunchAgents default PATH omits Homebrew; codex is a node script at /opt/homebrew/bin/codex. -->
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+
+</dict>
+</plist>

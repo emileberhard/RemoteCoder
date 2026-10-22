@@ -1,0 +1,44 @@
+{
+  "codexVersion": "0.162.0-alpha.17.2",
+  "codexCommit": "e79de0be2c87b29979fde43e908224be9a4294d2",
+  "originalHome": "/private/tmp/adopt-fixture-L2Yke2/c",
+  "createdBy": "dev-tools/probes/codex-adoption.mjs fixture() using actual pinned app-server and loopback Responses SSE, never live inference",
+  "threads": [
+    {
+      "id": "01a14ab7-ff34-7151-bad7-3262b406e60a",
+      "rollout_path": "/private/tmp/adopt-fixture-L2Yke2/c/archived_sessions/rollout-2026-10-17T18-35-34-01a14ab7-ff34-7151-bad7-3262b406e60a.jsonl",
+      "archived": 1,
+      "title": "Native adoption legacy",
+      "source": "vscode",
+      "projectionTurns": 3,
+      "projectionItems": 168
+    },
+    {
+      "id": "01a14ab7-fffc-7211-adac-4a0e73963e19",
+      "rollout_path": "/private/tmp/adopt-fixture-L2Yke2/c/sessions/2026/10/17/rollout-2026-10-17T18-35-35-01a14ab7-fffc-7211-adac-4a0e73963e19.jsonl",
+      "archived": 0,
+      "title": "ADOPTION_SPAWN",
+      "source": "vscode",
+      "projectionTurns": 4,
+      "projectionItems": 263
+    },
+    {
+      "id": "01a14ab8-003e-7fb1-baca-99c94187527b",
+      "rollout_path": "/private/tmp/adopt-fixture-L2Yke2/c/sessions/2026/10/17/rollout-2026-10-17T18-35-35-01a14ab8-003e-7fb1-baca-99c94187527b.jsonl",
+      "archived": 0,
+      "title": "",
+      "source": "{\"subagent\":{\"thread_spawn\":{\"parent_thread_id\":\"01a14ab7-fffc-7211-adac-4a0e73963e19\",\"depth\":1,\"agent_path\":\"/root/fixture_child\",\"agent_nickname\":\"Pauli\",\"agent_role\":null}}}",
+      "projectionTurns": 1,
+      "projectionItems": 55
+    }
+  ],
+  "spawnEdges": [
+    [
+      "01a14ab7-fffc-7211-adac-4a0e73963e19",
+      "01a14ab8-003e-7fb1-baca-99c94187527b",
+      "open"
+    ]
+  ],
+  "archiveSha256": "398af6aa686cd4a6457977b9f95d861d1ab60db602976051992f0655b0fbb30e",
+  "queueRows": 1
+}
