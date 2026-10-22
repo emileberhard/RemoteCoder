@@ -1043,7 +1043,8 @@ class TransferLifecycleTests(unittest.TestCase):
 class ConnectedBuildTests(unittest.TestCase):
     def test_build_child_cannot_read_or_change_the_heartbeat_pipe(self):
         with tempfile.TemporaryDirectory() as temporary:
-            run = Path(temporary)
+            run = Path(temporary) / "runs/isolated-stdin"
+            run.mkdir(parents=True)
             manifest = {
                 "kind": "verify",
                 "worktreeId": "isolated-stdin",
