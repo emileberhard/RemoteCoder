@@ -1,0 +1,4 @@
+
+
+
+export type LegacyAppPathString = string;

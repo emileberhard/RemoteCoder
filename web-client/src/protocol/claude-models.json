@@ -1,0 +1,38 @@
+[
+  {
+    "id": "fable",
+    "name": "Claude Fable",
+    "provider": "claude",
+    "efforts": ["low", "medium", "high", "xhigh", "max"],
+    "defaultEffort": "high",
+    "fast": false,
+    "images": true
+  },
+  {
+    "id": "opus",
+    "name": "Claude Opus",
+    "provider": "claude",
+    "efforts": ["low", "medium", "high", "xhigh", "max"],
+    "defaultEffort": "high",
+    "fast": true,
+    "images": true
+  },
+  {
+    "id": "sonnet",
+    "name": "Claude Sonnet",
+    "provider": "claude",
+    "efforts": ["low", "medium", "high", "xhigh", "max"],
+    "defaultEffort": "high",
+    "fast": false,
+    "images": true
+  },
+  {
+    "id": "haiku",
+    "name": "Claude Haiku",
+    "provider": "claude",
+    "efforts": ["low", "medium", "high", "xhigh", "max"],
+    "defaultEffort": "high",
+    "fast": false,
+    "images": true
+  }
+]
