@@ -179,7 +179,10 @@ def main():
                 with tempfile.TemporaryDirectory(prefix=".build-", dir=ROOT) as temporary:
                     staging = Path(temporary)
                     archive = staging / "source.tar"
-                    run("git", "-C", repository, "archive", "--output", archive, revision, "web-client")
+                    run(
+                        "git", "-C", repository, "archive", "--output", archive, revision,
+                        "web-client", "THIRD_PARTY_NOTICES.md", "LICENSES",
+                    )
                     with tarfile.open(archive) as source:
                         source.extractall(staging, filter="data")
                     web = staging / "web-client"
