@@ -12,7 +12,8 @@ use tokio::sync::Mutex;
 
 use super::transcript::{Boundary, TranscriptCache};
 use super::{
-    ActivityState, SessionActivity, SessionOwner, ensure_inventory_within_limit, output, valid_id,
+    ActivityState, SessionActivity, SessionOwner, bounded_output, ensure_inventory_within_limit,
+    valid_id,
 };
 use crate::time::parse_rfc3339_seconds;
 
@@ -33,7 +34,7 @@ pub(super) async fn codex_sessions(
         "-Fpcfatn",
     ]);
     let files = codex_writers(
-        std::str::from_utf8(&output(command).await?)?,
+        std::str::from_utf8(&inventory_output(command).await?)?,
         &home,
         managed_pid,
     );
@@ -82,6 +83,16 @@ pub(super) async fn codex_sessions(
     })
     .await
     .context("Codex activity reader failed")?
+}
+
+async fn inventory_output(command: Command) -> Result<Vec<u8>> {
+    let output = bounded_output(command).await?;
+    anyhow::ensure!(
+        output.status.success() || (output.status.code() == Some(1) && output.stdout.is_empty()),
+        "Codex activity command failed: {}",
+        output.status
+    );
+    Ok(output.stdout)
 }
 
 pub(super) fn codex_writers(
@@ -147,4 +158,28 @@ pub(super) fn boundary(line: &[u8]) -> Result<Option<Boundary>> {
         state,
         timestamp: record.timestamp.as_deref().and_then(parse_rfc3339_seconds),
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn shell(script: &str) -> Command {
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", script]);
+        command
+    }
+
+    #[tokio::test]
+    async fn codex_inventory_accepts_no_matches_but_rejects_incomplete_results() {
+        assert!(inventory_output(shell("exit 1")).await.unwrap().is_empty());
+        assert!(super::super::output(shell("exit 1")).await.is_err());
+        for script in [
+            "printf partial; exit 1",
+            "echo skipped >&2; exit 1",
+            "exit 2",
+        ] {
+            assert!(inventory_output(shell(script)).await.is_err(), "{script}");
+        }
+    }
 }

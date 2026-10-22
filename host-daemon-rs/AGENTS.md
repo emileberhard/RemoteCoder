@@ -425,7 +425,9 @@ owner until the last fixture is dropped.
   standalone Codex sessions (`src/activity/external/`: live ownership plus
   transcript boundaries). Those entries never enter the active-turn or recovery
   registry and never get synthetic controllable turn ids. Unavailable coverage
-  stays unknown. Activity reads use the publisher's latest refreshed observation;
+  stays unknown. Codex's `lsof` exit status 1 with empty stdout and stderr means
+  no matching processes; partial output, diagnostics and other failures remain
+  unavailable. Activity reads use the publisher's latest refreshed observation;
   admission and explicit takeover still verify live ownership independently.
   The `claude agents --json` listing is expensive (a Node CLI
   launch), so it reruns only when `~/.claude/sessions` changes, a listed process

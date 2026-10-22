@@ -272,7 +272,17 @@ const MAXIMUM_STDOUT_BYTES: usize = 16 * 1024 * 1024;
 const MAXIMUM_STDERR_BYTES: usize = 4 * 1024;
 const MAXIMUM_INVENTORY_SESSIONS: usize = 512;
 
-async fn output(mut command: Command) -> Result<Vec<u8>> {
+async fn output(command: Command) -> Result<Vec<u8>> {
+    let output = bounded_output(command).await?;
+    anyhow::ensure!(
+        output.status.success(),
+        "activity command failed: {}",
+        output.status
+    );
+    Ok(output.stdout)
+}
+
+async fn bounded_output(mut command: Command) -> Result<std::process::Output> {
     command
         .kill_on_drop(true)
         .stdin(Stdio::null())
@@ -298,12 +308,15 @@ async fn output(mut command: Command) -> Result<Vec<u8>> {
     })
     .await
     .context("activity command timed out")??;
-    anyhow::ensure!(status.success(), "activity command failed: {status}");
     anyhow::ensure!(
         stderr.is_empty(),
         "activity command reported incomplete coverage"
     );
-    Ok(stdout)
+    Ok(std::process::Output {
+        status,
+        stdout,
+        stderr,
+    })
 }
 
 async fn read_bounded(stream: impl AsyncRead + Unpin, limit: usize, what: &str) -> Result<Vec<u8>> {
