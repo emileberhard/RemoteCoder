@@ -1,0 +1,29 @@
+{
+  "state_5.sqlite": {
+    "schema": "eb6f12fe6da4bded03f74dcb3f61960f870eeaed5f8dd7afdee7915a6fcf1050",
+    "migrations": "b080b4fc8f0124c760d214d39b6d5c4aec5138a57b5c30df45987f6c49bde127"
+  },
+  "thread_history_1.sqlite": {
+    "schema": [
+      "3fffb3c54ea9c7a34c7c81c0e19a47a58bb320f1c3bcb8fdeafc9b7ecca755b0",
+      "d4fb2edf45cd232322d580c42cf826e1a3b0e7339450dc6b554a5f1d91d12d1b"
+    ],
+    "migrations": "7002a8fa3de51521591f5a910f71e4b6dd467aebf523d64ede78f4b8c2a43ee9"
+  },
+  "queue_1.sqlite": {
+    "schema": "bcfb7277891e0058458b8d3d65029c7a029ff9846238d3d7398efafd69ee65d8",
+    "migrations": "e1e66702fa0f9e36688a2f9458e389e6c5ca69e69f0dade8adaeceaea4deadb1"
+  },
+  "goals_1.sqlite": {
+    "schema": "b5bbeffcdce787cf1c58e2f7f36224636c1e537071d63def3e6126db1aed7b78",
+    "migrations": "c1461e8966f697a99c75432d954833033b710f25cfb7a620cea25d7605d05ef5"
+  },
+  "memories_1.sqlite": {
+    "schema": "2e7cf952ee319741ae5276b3dee7d135ec37ce8f2b4575447b203167eab8ec92",
+    "migrations": "20525156c4950eeb341e7edcdfb966045a5ec4e11e065681ccf3ca088ed252b0"
+  },
+  "memories_v2_1.sqlite": {
+    "schema": "2e7cf952ee319741ae5276b3dee7d135ec37ce8f2b4575447b203167eab8ec92",
+    "migrations": "20525156c4950eeb341e7edcdfb966045a5ec4e11e065681ccf3ca088ed252b0"
+  }
+}
