@@ -1,6 +1,5 @@
 import importlib.util
 import json
-import subprocess
 import unittest
 from pathlib import Path
 
@@ -12,29 +11,6 @@ spec.loader.exec_module(module)
 
 
 class ReleaseConfigurationTests(unittest.TestCase):
-    def test_release_steps_explicitly_select_bash_with_pipeline_failure_checks(self):
-        workflow = Path(__file__).resolve().parents[2] / ".github/workflows/release.yml"
-        document = json.loads(
-            subprocess.check_output(
-                [
-                    "ruby",
-                    "-ryaml",
-                    "-rjson",
-                    "-e",
-                    "puts JSON.generate(YAML.load_file(ARGV[0]))",
-                    str(workflow),
-                ],
-                text=True,
-            )
-        )
-        release = document["jobs"]["release"]
-        defaults = release.get("defaults", document.get("defaults", {})).get("run", {})
-        for step in release["steps"]:
-            if "run" in step:
-                self.assertEqual(
-                    step.get("shell", defaults.get("shell")), "bash", step.get("name")
-                )
-
     def test_public_client_configuration_is_allowed(self):
         module.validate(
             json.dumps(

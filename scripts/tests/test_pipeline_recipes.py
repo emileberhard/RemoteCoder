@@ -52,10 +52,11 @@ class PipelineRecipesTests(unittest.TestCase):
                 ["just", "codex-fork-run", str(source.parent), sys.executable, "-c",
                  "from pathlib import Path; import sys; Path(sys.argv[1]).write_text(Path('fixture.txt').read_text())", str(result_path)],
                 cwd=root,
-                env=os.environ | {"HOME": str(home), "RC_GATEWAY_BUILD_HOST": "local", "ZDOTDIR": str(root)},
+                env={"PATH": os.environ["PATH"], "HOME": str(home), "RC_GATEWAY_BUILD_HOST": "local", "ZDOTDIR": str(root)},
                 capture_output=True, text=True, check=False,
             )
             self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(result_path.is_file(), result.stdout + result.stderr)
             self.assertEqual(result_path.read_text(), "local fork source")
             cache = home / "Library/Caches/RemoteCoder-Build/codex-fork-check"
             self.assertTrue((cache / "build.lock").is_file())
