@@ -35,5 +35,6 @@ jobs:
           [[ -n "$DEPLOY_REPOSITORY" && -n "$GH_TOKEN" ]]
           jq -n --arg version "$VERSION" --arg commit "$COMMIT" \
             '{ref:"main",inputs:{version:$version,commit:$commit}}' |
-            gh api --method POST "repos/$DEPLOY_REPOSITORY/actions/workflows/release.yml/dispatches" --input - >"$RUNNER_TEMP/dispatch.json"
+            gh api --method POST -H "X-GitHub-Api-Version: 2026-03-10" \
+              "repos/$DEPLOY_REPOSITORY/actions/workflows/release.yml/dispatches" --input - >"$RUNNER_TEMP/dispatch.json"
           jq -er '.html_url' "$RUNNER_TEMP/dispatch.json" | tee -a "$GITHUB_STEP_SUMMARY"
