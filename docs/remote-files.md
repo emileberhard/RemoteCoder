@@ -64,6 +64,15 @@ the agent named the file, otherwise with the tool's name. Only a successful
 read produces an image view; a failed or text `Read` stays a tool call. Stored
 image views from before the path was kept stay unrendered.
 
+An image view shows the image the model received, never what its path holds
+later: agents often overwrite a file they already viewed, such as a render
+they repeat. The gateway lists that image under the item's `rcMedia`: a Claude
+`Read` carries its tool-result image as `imageUrl`, which becomes a tool media
+copy, and Codex `view_image` names the snapshot its runtime saved of the
+prepared image as `savedPath`. An image view without either, such as a Codex
+view recorded before its runtime saved snapshots, shows the file at its path,
+which may have changed since.
+
 The gateway copies inline tool media into its tool media store and lists the
 copies under the item's `rcMedia` (`[{path, mimeType, name?}]`, `name` only for
 a file the agent named); see

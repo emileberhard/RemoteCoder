@@ -84,7 +84,7 @@ extension CodexAppServerV2 {
             prompt: String?
         )
         case webSearch(id: String, query: String, action: JSONValue?)
-        case imageView(id: String, path: String)
+        case imageView(id: String, path: String, image: ToolMedia?)
         case imageGeneration(
             id: String,
             status: String,
@@ -458,6 +458,7 @@ private enum ThreadItemPayload {
 
     struct ImageView: Codable {
         let path: String?
+        let rcMedia: [V2.ToolMedia]?
     }
 
     struct Empty: Codable {}
@@ -514,8 +515,9 @@ extension CodexAppServerV2.ThreadItem: Codable {
             let payload = try Payload.WebSearch(from: decoder)
             self = .webSearch(id: id, query: payload.query, action: payload.action)
         case "imageView":
-            if let path = try Payload.ImageView(from: decoder).path {
-                self = .imageView(id: id, path: path)
+            let payload = try Payload.ImageView(from: decoder)
+            if let path = payload.path {
+                self = .imageView(id: id, path: path, image: payload.rcMedia?.first)
             } else {
                 self = .unknown(id: id, type: header.type, payload: try JSONValue(from: decoder))
             }
@@ -570,8 +572,8 @@ extension CodexAppServerV2.ThreadItem: Codable {
                 receiverThreadIds: receiverThreadIds, prompt: prompt))
         case .webSearch(let id, let query, let action):
             try write("webSearch", id, Payload.WebSearch(query: query, action: action))
-        case .imageView(let id, let path):
-            try write("imageView", id, Payload.ImageView(path: path))
+        case .imageView(let id, let path, let image):
+            try write("imageView", id, Payload.ImageView(path: path, rcMedia: image.map { [$0] }))
         case .imageGeneration(let id, let status, let result, let revisedPrompt, let savedPath):
             try write("imageGeneration", id, Payload.ImageGeneration(status: status, result: result,
                 revisedPrompt: revisedPrompt, savedPath: savedPath))
@@ -625,7 +627,7 @@ extension CodexAppServerV2.ThreadItem {
     var id: String {
         switch self {
         case .userMessage(let id, _, _), .hookPrompt(let id, _), .agentMessage(let id, _, _, _, _),
-             .plan(let id, _), .imageView(let id, _), .enteredReviewMode(let id, _),
+             .plan(let id, _), .imageView(let id, _, _), .enteredReviewMode(let id, _),
              .exitedReviewMode(let id, _), .contextCompaction(let id): id
         case .reasoning(let id, _, _), .fileChange(let id, _, _),
              .webSearch(let id, _, _), .unknown(let id, _, _): id

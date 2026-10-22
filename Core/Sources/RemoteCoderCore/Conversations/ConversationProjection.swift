@@ -301,8 +301,8 @@ enum ConversationProjection {
                    state.window.map({ $0.newer == nil || $0.turns.last?.id != turnID }) ?? true {
                     forkableMessageID = message.id
                 }
-            } else if case .imageView(let itemID, let path) = record.value {
-                let image = ViewedMedia(itemID: itemID, index: 0, path: path,
+            } else if case .imageView(let itemID, let path, let received) = record.value {
+                let image = ViewedMedia(itemID: itemID, index: 0, path: received?.path ?? path,
                                         caption: URL(fileURLWithPath: path).lastPathComponent)
                 flush(before: record.date, terminal: false)
                 rows.append(.viewedMedia(image))

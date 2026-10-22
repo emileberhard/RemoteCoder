@@ -260,12 +260,13 @@ struct ConversationStateTests: ConversationHistoryFixtures {
     @Test func aViewedImageSplitsTheActionGroupWithoutCountingAsAReply() throws {
         var state = ConversationState(conversationID: UUID(), threadID: "thread")
         state.apply(try event("item/started", item: tool("first", status: .completed), ordinal: 10))
-        state.apply(try event("item/completed", item: .imageView(id: "view", path: "/tmp/chart.png"), ordinal: 20))
+        state.apply(try event("item/completed", item: .imageView(
+            id: "view", path: "/tmp/chart.png", image: .init(path: "/media/abc.png", mimeType: "image/png")), ordinal: 20))
         state.apply(try event("item/started", item: tool("second", status: .completed), ordinal: 30))
         let snapshot = ConversationProjection.project(state)
         #expect(snapshot.items.map(\.id) == ["timeline-gw-thread-turn-seg-start", "viewed-media-view-0",
                                              "timeline-gw-thread-turn-seg-viewed-media-view-0"])
-        #expect(snapshot.items[1] == .viewedMedia(ViewedMedia(itemID: "view", index: 0, path: "/tmp/chart.png",
+        #expect(snapshot.items[1] == .viewedMedia(ViewedMedia(itemID: "view", index: 0, path: "/media/abc.png",
                                                               caption: "chart.png")))
         #expect(snapshot.timelines.map { $0.events.map(\.id) } == [["gw-thread-turn-first"], ["gw-thread-turn-second"]])
         #expect(snapshot.messages.isEmpty)
