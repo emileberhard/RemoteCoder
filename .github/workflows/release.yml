@@ -1,0 +1,39 @@
+name: Release
+
+on:
+  push:
+    tags: ['*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-24.04
+    environment: deployment-handoff
+    timeout-minutes: 10
+    env:
+      VERSION: ${{ github.ref_name }}
+      COMMIT: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Admit the newest annotated release on main
+        run: python3 scripts/release_tag.py "$VERSION" "$COMMIT"
+      - name: Hand off the exact release to private deployment
+        env:
+          GH_TOKEN: ${{ secrets.RC_DEPLOY_TOKEN }}
+          DEPLOY_REPOSITORY: ${{ vars.RC_DEPLOY_REPOSITORY }}
+        run: |
+          set -euo pipefail
+          [[ -n "$DEPLOY_REPOSITORY" && -n "$GH_TOKEN" ]]
+          jq -n --arg version "$VERSION" --arg commit "$COMMIT" \
+            '{ref:"main",inputs:{version:$version,commit:$commit}}' |
+            gh api --method POST "repos/$DEPLOY_REPOSITORY/actions/workflows/release.yml/dispatches" --input - >"$RUNNER_TEMP/dispatch.json"
+          jq -er '.html_url' "$RUNNER_TEMP/dispatch.json" | tee -a "$GITHUB_STEP_SUMMARY"

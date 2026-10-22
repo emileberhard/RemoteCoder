@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 1,
+  "component": "remote-coder-codex-gateway",
+  "chatgptBuild": "26.1016.51333",
+  "codexCliVersion": "0.163.0-alpha.11",
+  "codexForkCommit": "a1589fd975f391084bc3836fecdf9d7436a1d70a",
+  "codexUpstreamBaseCommit": "5425d3e625daa58eea3ad1de27c087eb3b2ffbd3",
+  "codexAppServerTransport": "websocket-over-unix",
+  "codexAppServerSocket": "~/.codex/app-server-control/app-server-control.sock",
+  "runtimeHashes": {
+    "bin/codex": "c4dde3200289fee0a6a995681f3cc66cf66227c6c6b7e6bfb9a2a7e3ec2d059d",
+    "bin/codex-code-mode-host": "609b6704e0860be13e90872ef26ca60399acded83b8b9572d16096338122d3df"
+  },
+  "status": "runtime-identity-only",
+  "externalAuthAcceptance": {
+    "required": true,
+    "gate": "just shared-codex-check <host>",
+    "probe": "dev-tools/src/remotecoder_tools/external_auth_probe.py",
+    "isolation": "Build-host execution only; fresh private HOME/CODEX_HOME; synthetic JWTs; loopback mocks; Seatbelt denies nonlocal outbound network; package bytes only transferred from requested host; no live credentials, host config or managed socket",
+    "matrix": [
+      "race",
+      "owner_gone",
+      "owner_disconnect",
+      "concurrent",
+      "timeout_late",
+      "wrong_account",
+      "expired_reads",
+      "restart",
+      "sibling_relogin",
+      "refresh_then_relogin"
+    ],
+    "liveAcceptanceRequired": [
+      "WebSocket tool continuation",
+      "remote compaction",
+      "Fast-tier reporting",
+      "Codex and Claude voice handoff and reconnect",
+      "renewal during long turn",
+      "router restart/outage",
+      "both-host exact recovery",
+      "Primary-host reboot and secondary-host reconnection over the configured private network",
+      "Desktop attachment"
+    ],
+    "executionHost": "scripts/build-host (shared background admission)",
+    "artifactMatch": "Requested-host managed PID executable, manifest source/version and approved executable hashes; full package fingerprint must match the isolated build-host snapshot",
+    "status": "operator-acceptance-not-published",
+    "liveAcceptanceStatus": "not-published"
+  },
+  "runtimePackageSHA256": "838ed3f9fc8eb861712bba77d1d5bef8be3fc65702fc730f9613e81b604e85fc"
+}
