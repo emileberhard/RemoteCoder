@@ -263,16 +263,11 @@ def resolve_package(path: Path, packages: Path) -> Path:
 
 
 def apply(path: Path, approval: Approval, package_sha256: str) -> None:
-    try:
-        previous_approval = repo_approval(path)
-    except ApprovalError:
-        previous_approval = None
     compatibility = load_json(path)
     if not isinstance(compatibility, dict) or not isinstance(
         compatibility.get("runtimeHashes"), dict
     ):
         raise ApprovalError("compatibility record has no runtimeHashes object")
-    previous_package_sha256 = compatibility.get("runtimePackageSHA256")
     compatibility["codexCliVersion"] = approval.version
     compatibility["codexForkCommit"] = approval.source_commit
     compatibility["runtimePackageSHA256"] = package_sha256
@@ -282,42 +277,6 @@ def apply(path: Path, approval: Approval, package_sha256: str) -> None:
             "bin/codex-code-mode-host": approval.code_mode_host_sha256,
         }
     )
-    if previous_approval != approval or (
-        previous_package_sha256 is not None and previous_package_sha256 != package_sha256
-    ):
-        compatibility["status"] = "candidate-unvalidated"
-        compatibility["validatedOnCommit"] = None
-        compatibility["validatedAtUtc"] = None
-        compatibility["verification"] = {
-            "gatewayRestartedAfterInstall": False,
-            "hosts": [],
-            "smokeTests": [],
-        }
-        compatibility["notes"] = (
-            "Runtime identity was prepared from a verified package; host acceptance is pending."
-        )
-        external = compatibility.get("externalAuthAcceptance")
-        if external is not None:
-            if not isinstance(external, dict):
-                raise ApprovalError("externalAuthAcceptance must be an object")
-            contract = {
-                "required",
-                "gate",
-                "probe",
-                "isolation",
-                "matrix",
-                "phase0Evidence",
-                "executionHost",
-                "artifactMatch",
-                "liveAcceptanceRequired",
-            }
-            compatibility["externalAuthAcceptance"] = {
-                **{key: value for key, value in external.items() if key in contract},
-                "verifiedHosts": [],
-                "status": "pending-host-acceptance",
-                "liveAcceptanceStatus": "pending",
-            }
-
     write_atomic(path, json.dumps(compatibility, indent=2, ensure_ascii=False) + "\n")
 
 

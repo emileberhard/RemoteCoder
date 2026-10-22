@@ -35,39 +35,17 @@ EOF
 
 manifest_hash="$(shasum -a 256 "${temp_root}/package/codex-package.json" | awk '{print $1}')"
 
-jq '.externalAuthAcceptance.status = "validated" |
-    .externalAuthAcceptance.verifiedHosts = ["old-host"] |
-    .externalAuthAcceptance.evidenceCommit = "old-commit" |
-    .externalAuthAcceptance.receipts = ["old-receipt"] |
-    .externalAuthAcceptance.liveAcceptanceStatus = "passed"' \
-  "${temp_root}/docs/codex/compatibility.json" >"${temp_root}/accepted.json"
-mv "${temp_root}/accepted.json" "${temp_root}/docs/codex/compatibility.json"
-
+cp "${temp_root}/docs/codex/compatibility.json" "${temp_root}/before.json"
 uv run --script "${script}" apply --repo-root "${temp_root}" --json \
   --package "${temp_root}/package" | jq -e '.ok == true' >/dev/null
-jq -e \
-  '.status == "candidate-unvalidated" and .validatedOnCommit == null and .verification.smokeTests == []' \
-  "${temp_root}/docs/codex/compatibility.json" >/dev/null
-jq -e '.externalAuthAcceptance |
-    .required == true and .gate == "just shared-codex-check <host>" and
-    .status == "pending-host-acceptance" and .verifiedHosts == [] and
-    .liveAcceptanceStatus == "pending" and
-    has("evidenceCommit") == false and has("receipts") == false' \
-  "${temp_root}/docs/codex/compatibility.json" >/dev/null
-
-jq '.externalAuthAcceptance.status = "validated" |
-    .externalAuthAcceptance.verifiedHosts = ["accepted-host"] |
-    .externalAuthAcceptance.evidenceCommit = "accepted-commit" |
-    .externalAuthAcceptance.receipts = ["accepted-receipt"] |
-    .externalAuthAcceptance.liveAcceptanceStatus = "passed"' \
-  "${temp_root}/docs/codex/compatibility.json" >"${temp_root}/accepted.json"
-mv "${temp_root}/accepted.json" "${temp_root}/docs/codex/compatibility.json"
-uv run --script "${script}" apply --repo-root "${temp_root}" --json \
-  --package "${temp_root}/package" | jq -e '.ok == true' >/dev/null
-jq -e '.externalAuthAcceptance |
-    .status == "validated" and .verifiedHosts == ["accepted-host"] and
-    .evidenceCommit == "accepted-commit" and .receipts == ["accepted-receipt"] and
-    .liveAcceptanceStatus == "passed"' \
+jq -e --slurpfile before "${temp_root}/before.json" \
+  --arg codex "${codex_hash}" --arg host "${code_mode_hash}" '
+    del(.runtimePackageSHA256) == ($before[0] | del(.runtimePackageSHA256) |
+      .codexCliVersion = "9.8.7-alpha.6" |
+      .codexForkCommit = "0123456789abcdef0123456789abcdef01234567" |
+      .runtimeHashes["bin/codex"] = $codex |
+      .runtimeHashes["bin/codex-code-mode-host"] = $host) and
+    .runtimePackageSHA256 != $before[0].runtimePackageSHA256' \
   "${temp_root}/docs/codex/compatibility.json" >/dev/null
 
 uv run --script "${script}" check --repo-root "${temp_root}" --json \
