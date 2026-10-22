@@ -7,7 +7,7 @@ dependencies = [
   "httpx>=0.28,<0.29",
   "pydantic>=2.12,<3",
   "remotecoder-tools",
-  "websockets>=15,<16",
+  "websockets>=17.2,<18",
 ]
 
 [build-system]
