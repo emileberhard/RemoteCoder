@@ -13,8 +13,47 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  gateway:
+  changes:
     if: ${{ !github.event.repository.private }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      gateway: ${{ steps.scope.outputs.gateway }}
+      swift: ${{ steps.scope.outputs.swift }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: ${{ github.event_name == 'pull_request' }}
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: scope
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          gateway=false
+          swift=false
+          if [[ "$EVENT_NAME" == push ]]; then
+            gateway=true
+            swift=true
+          else
+            git diff --no-renames --name-only -z "$BASE_SHA...$HEAD_SHA" > "$RUNNER_TEMP/changed-paths"
+            while IFS= read -r -d '' path; do
+              case "$path" in
+                host-daemon-rs/*|docs/codex/compatibility.json|protocol-fixtures/*|dev-tools/fixtures/*|rust-toolchain.toml|.github/workflows/ci.yml) gateway=true ;;
+              esac
+              case "$path" in
+                *.swift|protocol-fixtures/*|Core/*|RemoteCoder/*|RemoteCoderMac/*|RemoteCoderTests/*|RemoteCoderUITests/*|RemoteCoderLiveActivities/*|RemoteCoderNotificationService/*|RemoteCoderLocationPushService/*|RemoteCoderShareExtension/*|RemoteCoderCaptureExtension/*|Shared/*|Config/*|Tuist/*|scripts/*|.xcode-version|.swift-version|.github/workflows/ci.yml) swift=true ;;
+              esac
+            done < "$RUNNER_TEMP/changed-paths"
+          fi
+          printf 'gateway=%s\nswift=%s\n' "$gateway" "$swift" >> "$GITHUB_OUTPUT"
+
+  gateway:
+    needs: changes
+    if: ${{ needs.changes.outputs.gateway == 'true' }}
     runs-on: xcode-27
     timeout-minutes: 35
     env:
@@ -31,7 +70,8 @@ jobs:
       - run: cargo test --manifest-path host-daemon-rs/Cargo.toml --locked
 
   swift:
-    if: ${{ !github.event.repository.private }}
+    needs: changes
+    if: ${{ needs.changes.outputs.swift == 'true' }}
     runs-on: xcode-27
     timeout-minutes: 20
     env:
