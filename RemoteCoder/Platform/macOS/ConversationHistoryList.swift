@@ -405,7 +405,7 @@ private struct ConversationSourceRow: View, Equatable {
                 }
             }
             HStack(spacing: 4) {
-                Image(systemName: provider.symbolName)
+                Image(provider.markImage)
                     .resizable()
                     .scaledToFit()
                     .frame(width: markSize, height: markSize)
@@ -480,7 +480,7 @@ private struct UnsentDraftSourceRow: View, Equatable {
                 }
                 HStack(spacing: 4) {
                     if let provider = row.provider {
-                        Image(systemName: provider.symbolName)
+                        Image(provider.markImage)
                             .resizable()
                             .scaledToFit()
                             .frame(width: markSize, height: markSize)

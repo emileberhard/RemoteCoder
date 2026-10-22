@@ -22,7 +22,7 @@ zero before the reset. Its color follows how early the projected run-out is,
 sweeping hue from lime just before the reset through orange
 to alert red at two hours or more ahead (`UsageRunOutWarning`); mixing colors
 instead desaturates the middle of the range into mustard; VoiceOver states that lead time. The ring
-carries no text: the provider's symbol sits in its centre. Tapping it refreshes usage and opens a
+carries no text: the provider's logo sits in its centre. Tapping it refreshes usage and opens a
 compact popover: the provider's account selector, then each limit's
 remaining percentage,
 capacity bar and reset time. Text appears beyond that only when usage is stale
@@ -36,13 +36,16 @@ direction. Healthy values use the primary label color; low remaining values use
 amber (11–25%, the `UsageLow` asset with dark and high-contrast variants) or red
 (0–10%). Amber avoids reusing Claude's orange brand color for a warning. Details,
 the overview and VoiceOver carry the exact numbers, so color never carries the
-value alone. Stale samples use secondary styling, a dimmed symbol and explicit
+value alone. Stale samples use secondary styling, a dimmed logo and explicit
 last-known or unavailable status. Missing summary windows use an em dash with
 “Not reported” for VoiceOver, and a circle without any overall window is dashed
-with a dimmed symbol.
+with a dimmed logo.
 
-Provider marks use neutral SF Symbols (`terminal` for Codex and `text.bubble` for
-Claude). Codex slots are classified by their reported window duration, never by
+The logos are template vector assets (`ClaudeMark`, `CodexMark`) tinted in code
+with each provider's brand color: Claude `#D97757`, Codex the
+`#F4F6FF`→`#C4D3FF`→`#7A9DFF` gradient. The Claude path is from Simple Icons
+16.32.0 (CC0-1.0); the Codex path is from Lobe Icons
+(`@lobehub/icons-static-svg` 1.95.0, MIT, LobeHub). Each SVG records its source. Codex slots are classified by their reported window duration, never by
 a primary/secondary assumption.
 
 ## Ownership and recovery

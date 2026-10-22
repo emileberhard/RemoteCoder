@@ -33,11 +33,11 @@ struct UnsentDraftRowView: View, Equatable {
                         .truncationMode(.head)
                     Spacer(minLength: 6)
                     if let provider = row.provider {
-                        Image(systemName: provider.symbolName)
+                        Image(provider.markImage)
                             .resizable()
                             .scaledToFit()
                             .frame(width: markSize, height: markSize)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(provider.markStyle)
                             .accessibilityLabel("\(provider.displayName) draft")
                     }
                 }

@@ -154,11 +154,11 @@ struct ConversationRow: View, Equatable {
                     .accessibilityLabel("Probably done")
             }
             let provider = AgentProvider.provider(forThreadID: row.address.threadID)
-            Image(systemName: provider.symbolName)
+            Image(provider.markImage)
                 .resizable()
                 .scaledToFit()
                 .frame(width: markSize, height: markSize)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(provider.markStyle)
                 .accessibilityLabel("\(provider.displayName) conversation")
         }
         .lineLimit(1)

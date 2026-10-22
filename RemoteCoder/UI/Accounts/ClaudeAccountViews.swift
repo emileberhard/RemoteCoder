@@ -90,8 +90,8 @@ struct ClaudeUsageDetailsView: View {
                 Section { Button("All Accounts", systemImage: "person.2", action: onShowAllAccounts) }
             } label: {
                 HStack(spacing: 8) {
-                    Image(systemName: AgentProvider.claude.symbolName)
-                        .resizable().scaledToFit().foregroundStyle(.secondary)
+                    Image(AgentProvider.claude.markImage)
+                        .resizable().scaledToFit().foregroundStyle(AgentProvider.claude.markStyle)
                         .frame(width: markSize, height: markSize)
                     Text(directory.state.preference == nil ? "Automatic" : directory.effectiveAccount?.label ?? "Choose Account")
                         .scaledFont(.headline).multilineTextAlignment(.leading)

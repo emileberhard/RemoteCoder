@@ -1,7 +1,33 @@
 import SwiftUI
 
 extension AgentProvider {
-    var symbolName: String { self == .claude ? "text.bubble" : "terminal" }
+    var markImage: String { self == .claude ? "ClaudeMark" : "CodexMark" }
+
+    var brandColor: Color {
+        switch self {
+        case .claude:
+            Color(red: 0xD9 / 255, green: 0x77 / 255, blue: 0x57 / 255)
+        case .codex:
+            Color(red: 0x7A / 255, green: 0x9D / 255, blue: 0xFF / 255)
+        }
+    }
+
+    var markStyle: AnyShapeStyle {
+        switch self {
+        case .claude:
+            AnyShapeStyle(brandColor)
+        case .codex:
+            AnyShapeStyle(LinearGradient(
+                colors: [
+                    Color(red: 0xF4 / 255, green: 0xF6 / 255, blue: 0xFF / 255),
+                    Color(red: 0xC4 / 255, green: 0xD3 / 255, blue: 0xFF / 255),
+                    brandColor,
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            ))
+        }
+    }
 }
 
 struct UsageRingsControl: View {
@@ -107,10 +133,10 @@ struct UsageRings: View {
                     .padding(style.lineWidth + 1)
                     .transition(.opacity)
             }
-            Image(systemName: provider.symbolName)
+            Image(provider.markImage)
                 .resizable()
                 .scaledToFit()
-                .foregroundStyle(.secondary)
+                .foregroundStyle(provider.markStyle)
                 .frame(width: diameter * 0.46, height: diameter * 0.46)
                 .opacity(weekly.map { $0.isStale ? 0.5 : 1 } ?? 0.5)
         }
