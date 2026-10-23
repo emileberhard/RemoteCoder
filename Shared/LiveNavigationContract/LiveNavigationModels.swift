@@ -24,6 +24,9 @@ struct LiveNavigationCommand: Codable, Sendable {
     let uploadToken: String
     let serverPublicKey: String
     let expiresAtUnixSeconds: Int64
+    private let singleFix: Bool?
+
+    var isSingleFix: Bool { singleFix == true }
 
     var isExpired: Bool {
         Date().timeIntervalSince1970 >= TimeInterval(expiresAtUnixSeconds)

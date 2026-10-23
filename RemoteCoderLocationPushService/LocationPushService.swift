@@ -33,7 +33,9 @@ final class LocationPushService: NSObject, CLLocationPushServiceExtension, @unch
             activeGeneration = generation
             let storage: Result<Void, Error>
             do {
-                try LiveNavigationCommandStore.save(command: command)
+                if command.isSingleFix == false {
+                    try LiveNavigationCommandStore.save(command: command)
+                }
                 storage = .success(())
             } catch {
                 activeGeneration = nil
@@ -49,7 +51,9 @@ final class LocationPushService: NSObject, CLLocationPushServiceExtension, @unch
             completionOnce.call()
             return
         }
-        LiveNavigationConstants.postCommandChangedNotification()
+        if command.isSingleFix == false {
+            LiveNavigationConstants.postCommandChangedNotification()
+        }
 
         let task = Task { [weak self] in
             guard let self else {
@@ -106,19 +110,9 @@ final class LocationPushService: NSObject, CLLocationPushServiceExtension, @unch
                 message: "Location push extension acquired the bootstrap fix."
             )
             let response = try await LiveNavigationUploader.upload(event, using: command)
-            guard isActive(generation: generation) else {
+            guard isActive(generation: generation), try acknowledge(response, of: command) else {
                 finish(generation: generation, completion: completion)
                 return
-            }
-            guard try LiveNavigationCommandStore.saveProgress(
-                command: command,
-                acceptedSequence: response.acceptedSequence
-            ) else {
-                finish(generation: generation, completion: completion)
-                return
-            }
-            if response.command?.type == "stop" {
-                try LiveNavigationCommandStore.clear(sessionID: command.sessionId)
             }
             logger.notice("Uploaded bootstrap fix for navigation session \(command.sessionId, privacy: .public)")
         } catch {
@@ -129,6 +123,20 @@ final class LocationPushService: NSObject, CLLocationPushServiceExtension, @unch
         }
 
         finish(generation: generation, completion: completion)
+    }
+
+    private func acknowledge(_ response: LiveNavigationUploadResponse, of command: LiveNavigationCommand) throws -> Bool {
+        if command.isSingleFix { return true }
+        guard try LiveNavigationCommandStore.saveProgress(
+            command: command,
+            acceptedSequence: response.acceptedSequence
+        ) else {
+            return false
+        }
+        if response.command?.type == "stop" {
+            try LiveNavigationCommandStore.clear(sessionID: command.sessionId)
+        }
+        return true
     }
 
     private func isActive(generation: UUID) -> Bool {
@@ -170,7 +178,8 @@ final class LocationPushService: NSObject, CLLocationPushServiceExtension, @unch
             guidance: nil,
             message: error.localizedDescription
         )
-        _ = try? await LiveNavigationUploader.upload(event, using: command)
+        guard let response = try? await LiveNavigationUploader.upload(event, using: command) else { return }
+        _ = try? acknowledge(response, of: command)
     }
 }
 

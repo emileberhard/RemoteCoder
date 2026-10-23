@@ -416,6 +416,7 @@ impl NavigationManager {
             "uploadToken": upload_token,
             "serverPublicKey": URL_SAFE_NO_PAD.encode(server_public_key.as_bytes()),
             "expiresAtUnixSeconds": expires_at_unix_seconds,
+            "singleFix": params.single_fix,
         });
         let custom_data = command
             .as_object()

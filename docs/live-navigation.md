@@ -24,9 +24,10 @@ agent consumes location/guidance events through JSON-RPC or the CLI.
 4. `RemoteCoderLocationPushService` validates and stores the command, takes one
    Core Location fix, and uploads a `bootstrap` event.
 5. A Darwin notification lets an already-running containing app adopt the
-   stored command without polling. A suspended or terminated app is not resumed
-   by the push; it adopts the stored command when it next launches or comes to
-   the foreground. `LiveNavigationCoordinator` then restores the command, starts
+   stored command without polling. The extension does not hand off to a
+   suspended or terminated app (Apple's LPSE guide suggests letting the
+   extension's `liveUpdates` wake the app; this is not adopted), so such an app
+   adopts the stored command when it next launches or comes to the foreground. `LiveNavigationCoordinator` then restores the command, starts
    continuous Core Location, and creates one independent `GMSNavigationSession`
    for road-snapped locations and optional guidance.
 6. Agents long-poll `navigation/next`, or use `dev-tools/live-navigation watch`
@@ -42,9 +43,10 @@ for continuous tracking therefore needs the app opened once when it is not
 already running.
 
 `navigation/start` with `singleFix: true` asks for that one bootstrap fix only.
-The gateway records the stop with the session's first event, so the upload
-response tells the extension to clear the stored command, and opening the app
-later does not resume the session. A single fix takes no destination.
+The command carries `singleFix`, so the extension neither stores nor announces
+it: a running app cannot adopt it and a later launch cannot resume it. The
+gateway records the stop with the session's first event. A single fix takes no
+destination.
 `dev-tools/live-navigation fix` waits for it and prints its location. Apple
 allows roughly 360 location pushes a day per device, replenished one every few
 minutes, so poll with a session rather than repeated fixes.
@@ -115,7 +117,9 @@ diagnostics to the gateway; see [host observability](host-observability.md).
 The location token and the start inputs (`eventBaseUrl`, `setupReady`,
 `authorization`, `fullAccuracy`, `googleTermsAccepted`) travel in the
 `tokens.location` entry of `devices/register`; `navigation/start` reads them
-from the most recently registered device holding a location token. The app
+from the most recently registered device holding a location token, ready or
+not; preparing a second device therefore lets whichever registered last
+receive the pushes. The app
 sends it through `devices/register` to every host (`PushTokenSources` supplies
 the credentials), not only the active one. The app stores the token locally under
 `pushDevice.location` and refreshes it on every activation once setup has run;
