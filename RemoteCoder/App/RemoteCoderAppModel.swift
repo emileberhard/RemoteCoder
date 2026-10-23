@@ -189,6 +189,7 @@ final class RemoteCoderAppModel {
                 workspace.reconcileHosts()
                 #if os(iOS)
                 incomingCalls.refreshMicrophonePermission()
+                liveNavigationSetup.refreshRegistration(pushTokens: workspace.pushTokens)
                 #endif
             }
             await workspace.handleScenePhaseActive()

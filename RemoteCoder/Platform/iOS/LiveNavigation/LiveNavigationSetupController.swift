@@ -17,6 +17,7 @@ final class LiveNavigationSetupController {
     private let locationManager = CLLocationManager()
     private let logger = Logger(subsystem: "RemoteCoder", category: "LiveNavigationSetup")
     private var serviceSession: CLServiceSession?
+    private var refreshTask: Task<Void, Never>?
 
     private(set) var isWorking = false
     private(set) var status = "Not configured"
@@ -85,25 +86,11 @@ final class LiveNavigationSetupController {
             try Task.checkCancellation()
 
             status = "Preparing location…"
-            logger.notice("Requesting the location-push token.")
-            let token = try await locationManager.startMonitoringLocationPushes()
+            let credentials = credentials(token: try await locationPushToken())
             try Task.checkCancellation()
-            logger.notice("Received location-push token (\(token.count, privacy: .public) bytes).")
-            let setupReady = locationManager.authorizationStatus == .authorizedAlways
-                && locationManager.accuracyAuthorization == .fullAccuracy
-                && googleStatus?.termsAccepted == true
-
-            pushTokens.receiveLocation(
-                DeviceLocationCredentials(
-                    token: token.map { String(format: "%02x", $0) }.joined(),
-                    setupReady: setupReady,
-                    authorization: authorization,
-                    fullAccuracy: locationManager.accuracyAuthorization == .fullAccuracy,
-                    googleTermsAccepted: googleStatus?.termsAccepted == true
-                )
-            )
+            pushTokens.receiveLocation(credentials)
             UserDefaults.standard.set(true, forKey: Self.setupEnabledKey)
-            status = setupReady
+            status = credentials.setupReady
                 ? "Ready"
                 : "Enable Always and Precise location to finish setup."
         } catch {
@@ -111,6 +98,50 @@ final class LiveNavigationSetupController {
             status = "Setup incomplete"
             errorMessage = error.localizedDescription
         }
+    }
+
+    func refreshRegistration(pushTokens: PushTokenSources) {
+        guard UserDefaults.standard.bool(forKey: Self.setupEnabledKey), isWorking == false, refreshTask == nil else {
+            return
+        }
+        refreshTask = Task { [weak self] in
+            await self?.reregister(pushTokens: pushTokens)
+            self?.refreshTask = nil
+        }
+    }
+
+    private func reregister(pushTokens: PushTokenSources) async {
+        refreshGoogleStatus()
+        guard locationManager.authorizationStatus == .authorizedAlways else {
+            if let registered = pushTokens.location {
+                pushTokens.receiveLocation(credentials(token: registered.token))
+            }
+            return
+        }
+        do {
+            pushTokens.receiveLocation(credentials(token: try await locationPushToken()))
+        } catch {
+            logger.error("Location-push token refresh failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    private func locationPushToken() async throws -> String {
+        logger.notice("Requesting the location-push token.")
+        let token = try await locationManager.startMonitoringLocationPushes()
+        logger.notice("Received location-push token (\(token.count, privacy: .public) bytes).")
+        return token.map { String(format: "%02x", $0) }.joined()
+    }
+
+    private func credentials(token: String) -> DeviceLocationCredentials {
+        let fullAccuracy = locationManager.accuracyAuthorization == .fullAccuracy
+        let termsAccepted = googleStatus?.termsAccepted == true
+        return DeviceLocationCredentials(
+            token: token,
+            setupReady: locationManager.authorizationStatus == .authorizedAlways && fullAccuracy && termsAccepted,
+            authorization: authorization,
+            fullAccuracy: fullAccuracy,
+            googleTermsAccepted: termsAccepted
+        )
     }
 
     private func acceptGoogleTermsIfNeeded() async -> Bool {
