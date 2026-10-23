@@ -79,6 +79,7 @@ enum ConversationSidebarItem: Identifiable, Equatable, Sendable {
         case project(String)
         case more(String)
         case automationsHeader
+        case moreAutomations
         case settledHeader
         case moreSettled
         case row(String)
@@ -89,6 +90,7 @@ enum ConversationSidebarItem: Identifiable, Equatable, Sendable {
     case project(ConversationProjectHeader)
     case more(projectKey: String, hiddenCount: Int)
     case automationsHeader(ConversationSectionSummary)
+    case moreAutomations(hiddenCount: Int)
     case settledHeader(ConversationSectionSummary)
     case moreSettled(hiddenCount: Int)
     case row(ConversationSidebarRow)
@@ -130,6 +132,7 @@ enum ConversationSidebarItem: Identifiable, Equatable, Sendable {
         case let .project(header): .project(header.key)
         case let .more(key, _): .more(key)
         case .automationsHeader: .automationsHeader
+        case .moreAutomations: .moreAutomations
         case .settledHeader: .settledHeader
         case .moreSettled: .moreSettled
         case let .row(row): .row(row.id)
@@ -250,11 +253,11 @@ enum ConversationSidebarProjection {
         return captured
     }
 
-    /// Pinned rows by name, then rows that need you, running rows, unread rows
-    /// and the rest, each tier by latest activity, then settled rows by latest
-    /// activity, with the composite address as a stable tie-breaker. Projects
-    /// mode groups the unpinned, unsettled rows by project and orders the
-    /// projects by their latest activity. A row captured in `layout` keeps its
+    /// Pinned rows by name, then automation rows, then rows that need you,
+    /// running rows, unread rows and the rest, each tier by latest activity,
+    /// then settled rows by latest activity, with the composite address as a
+    /// stable tie-breaker. Projects mode groups the unpinned, unsettled rows by
+    /// project and orders the projects by their latest activity. A row captured in `layout` keeps its
     /// rank, settlement included, while the drawer stays open until its
     /// settlement mark changes on any device, except that Unread Only lists a
     /// row that turns unread among the chats; a row the capture did not know
@@ -337,22 +340,34 @@ enum ConversationSidebarProjection {
             if fold != .folded { items.append(contentsOf: pinned.map { .row($0.row) }) }
         }
         let unpinned = slots.dropFirst(pinned.count)
-        let chats = unpinned.prefix { !$0.row.isAutomation && !$0.isSettled }
+        let automations = unpinned.prefix { $0.row.isAutomation }
+        appendAutomations(automations, to: &items, arrangement: arrangement, searching: searching)
+        let remaining = unpinned.dropFirst(automations.count)
+        let chats = remaining.prefix { !$0.isSettled }
         if arrangement.mode == .projects {
             appendProjects(of: chats, to: &items, arrangement: arrangement, searching: searching, showsHostLabel: showsHostLabel)
         } else {
-            if !pinned.isEmpty, !chats.isEmpty { items.append(.chatsHeader) }
+            if !items.isEmpty, !chats.isEmpty { items.append(.chatsHeader) }
             items.append(contentsOf: chats.map { .row($0.row) })
         }
-        let remaining = unpinned.dropFirst(chats.count)
-        let automations = remaining.prefix { $0.row.isAutomation }
-        if !automations.isEmpty {
-            let fold = fold(isFolded: arrangement.isAutomationsFolded, searching: searching)
-            items.append(.automationsHeader(ConversationSectionSummary(automations.map(\.row), fold: fold)))
-            if fold != .folded { items.append(contentsOf: automations.map { .row($0.row) }) }
-        }
-        appendSettled(remaining.dropFirst(automations.count), to: &items, arrangement: arrangement, searching: searching)
+        appendSettled(remaining.dropFirst(chats.count), to: &items, arrangement: arrangement, searching: searching)
         return items
+    }
+
+    private static func appendAutomations(_ automations: ArraySlice<Slot>, to items: inout [ConversationSidebarItem],
+                                          arrangement: ConversationDrawerArrangement, searching: Bool) {
+        guard !automations.isEmpty else { return }
+        let fold = fold(isFolded: arrangement.isAutomationsFolded, searching: searching)
+        items.append(.automationsHeader(ConversationSectionSummary(automations.map(\.row), fold: fold)))
+        let shown: [ConversationSidebarRow] = switch fold {
+        case .folded: []
+        case .searching: automations.map(\.row)
+        case .expanded: limited(automations, to: arrangement.automationRowLimit)
+        }
+        items.append(contentsOf: shown.map { .row($0) })
+        if fold == .expanded, automations.count > shown.count {
+            items.append(.moreAutomations(hiddenCount: automations.count - shown.count))
+        }
     }
 
     private static func appendProjects(of chats: ArraySlice<Slot>, to items: inout [ConversationSidebarItem],
@@ -391,16 +406,21 @@ enum ConversationSidebarProjection {
         guard !settled.isEmpty else { return }
         let fold = fold(isFolded: arrangement.isSettledFolded, searching: searching)
         items.append(.settledHeader(ConversationSectionSummary(settled.map(\.row), fold: fold)))
-        let limit = switch fold {
-        case .searching: settled.count
+        let limit: Int? = switch fold {
+        case .searching: nil
         case .folded: 0
-        case .expanded: arrangement.settledRowLimit ?? settled.count
+        case .expanded: arrangement.settledRowLimit
         }
-        let shown = settled.enumerated().filter { $0.offset < limit || $0.element.row.isSelected }.map { $0.element.row }
+        let shown = limited(settled, to: limit)
         items.append(contentsOf: shown.map { .row($0) })
         if fold == .expanded, settled.count > shown.count {
             items.append(.moreSettled(hiddenCount: settled.count - shown.count))
         }
+    }
+
+    private static func limited(_ slots: ArraySlice<Slot>, to limit: Int?) -> [ConversationSidebarRow] {
+        guard let limit else { return slots.map(\.row) }
+        return slots.enumerated().filter { $0.offset < limit || $0.element.row.isSelected }.map(\.element.row)
     }
 
     private static func fold(isFolded: Bool, searching: Bool) -> ConversationSectionFold {
@@ -458,7 +478,7 @@ enum ConversationSidebarProjection {
         let isSettled: Bool
         let project: Project?
 
-        private var sectionOrder: Int { row.isAutomation ? 1 : isSettled ? 2 : 0 }
+        private var sectionOrder: Int { row.isAutomation ? 0 : isSettled ? 2 : 1 }
 
         func precedes(_ other: Slot) -> Bool {
             switch (pinnedName, other.pinnedName) {

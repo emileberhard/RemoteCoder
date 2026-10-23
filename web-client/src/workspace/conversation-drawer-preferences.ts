@@ -8,6 +8,7 @@ export type ConversationDrawerArrangement = Readonly<{
   foldedProjects: ReadonlySet<string>;
   revealedProjects: ReadonlySet<string>;
   projectRowLimit: number;
+  automationRowLimit: number;
   settledRowLimit: number;
   query: string;
 }>;
@@ -26,6 +27,7 @@ export class ConversationDrawerPreferences {
     foldedProjects: new Set(),
     revealedProjects: new Set(),
     projectRowLimit: 5,
+    automationRowLimit: 5,
     settledRowLimit: 10,
     query: "",
   };
@@ -131,11 +133,18 @@ export class ConversationDrawerPreferences {
   revealProject(key: string) {
     this.change({ revealedProjects: new Set([...this.state.revealedProjects, key].slice(-256)) });
   }
+  revealAllAutomations() {
+    this.change({ automationRowLimit: Number.MAX_SAFE_INTEGER });
+  }
   revealMoreSettled() {
     this.change({ settledRowLimit: this.state.settledRowLimit + 25 });
   }
   resetReveals() {
-    if (this.state.revealedProjects.size || this.state.settledRowLimit !== 10)
-      this.change({ revealedProjects: new Set(), settledRowLimit: 10 });
+    if (
+      this.state.revealedProjects.size ||
+      this.state.automationRowLimit !== 5 ||
+      this.state.settledRowLimit !== 10
+    )
+      this.change({ revealedProjects: new Set(), automationRowLimit: 5, settledRowLimit: 10 });
   }
 }

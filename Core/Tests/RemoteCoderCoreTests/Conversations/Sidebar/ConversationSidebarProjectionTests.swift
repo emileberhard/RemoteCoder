@@ -329,7 +329,7 @@ struct ConversationSidebarProjectionTests {
         let pinned = try #require(sections.first { $0.id == "pinned" }?.rows.first)
         #expect(pinned.isAutomation && pinned.isPinned)
         #expect(sections.flatMap(\.rows).map(\.address.threadID).count == 4)
-        #expect(sections.last?.id == "automations")
+        #expect(sections.map(\.id).prefix(2) == ["pinned", "automations"])
         arrangement.isAutomationsFolded = true
         #expect(items(hosts, arrangement: arrangement).contains(.automationsHeader(ConversationSectionSummary(
             fold: .folded, rowCount: 2, unreadCount: 0, liveActivity: .working))))
@@ -348,7 +348,7 @@ struct ConversationSidebarProjectionTests {
         ], marks: flags, activeThreadID: "automatic")]
         var arrangement = ConversationDrawerArrangement(mode: mode)
         let sections = ConversationSidebarSections.sections(of: items(hosts, arrangement: arrangement))
-        #expect(sections.map(\.id).suffix(2) == ["automations", "settled"])
+        #expect(sections.first?.id == "automations" && sections.last?.id == "settled")
         let row = try #require(sections.first { $0.id == "automations" }?.rows.first)
         #expect(row.isSelected && row.isAutomation && row.isSettled)
         #expect(sections.last?.rows.isEmpty == true)
@@ -369,6 +369,27 @@ struct ConversationSidebarProjectionTests {
             ConversationSectionSummary(fold: .folded, rowCount: 1, unreadCount: 0, liveActivity: nil)))
         arrangement.query = "missing"
         #expect(items(hosts, arrangement: arrangement).isEmpty)
+    }
+
+    @Test func automationsFollowPinsAndShowTheFiveMostRecentUntilRevealed() throws {
+        let automations = try (1...7).map { try thread("auto-\($0)", updatedAt: 800_000 - Int64($0)) }
+        let flags = marks(pins: ["pinned": "Keep"],
+                          purposes: Dictionary(uniqueKeysWithValues: automations.map { ($0.id, .automation) }))
+        let hosts = [host(mini, name: "Mini", threads: automations + [
+            try thread("pinned", updatedAt: 1), try thread("chat", updatedAt: 900_000),
+        ], marks: flags, activeThreadID: "auto-7")]
+
+        #expect(outline(hosts) == ["[pinned]", "pinned", "[automations]", "auto-1", "auto-2", "auto-3", "auto-4",
+                                   "auto-5", "auto-7", "+1 automations", "[chats]", "chat"])
+        let sections = ConversationSidebarSections.sections(of: items(hosts))
+        #expect(sections.first { $0.id == "automations" }?.kind == .automations(ConversationSectionSummary(
+            fold: .expanded, rowCount: 7, unreadCount: 0, liveActivity: nil), hiddenRowCount: 1))
+
+        var arrangement = ConversationDrawerArrangement()
+        arrangement.automationRowLimit = nil
+        #expect(outline(hosts, arrangement: arrangement).filter { $0.hasPrefix("auto-") }.count == 7)
+        arrangement.isAutomationsFolded = true
+        #expect(outline(hosts, arrangement: arrangement) == ["[pinned]", "pinned", "[automations]", "[chats]", "chat"])
     }
 
     @Test func datedRequestsNeedYouOnlyWhileNoSettlementCoversThem() throws {
@@ -779,6 +800,7 @@ struct ConversationSidebarProjectionTests {
             case .pinnedHeader: "[pinned]"
             case .chatsHeader: "[chats]"
             case .automationsHeader: "[automations]"
+            case let .moreAutomations(hidden): "+\(hidden) automations"
             case let .project(header): "{\(header.title)\(header.hostName.map { " · \($0)" } ?? "")}"
             case let .more(_, hidden): "+\(hidden)"
             case .settledHeader: "[settled]"

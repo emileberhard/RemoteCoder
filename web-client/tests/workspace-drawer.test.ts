@@ -86,13 +86,16 @@ test("drawer reopening resets temporary reveals while focus recapture preserves 
   workspace.openDrawer();
   workspace.revealProject("project");
   workspace.revealMoreSettled();
+  workspace.revealAllAutomations();
   workspace.openDrawer();
   expect(workspace.drawerArrangement.revealedProjects.has("project")).toBe(true);
   expect(workspace.drawerArrangement.settledRowLimit).toBe(35);
+  expect(workspace.drawerArrangement.automationRowLimit).toBe(Number.MAX_SAFE_INTEGER);
   workspace.closeDrawer();
   workspace.openDrawer();
   expect(workspace.drawerArrangement.revealedProjects.size).toBe(0);
   expect(workspace.drawerArrangement.settledRowLimit).toBe(10);
+  expect(workspace.drawerArrangement.automationRowLimit).toBe(5);
   workspace.setPinnedFolded(true);
   workspace.pinConversation({ hostId: "mini", threadId: "shared" }, "Keep visible");
   expect(workspace.drawerArrangement.isPinnedFolded).toBe(false);

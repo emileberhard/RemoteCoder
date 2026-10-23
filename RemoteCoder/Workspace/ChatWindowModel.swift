@@ -14,6 +14,7 @@ final class ChatWindowModel {
     var drawerQuery = ""
     private(set) var revealedProjects: Set<String> = []
     private(set) var revealsAllDrafts = false
+    private(set) var revealsAllAutomations = false
     private(set) var settledRowLimit = ConversationDrawerArrangement.initialSettledRowLimit
     private var screens: [ExecutionTarget: ChatScreenModel] = [:]
     @ObservationIgnored private let focusTasks = OwnedTasks<FocusTask>()
@@ -99,6 +100,7 @@ final class ChatWindowModel {
         if isOpen, !isHistoryDrawerOpen {
             revealedProjects = []
             revealsAllDrafts = false
+            revealsAllAutomations = false
             settledRowLimit = ConversationDrawerArrangement.initialSettledRowLimit
         }
         isHistoryDrawerOpen = isOpen
@@ -110,6 +112,10 @@ final class ChatWindowModel {
 
     func revealAllDrafts() {
         revealsAllDrafts = true
+    }
+
+    func revealAllAutomations() {
+        revealsAllAutomations = true
     }
 
     func revealMoreSettled() {

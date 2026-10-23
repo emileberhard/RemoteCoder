@@ -88,7 +88,9 @@ Structured service validation/conflict errors and health stay visible.
 ## App behavior
 
 Automation-purpose conversations appear in a collapsible Automations section
-in the native and browser drawers, after Chats/projects and before Settled.
+in the native and browser drawers, after Pinned and before Chats/projects.
+It shows its five highest-ranked rows (live or marked unread first, then most
+recent activity) and the selected row until "Show N more" reveals the rest.
 Their rows carry an automation symbol. Explicitly pinned automations appear
 once in Pinned and retain the symbol. Automation membership takes precedence
 over settlement; search reveals matching rows in folded sections. The section

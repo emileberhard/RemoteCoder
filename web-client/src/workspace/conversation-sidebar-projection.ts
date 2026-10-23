@@ -324,7 +324,7 @@ export function projectConversationSidebar(
       return collator.compare(a.pin, b.pin) || a.row.id.localeCompare(b.row.id);
     if (a.pin !== undefined || b.pin !== undefined) return a.pin !== undefined ? -1 : 1;
     const sectionOrder = (row: ConversationSidebarRow) =>
-      row.isAutomation ? 1 : row.settlement === "settled" ? 2 : 0;
+      row.isAutomation ? 0 : row.settlement === "settled" ? 2 : 1;
     return (
       sectionOrder(a.row) - sectionOrder(b.row) ||
       (sectionOrder(a.row) === 2 ? 0 : a.rank.tier - b.rank.tier) ||
@@ -350,7 +350,7 @@ export function projectConversationSidebar(
       (row, index) =>
         state === "searching" ||
         (state === "expanded" && index < limit) ||
-        (kind === "settled" && row.isSelected),
+        (row.isSelected && (kind === "settled" || (kind === "automations" && state === "expanded"))),
     );
     sections.push({
       id,
@@ -368,6 +368,14 @@ export function projectConversationSidebar(
     "Pinned",
     slots.filter((slot) => slot.pin !== undefined).map((slot) => slot.row),
     arrangement.isPinnedFolded,
+  );
+  add(
+    "automations",
+    "automations",
+    "Automations",
+    slots.filter((slot) => slot.pin === undefined && slot.row.isAutomation).map((slot) => slot.row),
+    arrangement.isAutomationsFolded,
+    arrangement.automationRowLimit,
   );
   const chats = slots.filter(
     (slot) => slot.pin === undefined && !slot.row.isAutomation && slot.row.settlement !== "settled",
@@ -402,13 +410,6 @@ export function projectConversationSidebar(
         );
     }
   }
-  add(
-    "automations",
-    "automations",
-    "Automations",
-    slots.filter((slot) => slot.pin === undefined && slot.row.isAutomation).map((slot) => slot.row),
-    arrangement.isAutomationsFolded,
-  );
   add(
     "settled",
     "settled",

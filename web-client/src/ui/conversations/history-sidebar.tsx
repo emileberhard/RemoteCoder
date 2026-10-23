@@ -355,7 +355,11 @@ function ShowMoreInSection({ section }: { section: ConversationSidebarSection })
       type="button"
       className="show-more"
       onClick={() =>
-        section.kind === "settled" ? workspace.revealMoreSettled() : workspace.revealProject(section.id)
+        section.kind === "settled"
+          ? workspace.revealMoreSettled()
+          : section.kind === "automations"
+            ? workspace.revealAllAutomations()
+            : workspace.revealProject(section.id)
       }
     >
       Show {section.hiddenCount} more

@@ -1128,12 +1128,13 @@ entrypoint linked above.
 ## Conversation drawer (`UI/Conversations/`)
 
 - Threads marked with the existing `automation` purpose appear in a collapsible
-  Automations section after Chats/projects and before Settled, even when settled.
+  Automations section between Pinned and Chats/projects, even when settled.
   Pinned automations stay in Pinned; automation rows carry a small clock-arrow
   symbol on both platforms. Membership comes only from the authoritative purpose.
   A scheduled follow-up in a user-created conversation does not change its purpose.
   Automations starts expanded, persists its fold per device and reveals matching
-  rows while searching, like Pinned.
+  rows while searching, like Pinned. Expanded, it lists its first five rows in
+  drawer rank plus the selected row, and a "Show N more" item reveals the rest.
 - One drawer lists every gateway's conversations together, addressed by
   `ConversationAddress`, with cwd badges, relative timestamps and
   active/resuming state. Selecting a row selects its host, and rows show the
@@ -1162,8 +1163,9 @@ entrypoint linked above.
   section headers whose trailing chevron folds Pinned, each project, Automations and
   Settled, and the
   Mac arm is a `List(selection:)` source list with a Pinned
-  `Section(isExpanded:)`, a Chats `Section` below it, and, in Projects, one
-  `Section(isExpanded:)` per project, an Automations `Section(isExpanded:)`, then a Settled `Section(isExpanded:)`
+  `Section(isExpanded:)`, an Automations `Section(isExpanded:)`, a Chats
+  `Section` below them, and, in Projects, one `Section(isExpanded:)` per
+  project, then a Settled `Section(isExpanded:)`
   whose selected row stays visible below it while folded; no glass,
   fonts from `sidebarRowSize`, and a bottom bar with the compact usage ring,
   the View Options menu (sort, Unread Only, Mark All as Read,
@@ -1211,7 +1213,7 @@ entrypoint linked above.
   only while open with no snapshot yet, so the first drag after launch shows
   rows instead of a spinner. Apart from the sort, the projection stays linear
   in the row count, formatting each per-host working directory once per path.
-  It emits one flat list with the Pinned, Chats, project, Automations and Settled headers and
+  It emits one flat list with the Pinned, Automations, Chats, project and Settled headers and
   "Show N more" items as items, so a row keeps its `ForEach` identity when a pin moves it
   between sections and slides instead of crossfading; only the Mac arm
   regroups the items into `Section`s.
@@ -1250,8 +1252,8 @@ entrypoint linked above.
   `ConversationDrawerPreferences`; Collapse/Expand All includes the displayed
   Pinned, Automations and Settled folds, and the present projects only in
   Projects mode. Pinning a chat unfolds Pinned;
-  revealed "Show N more" sections and the Settled row limit belong to the
-  window and reset when the drawer opens.
+  revealed "Show N more" sections, revealed Automations rows and the Settled
+  row limit belong to the window and reset when the drawer opens.
 - Probably done is a gateway suggestion in the marks replica, queried by
   `ConversationMarks.isProbablyDone`: no purpose or pin and activity at or before
   `doneThrough`. It is a badge only and never changes the row's rank. Its green

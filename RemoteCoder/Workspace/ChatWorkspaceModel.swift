@@ -998,6 +998,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
             foldedProjects: drawerPreferences.foldedProjects,
             revealedProjects: window.revealedProjects,
             projectRowLimit: SidebarPresentation.projectRowLimit,
+            automationRowLimit: window.revealsAllAutomations ? nil : ConversationDrawerArrangement.initialAutomationRowLimit,
             settledRowLimit: window.settledRowLimit,
             query: window.drawerQuery
         )
@@ -1010,6 +1011,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         arrangement.isSettledFolded = false
         arrangement.foldedProjects = []
         arrangement.projectRowLimit = nil
+        arrangement.automationRowLimit = nil
         arrangement.settledRowLimit = nil
         return arrangement
     }

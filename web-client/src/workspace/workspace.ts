@@ -737,6 +737,9 @@ export class Workspace {
   revealProject(key: string) {
     this.drawerPreferences.revealProject(key);
   }
+  revealAllAutomations() {
+    this.drawerPreferences.revealAllAutomations();
+  }
   revealMoreSettled() {
     this.drawerPreferences.revealMoreSettled();
   }

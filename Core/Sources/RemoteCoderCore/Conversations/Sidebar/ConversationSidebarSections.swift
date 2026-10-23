@@ -3,7 +3,7 @@ import Foundation
 struct ConversationSidebarSection: Identifiable, Equatable, Sendable {
     enum Kind: Equatable, Sendable {
         case pinned(ConversationSectionSummary)
-        case automations(ConversationSectionSummary)
+        case automations(ConversationSectionSummary, hiddenRowCount: Int)
         case chats
         case project(ConversationProjectHeader)
         case settled(ConversationSectionSummary, hiddenRowCount: Int)
@@ -47,7 +47,9 @@ enum ConversationSidebarSections {
                 kind = .pinned(summary)
             case let .automationsHeader(summary):
                 close()
-                kind = .automations(summary)
+                kind = .automations(summary, hiddenRowCount: 0)
+            case let .moreAutomations(hiddenCount):
+                if case let .automations(summary, _) = kind { kind = .automations(summary, hiddenRowCount: hiddenCount) }
             case .chatsHeader:
                 close()
                 kind = .chats

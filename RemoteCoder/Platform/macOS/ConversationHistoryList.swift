@@ -30,18 +30,25 @@ struct ConversationHistoryList: View {
             ForEach(sections) { section in
                 switch section.kind {
                 case let .pinned(summary):
-                    foldableSection(summary, rows: section.rows, hostNames: hostNames,
-                                    setFolded: { workspace.drawerPreferences.isPinnedFolded = $0 }) {
+                    foldableSection(summary, setFolded: { workspace.drawerPreferences.isPinnedFolded = $0 }) {
+                        rows(section.rows, hostNames: hostNames)
+                    } title: {
                         Text("Pinned")
                     }
-                case let .automations(summary):
-                    foldableSection(summary, rows: section.rows, hostNames: hostNames,
-                                    setFolded: { workspace.drawerPreferences.isAutomationsFolded = $0 }) {
+                case let .automations(summary, hiddenRowCount):
+                    foldableSection(summary, setFolded: { workspace.drawerPreferences.isAutomationsFolded = $0 }) {
+                        rows(section.rows, hostNames: hostNames)
+                        if hiddenRowCount > 0 {
+                            Button("Show \(hiddenRowCount) more") { window.revealAllAutomations() }
+                                .buttonStyle(.link)
+                        }
+                    } title: {
                         Label("Automations", systemImage: "clock.arrow.circlepath")
                     }
                 case let .project(header):
-                    foldableSection(header.summary, rows: section.rows, hostNames: hostNames,
-                                    setFolded: { workspace.setFolded($0, project: header.key, in: window) }) {
+                    foldableSection(header.summary, setFolded: { workspace.setFolded($0, project: header.key, in: window) }) {
+                        rows(section.rows, hostNames: hostNames)
+                    } title: {
                         projectTitle(header)
                     }
                 case .chats:
@@ -108,20 +115,20 @@ struct ConversationHistoryList: View {
     }
 
     @ViewBuilder
-    private func foldableSection(_ summary: ConversationSectionSummary, rows sectionRows: [ConversationSidebarRow],
-                                 hostNames: [UUID: String], setFolded: @escaping (Bool) -> Void,
+    private func foldableSection(_ summary: ConversationSectionSummary, setFolded: @escaping (Bool) -> Void,
+                                 @ViewBuilder content: () -> some View,
                                  @ViewBuilder title: () -> some View) -> some View {
         let header = sectionHeader(summary, title: title)
         switch summary.fold {
         case .searching:
             Section {
-                rows(sectionRows, hostNames: hostNames)
+                content()
             } header: {
                 header
             }
         case .expanded, .folded:
             Section(isExpanded: Binding(get: { summary.fold == .expanded }, set: { setFolded(!$0) })) {
-                rows(sectionRows, hostNames: hostNames)
+                content()
             } header: {
                 header
             }

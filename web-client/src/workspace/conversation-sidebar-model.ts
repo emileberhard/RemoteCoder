@@ -491,6 +491,7 @@ export class ConversationSidebarModel {
       isSettledFolded: false,
       foldedProjects: new Set<string>(),
       projectRowLimit: Number.MAX_SAFE_INTEGER,
+      automationRowLimit: Number.MAX_SAFE_INTEGER,
       settledRowLimit: Number.MAX_SAFE_INTEGER,
     };
     return projectConversationSidebar(

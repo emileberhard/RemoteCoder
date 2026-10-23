@@ -21,6 +21,7 @@ const arrangement: ConversationDrawerArrangement = {
   foldedProjects: new Set(),
   revealedProjects: new Set(),
   projectRowLimit: 5,
+  automationRowLimit: 5,
   settledRowLimit: 10,
   query: "",
 };
@@ -217,7 +218,7 @@ describe("native conversation sidebar projection", () => {
     expect(ids(selected)).toEqual(["root", "settled"]);
     expect(selected.sections.at(-1)?.summary.fold).toBe("folded");
   });
-  test("automation purpose groups before Settled in both modes, while pins retain one marked row", () => {
+  test("automation purpose groups between Pinned and chats in both modes, while pins retain one marked row", () => {
     const state = host(
       [
         thread("user"),
@@ -250,11 +251,11 @@ describe("native conversation sidebar projection", () => {
       );
       expect(snapshot.sections.map((section) => section.kind)).toEqual([
         "pinned",
-        mode === "priority" ? "chats" : "project",
         "automations",
+        mode === "priority" ? "chats" : "project",
         "settled",
       ]);
-      expect(ids(snapshot)).toEqual(["pinned", "user", "automatic", "selected", "old-automatic", "old-user"]);
+      expect(ids(snapshot)).toEqual(["pinned", "automatic", "selected", "old-automatic", "user", "old-user"]);
       const automationRows = snapshot.sections.find((section) => section.kind === "automations")?.rows;
       expect(automationRows?.every((row) => row.isAutomation)).toBe(true);
       expect(automationRows?.find((row) => row.address.threadId === "selected")?.isSelected).toBe(true);
@@ -262,8 +263,41 @@ describe("native conversation sidebar projection", () => {
         "settled",
       );
       expect(snapshot.sections[0]?.rows[0]?.isAutomation).toBe(true);
-      expect(snapshot.sections[1]?.rows[0]?.isAutomation).toBe(false);
+      expect(snapshot.sections[2]?.rows[0]?.isAutomation).toBe(false);
     }
+  });
+  test("automations show the five most recent and the selected row until revealed", () => {
+    const automations = [1, 2, 3, 4, 5, 6, 7].map((index) => thread(`auto-${index}`, now - index));
+    const state = host(automations, {
+      marks: {
+        ...marks,
+        threads: Object.fromEntries(
+          automations.map((automation) => [
+            automation.id,
+            { revision: 1, markedUnread: false, purpose: "automation" as const },
+          ]),
+        ),
+      },
+    });
+    const limited = projectConversationSidebar(
+      [state],
+      { hostId: "mini", threadId: "auto-7" },
+      new Map(),
+      { ...arrangement, automationRowLimit: 5 },
+      now,
+    ).sections[0];
+    expect(limited?.rows.map((row) => row.address.threadId)).toEqual([
+      "auto-1",
+      "auto-2",
+      "auto-3",
+      "auto-4",
+      "auto-5",
+      "auto-7",
+    ]);
+    expect(limited?.hiddenCount).toBe(1);
+    const revealed = project([state], { automationRowLimit: Number.MAX_SAFE_INTEGER }).sections[0];
+    expect(revealed?.rows).toHaveLength(7);
+    expect(revealed?.hiddenCount).toBe(0);
   });
   test("folded automations retain summaries and search reveals matching rows without changing identity", () => {
     const state = host([{ ...thread("automatic"), name: "Automatic" }, thread("quiet")], {

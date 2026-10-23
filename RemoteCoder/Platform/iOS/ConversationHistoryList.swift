@@ -72,6 +72,10 @@ struct ConversationHistoryList: View {
                                 }
                             }
                             .sectionHeaderSpacing(isFirst: drafts.isEmpty && item.id == items.first?.id)
+                        case let .moreAutomations(hiddenCount):
+                            moreButton("Show \(hiddenCount) more") {
+                                withAnimation(reduceMotion ? nil : .snappy) { window.revealAllAutomations() }
+                            }
                         case .chatsHeader:
                             Text("Chats")
                                 .font(.headline)

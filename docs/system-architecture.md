@@ -2624,7 +2624,7 @@ sections:
 - **Priority** (the default): pinned rows under a Pinned header, by pinned name,
   then, under a Chats header, every other unsettled row ranked by
   `ConversationDrawerRank`, then the Settled shelf.
-  The Chats header appears only below pinned rows. Its tiers are, in
+  The Chats header appears only below pinned or automation rows. Its tiers are, in
   order: needs you (an unseen question or a waiting turn), running, unread, then
   recent. Within a tier the newest activity comes first. Badges explain a
   row's position, so there are no further headers.
@@ -2680,11 +2680,13 @@ limits.
 
 Rows whose purpose is `probe` are hidden unless live or selected. Unpinned
 `automation` rows appear in their own collapsible Automations section after
-Chats/projects and before Settled, with an automation symbol that remains when
+Pinned and before Chats/projects, with an automation symbol that remains when
 pinned. Pinned membership takes precedence and each row appears once.
 Automation membership takes precedence over settlement; the stored settlement
 and its actions remain intact. Search reveals matches through a folded section.
-The Automations fold is a device preference and starts expanded. Collapse and
+The Automations fold is a device preference and starts expanded; expanded, it
+shows its first five rows plus the selected row until "Show N more" reveals the
+rest for that drawer opening. Collapse and
 Expand All include every collapsible section. Any purpose (`probe` or
 `automation`) means a finished turn never counts as unread; within its section,
 a row rises through the needs-you and running tiers, or when marked unread.

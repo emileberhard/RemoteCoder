@@ -8,6 +8,7 @@ enum ConversationDrawerMode: String, CaseIterable, Sendable {
 struct ConversationDrawerArrangement: Equatable, Sendable {
     static let initialSettledRowLimit = 10
     static let settledRowsRevealedPerStep = 25
+    static let initialAutomationRowLimit = 5
 
     var mode: ConversationDrawerMode = .priority
     var unreadOnly = false
@@ -17,6 +18,7 @@ struct ConversationDrawerArrangement: Equatable, Sendable {
     var foldedProjects: Set<String> = []
     var revealedProjects: Set<String> = []
     var projectRowLimit: Int?
+    var automationRowLimit: Int? = Self.initialAutomationRowLimit
     var settledRowLimit: Int? = Self.initialSettledRowLimit
     var query = ""
 }
