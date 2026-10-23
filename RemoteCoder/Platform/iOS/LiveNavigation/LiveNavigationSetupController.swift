@@ -112,17 +112,16 @@ final class LiveNavigationSetupController {
 
     private func reregister(pushTokens: PushTokenSources) async {
         refreshGoogleStatus()
-        guard locationManager.authorizationStatus == .authorizedAlways else {
-            if let registered = pushTokens.location {
-                pushTokens.receiveLocation(credentials(token: registered.token))
+        var refreshed: String?
+        if locationManager.authorizationStatus == .authorizedAlways {
+            do {
+                refreshed = try await locationPushToken()
+            } catch {
+                logger.error("Location-push token refresh failed: \(error.localizedDescription, privacy: .public)")
             }
-            return
         }
-        do {
-            pushTokens.receiveLocation(credentials(token: try await locationPushToken()))
-        } catch {
-            logger.error("Location-push token refresh failed: \(error.localizedDescription, privacy: .public)")
-        }
+        guard let token = refreshed ?? pushTokens.location?.token else { return }
+        pushTokens.receiveLocation(credentials(token: token))
     }
 
     private func locationPushToken() async throws -> String {
