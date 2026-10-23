@@ -156,8 +156,10 @@ URL or full carrier numbers.
 ## live-navigation
 
 Agent-facing live-location control (`src/remotecoder_tools/navigation.py`). A
-destination is optional. `--json` before the subcommand gives compact
-request/response output, and `watch` always emits one compact JSON event per line.
+destination is optional. `fix` takes one precise fix through a single-fix session
+and exits non-zero when none arrives within `--wait`. `--json` before the
+subcommand gives compact request/response output, and `watch` always emits one
+compact JSON event per line.
 `docs/live-navigation.md` holds the contract.
 
 ## perf-sim

@@ -136,6 +136,44 @@ class WatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(output.getvalue().splitlines()), 2)
 
 
+class FixTests(unittest.IsolatedAsyncioTestCase):
+    async def _fix(self, events: list[dict]) -> tuple[AsyncMock, io.StringIO]:
+        args = live_navigation.build_parser().parse_args(["--timeout", "5", "--json", "fix", "--wait", "30"])
+        socket = AsyncMock()
+        socket.__aenter__.return_value = socket
+        responses = [{"result": {"sessionId": "s", "state": "starting"}}, *({"result": event} for event in events)]
+        request = AsyncMock(side_effect=[(response, 0, 0) for response in responses])
+        output = io.StringIO()
+        with (
+            patch.object(live_navigation, "_resolve_config", return_value=Mock()),
+            patch.object(live_navigation, "_ws_connect", AsyncMock(return_value=socket)),
+            patch.object(live_navigation, "_drain_ready", AsyncMock()),
+            patch.object(live_navigation, "_initialize", AsyncMock()),
+            patch.object(live_navigation, "request_response", request),
+            redirect_stdout(output),
+        ):
+            await live_navigation.command_fix(args)
+        return request, output
+
+    async def test_a_fix_starts_a_single_fix_session_and_returns_its_first_location(self) -> None:
+        location = {"latitude": 55.7, "longitude": 13.2, "horizontalAccuracyMeters": 9.5, "observedAtUnixSeconds": 1}
+        request, output = await self._fix([
+            {"event": None, "state": "waiting"},
+            {"event": {"sequence": 1, "kind": "bootstrap", "rawLocation": location}},
+        ])
+        start = json.loads(request.call_args_list[0].kwargs["payload"])
+        self.assertEqual(start["method"], "navigation/start")
+        self.assertIs(start["params"]["singleFix"], True)
+        self.assertIsNone(start["params"]["destination"])
+        reply = json.loads(output.getvalue())
+        self.assertEqual(reply["sessionId"], "s")
+        self.assertEqual(reply["location"], location)
+
+    async def test_an_error_event_from_the_iphone_is_a_failure(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "could not take a fix: Location services are off"):
+            await self._fix([{"event": {"sequence": 1, "kind": "error", "message": "Location services are off"}}])
+
+
 class WaitBoundTests(unittest.TestCase):
     def test_a_wait_beyond_the_gateway_clamp_is_rejected(self) -> None:
         parser = live_navigation.build_parser()

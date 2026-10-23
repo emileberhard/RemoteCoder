@@ -5,6 +5,7 @@ import json
 import math
 import subprocess
 import sys
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -17,6 +18,8 @@ from .rpc import _drain_ready, _initialize, _json, _ws_connect, request_response
 MAPS_LOOKUP_TIMEOUT_S = 20.0
 
 MAX_WAIT_SECONDS = 60
+
+FIX_WAIT_SECONDS = 45
 
 
 def _emit(value: object, *, compact: bool) -> None:
@@ -202,6 +205,57 @@ async def command_watch(args: argparse.Namespace) -> int:
                 return 0
 
 
+async def _first_event(client: NavigationClient, session_id: str, *, wait_s: int, timeout_s: float) -> dict[str, Any]:
+    deadline = time.monotonic() + wait_s
+    while (remaining := math.ceil(deadline - time.monotonic())) > 0:
+        wait = min(remaining, MAX_WAIT_SECONDS)
+        result = await client.call(
+            "navigation/next",
+            {"sessionId": session_id, "afterSequence": 0, "timeoutSeconds": wait},
+            deadline_s=timeout_s + wait,
+        )
+        event = result.get("event")
+        if isinstance(event, dict):
+            return event
+        if result.get("state") == "expired":
+            raise RuntimeError(f"navigation session {session_id} expired before the iPhone answered")
+    raise RuntimeError(
+        f"the iPhone sent no fix within {wait_s} seconds (session {session_id}); "
+        "it may be offline or off the tailnet, have location services off, or have used up "
+        "its location-push allowance; a later event still lands in that session"
+    )
+
+
+async def command_fix(args: argparse.Namespace) -> int:
+    async with _connected(args) as client:
+        started = await client.call(
+            "navigation/start",
+            {
+                "destination": None,
+                "profile": {"mode": "walking", "avoidHighways": False, "avoidTolls": False},
+                "singleFix": True,
+            },
+            deadline_s=args.timeout,
+        )
+        session_id = started.get("sessionId")
+        if not isinstance(session_id, str):
+            raise RuntimeError("navigation/start returned no sessionId")
+        event = await _first_event(client, session_id, wait_s=args.wait, timeout_s=args.timeout)
+    location = event.get("rawLocation")
+    if event.get("kind") == "error" or not isinstance(location, dict):
+        raise RuntimeError(f"the iPhone could not take a fix: {event.get('message') or 'no location in its reply'}")
+    observed_at = location.get("observedAtUnixSeconds")
+    _emit(
+        {
+            "sessionId": session_id,
+            "observedAgeSeconds": round(time.time() - observed_at, 1) if isinstance(observed_at, int | float) else None,
+            "location": location,
+        },
+        compact=args.json,
+    )
+    return 0
+
+
 async def command_stop(args: argparse.Namespace) -> int:
     result = await _rpc(args, "navigation/stop", {"sessionId": args.session_id}, deadline_s=args.timeout)
     _emit(result, compact=args.json)
@@ -239,6 +293,10 @@ def build_parser() -> argparse.ArgumentParser:
     start.add_argument("--avoid-highways", action="store_true")
     start.add_argument("--avoid-tolls", action="store_true")
     start.set_defaults(handler=command_start)
+
+    fix = commands.add_parser("fix", help="take one precise fix and end the session")
+    fix.add_argument("--wait", type=int, default=FIX_WAIT_SECONDS, help="seconds to wait for the iPhone")
+    fix.set_defaults(handler=command_fix)
 
     status = commands.add_parser("status", help="show a session or the latest session")
     status.add_argument("--session-id")
