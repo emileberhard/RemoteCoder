@@ -1658,7 +1658,9 @@ providers. It reads fifty items per page through descending
 `thread/turns/list` with `itemsView: notLoaded` until every turn in the window
 has its metadata. The window holds one older and one newer cursor: a page's
 `nextCursor` continues past its last entry and its `backwardsCursor` reverses
-from its first. An absent `startedAtOrdinal` (Claude) keeps page order. The
+from its first. An absent `startedAtOrdinal` (Claude) keeps page order. Turns
+are ordered by their earliest item ordinal, whichever of live events, replay,
+pages or a checkpoint delivered them. The
 oldest turn may be partial and shows only the entries the window covers.
 Steering, intermediate commentary and async questions appear only where their
 paged entries place them. The transcript demands older history when the top

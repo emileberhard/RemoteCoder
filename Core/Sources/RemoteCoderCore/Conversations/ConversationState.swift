@@ -352,6 +352,7 @@ struct ConversationState: Sendable {
             turns.removeValue(forKey: id)
         }
         order.removeAll { turns[$0] == nil }
+        orderTurnsByOrdinal()
         revision = max(revision, checkpoint.revision) + 1
         persistenceRevision = max(persistenceRevision, checkpoint.durableRevision) + (mergesChanges ? 1 : 0)
     }
@@ -761,7 +762,10 @@ struct ConversationState: Sendable {
                 changed = true
             }
         }
-        if changed { markPersistedChange() }
+        if changed {
+            orderTurnsByOrdinal()
+            markPersistedChange()
+        }
         return changed
     }
 
@@ -991,7 +995,25 @@ struct ConversationState: Sendable {
         return result
     }
 
+    private mutating func orderTurnsByOrdinal() {
+        var placed: [(id: String, ordinal: Int64)] = []
+        var following: [String?: [String]] = [:]
+        var latest: (id: String, ordinal: Int64)?
+        for id in order {
+            guard let ordinal = turns[id]?.items.values.lazy.compactMap(\.position).min() else {
+                following[latest?.id, default: []].append(id)
+                continue
+            }
+            placed.append((id, ordinal))
+            if ordinal >= latest?.ordinal ?? .min { latest = (id, ordinal) }
+        }
+        let ordered = (following[nil] ?? []) + placed.sorted { $0.ordinal < $1.ordinal }
+            .flatMap { [$0.id] + (following[$0.id] ?? []) }
+        if ordered != order { order = ordered }
+    }
+
     private mutating func trim() {
+        orderTurnsByOrdinal()
         let pendingTurns = Set(submissions.values.map(\.turnID))
         var retained = Set(order.suffix(32))
         if let window, window.isLoaded {

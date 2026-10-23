@@ -531,9 +531,13 @@ entrypoint linked above.
     their turn and must not pay a whole-turn comparison per delta.
 - Codex item notifications and native pages share `startedAtOrdinal`. Completion
   updates content without moving an item's first position; older
-  completed-only recordings fall back to recorded order. Claude joins gateway
-  identities with provider UUID/message-block ids through its durable index.
-  Both adapters feed the same owner.
+  completed-only recordings fall back to recorded order. A positioned turn's
+  place in `ConversationState.order` follows its earliest item ordinal, never
+  arrival, so a late replay or a stale checkpoint cannot put an older
+  positioned turn after the live one. A turn without ordinals stays after the
+  highest-ordinal turn that preceded it.
+  Claude joins gateway identities with provider UUID/message-block ids through
+  its durable index. Both adapters feed the same owner.
 - Timeline liveness comes only from runtime gateway and processing state.
   Provider history may keep `inProgress` after an interruption, and that alone
   must never animate "Thinking". A turn missing from authoritative activity

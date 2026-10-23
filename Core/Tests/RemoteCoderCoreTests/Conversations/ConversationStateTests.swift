@@ -959,8 +959,8 @@ extension ConversationStateTests {
         for index in 0..<36 {
             let id = "r\(index)"
             state.apply(try lifecycle("turn/started", turnID: id, status: "inProgress"))
-            state.apply(try itemEvent("item/completed", user("\(id)-u"), turnID: id, ordinal: 0))
-            state.apply(try itemEvent("item/completed", reply("\(id)-a"), turnID: id, ordinal: 1))
+            state.apply(try itemEvent("item/completed", user("\(id)-u"), turnID: id, ordinal: 20 + 2 * index))
+            state.apply(try itemEvent("item/completed", reply("\(id)-a"), turnID: id, ordinal: 21 + 2 * index))
             state.apply(try lifecycle("turn/completed", turnID: id, status: "completed"))
             try expectMemoMatchesFreshProjection(state, memo: &memo, "turn \(id)")
         }
