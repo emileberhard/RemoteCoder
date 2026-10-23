@@ -269,6 +269,13 @@ def _wait_seconds(value: str) -> int:
     return seconds
 
 
+def _positive_seconds(value: str) -> int:
+    seconds = int(value)
+    if seconds < 1:
+        raise argparse.ArgumentTypeError("must be at least 1 second")
+    return seconds
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="live-navigation",
@@ -295,7 +302,7 @@ def build_parser() -> argparse.ArgumentParser:
     start.set_defaults(handler=command_start)
 
     fix = commands.add_parser("fix", help="take one precise fix and end the session")
-    fix.add_argument("--wait", type=int, default=FIX_WAIT_SECONDS, help="seconds to wait for the iPhone")
+    fix.add_argument("--wait", type=_positive_seconds, default=FIX_WAIT_SECONDS, help="seconds to wait for the iPhone")
     fix.set_defaults(handler=command_fix)
 
     status = commands.add_parser("status", help="show a session or the latest session")
