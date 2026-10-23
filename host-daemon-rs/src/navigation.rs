@@ -143,6 +143,8 @@ struct NavigationDeviceRegistration {
 pub(crate) struct StartNavigationParams {
     pub destination: Option<NavigationDestination>,
     pub profile: NavigationProfile,
+    #[serde(default)]
+    pub single_fix: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -229,6 +231,7 @@ struct NavigationSession {
     event_bytes: usize,
     dropped_through_sequence: u64,
     latest_sequence: u64,
+    single_fix: bool,
     stop_requested: bool,
 }
 
@@ -369,6 +372,9 @@ impl NavigationManager {
         params: StartNavigationParams,
     ) -> Result<StartNavigationResponse> {
         if let Some(destination) = params.destination.as_ref() {
+            if params.single_fix {
+                bail!("a single fix takes no destination");
+            }
             destination.validate()?;
         }
         let target = self
@@ -377,12 +383,17 @@ impl NavigationManager {
             .location_target()
             .await
             .context("reading the device registry")?
-            .context("no iPhone has registered a location-push token")?;
+            .context(
+                "no iPhone has registered for live location: open RemoteCoder on the iPhone, \
+                 and if this persists run Settings → Location → Prepare live location there",
+            )?;
         let inputs = &target.navigation;
         if !inputs.setup_ready || !inputs.full_accuracy || !inputs.google_terms_accepted {
             bail!(
-                "iPhone navigation setup is incomplete (ready={} fullAccuracy={} googleTermsAccepted={})",
-                inputs.setup_ready,
+                "iPhone live-location setup is incomplete (location access={}, precise={}, \
+                 Google terms accepted={}): run Settings → Location → Prepare live location in \
+                 RemoteCoder on the iPhone and allow Always and Precise",
+                inputs.authorization,
                 inputs.full_accuracy,
                 inputs.google_terms_accepted
             );
@@ -424,6 +435,7 @@ impl NavigationManager {
                 event_bytes: 0,
                 dropped_through_sequence: 0,
                 latest_sequence: 0,
+                single_fix: params.single_fix,
                 stop_requested: false,
             },
             now as i64,
@@ -636,6 +648,7 @@ fn store_event(
         return Ok(false);
     }
     session.latest_sequence = sequence;
+    session.stop_requested |= session.single_fix;
     session.events.push_back(StoredEvent {
         sequence,
         bytes,
@@ -730,6 +743,7 @@ fn session_status(session: &NavigationSession, now: i64) -> Value {
         "profile": session.profile,
         "createdAtUnixSeconds": session.created_at_unix_seconds,
         "expiresAtUnixSeconds": session.expires_at_unix_seconds,
+        "singleFix": session.single_fix,
         "latestSequence": session.latest_sequence,
         "latestEvent": session.events.back().map(|event| &event.value),
         "droppedThroughSequence": session.dropped_through_sequence,
@@ -808,6 +822,26 @@ mod tests {
         assert!(!store_event(&mut session, 1, event, 10).unwrap());
 
         assert_eq!(session.latest_sequence, 1);
+        assert_eq!(session.events.len(), 1);
+    }
+
+    #[test]
+    fn a_single_fix_session_asks_the_iphone_to_stop_with_its_first_event() {
+        let mut session = test_session();
+        session.single_fix = true;
+
+        assert!(
+            store_event(
+                &mut session,
+                1,
+                json!({ "sequence": 1, "kind": "bootstrap" }),
+                10
+            )
+            .unwrap()
+        );
+
+        assert!(session.stop_requested);
+        assert_eq!(session.state(0), NavigationSessionState::StopRequested);
         assert_eq!(session.events.len(), 1);
     }
 
@@ -897,6 +931,7 @@ mod tests {
             event_bytes: 0,
             dropped_through_sequence: 0,
             latest_sequence: 0,
+            single_fix: false,
             stop_requested: false,
         }
     }
