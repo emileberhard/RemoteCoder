@@ -306,8 +306,8 @@ struct ConversationSidebarProjectionTests {
         let rows = sidebarRows(hosts: [host(mini, name: "Mini", threads: threads, marks: flags,
                                             activityByThreadID: ["probe-live": .working])])
 
-        #expect(rows.map(\.address.threadID) == ["probe-live", "flagged", "automation"])
-        #expect(rows.map(\.isUnread) == [false, true, false])
+        #expect(rows.map(\.address.threadID) == ["flagged", "automation", "probe-live"])
+        #expect(rows.map(\.isUnread) == [true, false, false])
     }
 
     @Test(arguments: [ConversationDrawerMode.priority, .projects])
