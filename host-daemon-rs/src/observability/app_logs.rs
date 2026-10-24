@@ -196,9 +196,9 @@ impl AppLogStore {
 }
 
 fn enforce_byte_cap(dir: &Path, byte_cap: u64) -> CapOutcome {
-    let mut unreadable_entries = 0;
+    let (device_dirs, mut unreadable_entries) = device_directories(dir);
     let mut segments: Vec<(SystemTime, u64, PathBuf)> = Vec::new();
-    for device_dir in device_directories(dir) {
+    for device_dir in device_dirs {
         let Ok(entries) = std::fs::read_dir(&device_dir) else {
             unreadable_entries += 1;
             continue;
@@ -305,17 +305,24 @@ fn existing_segment_path(device_dir: &Path, segment: &str) -> Option<PathBuf> {
         })
 }
 
-fn device_directories(dir: &Path) -> impl Iterator<Item = PathBuf> {
-    std::fs::read_dir(dir)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .map(|entry| entry.path())
-        .filter(|path| path.is_dir())
+fn device_directories(dir: &Path) -> (Vec<PathBuf>, usize) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return (Vec::new(), 1);
+    };
+    let mut directories = Vec::new();
+    let mut unreadable = 0;
+    for entry in entries {
+        match entry.and_then(|entry| Ok((entry.file_type()?, entry.path()))) {
+            Ok((kind, path)) if kind.is_dir() => directories.push(path),
+            Ok(_) => {}
+            Err(_) => unreadable += 1,
+        }
+    }
+    (directories, unreadable)
 }
 
 fn sweep_all_devices(dir: &Path, today: u32, retention_days: u64) {
-    for device_dir in device_directories(dir) {
+    for device_dir in device_directories(dir).0 {
         sweep_expired_day_files(&device_dir, today, retention_days, segment_day);
         let _ = std::fs::remove_dir(&device_dir);
     }
@@ -700,6 +707,31 @@ mod tests {
             .store_on(20_260_821, "ipad", "d", &gzip_body())
             .expect("upload");
         assert_eq!(quiet.cap, None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_unlistable_store_root_leaves_the_total_unknown() {
+        let dir = temp_dir("cap-root");
+        let store = AppLogStore::new_in(dir.clone(), 30, APP_LOG_BYTE_CAP);
+        store
+            .store_on(20_260_821, "phone", "a", &gzip_body())
+            .expect("upload");
+        let mut permissions = std::fs::metadata(&dir).expect("metadata").permissions();
+        std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o300);
+        std::fs::set_permissions(&dir, permissions.clone()).expect("unlistable root");
+
+        let outcome = store
+            .store_on(20_260_821, "phone", "b", &gzip_body())
+            .map(|stored| stored.cap);
+        std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o700);
+        std::fs::set_permissions(&dir, permissions).expect("restore root");
+
+        let outcome = outcome.expect("upload").expect("reported");
+        assert_eq!(
+            (outcome.retained_bytes, outcome.event()),
+            (None, "cap_unmet")
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
