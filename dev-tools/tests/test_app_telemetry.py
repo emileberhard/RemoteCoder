@@ -3,14 +3,16 @@ import json
 import subprocess
 from pathlib import Path
 
-from symbols import SymbolFile
-
 from remotecoder_tools import app_telemetry, app_telemetry_store, config
 from remotecoder_tools.app_telemetry_summary import (
+    activity,
+    export_costs,
     heaviest_path,
     metrickit_report,
     persistence_runs,
+    sample_intervals,
     summarize_segment,
+    telemetry_runs,
 )
 
 
@@ -111,7 +113,7 @@ def test_a_crash_follows_its_attributed_thread():
 def test_symbolication_uses_the_load_address_shared_by_a_binarys_frames(monkeypatch):
     calls = []
     monkeypatch.setattr(app_telemetry, "symbol_files",
-                        lambda paths, extra: {"APP": SymbolFile(Path("/x/RemoteCoder"), "arm64")})
+                        lambda paths, extra: {"APP": Path("/x/RemoteCoder")})
     monkeypatch.setattr(app_telemetry, "atos",
                         lambda file, base, addresses: calls.append((base, addresses)) or [("f",)] * len(addresses))
     stack = [
@@ -174,3 +176,82 @@ def test_a_tailscale_address_of_this_mac_is_local(monkeypatch):
                         lambda *args, **kwargs: subprocess.CompletedProcess(args, 0, stdout=answer))
     assert config._matches_local_identity("100.64.0.1")
     assert not config._matches_local_identity("100.64.0.2")
+
+
+def sample(seq: int, seconds: float, cpu_ms: int, reason: str = "interval", battery: int = 80, **context) -> dict:
+    state = {"scene": "active", "surface": "chat", "turnRunningVisible": False, "voiceCall": False,
+             "lowPower": False, "charging": False, "batteryPercent": battery, **context}
+    return {"recordType": "sample", "runID": "run-1", "seq": seq, "reason": reason,
+            "ts": f"2026-10-24T10:{int(seconds) // 60:02d}:{int(seconds) % 60:02d}.000Z",
+            "monoNs": int(seconds * 1e9), "cpuUserNs": cpu_ms * 1_000_000, "cpuSystemNs": 0,
+            "interruptWakeups": seq * 10, "idleWakeups": 0, "timerWakeups": 0, "footprintBytes": 100 + seq,
+            "persistence": {"checkpoints": {"writes": seq, "bytes": seq * 1000}}, "context": state}
+
+
+def run_records() -> list[dict]:
+    return [
+        {"recordType": "run", "runID": "run-1", "appVersion": "3.67.0", "flushedThroughSeq": 2},
+        sample(1, 0, 0, "launch"),
+        sample(2, 30, 3000, battery=79),
+        sample(2, 30, 3000, battery=79),
+        sample(3, 40, 3500, "context", battery=79, turnRunningVisible=True),
+        sample(4, 41, 3700, "deferredContext", battery=79),
+        sample(5, 60, 4000, "background", battery=79, scene="background"),
+        sample(6, 660, 4600, "foreground", battery=75),
+        sample(8, 690, 5000, battery=75),
+        sample(9, 790, 5100, battery=75),
+        {"recordType": "export", "runID": "run-1", "seq": 10, "ts": "2026-10-24T10:13:20.000Z", "reason": "interval",
+         "totalMs": 120.0, "scanMs": 80.0, "processCpuNs": 510_000_000, "footprintBefore": 100, "footprintPeak": 150},
+    ]
+
+
+def test_sample_intervals_keep_background_gaps_and_mixed_states_apart():
+    [run] = telemetry_runs(run_records())
+    intervals = sample_intervals(run["records"])
+
+    assert run["missingRecords"] == 1
+    assert run["header"] == {"runID": "run-1", "appVersion": "3.67.0"}
+    assert [interval["kind"] for interval in intervals] == [
+        "measured", "measured", "mixed", "measured", "background", "incomplete", "gap"]
+    assert intervals[0]["cpuSeconds"] == 3.0
+    assert intervals[0]["persistenceBytes"] == {"checkpoints": 1000}
+    assert intervals[2]["context"]["turnRunningVisible"] is True
+    assert intervals[4]["seconds"] == 600 and intervals[4]["cpuSeconds"] == 0.6
+
+
+def test_activity_sums_each_state_and_rates_battery_only_while_discharging():
+    [run] = telemetry_runs(run_records())
+    rows = {(row["kind"], row["state"]["turnRunningVisible"]): row
+            for row in activity(sample_intervals(run["records"]))}
+
+    idle = rows[("measured", False)]
+    assert (idle["intervals"], idle["seconds"], idle["cpuSeconds"]) == (3, 59.0, 3.8)
+    assert idle["cpuPercent"] == round(3.8 / 59 * 100, 2)
+    assert idle["batteryPercentPerHour"] == round(1 / 59 * 3600, 2)
+    assert idle["wakeupsPerSecond"]["interruptWakeups"] == round(30 / 59, 2)
+    assert rows[("background", False)]["batteryPercentPerHour"] == 24.0
+
+
+def test_export_cost_reports_its_share_of_the_sampled_process_cpu():
+    [run] = telemetry_runs(run_records())
+    cost = export_costs(run["records"], sample_intervals(run["records"]))
+
+    assert cost["reasons"]["interval"]["exports"] == 1
+    assert cost["reasons"]["interval"]["stageMs"]["scan"] == 80.0
+    assert cost["reasons"]["interval"]["peakFootprintGrowthBytes"] == 50
+    assert cost["sampledProcessCpuSeconds"] == 5.1
+    assert cost["exportShareOfSampledCpu"] == 0.1
+    assert cost["sampler"]["samples"] == 8
+
+
+def test_a_local_listing_reads_the_gateway_cap_marker(tmp_path, monkeypatch):
+    monkeypatch.setattr(app_telemetry_store.Path, "home", lambda: tmp_path)
+    root = tmp_path / app_telemetry_store.APP_LOG_DIRECTORY
+    (root / "iPhone-a").mkdir(parents=True)
+    (root / "iPhone-a" / "20261024-001792850000000-aaaaaaaa-telemetry.jsonl.gz").write_bytes(gzip.compress(b""))
+    (root / "retention.json").write_text(json.dumps({"evictedThroughMs": 1_792_850_000_000, "files": 3}))
+
+    listing = app_telemetry_store.list_store("local")
+
+    assert [segment.kind for segment in listing.segments] == ["telemetry"]
+    assert app_telemetry._cap_cut(listing) == "2026-10-24T13:53:20.000Z"

@@ -9,11 +9,22 @@ from pathlib import Path
 
 from . import app_telemetry_store as store
 from .app_telemetry_summary import (
+    ACTIVITY_FIELDS,
+    ASSOCIATION_NOTE,
+    CONTEXT_FIELDS,
+    INTERVAL_KINDS,
+    TIMELINE_FIELDS,
+    activity,
     diagnostic,
+    export_costs,
     iso,
+    losses,
     metrickit_report,
     minute_counts,
     persistence_runs,
+    sample_intervals,
+    telemetry_runs,
+    timeline,
 )
 from .diagnostics import _parse_since
 
@@ -64,6 +75,16 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
     child.set_defaults(func=cmd_counts)
     command("persistence", "disk writes per owner for each app run, from the cumulative counters", "24h").set_defaults(
         func=cmd_persistence)
+    child = command("timeline", "process CPU, wakeups, memory and battery per stretch of unchanged state", "6h")
+    child.add_argument("--by", action="append", choices=CONTEXT_FIELDS,
+                       help=f"state fields that start a new stretch (repeatable; default: {' '.join(TIMELINE_FIELDS)})")
+    child.set_defaults(func=cmd_timeline)
+    child = command("activity", "process use summed per app state, with background and gaps kept apart", "24h")
+    child.add_argument("--by", action="append", choices=CONTEXT_FIELDS,
+                       help=f"state fields to group by (repeatable; default: {' '.join(ACTIVITY_FIELDS)})")
+    child.set_defaults(func=cmd_activity)
+    command("export-cost", "what the log export and the sampler cost on the device", "24h").set_defaults(
+        func=cmd_export_cost)
 
 
 def _window(args: argparse.Namespace) -> tuple[float, float]:
@@ -78,11 +99,17 @@ def _listings(args: argparse.Namespace) -> list[store.StoreListing]:
         return list(pool.map(store.list_store, hosts))
 
 
+def _cap_cut(listing: store.StoreListing) -> str | None:
+    through = (listing.retention or {}).get("evictedThroughMs")
+    return iso(datetime.datetime.fromtimestamp(through / 1000, datetime.UTC)) if isinstance(through, int) else None
+
+
 def _coverage(listings: list[store.StoreListing], failures: dict[str, str], reclaimed: store.Reclaimed) -> dict:
     return {
         "stores": [
             {"host": listing.host, "status": "failed" if listing.error or listing.host in failures else "read",
-             "error": listing.error or failures.get(listing.host)}
+             "error": listing.error or failures.get(listing.host),
+             **({"capEvictedThrough": cut} if (cut := _cap_cut(listing)) else {})}
             for listing in listings
         ],
         "index": {"bytes": reclaimed.index_bytes, "capBytes": reclaimed.cap_bytes,
@@ -90,13 +117,13 @@ def _coverage(listings: list[store.StoreListing], failures: dict[str, str], recl
     }
 
 
-def _select(args: argparse.Namespace, metrickit: bool) -> tuple[list[tuple[store.Segment, dict]], dict]:
+def _select(args: argparse.Namespace, kind: str) -> tuple[list[tuple[store.Segment, dict]], dict]:
     since, until = _window(args)
     listings = _listings(args)
     wanted = [
         segment
         for listing in listings for segment in listing.segments or ()
-        if segment.device == args.device and segment.is_metrickit == metrickit
+        if segment.device == args.device and segment.kind == kind
         and (stamp := segment.stamp_ms) is not None and since * 1000 <= stamp <= until * 1000 + SEGMENT_SLACK_MS
     ]
     entries, failures = store.indexed(sorted(wanted, key=lambda segment: segment.name))
@@ -116,13 +143,14 @@ def _emit(value: dict) -> int:
 async def cmd_stores(args: argparse.Namespace) -> int:
     listings = _listings(args)
     reclaimed = store.reclaim_index(listings)
-    devices: defaultdict[str, dict] = defaultdict(lambda: {"segments": 0, "metrickit": 0, "bytes": 0, "hosts": set(),
-                                                           "first": None, "latest": None})
+    devices: defaultdict[str, dict] = defaultdict(lambda: {"segments": 0, "metrickit": 0, "telemetry": 0, "bytes": 0,
+                                                           "hosts": set(), "first": None, "latest": None})
     for listing in listings:
         for segment in listing.segments or ():
             device = devices[segment.device]
             device["segments"] += 1
-            device["metrickit"] += segment.is_metrickit
+            device["metrickit"] += segment.kind == "metrickit"
+            device["telemetry"] += segment.kind == "telemetry"
             device["bytes"] += segment.size
             device["hosts"].add(segment.host)
             if (stamp := segment.stamp_ms) is not None:
@@ -149,7 +177,7 @@ def _metrickit_records(entries: list[tuple[store.Segment, dict]], kind: str) -> 
 
 
 async def cmd_metrickit(args: argparse.Namespace) -> int:
-    entries, coverage = _select(args, metrickit=True)
+    entries, coverage = _select(args, "metrickit")
     reports = [metrickit_report(record, segment.host, segment.device)
                for segment, record in _metrickit_records(entries, "metrics")]
     if not args.full:
@@ -203,7 +231,7 @@ def _symbolicate(diagnostics: list[dict]) -> dict:
 
 
 async def cmd_diagnostics(args: argparse.Namespace) -> int:
-    entries, coverage = _select(args, metrickit=True)
+    entries, coverage = _select(args, "metrickit")
     items = [diagnostic(record, segment.host, segment.device)
              for segment, record in _metrickit_records(entries, "diagnostic")]
     items.sort(key=lambda item: item.get("coverageStart") or item.get("receivedAt") or "")
@@ -214,7 +242,7 @@ async def cmd_diagnostics(args: argparse.Namespace) -> int:
 
 
 async def cmd_counts(args: argparse.Namespace) -> int:
-    entries, coverage = _select(args, metrickit=False)
+    entries, coverage = _select(args, "logs")
     since, until = (iso(datetime.datetime.fromtimestamp(value, datetime.UTC)) for value in _window(args))
     minutes = [(minute, counts) for _, entry in entries for minute, counts in entry.get("minutes", {}).items()]
     result = minute_counts(minutes, since, until, args.by, args.bucket)
@@ -225,7 +253,7 @@ async def cmd_counts(args: argparse.Namespace) -> int:
 
 
 async def cmd_persistence(args: argparse.Namespace) -> int:
-    entries, coverage = _select(args, metrickit=False)
+    entries, coverage = _select(args, "logs")
     since, until = (iso(datetime.datetime.fromtimestamp(value, datetime.UTC)) for value in _window(args))
     snapshots = [snapshot for _, entry in entries for snapshot in entry.get("persistence", [])
                  if since <= snapshot["ts"] <= until]
@@ -242,3 +270,40 @@ async def cmd_persistence(args: argparse.Namespace) -> int:
                    for owner, counters in sorted(totals.items())},
         "runs": runs,
     })
+
+
+def _telemetry(args: argparse.Namespace) -> tuple[list[dict], dict]:
+    entries, coverage = _select(args, "telemetry")
+    since, until = (iso(datetime.datetime.fromtimestamp(value, datetime.UTC)) for value in _window(args))
+    records = [record for _, entry in entries for record in entry.get("telemetry", [])
+               if record.get("recordType") == "run" or since <= str(record.get("ts", "")) <= until]
+    runs = telemetry_runs(records)
+    coverage["runs"] = [{"runID": run["runID"], **(run["header"] or {"header": "not read"}),
+                         "records": len(run["records"]), "missingRecords": run["missingRecords"]}
+                        for run in runs if run["records"]]
+    coverage["losses"] = losses(record for run in runs for record in run["records"])
+    return runs, coverage
+
+
+async def cmd_timeline(args: argparse.Namespace) -> int:
+    runs, coverage = _telemetry(args)
+    fields = args.by or TIMELINE_FIELDS
+    return _emit({
+        "coverage": coverage, "note": ASSOCIATION_NOTE, "kinds": INTERVAL_KINDS,
+        "runs": [{"runID": run["runID"], "stretches": timeline(sample_intervals(run["records"]), fields)}
+                 for run in runs if run["records"]],
+    })
+
+
+async def cmd_activity(args: argparse.Namespace) -> int:
+    runs, coverage = _telemetry(args)
+    intervals = [interval for run in runs for interval in sample_intervals(run["records"])]
+    return _emit({"coverage": coverage, "note": ASSOCIATION_NOTE, "kinds": INTERVAL_KINDS,
+                  "states": activity(intervals, args.by or ACTIVITY_FIELDS)})
+
+
+async def cmd_export_cost(args: argparse.Namespace) -> int:
+    runs, coverage = _telemetry(args)
+    records = [record for run in runs for record in run["records"]]
+    intervals = [interval for run in runs for interval in sample_intervals(run["records"])]
+    return _emit({"coverage": coverage, **export_costs(records, intervals)})

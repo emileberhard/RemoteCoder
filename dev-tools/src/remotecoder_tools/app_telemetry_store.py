@@ -17,6 +17,8 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import maintainer_config  # noqa: E402
 
 APP_LOG_DIRECTORY = "Library/Logs/remote-coder/app-logs"
+RETENTION_MARKER = "retention.json"
+LISTING_SEPARATOR = "--retention--"
 INDEX_ROOT = Path.home() / "Library/Caches/RemoteCoder/app-telemetry/index"
 INDEX_VERSION = 1
 INDEX_BYTE_CAP = 256 * 1024 * 1024
@@ -41,8 +43,10 @@ class Segment:
         return int(parts[1]) if len(parts) > 2 and parts[1].isdigit() else None
 
     @property
-    def is_metrickit(self) -> bool:
-        return "-mk-" in self.name
+    def kind(self) -> str:
+        if "-mk-" in self.name:
+            return "metrickit"
+        return "telemetry" if self.name.endswith("-telemetry") else "logs"
 
     @property
     def index_path(self) -> Path:
@@ -54,6 +58,15 @@ class StoreListing:
     host: str
     segments: tuple[Segment, ...] | None
     error: str | None
+    retention: dict | None = None
+
+
+def _retention(text: str) -> dict | None:
+    try:
+        marker = json.loads(text)
+    except ValueError:
+        return None
+    return marker if isinstance(marker, dict) else None
 
 
 def host_key(host: str) -> str:
@@ -96,10 +109,12 @@ def list_store(host: str) -> StoreListing:
                     status = file.stat()
                     segments.append(Segment(host, device.name, file.name.removesuffix(".jsonl.gz"),
                                             status.st_size, int(status.st_mtime)))
-        return StoreListing(host, tuple(segments), None)
+        marker = root / RETENTION_MARKER
+        return StoreListing(host, tuple(segments), None, _retention(marker.read_text()) if marker.is_file() else None)
     command = (
         f'cd "$HOME/{APP_LOG_DIRECTORY}" || exit 3; '
-        "find . -mindepth 2 -maxdepth 2 -type f -name '*.jsonl.gz' -exec stat -f '%z %m %N' {} +"
+        "find . -mindepth 2 -maxdepth 2 -type f -name '*.jsonl.gz' -exec stat -f '%z %m %N' {} + || exit 4; "
+        f"echo {LISTING_SEPARATOR}; cat {RETENTION_MARKER} 2>/dev/null; exit 0"
     )
     try:
         result = subprocess.run([*SSH, host, command], stdin=subprocess.DEVNULL, capture_output=True,
@@ -109,12 +124,13 @@ def list_store(host: str) -> StoreListing:
     if result.returncode != 0:
         detail = result.stderr.strip() or f"exit status {result.returncode}"
         return StoreListing(host, None, detail)
+    listing, _, marker = result.stdout.partition(f"{LISTING_SEPARATOR}\n")
     segments = []
-    for line in result.stdout.splitlines():
+    for line in listing.splitlines():
         size, mtime, path = line.split(" ", 2)
         _, device, file = path.split("/", 2)
         segments.append(Segment(host, device, file.removesuffix(".jsonl.gz"), int(size), int(mtime)))
-    return StoreListing(host, tuple(segments), None)
+    return StoreListing(host, tuple(segments), None, _retention(marker) if marker.strip() else None)
 
 
 def read_index(segment: Segment) -> dict | None:
