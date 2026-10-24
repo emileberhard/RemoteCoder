@@ -16,7 +16,7 @@ final class DiagnosticsLifecycle {
     }
 
     enum Phase {
-        case foreground(String)
+        case foreground
         case background
         case stopped
     }
@@ -34,10 +34,7 @@ final class DiagnosticsLifecycle {
 
     func update(destination: DiagnosticsDestination?, phase: Phase) {
         self.phase = phase
-        switch phase {
-        case .foreground, .background: needsDrain = true
-        case .stopped: needsDrain = false
-        }
+        needsDrain = phase == .background
         enqueue(destination: destination)
     }
 
@@ -49,7 +46,7 @@ final class DiagnosticsLifecycle {
         generation &+= 1
         pending = Request(generation: generation, destination: destination, phase: phase)
         guard worker == nil else { return }
-        worker = Task { await applyPending() }
+        worker = Task(priority: .utility) { await applyPending() }
     }
 
     func flush() async {
@@ -63,13 +60,8 @@ final class DiagnosticsLifecycle {
             await exporter.setDestination(request.destination)
             guard request.generation == generation else { continue }
             switch request.phase {
-            case .foreground(let reason):
+            case .foreground:
                 await exporter.startPumping()
-                guard request.generation == generation else { continue }
-                if needsDrain {
-                    needsDrain = false
-                    await exporter.drain(reason: reason)
-                }
             case .background:
                 if needsDrain {
                     needsDrain = false

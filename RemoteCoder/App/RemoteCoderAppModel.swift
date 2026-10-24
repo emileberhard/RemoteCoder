@@ -113,7 +113,7 @@ final class RemoteCoderAppModel {
             // Before bootstrap, which waits on the gateways: a slow or
             // unreachable host would otherwise leave the exporter draining into
             // segments it has no address for, and uploads are skipped silently.
-            syncDiagnosticsHost(reason: "launch")
+            syncDiagnosticsHost()
             logger.notice("chat bootstrap started")
             await workspace.bootstrap()
             logger.notice("chat bootstrap completed")
@@ -189,7 +189,7 @@ final class RemoteCoderAppModel {
         switch phase {
         case .active:
             workspace.dictationLibrary?.requestPublication()
-            syncDiagnosticsHost(reason: "foreground")
+            syncDiagnosticsHost()
             synchronizeHosts()
             if workspace.gatewayPolicy.registersDevice {
                 workspace.reconcileHosts()
@@ -214,9 +214,9 @@ final class RemoteCoderAppModel {
 
     /// Diagnostics stay one device-wide exporter pointed at the visible host;
     /// changing its destination does not move any chat's ownership.
-    private func syncDiagnosticsHost(reason: String) {
+    private func syncDiagnosticsHost() {
         diagnostics.update(destination: diagnosticsDestination(for: workspace.settings.activeHost?.configuration),
-                           phase: .foreground(reason))
+                           phase: .foreground)
     }
 
     private func diagnosticsDestination(for host: GatewayHostConfiguration?) -> DiagnosticsDestination? {

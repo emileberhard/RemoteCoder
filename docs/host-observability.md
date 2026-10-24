@@ -441,8 +441,10 @@ copy useless for its purpose.
   a segment every 10,000 kept records or 4 MiB, advancing the cursor and
   enforcing the queue cap per segment, so neither memory nor disk grows with the
   backlog.
-- **Cadence.** Every 5 minutes while the scene is active, plus on launch, on
-  foreground, and on background. Pending segments upload after every drain.
+- **Cadence.** Every 5 minutes while the scene is active, and on background.
+  Launch and foreground only start the 5-minute pump: a scan costs seconds of
+  CPU and would land exactly when the user returns to the app. Drains run at
+  utility priority. Pending segments upload after every drain.
   `DiagnosticsLifecycle` owns one latest-state worker; superseded background
   drains cannot stop a reactivated pump, and host changes do not rescan logs.
   Overlapping outbox drains share one scan/upload pass. Each pass rescans the
