@@ -122,6 +122,9 @@ def _matches_local_identity(hostname: str) -> bool:
         return False
     if not isinstance(status, dict) or not isinstance(status.get("Self"), dict):
         return False
+    addresses = status["Self"].get("TailscaleIPs")
+    if isinstance(addresses, list) and name in (address.casefold() for address in addresses if isinstance(address, str)):
+        return True
     dns_name = status["Self"].get("DNSName")
     if not isinstance(dns_name, str):
         return False

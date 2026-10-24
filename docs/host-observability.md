@@ -457,7 +457,20 @@ Two rules that must not be relaxed: the app never logs the gateway bearer
 token, and the uploader's own category (`AppLogExport`) is filtered out of
 every drain — otherwise uploading a segment generates the next one.
 
-Read a device's logs with `gunzip -c ~/Library/Logs/remote-coder/app-logs/<device>/*.jsonl.gz | jq`.
+**Reading it back.** The phone uploads to whichever gateway it can reach, so one
+device's history is split across hosts. `just app-telemetry stores` lists every
+device directory on this host and the configured gateway hosts (read over SSH);
+`metrickit`, `diagnostics --symbolicate`, `counts` and `persistence` take the
+exact `--device` and print JSON that names the stores read and any that failed.
+Each segment is indexed once into a rebuildable cache under
+`~/Library/Caches/RemoteCoder/app-telemetry/`, capped at 256 MiB, oldest first;
+an entry goes when its segment does. MetricKit's daily entry is never added to
+its subintervals, subintervals get no clock times, and per-foreground-minute
+rates are labelled as normalizations because the daily totals include background
+work. Persistence counters are cumulative per run, so the reader splits runs where
+a counter falls. `scripts/symbols.py`, shared with `perf-trace`, matches retained
+dSYMs and Xcode's DeviceSupport symbols by UUID. Raw records remain readable with
+`gunzip -c ~/Library/Logs/remote-coder/app-logs/<device>/*.jsonl.gz | jq`.
 A conversation switch leaves one `.notice` trail: `history select` (the tapped
 address, outcome and what was on screen), `window select` (a target change),
 `chat screen presents` and `transcript presents` (what the window actually

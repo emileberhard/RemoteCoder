@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from . import proxy
+from .app_telemetry import add_parser as add_app_telemetry_parser
 from .compaction_probe import cmd_e2e_compact_live
 from .config import (
     DEFAULT_CODEX_PROBE_MODEL,
@@ -1159,6 +1160,8 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"journal directory on the gateway host (default: {DEFAULT_JOURNAL_DIR})",
     )
     s.set_defaults(func=cmd_journal)
+
+    add_app_telemetry_parser(sub)
 
     s = sub.add_parser(
         "desktop-journal",

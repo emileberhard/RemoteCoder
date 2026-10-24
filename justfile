@@ -507,6 +507,10 @@ relay-probe:
 gateway-journal *args:
     ./dev-tools/rc-gateway journal {{ args }}
 
+# App logs and MetricKit reports uploaded to the gateway hosts, as JSON.
+app-telemetry *args:
+    ./dev-tools/rc-gateway app-telemetry {{ args }}
+
 # Record or summarize an iPhone or Mac-app trace on the MacBook (docs/host-observability.md, Device traces).
 [positional-arguments]
 perf-trace *args:
