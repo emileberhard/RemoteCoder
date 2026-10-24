@@ -98,12 +98,13 @@ final class LiveNavigationCoordinator: NSObject {
             }
         }
 
-        guard GMSNavigationServices.areTermsAndConditionsAccepted() else {
-            Task { await sink.send(kind: .error, message: "Google Navigation terms are not accepted.") }
-            return
-        }
         guard let navigationSession = GMSNavigationServices.createNavigationSession() else {
-            Task { await sink.send(kind: .error, message: "Google Navigation session creation failed.") }
+            Task {
+                await sink.send(
+                    kind: .error,
+                    message: "Google Navigation terms are not accepted: run Settings → Location → Prepare live location on the iPhone."
+                )
+            }
             return
         }
         self.navigationSession = navigationSession

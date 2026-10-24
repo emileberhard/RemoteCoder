@@ -73,24 +73,24 @@ so the two consent dialogs do not compete.
 ## Setup lifecycle and telemetry
 
 Only setup, the Settings Licenses page and a navigation session touch the
-Navigation SDK. When 3.66.8 read the Google terms on every activation, each
-activation was followed by one to two minutes of SDK network requests wrapped
-in UIKit background tasks, 15,000 to 100,000 of them per ten minutes of use.
-Keep SDK calls out of launch, activation and the main Settings view. The Licenses page reads the SDK version and license text in its
-view task after a `Task.yield()`: `.task` starts as `Task.immediate`, so only
-the yield moves the read to a later main-actor turn, outside the update that
-started it. On
-14 September 2026, symbolicated MetricKit watchdog
-reports proved a deadlock when a computed view getter called
-`areTermsAndConditionsAccepted`: SwiftUI held its render lock while Google's
-initialization waited for a worker whose UserDefaults notification needed that
-same lock. Do not reintroduce SDK calls into view getters.
+Navigation SDK. Each call is followed by one to two minutes of SDK network
+requests wrapped in UIKit background tasks, so keep SDK calls out of launch,
+activation and the main Settings view. The Licenses page reads the SDK version
+and license text in its view task after a `Task.yield()`: SwiftUI's
+[`task`](https://developer.apple.com/documentation/swiftui/view/task(name:priority:file:line:_:))
+starts as `Task.immediate`, so only the yield moves the read to a later
+main-actor turn, outside the update that started it. On 14 September 2026,
+symbolicated MetricKit watchdog reports proved a deadlock when a computed view
+getter called `areTermsAndConditionsAccepted`: SwiftUI held its render lock
+while Google's initialization waited for a worker whose UserDefaults
+notification needed that same lock. Do not reintroduce SDK calls into view
+getters.
 
-Setup uses Core Location's native async token request and awaits disconnection
-of its temporary gateway client in `defer`. The `LiveNavigationSetup` OSLog
-category records token request, receipt (byte count only), registration, and
-errors. The existing app-log exporter uploads those records and MetricKit
-diagnostics to the gateway; see [host observability](host-observability.md).
+Setup uses Core Location's native async token request. The
+`LiveNavigationSetup` OSLog category records token requests, receipts (byte
+count only) and errors. The existing app-log exporter uploads those records and
+MetricKit diagnostics to the gateway; see
+[host observability](host-observability.md).
 
 ## Trust boundary
 

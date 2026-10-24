@@ -88,9 +88,7 @@ final class LiveNavigationSetupController {
             guard googleMapsAPIKey.isEmpty == false else {
                 throw SetupError.missingGoogleMapsAPIKey
             }
-            guard await acceptGoogleTerms() else {
-                throw SetupError.googleTermsDeclined
-            }
+            await acknowledgeGoogleTerms()
 
             progress = "Requesting location access…"
             serviceSession = CLServiceSession(
@@ -159,11 +157,11 @@ final class LiveNavigationSetupController {
         accuracyAuthorization = locationManager.accuracyAuthorization
     }
 
-    private func acceptGoogleTerms() async -> Bool {
+    private func acknowledgeGoogleTerms() async {
         let options = GMSNavigationTermsAndConditionsOptions(companyName: "RemoteCoder")
-        return await withCheckedContinuation { continuation in
-            GMSNavigationServices.showTermsAndConditionsDialogIfNeeded(with: options) { accepted in
-                continuation.resume(returning: accepted)
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            GMSNavigationServices.showTermsAndConditionsDialogIfNeeded(with: options) { _ in
+                continuation.resume()
             }
         }
     }
@@ -180,14 +178,11 @@ final class LiveNavigationSetupController {
 }
 
 private enum SetupError: LocalizedError {
-    case googleTermsDeclined
     case missingGoogleMapsAPIKey
     case perfHarnessBuild
 
     var errorDescription: String? {
         switch self {
-        case .googleTermsDeclined:
-            return "Google Navigation terms must be accepted before setup can finish."
         case .missingGoogleMapsAPIKey:
             return "This build is missing its Google Maps key."
         case .perfHarnessBuild:
