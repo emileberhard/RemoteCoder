@@ -1001,9 +1001,9 @@ impl Gateway {
         loop {
             match self.resolve_loaded_app_server_threads().await {
                 Ok(0) => return,
-                Ok(failed) => warn!(
-                    failed,
-                    "app-server turn inventory left threads unresolved; retrying in {retry:?}"
+                Ok(unresolved) => debug!(
+                    unresolved,
+                    "app-server turn inventory has unresolved threads; retrying in {retry:?}"
                 ),
                 Err(error) => warn!(
                     "failed to list loaded app-server threads; retrying in {retry:?}: {error:#}"
@@ -1058,7 +1058,6 @@ impl Gateway {
             }
         }
 
-        let mut failed = 0;
         for thread_id in thread_ids {
             let generation = generations.get(&thread_id).copied().unwrap_or_default();
             let Err(error) = self
@@ -1083,11 +1082,14 @@ impl Gateway {
             );
             core.app_server_inventory_unresolved_threads
                 .insert(thread_id);
-            failed += 1;
         }
-        self.core.lock().await.app_server_inventory_bootstrapped = true;
+        let unresolved = {
+            let mut core = self.core.lock().await;
+            core.app_server_inventory_bootstrapped = true;
+            core.app_server_inventory_unresolved_threads.len()
+        };
         self.activity.mark_changed();
-        Ok(failed)
+        Ok(unresolved)
     }
 
     async fn clear_app_server_turn_inventory(&self) {
@@ -1193,19 +1195,20 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn only_a_failed_thread_stays_unknown_until_a_retry_resolves_it() {
+    async fn the_bootstrap_retries_until_no_loaded_thread_is_unknown() {
         let gateway = crate::test_support::TestGateway::new();
         let mut control = crate::test_support::FakeControl::attach(&gateway, 1).await;
         let worker_gateway = gateway.clone();
         let bootstrap =
             tokio::spawn(async move { worker_gateway.bootstrap_app_server_active_turns().await });
         let idle_page = json!({"result": {"data": [{"id": "turn", "status": "completed"}]}});
+        let unmaterialized = json!({"error": {"code": -32600, "message": "thread fresh is not materialized yet; thread/turns/list is unavailable before first user message"}});
 
         let list = next_request(&mut control, "thread/loaded/list").await;
         reply(
             &gateway,
             list,
-            json!({"result": {"data": ["gone", "flaky", "idle"]}}),
+            json!({"result": {"data": ["gone", "flaky", "fresh", "idle"]}}),
         )
         .await;
         gateway
@@ -1228,6 +1231,15 @@ mod tests {
             json!({"error": {"code": -32603, "message": "failed to read thread"}}),
         )
         .await;
+        let fresh = next_request(&mut control, "thread/turns/list").await;
+        reply(&gateway, fresh, unmaterialized.clone()).await;
+        let fresh = next_request(&mut control, "thread/read").await;
+        reply(
+            &gateway,
+            fresh,
+            json!({"result": {"thread": {"status": {"type": "active"}}}}),
+        )
+        .await;
         let idle = next_request(&mut control, "thread/turns/list").await;
         reply(&gateway, idle, idle_page.clone()).await;
 
@@ -1239,11 +1251,25 @@ mod tests {
                 .lock()
                 .await
                 .app_server_inventory_unresolved_threads,
-            HashSet::from(["flaky".to_string()])
+            HashSet::from(["flaky".to_string(), "fresh".to_string()])
         );
-        reply(&gateway, retry, json!({"result": {"data": ["flaky"]}})).await;
+        reply(
+            &gateway,
+            retry,
+            json!({"result": {"data": ["flaky", "fresh"]}}),
+        )
+        .await;
         let flaky = next_request(&mut control, "thread/turns/list").await;
         reply(&gateway, flaky, idle_page).await;
+        let fresh = next_request(&mut control, "thread/turns/list").await;
+        reply(&gateway, fresh, unmaterialized).await;
+        let fresh = next_request(&mut control, "thread/read").await;
+        reply(
+            &gateway,
+            fresh,
+            json!({"result": {"thread": {"status": {"type": "idle"}}}}),
+        )
+        .await;
 
         bootstrap.await.expect("bootstrap task");
         assert_eq!(gateway.reported_active_turn_status().await, (0, true));
