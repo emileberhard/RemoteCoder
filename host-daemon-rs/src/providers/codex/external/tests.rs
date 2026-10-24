@@ -332,6 +332,16 @@ async fn resumes_and_forks_keep_the_source_provider() {
     );
     assert!(resume["config"]["model_providers.relay"].is_object());
 
+    let mut recover = json!({"threadId": "t", "turnId": "u", "capability": "c"});
+    assert!(
+        external
+            .admit("thread/restart/recover", &mut recover, Some("relay"))
+            .await
+            .unwrap()
+    );
+    assert!(recover["config"]["model_providers.relay"].is_object());
+    assert!(recover["config"]["provider_model_catalog_json"].is_string());
+
     let mut inheriting =
         json!({"threadId": "t", "ephemeral": true, "experimentalPredictionMode": true});
     assert!(
@@ -350,6 +360,19 @@ async fn resumes_and_forks_keep_the_source_provider() {
             .unwrap()
     );
     assert!(native.get("config").is_none());
+
+    let mut native_recover = json!({"threadId": "t", "turnId": "u", "capability": "c"});
+    assert!(
+        !external
+            .admit(
+                "thread/restart/recover",
+                &mut native_recover,
+                Some("openai")
+            )
+            .await
+            .unwrap()
+    );
+    assert!(native_recover.get("config").is_none());
 }
 
 #[test]

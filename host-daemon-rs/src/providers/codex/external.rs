@@ -222,7 +222,7 @@ impl ExternalProviders {
             selected_models(fields).next().is_some() || selects_tier(fields)
         };
         match method {
-            "thread/resume" | "thread/fork" => Some(thread.to_owned()),
+            "thread/resume" | "thread/fork" | "thread/restart/recover" => Some(thread.to_owned()),
             "turn/start" | "thread/settings/update" | "turn/settings/update"
                 if params.as_object().is_some_and(selects) =>
             {
@@ -271,7 +271,7 @@ impl ExternalProviders {
                 }
                 self.admit_thread(fields, &provider, true, true).await
             }
-            "thread/resume" | "thread/fork" => {
+            "thread/resume" | "thread/fork" | "thread/restart/recover" => {
                 let source = source_provider.ok_or_else(|| {
                     RpcError::new(
                         RpcCode::Unavailable,

@@ -302,8 +302,9 @@ owner until the last fixture is dropped.
   - A `config` override that names the model, its provider or catalog, a
     service tier or a profile fails; only the request's own fields select them.
   - `thread/list` without `modelProviders` lists ChatGPT and every external
-    provider. Recovery preloads an external thread with an admitted
-    `thread/resume` before `thread/restart/recover`, which takes no config.
+    provider. `thread/restart/recover` is admitted like `thread/resume`: an
+    external thread's recovery carries its provider definition and catalog,
+    which the fenced daemon applies only when it loads the thread from storage.
   - `model/list` is gateway-owned: the native list plus one row per external
     model, with `modelProvider` and `modelProviderName`, on the last page.
 

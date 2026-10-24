@@ -3,7 +3,7 @@ use super::agent_gateway::native_error;
 use crate::providers::codex::external::ExternalProviders;
 use crate::rpc::error::RpcCode;
 use crate::rpc::{RpcError, RpcResult};
-use anyhow::{Result, anyhow};
+use anyhow::anyhow;
 use serde_json::{Value, json};
 
 pub(super) fn admission_failure(error: &RpcError) -> anyhow::Error {
@@ -63,23 +63,5 @@ impl Gateway {
             models.extend(external.model_rows());
         }
         Ok(listing)
-    }
-
-    pub(super) async fn load_external_thread(&self, thread: &str) -> Result<()> {
-        let Some(external) = self.external_providers.as_deref() else {
-            return Ok(());
-        };
-        let provider = self
-            .thread_model_provider(thread)
-            .await
-            .map_err(|error| admission_failure(&error))?;
-        if external.provider_ids().any(|id| id == provider) {
-            self.call_control(
-                "thread/resume",
-                json!({"threadId": thread, "excludeTurns": true}),
-            )
-            .await?;
-        }
-        Ok(())
     }
 }
