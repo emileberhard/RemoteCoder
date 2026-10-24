@@ -47,20 +47,12 @@ final class LiveNavigationCoordinator: NSObject {
         guard googleConfigured, UserDefaults.standard.bool(forKey: LiveNavigationSetupController.setupEnabledKey) else {
             return
         }
-        serviceSession = CLServiceSession(
-            authorization: .always,
-            fullAccuracyPurposeKey: LiveNavigationConstants.fullAccuracyPurposeKey
-        )
         guard let stored = try? LiveNavigationCommandStore.load() else { return }
         guard stored.command.isExpired == false else {
             try? LiveNavigationCommandStore.clear(sessionID: stored.command.sessionId)
             return
         }
         start(stored)
-    }
-
-    func retainSetupSession(_ session: CLServiceSession) {
-        serviceSession = session
     }
 
     func start(_ stored: LiveNavigationStoredState) {
@@ -187,6 +179,7 @@ final class LiveNavigationCoordinator: NSObject {
         navigationSession = nil
         backgroundSession?.invalidate()
         backgroundSession = nil
+        serviceSession = nil
         eventSink = nil
         activeSessionID = nil
         latestRawLocation = nil

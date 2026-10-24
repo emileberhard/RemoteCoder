@@ -30,7 +30,8 @@ agent consumes location/guidance events through JSON-RPC or the CLI.
    extension's `liveUpdates` wake the app; this is not adopted), so such an app
    adopts the stored command when it next launches or comes to the foreground. `LiveNavigationCoordinator` then restores the command, starts
    continuous Core Location, and creates one independent `GMSNavigationSession`
-   for road-snapped locations and optional guidance.
+   for road-snapped locations and optional guidance. It holds its Always
+   `CLServiceSession` only while that session runs.
 6. Agents long-poll `navigation/next`, or use `dev-tools/live-navigation watch`
    for JSONL.
 
