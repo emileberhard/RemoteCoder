@@ -1,11 +1,16 @@
 import gzip
+import io
 import json
+import os
 import shutil
 import subprocess
 import sys
 import tarfile
+import tempfile
+import threading
+import time
 from collections.abc import Iterable, Iterator
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import FIRST_COMPLETED, Future, ProcessPoolExecutor, wait
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -23,10 +28,13 @@ INDEX_ROOT = Path.home() / "Library/Caches/RemoteCoder/app-telemetry/index"
 INDEX_VERSION = 1
 INDEX_BYTE_CAP = 256 * 1024 * 1024
 LOCAL = "local"
-SSH = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5"]
+SSH = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "-o", "ServerAliveInterval=5",
+       "-o", "ServerAliveCountMax=3"]
 LIST_TIMEOUT_SECONDS = 20
 FETCH_TIMEOUT_SECONDS = 600
 PARSE_WORKERS = 4
+OUTSTANDING_SEGMENTS = 2 * PARSE_WORKERS
+STALE_TEMPORARY_SECONDS = 3600
 
 
 @dataclass(frozen=True)
@@ -147,14 +155,16 @@ def write_index(segment: Segment, summary: dict) -> dict:
     entry = {"version": INDEX_VERSION, "size": segment.size, "mtime": segment.mtime, **summary}
     path = segment.index_path
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(".tmp")
-    temporary.write_text(json.dumps(entry, separators=(",", ":")))
-    temporary.replace(path)
+    with tempfile.NamedTemporaryFile("w", dir=path.parent, prefix=f".{path.name}.", suffix=".tmp",
+                                     delete=False) as temporary:
+        temporary.write(json.dumps(entry, separators=(",", ":")))
+    os.replace(temporary.name, path)
     return entry
 
 
 def _summarize_bytes(compressed: bytes) -> dict:
-    return summarize_segment(gzip.decompress(compressed).splitlines())
+    with gzip.GzipFile(fileobj=io.BytesIO(compressed)) as stream:
+        return summarize_segment(stream)
 
 
 def _summarize_file(path: str) -> dict:
@@ -168,21 +178,53 @@ def _remote_members(host: str, segments: list[Segment]) -> Iterator[tuple[str, b
     process = subprocess.Popen([*SSH, host, command], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                stderr=subprocess.PIPE)
     assert process.stdin is not None and process.stdout is not None
-    process.stdin.write(names.encode())
-    process.stdin.close()
+    expired = threading.Event()
+
+    def expire() -> None:
+        expired.set()
+        process.kill()
+
+    deadline = threading.Timer(FETCH_TIMEOUT_SECONDS, expire)
+    deadline.start()
     try:
+        process.stdin.write(names.encode())
+        process.stdin.close()
         with tarfile.open(fileobj=process.stdout, mode="r|") as archive:
             for member in archive:
                 if member.isfile() and (stream := archive.extractfile(member)) is not None:
                     yield member.name, stream.read()
-        process.wait(timeout=FETCH_TIMEOUT_SECONDS)
+        process.wait()
+    except (OSError, EOFError, tarfile.TarError) as error:
+        if expired.is_set():
+            raise RuntimeError(f"fetching segments from {host} exceeded {FETCH_TIMEOUT_SECONDS} s") from error
+        raise
     finally:
+        deadline.cancel()
         if process.poll() is None:
             process.kill()
             process.wait()
+    if expired.is_set():
+        raise RuntimeError(f"fetching segments from {host} exceeded {FETCH_TIMEOUT_SECONDS} s")
     if process.returncode != 0:
         detail = process.stderr.read().decode(errors="replace").strip() if process.stderr else ""
         raise RuntimeError(f"fetching segments from {host} failed: {detail or process.returncode}")
+
+
+def _index_remote(pool: ProcessPoolExecutor, host: str, pending: list[Segment], entries: dict[Segment, dict]) -> None:
+    by_member = {f"{segment.device}/{segment.name}.jsonl.gz": segment for segment in pending}
+    running: dict[Future, Segment] = {}
+
+    def publish(done: Iterable[Future]) -> None:
+        for future in done:
+            segment = running.pop(future)
+            entries[segment] = write_index(segment, future.result())
+
+    for member, body in _remote_members(host, pending):
+        if (segment := by_member.get(member.removeprefix("./"))) is not None:
+            running[pool.submit(_summarize_bytes, body)] = segment
+        if len(running) >= OUTSTANDING_SEGMENTS:
+            publish(wait(running, return_when=FIRST_COMPLETED).done)
+    publish(wait(running).done)
 
 
 def indexed(segments: Iterable[Segment]) -> tuple[list[tuple[Segment, dict]], dict[str, str]]:
@@ -206,12 +248,7 @@ def indexed(segments: Iterable[Segment]) -> tuple[list[tuple[Segment, dict]], di
                         for segment, summary in zip(pending, summaries, strict=True):
                             entries[segment] = write_index(segment, summary)
                         continue
-                    by_member = {f"{segment.device}/{segment.name}.jsonl.gz": segment for segment in pending}
-                    futures = {member: pool.submit(_summarize_bytes, body)
-                               for member, body in _remote_members(host, pending)}
-                    for member, future in futures.items():
-                        if (segment := by_member.get(member.removeprefix("./"))) is not None:
-                            entries[segment] = write_index(segment, future.result())
+                    _index_remote(pool, host, pending, entries)
                 except (OSError, EOFError, RuntimeError, tarfile.TarError, subprocess.SubprocessError) as error:
                     failures[host] = f"{type(error).__name__}: {error}"
     return [(segment, entries[segment]) for segment in wanted if segment in entries], failures
@@ -244,8 +281,21 @@ def reclaim_index(listings: Iterable[StoreListing]) -> Reclaimed:
                 if segment is None:
                     file.unlink(missing_ok=True)
                     stale += 1
+    cutoff = time.time() - STALE_TEMPORARY_SECONDS
+    for temporary in INDEX_ROOT.glob("*/*/.*.tmp") if INDEX_ROOT.is_dir() else ():
+        try:
+            if temporary.stat().st_mtime < cutoff:
+                temporary.unlink(missing_ok=True)
+        except FileNotFoundError:
+            continue
     files = sorted(INDEX_ROOT.glob("*/*/*.json"), key=lambda path: path.name) if INDEX_ROOT.is_dir() else []
-    sizes = {file: file.stat().st_size for file in files}
+    sizes = {}
+    for file in files:
+        try:
+            sizes[file] = file.stat().st_size
+        except FileNotFoundError:
+            continue
+    files = [file for file in files if file in sizes]
     total = sum(sizes.values())
     evicted = 0
     for file in files:
@@ -255,4 +305,3 @@ def reclaim_index(listings: Iterable[StoreListing]) -> Reclaimed:
         total -= sizes[file]
         evicted += 1
     return Reclaimed(stale, evicted, total, INDEX_BYTE_CAP)
-

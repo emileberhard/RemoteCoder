@@ -32,6 +32,8 @@ sys.path.insert(0, str(store.ROOT / "scripts"))
 from symbols import DEVICE_SUPPORT_ROOT, atos, symbol_files  # noqa: E402
 
 SEGMENT_SLACK_MS = 3_600_000
+METRICKIT_DELIVERY_SLACK_MS = 3 * 86_400_000
+DAILY_REPORT_DUE = datetime.timedelta(hours=36)
 
 
 def add_parser(sub: argparse._SubParsersAction) -> None:
@@ -120,11 +122,12 @@ def _coverage(listings: list[store.StoreListing], failures: dict[str, str], recl
 def _select(args: argparse.Namespace, kind: str) -> tuple[list[tuple[store.Segment, dict]], dict]:
     since, until = _window(args)
     listings = _listings(args)
+    slack = METRICKIT_DELIVERY_SLACK_MS if kind == "metrickit" else SEGMENT_SLACK_MS
     wanted = [
         segment
         for listing in listings for segment in listing.segments or ()
         if segment.device == args.device and segment.kind == kind
-        and (stamp := segment.stamp_ms) is not None and since * 1000 <= stamp <= until * 1000 + SEGMENT_SLACK_MS
+        and (stamp := segment.stamp_ms) is not None and since * 1000 <= stamp <= until * 1000 + slack
     ]
     entries, failures = store.indexed(sorted(wanted, key=lambda segment: segment.name))
     coverage = _coverage(listings, failures, store.reclaim_index(listings))
@@ -165,6 +168,20 @@ async def cmd_stores(args: argparse.Namespace) -> int:
     })
 
 
+def _overlaps(report: dict, since: str, until: str) -> bool:
+    start, seconds = report.get("coverageStart"), report.get("coverageSeconds")
+    if isinstance(start, str) and isinstance(seconds, (int, float)):
+        end = iso(datetime.datetime.fromisoformat(start) + datetime.timedelta(seconds=seconds))
+        return start < until and end > since
+    return since <= str(report.get("receivedAt") or "") <= until
+
+
+def _window_iso(args: argparse.Namespace) -> tuple[str, str]:
+    since, until = _window(args)
+    return (iso(datetime.datetime.fromtimestamp(since, datetime.UTC)),
+            iso(datetime.datetime.fromtimestamp(until, datetime.UTC)))
+
+
 def _metrickit_records(entries: list[tuple[store.Segment, dict]], kind: str) -> list[tuple[store.Segment, dict]]:
     seen: set[str] = set()
     records = []
@@ -178,30 +195,36 @@ def _metrickit_records(entries: list[tuple[store.Segment, dict]], kind: str) -> 
 
 async def cmd_metrickit(args: argparse.Namespace) -> int:
     entries, coverage = _select(args, "metrickit")
-    reports = [metrickit_report(record, segment.host, segment.device)
-               for segment, record in _metrickit_records(entries, "metrics")]
+    since, until = _window_iso(args)
+    reports = [report for segment, record in _metrickit_records(entries, "metrics")
+               if _overlaps(report := metrickit_report(record, segment.host, segment.device), since, until)]
     if not args.full:
         for report in reports:
             report.pop("subintervals", None)
             report.pop("stateEntries", None)
             report.pop("states", None)
     reports.sort(key=lambda report: (report.get("coverageStart") or "", report.get("coverageSeconds") or 0))
-    return _emit({"coverage": coverage, "missingDays": _missing_days(reports), "reports": reports})
+    return _emit({"coverage": coverage, "reports": reports,
+                  "dailyReports": _daily_reports(reports, since, until, datetime.datetime.now(datetime.UTC))})
 
 
-def _missing_days(reports: list[dict]) -> list[str]:
-    days = sorted({report["coverageStart"] for report in reports
-                   if report.get("coverageSeconds") == 86400 and report.get("coverageStart")})
-    if not days:
-        return []
-    present = {datetime.datetime.fromisoformat(day) for day in days}
-    moment, last = min(present), max(present)
-    missing = []
-    while moment < last:
-        moment += datetime.timedelta(days=1)
-        if moment not in present:
-            missing.append(iso(moment))
-    return missing
+def _report_day(start: str) -> datetime.date:
+    return (datetime.datetime.fromisoformat(start) + datetime.timedelta(hours=12)).date()
+
+
+def _daily_reports(reports: list[dict], since: str, until: str, now: datetime.datetime) -> dict:
+    present = {_report_day(report["coverageStart"]) for report in reports
+               if report.get("coverageSeconds") == 86400 and report.get("coverageStart")}
+    day = datetime.datetime.fromisoformat(since).date()
+    last = (datetime.datetime.fromisoformat(until) - datetime.timedelta(milliseconds=1)).date()
+    missing, not_yet_due = [], []
+    while day <= last:
+        if day not in present:
+            ends = datetime.datetime.combine(day + datetime.timedelta(days=1), datetime.time(), datetime.UTC)
+            (missing if ends + DAILY_REPORT_DUE <= now else not_yet_due).append(day.isoformat())
+        day += datetime.timedelta(days=1)
+    return {"present": sorted(day.isoformat() for day in present), "missing": missing, "notYetDue": not_yet_due,
+            "note": "Days are the device's local calendar days; a daily report normally arrives within a day."}
 
 
 def _system_symbol_candidates(diagnostics: list[dict]) -> list[Path]:
@@ -232,8 +255,9 @@ def _symbolicate(diagnostics: list[dict]) -> dict:
 
 async def cmd_diagnostics(args: argparse.Namespace) -> int:
     entries, coverage = _select(args, "metrickit")
-    items = [diagnostic(record, segment.host, segment.device)
-             for segment, record in _metrickit_records(entries, "diagnostic")]
+    since, until = _window_iso(args)
+    items = [item for segment, record in _metrickit_records(entries, "diagnostic")
+             if _overlaps(item := diagnostic(record, segment.host, segment.device), since, until)]
     items.sort(key=lambda item: item.get("coverageStart") or item.get("receivedAt") or "")
     result: dict = {"coverage": coverage, "diagnostics": items}
     if args.symbolicate:
@@ -243,7 +267,7 @@ async def cmd_diagnostics(args: argparse.Namespace) -> int:
 
 async def cmd_counts(args: argparse.Namespace) -> int:
     entries, coverage = _select(args, "logs")
-    since, until = (iso(datetime.datetime.fromtimestamp(value, datetime.UTC)) for value in _window(args))
+    since, until = _window_iso(args)
     minutes = [(minute, counts) for _, entry in entries for minute, counts in entry.get("minutes", {}).items()]
     result = minute_counts(minutes, since, until, args.by, args.bucket)
     result["buckets"] = {name: dict(Counter(counts).most_common(args.top)) for name, counts in result["buckets"].items()}
@@ -254,7 +278,7 @@ async def cmd_counts(args: argparse.Namespace) -> int:
 
 async def cmd_persistence(args: argparse.Namespace) -> int:
     entries, coverage = _select(args, "logs")
-    since, until = (iso(datetime.datetime.fromtimestamp(value, datetime.UTC)) for value in _window(args))
+    since, until = _window_iso(args)
     snapshots = [snapshot for _, entry in entries for snapshot in entry.get("persistence", [])
                  if since <= snapshot["ts"] <= until]
     runs = persistence_runs(snapshots)
@@ -274,13 +298,20 @@ async def cmd_persistence(args: argparse.Namespace) -> int:
 
 def _telemetry(args: argparse.Namespace) -> tuple[list[dict], dict]:
     entries, coverage = _select(args, "telemetry")
-    since, until = (iso(datetime.datetime.fromtimestamp(value, datetime.UTC)) for value in _window(args))
+    since, until = _window_iso(args)
     records = [record for _, entry in entries for record in entry.get("telemetry", [])
                if record.get("recordType") == "run" or since <= str(record.get("ts", "")) <= until]
     runs = telemetry_runs(records)
-    coverage["runs"] = [{"runID": run["runID"], **(run["header"] or {"header": "not read"}),
-                         "records": len(run["records"]), "missingRecords": run["missingRecords"]}
-                        for run in runs if run["records"]]
+    coverage["runs"] = []
+    for run in runs:
+        if not run["records"]:
+            continue
+        samples = [record["ts"] for record in run["records"] if record.get("recordType") == "sample"]
+        coverage["runs"].append({
+            "runID": run["runID"], **(run["header"] or {"header": "not read"}),
+            "records": len(run["records"]), "missingRecords": run["missingRecords"],
+            "sampledFrom": samples[0] if samples else None, "sampledUntil": samples[-1] if samples else None,
+        })
     coverage["losses"] = losses(record for run in runs for record in run["records"])
     return runs, coverage
 
@@ -304,6 +335,4 @@ async def cmd_activity(args: argparse.Namespace) -> int:
 
 async def cmd_export_cost(args: argparse.Namespace) -> int:
     runs, coverage = _telemetry(args)
-    records = [record for run in runs for record in run["records"]]
-    intervals = [interval for run in runs for interval in sample_intervals(run["records"])]
-    return _emit({"coverage": coverage, **export_costs(records, intervals)})
+    return _emit({"coverage": coverage, **export_costs(runs)})

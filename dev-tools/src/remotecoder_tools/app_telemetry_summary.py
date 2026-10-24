@@ -289,7 +289,7 @@ ACTIVITY_FIELDS = ("scene", "surface", "turnRunningVisible", "voiceCall")
 WAKEUPS = ("interruptWakeups", "idleWakeups", "timerWakeups")
 INTERVAL_KINDS = {
     "measured": "one state held from sample to sample",
-    "mixed": "the state changed less than a second after the previous sample, so the interval holds both states",
+    "mixed": "the state changed without a sample of its own, so the interval holds more than one state",
     "background": "from the background sample to the next foreground one; the sampler is stopped, so all use in "
                   "between is attributed to the background",
     "gap": f"no sample for more than {SAMPLE_GAP_SECONDS:.0f} s while not backgrounded",
@@ -297,7 +297,7 @@ INTERVAL_KINDS = {
 }
 ASSOCIATION_NOTE = (
     "Process use is attributed to the state that held while it was measured: association, not causation. Work "
-    "started in one state and finished in the next counts toward the next. Battery change covers the whole device."
+    "started in one state and finished in the next counts toward the next. Battery levels cover the whole device."
 )
 
 
@@ -339,13 +339,13 @@ def sample_intervals(records: list[dict]) -> list[dict]:
         seconds = (end["monoNs"] - start["monoNs"]) / 1e9
         if seconds <= 0:
             continue
-        if start["context"].get("scene") == "background":
-            kind = "background"
-        elif any(seq not in seqs for seq in range(start["seq"] + 1, end["seq"])):
+        if any(seq not in seqs for seq in range(start["seq"] + 1, end["seq"])):
             kind = "incomplete"
+        elif start["context"].get("scene") == "background":
+            kind = "background"
         elif seconds > SAMPLE_GAP_SECONDS:
             kind = "gap"
-        elif end.get("reason") == "deferredContext":
+        elif end.get("mixed"):
             kind = "mixed"
         else:
             kind = "measured"
@@ -362,20 +362,9 @@ def sample_intervals(records: list[dict]) -> list[dict]:
     return intervals
 
 
-def _battery_drop(interval: dict) -> int | None:
-    start, end = interval["context"], interval["endContext"]
-    if start.get("charging") is not False or end.get("charging") is not False:
-        return None
-    if not isinstance(start.get("batteryPercent"), int) or not isinstance(end.get("batteryPercent"), int):
-        return None
-    return start["batteryPercent"] - end["batteryPercent"]
-
-
 def _totals(intervals: list[dict]) -> dict:
     seconds = sum(interval["seconds"] for interval in intervals)
     cpu = sum(interval["cpuSeconds"] for interval in intervals)
-    drops = [drop for interval in intervals if (drop := _battery_drop(interval)) is not None]
-    battery_seconds = sum(interval["seconds"] for interval in intervals if _battery_drop(interval) is not None)
     persistence: Counter = Counter()
     for interval in intervals:
         persistence.update(interval["persistenceBytes"])
@@ -385,8 +374,7 @@ def _totals(intervals: list[dict]) -> dict:
         "cpuPercent": round(cpu / seconds * 100, 2) if seconds else None,
         "wakeupsPerSecond": {name: round(sum(interval[name] for interval in intervals) / seconds, 2) if seconds else None
                              for name in WAKEUPS},
-        "peakFootprintBytes": max((interval["footprintBytes"] for interval in intervals), default=None),
-        "batteryPercentPerHour": round(sum(drops) / battery_seconds * 3600, 2) if battery_seconds else None,
+        "peakSampledFootprintBytes": max((interval["footprintBytes"] for interval in intervals), default=None),
         "persistenceBytes": {owner: value for owner, value in sorted(persistence.items()) if value},
     }
 
@@ -443,16 +431,20 @@ def _distribution(values: list[float]) -> dict:
     return {"sum": round(sum(ordered), 2), "p50": percentile(0.5), "p95": percentile(0.95), "max": round(ordered[-1], 2)}
 
 
-def export_costs(records: list[dict], intervals: list[dict]) -> dict:
-    exports = [record for record in records if record.get("recordType") == "export"]
-    samples = [record for record in records if record.get("recordType") == "sample"]
+def _parse(stamp: str) -> datetime.datetime:
+    return datetime.datetime.fromisoformat(stamp)
+
+
+def export_costs(runs: list[dict]) -> dict:
+    exports = [record for run in runs for record in run["records"] if record.get("recordType") == "export"]
+    samples = [record for run in runs for record in run["records"] if record.get("recordType") == "sample"]
     by_reason: defaultdict[str, list[dict]] = defaultdict(list)
     for record in exports:
         by_reason[str(record.get("reason"))].append(record)
     reasons = {}
     for reason, items in sorted(by_reason.items()):
-        growth = [record["footprintPeak"] - record["footprintBefore"] for record in items
-                  if isinstance(record.get("footprintPeak"), int) and isinstance(record.get("footprintBefore"), int)]
+        growth = [record["footprintSampledMax"] - record["footprintBefore"] for record in items
+                  if isinstance(record.get("footprintSampledMax"), int) and isinstance(record.get("footprintBefore"), int)]
         reasons[reason] = {
             "exports": len(items),
             "totalMs": _distribution([float(record.get("totalMs", 0)) for record in items]),
@@ -462,16 +454,35 @@ def export_costs(records: list[dict], intervals: list[dict]) -> dict:
                for name in ("scanned", "kept", "segments", "bytes", "flushedRecords", "uploadedSegments",
                             "uploadedBytes")},
             "processCpuSecondsDuringExports": round(sum(int(record.get("processCpuNs") or 0) for record in items) / 1e9, 3),
-            "peakFootprintGrowthBytes": max(growth, default=None),
+            "sampledFootprintGrowthBytes": max(growth, default=None),
         }
-    export_cpu = sum(int(record.get("processCpuNs") or 0) for record in exports) / 1e9
-    sampled_cpu = sum(interval["cpuSeconds"] for interval in intervals)
+    covered_cpu = sampled_cpu = 0.0
+    uncovered = 0
+    for run in runs:
+        intervals = sample_intervals(run["records"])
+        sampled_cpu += sum(interval["cpuSeconds"] for interval in intervals)
+        if not intervals:
+            uncovered += sum(record.get("recordType") == "export" for record in run["records"])
+            continue
+        first, last = _parse(intervals[0]["start"]), _parse(intervals[-1]["end"])
+        for record in run["records"]:
+            if record.get("recordType") != "export":
+                continue
+            finished = _parse(record["ts"])
+            started = finished - datetime.timedelta(milliseconds=float(record.get("totalMs", 0)))
+            if first <= started and finished <= last:
+                covered_cpu += int(record.get("processCpuNs") or 0) / 1e9
+            else:
+                uncovered += 1
     read_ns = [int(record.get("readNs") or 0) for record in samples]
     return {
         "reasons": reasons,
-        "processCpuSecondsDuringExports": round(export_cpu, 3),
         "sampledProcessCpuSeconds": round(sampled_cpu, 3),
-        "exportShareOfSampledCpu": round(export_cpu / sampled_cpu, 4) if sampled_cpu else None,
+        "processCpuSecondsDuringCoveredExports": round(covered_cpu, 3),
+        "exportShareOfSampledCpu": round(covered_cpu / sampled_cpu, 4) if sampled_cpu else None,
+        "exportsOutsideSampledCoverage": uncovered,
+        "shareNote": "Whole-process CPU while each export ran, over the CPU sampled in the same runs; only exports "
+                     "that lie entirely between a run's first and last sample count, and concurrent work inflates it.",
         "sampler": {"samples": len(samples), "readMicroseconds": _distribution([value / 1000 for value in read_ns])},
     }
 

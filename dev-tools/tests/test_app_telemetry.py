@@ -1,3 +1,4 @@
+import datetime
 import gzip
 import json
 import subprocess
@@ -178,10 +179,11 @@ def test_a_tailscale_address_of_this_mac_is_local(monkeypatch):
     assert not config._matches_local_identity("100.64.0.2")
 
 
-def sample(seq: int, seconds: float, cpu_ms: int, reason: str = "interval", battery: int = 80, **context) -> dict:
+def sample(seq: int, seconds: float, cpu_ms: int, reason: str = "interval", battery: int = 80, mixed: bool = False,
+           **context) -> dict:
     state = {"scene": "active", "surface": "chat", "turnRunningVisible": False, "voiceCall": False,
              "lowPower": False, "charging": False, "batteryPercent": battery, **context}
-    return {"recordType": "sample", "runID": "run-1", "seq": seq, "reason": reason,
+    return {"recordType": "sample", "runID": "run-1", "seq": seq, "reason": reason, "mixed": mixed,
             "ts": f"2026-10-24T10:{int(seconds) // 60:02d}:{int(seconds) % 60:02d}.000Z",
             "monoNs": int(seconds * 1e9), "cpuUserNs": cpu_ms * 1_000_000, "cpuSystemNs": 0,
             "interruptWakeups": seq * 10, "idleWakeups": 0, "timerWakeups": 0, "footprintBytes": 100 + seq,
@@ -195,13 +197,16 @@ def run_records() -> list[dict]:
         sample(2, 30, 3000, battery=79),
         sample(2, 30, 3000, battery=79),
         sample(3, 40, 3500, "context", battery=79, turnRunningVisible=True),
-        sample(4, 41, 3700, "deferredContext", battery=79),
+        sample(4, 41, 3700, "context", battery=79, mixed=True),
         sample(5, 60, 4000, "background", battery=79, scene="background"),
         sample(6, 660, 4600, "foreground", battery=75),
         sample(8, 690, 5000, battery=75),
         sample(9, 790, 5100, battery=75),
-        {"recordType": "export", "runID": "run-1", "seq": 10, "ts": "2026-10-24T10:13:20.000Z", "reason": "interval",
-         "totalMs": 120.0, "scanMs": 80.0, "processCpuNs": 510_000_000, "footprintBefore": 100, "footprintPeak": 150},
+        {"recordType": "export", "runID": "run-1", "seq": 10, "ts": "2026-10-24T10:10:00.000Z", "reason": "interval",
+         "totalMs": 120.0, "scanMs": 80.0, "processCpuNs": 510_000_000, "footprintBefore": 100,
+         "footprintSampledMax": 150},
+        {"recordType": "export", "runID": "run-1", "seq": 11, "ts": "2026-10-24T10:13:20.000Z", "reason": "interval",
+         "totalMs": 100.0, "processCpuNs": 9_000_000_000},
     ]
 
 
@@ -219,7 +224,12 @@ def test_sample_intervals_keep_background_gaps_and_mixed_states_apart():
     assert intervals[4]["seconds"] == 600 and intervals[4]["cpuSeconds"] == 0.6
 
 
-def test_activity_sums_each_state_and_rates_battery_only_while_discharging():
+def test_missing_records_outrank_a_background_start():
+    records = [sample(1, 0, 0, "background", scene="background"), sample(3, 600, 900, "foreground")]
+    assert [interval["kind"] for interval in sample_intervals(records)] == ["incomplete"]
+
+
+def test_activity_sums_each_state_kind_apart():
     [run] = telemetry_runs(run_records())
     rows = {(row["kind"], row["state"]["turnRunningVisible"]): row
             for row in activity(sample_intervals(run["records"]))}
@@ -227,21 +237,38 @@ def test_activity_sums_each_state_and_rates_battery_only_while_discharging():
     idle = rows[("measured", False)]
     assert (idle["intervals"], idle["seconds"], idle["cpuSeconds"]) == (3, 59.0, 3.8)
     assert idle["cpuPercent"] == round(3.8 / 59 * 100, 2)
-    assert idle["batteryPercentPerHour"] == round(1 / 59 * 3600, 2)
     assert idle["wakeupsPerSecond"]["interruptWakeups"] == round(30 / 59, 2)
-    assert rows[("background", False)]["batteryPercentPerHour"] == 24.0
+    assert rows[("mixed", True)]["seconds"] == 1.0
+    assert rows[("background", False)]["cpuSeconds"] == 0.6
 
 
-def test_export_cost_reports_its_share_of_the_sampled_process_cpu():
-    [run] = telemetry_runs(run_records())
-    cost = export_costs(run["records"], sample_intervals(run["records"]))
+def test_export_share_counts_only_exports_inside_the_sampled_coverage():
+    cost = export_costs(telemetry_runs(run_records()))
 
-    assert cost["reasons"]["interval"]["exports"] == 1
+    assert cost["reasons"]["interval"]["exports"] == 2
     assert cost["reasons"]["interval"]["stageMs"]["scan"] == 80.0
-    assert cost["reasons"]["interval"]["peakFootprintGrowthBytes"] == 50
+    assert cost["reasons"]["interval"]["sampledFootprintGrowthBytes"] == 50
     assert cost["sampledProcessCpuSeconds"] == 5.1
     assert cost["exportShareOfSampledCpu"] == 0.1
+    assert cost["exportsOutsideSampledCoverage"] == 1
     assert cost["sampler"]["samples"] == 8
+
+
+def test_metrickit_reports_are_selected_and_checked_by_coverage_day():
+    received_next_day = {"coverageStart": "2026-10-22T22:00:00.000Z", "coverageSeconds": 86400,
+                         "receivedAt": "2026-10-24T09:38:39.943Z"}
+    assert app_telemetry._overlaps(received_next_day, "2026-10-23T00:00:00.000Z", "2026-10-24T00:00:00.000Z")
+    assert not app_telemetry._overlaps(received_next_day, "2026-10-24T00:00:00.000Z", "2026-10-25T00:00:00.000Z")
+
+    days = app_telemetry._daily_reports([received_next_day], "2026-10-21T00:00:00.000Z", "2026-10-24T00:00:00.000Z",
+                                        datetime.datetime(2026, 10, 24, 15, tzinfo=datetime.UTC))
+
+    assert days["present"] == ["2026-10-23"]
+    assert days["missing"] == ["2026-10-21", "2026-10-22"]
+    assert days["notYetDue"] == []
+    later = app_telemetry._daily_reports([received_next_day], "2026-10-23T00:00:00.000Z", "2026-10-25T00:00:00.000Z",
+                                         datetime.datetime(2026, 10, 24, 15, tzinfo=datetime.UTC))
+    assert (later["missing"], later["notYetDue"]) == ([], ["2026-10-24"])
 
 
 def test_a_local_listing_reads_the_gateway_cap_marker(tmp_path, monkeypatch):
