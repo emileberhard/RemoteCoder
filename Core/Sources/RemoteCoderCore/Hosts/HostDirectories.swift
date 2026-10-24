@@ -222,11 +222,16 @@ final class HostDirectories {
             try Task.checkCancellation()
             if let information { return information.homeDirectory }
             let generation = informationGeneration
+            let path: String
             do {
-                return try await (homeResolutionTask ?? startHomeResolution(in: generation)).value
+                path = try await (homeResolutionTask ?? startHomeResolution(in: generation)).value
             } catch {
                 guard generation != informationGeneration else { throw error }
+                continue
             }
+            guard !isRetired else { throw HostDirectoriesError.retired }
+            try Task.checkCancellation()
+            if generation == informationGeneration { return path }
         }
     }
 

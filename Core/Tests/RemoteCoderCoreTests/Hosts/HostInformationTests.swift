@@ -60,7 +60,7 @@ struct HostInformationTests {
         await remote.firstReadArrived()
         initiating.cancel()
         await remote.releaseFirstRead()
-        _ = try? await initiating.value
+        await #expect(throws: CancellationError.self) { try await initiating.value }
         #expect(try await joining.value == "/home/before")
         #expect(directories.lastKnownHomePath == "/home/before")
         await directories.retire()

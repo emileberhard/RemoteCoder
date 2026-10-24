@@ -9,10 +9,9 @@ struct VoiceModeIntentTests {
     @Test func coldVoicePreparationAwaitsTheCachedModel() async throws {
         let fixture = await WorkspaceFixture()
         defer { await fixture.cleanUp() }
-        try fixture.selectColdHost()
+        try fixture.selectColdHost(lastKnownHomePath: "/workspace/home")
         let selected = try #require(fixture.workspace.selectedScreen)
         #expect(selected.target.codexModels.catalog == nil)
-        HostPreferences.setRemoteHomePath("/workspace/home", hostID: selected.hostID, defaults: fixture.defaults)
         let configuration = RemoteCoderVoiceConfiguration(
             modelID: CodexModelFixtures.astraID, reasoningSelectionID: "effort-xhigh", fastModeEnabled: true
         )

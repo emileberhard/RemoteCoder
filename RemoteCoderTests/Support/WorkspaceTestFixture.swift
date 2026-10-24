@@ -79,9 +79,10 @@ final class WorkspaceFixture {
     }
 
     @discardableResult
-    func selectColdHost() throws -> ChatTargetModel {
+    func selectColdHost(lastKnownHomePath: String? = nil) throws -> ChatTargetModel {
         let host = GatewayHostConfiguration(id: UUID(), name: "Cold host", hostname: "127.0.0.1", port: 3, authToken: "fixture-token")
         try CodexModelFixtures.seed(hostID: host.id, storage: temporaryStorage.storage)
+        if let lastKnownHomePath { HostPreferences.setRemoteHomePath(lastKnownHomePath, hostID: host.id, defaults: defaults) }
         workspace.settings.upsert(host)
         workspace.reconcileHosts()
         workspace.select(hostID: host.id)
