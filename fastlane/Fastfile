@@ -25,6 +25,7 @@ MAC_SCHEME = "RemoteCoderMac"
 MAC_PROFILE_NAME = "#{APP_IDENTIFIER} Mac AppStore"
 MAC_PROFILE_SETTING = "RC_PROFILE_REMOTECODER_MAC"
 MAC_DIRECT_PROFILE_NAME = "#{APP_IDENTIFIER} Mac DeveloperID"
+IOS_PROFILE_KINDS = { "app-store" => %w[AppStore IOS_APP_STORE], "ad-hoc" => %w[AdHoc IOS_APP_ADHOC] }.freeze
 PLATFORMS = {
   "ios" => { artifact: "RemoteCoder.ipa", direct: "RemoteCoder-direct.ipa", connect: "IOS", upload: "ios" },
   "mac" => { artifact: "RemoteCoderMac.pkg", direct: "RemoteCoderMac-direct.app", connect: "MAC_OS", upload: "osx" }
@@ -38,20 +39,20 @@ end
 
 Release = Struct.new(:version, :build_number, :commit, :directory, keyword_init: true)
 
-def tagged_release
-  UI.user_error!("Configure the maintainer development team and bundle identifier before signing.") if TEAM_ID.empty? || APP_IDENTIFIER.start_with?("com.example.", "org.example.")
+def release_version
+  UI.user_error!("Configure the maintainer development team and bundle identifier before releasing.") if TEAM_ID.empty? || APP_IDENTIFIER.start_with?("com.example.", "org.example.")
   version = required_env("RC_RELEASE_VERSION")
   parts = version.match(/\A(0|[1-9]\d{0,2})\.(0|[1-9]\d{0,2})\.(0|[1-9]\d{0,2})\z/)
   UI.user_error!("RC_RELEASE_VERSION must be X.Y.Z with each part at most 999.") unless parts
+  [version, (parts[1].to_i * 1_000_000 + parts[2].to_i * 1_000 + parts[3].to_i).to_s]
+end
+
+def tagged_release
+  version, build_number = release_version
   directory = required_env("RC_RELEASE_DIR")
   commit = required_env("RC_SOURCE_COMMIT")
   UI.user_error!("The release directory belongs to another commit.") unless File.read(File.join(directory, "commit")).strip == commit
-  Release.new(
-    version: version,
-    build_number: (parts[1].to_i * 1_000_000 + parts[2].to_i * 1_000 + parts[3].to_i).to_s,
-    commit: commit,
-    directory: directory
-  )
+  Release.new(version: version, build_number: build_number, commit: commit, directory: directory)
 end
 
 def write_release_config
@@ -85,9 +86,20 @@ def asc(*arguments)
   output
 end
 
+def ios_profiles(method)
+  suffix, = IOS_PROFILE_KINDS.fetch(method)
+  SIGNING_TARGETS.keys.to_h { |bundle_id| [bundle_id, "#{bundle_id} #{suffix}"] }
+end
+
+def release_profiles(platform)
+  return [[MAC_PROFILE_NAME, "MAC_APP_STORE", APP_IDENTIFIER], [MAC_DIRECT_PROFILE_NAME, "MAC_APP_DIRECT", APP_IDENTIFIER]] if platform == "mac"
+  IOS_PROFILE_KINDS.flat_map do |method, (_, type)|
+    ios_profiles(method).map { |bundle_id, name| [name, type, bundle_id] }
+  end
+end
+
 def install_profile(name, type, bundle_id)
   asc("install-profile", "--name", name, "--type", type, "--bundle-id", bundle_id)
-  name
 end
 
 def signing_keychain
@@ -146,9 +158,7 @@ def publish(release, platform, direct, built)
 end
 
 def build_ios(release, keychain, cache, work)
-  profiles = SIGNING_TARGETS.to_h do |bundle_id, _|
-    [bundle_id, install_profile("#{bundle_id} AppStore", "IOS_APP_STORE", bundle_id)]
-  end
+  profiles = ios_profiles("app-store")
   settings = release_settings(release, keychain)
   SIGNING_TARGETS.each { |bundle_id, setting| settings[setting] = profiles.fetch(bundle_id) }
   archive = File.join(work, "RemoteCoder.xcarchive")
@@ -169,9 +179,6 @@ def build_ios(release, keychain, cache, work)
     xcargs: xcargs(settings),
     xcodebuild_formatter: ""
   )
-  direct_profiles = SIGNING_TARGETS.to_h do |bundle_id, _|
-    [bundle_id, install_profile("#{bundle_id} AdHoc", "IOS_APP_ADHOC", bundle_id)]
-  end
   direct = build_app(
     workspace: "RemoteCoder.xcworkspace",
     scheme: "RemoteCoder",
@@ -181,7 +188,7 @@ def build_ios(release, keychain, cache, work)
     output_directory: File.join(work, "direct"),
     buildlog_path: File.join(work, "logs"),
     export_method: "ad-hoc",
-    export_options: { signingStyle: "manual", teamID: TEAM_ID, provisioningProfiles: direct_profiles },
+    export_options: { signingStyle: "manual", teamID: TEAM_ID, provisioningProfiles: ios_profiles("ad-hoc") },
     xcodebuild_formatter: ""
   )
   [[ipa, "app-store"], [direct, "ad-hoc"]].each do |exported, distribution|
@@ -197,7 +204,7 @@ end
 
 def build_mac(release, keychain, cache, work)
   settings = release_settings(release, keychain)
-  settings[MAC_PROFILE_SETTING] = install_profile(MAC_PROFILE_NAME, "MAC_APP_STORE", APP_IDENTIFIER)
+  settings[MAC_PROFILE_SETTING] = MAC_PROFILE_NAME
   archive = File.join(work, "#{MAC_SCHEME}.xcarchive")
   build_mac_app(
     workspace: "RemoteCoder.xcworkspace",
@@ -240,7 +247,7 @@ def build_mac(release, keychain, cache, work)
       signingStyle: "manual",
       teamID: TEAM_ID,
       signingCertificate: "Developer ID Application",
-      provisioningProfiles: { APP_IDENTIFIER => install_profile(MAC_DIRECT_PROFILE_NAME, "MAC_APP_DIRECT", APP_IDENTIFIER) }
+      provisioningProfiles: { APP_IDENTIFIER => MAC_DIRECT_PROFILE_NAME }
     },
     xcodebuild_formatter: ""
   )
@@ -263,11 +270,11 @@ def connect_api_key
   )
 end
 
-def uploaded_build(app, platform, release)
+def uploaded_build(app, platform, version, build_number)
   builds = Spaceship::ConnectAPI::Build.all(
-    app_id: app.id, version: release.version, build_number: release.build_number, platform: platform
+    app_id: app.id, version: version, build_number: build_number, platform: platform
   )
-  UI.user_error!("App Store Connect has #{builds.length} #{platform} builds numbered #{release.build_number}.") if builds.length > 1
+  UI.user_error!("App Store Connect has #{builds.length} #{platform} builds numbered #{build_number}.") if builds.length > 1
   builds.first
 end
 
@@ -277,6 +284,7 @@ lane :build do
   pending = PLATFORMS.keys.reject { |platform| File.file?(File.join(release.directory, PLATFORMS[platform][:artifact])) }
   next UI.message("Both app archives for #{release.version} already exist.") if pending.empty?
 
+  profiles = pending.flat_map { |platform| release_profiles(platform) }.map { |profile| Thread.new { install_profile(*profile) } }
   write_release_config
   generate_project(File.join(required_env("RC_RELEASE_CACHE"), "source-packages"))
   compiler_names = JSON.parse(IO.popen(["python3", "-c", "import json,sys; sys.path.insert(0, 'scripts'); from build_support import BUILD_ENV_NAMES; print(json.dumps(sorted(BUILD_ENV_NAMES)))"], chdir: PROJECT_ROOT, &:read))
@@ -294,6 +302,7 @@ lane :build do
     $stdout.puts("--- #{platform} archive ---", File.read(log))
     platform unless status.success?
   end
+  profiles.each(&:value)
   failed = if ENV["EMIL_BUILD_JOBS"].to_s.strip.empty?
              pending.map(&start).filter_map(&failure)
            else
@@ -314,7 +323,7 @@ lane :archive do |options|
   FileUtils.rm_rf(work)
 end
 
-desc "Upload one platform's archive unless App Store Connect already has it, then wait until TestFlight processed it"
+desc "Upload one platform's archive unless App Store Connect already has it; the processed lane waits for Apple's processing"
 lane :upload do |options|
   platform = options.fetch(:platform)
   spec = PLATFORMS.fetch(platform)
@@ -324,30 +333,37 @@ lane :upload do |options|
   api_key = connect_api_key
   app = Spaceship::ConnectAPI::App.find(APP_IDENTIFIER)
 
-  build = uploaded_build(app, spec[:connect], release)
+  build = uploaded_build(app, spec[:connect], release.version, release.build_number)
   if build.nil?
     upload_to_testflight(
       api_key: api_key,
       app_identifier: APP_IDENTIFIER,
       app_platform: spec[:upload],
       **(platform == "ios" ? { ipa: artifact } : { pkg: artifact }),
-      uses_non_exempt_encryption: false,
-      skip_waiting_for_build_processing: false,
-      wait_processing_timeout_duration: 1800,
+      skip_waiting_for_build_processing: true,
       distribute_external: false
     )
   else
     UI.important("#{platform} #{release.version} (#{release.build_number}) is already in App Store Connect as #{build.processing_state}.")
   end
+end
+
+desc "Wait until App Store Connect has processed one platform's uploaded build of RC_RELEASE_VERSION"
+lane :processed do |options|
+  platform = options.fetch(:platform)
+  spec = PLATFORMS.fetch(platform)
+  version, build_number = release_version
+  connect_api_key
+  app = Spaceship::ConnectAPI::App.find(APP_IDENTIFIER)
 
   deadline = Time.now + 1800
   loop do
-    build = uploaded_build(app, spec[:connect], release)
+    build = uploaded_build(app, spec[:connect], version, build_number)
     state = build&.processing_state
     break if state == Spaceship::ConnectAPI::Build::ProcessingState::VALID
-    UI.user_error!("#{platform} build #{release.build_number} is #{state}; fix it and release the next patch version.") if [Spaceship::ConnectAPI::Build::ProcessingState::FAILED, Spaceship::ConnectAPI::Build::ProcessingState::INVALID].include?(state)
-    UI.user_error!("#{platform} build #{release.build_number} did not finish processing in time; rerun the job to keep waiting.") if Time.now > deadline
+    UI.user_error!("#{platform} build #{build_number} is #{state}; fix it and release the next patch version.") if [Spaceship::ConnectAPI::Build::ProcessingState::FAILED, Spaceship::ConnectAPI::Build::ProcessingState::INVALID].include?(state)
+    UI.user_error!("#{platform} build #{build_number} did not finish processing in time; rerun the job to keep waiting.") if Time.now > deadline
     sleep(30)
   end
-  UI.success("TestFlight #{platform} #{release.version} (#{release.build_number}) is valid.")
+  UI.success("TestFlight #{platform} #{version} (#{build_number}) is valid.")
 end
