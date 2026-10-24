@@ -3,12 +3,12 @@
   "component": "remote-coder-codex-gateway",
   "chatgptBuild": "26.1016.51333",
   "codexCliVersion": "0.163.0-alpha.11",
-  "codexForkCommit": "78b8045a85ff362e30d8d4c18d5a89b52ead58ab",
+  "codexForkCommit": "e0cc64c63b294076dc7973189885fc57b7d95d1f",
   "codexUpstreamBaseCommit": "5425d3e625daa58eea3ad1de27c087eb3b2ffbd3",
   "codexAppServerTransport": "websocket-over-unix",
   "codexAppServerSocket": "~/.codex/app-server-control/app-server-control.sock",
   "runtimeHashes": {
-    "bin/codex": "ba28a8a227cbdbc35a50ea269a36636ddc98e5bdf6d66726770108ecd7d228d7",
+    "bin/codex": "be8e06cbd2dbb3bdb47f443fa4f1c5a9736edec8c9418996b60b41467a741289",
     "bin/codex-code-mode-host": "611295b6714b9c0ffbb466270a66ce0865203195287db1389b124ee075df6441"
   },
   "status": "runtime-identity-only",
@@ -45,5 +45,5 @@
     "status": "operator-acceptance-not-published",
     "liveAcceptanceStatus": "not-published"
   },
-  "runtimePackageSHA256": "31287495585c573f30ce2a120d6f17af4ac3326d123ab8ff838ad0291a535470"
+  "runtimePackageSHA256": "6b218c18611ef490381fd09fa7beb586f3177aac5fc6b82dd865a52974ad8861"
 }
