@@ -208,8 +208,8 @@ pub(super) async fn app_logs(
     };
     match result {
         Ok(stored) => {
-            if let Some(eviction) = &stored.cap_eviction {
-                state.journal.app_logs("cap_evicted", eviction.fields());
+            if let Some(outcome) = &stored.cap {
+                state.journal.app_logs(outcome.event(), outcome.fields());
             }
             (
                 StatusCode::OK,

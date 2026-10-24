@@ -62,28 +62,42 @@ pub(crate) struct AppLogStore {
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct StoredSegment {
     pub(crate) path: PathBuf,
-    pub(crate) cap_eviction: Option<CapEviction>,
+    pub(crate) cap: Option<CapOutcome>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct CapEviction {
+pub(crate) struct CapOutcome {
     pub(crate) files: usize,
     pub(crate) bytes: u64,
     pub(crate) retained_bytes: u64,
     pub(crate) cap_bytes: u64,
-    pub(crate) evicted_through: SystemTime,
-    pub(crate) evicted_at: SystemTime,
+    pub(crate) unreadable_entries: usize,
+    pub(crate) evicted_through: Option<SystemTime>,
+    pub(crate) at: SystemTime,
 }
 
-impl CapEviction {
+impl CapOutcome {
+    pub(crate) fn is_met(&self) -> bool {
+        self.retained_bytes <= self.cap_bytes
+    }
+
+    pub(crate) fn event(&self) -> &'static str {
+        if self.is_met() {
+            "cap_evicted"
+        } else {
+            "cap_unmet"
+        }
+    }
+
     pub(crate) fn fields(&self) -> Value {
         json!({
             "files": self.files,
             "bytes": self.bytes,
             "retainedBytes": self.retained_bytes,
             "capBytes": self.cap_bytes,
-            "evictedThroughMs": unix_millis(self.evicted_through),
-            "evictedAtMs": unix_millis(self.evicted_at),
+            "unreadableEntries": self.unreadable_entries,
+            "evictedThroughMs": self.evicted_through.map(unix_millis),
+            "atMs": unix_millis(self.at),
         })
     }
 }
@@ -142,21 +156,27 @@ impl AppLogStore {
             bytes = body.len(),
             "stored app log segment"
         );
-        let cap_eviction = enforce_byte_cap(&self.dir, self.byte_cap);
-        if let Some(eviction) = &cap_eviction {
-            self.record_cap_eviction(eviction);
+        let cap = enforce_byte_cap(&self.dir, self.byte_cap);
+        if let Some(outcome) = &cap {
+            self.record_cap(outcome);
         }
-        Ok(StoredSegment { path, cap_eviction })
+        Ok(StoredSegment { path, cap })
     }
 
-    fn record_cap_eviction(&self, eviction: &CapEviction) {
+    fn record_cap(&self, outcome: &CapOutcome) {
         warn!(
-            files = eviction.files,
-            bytes = eviction.bytes,
-            cap_bytes = eviction.cap_bytes,
-            "app log store over its byte cap; evicted the oldest segments"
+            files = outcome.files,
+            bytes = outcome.bytes,
+            retained_bytes = outcome.retained_bytes,
+            cap_bytes = outcome.cap_bytes,
+            unreadable = outcome.unreadable_entries,
+            met = outcome.is_met(),
+            "app log store over its byte cap"
         );
-        let mut marker = eviction.fields();
+        if outcome.files == 0 {
+            return;
+        }
+        let mut marker = outcome.fields();
         marker["retentionDays"] = json!(self.retention_days);
         if let Err(error) = private_state::replace(
             &self.dir.join(RETENTION_MARKER),
@@ -167,29 +187,47 @@ impl AppLogStore {
     }
 }
 
-fn enforce_byte_cap(dir: &Path, byte_cap: u64) -> Option<CapEviction> {
-    let mut segments: Vec<(SystemTime, u64, PathBuf)> = device_directories(dir)
-        .flat_map(|device_dir| {
-            std::fs::read_dir(device_dir)
-                .into_iter()
-                .flatten()
-                .flatten()
-        })
-        .filter(|entry| entry.file_name().to_str().and_then(segment_day).is_some())
-        .filter_map(|entry| {
-            let metadata = entry.metadata().ok()?;
-            let modified = metadata.modified().unwrap_or(UNIX_EPOCH);
-            Some((modified, metadata.len(), entry.path()))
-        })
-        .collect();
+fn enforce_byte_cap(dir: &Path, byte_cap: u64) -> Option<CapOutcome> {
+    let mut unreadable_entries = 0;
+    let mut segments: Vec<(SystemTime, u64, PathBuf)> = Vec::new();
+    for device_dir in device_directories(dir) {
+        let Ok(entries) = std::fs::read_dir(&device_dir) else {
+            unreadable_entries += 1;
+            continue;
+        };
+        for entry in entries {
+            let Ok(entry) = entry else {
+                unreadable_entries += 1;
+                continue;
+            };
+            if entry.file_name().to_str().and_then(segment_day).is_none() {
+                continue;
+            }
+            match entry.metadata() {
+                Ok(metadata) => segments.push((
+                    metadata.modified().unwrap_or(UNIX_EPOCH),
+                    metadata.len(),
+                    entry.path(),
+                )),
+                Err(_) => unreadable_entries += 1,
+            }
+        }
+    }
     let mut retained: u64 = segments.iter().map(|(_, size, _)| size).sum();
     if retained <= byte_cap {
+        if unreadable_entries > 0 {
+            warn!(
+                unreadable_entries,
+                retained_bytes = retained,
+                "app log store total is a lower bound; some entries could not be read"
+            );
+        }
         return None;
     }
     segments.sort();
     let mut files = 0;
     let mut bytes = 0;
-    let mut evicted_through = UNIX_EPOCH;
+    let mut evicted_through = None;
     for (modified, size, path) in segments {
         if retained <= byte_cap {
             break;
@@ -198,16 +236,17 @@ fn enforce_byte_cap(dir: &Path, byte_cap: u64) -> Option<CapEviction> {
             retained -= size;
             files += 1;
             bytes += size;
-            evicted_through = modified;
+            evicted_through = Some(modified);
         }
     }
-    (files > 0).then(|| CapEviction {
+    Some(CapOutcome {
         files,
         bytes,
         retained_bytes: retained,
         cap_bytes: byte_cap,
+        unreadable_entries,
         evicted_through,
-        evicted_at: SystemTime::now(),
+        at: SystemTime::now(),
     })
 }
 
@@ -541,7 +580,7 @@ mod tests {
             let segment = store
                 .store_on(20_260_821, device, segment, &gzip_body())
                 .expect("upload");
-            assert_eq!(segment.cap_eviction, None);
+            assert_eq!(segment.cap, None);
             std::fs::File::options()
                 .write(true)
                 .open(&segment.path)
@@ -554,10 +593,11 @@ mod tests {
             .store_on(20_260_821, "phone", "c", &gzip_body())
             .expect("upload");
 
-        let eviction = newest.cap_eviction.expect("over the cap");
-        assert_eq!((eviction.files, eviction.bytes), (1, body_size));
-        assert_eq!(eviction.retained_bytes, body_size * 2);
-        assert_eq!(eviction.evicted_through, base);
+        let outcome = newest.cap.expect("over the cap");
+        assert_eq!((outcome.files, outcome.bytes), (1, body_size));
+        assert_eq!(outcome.retained_bytes, body_size * 2);
+        assert_eq!(outcome.evicted_through, Some(base));
+        assert_eq!(outcome.event(), "cap_evicted");
         assert!(
             !stored[0].exists(),
             "the oldest segment goes first, whatever its device"
@@ -570,6 +610,35 @@ mod tests {
         .expect("marker is JSON");
         assert_eq!(marker["evictedThroughMs"], json!(1_700_000_000_000_u64));
         assert_eq!(marker["retentionDays"], json!(30));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_cap_the_store_cannot_meet_is_reported_as_unmet() {
+        let dir = temp_dir("cap-unmet");
+        let body_size = u64::try_from(gzip_body().len()).expect("size");
+        let store = AppLogStore::new_in(dir.clone(), 30, body_size * 3);
+        for segment in ["a", "b"] {
+            store
+                .store_on(20_260_821, "phone", segment, &gzip_body())
+                .expect("upload");
+        }
+        let locked = dir.join("phone");
+        let mut permissions = std::fs::metadata(&locked).expect("metadata").permissions();
+        std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o500);
+        std::fs::set_permissions(&locked, permissions.clone()).expect("read-only directory");
+        let store = AppLogStore::new_in(dir.clone(), 30, body_size);
+
+        let outcome = store
+            .store_on(20_260_821, "ipad", "c", &gzip_body())
+            .map(|stored| stored.cap);
+        std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o700);
+        std::fs::set_permissions(&locked, permissions).expect("restore directory");
+
+        let outcome = outcome.expect("upload").expect("over the cap");
+        assert!(!outcome.is_met());
+        assert_eq!(outcome.event(), "cap_unmet");
+        assert_eq!(outcome.retained_bytes, body_size * 2);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
