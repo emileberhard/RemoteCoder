@@ -71,7 +71,10 @@ final class ProcessResourceSampler {
         deferred = nil
         guard let context else { return }
         let started = clock.now
-        guard let resources = read() else { return }
+        guard let resources = read() else {
+            if reason != .interval { unsampledChange = true }
+            return
+        }
         let readTime = started.duration(to: clock.now)
         lastSample = clock.now
         let mixed = unsampledChange

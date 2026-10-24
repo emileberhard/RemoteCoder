@@ -132,4 +132,27 @@ struct FieldTelemetryTests {
         #expect(samples.map(\.mixed) == [false, true, false])
         #expect(samples[1].context.turnRunningVisible == true)
     }
+
+    @MainActor @Test func aTransitionWhoseReadFailedMarksTheNextIntervalMixed() {
+        let buffer = TelemetryBuffer(runID: "test")
+        let resources = ProcessResources(cpuUserNanoseconds: 1, cpuSystemNanoseconds: 1, interruptWakeups: 0,
+                                         idleWakeups: 0, timerWakeups: 0, footprintBytes: 1)
+        var reads = 0
+        let sampler = ProcessResourceSampler(recorder: buffer, read: {
+            reads += 1
+            return reads == 2 ? nil : resources
+        })
+        sampler.update(context)
+        var background = context
+        background.scene = .background
+        sampler.update(background)
+        sampler.update(context)
+        sampler.stop()
+        let samples = buffer.take().compactMap { line -> ProcessSample? in
+            if case .sample(let sample) = line.record { return sample }
+            return nil
+        }
+        #expect(samples.map(\.reason) == [.launch, .foreground])
+        #expect(samples.map(\.mixed) == [false, true])
+    }
 }
