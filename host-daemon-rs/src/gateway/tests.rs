@@ -411,14 +411,18 @@ async fn active_status_keeps_inventory_unavailable_when_lookup_fails() {
 }
 
 #[tokio::test]
-async fn ephemeral_inventory_requires_authoritative_idle_readback() {
+async fn threads_without_turn_history_require_authoritative_idle_readback() {
     let claude_test =
         Arc::new(crate::providers::claude::settings::ClaudeSettings::isolated_for_test());
-    for (ephemeral, status, succeeds, resolved) in [
-        (true, json!({"type":"idle"}), true, true),
-        (true, json!({"type":"active"}), true, false),
-        (true, Value::Null, true, false),
-        (false, json!({"type":"idle"}), false, false),
+    let unmaterialized = "thread ephemeral is not materialized yet; thread/turns/list is unavailable before first user message";
+    let ephemeral_error = "ephemeral threads do not support thread/turns/list";
+    for (error, ephemeral, status, succeeds, resolved) in [
+        (ephemeral_error, true, json!({"type":"idle"}), true, true),
+        (ephemeral_error, true, json!({"type":"active"}), true, false),
+        (ephemeral_error, true, Value::Null, true, false),
+        (ephemeral_error, false, json!({"type":"idle"}), false, false),
+        (unmaterialized, false, json!({"type":"idle"}), true, true),
+        (unmaterialized, false, json!({"type":"active"}), true, false),
     ] {
         let codex = Arc::new(CodexAppServer::new(
             PathBuf::from("/bin/true"),
@@ -447,9 +451,7 @@ async fn ephemeral_inventory_requires_authoritative_idle_readback() {
         for (method, reply) in [
             (
                 "thread/turns/list",
-                json!({"error":{
-                    "code":-32600,"message":"ephemeral threads do not support thread/turns/list"
-                }}),
+                json!({"error":{"code":-32600,"message":error}}),
             ),
             (
                 "thread/read",

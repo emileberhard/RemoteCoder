@@ -407,7 +407,11 @@ owner until the last fixture is dropped.
   prompt preview, cwd, source, and for a gateway-owned turn `startedAtSequence`,
   the `rcSequence` of its stored `turn/started`), plus `coverage {codex,
   claude}`. Only a covered provider's empty list proves that none of its turns
-  runs. `appServerInventoryAvailable` mirrors `coverage.codex` until its
+  runs. Each control connection resolves every loaded Codex thread; a thread
+  without turn history counts as idle only on its live idle status. A thread it
+  cannot resolve stays unresolved, keeping `coverage.codex` false, and the pass
+  retries from 1 s doubling to 60 s until every thread resolves.
+  `appServerInventoryAvailable` mirrors `coverage.codex` until its
   removal. It is telemetry and never owns lifecycle or restart decisions.
 - Clients branch on `error.data.kind`, never on a message: `turnNotRunning`
   (`threadId`, `turnId`), `historyCursorInvalid`, `historyPageTooLarge`

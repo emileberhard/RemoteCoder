@@ -25,6 +25,9 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::tungstenite::Message as UpstreamMessage;
 use tracing::{debug, info, warn};
 
+const INVENTORY_BOOTSTRAP_FIRST_RETRY: Duration = Duration::from_secs(1);
+const INVENTORY_BOOTSTRAP_MAX_RETRY: Duration = Duration::from_secs(60);
+
 pub(super) struct ControlGeneration {
     pub(super) out_tx: mpsc::Sender<String>,
     pub(super) auth: std::sync::Mutex<super::external_auth::InstalledAuth>,
@@ -266,16 +269,11 @@ impl Gateway {
                                 self.spawn_external_renewal(&generation);
                                 info!("Codex control connection initialized");
                                 self.spawn_persisted_observers().await;
-                                    let gateway = Arc::clone(&self);
-                                    generation.spawn("app-server inventory bootstrap", async move {
-                                        if let Err(error) =
-                                            gateway.bootstrap_app_server_active_turns().await
-                                        {
-                                            warn!(%error, "failed to bootstrap app-server turn inventory");
-                                            gateway.clear_app_server_turn_inventory().await;
-                                        }
-                                        Ok(())
-                                    });
+                                let gateway = Arc::clone(&self);
+                                generation.spawn("app-server inventory bootstrap", async move {
+                                    gateway.bootstrap_app_server_active_turns().await;
+                                    Ok(())
+                                });
                                 let gateway = Arc::clone(&self);
                                 generation.spawn("native unarchive drain", async move {
                                     gateway.drain_pending_native_unarchives().await;
@@ -930,15 +928,23 @@ impl Gateway {
                 Some(active_turn_in(&thread_id, turns)?)
             }
             Err(error) => {
-                // Native ephemeral threads appear in loaded/list but have no
-                // paginated history. Only explicit live idle state proves that
-                // they contribute no active turn; active/unknown stays unresolved.
-                // The gateway's own side-question forks never carry user work.
+                // Native ephemeral threads, and threads before their first user
+                // message, appear in loaded/list but have no paginated history.
+                // Only explicit live idle state proves that they contribute no
+                // active turn; active/unknown stays unresolved. The gateway's own
+                // side-question forks never carry user work.
                 let native = serde_json::from_str::<Value>(&error.to_string()).ok();
-                if !native.is_some_and(|error| {
-                    error["code"] == -32600
-                        && error["message"] == "ephemeral threads do not support thread/turns/list"
-                }) {
+                let message = native
+                    .as_ref()
+                    .filter(|error| error["code"] == -32600)
+                    .and_then(|error| error["message"].as_str());
+                let ephemeral =
+                    message == Some("ephemeral threads do not support thread/turns/list");
+                let unmaterialized = message
+                    == Some(&*format!(
+                        "thread {thread_id} is not materialized yet; thread/turns/list is unavailable before first user message"
+                    ));
+                if !ephemeral && !unmaterialized {
                     return Err(error);
                 }
                 if self.side_question_forks.owns_thread(&thread_id) {
@@ -951,7 +957,7 @@ impl Gateway {
                         )
                         .await?;
                     ensure!(
-                        read["thread"]["ephemeral"] == true,
+                        unmaterialized || read["thread"]["ephemeral"] == true,
                         "Ephemeral thread activity cannot be resolved"
                     );
                     (read["thread"]["status"]["type"] == "idle").then_some(None)
@@ -989,8 +995,32 @@ impl Gateway {
         Ok(())
     }
 
-    async fn bootstrap_app_server_active_turns(self: &Arc<Self>) -> Result<()> {
+    async fn bootstrap_app_server_active_turns(self: &Arc<Self>) {
         self.core.lock().await.app_server_inventory_bootstrapped = false;
+        let mut retry = INVENTORY_BOOTSTRAP_FIRST_RETRY;
+        loop {
+            match self.resolve_loaded_app_server_threads().await {
+                Ok(0) => return,
+                Ok(failed) => warn!(
+                    failed,
+                    "app-server turn inventory left threads unresolved; retrying in {retry:?}"
+                ),
+                Err(error) => warn!(
+                    "failed to list loaded app-server threads; retrying in {retry:?}: {error:#}"
+                ),
+            }
+            tokio::time::sleep(retry).await;
+            retry = (retry * 2).min(INVENTORY_BOOTSTRAP_MAX_RETRY);
+        }
+    }
+
+    async fn resolve_loaded_app_server_threads(self: &Arc<Self>) -> Result<usize> {
+        let generations = self
+            .core
+            .lock()
+            .await
+            .app_server_inventory_generation_by_thread
+            .clone();
         let mut cursor: Option<String> = None;
         let mut seen_cursors = HashSet::new();
         let mut thread_ids = Vec::new();
@@ -1028,24 +1058,36 @@ impl Gateway {
             }
         }
 
+        let mut failed = 0;
         for thread_id in thread_ids {
-            let generation = self
-                .core
-                .lock()
+            let generation = generations.get(&thread_id).copied().unwrap_or_default();
+            let Err(error) = self
+                .refresh_app_server_active_turn(thread_id.clone(), generation)
                 .await
+            else {
+                continue;
+            };
+            let mut core = self.core.lock().await;
+            if core
                 .app_server_inventory_generation_by_thread
                 .get(&thread_id)
                 .copied()
-                .unwrap_or_default();
-            self.refresh_app_server_active_turn(thread_id.clone(), generation)
-                .await
-                .with_context(|| {
-                    format!("failed to bootstrap app-server turn inventory for {thread_id}")
-                })?;
+                .unwrap_or_default()
+                != generation
+            {
+                continue;
+            }
+            warn!(
+                thread_id,
+                "failed to resolve app-server turn inventory: {error:#}"
+            );
+            core.app_server_inventory_unresolved_threads
+                .insert(thread_id);
+            failed += 1;
         }
         self.core.lock().await.app_server_inventory_bootstrapped = true;
         self.activity.mark_changed();
-        Ok(())
+        Ok(failed)
     }
 
     async fn clear_app_server_turn_inventory(&self) {
@@ -1130,6 +1172,81 @@ mod tests {
                     .is_empty()
             );
         }
+    }
+
+    async fn next_request(control: &mut crate::test_support::FakeControl, method: &str) -> Value {
+        let request: Value =
+            serde_json::from_str(&control.requests.recv().await.expect("inventory request"))
+                .expect("request JSON");
+        assert_eq!(request["method"], method, "{request}");
+        request
+    }
+
+    async fn reply(gateway: &Arc<Gateway>, request: Value, mut response: Value) {
+        response["id"] = request["id"].clone();
+        gateway
+            .handle_control_text(
+                response.to_string(),
+                NotificationOrigin::Control { opened_after: 0 },
+            )
+            .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn only_a_failed_thread_stays_unknown_until_a_retry_resolves_it() {
+        let gateway = crate::test_support::TestGateway::new();
+        let mut control = crate::test_support::FakeControl::attach(&gateway, 1).await;
+        let worker_gateway = gateway.clone();
+        let bootstrap =
+            tokio::spawn(async move { worker_gateway.bootstrap_app_server_active_turns().await });
+        let idle_page = json!({"result": {"data": [{"id": "turn", "status": "completed"}]}});
+
+        let list = next_request(&mut control, "thread/loaded/list").await;
+        reply(
+            &gateway,
+            list,
+            json!({"result": {"data": ["gone", "flaky", "idle"]}}),
+        )
+        .await;
+        gateway
+            .handle_app_server_status_notification(&json!({
+                "method": "thread/status/changed",
+                "params": {"threadId": "gone", "status": {"type": "notLoaded"}}
+            }))
+            .await;
+        let gone = next_request(&mut control, "thread/turns/list").await;
+        reply(
+            &gateway,
+            gone,
+            json!({"error": {"code": -32600, "message": "thread not loaded: gone"}}),
+        )
+        .await;
+        let flaky = next_request(&mut control, "thread/turns/list").await;
+        reply(
+            &gateway,
+            flaky,
+            json!({"error": {"code": -32603, "message": "failed to read thread"}}),
+        )
+        .await;
+        let idle = next_request(&mut control, "thread/turns/list").await;
+        reply(&gateway, idle, idle_page.clone()).await;
+
+        let retry = next_request(&mut control, "thread/loaded/list").await;
+        assert_eq!(gateway.reported_active_turn_status().await, (0, false));
+        assert_eq!(
+            gateway
+                .core
+                .lock()
+                .await
+                .app_server_inventory_unresolved_threads,
+            HashSet::from(["flaky".to_string()])
+        );
+        reply(&gateway, retry, json!({"result": {"data": ["flaky"]}})).await;
+        let flaky = next_request(&mut control, "thread/turns/list").await;
+        reply(&gateway, flaky, idle_page).await;
+
+        bootstrap.await.expect("bootstrap task");
+        assert_eq!(gateway.reported_active_turn_status().await, (0, true));
     }
 
     #[test]

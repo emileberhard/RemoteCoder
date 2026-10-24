@@ -43,7 +43,9 @@ impl OwnedTasks {
         self.tracker.spawn(async move {
             match AssertUnwindSafe(future).catch_unwind().await {
                 Ok(Ok(())) => {}
-                Ok(Err(error)) => tracing::warn!(label, %error, "owned operation failed"),
+                Ok(Err(error)) => {
+                    tracing::warn!(label, error = %format!("{error:#}"), "owned operation failed");
+                }
                 Err(_) => tracing::error!(label, "owned operation panicked"),
             }
         });
