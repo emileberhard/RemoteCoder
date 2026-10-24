@@ -1493,12 +1493,15 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         acceptsConversationInput && activeSessionID.flatMap { target.turns.turn(forThread: $0) } != nil
     }
 
-    var composerStopState: ComposerStopState {
-        let turn = activeSessionID.flatMap { threadID in
+    var runningTurn: RunningTurn? {
+        activeSessionID.flatMap { threadID in
             target.turns.turn(forThread: threadID).map { RunningTurn(threadID: $0.threadID, turnID: $0.turnID) }
                 ?? (compaction?.isActive == true ? compaction?.turnID.map { RunningTurn(threadID: threadID, turnID: $0) } : nil)
         }
-        guard acceptsConversationInput, let turn else { return .hidden }
+    }
+
+    var composerStopState: ComposerStopState {
+        guard acceptsConversationInput, let turn = runningTurn else { return .hidden }
         return ComposerStopState(runningTurn: turn, isStopping: target.turnStops.isStopping(turn))
     }
 

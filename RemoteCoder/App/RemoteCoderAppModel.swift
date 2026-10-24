@@ -35,7 +35,7 @@ final class RemoteCoderAppModel {
         #endif
         energy = AppEnergyMonitor(workspace: workspace)
         telemetry = TelemetryContext(workspace: workspace, voiceCalls: voiceCalls, energy: energy, scenes: scenes,
-                                     recorder: DiagnosticsOutbox.shared)
+                                     recorder: DiagnosticsOutbox.shared.telemetry)
         workspace.syncedPreferences.onExternalChange = { [weak self] in self?.applyPreferencesFromOtherDevices() }
     }
 
@@ -185,7 +185,7 @@ final class RemoteCoderAppModel {
     private func enter(_ phase: ScenePhase) async {
         logger.notice("scenePhase -> \(String(describing: phase), privacy: .public)")
         energy.refresh()
-        await telemetry.sceneChanged()
+        telemetry.sceneChanged()
         switch phase {
         case .active:
             workspace.dictationLibrary?.requestPublication()

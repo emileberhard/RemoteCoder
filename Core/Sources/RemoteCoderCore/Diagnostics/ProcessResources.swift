@@ -55,4 +55,3 @@ enum MachTime {
         nanoseconds(mach_continuous_time())
     }
 }
-

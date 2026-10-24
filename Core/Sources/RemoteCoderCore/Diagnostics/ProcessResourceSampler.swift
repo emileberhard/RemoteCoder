@@ -1,27 +1,25 @@
 import Foundation
 
-protocol TelemetryRecording: Actor {
-    func record(_ record: TelemetryRecord)
-}
-
-actor ProcessResourceSampler {
+@MainActor
+final class ProcessResourceSampler {
     static let interval: Duration = .seconds(30)
     static let minimumSpacing: Duration = .seconds(1)
 
-    private let recorder: any TelemetryRecording
-    private let read: @Sendable () -> ProcessResources?
+    private let recorder: TelemetryBuffer
+    private let read: () -> ProcessResources?
     private let clock = ContinuousClock()
     private var context: UsageContext?
     private var lastSample: ContinuousClock.Instant?
+    private var unsampledChange = false
     private var periodic: Task<Void, Never>?
     private var deferred: Task<Void, Never>?
 
-    init(recorder: any TelemetryRecording, read: @escaping @Sendable () -> ProcessResources? = ProcessResources.current) {
+    init(recorder: TelemetryBuffer, read: @escaping () -> ProcessResources? = ProcessResources.current) {
         self.recorder = recorder
         self.read = read
     }
 
-    func update(_ next: UsageContext) async {
+    func update(_ next: UsageContext) {
         guard next != context else { return }
         let previous = context
         context = next
@@ -33,53 +31,23 @@ actor ProcessResourceSampler {
         }
         if next.scene == .background {
             stop()
-            await sample(.background)
+            sample(.background)
             return
         }
         if periodic == nil { startPeriodic() }
         if reason == .context, let lastSample {
             let wait = Self.minimumSpacing - lastSample.duration(to: clock.now)
             if wait > .zero {
+                unsampledChange = true
                 guard deferred == nil else { return }
                 deferred = Task { [weak self] in
                     do { try await Task.sleep(for: wait) } catch { return }
-                    await self?.takeDeferredSample()
+                    self?.sample(.context)
                 }
                 return
             }
         }
-        deferred?.cancel()
-        deferred = nil
-        await sample(reason)
-    }
-
-    private func takeDeferredSample() async {
-        deferred = nil
-        await sample(.deferredContext)
-    }
-
-    private func startPeriodic() {
-        periodic = Task { [weak self] in
-            while !Task.isCancelled {
-                do { try await Task.sleep(for: Self.interval, tolerance: .seconds(5)) } catch { return }
-                await self?.sample(.interval)
-            }
-        }
-    }
-
-    private func sample(_ reason: ProcessSample.Reason) async {
-        guard let context else { return }
-        let started = clock.now
-        guard let resources = read() else { return }
-        let readTime = started.duration(to: clock.now)
-        lastSample = clock.now
-        let persistence = PersistenceMetrics.shared.snapshot()
-        await recorder.record(.sample(ProcessSample(
-            reason: reason, resources: resources,
-            readNanoseconds: UInt64(readTime.components.seconds) * 1_000_000_000
-                + UInt64(readTime.components.attoseconds / 1_000_000_000),
-            persistence: persistence, context: context
-        )))
+        sample(reason)
     }
 
     func stop() {
@@ -87,5 +55,32 @@ actor ProcessResourceSampler {
         periodic = nil
         deferred?.cancel()
         deferred = nil
+    }
+
+    private func startPeriodic() {
+        periodic = Task { [weak self] in
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: Self.interval, tolerance: .seconds(5)) } catch { return }
+                self?.sample(.interval)
+            }
+        }
+    }
+
+    private func sample(_ reason: ProcessSample.Reason) {
+        deferred?.cancel()
+        deferred = nil
+        guard let context else { return }
+        let started = clock.now
+        guard let resources = read() else { return }
+        let readTime = started.duration(to: clock.now)
+        lastSample = clock.now
+        let mixed = unsampledChange
+        unsampledChange = false
+        recorder.record(.sample(ProcessSample(
+            reason: reason, resources: resources,
+            readNanoseconds: UInt64(readTime.components.seconds) * 1_000_000_000
+                + UInt64(readTime.components.attoseconds / 1_000_000_000),
+            persistence: PersistenceMetrics.shared.snapshot(), mixed: mixed, context: context
+        )))
     }
 }

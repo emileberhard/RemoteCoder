@@ -28,7 +28,7 @@ struct FieldTelemetryTests {
     private func sample(_ reason: ProcessSample.Reason = .interval) -> TelemetryRecord {
         .sample(ProcessSample(reason: reason, resources: ProcessResources(cpuUserNanoseconds: 2, cpuSystemNanoseconds: 1,
             interruptWakeups: 3, idleWakeups: 4, timerWakeups: 5, footprintBytes: 6), readNanoseconds: 7,
-            persistence: [.checkpoints: PersistenceMetrics.Counters(writes: 1, bytes: 10)], context: context))
+            persistence: [.checkpoints: PersistenceMetrics.Counters(writes: 1, bytes: 10)], mixed: false, context: context))
     }
 
     @Test func machCPUTimeMatchesTheKernelsResourceUsage() throws {
@@ -51,12 +51,12 @@ struct FieldTelemetryTests {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let outbox = DiagnosticsOutbox(directory: directory, deviceLabel: { "test-device" })
-        await outbox.record(sample(.launch))
-        await outbox.record(sample(.context))
+        outbox.telemetry.record(sample(.launch))
+        outbox.telemetry.record(sample(.context))
         await outbox.drain(reason: "test")
         await outbox.drain(reason: "test")
         let batches = try telemetryBatches(in: directory)
-        try #require(batches.count == 2)
+        try #require(batches.count == 3)
         let first = batches[0]
         #expect(first.map { $0["recordType"] as? String } == ["run", "sample", "sample"])
         #expect(first[0]["flushedThroughSeq"] as? Int == 2)
@@ -67,6 +67,7 @@ struct FieldTelemetryTests {
         #expect(second.map { $0["recordType"] as? String } == ["run", "export"])
         #expect(second[1]["reason"] as? String == "test")
         #expect(second[1]["seq"] as? Int == 3)
+        #expect(batches[2].dropFirst().map { $0["seq"] as? Int } == [4])
         #expect(Set(batches.map { $0[0]["runID"] as? String }).count == 1)
     }
 
@@ -74,7 +75,7 @@ struct FieldTelemetryTests {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let outbox = DiagnosticsOutbox(directory: directory, deviceLabel: { "test-device" })
-        for _ in 0..<300 { await outbox.record(sample()) }
+        for _ in 0..<300 { outbox.telemetry.record(sample()) }
         await outbox.drain(reason: "test")
         let batch = try #require(try telemetryBatches(in: directory).first)
         let samples = batch.filter { $0["recordType"] as? String == "sample" }
@@ -107,30 +108,28 @@ struct FieldTelemetryTests {
         #expect(losses.contains { $0["what"] as? String == "logSegment" && $0["count"] as? Int == 2 })
     }
 
-    @Test func theSamplerSamplesOnTransitionsAndStopsInTheBackground() async {
-        let recorder = RecordingSink()
+    @MainActor @Test func aChangeCutShortByBackgroundingMarksItsIntervalMixed() {
+        let buffer = TelemetryBuffer(runID: "test")
         let resources = ProcessResources(cpuUserNanoseconds: 1, cpuSystemNanoseconds: 1, interruptWakeups: 0,
                                          idleWakeups: 0, timerWakeups: 0, footprintBytes: 1)
-        let sampler = ProcessResourceSampler(recorder: recorder, read: { resources })
-        await sampler.update(context)
+        let sampler = ProcessResourceSampler(recorder: buffer, read: { resources })
+        sampler.update(context)
         var changed = context
         changed.turnRunningVisible = true
-        await sampler.update(changed)
+        sampler.update(changed)
         var background = changed
         background.scene = .background
-        await sampler.update(background)
+        sampler.update(background)
         var returning = background
         returning.scene = .active
-        await sampler.update(returning)
-        await sampler.stop()
-        #expect(await recorder.reasons == [.launch, .background, .foreground])
-    }
-}
-
-private actor RecordingSink: TelemetryRecording {
-    private(set) var reasons: [ProcessSample.Reason] = []
-
-    func record(_ record: TelemetryRecord) {
-        if case .sample(let sample) = record { reasons.append(sample.reason) }
+        sampler.update(returning)
+        sampler.stop()
+        let samples = buffer.take().compactMap { line -> ProcessSample? in
+            if case .sample(let sample) = line.record { return sample }
+            return nil
+        }
+        #expect(samples.map(\.reason) == [.launch, .background, .foreground])
+        #expect(samples.map(\.mixed) == [false, true, false])
+        #expect(samples[1].context.turnRunningVisible == true)
     }
 }

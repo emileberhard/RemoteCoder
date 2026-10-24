@@ -15,7 +15,7 @@ final class TelemetryContext {
     private var observation: Task<Void, Never>?
 
     init(workspace: ChatWorkspaceModel, voiceCalls: VoiceCallCenter, energy: AppEnergyMonitor,
-         scenes: ScenePhaseAggregate, recorder: any TelemetryRecording) {
+         scenes: ScenePhaseAggregate, recorder: TelemetryBuffer) {
         self.workspace = workspace
         self.voiceCalls = voiceCalls
         self.energy = energy
@@ -30,14 +30,13 @@ final class TelemetryContext {
         observation = Task { [weak self] in
             for await context in Observations({ @MainActor [weak self] in self?.current() }) {
                 guard let context, !Task.isCancelled else { continue }
-                await sampler.update(context)
+                sampler.update(context)
             }
         }
     }
 
-    func sceneChanged() async {
-        guard let sampler else { return }
-        await sampler.update(current())
+    func sceneChanged() {
+        sampler?.update(current())
     }
 
     func stop() {
@@ -45,8 +44,7 @@ final class TelemetryContext {
         observation = nil
         device.stop()
         network.stop()
-        guard let sampler else { return }
-        Task { await sampler.stop() }
+        sampler?.stop()
     }
 
     private func current() -> UsageContext {
@@ -56,7 +54,7 @@ final class TelemetryContext {
         return UsageContext(
             scene: Self.scene(scenes.phase),
             surface: window.isHistoryDrawerOpen ? .drawer : .chat,
-            turnRunningVisible: screen.map { $0.composerStopState != .hidden },
+            turnRunningVisible: screen.map { $0.runningTurn != nil },
             voiceCall: voiceCalls.call.isActive,
             thermal: Self.thermal(policy.thermalState),
             lowPower: policy.isLowPowerModeEnabled,

@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 struct UsageContext: Codable, Sendable, Equatable {
     enum Scene: String, Codable, Sendable { case active, inactive, background }
@@ -21,12 +22,13 @@ struct UsageContext: Codable, Sendable, Equatable {
 }
 
 struct ProcessSample: Sendable {
-    enum Reason: String, Encodable, Sendable { case launch, interval, context, deferredContext, foreground, background }
+    enum Reason: String, Encodable, Sendable { case launch, interval, context, foreground, background }
 
     let reason: Reason
     let resources: ProcessResources
     let readNanoseconds: UInt64
     let persistence: [PersistenceMetrics.Owner: PersistenceMetrics.Counters]
+    let mixed: Bool
     let context: UsageContext
 }
 
@@ -46,7 +48,7 @@ struct ExportCost: Sendable {
     var uploadedSegments = 0
     var uploadedBytes = 0
     var footprintBefore: UInt64?
-    var footprintPeak: UInt64?
+    var footprintSampledMax: UInt64?
     var footprintAfter: UInt64?
     var processCPUNanoseconds: UInt64?
 }
@@ -124,9 +126,10 @@ struct TelemetryLine: Encodable, Sendable {
     private enum Key: String, CodingKey {
         case recordType, schemaVersion, runID, seq, ts, monoNs, reason
         case cpuUserNs, cpuSystemNs, interruptWakeups, idleWakeups, timerWakeups, footprintBytes, readNs
-        case persistence, context
+        case persistence, mixed, context
         case scanMs, encodeMs, writeMs, compressMs, uploadMs, totalMs, scanned, kept, segments, bytes
-        case flushedRecords, uploadedSegments, uploadedBytes, footprintBefore, footprintPeak, footprintAfter, processCpuNs
+        case flushedRecords, uploadedSegments, uploadedBytes, footprintBefore, footprintSampledMax, footprintAfter
+        case processCpuNs
         case what, count
     }
 
@@ -151,6 +154,7 @@ struct TelemetryLine: Encodable, Sendable {
             try container.encode(sample.readNanoseconds, forKey: .readNs)
             try container.encode(Dictionary(uniqueKeysWithValues: sample.persistence.map { ($0.key.rawValue, $0.value) }),
                                  forKey: .persistence)
+            try container.encode(sample.mixed, forKey: .mixed)
             try container.encode(sample.context, forKey: .context)
         case .export(let cost):
             try container.encode("export", forKey: .recordType)
@@ -169,7 +173,7 @@ struct TelemetryLine: Encodable, Sendable {
             try container.encode(cost.uploadedSegments, forKey: .uploadedSegments)
             try container.encode(cost.uploadedBytes, forKey: .uploadedBytes)
             try container.encodeIfPresent(cost.footprintBefore, forKey: .footprintBefore)
-            try container.encodeIfPresent(cost.footprintPeak, forKey: .footprintPeak)
+            try container.encodeIfPresent(cost.footprintSampledMax, forKey: .footprintSampledMax)
             try container.encodeIfPresent(cost.footprintAfter, forKey: .footprintAfter)
             try container.encodeIfPresent(cost.processCPUNanoseconds, forKey: .processCpuNs)
         case .loss(let loss):
@@ -194,5 +198,60 @@ struct TelemetryRunHeader: Encodable, Sendable {
         try container.encode("run", forKey: .recordType)
         try container.encode(TelemetryRun.schemaVersion, forKey: .schemaVersion)
         try container.encode(flushedThroughSeq, forKey: .flushedThroughSeq)
+    }
+}
+
+final class TelemetryBuffer: Sendable {
+    private struct State {
+        var lines: [TelemetryLine] = []
+        var nextSeq: UInt64 = 1
+        var dropped = 0
+    }
+
+    let runID: String
+    private let capacity: Int
+    private let state = Mutex(State())
+
+    init(runID: String, capacity: Int = 256) {
+        self.runID = runID
+        self.capacity = capacity
+    }
+
+    func record(_ record: TelemetryRecord) {
+        let at = Date.now
+        let monoNs = MachTime.continuousNanoseconds()
+        state.withLock { state in
+            if state.lines.count >= capacity {
+                state.lines.removeFirst()
+                state.dropped += 1
+            }
+            state.lines.append(TelemetryLine(runID: runID, seq: state.nextSeq, at: at, monoNs: monoNs, record: record))
+            state.nextSeq += 1
+        }
+    }
+
+    func take() -> [TelemetryLine] {
+        let at = Date.now
+        let monoNs = MachTime.continuousNanoseconds()
+        return state.withLock { state in
+            var lines = state.lines
+            if state.dropped > 0 {
+                lines.append(TelemetryLine(runID: runID, seq: state.nextSeq, at: at, monoNs: monoNs, record: .loss(
+                    TelemetryLoss(what: .telemetryRecords, count: state.dropped, bytes: nil, reason: "memory buffer full"))))
+                state.nextSeq += 1
+                state.dropped = 0
+            }
+            state.lines.removeAll(keepingCapacity: true)
+            return lines
+        }
+    }
+
+    func restore(_ lines: [TelemetryLine]) {
+        state.withLock { state in
+            let merged = lines + state.lines
+            let overflow = max(0, merged.count - capacity)
+            state.lines = Array(merged.dropFirst(overflow))
+            state.dropped += overflow
+        }
     }
 }

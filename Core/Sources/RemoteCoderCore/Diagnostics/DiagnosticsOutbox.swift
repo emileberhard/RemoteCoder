@@ -94,7 +94,7 @@ struct DiagnosticsDestination: Sendable {
 /// every subsystem, category and level, including debug — is drained here,
 /// deliberately not a curated subset: the host copy has to be able to answer a
 /// question nobody thought to instrument for.
-actor DiagnosticsOutbox: DiagnosticsExporting, TelemetryRecording {
+actor DiagnosticsOutbox: DiagnosticsExporting {
     /// The exporter's own category, excluded from every drain so uploading a
     /// segment cannot generate the next one.
     static let loggerCategory = "AppLogExport"
@@ -107,7 +107,7 @@ actor DiagnosticsOutbox: DiagnosticsExporting, TelemetryRecording {
     private static let maximumUploadBytes = 16 * 1024 * 1024
     private static let drainInterval: Duration = .seconds(300)
     private static let maximumSegmentRecords = 10_000
-    private static let maximumBufferedTelemetry = 256
+    private static let maximumSegmentBytes = 4 * 1024 * 1024
 
     private let logger = Logger(subsystem: "RemoteCoder", category: DiagnosticsOutbox.loggerCategory)
     private let directory: URL
@@ -126,9 +126,7 @@ actor DiagnosticsOutbox: DiagnosticsExporting, TelemetryRecording {
     private var isUploading = false
     private var drainTask: Task<Void, Never>?
     private var run: TelemetryRun
-    private var telemetry: [TelemetryLine] = []
-    private var nextTelemetrySeq: UInt64 = 1
-    private var droppedTelemetry = 0
+    nonisolated let telemetry: TelemetryBuffer
     private let clock = ContinuousClock()
 
     init(
@@ -147,7 +145,9 @@ actor DiagnosticsOutbox: DiagnosticsExporting, TelemetryRecording {
         reportReceiptsURL = base.appendingPathComponent("performance-report-receipts.json", isDirectory: false)
         cursor = .beginning
         reportReceipts = []
-        run = TelemetryRun.make(installationID: nil)
+        let run = TelemetryRun.make(installationID: nil)
+        self.run = run
+        telemetry = TelemetryBuffer(runID: run.runID)
     }
 
     private func loadIfNeeded() {
@@ -230,25 +230,10 @@ actor DiagnosticsOutbox: DiagnosticsExporting, TelemetryRecording {
         }
     }
 
-    func record(_ record: TelemetryRecord) {
-        let line = TelemetryLine(runID: run.runID, seq: nextTelemetrySeq, at: .now,
-                                 monoNs: MachTime.continuousNanoseconds(), record: record)
-        nextTelemetrySeq += 1
-        if telemetry.count >= Self.maximumBufferedTelemetry {
-            telemetry.removeFirst()
-            droppedTelemetry += 1
-        }
-        telemetry.append(line)
-    }
-
     private func flushTelemetry() -> Int {
-        guard !telemetry.isEmpty || droppedTelemetry > 0 else { return 0 }
-        var lines = telemetry
-        if droppedTelemetry > 0 {
-            lines.append(TelemetryLine(runID: run.runID, seq: nextTelemetrySeq, at: .now,
-                monoNs: MachTime.continuousNanoseconds(), record: .loss(TelemetryLoss(
-                    what: .telemetryRecords, count: droppedTelemetry, bytes: nil, reason: "memory buffer full"))))
-        }
+        loadIfNeeded()
+        let lines = telemetry.take()
+        guard !lines.isEmpty else { return 0 }
         run.installationID = AppStorageScope.current.defaults.string(forKey: HostStore.installationIDKey)
         let started = clock.now
         let encoder = Self.recordEncoder()
@@ -264,12 +249,10 @@ actor DiagnosticsOutbox: DiagnosticsExporting, TelemetryRecording {
         } catch {
             PersistenceMetrics.shared.failed(.diagnostics)
             logger.error("telemetry batch write failed: \(error.localizedDescription, privacy: .public)")
+            telemetry.restore(lines)
             return 0
         }
         PersistenceMetrics.shared.wrote(.diagnostics, bytes: body.count, elapsed: started.duration(to: clock.now))
-        if droppedTelemetry > 0 { nextTelemetrySeq += 1 }
-        telemetry.removeAll(keepingCapacity: true)
-        droppedTelemetry = 0
         return lines.count
     }
 
@@ -295,7 +278,11 @@ actor DiagnosticsOutbox: DiagnosticsExporting, TelemetryRecording {
     /// Never throws and never blocks a caller's work: a failed drain or a
     /// failed upload is retried on the next pass.
     func drain(reason: String) async {
-        if let drainTask { await drainTask.value; return }
+        if let drainTask {
+            await drainTask.value
+            _ = flushTelemetry()
+            return
+        }
         let task = Task { await performDrain(reason: reason) }
         drainTask = task
         await task.value
@@ -319,11 +306,12 @@ actor DiagnosticsOutbox: DiagnosticsExporting, TelemetryRecording {
         cost.totalMilliseconds = started.duration(to: clock.now).milliseconds
         cost.footprintBefore = before?.footprintBytes
         cost.footprintAfter = after?.footprintBytes
-        cost.footprintPeak = [before, afterScan, after].compactMap { $0?.footprintBytes }.max()
+        cost.footprintSampledMax = [before, afterScan, after].compactMap { $0?.footprintBytes }.max()
         if let before, let after, after.cpuNanoseconds >= before.cpuNanoseconds {
             cost.processCPUNanoseconds = after.cpuNanoseconds - before.cpuNanoseconds
         }
-        record(.export(cost))
+        telemetry.record(.export(cost))
+        _ = flushTelemetry()
         if cost.kept > 0 || upload.segments > 0 {
             logger.debug("log drain \(reason, privacy: .public): \(cost.kept) records, \(upload.segments) segments uploaded")
         }
@@ -391,7 +379,7 @@ actor DiagnosticsOutbox: DiagnosticsExporting, TelemetryRecording {
             encoding += encodeStarted.duration(to: clock.now)
             pending += 1
             last = record
-            if pending >= Self.maximumSegmentRecords { writeSegment() }
+            if pending >= Self.maximumSegmentRecords || body.count >= Self.maximumSegmentBytes { writeSegment() }
         }
 
         func writeSegment() {
@@ -414,6 +402,7 @@ actor DiagnosticsOutbox: DiagnosticsExporting, TelemetryRecording {
             writing += writeStarted.duration(to: clock.now)
             body.removeAll(keepingCapacity: true)
             pending = 0
+            evictOldestBeyondCap()
         }
 
         do {
@@ -443,7 +432,6 @@ actor DiagnosticsOutbox: DiagnosticsExporting, TelemetryRecording {
             logger.error("OSLogStore drain failed: \(error.localizedDescription, privacy: .public)")
         }
         writeSegment()
-        if cost.segments > 0 { evictOldestBeyondCap() }
         cost.encodeMilliseconds = encoding.milliseconds
         cost.writeMilliseconds = writing.milliseconds
         cost.scanMilliseconds = max(0, started.duration(to: clock.now).milliseconds - cost.encodeMilliseconds - cost.writeMilliseconds)
@@ -502,17 +490,24 @@ actor DiagnosticsOutbox: DiagnosticsExporting, TelemetryRecording {
         guard total > storedByteLimit else { return }
         segments.sort { (Self.evictionClass($0).rawValue, $0.lastPathComponent) < (Self.evictionClass($1).rawValue, $1.lastPathComponent) }
         var evicted: [TelemetryLoss.What: (count: Int, bytes: Int)] = [:]
+        var failures = 0
         while total > storedByteLimit, let oldest = segments.first {
-            let size = Self.fileSize(oldest)
-            total -= size
-            try? FileManager.default.removeItem(at: oldest)
             segments.removeFirst()
+            let size = Self.fileSize(oldest)
+            do { try FileManager.default.removeItem(at: oldest) } catch {
+                failures += 1
+                continue
+            }
+            total -= size
             evicted[Self.evictionClass(oldest).loss, default: (0, 0)].count += 1
             evicted[Self.evictionClass(oldest).loss, default: (0, 0)].bytes += size
         }
         for (what, loss) in evicted.sorted(by: { $0.key.rawValue < $1.key.rawValue }) {
             logger.notice("evicted \(loss.count, privacy: .public) undelivered \(what.rawValue, privacy: .public) segments to stay under the on-device cap")
-            record(.loss(TelemetryLoss(what: what, count: loss.count, bytes: loss.bytes, reason: "on-device queue cap")))
+            telemetry.record(.loss(TelemetryLoss(what: what, count: loss.count, bytes: loss.bytes, reason: "on-device queue cap")))
+        }
+        if total > storedByteLimit {
+            logger.error("on-device queue holds \(total, privacy: .public) bytes over its \(self.storedByteLimit, privacy: .public)-byte cap; \(failures, privacy: .public) segments could not be removed")
         }
     }
 
