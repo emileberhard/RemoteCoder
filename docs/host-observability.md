@@ -283,9 +283,12 @@ kind-specific fields.
   `rejection` kind for a request refused after authentication. Failed authentication is not
   journalled. Never keys, URLs, query strings, audio or transcripts.
 - `app_logs` — `cap_evicted` when the uploaded app-log store went over its
-  1 GiB cap and lost segments still inside the 14-day window: `files`, `bytes`,
-  `retainedBytes`, `capBytes`, and `evictedThroughMs`, the newest removed
-  segment's mtime. The same fields go to `app-logs/retention.json` for the reader.
+  1 GiB cap and lost segments still inside the 14-day window, or `cap_unmet`
+  when it is still over the cap afterwards: `files`, `bytes`, `retainedBytes`,
+  `capBytes`, `unreadableEntries` (which make the total a lower bound),
+  `evictedThroughMs` (the newest removed segment's mtime, or null) and `atMs`.
+  An eviction also writes those fields to `app-logs/retention.json` for the
+  reader.
 
 - `review` — each automatic turn-review opportunity for Codex or Claude, each
   early title and each requested regeneration. `trigger` separates them:
@@ -433,8 +436,9 @@ copy useless for its purpose.
   of the last record emitted at that date. A date alone loses entries that
   share a timestamp, and re-emits the boundary entry; `AppLogResume` is a pure
   value so both behaviours are unit-tested. A drain streams the store and writes
-  a segment every 10,000 kept records, advancing the cursor per segment, so its
-  memory does not grow with the backlog.
+  a segment every 10,000 kept records or 4 MiB, advancing the cursor and
+  enforcing the queue cap per segment, so neither memory nor disk grows with the
+  backlog.
 - **Cadence.** Every 5 minutes while the scene is active, plus on launch, on
   foreground, and on background. Pending segments upload after every drain.
   `DiagnosticsLifecycle` owns one latest-state worker; superseded background
@@ -447,7 +451,10 @@ copy useless for its purpose.
   once the process dies.
 - **Bounded.** 50 MB of undelivered segments on device. Over the cap, raw log
   segments go first, then telemetry batches, then MetricKit reports, oldest
-  first within each, and each eviction becomes a `loss` record.
+  first within each; each segment actually removed becomes a `loss` record, and
+  a cap the queue still exceeds is logged as an error. A MetricKit report is one
+  record of whatever size MetricKit delivered, up to the queue cap, so its
+  upload compresses it whole.
   A segment is deleted locally only after a 2xx, so a broken upload path
   retries rather than losing data.
 - **Transport.** `POST /app-logs` on the gateway, bearer-authed like `/health`,
@@ -472,6 +479,9 @@ device directory on this host and the configured gateway hosts (read over SSH);
 `metrickit`, `diagnostics --symbolicate`, `counts`, `persistence`, `timeline`,
 `activity` and `export-cost` take the exact `--device` and print JSON that names
 the stores read and any that failed, and when the host cap removed data.
+MetricKit reports and diagnostics are selected by the time they cover, not when
+they arrived, and `metrickit` lists the window's present, missing and not yet
+due daily reports.
 Each segment is indexed once into a rebuildable cache under
 `~/Library/Caches/RemoteCoder/app-telemetry/`, capped at 256 MiB, oldest first;
 an entry goes when its segment does. MetricKit's daily entry is never added to
@@ -501,8 +511,12 @@ only, never WebKit's processes, and it cannot apportion battery to a feature.
   `TASK_VM_INFO`: user and system CPU in nanoseconds (converted from Mach time),
   interrupt, idle and timer wakeups, and the physical footprint. It samples on
   launch, every 30 s while a scene is active, on each state change (at least
-  1 s apart, later as `deferredContext`), once on backgrounding and once on
-  return. It stops in the background, so nothing runs or wakes while suspended.
+  1 s apart), once on backgrounding and once on return. A change it could not
+  sample at once marks the next sample `mixed`. It runs on the main actor, where
+  a read takes microseconds, and hands each sample to a lock-owned
+  `TelemetryBuffer` without waiting for the exporter, so samples carry the time
+  of their read and lifecycle work never waits behind a log scan. It stops in
+  the background, so nothing runs or wakes while suspended.
   P-core time, CPU energy and GPU time stay out until a device run validates them.
 - **State.** `TelemetryContext` (app) projects the scene, the visible surface
   (chat or drawer), whether the shown conversation has a running turn, a voice
@@ -516,18 +530,23 @@ only, never WebKit's processes, and it cannot apportion battery to a feature.
   `seq`, `ts` and `monoNs`. Samples hold cumulative counters and the
   `PersistenceMetrics` snapshot; the reader takes the deltas. `export` records
   each drain's stage times (scan, encode, write, compress, upload), records
-  scanned and kept, bytes, the footprint before, at peak and after, and the
-  whole-process CPU during the drain. Up to 256 records wait in memory and are
-  written before each drain's log scan, so an abrupt kill normally loses at most
-  the last drain interval; an overflow keeps the newest and writes a `loss` line.
+  scanned and kept, bytes, the footprint before, after the scan and after the
+  upload (`footprintSampledMax` is the largest of those three, not the peak,
+  which needs Instruments), and the whole-process CPU during the drain. Up to
+  256 records wait in the buffer; a batch is written before each drain's log
+  scan and after its export record, so an abrupt kill normally loses at most
+  the last drain interval. An overflow keeps the newest and writes a `loss` line.
 - **Reading.** `just app-telemetry timeline` merges sample intervals into
   stretches of unchanged state; `activity` sums them per state; `export-cost`
-  totals the drains and their share of the sampled CPU. Intervals are
-  `measured`, `mixed` (two states inside a second), `background` (all use from
-  backgrounding until the return, sampler stopped), `gap` (no sample for 45 s
-  while not backgrounded) or `incomplete` (records missing in between), and only
+  totals the drains and their CPU share, counting only exports that lie inside
+  a run's sampled span. Intervals are `incomplete` (records missing in between),
+  `background` (all use from backgrounding until the return, sampler stopped),
+  `gap` (no sample for 45 s while not backgrounded), `mixed` (a state change
+  without its own sample) or `measured`, in that precedence, and only
   `measured` ones describe a single state. All of it is association: work that
-  started in one state and finished in the next counts toward the next.
+  started in one state and finished in the next counts toward the next. Battery
+  levels appear on timeline stretches only; a 1 % step lands in whichever state
+  held when iOS reported it, so no per-state battery rate is computed.
 - **Switching it off.** `perf-sim --disable resourceSampler` turns it off in
   `RC_PERF_HARNESS` builds for the overhead comparison. There is no user setting.
 
