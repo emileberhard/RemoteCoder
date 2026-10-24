@@ -77,7 +77,9 @@ Navigation SDK. When 3.66.8 read the Google terms on every activation, each
 activation was followed by one to two minutes of SDK network requests wrapped
 in UIKit background tasks, 15,000 to 100,000 of them per ten minutes of use.
 Keep SDK calls out of launch, activation and the main Settings view. The Licenses page reads the SDK version and license text in its
-view task, on the main actor outside view rendering, as the SDK requires. On
+view task after a `Task.yield()`: `.task` starts as `Task.immediate`, so only
+the yield moves the read to a later main-actor turn, outside the update that
+started it. On
 14 September 2026, symbolicated MetricKit watchdog
 reports proved a deadlock when a computed view getter called
 `areTermsAndConditionsAccepted`: SwiftUI held its render lock while Google's

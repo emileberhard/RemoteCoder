@@ -68,6 +68,9 @@ struct GoogleNavigationLicensesView: View {
         }
         .navigationTitle("Google licenses")
         .inlineNavigationTitle()
-        .task { licenses = .load() }
+        .task {
+            await Task.yield()
+            licenses = .load()
+        }
     }
 }

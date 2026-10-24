@@ -22,15 +22,21 @@ final class LiveNavigationSetupController {
 
     static let setupEnabledKey = "liveNavigation.setupEnabled"
 
-    private let locationManager = CLLocationManager()
+    private let locationManager: CLLocationManager
     private let logger = Logger(subsystem: "RemoteCoder", category: "LiveNavigationSetup")
     private var serviceSession: CLServiceSession?
     private var refreshTask: Task<Void, Never>?
 
+    private var authorizationStatus: CLAuthorizationStatus
+    private var accuracyAuthorization: CLAccuracyAuthorization
     private(set) var progress: String?
     private(set) var errorMessage: String?
 
     init() {
+        let locationManager = CLLocationManager()
+        self.locationManager = locationManager
+        authorizationStatus = locationManager.authorizationStatus
+        accuracyAuthorization = locationManager.accuracyAuthorization
         if UserDefaults.standard.bool(forKey: Self.setupEnabledKey) {
             serviceSession = CLServiceSession(authorization: .always)
         }
@@ -46,7 +52,7 @@ final class LiveNavigationSetupController {
     }
 
     var authorization: String {
-        switch locationManager.authorizationStatus {
+        switch authorizationStatus {
         case .notDetermined:
             return "Not requested"
         case .restricted:
@@ -63,11 +69,11 @@ final class LiveNavigationSetupController {
     }
 
     var accuracy: String {
-        locationManager.accuracyAuthorization == .fullAccuracy ? "Precise" : "Reduced"
+        accuracyAuthorization == .fullAccuracy ? "Precise" : "Reduced"
     }
 
     private var isReady: Bool {
-        locationManager.authorizationStatus == .authorizedAlways && locationManager.accuracyAuthorization == .fullAccuracy
+        authorizationStatus == .authorizedAlways && accuracyAuthorization == .fullAccuracy
     }
 
     func prepare(policy: SharedGatewayPolicy, googleMapsAPIKey: String, pushTokens: PushTokenSources) async {
@@ -93,6 +99,7 @@ final class LiveNavigationSetupController {
             )
             try await waitForLocationDecision()
             try Task.checkCancellation()
+            readAuthorization()
 
             progress = "Preparing location…"
             let credentials = credentials(token: try await locationPushToken())
@@ -106,6 +113,7 @@ final class LiveNavigationSetupController {
     }
 
     func refreshRegistration(pushTokens: PushTokenSources) {
+        readAuthorization()
         guard UserDefaults.standard.bool(forKey: Self.setupEnabledKey), isWorking == false, refreshTask == nil else {
             return
         }
@@ -117,7 +125,7 @@ final class LiveNavigationSetupController {
 
     private func reregister(pushTokens: PushTokenSources) async {
         var refreshed: String?
-        if locationManager.authorizationStatus == .authorizedAlways {
+        if authorizationStatus == .authorizedAlways {
             do {
                 refreshed = try await locationPushToken()
             } catch {
@@ -140,9 +148,14 @@ final class LiveNavigationSetupController {
             token: token,
             setupReady: isReady,
             authorization: authorization,
-            fullAccuracy: locationManager.accuracyAuthorization == .fullAccuracy,
+            fullAccuracy: accuracyAuthorization == .fullAccuracy,
             googleTermsAccepted: true
         )
+    }
+
+    private func readAuthorization() {
+        authorizationStatus = locationManager.authorizationStatus
+        accuracyAuthorization = locationManager.accuracyAuthorization
     }
 
     private func acceptGoogleTerms() async -> Bool {
