@@ -95,6 +95,8 @@ One line per term, with the type that owns it and the document that holds its co
 | Live Navigation | Agent-driven live-location guidance on the phone | `host-daemon-rs/src/navigation.rs` | [Live navigation](live-navigation.md) |
 | LPSE | The Location Push Service Extension that wakes the app for one-shot location | `RemoteCoderLocationPushService/` | [Live navigation](live-navigation.md) |
 | Energy state | Normal or conserving rendering and prefetch, chosen from Low Power Mode and thermal state | `AppEnergyPolicy` | [Persistence and energy](persistence-energy.md) |
+| Field telemetry | Process CPU, wakeups and footprint sampled with the app state that held, uploaded as versioned batches | `ProcessResourceSampler`, `TelemetryContext`, `DiagnosticsOutbox` | [Host observability](host-observability.md#field-telemetry) |
+| Usage context | The app state a telemetry sample was taken in; absent fields are unknown | `TelemetryContext` | [Host observability](host-observability.md#field-telemetry) |
 | Haptic | A named feedback event from the one catalog | `HapticService` | [Haptics](haptics.md) |
 | Interface zoom | The Mac's app-wide text and control scale, 80–200 %, set from the View menu and applied as `interfaceScale` | `InterfaceZoom`, `InterfaceScale.swift` | [App area rules](../RemoteCoder/AGENTS.md) |
 

@@ -13,7 +13,7 @@ there is no flag that turns any of this off.
 | Managed app-server stderr | `~/.codex/app-server-daemon/app-server.stderr.log` | Codex/app-server errors, including persistence and tool failures |
 | Desktop decisions | `desktop/desktop-YYYYMMDD.jsonl` | Every ChatGPT reconciliation: what it observed, the reason it chose, and every signal or relaunch that followed |
 | Desktop helper | `chatgpt-shared-codex.log` / `.error.log` | The launcher's stdout/stderr — a bare startup banner, and the final error when a check fails |
-| App logs | `app-logs/<device>/YYYYMMDD-<segment>.jsonl.gz` | The iOS OSLog stream and versioned MetricKit reports, uploaded from the phone |
+| App logs | `app-logs/<device>/YYYYMMDD-<segment>.jsonl.gz` | The iOS OSLog stream, versioned MetricKit reports and [field telemetry](#field-telemetry), uploaded from the phone (14 days, 1 GiB in total) |
 | Voice sessions | `voice-sessions/<started>-<thread>.jsonl` | Per-call transcripts, delegation lifecycle, latencies, close summary (newest 100) |
 | Deployments | `deployments/*.log` | Install runs with their git commit (per-run entries kept 7 days, pruned by each app install) |
 | launchd redirect | `codex-gateway.out.log` / `.err.log` | Startup banner and panics only |
@@ -282,6 +282,10 @@ kind-specific fields.
   `closeCode`, `bytesUp`, `bytesDown` and `durationMs`; or `rejected` with the
   `rejection` kind for a request refused after authentication. Failed authentication is not
   journalled. Never keys, URLs, query strings, audio or transcripts.
+- `app_logs` — `cap_evicted` when the uploaded app-log store went over its
+  1 GiB cap and lost segments still inside the 14-day window: `files`, `bytes`,
+  `retainedBytes`, `capBytes`, and `evictedThroughMs`, the newest removed
+  segment's mtime. The same fields go to `app-logs/retention.json` for the reader.
 
 - `review` — each automatic turn-review opportunity for Codex or Claude, each
   early title and each requested regeneration. `trigger` separates them:
@@ -427,8 +431,10 @@ copy useless for its purpose.
 
 - **Cursor.** A drain resumes from the last drained date *plus* the signature
   of the last record emitted at that date. A date alone loses entries that
-  share a timestamp, and re-emits the boundary entry; `DiagnosticsOutbox.advance`
-  is pure so both behaviours are unit-tested.
+  share a timestamp, and re-emits the boundary entry; `AppLogResume` is a pure
+  value so both behaviours are unit-tested. A drain streams the store and writes
+  a segment every 10,000 kept records, advancing the cursor per segment, so its
+  memory does not grow with the backlog.
 - **Cadence.** Every 5 minutes while the scene is active, plus on launch, on
   foreground, and on background. Pending segments upload after every drain.
   `DiagnosticsLifecycle` owns one latest-state worker; superseded background
@@ -439,7 +445,9 @@ copy useless for its purpose.
   process lifetime. The interval trades that CPU against the entries a crash
   or kill can lose: the store is process-scoped, so undrained entries are gone
   once the process dies.
-- **Bounded.** 50 MB of undelivered segments on device, oldest evicted first.
+- **Bounded.** 50 MB of undelivered segments on device. Over the cap, raw log
+  segments go first, then telemetry batches, then MetricKit reports, oldest
+  first within each, and each eviction becomes a `loss` record.
   A segment is deleted locally only after a 2xx, so a broken upload path
   retries rather than losing data.
 - **Transport.** `POST /app-logs` on the gateway, bearer-authed like `/health`,
@@ -450,8 +458,9 @@ copy useless for its purpose.
 - **Host side.** `observability/app_logs.rs` reduces the device and segment names to one safe
   path component each (everything outside `[A-Za-z0-9._-]` becomes `-`), so a
   name arriving from the network can never escape the store. Bodies are stored
-  unparsed after a gzip magic-byte check, with the same retention sweep as the
-  journal and a 16 MiB per-request ceiling.
+  unparsed after a gzip magic-byte check, with a 16 MiB per-request ceiling.
+  Segments age out after 14 days; past 1 GiB for all devices together the oldest
+  go first, which the `app_logs` journal kind and `retention.json` report.
 
 Two rules that must not be relaxed: the app never logs the gateway bearer
 token, and the uploader's own category (`AppLogExport`) is filtered out of
@@ -460,8 +469,9 @@ every drain — otherwise uploading a segment generates the next one.
 **Reading it back.** The phone uploads to whichever gateway it can reach, so one
 device's history is split across hosts. `just app-telemetry stores` lists every
 device directory on this host and the configured gateway hosts (read over SSH);
-`metrickit`, `diagnostics --symbolicate`, `counts` and `persistence` take the
-exact `--device` and print JSON that names the stores read and any that failed.
+`metrickit`, `diagnostics --symbolicate`, `counts`, `persistence`, `timeline`,
+`activity` and `export-cost` take the exact `--device` and print JSON that names
+the stores read and any that failed, and when the host cap removed data.
 Each segment is indexed once into a rebuildable cache under
 `~/Library/Caches/RemoteCoder/app-telemetry/`, capped at 256 MiB, oldest first;
 an entry goes when its segment does. MetricKit's daily entry is never added to
@@ -478,6 +488,71 @@ shows), and `drawer state`. A tap whose `transcript presents` never names the
 tapped thread did not reach the screen.
 Settings → Hosts → **Export logs** shares the raw segments off the phone when
 it cannot reach a gateway at all.
+
+### Field telemetry
+
+The OSLog stream and MetricKit say what happened; field telemetry says what the
+process spent while it happened, so a day of ordinary use can be read back as
+CPU, wakeups and memory per app state. It complements Instruments and Power
+Profiler runs rather than replacing them: it measures the RemoteCoder process
+only, never WebKit's processes, and it cannot apportion battery to a feature.
+
+- **Sampling.** `ProcessResourceSampler` (Core) reads `TASK_POWER_INFO_V2` and
+  `TASK_VM_INFO`: user and system CPU in nanoseconds (converted from Mach time),
+  interrupt, idle and timer wakeups, and the physical footprint. It samples on
+  launch, every 30 s while a scene is active, on each state change (at least
+  1 s apart, later as `deferredContext`), once on backgrounding and once on
+  return. It stops in the background, so nothing runs or wakes while suspended.
+  P-core time, CPU energy and GPU time stay out until a device run validates them.
+- **State.** `TelemetryContext` (app) projects the scene, the visible surface
+  (chat or drawer), whether the shown conversation has a running turn, a voice
+  call, thermal state and Low Power Mode, battery level, charging and
+  brightness in 10 % steps (iOS), the network interface and the shown host's
+  route. Each sample carries the whole state; an absent field is unknown.
+- **Records.** `TelemetryRecord` lines go into `<stamp>-<id>-telemetry.jsonl`
+  batches: a `run` header (`runID`, installation ID, model, app version and
+  build, OS build, wall and monotonic anchors, `flushedThroughSeq`), then
+  `sample`, `export` and `loss` lines with `schemaVersion`, `runID`, a per-run
+  `seq`, `ts` and `monoNs`. Samples hold cumulative counters and the
+  `PersistenceMetrics` snapshot; the reader takes the deltas. `export` records
+  each drain's stage times (scan, encode, write, compress, upload), records
+  scanned and kept, bytes, the footprint before, at peak and after, and the
+  whole-process CPU during the drain. Up to 256 records wait in memory and are
+  written before each drain's log scan, so an abrupt kill normally loses at most
+  the last drain interval; an overflow keeps the newest and writes a `loss` line.
+- **Reading.** `just app-telemetry timeline` merges sample intervals into
+  stretches of unchanged state; `activity` sums them per state; `export-cost`
+  totals the drains and their share of the sampled CPU. Intervals are
+  `measured`, `mixed` (two states inside a second), `background` (all use from
+  backgrounding until the return, sampler stopped), `gap` (no sample for 45 s
+  while not backgrounded) or `incomplete` (records missing in between), and only
+  `measured` ones describe a single state. All of it is association: work that
+  started in one state and finished in the next counts toward the next.
+- **Switching it off.** `perf-sim --disable resourceSampler` turns it off in
+  `RC_PERF_HARNESS` builds for the overhead comparison. There is no user setting.
+
+Decision summary (2026-10-24). The goal is to answer, for any hour in the last
+14 days, which version, state and minute spent CPU, wakeups, memory or disk, and
+what the telemetry itself cost, with a phone-side cost small enough to measure.
+`DiagnosticsOutbox` owns durable batches, upload and loss records;
+`ProcessResourceSampler` owns the Mach reads; `TelemetryContext` owns only the
+state projection and its observation lifetime; `AppPerformanceDiagnostics`
+stays the single MetricKit owner; `AppLogStore` owns host retention and the
+byte cap; the reader owns its rebuildable index. Rejected: inferring battery
+share from `task_energy` (CPU energy only), long-lived signposts per activity
+(overlaps count twice), features reporting their own state, a file per sample,
+and a new identity (the installation ID exists). Deliberate departures from the
+reviewed plan: state rides on every sample instead of separate `context`
+records, live web views come from the existing renderer logs, Settings is not a
+tracked surface because its presentation is view-local, the network interface
+comes from one path monitor in `TelemetryContext`, and on-device segments stay
+uncompressed with their size bounded by the record cap. Costly to change later:
+the record schema and identity fields, hence `schemaVersion` from the first
+record. Next, once two days of `export-cost` exist: the log diet (raw
+RemoteCoder, error and selected Apple records, per-minute counts for the rest),
+then MetricKit activity states, operation signposts, per-purpose network
+counters and gateway connection correlation, as far as the data still shows
+gaps.
 
 ### iOS 27 performance reports and history timing
 

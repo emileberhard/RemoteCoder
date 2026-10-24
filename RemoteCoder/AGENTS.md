@@ -313,6 +313,11 @@ entrypoint linked above.
     the one `VoiceCallCenter` and passes it to the workspace and every model;
     its `CallSystemBridge` owns the `ConversationManager`.
   - **Logs.** `DiagnosticsOutbox` follows the visible host.
+  - **Field telemetry.** `RemoteCoderAppModel` creates the one
+    `TelemetryContext`, which projects existing state for
+    `ProcessResourceSampler` and owns only that observation. Features never
+    report their state to telemetry; extend the projection instead. See
+    [field telemetry](../docs/host-observability.md#field-telemetry).
 
 ## Gateway client and history (Core `Gateway/`, `Conversations/History/`, `Wire/`)
 
