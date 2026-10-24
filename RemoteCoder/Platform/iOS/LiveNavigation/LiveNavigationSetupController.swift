@@ -30,6 +30,12 @@ final class LiveNavigationSetupController {
     private(set) var progress: String?
     private(set) var errorMessage: String?
 
+    init() {
+        if UserDefaults.standard.bool(forKey: Self.setupEnabledKey) {
+            serviceSession = CLServiceSession(authorization: .always)
+        }
+    }
+
     var isWorking: Bool { progress != nil }
 
     var status: String {
