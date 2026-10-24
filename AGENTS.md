@@ -323,7 +323,9 @@ measurably beat SwiftUI.
 - Low Power Mode and serious or critical thermal states set
   `AppEnergyPolicy.conservesEnergy`, which switches rendering and prefetch
   paths. A hot phone therefore runs different code, not just slower code.
-  Compare traces only within the same energy state.
+  Compare traces only within the same energy state. `AppEnergyMonitor` logs
+  that state at launch and on every change (category `Energy`), so uploaded
+  app logs show which state a period ran in.
 - Known dead end: on iOS, `OSLogStore` ignores `position(date:)` and reverse
   enumeration, and predicates do not shorten its scan. Those APIs cannot bound
   the cost of the log export.
