@@ -1262,6 +1262,26 @@ mod tests {
         let flaky = next_request(&mut control, "thread/turns/list").await;
         reply(&gateway, flaky, idle_page).await;
         let fresh = next_request(&mut control, "thread/turns/list").await;
+        reply(&gateway, fresh, unmaterialized.clone()).await;
+        let fresh = next_request(&mut control, "thread/read").await;
+        reply(
+            &gateway,
+            fresh,
+            json!({"result": {"thread": {"status": {"type": "active"}}}}),
+        )
+        .await;
+
+        let retry = next_request(&mut control, "thread/loaded/list").await;
+        assert_eq!(
+            gateway
+                .core
+                .lock()
+                .await
+                .app_server_inventory_unresolved_threads,
+            HashSet::from(["fresh".to_string()])
+        );
+        reply(&gateway, retry, json!({"result": {"data": ["fresh"]}})).await;
+        let fresh = next_request(&mut control, "thread/turns/list").await;
         reply(&gateway, fresh, unmaterialized).await;
         let fresh = next_request(&mut control, "thread/read").await;
         reply(
