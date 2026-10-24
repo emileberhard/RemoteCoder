@@ -619,9 +619,11 @@ fn selected_models(fields: &Map<String, Value>) -> impl Iterator<Item = &str> {
 }
 
 fn selects_tier(fields: &Map<String, Value>) -> bool {
-    ["serviceTier", "serviceTierForTurn"]
-        .iter()
-        .any(|key| fields.get(*key).is_some_and(|tier| !tier.is_null()))
+    ["serviceTier", "serviceTierForTurn"].iter().any(|key| {
+        fields
+            .get(*key)
+            .is_some_and(|tier| !tier.is_null() && tier != "default")
+    })
 }
 
 const SELECTION_CONFIG: [&str; 8] = [

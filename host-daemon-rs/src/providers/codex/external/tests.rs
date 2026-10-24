@@ -130,6 +130,17 @@ async fn nested_and_per_turn_selections_get_the_same_checks() {
         .await
         .unwrap_err();
     assert!(error.message.contains("no service tiers"));
+
+    for key in ["serviceTier", "serviceTierForTurn"] {
+        let mut standard = json!({"threadId": "t", "model": MODEL, key: "default"});
+        assert!(
+            !external
+                .admit("turn/start", &mut standard, Some("relay"))
+                .await
+                .unwrap(),
+            "{key}"
+        );
+    }
 }
 
 #[tokio::test]
