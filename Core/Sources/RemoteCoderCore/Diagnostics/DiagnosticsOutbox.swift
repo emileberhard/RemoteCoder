@@ -253,6 +253,7 @@ actor DiagnosticsOutbox: DiagnosticsExporting {
             return 0
         }
         PersistenceMetrics.shared.wrote(.diagnostics, bytes: body.count, elapsed: started.duration(to: clock.now))
+        evictOldestBeyondCap()
         return lines.count
     }
 
