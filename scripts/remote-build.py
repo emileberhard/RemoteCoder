@@ -352,6 +352,55 @@ def owned_rsync_options(destination: str, run: Path) -> list[str]:
         ["python3", str(run / "rsync-receiver.py"), str(run)])] if destination else []
 
 
+SYMBOL_MIRROR_FINALIZE = """import json,pathlib,sys,time
+run=pathlib.Path(sys.argv[1])
+sys.path.insert(0,str(run/'receiver-bootstrap'))
+from build_support import atomic_json,file_lease
+namespace={}
+payload=json.loads(sys.stdin.readline())
+exec(payload['build_artifacts.py'],namespace)
+(run/'receiver-bootstrap/build_cache.py').write_text(payload['build_cache.py'])
+from build_cache import load_policy,prune_caches,cache_allocated_bytes
+expected=json.loads(sys.stdin.readline())
+with file_lease(run.parent.parent/'leases/runs'/f'{run.name}.lock'):
+ if namespace['tree_digest'](run/'symbols') != expected: raise SystemExit('Mirrored dSYM fingerprint mismatch')
+ atomic_json(run/'outcome.json',{'exitCode':0,'finishedAt':time.time(),'kind':'device-symbols'})
+policy=load_policy()
+retention=prune_caches(run.parent.parent,policy,'',run.name)
+allocated=cache_allocated_bytes(run.parent.parent)
+evidence={'allocatedBytes':allocated,'budgetBytes':policy.compilation_budget_bytes,'retention':retention}
+atomic_json(run/'symbol-cache.json',evidence)
+if allocated>policy.compilation_budget_bytes: print('WARNING: RemoteCoder-Build total cap is unmet after symbol retention; inspect '+str(run/'symbol-cache.json'),file=sys.stderr)
+
+"""
+
+
+def mirror_device_symbols(artifact: dict, manifest: dict) -> dict:
+    host = build_hosts.TEST_DEVICE_HOST
+    local = build_hosts.is_local(host)
+    shell = ["bash", "-c"] if local else [*SSH, host]
+    destination = "" if local else host + ":"
+    home = json.loads(subprocess.check_output(
+        [*shell, "python3 -c 'import json,pathlib; print(json.dumps(str(pathlib.Path.home())))'"], text=True))
+    run = Path(home) / "Library/Caches/RemoteCoder-Build/runs" / ("symbols-" + manifest["buildId"])
+    try:
+        prepare_transfer(shell, run)
+        with host_job_assertion(shell, lease_path(run.parent.parent, "runs", run.name)):
+            source = Path(artifact["symbols"][0]["path"])
+            with file_lease(lease_path(run.parent.parent, "runs", run.name)) if local else nullcontext():
+                subprocess.run(["rsync", "-a", *owned_rsync_options(destination, run),
+                                str(source) + "/", destination + str(run / "symbols") + "/"], check=True)
+            payload = json.dumps({name: Path(__file__).with_name(name).read_text()
+                                  for name in ("build_artifacts.py", "build_cache.py")})
+            subprocess.run([*shell, shlex.join(["python3", "-c", SYMBOL_MIRROR_FINALIZE, str(run)])],
+                           input=payload + "\n" + json.dumps(artifact["symbols"][0]["sha256"]) + "\n",
+                           text=True, check=True)
+    except BaseException:
+        record_transfer_failure(shell, run)
+        raise
+    return {"host": host, "directory": str(run / "symbols")}
+
+
 def transfer_source(shell: list[str], destination: str, run: Path, manifest: dict):
     try:
         prepare_transfer(shell, run)
@@ -737,6 +786,7 @@ def worker(run: Path) -> dict:
         if manifest["kind"] == "ios-install" and status == 0:
             receipt["iosArtifact"] = str(ios_artifact)
             receipt["iosBuild"] = artifact_evidence
+            receipt["profilingSymbols"] = mirror_device_symbols(artifact_evidence, manifest)
             receipt["deliveryRequested"] = "--build-only" not in manifest["arguments"]
         if stages_path.is_file():
             receipt["stages"] = stages

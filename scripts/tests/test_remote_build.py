@@ -24,6 +24,32 @@ module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 
 
+class ProfilingSymbolsTests(unittest.TestCase):
+    def test_symbols_remain_discoverable_on_the_tracing_host_after_source_removal(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary).resolve()
+            source = home / "source-symbols"
+            dwarf = source / "RemoteCoder.app.dSYM/Contents/Resources/DWARF/RemoteCoder"
+            dwarf.parent.mkdir(parents=True)
+            dwarf.write_bytes(b"debug information")
+            artifact = {"symbols": [{"path": str(source), "sha256": module.tree_digest(source)}]}
+            real_run = subprocess.run
+
+            def target_process(*args, **kwargs):
+                return real_run(*args, **(kwargs | {"env": os.environ | {"HOME": str(home)}}))
+
+            with (patch.object(module.subprocess, "run", side_effect=target_process),
+                  patch.object(module.build_hosts, "TEST_DEVICE_HOST", "local"),
+                  patch.object(module.subprocess, "check_output", return_value=json.dumps(str(home))),
+                  patch.object(module, "host_job_assertion", return_value=nullcontext())):
+                mirrored = module.mirror_device_symbols(artifact, {"buildId": "fixture-symbols"})
+            shutil.rmtree(source)
+            copied = Path(mirrored["directory"])
+            self.assertEqual((copied / dwarf.relative_to(source)).read_bytes(), b"debug information")
+            self.assertEqual(json.loads((copied.parent / "outcome.json").read_text())["exitCode"], 0)
+            self.assertTrue((copied.parent / "symbol-cache.json").is_file())
+
+
 def worker_snapshot(
     run, *, kind, worktree_id, build_id, source_commit, xcode_version, environment
 ):
