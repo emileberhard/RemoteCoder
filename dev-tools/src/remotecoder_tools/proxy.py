@@ -1,5 +1,6 @@
 import asyncio
 import os
+import select
 import sys
 from typing import BinaryIO
 
@@ -40,9 +41,18 @@ async def bridge(ws, stdin: asyncio.StreamReader, stdout: asyncio.StreamWriter) 
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
         await _close_output(stdout)
-    os.set_blocking(sys.stderr.fileno(), True)
-    print(diagnostic, file=sys.stderr)
+    _report(diagnostic)
     return status
+
+
+def _report(diagnostic: str) -> None:
+    line = diagnostic.encode("utf-8")[: select.PIPE_BUF - 1] + b"\n"
+    try:
+        _, writable, _ = select.select([], [sys.stderr], [], FLUSH_GRACE_S)
+        if writable:
+            os.write(sys.stderr.fileno(), line)
+    except OSError:
+        pass
 
 
 async def _close_output(stdout: asyncio.StreamWriter) -> None:

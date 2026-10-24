@@ -4,7 +4,6 @@ import os
 import socket
 import sys
 import threading
-import time
 import unittest
 from unittest.mock import patch
 
@@ -161,8 +160,7 @@ class GatewayProxyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(status, 75)
         self.assertEqual(set(threading.enumerate()), threads)
 
-
-    async def test_diagnostic_after_an_abort_waits_for_a_reader_sharing_the_output_pipe(self):
+    async def test_exit_stays_bounded_when_a_merged_output_reader_never_reads(self):
         async def handler(connection):
             await connection.send(json.dumps(READY))
             for sequence in range(64):
@@ -170,30 +168,27 @@ class GatewayProxyTests(unittest.IsolatedAsyncioTestCase):
             await connection.close(1012, "planned restart")
 
         port = await self.gateway(handler)
-        stdin_read, stdin_write = os.pipe()
+        launcher = (
+            "import sys; from remotecoder_tools import gateway_cli, proxy; "
+            "proxy.FLUSH_GRACE_S = 0.2; raise SystemExit(gateway_cli.main())"
+        )
         output_read, output_write = os.pipe()
-        self.addCleanup(os.close, stdin_write)
-        merged_stderr = os.fdopen(os.dup(output_write), "w")
-        self.addCleanup(merged_stderr.close)
-        received = bytearray()
+        self.addCleanup(os.close, output_read)
+        try:
+            process = await asyncio.create_subprocess_exec(
+                sys.executable, "-c", launcher, "--host", "127.0.0.1", "--port", str(port), "--scheme", "ws",
+                "--no-ssh-env", "--token", "private-fixture-bearer", "proxy", "--timeout", "5",
+                stdin=asyncio.subprocess.PIPE, stdout=output_write, stderr=asyncio.subprocess.STDOUT,
+            )
+        finally:
+            os.close(output_write)
+        self.addCleanup(lambda: process.returncode is None and process.kill())
 
-        def read_late():
-            time.sleep(1.0)
-            with os.fdopen(output_read, "rb") as output:
-                received.extend(output.read())
-
-        reader = threading.Thread(target=read_late)
-        reader.start()
-        config = GatewayConfig(host="127.0.0.1", port=port, token="private-fixture-bearer", scheme="ws")
-        with patch.object(proxy, "FLUSH_GRACE_S", 0.2), patch.object(proxy.sys, "stderr", merged_stderr):
-            stdin, stdout = await proxy.stdio_streams(os.fdopen(stdin_read, "rb"), os.fdopen(output_write, "wb"))
-            async with _open_gateway(config, timeout_s=5, method="proxy") as ws:
-                status = await proxy.bridge(ws, stdin, stdout)
-        merged_stderr.close()
-        await asyncio.to_thread(reader.join, 5)
+        status = await asyncio.wait_for(process.wait(), 10)
+        process.stdin.close()
 
         self.assertEqual(status, 75)
-        self.assertTrue(received.endswith(b"error: gateway closed the proxy connection (code 1012)\n"))
+
 
 if __name__ == "__main__":
     unittest.main()

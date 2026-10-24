@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
+from . import proxy
 from .compaction_probe import cmd_e2e_compact_live
 from .config import (
     DEFAULT_CODEX_PROBE_MODEL,
@@ -39,7 +40,6 @@ from .probes import (
     cmd_upload,
 )
 from .queue_probe import cmd_e2e_queue_live
-from . import proxy
 from .rpc import (
     EX_TEMPFAIL,
     RETRYABLE_CLOSE_CODES,
@@ -710,7 +710,6 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--timeout", type=float, default=20.0, help="recv timeout in seconds")
     s.set_defaults(func=cmd_thread_list)
 
-    # -- proxy --
     s = sub.add_parser(
         "proxy",
         help="bridge line-delimited JSON-RPC on stdin/stdout to the gateway",

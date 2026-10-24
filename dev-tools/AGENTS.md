@@ -78,7 +78,8 @@ evidence. It never connects to an installed gateway or starts an agent turn.
   socket normally and exits 0. A gateway close flushes queued messages for up to
   five seconds and exits by the `rpc` rule above (75 for a retryable close or a
   transient setup failure, else 2); a stdout still blocked after that grace is
-  aborted. A reader more than 1024 messages or 8 MiB behind fails with exit 2
+  aborted. The closing diagnostic is one bounded, best-effort stderr line, so
+  the exit status is authoritative. A reader more than 1024 messages or 8 MiB behind fails with exit 2
   instead of dropping messages. After 75 the client reconnects and resumes its
   thread; the bridge never replays a request.
 - **Wire notes:** method, item and enum shapes are not copied here. Read the pinned
