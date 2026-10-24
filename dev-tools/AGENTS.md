@@ -67,6 +67,20 @@ evidence. It never connects to an installed gateway or starts an agent turn.
 - **`steer`** discovers the exact active turn id from `daemon/activeTurns` (5 s by
   default). Unavailable inventory stays unknown, no matching turn is a clear
   error, and the gateway rejects a steer that arrives after the turn completed.
+- **`proxy`** is the gateway's counterpart of `codex app-server proxy` for
+  clients that speak the app-server protocol on stdio, such as the agents
+  launcher, so their threads pass the gateway's provider admission. Client lines
+  go out verbatim and the client owns `initialize`/`initialized`; gateway
+  messages come back one JSON object per line through the same reader that
+  consumed `ready`, so request IDs and server requests are untouched. stdio must
+  be pipes or sockets (asyncio pipe transports, no reader threads) and
+  diagnostics go only to stderr. stdin EOF or a closed stdout reader closes the
+  socket normally and exits 0. A gateway close flushes queued messages for up to
+  five seconds and exits by the `rpc` rule above (75 for a retryable close or a
+  transient setup failure, else 2); a stdout still blocked after that grace is
+  aborted. A reader more than 1024 messages or 8 MiB behind fails with exit 2
+  instead of dropping messages. After 75 the client reconnects and resumes its
+  thread; the bridge never replays a request.
 - **Wire notes:** method, item and enum shapes are not copied here. Read the pinned
   schema (`CODEX_BIN=<candidate>/bin/codex just codex-schema`, the fork's
   `codex-rs/app-server-protocol/` and the root `AGENTS.md`, *Protocol drift*).

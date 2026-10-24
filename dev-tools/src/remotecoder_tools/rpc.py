@@ -15,6 +15,12 @@ from .transport import GatewayOpeningTimeout, websocket
 _readers: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 
 
+EX_TEMPFAIL = 75
+
+
+RETRYABLE_CLOSE_CODES = frozenset({1001, 1012, 1013, 4012})
+
+
 _MAX_PENDING_MESSAGES = 1024
 
 

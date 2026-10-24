@@ -23,6 +23,7 @@ each works from any directory. Run the tests with `just tools-test`;
 ./dev-tools/rc-gateway config                        # resolved config, token redacted
 ./dev-tools/rc-gateway turn --prompt "hello" --show-deltas
 ./dev-tools/rc-gateway rpc --method thread/read --params '{"threadId":"...","includeTurns":true}'
+./dev-tools/rc-gateway proxy                         # app-server JSON-RPC on stdio, through gateway admission
 ./dev-tools/realtime-voice-probe --media
 ```
 

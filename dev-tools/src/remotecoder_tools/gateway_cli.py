@@ -39,7 +39,10 @@ from .probes import (
     cmd_upload,
 )
 from .queue_probe import cmd_e2e_queue_live
+from . import proxy
 from .rpc import (
+    EX_TEMPFAIL,
+    RETRYABLE_CLOSE_CODES,
     GatewayRPCError,
     _claude_health,
     _drain_ready,
@@ -92,12 +95,6 @@ async def cmd_health(args: argparse.Namespace) -> int:
     else:
         print(r.text.strip())
     return 0
-
-
-EX_TEMPFAIL = 75
-
-
-RETRYABLE_CLOSE_CODES = frozenset({1001, 1012, 1013, 4012})
 
 
 def _transient_connection_failure(error: Exception, *, sent: bool) -> bool:
@@ -166,6 +163,19 @@ async def cmd_rpc(args: argparse.Namespace) -> int:
                 raise TimeoutError(detail) from error
             raise
         print(f"error: {detail} (transient; retry)", file=sys.stderr)
+        return EX_TEMPFAIL
+
+
+async def cmd_proxy(args: argparse.Namespace) -> int:
+    cfg = _resolve_config(args)
+    try:
+        async with _open_gateway(cfg, timeout_s=args.timeout, method="proxy") as ws:
+            stdin, stdout = await proxy.stdio_streams(sys.stdin.buffer, sys.stdout.buffer)
+            return await proxy.bridge(ws, stdin, stdout)
+    except Exception as error:
+        if not _transient_connection_failure(error, sent=False):
+            raise
+        print(f"error: gateway proxy connection to {cfg.host}:{cfg.port}: {error} (transient; retry)", file=sys.stderr)
         return EX_TEMPFAIL
 
 
@@ -699,6 +709,21 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--limit", type=int, default=30, help="max Claude threads to return (default: 30)")
     s.add_argument("--timeout", type=float, default=20.0, help="recv timeout in seconds")
     s.set_defaults(func=cmd_thread_list)
+
+    # -- proxy --
+    s = sub.add_parser(
+        "proxy",
+        help="bridge line-delimited JSON-RPC on stdin/stdout to the gateway",
+        description=(
+            "Relay JSON-RPC between stdin/stdout and one gateway connection, so a client of "
+            "`codex app-server proxy` reaches the gateway and its admission instead. The client sends "
+            "initialize itself. Each stdout line is one gateway message; diagnostics go to stderr. "
+            "Exits 0 when the client closes stdin or stdout, 75 for a transient connection failure or a "
+            "retryable gateway close, and 2 otherwise."
+        ),
+    )
+    s.add_argument("--timeout", type=float, default=10.0, help="connection setup budget in seconds")
+    s.set_defaults(func=cmd_proxy)
 
     # -- thread-read --
     s = sub.add_parser(
