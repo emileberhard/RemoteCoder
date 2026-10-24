@@ -283,12 +283,14 @@ kind-specific fields.
   `rejection` kind for a request refused after authentication. Failed authentication is not
   journalled. Never keys, URLs, query strings, audio or transcripts.
 - `app_logs` — `cap_evicted` when the uploaded app-log store went over its
-  1 GiB cap and lost segments still inside the 14-day window, or `cap_unmet`
-  when it is still over the cap afterwards: `files`, `bytes`, `retainedBytes`,
-  `capBytes`, `unreadableEntries` (which make the total a lower bound),
-  `evictedThroughMs` (the newest removed segment's mtime, or null) and `atMs`.
-  An eviction also writes those fields to `app-logs/retention.json` for the
-  reader.
+  1 GiB cap and lost segments still inside the 14-day window, `cap_unmet` when
+  its total is still over the cap afterwards or unknown because entries could
+  not be read, and `cap_met` on the first upload that finds an unmet cap met
+  again: `met`, `files`, `bytes`, `retainedBytes` (null when unknown),
+  `capBytes`, `unreadableEntries`, `evictedThroughMs` (the newest removed
+  segment's mtime, or null) and `atMs`. Each one also rewrites
+  `app-logs/retention.json` for the reader, keeping the last eviction's
+  `evictedThroughMs`.
 
 - `review` — each automatic turn-review opportunity for Codex or Claude, each
   early title and each requested regeneration. `trigger` separates them:
@@ -451,8 +453,9 @@ copy useless for its purpose.
   once the process dies.
 - **Bounded.** 50 MB of undelivered segments on device. Over the cap, raw log
   segments go first, then telemetry batches, then MetricKit reports, oldest
-  first within each; each segment actually removed becomes a `loss` record, and
-  a cap the queue still exceeds is logged as an error. A MetricKit report is one
+  first within each, checked after every segment and telemetry batch written;
+  each segment actually removed becomes a `loss` record, and a cap the queue
+  still exceeds is logged as an error. A MetricKit report is one
   record of whatever size MetricKit delivered, up to the queue cap, so its
   upload compresses it whole.
   A segment is deleted locally only after a 2xx, so a broken upload path
@@ -478,10 +481,11 @@ device's history is split across hosts. `just app-telemetry stores` lists every
 device directory on this host and the configured gateway hosts (read over SSH);
 `metrickit`, `diagnostics --symbolicate`, `counts`, `persistence`, `timeline`,
 `activity` and `export-cost` take the exact `--device` and print JSON that names
-the stores read and any that failed, and when the host cap removed data.
-MetricKit reports and diagnostics are selected by the time they cover, not when
-they arrived, and `metrickit` lists the window's present, missing and not yet
-due daily reports.
+the stores read and any that failed, when the host cap removed data or is
+unmet, and each segment it could not read (corrupt, or expanding beyond 32 MiB).
+MetricKit reports and diagnostics are selected by the time they cover, however
+late they arrived, and `metrickit` lists the spans of the window no report
+covers, split 36 hours before now into missing and not yet due.
 Each segment is indexed once into a rebuildable cache under
 `~/Library/Caches/RemoteCoder/app-telemetry/`, capped at 256 MiB, oldest first;
 an entry goes when its segment does. MetricKit's daily entry is never added to
