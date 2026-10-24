@@ -69,7 +69,7 @@ pub(crate) struct StoredSegment {
 pub(crate) struct CapOutcome {
     pub(crate) files: usize,
     pub(crate) bytes: u64,
-    pub(crate) retained_bytes: u64,
+    pub(crate) retained_bytes: Option<u64>,
     pub(crate) cap_bytes: u64,
     pub(crate) unreadable_entries: usize,
     pub(crate) evicted_through: Option<SystemTime>,
@@ -78,19 +78,21 @@ pub(crate) struct CapOutcome {
 
 impl CapOutcome {
     pub(crate) fn is_met(&self) -> bool {
-        self.retained_bytes <= self.cap_bytes
+        self.retained_bytes
+            .is_some_and(|retained| retained <= self.cap_bytes)
     }
 
     pub(crate) fn event(&self) -> &'static str {
-        if self.is_met() {
-            "cap_evicted"
-        } else {
-            "cap_unmet"
+        match (self.is_met(), self.files) {
+            (false, _) => "cap_unmet",
+            (true, 0) => "cap_met",
+            (true, _) => "cap_evicted",
         }
     }
 
     pub(crate) fn fields(&self) -> Value {
         json!({
+            "met": self.is_met(),
             "files": self.files,
             "bytes": self.bytes,
             "retainedBytes": self.retained_bytes,
@@ -156,38 +158,44 @@ impl AppLogStore {
             bytes = body.len(),
             "stored app log segment"
         );
-        let cap = enforce_byte_cap(&self.dir, self.byte_cap);
-        if let Some(outcome) = &cap {
-            self.record_cap(outcome);
-        }
+        let cap = self.record_cap(enforce_byte_cap(&self.dir, self.byte_cap));
         Ok(StoredSegment { path, cap })
     }
 
-    fn record_cap(&self, outcome: &CapOutcome) {
+    fn record_cap(&self, outcome: CapOutcome) -> Option<CapOutcome> {
+        let marker_path = self.dir.join(RETENTION_MARKER);
+        let previous = std::fs::read(&marker_path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
+        let previously_unmet = previous
+            .as_ref()
+            .is_some_and(|marker| marker["met"] == false);
+        if outcome.is_met() && outcome.files == 0 && !previously_unmet {
+            return None;
+        }
         warn!(
+            event = outcome.event(),
             files = outcome.files,
             bytes = outcome.bytes,
             retained_bytes = outcome.retained_bytes,
             cap_bytes = outcome.cap_bytes,
             unreadable = outcome.unreadable_entries,
-            met = outcome.is_met(),
-            "app log store over its byte cap"
+            "app log store byte cap"
         );
-        if outcome.files == 0 {
-            return;
-        }
         let mut marker = outcome.fields();
-        marker["retentionDays"] = json!(self.retention_days);
-        if let Err(error) = private_state::replace(
-            &self.dir.join(RETENTION_MARKER),
-            marker.to_string().as_bytes(),
-        ) {
-            warn!(error = %format!("{error:#}"), "failed recording the app log cap eviction");
+        if outcome.evicted_through.is_none() {
+            marker["evictedThroughMs"] =
+                previous.map_or(Value::Null, |previous| previous["evictedThroughMs"].clone());
         }
+        marker["retentionDays"] = json!(self.retention_days);
+        if let Err(error) = private_state::replace(&marker_path, marker.to_string().as_bytes()) {
+            warn!(error = %format!("{error:#}"), "failed recording the app log cap outcome");
+        }
+        Some(outcome)
     }
 }
 
-fn enforce_byte_cap(dir: &Path, byte_cap: u64) -> Option<CapOutcome> {
+fn enforce_byte_cap(dir: &Path, byte_cap: u64) -> CapOutcome {
     let mut unreadable_entries = 0;
     let mut segments: Vec<(SystemTime, u64, PathBuf)> = Vec::new();
     for device_dir in device_directories(dir) {
@@ -214,40 +222,32 @@ fn enforce_byte_cap(dir: &Path, byte_cap: u64) -> Option<CapOutcome> {
         }
     }
     let mut retained: u64 = segments.iter().map(|(_, size, _)| size).sum();
-    if retained <= byte_cap {
-        if unreadable_entries > 0 {
-            warn!(
-                unreadable_entries,
-                retained_bytes = retained,
-                "app log store total is a lower bound; some entries could not be read"
-            );
-        }
-        return None;
-    }
-    segments.sort();
     let mut files = 0;
     let mut bytes = 0;
     let mut evicted_through = None;
-    for (modified, size, path) in segments {
-        if retained <= byte_cap {
-            break;
-        }
-        if std::fs::remove_file(&path).is_ok() {
-            retained -= size;
-            files += 1;
-            bytes += size;
-            evicted_through = Some(modified);
+    if retained > byte_cap {
+        segments.sort();
+        for (modified, size, path) in segments {
+            if retained <= byte_cap {
+                break;
+            }
+            if std::fs::remove_file(&path).is_ok() {
+                retained -= size;
+                files += 1;
+                bytes += size;
+                evicted_through = Some(modified);
+            }
         }
     }
-    Some(CapOutcome {
+    CapOutcome {
         files,
         bytes,
-        retained_bytes: retained,
+        retained_bytes: (unreadable_entries == 0).then_some(retained),
         cap_bytes: byte_cap,
         unreadable_entries,
         evicted_through,
         at: SystemTime::now(),
-    })
+    }
 }
 
 fn unix_millis(time: SystemTime) -> u64 {
@@ -595,7 +595,7 @@ mod tests {
 
         let outcome = newest.cap.expect("over the cap");
         assert_eq!((outcome.files, outcome.bytes), (1, body_size));
-        assert_eq!(outcome.retained_bytes, body_size * 2);
+        assert_eq!(outcome.retained_bytes, Some(body_size * 2));
         assert_eq!(outcome.evicted_through, Some(base));
         assert_eq!(outcome.event(), "cap_evicted");
         assert!(
@@ -609,6 +609,7 @@ mod tests {
         )
         .expect("marker is JSON");
         assert_eq!(marker["evictedThroughMs"], json!(1_700_000_000_000_u64));
+        assert_eq!(marker["met"], json!(true));
         assert_eq!(marker["retentionDays"], json!(30));
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -638,7 +639,67 @@ mod tests {
         let outcome = outcome.expect("upload").expect("over the cap");
         assert!(!outcome.is_met());
         assert_eq!(outcome.event(), "cap_unmet");
-        assert_eq!(outcome.retained_bytes, body_size * 2);
+        assert_eq!(outcome.retained_bytes, Some(body_size * 2));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_unreadable_device_leaves_the_total_unknown_until_it_reads_again() {
+        let dir = temp_dir("cap-unknown");
+        let store = AppLogStore::new_in(dir.clone(), 30, APP_LOG_BYTE_CAP);
+        store
+            .store_on(20_260_821, "phone", "a", &gzip_body())
+            .expect("upload");
+        let marker_path = dir.join(RETENTION_MARKER);
+        std::fs::write(&marker_path, r#"{"met":true,"evictedThroughMs":123}"#).expect("marker");
+        let marker = || -> Value {
+            serde_json::from_slice(&std::fs::read(&marker_path).expect("marker")).expect("JSON")
+        };
+        let hidden = dir.join("phone");
+        let mut permissions = std::fs::metadata(&hidden).expect("metadata").permissions();
+        std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o000);
+        std::fs::set_permissions(&hidden, permissions.clone()).expect("unreadable directory");
+
+        let unknown = store
+            .store_on(20_260_821, "ipad", "b", &gzip_body())
+            .map(|stored| stored.cap);
+        std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o700);
+        std::fs::set_permissions(&hidden, permissions).expect("restore directory");
+
+        let unknown = unknown.expect("upload").expect("reported");
+        assert_eq!(
+            (
+                unknown.retained_bytes,
+                unknown.unreadable_entries,
+                unknown.event()
+            ),
+            (None, 1, "cap_unmet")
+        );
+        assert_eq!(
+            (
+                marker()["met"].clone(),
+                marker()["evictedThroughMs"].clone()
+            ),
+            (json!(false), json!(123))
+        );
+
+        let recovered = store
+            .store_on(20_260_821, "ipad", "c", &gzip_body())
+            .expect("upload")
+            .cap
+            .expect("recovery reported");
+        assert_eq!(recovered.event(), "cap_met");
+        assert_eq!(
+            (
+                marker()["met"].clone(),
+                marker()["evictedThroughMs"].clone()
+            ),
+            (json!(true), json!(123))
+        );
+        let quiet = store
+            .store_on(20_260_821, "ipad", "d", &gzip_body())
+            .expect("upload");
+        assert_eq!(quiet.cap, None);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
