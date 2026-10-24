@@ -286,6 +286,12 @@ impl ExternalProviders {
                         self.label(source)
                     )));
                 }
+                if method == "thread/resume"
+                    && source != NATIVE_PROVIDER
+                    && fields.get("modelProvider").is_none_or(Value::is_null)
+                {
+                    fields.insert("modelProvider".into(), json!(source));
+                }
                 let inherits = method == "thread/fork"
                     && fields.get("experimentalPredictionMode") == Some(&json!(true));
                 self.admit_thread(fields, source, false, !inherits).await

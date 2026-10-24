@@ -294,7 +294,10 @@ owner until the last fixture is dropped.
     into its `config`.
   - `thread/resume` and `thread/fork` read the source thread's provider and keep
     it; another `modelProvider`, or a model of another provider, fails. A
-    prediction-mode fork inherits without config, which Codex rejects there.
+    resume of an external thread always carries its `modelProvider`: a resume
+    that overrides the model makes Codex skip the persisted provider and store
+    the config default (`openai`) instead. A prediction-mode fork inherits
+    without config, which Codex rejects there.
   - `turn/start`, `thread/settings/update` and `turn/settings/update` with a model
     (`model` or `collaborationMode.settings.model`) or service tier
     (`serviceTier` or `serviceTierForTurn`) are checked against the thread's

@@ -331,6 +331,37 @@ async fn resumes_and_forks_keep_the_source_provider() {
             .unwrap()
     );
     assert!(resume["config"]["model_providers.relay"].is_object());
+    assert_eq!(resume["modelProvider"], "relay");
+
+    let mut unset = json!({"threadId": "t", "model": MODEL, "modelProvider": null});
+    external
+        .admit("thread/resume", &mut unset, Some("relay"))
+        .await
+        .unwrap();
+    assert_eq!(unset["modelProvider"], "relay");
+
+    let mut conflicting = json!({"threadId": "t", "model": MODEL, "modelProvider": "openai"});
+    let refusal = external
+        .admit("thread/resume", &mut conflicting, Some("relay"))
+        .await
+        .unwrap_err();
+    assert!(refusal.message.contains("runs on Relay"));
+
+    let mut native = json!({"threadId": "t", "model": "gpt-native"});
+    external
+        .admit("thread/resume", &mut native, Some(NATIVE_PROVIDER))
+        .await
+        .unwrap();
+    assert!(native.get("modelProvider").is_none());
+
+    let mut fork = json!({"threadId": "t", "model": MODEL});
+    assert!(
+        external
+            .admit("thread/fork", &mut fork, Some("relay"))
+            .await
+            .unwrap()
+    );
+    assert!(fork.get("modelProvider").is_none());
 
     let mut recover = json!({"threadId": "t", "turnId": "u", "capability": "c"});
     assert!(
@@ -341,6 +372,7 @@ async fn resumes_and_forks_keep_the_source_provider() {
     );
     assert!(recover["config"]["model_providers.relay"].is_object());
     assert!(recover["config"]["provider_model_catalog_json"].is_string());
+    assert!(recover.get("modelProvider").is_none());
 
     let mut inheriting =
         json!({"threadId": "t", "ephemeral": true, "experimentalPredictionMode": true});
