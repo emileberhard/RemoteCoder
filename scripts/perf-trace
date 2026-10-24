@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Record and summarize an Instruments trace of RemoteCoder on an iPhone, iPad or Mac.
 
-The trace is recorded and summarized on the Mac the iOS device is attached to, the
-Mac mini for the agent iPad, or for --mac on the MacBook that runs the Mac app,
-because a system-wide export is too large to move between hosts. The summary reports the app's CPU time by thread, its
+The trace is recorded and summarized on the configured device host or, with
+--mac, the selected Mac. --host overrides that routing. Traces stay on that host
+because system-wide exports are large. The summary reports the app's CPU time by thread, its
 Core Animation commits, GPU time, and hitches, plus the render server's CPU time
 when the trace covers it (an iPhone recording is system-wide and includes
 backboardd; a Mac recording attaches to the app, so WindowServer is unknown), so
@@ -60,6 +60,7 @@ MAC_APP_EXECUTABLE = f"/{APP}.app/Contents/MacOS/{APP}"
 IPHONE_RENDER_SERVER = "backboardd"
 MAC_RENDER_SERVER = "WindowServer"
 INSTRUMENTS = ["Hitches", "GPU", "Thermal State"]
+TEMPLATES = ("Time Profiler", "Processor Trace", "Swift Concurrency", "System Trace", "File Activity", "Allocations")
 DEVELOPER_TOOLING = re.compile(r"/Developer/Library/(Private)?Frameworks/")
 SIGNPOST_SUBSYSTEM = "RemoteCoder"
 MOTION_SIGNPOST = "TranscriptScroll"
@@ -79,6 +80,7 @@ import json, os, signal, sys, threading, traceback, types
 payload = json.loads(sys.stdin.buffer.read(int(sys.argv[1])))
 for name, module_source in payload["modules"].items():
     sys.modules[name] = types.ModuleType(name)
+    sys.modules[name].__file__ = name + ".py"
     exec(compile(module_source, name + ".py", "exec"), sys.modules[name].__dict__)
 __file__ = "perf-trace"
 def stop_when_client_disconnects():
@@ -139,6 +141,7 @@ class Run:
     platform: str
     schemas: frozenset[str]
     started_at: str
+    template: str = ""
 
 
 def sysctl_number(name: str) -> int:
@@ -257,13 +260,15 @@ def table_rows(trace: str, schema: str, columns: set[str]):
                 values[identifier] = element
 
 
-def symbolicate(frames: set[Frame], apps: list[Path]) -> dict[Frame, tuple[str, ...]]:
+def symbolicate(frames: set[Frame], apps: list[Path]) -> tuple[dict[Frame, tuple[str, ...]], dict[Frame, tuple[str, ...]]]:
     names = {frame: (frame.name,) for frame in frames if is_symbol(frame.name)}
+    locations = {}
     by_binary: defaultdict[Binary, list[Frame]] = defaultdict(list)
     for frame in frames:
         if frame.binary is not None:
             by_binary[frame.binary].append(frame)
-    app_files = [path for app in apps for path in (app / APP, app / f"{APP}.debug.dylib")]
+    app_files = [root / name for app in apps for root in (app, app / "Contents/MacOS")
+                 for name in (APP, f"{APP}.debug.dylib")]
     files = symbol_files([binary.path for binary in by_binary], app_files)
     if missing := sorted({binary.name for binary in by_binary if binary.uuid not in files}):
         print(f"warning: no symbols with a matching UUID for {', '.join(missing)}", file=sys.stderr)
@@ -274,8 +279,11 @@ def symbolicate(frames: set[Frame], apps: list[Path]) -> dict[Frame, tuple[str, 
             if (file := files.get(binary.uuid)) is not None
         }
     for binary, result in results.items():
-        names.update(zip(by_binary[binary], result.result(), strict=True))
-    return names
+        resolved = result.result()
+        locations.update(zip(by_binary[binary], resolved, strict=True))
+        names.update((frame, tuple(line.split(" (in ", 1)[0] for line in lines))
+                     for frame, lines in zip(by_binary[binary], resolved, strict=True) if lines)
+    return names, locations
 
 
 def process_name(element) -> str:
@@ -310,7 +318,7 @@ def recorded_run(trace: str) -> Run:
         float(summary.findtext("duration")), summary.findtext("end-reason"),
         run.find("info/target/device").get("platform"),
         frozenset(table.get("schema") for table in run.iterfind("data/table")),
-        summary.findtext("start-date"),
+        summary.findtext("start-date"), summary.findtext("template-name") or "",
     )
 
 
@@ -716,11 +724,131 @@ def frame_statistics(samples: list[Sample], names: dict):
     return stacks, inclusive, self_by_binary
 
 
+def processor_trace(trace: str, run: Run, count: int) -> dict | None:
+    if "processor-trace-intervals" not in run.schemas:
+        return {"topFunctions": None, "unavailableReason": "no processor-trace-intervals export"} if run.template == "Processor Trace" else None
+    functions = defaultdict(lambda: {"callIntervals": 0, "selfMs": 0, "selfCycles": 0, "selfInstructions": 0})
+    missing = Counter()
+    for row in table_rows(trace, "processor-trace-intervals", {"process", "name", "self-duration", "self-cycles", "self-instructions"}):
+        if process_name(row.get("process")) != APP:
+            continue
+        name = element_text(row.get("name")) or "<unavailable function>"
+        entry = functions[name]
+        entry["callIntervals"] += 1
+        for column, field, divisor in (("self-duration", "selfMs", 1e6), ("self-cycles", "selfCycles", 1),
+                                       ("self-instructions", "selfInstructions", 1)):
+            value = trace_number(row.get(column))
+            if value is None:
+                entry[field] = None
+                missing[column] += 1
+            elif entry[field] is not None:
+                entry[field] += value / divisor
+    top = sorted(functions.items(), key=lambda item: item[1]["selfCycles"] or 0, reverse=True)[:count or 30]
+    return {"schema": "processor-trace-intervals", "topFunctions": dict(top) or None,
+            "unavailableReason": None if functions else "no app function-call intervals exported",
+            "unavailableValueRows": dict(missing), "functionsObserved": len(functions),
+            "scope": "observed call intervals; calls crossing capture boundaries can be incomplete"}
+
+
+def file_activity(trace: str, schemas: frozenset[str]) -> dict | None:
+    if "FsSyscall" not in schemas:
+        return None
+    paths = defaultdict(lambda: {"operations": Counter(), "readBytes": 0, "writtenBytes": 0,
+                                 "unavailableByteRows": 0, "durationMs": 0, "fileDescriptors": Counter()})
+    for row in table_rows(trace, "FsSyscall", {"process", "path", "syscall", "lreads", "lwrites", "duration", "type", "fd"}):
+        if process_name(row.get("process")) != APP:
+            continue
+        path = element_text(row.get("path")) or "<unavailable path>"
+        entry = paths[path]
+        if descriptor := element_text(row.get("fd")):
+            entry["fileDescriptors"][descriptor] += 1
+        entry["operations"][element_text(row.get("syscall")) or "<unavailable operation>"] += 1
+        duration = trace_number(row.get("duration"))
+        entry["durationMs"] = None if duration is None or entry["durationMs"] is None else entry["durationMs"] + duration / 1e6
+        for column, field in (("lreads", "readBytes"), ("lwrites", "writtenBytes")):
+            element = row.get(column)
+            if (element is not None and element.tag != "sentinel") or element_text(row.get("type")) == ("Read" if column == "lreads" else "Write"):
+                value = trace_number(element)
+                if value is None:
+                    entry[field] = None
+                    entry["unavailableByteRows"] += 1
+                elif entry[field] is not None:
+                    entry[field] += int(value)
+    return {"schema": "FsSyscall", "paths": dict(sorted(paths.items(), key=lambda item:
+            (item[1]["writtenBytes"] or 0) + (item[1]["readBytes"] or 0), reverse=True)[:50]),
+            "pathLimit": 50, "pathsObserved": len(paths),
+            "scope": "logical filesystem calls; excludes physical disk amplification"}
+
+
+def system_trace(trace: str, schemas: frozenset[str]) -> dict | None:
+    if "thread-state" not in schemas:
+        return None
+    blocked = defaultdict(Counter)
+    missing = 0
+    for row in table_rows(trace, "thread-state", {"process", "thread", "state", "duration", "note"}):
+        if process_name(row.get("process")) != APP or element_text(row.get("state")) != "Blocked":
+            continue
+        duration = trace_number(row.get("duration"))
+        if duration is None:
+            missing += 1
+            continue
+        thread = element_text(row.get("thread")) or "<unavailable thread>"
+        reason = element_text(row.get("note")) or "<blocking reason unavailable>"
+        blocked[thread][reason] += duration / 1e6
+    return {"schema": "thread-state", "blockedMsByThreadAndReason": heaviest(blocked, 20),
+            "unavailableDurationRows": missing,
+            "reasonScope": "exported thread-state note; absence does not identify I/O, lock, or IPC"}
+
+
+def swift_concurrency(trace: str, schemas: frozenset[str]) -> dict | None:
+    if "SwiftTaskStateTable" not in schemas:
+        return None
+    states = Counter()
+    actors = defaultdict(Counter)
+    functions = Counter()
+    missing = 0
+    tasks = set()
+    for row in table_rows(trace, "SwiftTaskStateTable", {"process", "task", "state", "duration", "resume-function", "actor", "enqueued-actor"}):
+        if process_name(row.get("process")) != APP:
+            continue
+        task = element_text(row.get("task"))
+        if task:
+            tasks.add(task)
+        duration = trace_number(row.get("duration"))
+        if duration is None:
+            missing += 1
+            continue
+        state = element_text(row.get("state")) or "<unavailable state>"
+        states[state] += duration / 1e6
+        actor = element_text(row.get("enqueued-actor")) or element_text(row.get("actor"))
+        if actor:
+            actors[actor][state] += duration / 1e6
+        function = element_text(row.get("resume-function"))
+        if function:
+            functions[function] += duration / 1e6
+    queues = {}
+    if "SwiftActorQueueSize" in schemas:
+        for row in table_rows(trace, "SwiftActorQueueSize", {"process", "actor", "count"}):
+            if process_name(row.get("process")) != APP:
+                continue
+            actor = element_text(row.get("actor")) or "<unavailable actor>"
+            count = trace_number(row.get("count"))
+            if count is not None:
+                queues[actor] = max(queues.get(actor, 0), int(count))
+    return {"schema": "SwiftTaskStateTable", "observedTasks": len(tasks), "taskStateMs": dict(states),
+            "taskStateMsByActor": heaviest(actors, 20),
+            "resumeFunctionStateMs": dict(functions.most_common(30)), "actorPeakQueuedTasks": queues or None,
+            "actorQueueUnavailableReason": None if queues else "no app actor queue counts exported",
+            "unavailableDurationRows": missing,
+            "scope": "summed task state lifetimes; overlapping tasks are not CPU time"}
+
+
 def summarize(trace: str, frames: int, callers: list[str], apps: list[Path]) -> dict:
     run = recorded_run(trace)
     scroll = scroll_receipt(trace)
     render_server = MAC_RENDER_SERVER if run.platform == "macOS" else IPHONE_RENDER_SERVER
-    cpu_ms, unweighted, samples, automation_samples = time_profile(trace)
+    cpu_ms, unweighted, samples, automation_samples = (time_profile(trace) if "time-profile" in run.schemas
+                                                        else (Counter(), Counter(), [], Counter()))
     app_threads = thread_ms(samples)
     commits, app_frames, commit_starts = (hitch_updates(trace) if "hitches-updates" in run.schemas
                                           else (None, set(), None))
@@ -733,14 +861,30 @@ def summarize(trace: str, frames: int, callers: list[str], apps: list[Path]) -> 
     journey_intervals = operation_intervals(trace, run.schemas, "ReplayJourney")
 
     all_frames = {frame for sample in samples for frame in sample.stack}
-    names = symbolicate(all_frames, apps) if frames or callers else {}
+    names, locations = symbolicate(all_frames, apps) if frames or callers else ({}, {})
+    location_weights = Counter()
+    location_self = Counter()
+    for sample in samples:
+        if sample.stack:
+            location_self[sample.stack[0]] += sample.weight_ms
+        for frame in set(sample.stack):
+            location_weights[frame] += sample.weight_ms
+    app_roots = app_bundle_roots(all_frames)
+    location_frames = dict.fromkeys(
+        frame for weights in (location_self, location_weights) for owner in ("app", "system")
+        for frame, _ in Counter({frame: weight for frame, weight in weights.items()
+                                if frame_owner(frame, app_roots) == owner}).most_common(frames or 10)
+    )
     stacks, inclusive, self_by_binary = frame_statistics(samples, names)
 
     def rate(value: float) -> float:
         return round(value / run.seconds, 2)
 
     def cpu_summary(process: str) -> dict:
-        reason = f"time-profile has {unweighted[process]} samples without a weight for {process}" if unweighted[process] else None
+        reason = ("trace did not collect time-profile" if "time-profile" not in run.schemas else
+                  f"time-profile has {unweighted[process]} samples without a weight for {process}" if unweighted[process] else
+                  f"time-profile has no samples for {process}; keep the app foreground and attach to its process"
+                  if process not in cpu_ms else None)
         return {
             "cpuMs": None if reason else round(cpu_ms[process], 1),
             "cpuMsPerSecond": None if reason else rate(cpu_ms[process]),
@@ -782,7 +926,7 @@ def summarize(trace: str, frames: int, callers: list[str], apps: list[Path]) -> 
         "journey": journey,
         "app": {
             **app_cpu,
-            "cpuMsByThread": None if unweighted[APP] else {name: round(ms, 1) for name, ms in app_threads.most_common(8)},
+            "cpuMsByThread": None if app_cpu["cpuUnavailableReason"] else {name: round(ms, 1) for name, ms in app_threads.most_common(8)},
             "automation": automation_summary(samples, automation_samples),
             "commits": commits[APP] if commits is not None else None,
             "commitsPerSecond": rate(commits[APP]) if commits is not None else None,
@@ -811,6 +955,20 @@ def summarize(trace: str, frames: int, callers: list[str], apps: list[Path]) -> 
             **gpu_summary(render_server),
         } if render_server in cpu_ms or unweighted[render_server] else None,
         "swiftui": swiftui,
+        "fileActivity": file_activity(trace, run.schemas),
+        "systemTrace": system_trace(trace, run.schemas),
+        "swiftConcurrency": swift_concurrency(trace, run.schemas),
+        "exportedSchemas": sorted(run.schemas),
+        "symbolLocations": [
+            {"binary": frame.binary.name, "uuid": frame.binary.uuid, "address": hex(frame.address),
+             "inclusiveMs": round(location_weights[frame], 2), "selfMs": round(location_self[frame], 2),
+             "inlineFrames": list(locations.get(frame, ())),
+             "unavailableReason": None if locations.get(frame) else "no matching debug information for this address"}
+            for frame in location_frames if frame.binary is not None
+        ] if frames or callers else None,
+        "processorTrace": processor_trace(trace, run, frames),
+        "allocations": {"unavailableReason": "xctrace does not expose allocation events in this trace", "events": None}
+                       if run.template == "Allocations" else None,
     }
 
 
@@ -820,7 +978,8 @@ def remote(host: str, arguments: list[str]) -> int:
     head, guard, tail = script.rpartition('if __name__ == "__main__":')
     payload = json.dumps({
         "script": f"{head}SCROLL_SOURCE = {source!r}\n\n{guard}{tail}",
-        "modules": {"build_hosts": Path(__file__).with_name("build_hosts.py").read_text()},
+        "modules": {name: Path(__file__).with_name(name + ".py").read_text()
+                    for name in ("maintainer_config", "build_hosts", "symbols")},
     }).encode()
     command = SSH + [host, shlex.join(["python3", "-c", REMOTE_BOOTSTRAP, str(len(payload)), *arguments])]
     with subprocess.Popen(command, stdin=subprocess.PIPE) as client:
@@ -868,8 +1027,8 @@ def require_swiftui(command: list[str]) -> None:
 
 
 @contextlib.contextmanager
-def recording(trace: Path, seconds: int, target: list[str], instruments: list[str]):
-    command = ["xcrun", "xctrace", "record", *target, "--template", "Time Profiler",
+def recording(trace: Path, seconds: int, target: list[str], instruments: list[str], template: str = "Time Profiler"):
+    command = ["xcrun", "xctrace", "record", *target, "--template", template,
                *(argument for instrument in instruments for argument in ("--instrument", instrument))]
     if "SwiftUI" in instruments:
         require_swiftui(command)
@@ -880,13 +1039,24 @@ def recording(trace: Path, seconds: int, target: list[str], instruments: list[st
             if line.startswith(RECORDING_STARTED):
                 break
         else:
-            sys.exit(f"xctrace exited ({recorder.wait()}) before it started recording {trace}")
+            sys.exit(f"xctrace exited ({recorder.wait()}) before it started recording {trace}. "
+                     + ("Processor Trace requires A18+/M4+ hardware and Developer → Processor Trace enabled on the device."
+                        if template == "Processor Trace" else "Keep RemoteCoder running and the device unlocked. Single-process templates require a debuggable install with get-task-allow."))
         try:
             yield
         finally:
             sys.stderr.writelines(recorder.stdout)
     if recorder.returncode != 0:
+        if template == "Processor Trace" or "Processor Trace" in instruments:
+            sys.exit("Processor Trace recording failed; see xctrace errors above. Requires a debuggable app, A18+/M4+ "
+                     "hardware, and Developer → Processor Trace enabled on iOS; Mac recording needs Developer Tools "
+                     "profiling access and no competing ktrace session.")
         raise subprocess.CalledProcessError(recorder.returncode, command)
+
+
+def selected_instruments(template: str, swiftui: bool, extra: list[str]) -> list[str]:
+    instruments = INSTRUMENTS if template == "Time Profiler" else ["Time Profiler"]
+    return list(dict.fromkeys([*instruments, *(["SwiftUI"] if swiftui else []), *extra]))
 
 
 def reject_automation(summary: dict) -> None:
@@ -905,11 +1075,14 @@ def report(summary: dict, remedy: str) -> None:
     if summary["endReason"] != TRACE_COMPLETE:
         sys.exit(f"{summary['trace']} stopped after {summary['seconds']} s: {summary['endReason']}; {remedy}")
     reject_automation(summary)
+    if summary["app"]["cpuUnavailableReason"]:
+        sys.exit(summary["app"]["cpuUnavailableReason"])
 
 
-def record_device(device: str, label: str, seconds: int, frames: int, callers: list[str], apps: list[Path], swiftui: bool) -> None:
+def record_device(device: str, label: str, seconds: int, frames: int, callers: list[str], apps: list[Path], swiftui: bool, template: str = "Time Profiler", instruments: list[str] = ()) -> None:
     trace = new_trace(label)
-    with recording(trace, seconds, ["--device", device, "--all-processes"], [*INSTRUMENTS, *(["SwiftUI"] if swiftui else [])]):
+    with recording(trace, seconds, ["--device", device, *(["--attach", APP] if template in ("Allocations", "Processor Trace") else ["--all-processes"])],
+                   selected_instruments(template, swiftui, instruments), template):
         pass
     summary = summarize(str(trace), frames, callers, apps)
     report(summary, "keep the device connected and unlocked, then record again")
@@ -971,7 +1144,8 @@ def record_mac(label: str, seconds: int, frames: int, callers: list[str], apps: 
     driver = scroll_driver() if args.scroll else None
     trace = new_trace(label)
     scroll = None
-    with recording(trace, seconds, ["--attach", str(pid)], [*INSTRUMENTS, *(["SwiftUI"] if args.swiftui else [])]):
+    with recording(trace, seconds, ["--attach", str(pid)],
+                   selected_instruments(args.template, args.swiftui, args.instrument), args.template):
         with ThreadPoolExecutor(max_workers=1) as pool:
             sampling = pool.submit(top_window, pid, seconds)
             if driver is not None:
@@ -1013,7 +1187,9 @@ def main() -> None:
     target = record_parser.add_mutually_exclusive_group(required=True)
     target.add_argument("--device", help="iPhone/iPad UDID or name as xctrace lists it")
     target.add_argument("--mac", action="store_true", help=f"trace the host Mac and its running {APP} app")
-    record_parser.add_argument("--seconds", type=int, default=30)
+    record_parser.add_argument("--seconds", type=int, help="default 5 for Processor Trace, otherwise 30")
+    record_parser.add_argument("--template", choices=TEMPLATES, default="Time Profiler")
+    record_parser.add_argument("--instrument", action="append", default=[], help="additional Apple instrument; repeatable")
     record_parser.add_argument("--swiftui", action="store_true", help="add SwiftUI on a supported device or Mac template; its tables are large")
     record_parser.add_argument("--scroll", action="store_true", help="drive alternating pixel swipes after recording starts (--mac only)")
     record_parser.add_argument("--scroll-velocity", type=float, default=900, metavar="PIXELS_PER_SECOND")
@@ -1025,6 +1201,8 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.command == "record":
+        if args.seconds is None:
+            args.seconds = 5 if args.template == "Processor Trace" or "Processor Trace" in args.instrument else 30
         if args.seconds <= 0:
             parser.error("--seconds must be positive")
         if args.scroll and args.seconds > 3600:
@@ -1049,10 +1227,12 @@ def main() -> None:
             summary = summarize(args.trace, args.frames, args.callers, args.symbols)
             print(json.dumps(summary, indent=2))
             reject_automation(summary)
+            if summary["app"]["cpuUnavailableReason"]:
+                sys.exit(summary["app"]["cpuUnavailableReason"])
         elif args.mac:
             record_mac(args.label, args.seconds, args.frames, args.callers, args.symbols, args)
         else:
-            record_device(args.device, args.label, args.seconds, args.frames, args.callers, args.symbols, args.swiftui)
+            record_device(args.device, args.label, args.seconds, args.frames, args.callers, args.symbols, args.swiftui, args.template, args.instrument)
 
 
 if __name__ == "__main__":

@@ -48,7 +48,7 @@ class SymbolFileTests(unittest.TestCase):
                           return_value=subprocess.CompletedProcess([], 0, stdout=output)) as run:
             names = symbols.atos(symbols.SymbolFile(Path("/x/RemoteCoder"), "arm64"), 0x100000000,
                                  [0x100003000, 0x100004000])
-        self.assertEqual(names, [("inner", "outer"), ()])
+        self.assertEqual(names, [("inner (in RemoteCoder) (Parser.swift:10)", "outer (in RemoteCoder) (Chat.swift:3)"), ()])
         self.assertIn("0x100000000", run.call_args.args[0])
 
 

@@ -321,6 +321,25 @@ measurably beat SwiftUI.
   `perf-trace` rejects a trace that contains them.
   `dev-tools/streaming-motion-report` measures streaming jitter from a screen
   recording.
+- `perf-trace record --template` selects `Time Profiler` (default),
+  `Processor Trace`, `Swift Concurrency`, `System Trace`, `File Activity`, or
+  `Allocations`; repeat `--instrument` to add Apple instruments. Processor
+  Trace defaults to 5 seconds and requires A18+/M4+ hardware plus the device's
+  Developer → Processor Trace setting. Both cabled test devices are older and
+  cannot record it. Mac recording also needs Developer Tools profiling access.
+  Other templates retain Time Profiler for the XCTest-driver rejection.
+  File Activity reports logical bytes and operations by exported path (an
+  unavailable path stays unknown), System Trace reports blocked thread time,
+  Swift Concurrency reports task states and actor queues, and Processor Trace
+  reports observed function-call intervals and self cycles. Unsupported export
+  tables, including allocation events on current Xcode, stay unavailable.
+  `--frames` includes UUID/address/source and inline-frame details alongside
+  the existing frame aggregates. Device builds mirror their matching dSYMs to
+  the configured tracing host under leased `RemoteCoder-Build/runs` retention;
+  published release symbols remain in the deployment owner's symbol retention.
+  A trace without app CPU samples fails with a diagnostic. On a device that
+  records only the kernel, verify the app is foreground and unlocked, then
+  repair its profiling services before collecting another measurement.
 - Low Power Mode and serious or critical thermal states set
   `AppEnergyPolicy.conservesEnergy`, which switches rendering and prefetch
   paths. A hot phone therefore runs different code, not just slower code.

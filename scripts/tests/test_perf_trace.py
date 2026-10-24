@@ -157,10 +157,54 @@ MOTION_UPDATES_XML = '''<trace-query-result><node><schema name="hitches-updates"
 </node></trace-query-result>'''
 
 
-NO_AUTOMATION = {"app": {"automation": {"samples": 0}}}
+NO_AUTOMATION = {"app": {"automation": {"samples": 0}, "cpuUnavailableReason": None}}
 
 
 class PerfTraceTests(unittest.TestCase):
+    def test_new_template_tables_preserve_unknown_metrics_and_filter_other_apps(self):
+        import xml.etree.ElementTree as ET
+
+        def value(tag, text):
+            element = ET.Element(tag)
+            element.text = text
+            return element
+
+        app = ET.Element("process", fmt="RemoteCoder (12)")
+        other = ET.Element("process", fmt="OtherApp (13)")
+        rows = [
+            {"process": app, "name": value("text-location", "encode"),
+             "self-duration": value("duration", "2000000"), "self-cycles": value("uint64", "100"),
+             "self-instructions": value("uint64", "50")},
+            {"process": app, "name": value("text-location", "encode"),
+             "self-duration": ET.Element("sentinel"), "self-cycles": value("uint64", "10"),
+             "self-instructions": value("uint64", "5")},
+            {"process": other, "name": value("text-location", "unrelated"), "self-cycles": value("uint64", "999")},
+        ]
+        run = trace.Run(2, "Time limit reached", "iOS", frozenset({"processor-trace-intervals"}), "now")
+        with patch.object(trace, "table_rows", return_value=iter(rows)):
+            result = trace.processor_trace("x.trace", run, 10)
+        self.assertEqual(result["topFunctions"], {"encode": {"callIntervals": 2, "selfMs": None,
+                                                           "selfCycles": 110, "selfInstructions": 55}})
+        self.assertEqual(result["unavailableValueRows"], {"self-duration": 1})
+        with patch.object(trace, "table_rows", return_value=iter([
+            {"process": app, "path": value("file-path", "/db-wal"), "syscall": value("syscall", "pwrite"),
+             "type": value("string", "Write"), "lwrites": value("size-in-bytes", "4096"),
+             "duration": value("duration", "1000000")},
+            {"process": app, "path": value("file-path", "/db-wal"), "syscall": value("syscall", "pwrite"),
+             "type": value("string", "Write"), "lwrites": ET.Element("sentinel"),
+             "duration": value("duration", "2000000")},
+        ])):
+            result = trace.file_activity("x.trace", frozenset({"FsSyscall"}))
+        self.assertIsNone(result["paths"]["/db-wal"]["writtenBytes"])
+        self.assertEqual(result["paths"]["/db-wal"]["durationMs"], 3)
+
+    def test_no_app_samples_are_unavailable_and_fail_recording_report(self):
+        result, _ = self.summary({"time-profile"}, tables={"time-profile": PROFILE_XML.replace("RemoteCoder", "OtherApp")})
+        self.assertIsNone(result["app"]["cpuMs"])
+        self.assertIsNone(result["app"]["cpuMsByThread"])
+        with redirect_stdout(io.StringIO()), self.assertRaisesRegex(SystemExit, "no samples for RemoteCoder"):
+            trace.report(result, "retry")
+
     def test_app_frames_survive_renamed_comparison_bundles(self):
         for executable in ("RemoteCoder", "RemoteCoder.debug.dylib"):
             for root in ("/baseline.app", "/baseline.app/Contents/MacOS"):

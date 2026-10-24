@@ -49,7 +49,7 @@ def atos(file: SymbolFile, load_address: int, addresses: list[int]) -> list[tupl
     if len(blocks) != len(addresses):
         raise RuntimeError(f"atos returned {len(blocks)} results for {len(addresses)} addresses in {file.path}")
     return [
-        tuple(name for line in block.splitlines() if is_symbol(name := line.split(" (in ", 1)[0]))
+        tuple(line for line in block.splitlines() if is_symbol(line))
         for block in blocks
     ]
 
