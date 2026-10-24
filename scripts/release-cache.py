@@ -21,7 +21,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 import gateway_bundle
-from build_artifacts import tree_digest
+from build_artifacts import reuse_installed, tree_digest
 from build_support import cache_root, file_lease
 from maintainer_config import load as maintainer_config
 from release_tag import require_main_ancestor
@@ -29,7 +29,6 @@ from release_tag import require_main_ancestor
 RELEASES_IN_HOME = Path("Library/Caches/RemoteCoder-Build/releases")
 RELEASES = Path.home() / RELEASES_IN_HOME
 DEPLOYMENTS = Path.home() / "Library/Logs/remote-coder/deployments"
-CODEX_PACKAGE = Path.home() / ".codex/packages/standalone/current"
 INSTALLED_GATEWAY = Path.home() / "localbin/remote-coder-gateway/remote-coder-codex-gateway"
 CONFIG = "Contents/Resources/RemoteCoderLocalConfig.json"
 VERSION = r"(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})"
@@ -405,10 +404,10 @@ def catch_up(host: str) -> dict:
     prune_symbols()
     package = None
     if plan["gateway"] == "deliver":
-        package = CODEX_PACKAGE
-        if not CODEX_PACKAGE.exists() or fingerprint(CODEX_PACKAGE) != artifacts["codex-package"]["fingerprint"]:
-            package = directory / "codex-package"
-            mirror(host, "codex-package", artifacts["codex-package"], package)
+        package = directory / "codex-package"
+        published = artifacts["codex-package"]
+        if package.exists() or not reuse_installed(package, published["fingerprint"].removeprefix("tree:")):
+            mirror(host, "codex-package", published, package)
     return {
         "version": version,
         "commit": record["commit"],

@@ -238,7 +238,7 @@ class ReleasePublicationTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name).resolve()
-        self.rsync_calls = 0
+        self.copied = []
         self.enterContext(patch.object(module.subprocess, "run", side_effect=self.transport))
 
     def on(self, host):
@@ -246,7 +246,7 @@ class ReleasePublicationTests(unittest.TestCase):
         stack = contextlib.ExitStack()
         stack.enter_context(patch.object(module, "RELEASES", home / module.RELEASES_IN_HOME))
         stack.enter_context(patch.object(module, "DEPLOYMENTS", home / "Library/Logs/remote-coder/deployments"))
-        stack.enter_context(patch.object(module, "CODEX_PACKAGE", home / ".codex/packages/standalone/current"))
+        stack.enter_context(patch("build_artifacts.Path.home", return_value=home))
         return stack
 
     def transport(self, command, **kwargs):
@@ -254,8 +254,8 @@ class ReleasePublicationTests(unittest.TestCase):
             record = self.root / "mini" / module.RELEASES_IN_HOME / "published.json"
             return subprocess.CompletedProcess(command, 0, record.read_text() if record.exists() else "", "")
         self.assertEqual(command[:2], ["rsync", "-a"])
-        self.rsync_calls += 1
         source, destination = command[2].removeprefix("mini:"), command[3]
+        self.copied.append(source.rstrip("/"))
         if source.endswith("/"):
             shutil.copytree(source, destination, symlinks=True)
         else:
@@ -269,6 +269,7 @@ class ReleasePublicationTests(unittest.TestCase):
             write(gateway / "Contents/MacOS/gateway", f"gateway {version}".encode())
             package = self.root / "mini/.codex/packages/standalone/releases/0.1.0"
             write(package / "bin/codex", b"codex")
+            write(package / "codex-package.json", b"{}")
             module.publish(version, gateway, package)
             write(directory / module.MAC_APP / "Contents/Info.plist", f"app {version}".encode())
             write(directory / module.MAC_PACKAGE, f"pkg {version}".encode())
@@ -314,17 +315,29 @@ class ReleasePublicationTests(unittest.TestCase):
                 self.assertEqual(module.fingerprint(copy), record["artifacts"][name]["fingerprint"], name)
             self.assertEqual((directory / "commit").read_text().strip(), self.commit)
 
+    def test_catch_up_snapshots_the_installed_package_despite_the_installer_link(self):
+        record = self.publish_on_mini("3.45.0")
+        standalone = self.root / "book/.codex/packages/standalone"
+        shutil.copytree(self.root / "mini/.codex/packages/standalone/releases/0.1.0", standalone / "releases/0.1.0", symlinks=True)
+        (standalone / "releases/0.1.0/codex").symlink_to("bin/codex")
+        (standalone / "current").symlink_to("releases/0.1.0")
+        plan = self.catch_up({"gateway": "3.44.1", "app": "3.44.1"})
+        package = Path(plan["releaseDir"]) / "codex-package"
+        self.assertEqual(plan["codexPackage"], str(package))
+        self.assertEqual(module.fingerprint(package), record["artifacts"]["codex-package"]["fingerprint"])
+        self.assertNotIn(record["artifacts"]["codex-package"]["path"], self.copied)
+
     def test_settled_release_keeps_later_development_builds_and_never_downgrades(self):
         self.publish_on_mini("3.45.0")
         self.catch_up({"gateway": "3.44.1", "app": "3.44.1"})
-        copied = self.rsync_calls
+        copied = len(self.copied)
         with self.on("book"), patch.object(module, "installed", return_value={"gateway": "3.45.0", "app": "3.45.0"}):
             self.assertEqual(module.settle("3.45.0"), ["app", "gateway"])
         plan = self.catch_up({"gateway": "development", "app": "development"})
         self.assertEqual((plan["gateway"], plan["app"], plan["codexPackage"]), ("keep", "keep", None))
         plan = self.catch_up({"gateway": "3.46.0", "app": "3.45.0"})
         self.assertEqual((plan["gateway"], plan["app"]), ("newer", "current"))
-        self.assertEqual(self.rsync_calls, copied)
+        self.assertEqual(len(self.copied), copied)
 
     def test_a_changed_artifact_is_rejected_before_the_mac_publication_is_complete(self):
         self.publish_on_mini("3.45.0")
