@@ -93,8 +93,7 @@ struct AutomationsView: View {
             ToolbarItem { Button("Refresh", systemImage: "arrow.clockwise") { Task { await authority.refresh(filter: filter, search: query) } } }
             ToolbarItem { Button("New automation", systemImage: "plus") {
                 var draft = AutomationDraft.new()
-                if let directories = workspace.model(for: authority.hostID)?.directories,
-                   case .resolved(let home) = directories.home {
+                if let home = workspace.model(for: authority.hostID)?.directories.lastKnownHomePath {
                     draft.set(.string(home), at: ["cwd"])
                 }
                 editor = drafts.session(authorityID: authority.hostID, draft: draft); editorPresented = editor != nil

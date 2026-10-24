@@ -26,23 +26,43 @@ struct HostInformationTests {
 
         let relaunched = HostDirectories(gateway: remote, hostID: hostID, hostLabel: "Test", defaults: defaults)
         #expect(relaunched.lastKnownHomePath == "/home/second")
-        #expect(relaunched.home == .unresolved)
+        #expect(relaunched.information == nil)
         #expect(await remote.reads == 2)
     }
 
-    @Test func aReconnectDuringResolutionResolvesOnTheNewConnection() async throws {
+    @Test func aReconnectDuringResolutionResolvesEveryCallerOnTheNewConnection() async throws {
         let suite = "HostInformationTests.\(UUID())"
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let remote = HeldFirstReadRemote(homes: ["/home/before", "/home/after"])
         let directories = HostDirectories(gateway: remote, hostID: UUID(), hostLabel: "Test", defaults: defaults)
-        let resolution = Task { try await directories.resolveHomePath() }
+        let initiating = Task { try await directories.resolveHomePath() }
+        let joining = Task { try await directories.resolveHomePath() }
         await remote.firstReadArrived()
         directories.connectionChanged()
         await remote.releaseFirstRead()
-        #expect(try await resolution.value == "/home/after")
-        #expect(directories.home == .resolved("/home/after"))
+        #expect(try await initiating.value == "/home/after")
+        #expect(try await joining.value == "/home/after")
+        #expect(directories.information?.homeDirectory == "/home/after")
         #expect(directories.lastKnownHomePath == "/home/after")
+        #expect(await remote.reads == 2)
+        await directories.retire()
+    }
+
+    @Test func aCancelledInitiatorStillPublishesTheSharedRead() async throws {
+        let suite = "HostInformationTests.\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let remote = HeldFirstReadRemote(homes: ["/home/before"])
+        let directories = HostDirectories(gateway: remote, hostID: UUID(), hostLabel: "Test", defaults: defaults)
+        let initiating = Task { try await directories.resolveHomePath() }
+        let joining = Task { try await directories.resolveHomePath() }
+        await remote.firstReadArrived()
+        initiating.cancel()
+        await remote.releaseFirstRead()
+        _ = try? await initiating.value
+        #expect(try await joining.value == "/home/before")
+        #expect(directories.lastKnownHomePath == "/home/before")
         await directories.retire()
     }
 
@@ -70,9 +90,11 @@ private actor HeldFirstReadRemote: HostDirectoryRemote {
     private var homes: [String]
     private var heldRead: CheckedContinuation<Void, Never>?
     private var arrivalWaiter: CheckedContinuation<Void, Never>?
+    private(set) var reads = 0
     init(homes: [String]) { self.homes = homes }
 
     func readHostInfo() async -> GatewayClient.HostInfoResponse {
+        reads += 1
         let home = homes.removeFirst()
         if home == "/home/before" {
             await withCheckedContinuation { heldRead = $0; arrivalWaiter?.resume(); arrivalWaiter = nil }

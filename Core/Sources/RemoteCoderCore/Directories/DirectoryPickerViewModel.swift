@@ -16,10 +16,7 @@ final class DirectoryPickerViewModel {
     @ObservationIgnored private let directories: HostDirectories
     @ObservationIgnored private var expansionTasks: [String: Task<Void, Never>] = [:]
 
-    var resolvedHomeDirectory: String? {
-        if case .resolved(let path) = directories.home { return path }
-        return nil
-    }
+    var homeDirectory: String? { directories.lastKnownHomePath }
 
     init(directories: HostDirectories, currentWorkingDirectory: String?, prefetchedRootChildren: [DirectoryItem] = []) {
         self.directories = directories

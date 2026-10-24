@@ -2,20 +2,13 @@ import Foundation
 import Observation
 import OSLog
 
-enum HostHome: Equatable, Sendable {
-    case unresolved
-    case resolved(String)
-    case failed(String)
-}
-
-/// Keeps one physical host's directory knowledge: the resolved `$HOME` and the
-/// last one it reported, its warm child listing and the favorited paths. One instance per host, owned by
-/// `HostServices`, so every consumer reads the same resolution instead of
-/// racing its own.
+/// Keeps one physical host's directory knowledge: its last reported `$HOME`,
+/// its warm child listing and the favorited paths. One instance per host,
+/// owned by `HostServices`, so every consumer reads the same resolution
+/// instead of racing its own.
 @MainActor
 @Observable
 final class HostDirectories {
-    private(set) var home: HostHome = .unresolved
     private(set) var lastKnownHomePath: String?
     private(set) var information: GatewayClient.HostInfoResponse?
     private(set) var homeChildren: DirectoryListing?
@@ -34,12 +27,12 @@ final class HostDirectories {
     @ObservationIgnored private var refreshLoopTask: Task<Void, Never>?
     @ObservationIgnored private var activeRefreshTask: Task<Void, Never>?
     @ObservationIgnored private var informationGeneration = UUID()
-    @ObservationIgnored private var homeResolutionTask: Task<GatewayClient.HostInfoResponse, Error>?
+    @ObservationIgnored private var homeResolutionTask: Task<String, Error>?
     @ObservationIgnored private var visibleOwners: Set<UUID> = []
     @ObservationIgnored private var isSuspended = false
     @ObservationIgnored private var isRetired = false
 
-    init(gateway: any HostDirectoryRemote, hostID: UUID, hostLabel: String, defaults: UserDefaults = AppStorageScope.current.defaults) {
+    init(gateway: any HostDirectoryRemote, hostID: UUID, hostLabel: String, defaults: UserDefaults) {
         self.hostID = hostID
         self.gateway = gateway
         self.hostLabel = hostLabel
@@ -225,45 +218,39 @@ final class HostDirectories {
 
     func resolveHomePath() async throws -> String {
         while true {
+            guard !isRetired else { throw HostDirectoriesError.retired }
+            try Task.checkCancellation()
+            if let information { return information.homeDirectory }
             let generation = informationGeneration
             do {
-                return try await resolveHomePath(in: generation)
+                return try await (homeResolutionTask ?? startHomeResolution(in: generation)).value
             } catch {
                 guard generation != informationGeneration else { throw error }
             }
         }
     }
 
-    private func resolveHomePath(in generation: UUID) async throws -> String {
-        guard !isRetired else { throw HostDirectoriesError.retired }
-        try Task.checkCancellation()
-        if information != nil, case .resolved(let path) = home { return path }
-        if let homeResolutionTask { return try await homeResolutionTask.value.homeDirectory }
-
+    private func startHomeResolution(in generation: UUID) -> Task<String, Error> {
         let gateway = self.gateway
-        let task = Task { try await gateway.readHostInfo() }
-        homeResolutionTask = task
-        do {
-            let result = try await task.value
-            let resolved = result.homeDirectory
-            guard generation == informationGeneration else { throw CancellationError() }
-            guard !isRetired else { throw HostDirectoriesError.retired }
-            try Task.checkCancellation()
-            information = result
-            home = .resolved(resolved)
-            if lastKnownHomePath != resolved {
-                lastKnownHomePath = resolved
-                HostPreferences.setRemoteHomePath(resolved, hostID: hostID, defaults: defaults)
+        let task = Task {
+            do {
+                let result = try await gateway.readHostInfo()
+                guard generation == informationGeneration, !isRetired else { throw CancellationError() }
+                homeResolutionTask = nil
+                information = result
+                if lastKnownHomePath != result.homeDirectory {
+                    lastKnownHomePath = result.homeDirectory
+                    HostPreferences.setRemoteHomePath(result.homeDirectory, hostID: hostID, defaults: defaults)
+                }
+                logger.notice("Resolved remote home for \(self.hostLabel, privacy: .public): \(result.homeDirectory, privacy: .public)")
+                return result.homeDirectory
+            } catch {
+                if generation == informationGeneration, !isRetired { homeResolutionTask = nil }
+                throw error
             }
-            homeResolutionTask = nil
-            logger.notice("Resolved remote home for \(self.hostLabel, privacy: .public): \(resolved, privacy: .public)")
-            return resolved
-        } catch {
-            guard generation == informationGeneration else { throw error }
-            homeResolutionTask = nil
-            if !(error is CancellationError) { home = .failed(error.localizedDescription) }
-            throw error
         }
+        homeResolutionTask = task
+        return task
     }
 
     /// Expands `~` and `~/...` against the resolved home; every other path is

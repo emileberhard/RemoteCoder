@@ -334,7 +334,7 @@ private struct DirectoryFolderList: View {
     }
 
     private func isSelected(_ item: DirectoryItem) -> Bool {
-        if item.path == "~", let homePath = viewModel.resolvedHomeDirectory {
+        if item.path == "~", let homePath = viewModel.homeDirectory {
             return viewModel.selectedPath == "~" || viewModel.selectedPath == homePath
         }
         return viewModel.selectedPath == item.path
