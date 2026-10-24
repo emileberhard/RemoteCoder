@@ -6,10 +6,18 @@ import OSLog
 @MainActor
 @Observable
 final class LiveNavigationSetupController {
-    struct GoogleStatus {
-        let termsAccepted: Bool
+    struct GoogleLicenses {
         let sdkVersion: String
         let openSourceLicenses: String
+
+        @MainActor static func load() -> Self {
+            // SDK initialization touches UserDefaults. Never do this while SwiftUI
+            // holds its render lock: Google's initializer can wait on that same lock.
+            Self(
+                sdkVersion: GMSNavigationServices.navSDKVersion(),
+                openSourceLicenses: GMSNavigationServices.openSourceLicenseInfo()
+            )
+        }
     }
 
     static let setupEnabledKey = "liveNavigation.setupEnabled"
@@ -19,10 +27,17 @@ final class LiveNavigationSetupController {
     private var serviceSession: CLServiceSession?
     private var refreshTask: Task<Void, Never>?
 
-    private(set) var isWorking = false
-    private(set) var status = "Not configured"
+    private(set) var progress: String?
     private(set) var errorMessage: String?
-    private(set) var googleStatus: GoogleStatus?
+
+    var isWorking: Bool { progress != nil }
+
+    var status: String {
+        if let progress { return progress }
+        if errorMessage != nil { return "Setup incomplete" }
+        guard UserDefaults.standard.bool(forKey: Self.setupEnabledKey) else { return "Not configured" }
+        return isReady ? "Ready" : "Enable Always and Precise location to finish setup."
+    }
 
     var authorization: String {
         switch locationManager.authorizationStatus {
@@ -45,57 +60,41 @@ final class LiveNavigationSetupController {
         locationManager.accuracyAuthorization == .fullAccuracy ? "Precise" : "Reduced"
     }
 
-    func refreshGoogleStatus() {
-        // SDK initialization touches UserDefaults. Never do this while SwiftUI
-        // holds its render lock: Google's initializer can wait on that same lock.
-        googleStatus = GoogleStatus(
-            termsAccepted: GMSNavigationServices.areTermsAndConditionsAccepted(),
-            sdkVersion: GMSNavigationServices.navSDKVersion(),
-            openSourceLicenses: GMSNavigationServices.openSourceLicenseInfo()
-        )
+    private var isReady: Bool {
+        locationManager.authorizationStatus == .authorizedAlways && locationManager.accuracyAuthorization == .fullAccuracy
     }
 
     func prepare(policy: SharedGatewayPolicy, googleMapsAPIKey: String, pushTokens: PushTokenSources) async {
         guard isWorking == false else { return }
-        isWorking = true
+        progress = "Waiting for Google terms…"
         errorMessage = nil
-        defer { isWorking = false }
+        defer { progress = nil }
+        await refreshTask?.value
 
         do {
             guard policy.registersDevice else { throw SetupError.perfHarnessBuild }
             guard googleMapsAPIKey.isEmpty == false else {
                 throw SetupError.missingGoogleMapsAPIKey
             }
-            if googleStatus == nil {
-                refreshGoogleStatus()
-            }
-            status = "Waiting for Google terms…"
-            guard await acceptGoogleTermsIfNeeded() else {
+            guard await acceptGoogleTerms() else {
                 throw SetupError.googleTermsDeclined
             }
 
-            status = "Requesting location access…"
-            let session = CLServiceSession(
+            progress = "Requesting location access…"
+            serviceSession = CLServiceSession(
                 authorization: .always,
                 fullAccuracyPurposeKey: LiveNavigationConstants.fullAccuracyPurposeKey
             )
-            serviceSession = session
-            LiveNavigationCoordinator.shared.retainSetupSession(session)
-
             try await waitForLocationDecision()
             try Task.checkCancellation()
 
-            status = "Preparing location…"
+            progress = "Preparing location…"
             let credentials = credentials(token: try await locationPushToken())
             try Task.checkCancellation()
             pushTokens.receiveLocation(credentials)
             UserDefaults.standard.set(true, forKey: Self.setupEnabledKey)
-            status = credentials.setupReady
-                ? "Ready"
-                : "Enable Always and Precise location to finish setup."
         } catch {
             logger.error("Live-location setup failed: \(error.localizedDescription, privacy: .public)")
-            status = "Setup incomplete"
             errorMessage = error.localizedDescription
         }
     }
@@ -111,7 +110,6 @@ final class LiveNavigationSetupController {
     }
 
     private func reregister(pushTokens: PushTokenSources) async {
-        refreshGoogleStatus()
         var refreshed: String?
         if locationManager.authorizationStatus == .authorizedAlways {
             do {
@@ -132,27 +130,22 @@ final class LiveNavigationSetupController {
     }
 
     private func credentials(token: String) -> DeviceLocationCredentials {
-        let fullAccuracy = locationManager.accuracyAuthorization == .fullAccuracy
-        let termsAccepted = googleStatus?.termsAccepted == true
-        return DeviceLocationCredentials(
+        DeviceLocationCredentials(
             token: token,
-            setupReady: locationManager.authorizationStatus == .authorizedAlways && fullAccuracy && termsAccepted,
+            setupReady: isReady,
             authorization: authorization,
-            fullAccuracy: fullAccuracy,
-            googleTermsAccepted: termsAccepted
+            fullAccuracy: locationManager.accuracyAuthorization == .fullAccuracy,
+            googleTermsAccepted: true
         )
     }
 
-    private func acceptGoogleTermsIfNeeded() async -> Bool {
-        if googleStatus?.termsAccepted == true { return true }
+    private func acceptGoogleTerms() async -> Bool {
         let options = GMSNavigationTermsAndConditionsOptions(companyName: "RemoteCoder")
-        let accepted = await withCheckedContinuation { continuation in
+        return await withCheckedContinuation { continuation in
             GMSNavigationServices.showTermsAndConditionsDialogIfNeeded(with: options) { accepted in
                 continuation.resume(returning: accepted)
             }
         }
-        refreshGoogleStatus()
-        return accepted
     }
 
     private func waitForLocationDecision() async throws {

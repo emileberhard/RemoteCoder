@@ -10,11 +10,12 @@ agent consumes location/guidance events through JSON-RPC or the CLI.
    then Always + Precise Core Location, and `startMonitoringLocationPushes` token
    registration; the app then registers the device, location token included,
    with every configured host. After that, every app activation re-requests the
-   token and re-reads authorization, accuracy and the Google terms
+   token and re-reads authorization and accuracy
    (`LiveNavigationSetupController.refreshRegistration`), so an upgrade, a
    rotated or invalidated token and a permission change re-register without
-   another setup. A device that lost Always or Precise registers
-   `setupReady: false`, and `navigation/start` names what is missing.
+   another setup. Completed setup implies accepted Google terms, so activation
+   never touches the Navigation SDK. A device that lost Always or Precise
+   registers `setupReady: false`, and `navigation/start` names what is missing.
 
 2. `navigation/start` creates a six-hour in-memory session. Destination is
    optional; travel mode is required.
@@ -68,9 +69,13 @@ so the two consent dialogs do not compete.
 
 ## Setup lifecycle and telemetry
 
-The settings view reads a stored Google status snapshot. Its view task refreshes
-that snapshot on the main actor, outside view rendering; the SDK APIs remain on
-their required main thread. On 14 September 2026, symbolicated MetricKit watchdog
+Only setup, the Settings Licenses page and a navigation session touch the
+Navigation SDK. When 3.66.8 read the Google terms on every activation, each
+activation was followed by one to two minutes of SDK network requests wrapped
+in UIKit background tasks, 15,000 to 100,000 of them per ten minutes of use.
+Keep SDK calls out of launch, activation and the main Settings view. The Licenses page reads the SDK version and license text in its
+view task, on the main actor outside view rendering, as the SDK requires. On
+14 September 2026, symbolicated MetricKit watchdog
 reports proved a deadlock when a computed view getter called
 `areTermsAndConditionsAccepted`: SwiftUI held its render lock while Google's
 initialization waited for a worker whose UserDefaults notification needed that

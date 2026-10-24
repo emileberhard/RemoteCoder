@@ -10,7 +10,6 @@ struct LiveNavigationSettingsSection: View {
         Section {
             LabeledContent("Location access", value: setup.authorization)
             LabeledContent("Accuracy", value: setup.accuracy)
-            LabeledContent("Google terms", value: setup.googleStatus.map { $0.termsAccepted ? "Accepted" : "Not accepted" } ?? "Loading…")
 
             Button {
                 HapticService.shared.play(.buttonPress)
@@ -38,13 +37,10 @@ struct LiveNavigationSettingsSection: View {
         } header: {
             Text("Live location")
         }
-        .task { setup.refreshGoogleStatus() }
 
         Section {
-            if let googleStatus = setup.googleStatus {
-                NavigationLink("Licenses") {
-                    GoogleNavigationLicensesView(status: googleStatus)
-                }
+            NavigationLink("Licenses") {
+                GoogleNavigationLicensesView()
             }
         } header: {
             Text("Google Maps")
@@ -55,20 +51,23 @@ struct LiveNavigationSettingsSection: View {
 }
 
 struct GoogleNavigationLicensesView: View {
-    let status: LiveNavigationSetupController.GoogleStatus
+    @State private var licenses: LiveNavigationSetupController.GoogleLicenses?
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                LabeledContent("Navigation SDK", value: status.sdkVersion)
-                Text(status.openSourceLicenses)
-                    .scaledFont(.caption.monospaced())
-                    .textSelection(.enabled)
+            if let licenses {
+                VStack(alignment: .leading, spacing: 20) {
+                    LabeledContent("Navigation SDK", value: licenses.sdkVersion)
+                    Text(licenses.openSourceLicenses)
+                        .scaledFont(.caption.monospaced())
+                        .textSelection(.enabled)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding()
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding()
         }
         .navigationTitle("Google licenses")
         .inlineNavigationTitle()
+        .task { licenses = .load() }
     }
 }
