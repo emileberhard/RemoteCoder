@@ -63,7 +63,11 @@ class MemoryStorage implements Storage {
 }
 class Gateway implements Rpc {
   document: PreferenceDocument = { entries: {} };
-  catalog = [model("gpt-6.1-sol"), model("other", false, true), model("hidden", true)];
+  catalog: (ReturnType<typeof model> & { modelProvider?: string; modelProviderName?: string })[] = [
+    model("gpt-6.1-sol"),
+    model("other", false, true),
+    model("hidden", true),
+  ];
   selectedModel = "hidden";
   offline = false;
   updates: PreferenceDocument[] = [];
