@@ -307,10 +307,11 @@ measurably beat SwiftUI.
   require one.
 
 **Measuring**
-- Measure before and after on the iPad, not in the simulator; confirm a finding
-  specific to the iPhone layout or hardware on the iPhone.
-  `just perf-trace record <label> --device <iPad UDID>` records Instruments on
-  the primary service host the iPad is cabled to and summarizes CPU time by thread, Core
+- Measure before and after on the cabled test iPhone, not in the simulator; the
+  test iPad is the second device for its layout and for parallel traces.
+  Compare traces only from the same device.
+  `just perf-trace record <label> --device <UDID>` records Instruments on
+  the primary service host the test devices are cabled to and summarizes CPU time by thread, Core
   Animation commits, GPU time and hitches; its `motion` block limits them to the
   transcript's `TranscriptScroll` signposts and gives Apple's hitch rate.
   `--frames` ranks the main thread's top functions by self time and `--callers`
