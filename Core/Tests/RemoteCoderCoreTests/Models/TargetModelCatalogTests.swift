@@ -16,6 +16,30 @@ struct TargetModelCatalogTests {
         #expect(!catalog.options(for: .claude).isEmpty)
     }
 
+    @Test func anExistingConversationOffersOnlyModelsOfItsModelProvider() async throws {
+        let defaults = try #require(UserDefaults(suiteName: "TargetModelCatalogTests.\(UUID())"))
+        var relay = CodexModelFixtures.wireModel("relay/model-a", name: "Model A", efforts: ["low", "medium", "high"])
+        relay["modelProvider"] = "relay"
+        relay["modelProviderName"] = "Relay"
+        let models = try CodexModelFixtures.models(CodexModelFixtures.wireModels() + [relay])
+        let service = CodexModelCatalogService(directory: .temporaryDirectory.appending(path: UUID().uuidString)) { _ in
+            CodexAppServerV2.ModelListResponse(data: models, nextCursor: nil)
+        }
+        await service.refresh()
+        let catalog = TargetModelCatalog(service: service, preferences: ModelPickerPreferences(defaults: defaults), defaults: defaults)
+        let external = try #require(catalog.option(id: "relay/model-a", threadID: "t", effort: nil, fastMode: false))
+        let native = try #require(catalog.option(id: CodexModelFixtures.solID, threadID: "t", effort: nil, fastMode: false))
+
+        #expect(external.pickerTitle == "Model A · Relay")
+        #expect(native.pickerTitle == "GPT-6.1 Sol")
+        #expect(catalog.options(for: .codex).contains(external), "new chats offer every provider")
+        #expect(catalog.pickerOptions(including: external).map(\.id) == ["relay/model-a"])
+        #expect(!catalog.pickerOptions(including: native).contains { $0.modelProvider != nil })
+
+        let encoded = try JSONEncoder().encode(models.last)
+        #expect(try JSONDecoder().decode(CodexAppServerV2.Model.self, from: encoded).modelProvider == external.modelProvider)
+    }
+
     @Test func hiddenClaudeModelsLeavePickersAndDefaultsButKeepTheirIdentity() throws {
         let defaults = try #require(UserDefaults(suiteName: "TargetModelCatalogTests.\(UUID())"))
         let preferences = ModelPickerPreferences(defaults: defaults)

@@ -102,7 +102,7 @@ struct NewChatSettingsSection: View {
             Picker("Model", selection: modelDefaultBinding.nativeSelectionFeedback()) {
                 Text("Last selected").tag(NewChatDefaults.lastSelectedValue)
                 ForEach(modelOptions) { option in
-                    Text(option.displayName).tag(option.id)
+                    Text(option.pickerTitle).tag(option.id)
                 }
                 if let unavailableFixedModelName {
                     Text(unavailableFixedModelName).tag(modelDefault)

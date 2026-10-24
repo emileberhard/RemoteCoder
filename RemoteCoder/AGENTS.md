@@ -1055,6 +1055,11 @@ entrypoint linked above.
     Settings shows a Daybreak Blue badge and the composer a small shield.
     This is derived per execution target, never a stored toggle or a model-id
     allowlist. Missing metadata preserves automatic upstream behavior.
+  - Rows with `modelProvider`/`modelProviderName` run on a gateway external
+    provider. `ModelOption.modelProvider` keeps it, pickers show
+    `pickerTitle` (`Model · Provider`), and an existing conversation's picker
+    offers only models of its own model provider. New chats send only the
+    model; the gateway resolves its provider.
   - `ModelVisibility` stores per-model overrides by id and is read
     through `ModelPickerPreferences`, separately for each provider. New Codex models appear
     unless the host marks them `hidden`, and hidden ones can be opted in.

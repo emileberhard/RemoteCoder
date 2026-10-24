@@ -166,7 +166,7 @@ private final class ReasoningControlFixture {
     let haptics: HapticService
     let picker: ReasoningPickerPresentation
     let model = ModelOption(id: "fixture-model", displayName: "Fixture", reasoningEfforts: [.low, .medium, .high],
-        supportsFastMode: true, supportsDaybreakBlue: false, acceptsImages: true, provider: .codex, isListed: true)
+        supportsFastMode: true, supportsDaybreakBlue: false, acceptsImages: true, provider: .codex, modelProvider: nil, isListed: true)
     var conversation = 0
     var reasoning: ReasoningSelection = .effort(.high)
     var savedChat = false

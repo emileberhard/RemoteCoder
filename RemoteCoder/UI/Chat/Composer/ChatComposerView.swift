@@ -1024,7 +1024,7 @@ private struct ChatComposerPreview: View {
         id: "preview-codex", displayName: "GPT-6.1 Sol",
         reasoningEfforts: [.low, .medium, .high, .xhigh], supportsFastMode: true,
         supportsDaybreakBlue: false,
-        acceptsImages: true, provider: .codex, isListed: true
+        acceptsImages: true, provider: .codex, modelProvider: nil, isListed: true
     )
 
     init(state: ComposerPreviewState, defaults: UserDefaults) {

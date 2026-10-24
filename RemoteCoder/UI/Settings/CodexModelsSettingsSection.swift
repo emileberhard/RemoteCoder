@@ -109,11 +109,11 @@ private struct CodexModelsSettingsPage: View {
                         VStack(alignment: .leading, spacing: 4) {
                             ViewThatFits(in: .horizontal) {
                                 HStack(spacing: 6) {
-                                    Text(entry.option.displayName)
+                                    Text(entry.option.pickerTitle)
                                     if entry.option.supportsDaybreakBlue { DaybreakBlueBadge() }
                                 }
                                 VStack(alignment: .leading, spacing: 4) {
-                                    Text(entry.option.displayName)
+                                    Text(entry.option.pickerTitle)
                                     if entry.option.supportsDaybreakBlue { DaybreakBlueBadge() }
                                 }
                             }

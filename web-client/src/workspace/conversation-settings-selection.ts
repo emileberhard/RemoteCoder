@@ -84,8 +84,15 @@ export class ConversationSettingsSelection {
     const provider = selected?.provider ?? conversation?.header.provider;
     const storedModel = selected?.model || conversation?.header.model;
     const model = provider === "claude" && storedModel ? canonicalModelID(storedModel) : storedModel;
+    const route =
+      conversation && provider === "codex"
+        ? catalog.find((choice) => choice.provider === "codex" && choice.id === model)
+        : undefined;
     const result: ModelChoice[] = catalog
       .filter((choice) => choice.visible)
+      .filter(
+        (choice) => !route || choice.provider !== "codex" || choice.modelProvider === route.modelProvider,
+      )
       .map((choice) => ({
         ...choice,
         efforts: choice.efforts.filter((effort) =>

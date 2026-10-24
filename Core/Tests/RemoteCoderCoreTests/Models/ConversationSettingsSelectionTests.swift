@@ -7,11 +7,11 @@ struct ConversationSettingsSelectionTests {
     private static let codex = ModelOption(
         id: "gpt-a", displayName: "GPT A", reasoningEfforts: [.low, .high], supportsFastMode: true,
         supportsDaybreakBlue: false,
-        acceptsImages: true, provider: .codex, isListed: true)
+        acceptsImages: true, provider: .codex, modelProvider: nil, isListed: true)
     private static let otherCodex = ModelOption(
         id: "gpt-b", displayName: "GPT B", reasoningEfforts: [.low, .high], supportsFastMode: false,
         supportsDaybreakBlue: false,
-        acceptsImages: true, provider: .codex, isListed: true)
+        acceptsImages: true, provider: .codex, modelProvider: nil, isListed: true)
 
     private func fresh() -> ConversationSettingsSelection {
         ConversationSettingsSelection(model: Self.codex, reasoning: .automatic, fastMode: .selection(nil))

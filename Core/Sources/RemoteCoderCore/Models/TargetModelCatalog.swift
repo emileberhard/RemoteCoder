@@ -25,7 +25,7 @@ struct TargetModelCatalog {
     }
 
     func pickerOptions(including selection: ModelOption) -> [ModelOption] {
-        let options = options(for: selection.provider)
+        let options = options(for: selection.provider).filter { $0.modelProvider == selection.modelProvider }
         return options.contains { $0.id == selection.id } ? options : options + [selection]
     }
 

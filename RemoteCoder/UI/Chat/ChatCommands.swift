@@ -96,7 +96,7 @@ struct ChatCommands: Commands {
             }
         )) {
             ForEach(actions?.models ?? []) { model in
-                Text(model.displayName).tag(Optional(model.id))
+                Text(model.pickerTitle).tag(Optional(model.id))
             }
         }
         .disabled(actions?.models.isEmpty ?? true)

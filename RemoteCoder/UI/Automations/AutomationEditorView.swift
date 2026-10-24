@@ -280,7 +280,7 @@ struct AutomationEditorView: View {
                                                   provider: agent["provider"]?.stringValue ?? "codex")
         return Picker("Model", selection: text(agentPath + ["model"], optional: true)) {
             Text("Service default").tag("")
-            ForEach(options) { Text($0.displayName).tag($0.id) }
+            ForEach(options) { Text($0.pickerTitle).tag($0.id) }
             if !saved.isEmpty && !options.contains(where: { $0.id == saved }) { Text("\(saved) (saved, unavailable)").tag(saved) }
         }
     }

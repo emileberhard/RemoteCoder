@@ -768,3 +768,24 @@ test("reentrant preference refreshes wait for the owning exchange rather than ov
   expect(reads).toBe(2);
   expect(workspace.getSnapshot().hosts[0]?.preferences.status).toBe("ready");
 });
+
+test("a conversation on an external model provider offers only that provider's models", async () => {
+  const { workspace, gateway } = setup();
+  gateway.catalog = [
+    model("gpt-6.1-sol"),
+    { ...model("relay/model-a"), displayName: "Model A", modelProvider: "relay", modelProviderName: "Relay" },
+  ];
+  await workspace.refreshHost("mini");
+  expect(workspace.choices().find((choice) => choice.id === "relay/model-a")?.name).toBe("Model A · Relay");
+  expect(workspace.choices().filter((choice) => choice.provider === "codex")).toHaveLength(2);
+
+  gateway.selectedModel = "relay/model-a";
+  await workspace.refreshHost("mini");
+  await workspace.selectConversation({ hostId: "mini", threadId: "conversation" });
+  expect(
+    workspace
+      .choices()
+      .filter((choice) => choice.provider === "codex")
+      .map((choice) => choice.id),
+  ).toEqual(["relay/model-a"]);
+});

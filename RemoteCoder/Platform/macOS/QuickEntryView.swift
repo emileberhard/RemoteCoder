@@ -177,7 +177,7 @@ private struct QuickEntryDestinationBar: View {
         } else if !options.isEmpty {
             Picker("Model", selection: Binding(get: { screen.selectedModel }, set: { if let option = $0 { session.selectModel(option) } })) {
                 ForEach(options) { option in
-                    Text(option.displayName).tag(Optional(option))
+                    Text(option.pickerTitle).tag(Optional(option))
                 }
             }
             .fixedSize()

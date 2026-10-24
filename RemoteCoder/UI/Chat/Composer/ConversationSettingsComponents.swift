@@ -83,9 +83,9 @@ struct ConversationModelMenu: View {
 
     @ViewBuilder private func modelLabel(_ option: ModelOption) -> some View {
         if option.supportsDaybreakBlue {
-            Label("\(option.displayName) · Daybreak Blue", systemImage: "shield")
+            Label("\(option.pickerTitle) · Daybreak Blue", systemImage: "shield")
         } else {
-            Text(option.displayName)
+            Text(option.pickerTitle)
         }
     }
 }
@@ -102,7 +102,7 @@ struct UnresolvedModelControls: View {
                 AppMenu {
                     Picker("Model", selection: $selection.nativeSelectionFeedback()) {
                         ForEach(models) { option in
-                            Text(option.displayName).tag(Optional(option))
+                            Text(option.pickerTitle).tag(Optional(option))
                         }
                     }
                     .pickerStyle(.inline)

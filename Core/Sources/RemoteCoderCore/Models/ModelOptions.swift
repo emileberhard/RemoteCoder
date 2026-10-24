@@ -103,7 +103,12 @@ struct ModelOption: Identifiable, Hashable, Sendable {
     let supportsDaybreakBlue: Bool
     let acceptsImages: Bool
     let provider: AgentProvider
+    let modelProvider: CodexAppServerV2.ModelProvider?
     let isListed: Bool
+
+    var pickerTitle: String {
+        modelProvider.map { "\(displayName) · \($0.name)" } ?? displayName
+    }
 
     var automaticCyberAccessProgram: CodexAppServerV2.CyberAccessProgram? {
         supportsDaybreakBlue ? .daybreakBlue : nil
@@ -118,6 +123,7 @@ struct ModelOption: Identifiable, Hashable, Sendable {
             supportsDaybreakBlue: false,
             acceptsImages: true,
             provider: .codex,
+            modelProvider: nil,
             isListed: false
         )
     }
@@ -170,6 +176,7 @@ enum ClaudeModelCatalog {
             supportsDaybreakBlue: false,
             acceptsImages: true,
             provider: .claude,
+            modelProvider: nil,
             isListed: true
         )
     }

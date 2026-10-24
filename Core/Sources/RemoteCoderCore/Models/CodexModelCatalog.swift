@@ -31,6 +31,7 @@ struct CodexModelCatalog: Equatable, Sendable {
                     supportsDaybreakBlue: model.availableAccessPrograms?.cyber.contains("daybreakBlue") == true,
                     acceptsImages: model.inputModalities.contains(.image),
                     provider: .codex,
+                    modelProvider: model.modelProvider,
                     isListed: true
                 ),
                 summary: model.description,

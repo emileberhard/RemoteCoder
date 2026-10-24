@@ -27,7 +27,7 @@ struct CommandPaletteCatalog {
             Entry(item: .folder(folder), title: folder.displayPath, detail: "Folder \(folder.hostName)")
         }
         let models = actions.models.map { model in
-            Entry(item: .model(model), title: model.displayName, detail: "Model")
+            Entry(item: .model(model), title: model.pickerTitle, detail: "Model")
         }
         let commands = ChatCommand.allCases
             .filter { $0.appearsInPalette && actions.isEnabled($0) }

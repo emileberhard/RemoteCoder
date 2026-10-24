@@ -35,6 +35,7 @@ export type ModelChoice = {
   defaultEffort: string;
   hiddenUpstream?: boolean;
   upstreamDefault?: boolean;
+  modelProvider?: string;
 };
 type HostContext = {
   preferences: Load<PreferenceDocument>;
@@ -72,6 +73,11 @@ type PinnedHeaderRecovery = {
   retryAt?: number;
 };
 type HeaderRead = { threadId: string; name?: { value: string | null } };
+type ExternalModel = Model & { modelProvider: string; modelProviderName: string };
+function external(model: Model): model is ExternalModel {
+  const route = model as Partial<ExternalModel>;
+  return typeof route.modelProvider === "string" && typeof route.modelProviderName === "string";
+}
 export class HostServices {
   private readonly versions: HostVersions;
   readonly accountUsage: AccountUsageStore;
@@ -430,8 +436,11 @@ export class HostServices {
               })
               .map((model) => ({
                 id: model.model,
-                name: model.displayName,
+                name: external(model)
+                  ? `${model.displayName} · ${model.modelProviderName}`
+                  : model.displayName,
                 provider: "codex" as const,
+                modelProvider: external(model) ? model.modelProvider : undefined,
                 efforts: model.supportedReasoningEfforts.map((effort) => effort.reasoningEffort),
                 defaultEffort: model.defaultReasoningEffort,
                 hiddenUpstream: model.hidden,
