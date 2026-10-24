@@ -249,7 +249,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
 
     @ObservationIgnored private lazy var transcriptRecovery = TranscriptRecovery(source: self)
 
-    var remoteHomePath: String?
+    var remoteHomePath: String? { directories.lastKnownHomePath }
 
     var favoriteFolderHost: FavoriteFolder.Host {
         FavoriteFolder.Host(id: hostID, name: hostDisplayName, paths: directories.favorites, remoteHomePath: remoteHomePath)
@@ -419,7 +419,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
         self.modelCatalog = modelCatalog
         let hostServices = HostServices(host: host, routes: routes, speech: speechAccess,
             gateway: gateway,
-            htmlVisuals: htmlVisuals, syncedPreferences: syncedPreferences)
+            htmlVisuals: htmlVisuals, syncedPreferences: syncedPreferences, defaults: chatDefaults)
         self.hostServices = hostServices
         self.fileOpener = HostFileOpener(access: hostServices.files, canPreview: HostFileOpener.quickLookCanPreview)
         let historyCache = storage.root == HostStorage.live.root ? HistoryPageCache.shared
@@ -503,9 +503,8 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
         guard acceptsWork else { return }
 
         if remoteHomePath == nil {
-            let resolved = try? await directories.resolveHomePath()
+            _ = try? await directories.resolveHomePath()
             guard acceptsWork else { return }
-            remoteHomePath = resolved
         }
         for screen in screens { screen.adoptRemoteHomeAsWorkingDirectoryIfUnset() }
 
@@ -620,7 +619,6 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
     private func refreshForegroundDirectory(generation: Int) async {
         if isVisible { await directories.triggerForegroundRefresh() }
         guard !Task.isCancelled, lifecycle.isCurrent(generation) else { return }
-        if case .resolved(let home) = directories.home { remoteHomePath = home }
         for screen in screens { screen.adoptRemoteHomeAsWorkingDirectoryIfUnset() }
     }
 

@@ -195,18 +195,17 @@ struct HostScopedStateTests {
         // Even with a bundled `codexWorkdir` present, an unconfigured host has no
         // directory: one machine's repository path is not another's.
         #expect(HostPreferences.workingDirectory(hostID: host.id, defaults: defaults) == nil)
+        HostPreferences.setRemoteHomePath("/Users/developer", hostID: host.id, defaults: defaults)
 
         let target = ChatTargetModel(host: host, chatDefaults: defaults, modelPickerPreferences: ModelPickerPreferences(defaults: defaults), syncedPreferences: SyncedPreferenceStore(defaults: defaults, keys: []), voiceCalls: TestVoiceCalls.center, backgroundExecution: StubBackgroundExecution(), uploadContinuation: ForegroundUploadContinuation(), gatewayPolicy: .production, storage: temporary.storage, htmlVisuals: HTMLVisualServices(directory: temporary.storage.root.appending(path: "html-visuals")))
         let model = target.makeScreen(newChat: UUID())
         #expect(model.workingDirectory == nil)
 
-        HostPreferences.setRemoteHomePath("/Users/developer", hostID: host.id, defaults: defaults)
         model.adoptRemoteHomeAsWorkingDirectoryIfUnset()
         #expect(model.workingDirectory == "/Users/developer")
 
         // A host that already has one keeps it.
         model.updateWorkingDirectory("/Users/developer/repo")
-        model.target.remoteHomePath = "/Users/other"
         model.adoptRemoteHomeAsWorkingDirectoryIfUnset()
         #expect(model.workingDirectory == "/Users/developer/repo")
     }

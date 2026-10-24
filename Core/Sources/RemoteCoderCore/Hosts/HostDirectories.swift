@@ -8,14 +8,15 @@ enum HostHome: Equatable, Sendable {
     case failed(String)
 }
 
-/// Keeps one physical host's directory knowledge: the resolved `$HOME`, its
-/// warm child listing and the favorited paths. One instance per host, owned by
+/// Keeps one physical host's directory knowledge: the resolved `$HOME` and the
+/// last one it reported, its warm child listing and the favorited paths. One instance per host, owned by
 /// `HostServices`, so every consumer reads the same resolution instead of
 /// racing its own.
 @MainActor
 @Observable
 final class HostDirectories {
     private(set) var home: HostHome = .unresolved
+    private(set) var lastKnownHomePath: String?
     private(set) var information: GatewayClient.HostInfoResponse?
     private(set) var homeChildren: DirectoryListing?
     private(set) var favorites: [String]
@@ -46,6 +47,7 @@ final class HostDirectories {
         favoritesKey = "directoryFavorites.\(hostID.uuidString)"
         legacyFavoritesKey = "directoryPicker.favoritePaths.\(hostID.uuidString)"
         favorites = []
+        lastKnownHomePath = HostPreferences.remoteHomePath(hostID: hostID, defaults: defaults)
         loadFavorites()
     }
 
@@ -222,13 +224,23 @@ final class HostDirectories {
     }
 
     func resolveHomePath() async throws -> String {
+        while true {
+            let generation = informationGeneration
+            do {
+                return try await resolveHomePath(in: generation)
+            } catch {
+                guard generation != informationGeneration else { throw error }
+            }
+        }
+    }
+
+    private func resolveHomePath(in generation: UUID) async throws -> String {
         guard !isRetired else { throw HostDirectoriesError.retired }
         try Task.checkCancellation()
         if information != nil, case .resolved(let path) = home { return path }
         if let homeResolutionTask { return try await homeResolutionTask.value.homeDirectory }
 
         let gateway = self.gateway
-        let generation = informationGeneration
         let task = Task { try await gateway.readHostInfo() }
         homeResolutionTask = task
         do {
@@ -239,6 +251,10 @@ final class HostDirectories {
             try Task.checkCancellation()
             information = result
             home = .resolved(resolved)
+            if lastKnownHomePath != resolved {
+                lastKnownHomePath = resolved
+                HostPreferences.setRemoteHomePath(resolved, hostID: hostID, defaults: defaults)
+            }
             homeResolutionTask = nil
             logger.notice("Resolved remote home for \(self.hostLabel, privacy: .public): \(resolved, privacy: .public)")
             return resolved

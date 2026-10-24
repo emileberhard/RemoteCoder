@@ -20,14 +20,14 @@ final class HostServices {
     let registration: DeviceRegistration
 
     init(host: GatewayHostConfiguration, routes: GatewayRoutes, speech: GatewaySpeechAccess, gateway: GatewayClient,
-         htmlVisuals: HTMLVisualServices, syncedPreferences store: SyncedPreferenceStore) {
+         htmlVisuals: HTMLVisualServices, syncedPreferences store: SyncedPreferenceStore, defaults: UserDefaults) {
         self.routes = routes
         self.speech = speech
         files = HostFileStore(host: host, routes: routes)
         imagePreviews = HostImagePreviews(access: files)
         self.gateway = gateway
         automations = AutomationManagement(host: host, gateway: gateway)
-        directories = HostDirectories(gateway: gateway, hostID: host.id, hostLabel: host.errorLabel)
+        directories = HostDirectories(gateway: gateway, hostID: host.id, hostLabel: host.errorLabel, defaults: defaults)
         preferenceExchange = SyncedPreferenceExchange(gateway: gateway, store: store, hostLabel: host.errorLabel)
         htmlVisualDocuments = HTMLVisualDocumentStore(hostID: host.id, access: files, cache: htmlVisuals.documents)
         htmlVisualRenderer = htmlVisuals.renderer

@@ -1379,21 +1379,16 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
 
     func updateWorkingDirectoryToRemoteHome(preferCachedHomePath: Bool = false) async {
         let conversationID = currentConversationID
-        if preferCachedHomePath, let cached = HostPreferences.remoteHomePath(hostID: hostID, defaults: target.chatDefaults) {
-            target.remoteHomePath = cached
-            updateWorkingDirectory(cached)
+        if preferCachedHomePath, let known = target.remoteHomePath {
+            updateWorkingDirectory(known)
             recordBlankNewChatSetup()
             return
         }
         target.directories.startIfNeeded()
-        let resolved = try? await target.directories.resolveHomePath()
-        guard currentConversationID == conversationID, isRetired == false else { return }
-        target.remoteHomePath = resolved
-        if let resolved {
-            updateWorkingDirectory(resolved)
-            recordBlankNewChatSetup()
-            HostPreferences.setRemoteHomePath(resolved, hostID: hostID, defaults: target.chatDefaults)
-        }
+        guard let resolved = try? await target.directories.resolveHomePath(),
+              currentConversationID == conversationID, isRetired == false else { return }
+        updateWorkingDirectory(resolved)
+        recordBlankNewChatSetup()
     }
 
     /// A host the user has never picked a directory for gets its own remote home,
@@ -1402,7 +1397,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
     func adoptRemoteHomeAsWorkingDirectoryIfUnset() {
         guard isRetired == false else { return }
         guard workingDirectory?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false else { return }
-        guard let home = target.remoteHomePath ?? HostPreferences.remoteHomePath(hostID: hostID, defaults: target.chatDefaults) else { return }
+        guard let home = target.remoteHomePath else { return }
         updateWorkingDirectory(home)
         recordBlankNewChatSetup()
     }

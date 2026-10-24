@@ -1355,8 +1355,13 @@ entrypoint linked above.
 
 - **Directory picker (`UI/DirectoryPicker/`).**
   - It browses the remote home tree. `HostDirectories` reads the home path
-    once from the gateway's `host/info` and keeps its immediate children warm.
-    Its timer refreshes only while one of the host's models is visible.
+    once per connection from the gateway's `host/info` and keeps its immediate
+    children warm. Its timer refreshes only while one of the host's models is
+    visible. A read superseded by a reconnect retries on the new connection.
+  - `HostDirectories.lastKnownHomePath` is the one home path every view and
+    working-directory default reads (`ChatTargetModel.remoteHomePath`). It
+    persists per host, so paths show relative to home at launch and while the
+    host is offline; never keep another copy of it.
   - The host's gateway owns its favorites. `HostDirectories` keeps a replica:
     the last acknowledged list plus pending add and remove changes, cached in
     defaults, so favorites show before connecting and a change made offline
