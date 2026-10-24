@@ -482,7 +482,8 @@ device directory on this host and the configured gateway hosts (read over SSH);
 `metrickit`, `diagnostics --symbolicate`, `counts`, `persistence`, `timeline`,
 `activity` and `export-cost` take the exact `--device` and print JSON that names
 the stores read and any that failed, when the host cap removed data or is
-unmet, and each segment it could not read (corrupt, or expanding beyond 32 MiB).
+unmet, and each segment it could not read (corrupt, or expanding beyond the
+app's 50 MiB queue cap).
 MetricKit reports and diagnostics are selected by the time they cover, however
 late they arrived, and `metrickit` lists the spans of the window no report
 covers, split 36 hours before now into missing and not yet due.
