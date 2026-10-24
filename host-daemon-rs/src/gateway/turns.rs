@@ -225,11 +225,15 @@ impl Gateway {
         self.initialize_codex_connection(&mut sink, &mut stream)
             .await?;
         let resume_id = format!("pending:resume:{key}");
+        let mut params = serde_json::json!({ "threadId": pending.thread_id });
+        self.admit_native("thread/resume", &mut params)
+            .await
+            .map_err(|error| super::external_providers::admission_failure(&error))?;
         let request = serde_json::json!({
             "jsonrpc": "2.0",
             "id": resume_id,
             "method": "thread/resume",
-            "params": { "threadId": pending.thread_id },
+            "params": params,
         });
         sink.send(UpstreamMessage::Text(serde_json::to_string(&request)?))
             .await
@@ -513,11 +517,15 @@ impl Gateway {
             opened_after: self.notification_floor().await,
         };
         let resume_id = format!("observer:resume:{thread_id}");
+        let mut params = serde_json::json!({ "threadId": thread_id });
+        self.admit_native("thread/resume", &mut params)
+            .await
+            .map_err(|error| super::external_providers::admission_failure(&error))?;
         let resume = serde_json::json!({
             "jsonrpc": "2.0",
             "id": resume_id,
             "method": "thread/resume",
-            "params": { "threadId": thread_id }
+            "params": params
         });
         sink.send(UpstreamMessage::Text(serde_json::to_string(&resume)?))
             .await

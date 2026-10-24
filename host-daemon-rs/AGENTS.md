@@ -277,6 +277,36 @@ owner until the last fixture is dropped.
 
 ## Gateway RPCs
 
+- External model providers (`src/providers/codex/external.rs`, wired in
+  `src/gateway/external_providers.rs`) come only from the operator file in
+  `RC_CODEX_GATEWAY_EXTERNAL_PROVIDERS_FILE`; public sources carry no ids, URLs
+  or model names. The owner projects each provider's `/models` listing into a
+  Codex catalog file under `<state>/external-models/` (removed with the
+  configuration) and never tunes prompts, tools or behaviour per model: every
+  row gets the same generic harness defaults. Admission runs on every Codex
+  request path that reaches the app-server, native passthrough, control calls,
+  pending/observer resumes and restart recovery, so non-UI callers get the same
+  rules:
+  - Projection offers only models whose listing reports `/v1/responses`, a
+    positive `prompt_tokens`, `streaming` and `tool_calls`.
+  - `thread/start` takes `modelProvider`, or the provider that lists the model;
+    the gateway injects `model_providers.<id>` and `provider_model_catalog_json`
+    into its `config`.
+  - `thread/resume` and `thread/fork` read the source thread's provider and keep
+    it; another `modelProvider`, or a model of another provider, fails. A
+    prediction-mode fork inherits without config, which Codex rejects there.
+  - `turn/start`, `thread/settings/update` and `turn/settings/update` with a model
+    (`model` or `collaborationMode.settings.model`) or service tier
+    (`serviceTier` or `serviceTierForTurn`) are checked against the thread's
+    provider; external providers have no service tiers.
+  - A `config` override that names the model, its provider or catalog, a
+    service tier or a profile fails; only the request's own fields select them.
+  - `thread/list` without `modelProviders` lists ChatGPT and every external
+    provider. Recovery preloads an external thread with an admitted
+    `thread/resume` before `thread/restart/recover`, which takes no config.
+  - `model/list` is gateway-owned: the native list plus one row per external
+    model, with `modelProvider` and `modelProviderName`, on the last page.
+
 - `src/rpc/dispatch.rs` owns request lifetime classification.
   `conversation/subscriptions/set` executes on its connection in socket order,
   outside read admission. `daemon/activeTurns`, `daemon/liveActivity` and

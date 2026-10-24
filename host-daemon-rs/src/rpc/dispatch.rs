@@ -125,6 +125,7 @@ pub(crate) enum OwnedRoute {
     ClaudeLiveCheckpoint,
     Automations,
     TakeOver,
+    ModelList,
 }
 
 #[derive(Clone, Copy)]
@@ -653,6 +654,7 @@ const METHOD_SPECS: &[MethodSpec] = &[
         NEW_WORK
     ),
     spec!("host/info", HostInfo, Some(RequestLifetime::Status), 0),
+    spec!("model/list", ModelList, Some(RequestLifetime::Query), 0),
     spec!(
         "conversation/takeOver",
         TakeOver,

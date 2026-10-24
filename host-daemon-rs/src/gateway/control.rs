@@ -759,7 +759,37 @@ impl Gateway {
             .map_err(anyhow::Error::msg)
     }
 
+    pub(super) async fn call_control_unadmitted(
+        &self,
+        method: &str,
+        params: Value,
+    ) -> Result<Value> {
+        let (reply_rx, _pending) = self.send_control_call(method, params).await?;
+        tokio::time::timeout(
+            Duration::from_secs_f64(UPSTREAM_SEND_TIMEOUT_SECONDS),
+            reply_rx,
+        )
+        .await
+        .context("codex internal JSON-RPC timed out")?
+        .context("codex internal JSON-RPC response channel closed")?
+        .map_err(anyhow::Error::msg)
+    }
+
     async fn begin_control_call(
+        &self,
+        method: &str,
+        mut params: Value,
+    ) -> Result<(
+        oneshot::Receiver<Result<Value, String>>,
+        PendingControlReply<'_>,
+    )> {
+        self.admit_native(method, &mut params)
+            .await
+            .map_err(|error| super::external_providers::admission_failure(&error))?;
+        self.send_control_call(method, params).await
+    }
+
+    async fn send_control_call(
         &self,
         method: &str,
         params: Value,
@@ -789,7 +819,10 @@ impl Gateway {
         method: &str,
         params: Value,
     ) -> crate::rpc::RpcResult {
-        let (reply_rx, _pending) = self.begin_control_call(method, params).await?;
+        let (reply_rx, _pending) = self
+            .begin_control_call(method, params)
+            .await
+            .map_err(|error| super::agent_gateway::native_error(&error))?;
         match reply_rx.await {
             Ok(Ok(value)) => Ok(value),
             Ok(Err(error)) => Err(serde_json::from_str::<Value>(&error)

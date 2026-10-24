@@ -146,6 +146,7 @@ impl Fixture {
                 "workspace-a".into(),
             )),
             None,
+            None,
         );
         Self {
             gateway,

@@ -710,6 +710,7 @@ async fn user_alert_gate_preserves_roots_and_silences_all_child_events() {
             call_delivery: None,
 
             external_auth: None,
+            external_providers: None,
         },
         notifier,
     );

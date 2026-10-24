@@ -67,6 +67,7 @@ impl Gateway {
                     .await;
             }
             OwnedRoute::HostInfo => host_info(self.claude_settings.router.is_some()),
+            OwnedRoute::ModelList => self.model_list(params).await,
             OwnedRoute::Rename => self.rename_thread(&params).await,
             OwnedRoute::RegenerateTitle => self.regenerate_title_rpc(&params).await,
             OwnedRoute::Subscriptions => out.content_subscriptions.replace(params),
@@ -472,9 +473,7 @@ impl Gateway {
             let effort = match settings.effort.as_deref() {
                 Some(effort) => effort.to_string(),
                 None => {
-                    let catalog = self
-                        .call_control("model/list", json!({ "includeHidden": true }))
-                        .await?;
+                    let catalog = self.model_list(json!({ "includeHidden": true })).await?;
                     catalog["data"]
                         .as_array()
                         .and_then(|models| {

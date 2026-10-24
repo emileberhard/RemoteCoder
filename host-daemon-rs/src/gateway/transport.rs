@@ -783,6 +783,19 @@ impl Gateway {
             let _ = self.reject_draining(out_tx, id.as_ref()).await;
             return Ok(());
         }
+        let mut object = object;
+        let mut params = object.remove("params").unwrap_or(Value::Null);
+        let admitted = self.admit_native(&method, &mut params).await;
+        if !params.is_null() {
+            object.insert("params".into(), params);
+        }
+        let rewritten = match admitted {
+            Ok(rewritten) => rewritten,
+            Err(error) => {
+                let _ = self.send_error_to(out_tx, id.as_ref(), &error).await;
+                return Ok(());
+            }
+        };
 
         if let Some(method) = correlated_method(Some(method.as_str()))
             && let Some(id) = &id
@@ -817,8 +830,7 @@ impl Gateway {
             .await
             .context("failed to persist pending turn start")?;
 
-        let mut object = object;
-        let payload = if crate::agents::tools::declare_on_codex_request(&mut object) {
+        let payload = if crate::agents::tools::declare_on_codex_request(&mut object) || rewritten {
             serde_json::to_string(&Value::Object(object))
                 .context("encoding Codex request failed")?
         } else {

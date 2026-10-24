@@ -12,6 +12,7 @@ use crate::providers::claude::auth::ClaudeAuth;
 use crate::providers::claude::restart_driver::ClaudeRestartDriver;
 use crate::providers::claude::settings::ClaudeSettings;
 use crate::providers::codex::daemon::CodexAppServer;
+use crate::providers::codex::external::ExternalProviders;
 use crate::push::PushService;
 use crate::rpc::dispatch::ClientRequest;
 use crate::runtime::recovery::{RecoveryJournal, RecoveryStore};
@@ -235,6 +236,7 @@ struct GatewayConstruction {
     recovery_path: Option<PathBuf>,
     call_delivery: Option<calls::CallDeliveryConfig>,
     external_auth: Option<external_auth::ExternalAuth>,
+    external_providers: Option<Arc<ExternalProviders>>,
 }
 
 mod account_context;
@@ -242,6 +244,7 @@ mod activity;
 pub(crate) mod admission;
 mod claude_fork;
 mod external_auth;
+mod external_providers;
 pub(crate) use external_auth::ExternalAuth;
 mod lifecycle;
 mod takeover;
@@ -250,6 +253,7 @@ pub(crate) struct Gateway {
     user_name: Option<String>,
     pub(crate) admission: Arc<crate::gateway::admission::ConversationAdmission>,
     external_auth: Option<external_auth::ExternalAuth>,
+    external_providers: Option<Arc<ExternalProviders>>,
     questions: question_gateway::Runtime,
     agents: agent_gateway::Runtime,
     codex: Arc<CodexAppServer>,
@@ -341,6 +345,7 @@ impl Gateway {
                 recovery_path,
                 call_delivery,
                 external_auth: None,
+                external_providers: None,
             },
             apns,
         )
@@ -361,6 +366,7 @@ impl Gateway {
         state_directory: PathBuf,
         call_delivery: Option<calls::CallDeliveryConfig>,
         external_auth: Option<ExternalAuth>,
+        external_providers: Option<Arc<ExternalProviders>>,
         user_name: Option<String>,
     ) -> Arc<Self> {
         Self::construct_with_apns(
@@ -373,6 +379,7 @@ impl Gateway {
                 recovery_path: Some(state_directory.join("codex-restart-recovery.json")),
                 call_delivery,
                 external_auth,
+                external_providers,
             },
             apns,
         )
@@ -391,6 +398,7 @@ impl Gateway {
             recovery_path,
             call_delivery,
             external_auth,
+            external_providers,
         } = configuration;
         let metadata_path = turn_state_path
             .as_ref()
@@ -454,6 +462,7 @@ impl Gateway {
             renames: renames::Renames::default(),
             side_question_forks: side_question::Forks::default(),
             external_auth,
+            external_providers,
             admission: Arc::clone(&admission),
             agents: agent_gateway::Runtime::default(),
             questions: question_gateway::Runtime::new(

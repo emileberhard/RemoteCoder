@@ -81,6 +81,27 @@ owns Codex external-token installation/renewal and Claude account failover;
 there is no silent switch to native login during a router outage. See
 [provider accounts](../docs/provider-accounts.md).
 
+### Optional external model providers
+
+`RC_CODEX_GATEWAY_EXTERNAL_PROVIDERS_FILE` names a private JSON file (at most
+64 KiB) of OpenAI-compatible Responses endpoints that Codex conversations can
+run on besides ChatGPT:
+
+```json
+{"providers": [{"id": "relay", "name": "Relay", "baseUrl": "http://127.0.0.1:8080/v1",
+  "keyFile": "/absolute/path/relay.key", "models": ["vendor/model-a"]}]}
+```
+
+Each id is lowercase and neither `openai` nor `claude`; a model id belongs to one
+provider. The gateway reads `GET {baseUrl}/models` with the key as a bearer and
+offers each listed model whose entry names the `/v1/responses` endpoint, a
+positive `capabilities.prompt_tokens` and true `streaming` and `tool_calls`. It derives the model metadata Codex needs
+from that listing alone and keeps the last good catalog in its state directory.
+A conversation stays on the provider it started on; choosing a model of another
+provider needs a new conversation. Hosted web search is withheld from these
+providers. ChatGPT Desktop has no definition for them and cannot resume such
+conversations.
+
 ### Optional host services
 
 - User identity: `RC_CODEX_GATEWAY_USER_NAME` personalizes voice prompts and

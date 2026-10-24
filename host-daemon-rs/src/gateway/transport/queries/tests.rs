@@ -451,7 +451,7 @@ async fn cancellation_is_exact_and_never_forwards_unknown_or_nonquery_ids() {
     connection.cancel(99).await;
     connection.cancel(Value::Null).await;
     connection
-        .send(json!({"id": 10,"method":"model/list","params":{}}))
+        .send(json!({"id": 10,"method":"config/read","params":{}}))
         .await;
     assert!(connection.upstream.try_recv().is_ok());
     connection.cancel(10).await;

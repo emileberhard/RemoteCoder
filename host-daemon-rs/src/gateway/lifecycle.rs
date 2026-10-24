@@ -257,16 +257,20 @@ impl Gateway {
                         continue;
                     }
                 }
-                let result = self
-                    .call_control(
-                        "thread/restart/recover",
-                        serde_json::json!({
-                            "threadId": &task.thread_id,
-                            "turnId": &task.turn_id,
-                            "capability": &capability,
-                        }),
-                    )
-                    .await;
+                let result = match self.load_external_thread(&task.thread_id).await {
+                    Ok(()) => {
+                        self.call_control(
+                            "thread/restart/recover",
+                            serde_json::json!({
+                                "threadId": &task.thread_id,
+                                "turnId": &task.turn_id,
+                                "capability": &capability,
+                            }),
+                        )
+                        .await
+                    }
+                    Err(error) => Err(error),
+                };
                 let status = match result {
                     Ok(result) => match recovery_status(
                         &result,

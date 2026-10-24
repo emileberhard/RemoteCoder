@@ -713,6 +713,7 @@ mod startup_tests {
                 recovery_path: None,
                 call_delivery: None,
                 external_auth: None,
+                external_providers: None,
             },
             probe.service.clone(),
         )

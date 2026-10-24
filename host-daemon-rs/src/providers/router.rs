@@ -295,7 +295,7 @@ impl Router {
     }
 }
 
-fn read_key(path: &std::path::Path) -> Result<String> {
+pub(crate) fn read_key(path: &std::path::Path) -> Result<String> {
     use std::io::Read;
     use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
     let file = std::fs::OpenOptions::new()
