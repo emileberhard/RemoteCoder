@@ -23,7 +23,7 @@ final class HostStore {
     @ObservationIgnored private var syncTask: Task<Void, Never>?
     @ObservationIgnored private var syncRequested = false
 
-    static let installationIDKey = "gateway.installationID"
+    nonisolated static let installationIDKey = "gateway.installationID"
     private static let hostsKey = "gateway.hosts"
     private static let activeHostIDKey = "gateway.activeHostID"
 

@@ -52,7 +52,7 @@ PERF_DIR = "Library/Caches/perf"
 SWITCHES = {
     "growth", "readingFrames", "geometryProjections", "visibility",
     "scrollTargets", "scrollPosition", "geometryGroup", "latestEdge",
-    "contextMenu", "textSelection", "tooltips", "growthGate",
+    "contextMenu", "textSelection", "tooltips", "growthGate", "resourceSampler",
 }
 TRACE_WARMUP = 4
 TRACE_COMPLETE = "Time limit reached"

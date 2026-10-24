@@ -22,6 +22,7 @@ final class RemoteCoderAppModel {
     private var hostSynchronizationRequested = false
     private var diagnosticsHostTask: Task<Void, Never>?
     private let diagnostics = DiagnosticsLifecycle(exporter: DiagnosticsOutbox.shared)
+    private let telemetry: TelemetryContext
     private var notificationAuthorizationTask: Task<Void, Never>?
     private var registrationTask: Task<Void, Never>?
 
@@ -33,6 +34,8 @@ final class RemoteCoderAppModel {
         incomingCalls = IncomingCallCoordinator(workspace: workspace, voiceCalls: voiceCalls)
         #endif
         energy = AppEnergyMonitor(workspace: workspace)
+        telemetry = TelemetryContext(workspace: workspace, voiceCalls: voiceCalls, energy: energy, scenes: scenes,
+                                     recorder: DiagnosticsOutbox.shared)
         workspace.syncedPreferences.onExternalChange = { [weak self] in self?.applyPreferencesFromOtherDevices() }
     }
 
@@ -102,6 +105,7 @@ final class RemoteCoderAppModel {
         LiveNavigationCoordinator.shared.restoreIfNeeded()
         #endif
         energy.start()
+        telemetry.start()
         workspace.dictationLibrary?.requestPublication()
 
         bootstrapTask = Task { [weak self] in
@@ -173,6 +177,7 @@ final class RemoteCoderAppModel {
         notificationAuthorizationTask = nil
         registrationTask?.cancel()
         registrationTask = nil
+        telemetry.stop()
         diagnostics.update(destination: diagnosticsDestination(for: workspace.settings.activeHost?.configuration), phase: .stopped)
         workspace.teardown()
     }
@@ -180,6 +185,7 @@ final class RemoteCoderAppModel {
     private func enter(_ phase: ScenePhase) async {
         logger.notice("scenePhase -> \(String(describing: phase), privacy: .public)")
         energy.refresh()
+        await telemetry.sceneChanged()
         switch phase {
         case .active:
             workspace.dictationLibrary?.requestPublication()

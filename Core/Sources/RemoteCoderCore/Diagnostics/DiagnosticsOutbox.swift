@@ -34,6 +34,53 @@ struct AppLogCursor: Codable, Sendable, Equatable {
     static let beginning = AppLogCursor(date: .distantPast, lastSignature: nil)
 }
 
+struct AppLogResume {
+    private let cursor: AppLogCursor
+    private var held: [AppLogRecord] = []
+    private var resolved: Bool
+
+    init(cursor: AppLogCursor) {
+        self.cursor = cursor
+        resolved = cursor.lastSignature == nil
+    }
+
+    mutating func accept(_ record: AppLogRecord) -> [AppLogRecord] {
+        guard record.ts >= cursor.date else { return [] }
+        if resolved { return [record] }
+        if record.ts == cursor.date {
+            if record.signature == cursor.lastSignature {
+                held.removeAll()
+                resolved = true
+            } else {
+                held.append(record)
+            }
+            return []
+        }
+        resolved = true
+        defer { held.removeAll() }
+        return held + [record]
+    }
+
+    mutating func finish() -> [AppLogRecord] {
+        defer { held.removeAll() }
+        return resolved ? [] : held
+    }
+}
+
+struct DiagnosticsUpload: Sendable, Equatable {
+    var segments = 0
+    var bytes = 0
+    var compressMilliseconds = 0.0
+    var uploadMilliseconds = 0.0
+}
+
+extension Duration {
+    var milliseconds: Double {
+        let parts = components
+        return Double(parts.seconds) * 1_000 + Double(parts.attoseconds) / 1e15
+    }
+}
+
 struct DiagnosticsDestination: Sendable {
     let host: GatewayHostConfiguration
     let send: @Sendable (URLRequest) async throws -> (Data, URLResponse)
@@ -47,7 +94,7 @@ struct DiagnosticsDestination: Sendable {
 /// every subsystem, category and level, including debug — is drained here,
 /// deliberately not a curated subset: the host copy has to be able to answer a
 /// question nobody thought to instrument for.
-actor DiagnosticsOutbox: DiagnosticsExporting {
+actor DiagnosticsOutbox: DiagnosticsExporting, TelemetryRecording {
     /// The exporter's own category, excluded from every drain so uploading a
     /// segment cannot generate the next one.
     static let loggerCategory = "AppLogExport"
@@ -59,6 +106,8 @@ actor DiagnosticsOutbox: DiagnosticsExporting {
     private static let maximumRememberedReports = 1_024
     private static let maximumUploadBytes = 16 * 1024 * 1024
     private static let drainInterval: Duration = .seconds(300)
+    private static let maximumSegmentRecords = 10_000
+    private static let maximumBufferedTelemetry = 256
 
     private let logger = Logger(subsystem: "RemoteCoder", category: DiagnosticsOutbox.loggerCategory)
     private let directory: URL
@@ -76,6 +125,11 @@ actor DiagnosticsOutbox: DiagnosticsExporting {
     private var cachedDeviceName: String?
     private var isUploading = false
     private var drainTask: Task<Void, Never>?
+    private var run: TelemetryRun
+    private var telemetry: [TelemetryLine] = []
+    private var nextTelemetrySeq: UInt64 = 1
+    private var droppedTelemetry = 0
+    private let clock = ContinuousClock()
 
     init(
         directory: URL? = nil,
@@ -93,6 +147,7 @@ actor DiagnosticsOutbox: DiagnosticsExporting {
         reportReceiptsURL = base.appendingPathComponent("performance-report-receipts.json", isDirectory: false)
         cursor = .beginning
         reportReceipts = []
+        run = TelemetryRun.make(installationID: nil)
     }
 
     private func loadIfNeeded() {
@@ -175,6 +230,49 @@ actor DiagnosticsOutbox: DiagnosticsExporting {
         }
     }
 
+    func record(_ record: TelemetryRecord) {
+        let line = TelemetryLine(runID: run.runID, seq: nextTelemetrySeq, at: .now,
+                                 monoNs: MachTime.continuousNanoseconds(), record: record)
+        nextTelemetrySeq += 1
+        if telemetry.count >= Self.maximumBufferedTelemetry {
+            telemetry.removeFirst()
+            droppedTelemetry += 1
+        }
+        telemetry.append(line)
+    }
+
+    private func flushTelemetry() -> Int {
+        guard !telemetry.isEmpty || droppedTelemetry > 0 else { return 0 }
+        var lines = telemetry
+        if droppedTelemetry > 0 {
+            lines.append(TelemetryLine(runID: run.runID, seq: nextTelemetrySeq, at: .now,
+                monoNs: MachTime.continuousNanoseconds(), record: .loss(TelemetryLoss(
+                    what: .telemetryRecords, count: droppedTelemetry, bytes: nil, reason: "memory buffer full"))))
+        }
+        run.installationID = AppStorageScope.current.defaults.string(forKey: HostStore.installationIDKey)
+        let started = clock.now
+        let encoder = Self.recordEncoder()
+        var body = Data()
+        do {
+            body.append(try encoder.encode(TelemetryRunHeader(run: run, flushedThroughSeq: lines.last?.seq ?? 0)))
+            body.append(0x0A)
+            for line in lines {
+                body.append(try encoder.encode(line))
+                body.append(0x0A)
+            }
+            try body.write(to: directory.appendingPathComponent("\(Self.segmentStamp())-telemetry.jsonl"), options: .atomic)
+        } catch {
+            PersistenceMetrics.shared.failed(.diagnostics)
+            logger.error("telemetry batch write failed: \(error.localizedDescription, privacy: .public)")
+            return 0
+        }
+        PersistenceMetrics.shared.wrote(.diagnostics, bytes: body.count, elapsed: started.duration(to: clock.now))
+        if droppedTelemetry > 0 { nextTelemetrySeq += 1 }
+        telemetry.removeAll(keepingCapacity: true)
+        droppedTelemetry = 0
+        return lines.count
+    }
+
     /// Starts the periodic drain. Idempotent: calling it again while running
     /// leaves the existing pump alone.
     func startPumping() {
@@ -205,18 +303,38 @@ actor DiagnosticsOutbox: DiagnosticsExporting {
     }
 
     private func performDrain(reason: String) async {
+        let started = clock.now
+        let before = ProcessResources.current()
+        var cost = ExportCost(reason: reason)
         PersistenceMetrics.shared.reportIfDue()
-        let drained = drainToSegment()
-        let uploaded = await uploadPendingSegments()
-        if drained > 0 || uploaded > 0 {
-            logger.debug("log drain \(reason, privacy: .public): \(drained) records, \(uploaded) segments uploaded")
+        cost.flushedRecords = flushTelemetry()
+        drainToSegments(&cost)
+        let afterScan = ProcessResources.current()
+        let upload = await uploadPendingSegments()
+        let after = ProcessResources.current()
+        cost.uploadedSegments = upload.segments
+        cost.uploadedBytes = upload.bytes
+        cost.compressMilliseconds = upload.compressMilliseconds
+        cost.uploadMilliseconds = upload.uploadMilliseconds
+        cost.totalMilliseconds = started.duration(to: clock.now).milliseconds
+        cost.footprintBefore = before?.footprintBytes
+        cost.footprintAfter = after?.footprintBytes
+        cost.footprintPeak = [before, afterScan, after].compactMap { $0?.footprintBytes }.max()
+        if let before, let after, after.cpuNanoseconds >= before.cpuNanoseconds {
+            cost.processCPUNanoseconds = after.cpuNanoseconds - before.cpuNanoseconds
+        }
+        record(.export(cost))
+        if cost.kept > 0 || upload.segments > 0 {
+            logger.debug("log drain \(reason, privacy: .public): \(cost.kept) records, \(upload.segments) segments uploaded")
         }
     }
 
     /// Writes every log record the app has produced into one file for the
     /// Settings share sheet, for when the phone has no gateway connectivity.
     func exportArchive() -> URL? {
-        _ = drainToSegment()
+        _ = flushTelemetry()
+        var cost = ExportCost(reason: "archive")
+        drainToSegments(&cost)
         let destination = FileManager.default.temporaryDirectory
             .appendingPathComponent("RemoteCoder-logs-\(Self.segmentStamp()).jsonl")
         guard let out = OutputStream(url: destination, append: false) else { return nil }
@@ -253,76 +371,82 @@ actor DiagnosticsOutbox: DiagnosticsExporting {
 
     // MARK: - Draining
 
-    /// Reads everything logged since the cursor and appends it to a new
-    /// segment. Returns how many records were written.
-    private func drainToSegment() -> Int {
+    private func drainToSegments(_ cost: inout ExportCost) {
         loadIfNeeded()
-        let records: [AppLogRecord]
+        let started = clock.now
+        let encoder = Self.recordEncoder()
+        var resume = AppLogResume(cursor: cursor)
+        var body = Data()
+        var pending = 0
+        var last: AppLogRecord?
+        var encoding: Duration = .zero
+        var writing: Duration = .zero
+        var failed = false
+
+        func emit(_ record: AppLogRecord) {
+            let encodeStarted = clock.now
+            guard let line = try? encoder.encode(record) else { return }
+            body.append(line)
+            body.append(0x0A)
+            encoding += encodeStarted.duration(to: clock.now)
+            pending += 1
+            last = record
+            if pending >= Self.maximumSegmentRecords { writeSegment() }
+        }
+
+        func writeSegment() {
+            guard pending > 0, !failed, let last else { return }
+            let writeStarted = clock.now
+            let url = directory.appendingPathComponent("\(Self.segmentStamp()).jsonl", isDirectory: false)
+            do {
+                try body.write(to: url, options: .atomic)
+                PersistenceMetrics.shared.wrote(.diagnostics, bytes: body.count, elapsed: writeStarted.duration(to: clock.now))
+            } catch {
+                logger.error("segment write failed: \(error.localizedDescription, privacy: .public)")
+                failed = true
+                return
+            }
+            cost.segments += 1
+            cost.bytes += body.count
+            cost.kept += pending
+            cursor = AppLogCursor(date: last.ts, lastSignature: last.signature)
+            persistCursor()
+            writing += writeStarted.duration(to: clock.now)
+            body.removeAll(keepingCapacity: true)
+            pending = 0
+        }
+
         do {
-            records = try readNewEntries()
+            let store = try OSLogStore(scope: .currentProcessIdentifier)
+            let since = cursor.date
+            for entry in try store.getEntries(at: store.position(date: since)) {
+                cost.scanned += 1
+                guard !failed else { break }
+                guard entry.date >= since else { continue }
+                let log = entry as? OSLogEntryLog
+                let category = log?.category ?? ""
+                // The uploader's own lines would otherwise seed the next segment.
+                guard category != Self.loggerCategory else { continue }
+                let record = AppLogRecord(
+                    ts: entry.date,
+                    level: Self.levelName(log?.level),
+                    subsystem: log?.subsystem ?? "",
+                    category: category,
+                    message: entry.composedMessage,
+                    process: log?.process,
+                    thread: log?.threadIdentifier
+                )
+                for ready in resume.accept(record) { emit(ready) }
+            }
+            for ready in resume.finish() { emit(ready) }
         } catch {
             logger.error("OSLogStore drain failed: \(error.localizedDescription, privacy: .public)")
-            return 0
         }
-
-        let (emit, advanced) = Self.advance(cursor: cursor, records: records)
-        guard !emit.isEmpty else { return 0 }
-
-        let started = ContinuousClock.now
-        guard let body = Self.encode(emit) else { return 0 }
-        let url = directory.appendingPathComponent("\(Self.segmentStamp()).jsonl", isDirectory: false)
-        do {
-            try body.write(to: url, options: .atomic)
-            PersistenceMetrics.shared.wrote(.diagnostics, bytes: body.count, elapsed: started.duration(to: .now))
-        } catch {
-            logger.error("segment write failed: \(error.localizedDescription, privacy: .public)")
-            return 0
-        }
-
-        cursor = advanced
-        persistCursor()
-        evictOldestBeyondCap()
-        return emit.count
-    }
-
-    private func readNewEntries() throws -> [AppLogRecord] {
-        let store = try OSLogStore(scope: .currentProcessIdentifier)
-        let since = cursor.date
-        let position = store.position(date: since)
-        return try store.getEntries(at: position).compactMap { entry -> AppLogRecord? in
-            guard entry.date >= since else { return nil }
-            let log = entry as? OSLogEntryLog
-            let category = log?.category ?? ""
-            // The uploader's own lines would otherwise seed the next segment.
-            guard category != Self.loggerCategory else { return nil }
-            return AppLogRecord(
-                ts: entry.date,
-                level: Self.levelName(log?.level),
-                subsystem: log?.subsystem ?? "",
-                category: category,
-                message: entry.composedMessage,
-                process: log?.process,
-                thread: log?.threadIdentifier
-            )
-        }
-    }
-
-    /// Selects the records a drain should emit and where the next one resumes.
-    ///
-    /// Pure so the resume behaviour can be tested without an OSLogStore.
-    static func advance(
-        cursor: AppLogCursor,
-        records: [AppLogRecord]
-    ) -> (emit: [AppLogRecord], cursor: AppLogCursor) {
-        var candidates = records.filter { $0.ts >= cursor.date }
-        if let signature = cursor.lastSignature,
-           let boundary = candidates.firstIndex(where: {
-               $0.ts == cursor.date && $0.signature == signature
-           }) {
-            candidates.removeSubrange(...boundary)
-        }
-        guard let last = candidates.last else { return ([], cursor) }
-        return (candidates, AppLogCursor(date: last.ts, lastSignature: last.signature))
+        writeSegment()
+        if cost.segments > 0 { evictOldestBeyondCap() }
+        cost.encodeMilliseconds = encoding.milliseconds
+        cost.writeMilliseconds = writing.milliseconds
+        cost.scanMilliseconds = max(0, started.duration(to: clock.now).milliseconds - cost.encodeMilliseconds - cost.writeMilliseconds)
     }
 
     /// Full RFC 3339 UTC date-time with millis. `ISO8601FormatStyle` is a value
@@ -330,7 +454,7 @@ actor DiagnosticsOutbox: DiagnosticsExporting {
     /// sendable closure.
     static let timestampStyle = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
 
-    static func encode(_ records: [AppLogRecord]) -> Data? {
+    static func recordEncoder() -> JSONEncoder {
         // Millisecond precision, matching the gateway journal's `ts`, so app
         // and host records can be interleaved by time. Plain `.iso8601`
         // truncates to whole seconds and loses the ordering that matters.
@@ -339,13 +463,7 @@ actor DiagnosticsOutbox: DiagnosticsExporting {
             var container = encoder.singleValueContainer()
             try container.encode(date.formatted(Self.timestampStyle))
         }
-        var body = Data()
-        for record in records {
-            guard let line = try? encoder.encode(record) else { continue }
-            body.append(line)
-            body.append(0x0A)
-        }
-        return body.isEmpty ? nil : body
+        return encoder
     }
 
     private static func levelName(_ level: OSLogEntryLog.Level?) -> String {
@@ -381,12 +499,39 @@ actor DiagnosticsOutbox: DiagnosticsExporting {
     private func evictOldestBeyondCap() {
         var segments = pendingSegments(includingExportOnly: true)
         var total = segments.reduce(0) { $0 + Self.fileSize($1) }
+        guard total > storedByteLimit else { return }
+        segments.sort { (Self.evictionClass($0).rawValue, $0.lastPathComponent) < (Self.evictionClass($1).rawValue, $1.lastPathComponent) }
+        var evicted: [TelemetryLoss.What: (count: Int, bytes: Int)] = [:]
         while total > storedByteLimit, let oldest = segments.first {
-            total -= Self.fileSize(oldest)
+            let size = Self.fileSize(oldest)
+            total -= size
             try? FileManager.default.removeItem(at: oldest)
             segments.removeFirst()
-            logger.notice("evicted an undelivered log segment to stay under the on-device cap")
+            evicted[Self.evictionClass(oldest).loss, default: (0, 0)].count += 1
+            evicted[Self.evictionClass(oldest).loss, default: (0, 0)].bytes += size
         }
+        for (what, loss) in evicted.sorted(by: { $0.key.rawValue < $1.key.rawValue }) {
+            logger.notice("evicted \(loss.count, privacy: .public) undelivered \(what.rawValue, privacy: .public) segments to stay under the on-device cap")
+            record(.loss(TelemetryLoss(what: what, count: loss.count, bytes: loss.bytes, reason: "on-device queue cap")))
+        }
+    }
+
+    private enum EvictionClass: Int {
+        case log, telemetry, metricKit
+
+        var loss: TelemetryLoss.What {
+            switch self {
+            case .log: .logSegment
+            case .telemetry: .telemetrySegment
+            case .metricKit: .metricKitSegment
+            }
+        }
+    }
+
+    private static func evictionClass(_ url: URL) -> EvictionClass {
+        let name = url.pathExtension == "export-only" ? url.deletingPathExtension().lastPathComponent : url.lastPathComponent
+        if name.contains("-mk-") { return .metricKit }
+        return name.hasSuffix("-telemetry.jsonl") ? .telemetry : .log
     }
 
     private static func fileSize(_ url: URL) -> Int {
@@ -404,22 +549,24 @@ actor DiagnosticsOutbox: DiagnosticsExporting {
 
     // MARK: - Uploading
 
-    func uploadPendingSegments() async -> Int {
+    func uploadPendingSegments() async -> DiagnosticsUpload {
         loadIfNeeded()
         evictOldestBeyondCap()
-        guard !isUploading else { return 0 }
-        guard let destination, let url = Self.appLogsURL(for: destination.host) else { return 0 }
+        var result = DiagnosticsUpload()
+        guard !isUploading else { return result }
+        guard let destination, let url = Self.appLogsURL(for: destination.host) else { return result }
         isUploading = true
         defer { isUploading = false }
-        var uploaded = 0
         for segment in pendingSegments() {
             guard !skippedSegments.contains(segment.lastPathComponent) else { continue }
+            let compressStarted = clock.now
             guard Self.fileSize(segment) <= storedByteLimit,
                   let raw = try? Data(contentsOf: segment),
                   let body = GzipEncoding.gzipped(raw) else {
                 quarantine(segment, reason: "unreadable or over storage limit")
                 continue
             }
+            result.compressMilliseconds += compressStarted.duration(to: clock.now).milliseconds
             guard body.count <= uploadByteLimit else {
                 quarantine(segment, reason: "compressed segment exceeds upload limit")
                 continue
@@ -437,19 +584,22 @@ actor DiagnosticsOutbox: DiagnosticsExporting {
             request.httpBody = body
             request.timeoutInterval = 30
 
-            guard let response = try? await destination.send(request).1,
-                  let status = (response as? HTTPURLResponse)?.statusCode else {
+            let uploadStarted = clock.now
+            let response = try? await destination.send(request).1
+            result.uploadMilliseconds += uploadStarted.duration(to: clock.now).milliseconds
+            guard let response, let status = (response as? HTTPURLResponse)?.statusCode else {
                 // Host unreachable. Keep the segment and try again next pass.
-                return uploaded
+                return result
             }
             guard (200..<300).contains(status) else {
                 logger.error("app log upload rejected with \(status, privacy: .public)")
-                return uploaded
+                return result
             }
             try? FileManager.default.removeItem(at: segment)
-            uploaded += 1
+            result.segments += 1
+            result.bytes += body.count
         }
-        return uploaded
+        return result
     }
 
     private func quarantine(_ segment: URL, reason: String) {

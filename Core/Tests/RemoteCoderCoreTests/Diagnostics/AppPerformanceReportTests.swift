@@ -161,13 +161,13 @@ struct AppPerformanceReportTests {
         let exporter = DiagnosticsOutbox(directory: directory, uploadByteLimit: 1, deviceLabel: { "test-device" })
         await exporter.setDestination(.unreachable(host))
         try await exporter.enqueuePerformanceReport(fixture, kind: .diagnostic, timeRange: timeRange)
-        #expect(await exporter.uploadPendingSegments() == 0)
+        #expect(await exporter.uploadPendingSegments().segments == 0)
         #expect(try segments(in: directory).isEmpty)
         let quarantined = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil).filter { $0.pathExtension == "export-only" }
         #expect(quarantined.count == 1)
         let restored = DiagnosticsOutbox(directory: directory, uploadByteLimit: 1, deviceLabel: { "test-device" })
         await restored.setDestination(.unreachable(host))
-        #expect(await restored.uploadPendingSegments() == 0)
+        #expect(await restored.uploadPendingSegments().segments == 0)
         let archive = try #require(await restored.exportArchive())
         defer { try? FileManager.default.removeItem(at: archive) }
         #expect(try String(contentsOf: archive, encoding: .utf8).contains("futureDiagnostic"))
@@ -187,9 +187,9 @@ struct AppPerformanceReportTests {
         )) { try await session.data(for: $0) })
         try await exporter.enqueuePerformanceReport(fixture, kind: .diagnostic, timeRange: timeRange)
         let raw = try Data(contentsOf: #require(segments(in: directory).first))
-        #expect(await exporter.uploadPendingSegments() == 0)
+        #expect(await exporter.uploadPendingSegments().segments == 0)
         #expect(try segments(in: directory).count == 1)
-        #expect(await exporter.uploadPendingSegments() == 1)
+        #expect(await exporter.uploadPendingSegments().segments == 1)
         #expect(try segments(in: directory).isEmpty)
         let requests = ReportUploadProtocol.requests.withLock { $0[hostname] ?? [] }
         try #require(requests.count == 2)
