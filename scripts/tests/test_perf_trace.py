@@ -598,52 +598,6 @@ class PerfTraceTests(unittest.TestCase):
         for key in ("app", "renderServer"):
             self.assertIsNone(result[key]["gpuMsUnavailableReason"])
 
-    def test_retained_bench_symbols_are_found_by_uuid_after_the_build_is_replaced(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            old = (
-                root
-                / trace.BUILD_RUN_ROOT
-                / "old/symbols/RemoteCoder.app.dSYM/Contents/Resources/DWARF/RemoteCoder"
-            )
-            current = (
-                root
-                / trace.BUILD_RUN_ROOT
-                / "new/symbols/RemoteCoder.app.dSYM/Contents/Resources/DWARF/RemoteCoder"
-            )
-            for path in (old, current):
-                path.parent.mkdir(parents=True)
-                path.write_bytes(b"fixture debug information")
-            identities = {
-                old: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA",
-                current: "BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB",
-            }
-            binary = trace.Binary(
-                "RemoteCoder",
-                identities[old],
-                "arm64",
-                0,
-                str(root / "removed-product/RemoteCoder"),
-            )
-
-            def dwarfdump(command, **kwargs):
-                return subprocess.CompletedProcess(
-                    command,
-                    0,
-                    stdout="\n".join(
-                        f"UUID: {identities[Path(path)]} (arm64) {path}"
-                        for path in command[3:]
-                    ),
-                )
-
-            with (
-                patch.object(Path, "home", return_value=root),
-                patch.object(trace.subprocess, "run", side_effect=dwarfdump),
-            ):
-                found = trace.symbol_files([binary], [])
-            self.assertEqual(found[binary.uuid], old)
-            self.assertNotEqual(found[binary.uuid], current)
-
     def test_hitch_columns_references_units_and_process_filter(self):
         with patch.object(trace.subprocess, "Popen", return_value=Export(HITCH_XML)):
             result = trace.app_hitches(trace.app_hitch_rows("recording.trace", frozenset({"hitches"})))

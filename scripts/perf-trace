@@ -52,6 +52,7 @@ from statistics import median
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from build_hosts import MAC_GUI_HOST, TEST_DEVICE_HOST, is_local
+from symbols import atos, is_symbol, symbol_files
 
 
 APP = "RemoteCoder"
@@ -102,10 +103,6 @@ sys.stdout.flush()
 sys.stderr.flush()
 os._exit(code)
 """
-DSYM_ROOT = "Library/Logs/remote-coder/deployments"
-BUILD_RUN_ROOT = "Library/Caches/RemoteCoder-Build/runs"
-DEVICE_SUPPORT_ROOT = "Library/Developer/Xcode/iOS DeviceSupport"
-ATOS_SEPARATOR = "\x1e"
 TRACE_COMPLETE = "Time limit reached"
 RECORDING_STARTED = "Ctrl-C to stop the recording"
 
@@ -260,61 +257,19 @@ def table_rows(trace: str, schema: str, columns: set[str]):
                 values[identifier] = element
 
 
-def symbol_files(binaries, apps: list[Path]) -> dict[str, Path]:
-    home = Path.home()
-    device_support = home / DEVICE_SUPPORT_ROOT
-    roots = [*device_support.glob("*/Symbols"), *device_support.glob("*/*/Symbols")]
-    candidates = [*(home / DSYM_ROOT).glob("*/symbols/*.dSYM/Contents/Resources/DWARF/*")]
-    candidates += (home / BUILD_RUN_ROOT).glob("*/symbols/*.dSYM/Contents/Resources/DWARF/*")
-    candidates += [path for app in apps for path in (app / APP, app / f"{APP}.debug.dylib") if path.is_file()]
-    for binary in binaries:
-        local = Path(binary.path)
-        candidates += [local] if local.is_file() else []
-        candidates += [path for root in roots if (path := root / binary.path.lstrip("/")).is_file()]
-    if not candidates:
-        return {}
-    output = subprocess.run(
-        ["xcrun", "dwarfdump", "--uuid", *map(str, candidates)],
-        stdout=subprocess.PIPE, text=True,
-    ).stdout
-    files: dict[str, Path] = {}
-    for line in output.splitlines():
-        _, uuid, _, path = line.split(" ", 3)
-        files.setdefault(uuid, Path(path))
-    return files
-
-
-def atos(file: Path, binary: Binary, addresses: list[int]) -> list[tuple[str, ...]]:
-    output = subprocess.run(
-        ["xcrun", "atos", "-i", "-d", ATOS_SEPARATOR, "-o", str(file), "-arch", binary.arch,
-         "-l", hex(binary.load_address)],
-        input="\n".join(map(hex, addresses)), stdout=subprocess.PIPE, text=True, check=True,
-    ).stdout
-    blocks = output.split(f"{ATOS_SEPARATOR}\n")[:-1]
-    if len(blocks) != len(addresses):
-        raise RuntimeError(f"atos returned {len(blocks)} results for {len(addresses)} addresses in {file}")
-    return [
-        tuple(name for line in block.splitlines() if is_symbol(name := line.split(" (in ", 1)[0]))
-        for block in blocks
-    ]
-
-
-def is_symbol(name: str) -> bool:
-    return bool(name) and not name.startswith(("0x", "<"))
-
-
 def symbolicate(frames: set[Frame], apps: list[Path]) -> dict[Frame, tuple[str, ...]]:
     names = {frame: (frame.name,) for frame in frames if is_symbol(frame.name)}
     by_binary: defaultdict[Binary, list[Frame]] = defaultdict(list)
     for frame in frames:
         if frame.binary is not None:
             by_binary[frame.binary].append(frame)
-    files = symbol_files(by_binary, apps)
+    app_files = [path for app in apps for path in (app / APP, app / f"{APP}.debug.dylib")]
+    files = symbol_files([binary.path for binary in by_binary], app_files)
     if missing := sorted({binary.name for binary in by_binary if binary.uuid not in files}):
         print(f"warning: no symbols with a matching UUID for {', '.join(missing)}", file=sys.stderr)
     with ThreadPoolExecutor(max_workers=4) as pool:
         results = {
-            binary: pool.submit(atos, file, binary, [frame.address for frame in binary_frames])
+            binary: pool.submit(atos, file, binary.load_address, [frame.address for frame in binary_frames])
             for binary, binary_frames in by_binary.items()
             if (file := files.get(binary.uuid)) is not None
         }
