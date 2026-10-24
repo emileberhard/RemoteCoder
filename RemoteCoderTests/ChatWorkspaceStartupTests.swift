@@ -139,7 +139,8 @@ struct ChatWorkspaceStartupTests {
         #expect(workspace.selectedHost != nil)
         #expect(workspace.keyWindow.selectedTarget == ExecutionTarget(hostID: fixture.mini.id))
 
-        let app = RemoteCoderAppModel(workspace: workspace, voiceCalls: TestVoiceCalls.center, scenes: ScenePhaseAggregate())
+        let app = RemoteCoderAppModel(workspace: workspace, voiceCalls: TestVoiceCalls.center, scenes: ScenePhaseAggregate(),
+                                      makeBackgroundExecution: { StubBackgroundExecution() })
         app.start()
         defer { app.terminate() }
 

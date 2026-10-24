@@ -22,14 +22,17 @@ final class RemoteCoderAppModel {
     private var hostSynchronizationRequested = false
     private var diagnosticsHostTask: Task<Void, Never>?
     private let diagnostics = DiagnosticsLifecycle(exporter: DiagnosticsOutbox.shared)
+    private let makeBackgroundExecution: @MainActor () -> any BackgroundExecution
     private let telemetry: TelemetryContext
     private var notificationAuthorizationTask: Task<Void, Never>?
     private var registrationTask: Task<Void, Never>?
 
-    init(workspace: ChatWorkspaceModel, voiceCalls: VoiceCallCenter, scenes: ScenePhaseAggregate) {
+    init(workspace: ChatWorkspaceModel, voiceCalls: VoiceCallCenter, scenes: ScenePhaseAggregate,
+         makeBackgroundExecution: @escaping @MainActor () -> any BackgroundExecution) {
         self.workspace = workspace
         self.voiceCalls = voiceCalls
         self.scenes = scenes
+        self.makeBackgroundExecution = makeBackgroundExecution
         #if os(iOS)
         incomingCalls = IncomingCallCoordinator(workspace: workspace, voiceCalls: voiceCalls)
         #endif
@@ -87,7 +90,8 @@ final class RemoteCoderAppModel {
             dictationLibrary: PerfBuild.isHarness ? nil : SharedDictationLibrary(defaults: defaults,
                 directory: scope.hostStorage.directory(for: .device).appending(path: "dictation-library"))
         )
-        return RemoteCoderAppModel(workspace: workspace, voiceCalls: voiceCalls, scenes: scenes)
+        return RemoteCoderAppModel(workspace: workspace, voiceCalls: voiceCalls, scenes: scenes,
+                                   makeBackgroundExecution: makeBackgroundExecution)
     }
 
     func start() {
@@ -203,12 +207,22 @@ final class RemoteCoderAppModel {
             await workspace.handleScenePhaseInactive()
         case .background:
             workspace.dictationLibrary?.cancelPublication()
-            // Last chance to ship what this foreground session logged.
-            diagnostics.update(destination: diagnosticsDestination(for: workspace.settings.activeHost?.configuration),
-                               phase: .background)
+            drainDiagnosticsOnBackground()
             await workspace.handleScenePhaseBackground()
         @unknown default:
             break
+        }
+    }
+
+    private func drainDiagnosticsOnBackground() {
+        // Last chance to ship what this foreground session logged.
+        diagnostics.update(destination: diagnosticsDestination(for: workspace.settings.activeHost?.configuration),
+                           phase: .background)
+        let execution = makeBackgroundExecution()
+        execution.hold(named: "RemoteCoder.DiagnosticsDrain") { execution.release() }
+        Task { [diagnostics] in
+            await diagnostics.flush()
+            execution.release()
         }
     }
 

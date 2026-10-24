@@ -444,7 +444,10 @@ copy useless for its purpose.
 - **Cadence.** Every 5 minutes while the scene is active, and on background.
   Launch and foreground only start the 5-minute pump: a scan costs seconds of
   CPU and would land exactly when the user returns to the app. Drains run at
-  utility priority. Pending segments upload after every drain.
+  utility priority. Pending segments upload after every drain. The background
+  drain holds a background task until the lifecycle settles; if iOS expires
+  the hold first, the process is suspended mid-scan and the rest waits for
+  the next drain, or is lost if the process dies before it.
   `DiagnosticsLifecycle` owns one latest-state worker; superseded background
   drains cannot stop a reactivated pump, and host changes do not rescan logs.
   Overlapping outbox drains share one scan/upload pass. Each pass rescans the

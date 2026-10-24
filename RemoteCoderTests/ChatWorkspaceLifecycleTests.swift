@@ -1243,7 +1243,8 @@ struct AppSceneLifecycleTests {
     @Test func oneBackgroundedSceneKeepsTheWorkspaceForegroundUntilTheOtherLeavesToo() async throws {
         let fixture = await WorkspaceFixture()
         defer { await fixture.cleanUp() }
-        let app = RemoteCoderAppModel(workspace: fixture.workspace, voiceCalls: TestVoiceCalls.center, scenes: ScenePhaseAggregate())
+        let app = RemoteCoderAppModel(workspace: fixture.workspace, voiceCalls: TestVoiceCalls.center, scenes: ScenePhaseAggregate(),
+                                      makeBackgroundExecution: { StubBackgroundExecution() })
         let model = try #require(fixture.workspace.screen(for: fixture.mini.id))
         let normal = AppEnergyPolicy(isLowPowerModeEnabled: false, thermalState: .nominal)
         let first = UUID()
@@ -1265,7 +1266,8 @@ struct AppSceneLifecycleTests {
     @Test func activatingTheAppReconcilesTheCurrentHosts() async throws {
         let fixture = await WorkspaceFixture()
         defer { await fixture.cleanUp() }
-        let app = RemoteCoderAppModel(workspace: fixture.workspace, voiceCalls: TestVoiceCalls.center, scenes: ScenePhaseAggregate())
+        let app = RemoteCoderAppModel(workspace: fixture.workspace, voiceCalls: TestVoiceCalls.center, scenes: ScenePhaseAggregate(),
+                                      makeBackgroundExecution: { StubBackgroundExecution() })
         let book = try #require(fixture.workspace.screen(for: fixture.book.id))
 
         fixture.workspace.settings.delete(fixture.book)
