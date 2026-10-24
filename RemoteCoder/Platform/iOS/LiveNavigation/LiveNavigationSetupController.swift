@@ -99,12 +99,12 @@ final class LiveNavigationSetupController {
             )
             try await waitForLocationDecision()
             try Task.checkCancellation()
-            readAuthorization()
 
             progress = "Preparing location…"
-            let credentials = credentials(token: try await locationPushToken())
+            let token = try await locationPushToken()
             try Task.checkCancellation()
-            pushTokens.receiveLocation(credentials)
+            readAuthorization()
+            pushTokens.receiveLocation(credentials(token: token))
             UserDefaults.standard.set(true, forKey: Self.setupEnabledKey)
         } catch {
             logger.error("Live-location setup failed: \(error.localizedDescription, privacy: .public)")
@@ -132,6 +132,7 @@ final class LiveNavigationSetupController {
                 logger.error("Location-push token refresh failed: \(error.localizedDescription, privacy: .public)")
             }
         }
+        readAuthorization()
         guard let token = refreshed ?? pushTokens.location?.token else { return }
         pushTokens.receiveLocation(credentials(token: token))
     }
