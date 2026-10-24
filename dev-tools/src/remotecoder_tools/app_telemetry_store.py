@@ -9,10 +9,12 @@ import tarfile
 import tempfile
 import threading
 import time
+import zlib
 from collections.abc import Iterable, Iterator
 from concurrent.futures import FIRST_COMPLETED, Future, ProcessPoolExecutor, wait
 from dataclasses import dataclass
 from pathlib import Path
+from typing import IO
 
 from .app_telemetry_summary import summarize_segment
 from .config import _matches_local_identity
@@ -35,6 +37,7 @@ FETCH_TIMEOUT_SECONDS = 600
 PARSE_WORKERS = 4
 OUTSTANDING_SEGMENTS = 2 * PARSE_WORKERS
 STALE_TEMPORARY_SECONDS = 3600
+EXPANDED_SEGMENT_BYTE_CAP = 32 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -162,14 +165,34 @@ def write_index(segment: Segment, summary: dict) -> dict:
     return entry
 
 
+class UnreadableSegment(Exception):
+    pass
+
+
+def _bounded_lines(stream: IO[bytes]) -> Iterator[bytes]:
+    remaining = EXPANDED_SEGMENT_BYTE_CAP
+    while line := stream.readline(remaining + 1):
+        remaining -= len(line)
+        if remaining < 0:
+            raise UnreadableSegment(f"expands beyond {EXPANDED_SEGMENT_BYTE_CAP} bytes")
+        yield line
+
+
+def _summarize(stream: IO[bytes]) -> dict:
+    try:
+        return summarize_segment(_bounded_lines(stream))
+    except (UnreadableSegment, gzip.BadGzipFile, EOFError, zlib.error) as error:
+        return {"unreadable": f"{type(error).__name__}: {error}"}
+
+
 def _summarize_bytes(compressed: bytes) -> dict:
     with gzip.GzipFile(fileobj=io.BytesIO(compressed)) as stream:
-        return summarize_segment(stream)
+        return _summarize(stream)
 
 
 def _summarize_file(path: str) -> dict:
     with gzip.open(path, "rb") as stream:
-        return summarize_segment(stream)
+        return _summarize(stream)
 
 
 def _remote_members(host: str, segments: list[Segment]) -> Iterator[tuple[str, bytes]]:

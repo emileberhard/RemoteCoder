@@ -32,8 +32,7 @@ sys.path.insert(0, str(store.ROOT / "scripts"))
 from symbols import DEVICE_SUPPORT_ROOT, atos, symbol_files  # noqa: E402
 
 SEGMENT_SLACK_MS = 3_600_000
-METRICKIT_DELIVERY_SLACK_MS = 3 * 86_400_000
-DAILY_REPORT_DUE = datetime.timedelta(hours=36)
+METRICKIT_REPORT_DUE = datetime.timedelta(hours=36)
 
 
 def add_parser(sub: argparse._SubParsersAction) -> None:
@@ -101,17 +100,24 @@ def _listings(args: argparse.Namespace) -> list[store.StoreListing]:
         return list(pool.map(store.list_store, hosts))
 
 
-def _cap_cut(listing: store.StoreListing) -> str | None:
-    through = (listing.retention or {}).get("evictedThroughMs")
-    return iso(datetime.datetime.fromtimestamp(through / 1000, datetime.UTC)) if isinstance(through, int) else None
+def _iso_ms(value: object) -> str | None:
+    return iso(datetime.datetime.fromtimestamp(value / 1000, datetime.UTC)) if isinstance(value, int) else None
+
+
+def _cap_state(listing: store.StoreListing) -> dict:
+    marker = listing.retention or {}
+    state = {"capEvictedThrough": cut} if (cut := _iso_ms(marker.get("evictedThroughMs"))) else {}
+    if marker.get("met") is False:
+        state["capUnmet"] = {"checkedAt": _iso_ms(marker.get("atMs")), "retainedBytes": marker.get("retainedBytes"),
+                             "capBytes": marker.get("capBytes"), "unreadableEntries": marker.get("unreadableEntries")}
+    return state
 
 
 def _coverage(listings: list[store.StoreListing], failures: dict[str, str], reclaimed: store.Reclaimed) -> dict:
     return {
         "stores": [
             {"host": listing.host, "status": "failed" if listing.error or listing.host in failures else "read",
-             "error": listing.error or failures.get(listing.host),
-             **({"capEvictedThrough": cut} if (cut := _cap_cut(listing)) else {})}
+             "error": listing.error or failures.get(listing.host), **_cap_state(listing)}
             for listing in listings
         ],
         "index": {"bytes": reclaimed.index_bytes, "capBytes": reclaimed.cap_bytes,
@@ -119,21 +125,30 @@ def _coverage(listings: list[store.StoreListing], failures: dict[str, str], recl
     }
 
 
+def _wanted(segment: store.Segment, since: float, until: float) -> bool:
+    if segment.kind == "metrickit":
+        return True
+    stamp = segment.stamp_ms
+    return stamp is not None and since * 1000 <= stamp <= until * 1000 + SEGMENT_SLACK_MS
+
+
 def _select(args: argparse.Namespace, kind: str) -> tuple[list[tuple[store.Segment, dict]], dict]:
     since, until = _window(args)
     listings = _listings(args)
-    slack = METRICKIT_DELIVERY_SLACK_MS if kind == "metrickit" else SEGMENT_SLACK_MS
     wanted = [
         segment
         for listing in listings for segment in listing.segments or ()
-        if segment.device == args.device and segment.kind == kind
-        and (stamp := segment.stamp_ms) is not None and since * 1000 <= stamp <= until * 1000 + slack
+        if segment.device == args.device and segment.kind == kind and _wanted(segment, since, until)
     ]
     entries, failures = store.indexed(sorted(wanted, key=lambda segment: segment.name))
     coverage = _coverage(listings, failures, store.reclaim_index(listings))
     coverage["window"] = {"since": iso(datetime.datetime.fromtimestamp(since, datetime.UTC)),
                           "until": iso(datetime.datetime.fromtimestamp(until, datetime.UTC))}
-    coverage["segments"] = len(entries)
+    unreadable = [{"host": segment.host, "segment": segment.name, "error": entry["unreadable"]}
+                  for segment, entry in entries if "unreadable" in entry]
+    coverage["segments"] = len(entries) - len(unreadable)
+    if unreadable:
+        coverage["unreadableSegments"] = unreadable
     return entries, coverage
 
 
@@ -205,26 +220,36 @@ async def cmd_metrickit(args: argparse.Namespace) -> int:
             report.pop("states", None)
     reports.sort(key=lambda report: (report.get("coverageStart") or "", report.get("coverageSeconds") or 0))
     return _emit({"coverage": coverage, "reports": reports,
-                  "dailyReports": _daily_reports(reports, since, until, datetime.datetime.now(datetime.UTC))})
+                  "uncovered": _uncovered(reports, since, until, datetime.datetime.now(datetime.UTC))})
 
 
-def _report_day(start: str) -> datetime.date:
-    return (datetime.datetime.fromisoformat(start) + datetime.timedelta(hours=12)).date()
-
-
-def _daily_reports(reports: list[dict], since: str, until: str, now: datetime.datetime) -> dict:
-    present = {_report_day(report["coverageStart"]) for report in reports
-               if report.get("coverageSeconds") == 86400 and report.get("coverageStart")}
-    day = datetime.datetime.fromisoformat(since).date()
-    last = (datetime.datetime.fromisoformat(until) - datetime.timedelta(milliseconds=1)).date()
+def _uncovered(reports: list[dict], since: str, until: str, now: datetime.datetime) -> dict:
+    start, end = datetime.datetime.fromisoformat(since), datetime.datetime.fromisoformat(until)
+    spans = []
+    for report in reports:
+        begin, seconds = report.get("coverageStart"), report.get("coverageSeconds")
+        if isinstance(begin, str) and isinstance(seconds, (int, float)):
+            moment = datetime.datetime.fromisoformat(begin)
+            spans.append((moment, moment + datetime.timedelta(seconds=seconds)))
+    spans.sort()
+    gaps, cursor = [], start
+    for begin, finish in spans:
+        if begin > cursor:
+            gaps.append((cursor, min(begin, end)))
+        cursor = max(cursor, finish)
+        if cursor >= end:
+            break
+    if cursor < end:
+        gaps.append((cursor, end))
+    due = now - METRICKIT_REPORT_DUE
     missing, not_yet_due = [], []
-    while day <= last:
-        if day not in present:
-            ends = datetime.datetime.combine(day + datetime.timedelta(days=1), datetime.time(), datetime.UTC)
-            (missing if ends + DAILY_REPORT_DUE <= now else not_yet_due).append(day.isoformat())
-        day += datetime.timedelta(days=1)
-    return {"present": sorted(day.isoformat() for day in present), "missing": missing, "notYetDue": not_yet_due,
-            "note": "Days are the device's local calendar days; a daily report normally arrives within a day."}
+    for begin, finish in gaps:
+        if begin < due:
+            missing.append({"from": iso(begin), "until": iso(min(finish, due))})
+        if finish > due:
+            not_yet_due.append({"from": iso(max(begin, due)), "until": iso(finish)})
+    return {"missing": missing, "notYetDue": not_yet_due,
+            "note": "Spans of the window no MetricKit report covers; a report normally arrives within a day."}
 
 
 def _system_symbol_candidates(diagnostics: list[dict]) -> list[Path]:

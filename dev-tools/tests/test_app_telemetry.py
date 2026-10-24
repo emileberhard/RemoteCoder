@@ -254,21 +254,31 @@ def test_export_share_counts_only_exports_inside_the_sampled_coverage():
     assert cost["sampler"]["samples"] == 8
 
 
-def test_metrickit_reports_are_selected_and_checked_by_coverage_day():
+def test_metrickit_reports_are_selected_and_checked_by_coverage():
     received_next_day = {"coverageStart": "2026-10-22T22:00:00.000Z", "coverageSeconds": 86400,
                          "receivedAt": "2026-10-24T09:38:39.943Z"}
     assert app_telemetry._overlaps(received_next_day, "2026-10-23T00:00:00.000Z", "2026-10-24T00:00:00.000Z")
     assert not app_telemetry._overlaps(received_next_day, "2026-10-24T00:00:00.000Z", "2026-10-25T00:00:00.000Z")
+    received_days_later = app_telemetry_store.Segment("local", "iPhone-a", "20261029-001792500000000-mk-r1", 10, 0)
+    assert app_telemetry._wanted(received_days_later, 1_792_000_000, 1_792_100_000)
+    log_then = app_telemetry_store.Segment("local", "iPhone-a", "20261029-001792500000000-aaaaaaaa", 10, 0)
+    assert not app_telemetry._wanted(log_then, 1_792_000_000, 1_792_100_000)
 
-    days = app_telemetry._daily_reports([received_next_day], "2026-10-21T00:00:00.000Z", "2026-10-24T00:00:00.000Z",
-                                        datetime.datetime(2026, 10, 24, 15, tzinfo=datetime.UTC))
+    stockholm_day = app_telemetry._uncovered([received_next_day], "2026-10-22T22:00:00.000Z",
+                                             "2026-10-23T22:00:00.000Z", datetime.datetime(2026, 10, 25, tzinfo=datetime.UTC))
+    assert stockholm_day["missing"] == stockholm_day["notYetDue"] == []
+    later = app_telemetry._uncovered([received_next_day], "2026-10-21T00:00:00.000Z", "2026-10-25T00:00:00.000Z",
+                                     datetime.datetime(2026, 10, 25, 15, tzinfo=datetime.UTC))
+    assert later["missing"] == [{"from": "2026-10-21T00:00:00.000Z", "until": "2026-10-22T22:00:00.000Z"},
+                                {"from": "2026-10-23T22:00:00.000Z", "until": "2026-10-24T03:00:00.000Z"}]
+    assert later["notYetDue"] == [{"from": "2026-10-24T03:00:00.000Z", "until": "2026-10-25T00:00:00.000Z"}]
 
-    assert days["present"] == ["2026-10-23"]
-    assert days["missing"] == ["2026-10-21", "2026-10-22"]
-    assert days["notYetDue"] == []
-    later = app_telemetry._daily_reports([received_next_day], "2026-10-23T00:00:00.000Z", "2026-10-25T00:00:00.000Z",
-                                         datetime.datetime(2026, 10, 24, 15, tzinfo=datetime.UTC))
-    assert (later["missing"], later["notYetDue"]) == ([], ["2026-10-24"])
+
+def test_an_oversized_segment_is_reported_unreadable(monkeypatch):
+    monkeypatch.setattr(app_telemetry_store, "EXPANDED_SEGMENT_BYTE_CAP", 64)
+    summary = app_telemetry_store._summarize_bytes(gzip.compress(b"x" * 100 + b"\n"))
+    assert summary["unreadable"].startswith("UnreadableSegment")
+    assert "records" in app_telemetry_store._summarize_bytes(gzip.compress(b"{}\n" * 10))
 
 
 def test_a_local_listing_reads_the_gateway_cap_marker(tmp_path, monkeypatch):
@@ -276,9 +286,15 @@ def test_a_local_listing_reads_the_gateway_cap_marker(tmp_path, monkeypatch):
     root = tmp_path / app_telemetry_store.APP_LOG_DIRECTORY
     (root / "iPhone-a").mkdir(parents=True)
     (root / "iPhone-a" / "20261024-001792850000000-aaaaaaaa-telemetry.jsonl.gz").write_bytes(gzip.compress(b""))
-    (root / "retention.json").write_text(json.dumps({"evictedThroughMs": 1_792_850_000_000, "files": 3}))
+    (root / "retention.json").write_text(json.dumps({"evictedThroughMs": 1_792_850_000_000, "files": 0, "met": False,
+                                                     "atMs": 1_792_850_000_000, "retainedBytes": None,
+                                                     "capBytes": 1024, "unreadableEntries": 1}))
 
     listing = app_telemetry_store.list_store("local")
 
     assert [segment.kind for segment in listing.segments] == ["telemetry"]
-    assert app_telemetry._cap_cut(listing) == "2026-10-24T13:53:20.000Z"
+    assert app_telemetry._cap_state(listing) == {
+        "capEvictedThrough": "2026-10-24T13:53:20.000Z",
+        "capUnmet": {"checkedAt": "2026-10-24T13:53:20.000Z", "retainedBytes": None, "capBytes": 1024,
+                     "unreadableEntries": 1},
+    }
