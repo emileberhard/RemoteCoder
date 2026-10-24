@@ -50,7 +50,7 @@ use crate::gateway::Gateway;
 use crate::http::lan::LanListener;
 use crate::http::relay::{RelayEndpoint, RelayRoute};
 use crate::http::server::{HttpState, RequestAdmission, run_http_server};
-use crate::observability::app_logs::AppLogStore;
+use crate::observability::app_logs::{APP_LOG_BYTE_CAP, APP_LOG_RETENTION_DAYS, AppLogStore};
 use crate::observability::journal::Journal;
 use crate::providers::codex::daemon::CodexAppServer;
 use crate::push::PushService;
@@ -505,7 +505,8 @@ async fn serve_http(
         codex_code_mode_host_path: settings.codex_code_mode_host_path.clone(),
         app_logs: AppLogStore::new_in(
             settings.host_paths.logs("app-logs"),
-            DEFAULT_LOG_RETENTION_DAYS,
+            APP_LOG_RETENTION_DAYS,
+            APP_LOG_BYTE_CAP,
         ),
         uploads,
         files: crate::files::FileDownloads::default(),

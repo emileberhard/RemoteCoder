@@ -30,7 +30,7 @@ use crate::files::upload::UploadStore;
 use crate::gateway::Gateway;
 use crate::http::lan::{LanEndpoint, serve_lan};
 use crate::http::lan_identity::LanIdentity;
-use crate::observability::app_logs::AppLogStore;
+use crate::observability::app_logs::{APP_LOG_BYTE_CAP, AppLogStore};
 use crate::observability::journal::Journal;
 use crate::providers::codex::daemon::CodexAppServer;
 use crate::voice::speech::{SpeechClients, SpeechRelay};
@@ -158,7 +158,7 @@ impl LanHarness {
             accounts: None,
             codex_version: "test".to_string(),
             codex_code_mode_host_path: directory.path().join("codex-code-mode-host"),
-            app_logs: AppLogStore::new_in(directory.path().join("app-logs"), 1),
+            app_logs: AppLogStore::new_in(directory.path().join("app-logs"), 1, APP_LOG_BYTE_CAP),
             uploads: UploadStore::open_in(directory.path().join("uploads")).unwrap(),
             files: FileDownloads::default(),
             speech: SpeechRelay::new(

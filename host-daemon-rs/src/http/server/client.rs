@@ -207,11 +207,16 @@ pub(super) async fn app_logs(
             .into_response();
     };
     match result {
-        Ok(path) => (
-            StatusCode::OK,
-            Json(json!({ "stored": path.file_name().and_then(|name| name.to_str()) })),
-        )
-            .into_response(),
+        Ok(stored) => {
+            if let Some(eviction) = &stored.cap_eviction {
+                state.journal.app_logs("cap_evicted", eviction.fields());
+            }
+            (
+                StatusCode::OK,
+                Json(json!({ "stored": stored.path.file_name().and_then(|name| name.to_str()) })),
+            )
+                .into_response()
+        }
         Err(error) => {
             warn_rejected(device, &error);
             let status = match error {

@@ -4,7 +4,8 @@
 //! gone before a question about it gets asked. The app drains its own log
 //! store into gzipped JSONL segments and posts them here; the gateway writes
 //! them verbatim under `~/Library/Logs/remote-coder/app-logs/<device>/` and
-//! ages them out on the same retention window as the journal.
+//! ages them out after [`APP_LOG_RETENTION_DAYS`] or, oldest first across all
+//! devices, beyond [`APP_LOG_BYTE_CAP`].
 //!
 //! Segment bodies are opaque: they are stored, never parsed. What this module
 //! owns is the path — a device name arrives from the network, so it is
@@ -12,7 +13,9 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 
+use serde_json::{Value, json};
 use tracing::{info, warn};
 
 use crate::observability::journal::{sweep_expired_day_files, today_utc};
@@ -44,18 +47,53 @@ impl AppLogError {
 /// anything longer is a client bug or an attack, not a real device name.
 const MAX_NAME_LENGTH: usize = 64;
 
+pub(crate) const APP_LOG_RETENTION_DAYS: u64 = 14;
+pub(crate) const APP_LOG_BYTE_CAP: u64 = 1024 * 1024 * 1024;
+const RETENTION_MARKER: &str = "retention.json";
+
 #[derive(Debug, Clone)]
 pub(crate) struct AppLogStore {
     dir: PathBuf,
     retention_days: u64,
+    byte_cap: u64,
     publishing: Arc<Mutex<()>>,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct StoredSegment {
+    pub(crate) path: PathBuf,
+    pub(crate) cap_eviction: Option<CapEviction>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CapEviction {
+    pub(crate) files: usize,
+    pub(crate) bytes: u64,
+    pub(crate) retained_bytes: u64,
+    pub(crate) cap_bytes: u64,
+    pub(crate) evicted_through: SystemTime,
+    pub(crate) evicted_at: SystemTime,
+}
+
+impl CapEviction {
+    pub(crate) fn fields(&self) -> Value {
+        json!({
+            "files": self.files,
+            "bytes": self.bytes,
+            "retainedBytes": self.retained_bytes,
+            "capBytes": self.cap_bytes,
+            "evictedThroughMs": unix_millis(self.evicted_through),
+            "evictedAtMs": unix_millis(self.evicted_at),
+        })
+    }
+}
+
 impl AppLogStore {
-    pub(crate) fn new_in(dir: PathBuf, retention_days: u64) -> AppLogStore {
+    pub(crate) fn new_in(dir: PathBuf, retention_days: u64, byte_cap: u64) -> AppLogStore {
         AppLogStore {
             dir,
             retention_days,
+            byte_cap,
             publishing: Arc::new(Mutex::new(())),
         }
     }
@@ -69,7 +107,7 @@ impl AppLogStore {
         device: &str,
         segment: &str,
         body: &[u8],
-    ) -> Result<PathBuf, AppLogError> {
+    ) -> Result<StoredSegment, AppLogError> {
         self.store_on(today_utc(), device, segment, body)
     }
 
@@ -79,7 +117,7 @@ impl AppLogStore {
         device: &str,
         segment: &str,
         body: &[u8],
-    ) -> Result<PathBuf, AppLogError> {
+    ) -> Result<StoredSegment, AppLogError> {
         let device = sanitize_component(device).ok_or(AppLogError::InvalidName("device"))?;
         let segment = sanitize_component(segment).ok_or(AppLogError::InvalidName("segment"))?;
         if body.len() < 2 || body[0] != 0x1f || body[1] != 0x8b {
@@ -104,8 +142,79 @@ impl AppLogStore {
             bytes = body.len(),
             "stored app log segment"
         );
-        Ok(path)
+        let cap_eviction = enforce_byte_cap(&self.dir, self.byte_cap);
+        if let Some(eviction) = &cap_eviction {
+            self.record_cap_eviction(eviction);
+        }
+        Ok(StoredSegment { path, cap_eviction })
     }
+
+    fn record_cap_eviction(&self, eviction: &CapEviction) {
+        warn!(
+            files = eviction.files,
+            bytes = eviction.bytes,
+            cap_bytes = eviction.cap_bytes,
+            "app log store over its byte cap; evicted the oldest segments"
+        );
+        let mut marker = eviction.fields();
+        marker["retentionDays"] = json!(self.retention_days);
+        if let Err(error) = private_state::replace(
+            &self.dir.join(RETENTION_MARKER),
+            marker.to_string().as_bytes(),
+        ) {
+            warn!(error = %format!("{error:#}"), "failed recording the app log cap eviction");
+        }
+    }
+}
+
+fn enforce_byte_cap(dir: &Path, byte_cap: u64) -> Option<CapEviction> {
+    let mut segments: Vec<(SystemTime, u64, PathBuf)> = device_directories(dir)
+        .flat_map(|device_dir| {
+            std::fs::read_dir(device_dir)
+                .into_iter()
+                .flatten()
+                .flatten()
+        })
+        .filter(|entry| entry.file_name().to_str().and_then(segment_day).is_some())
+        .filter_map(|entry| {
+            let metadata = entry.metadata().ok()?;
+            let modified = metadata.modified().unwrap_or(UNIX_EPOCH);
+            Some((modified, metadata.len(), entry.path()))
+        })
+        .collect();
+    let mut retained: u64 = segments.iter().map(|(_, size, _)| size).sum();
+    if retained <= byte_cap {
+        return None;
+    }
+    segments.sort();
+    let mut files = 0;
+    let mut bytes = 0;
+    let mut evicted_through = UNIX_EPOCH;
+    for (modified, size, path) in segments {
+        if retained <= byte_cap {
+            break;
+        }
+        if std::fs::remove_file(&path).is_ok() {
+            retained -= size;
+            files += 1;
+            bytes += size;
+            evicted_through = modified;
+        }
+    }
+    (files > 0).then(|| CapEviction {
+        files,
+        bytes,
+        retained_bytes: retained,
+        cap_bytes: byte_cap,
+        evicted_through,
+        evicted_at: SystemTime::now(),
+    })
+}
+
+fn unix_millis(time: SystemTime) -> u64 {
+    time.duration_since(UNIX_EPOCH).map_or(0, |elapsed| {
+        u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
+    })
 }
 
 /// Reduces an arbitrary client-supplied string to one safe path component.
@@ -157,28 +266,28 @@ fn existing_segment_path(device_dir: &Path, segment: &str) -> Option<PathBuf> {
         })
 }
 
-fn sweep_all_devices(dir: &Path, today: u32, retention_days: u64) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for device_dir in entries
+fn device_directories(dir: &Path) -> impl Iterator<Item = PathBuf> {
+    std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
         .flatten()
         .map(|entry| entry.path())
         .filter(|path| path.is_dir())
-    {
-        sweep_device_directory(&device_dir, today, retention_days);
+}
+
+fn sweep_all_devices(dir: &Path, today: u32, retention_days: u64) {
+    for device_dir in device_directories(dir) {
+        sweep_expired_day_files(&device_dir, today, retention_days, segment_day);
         let _ = std::fs::remove_dir(&device_dir);
     }
 }
 
-fn sweep_device_directory(dir: &Path, today: u32, retention_days: u64) {
-    sweep_expired_day_files(dir, today, retention_days, |name| {
-        let (day, rest) = name.split_at_checked(8)?;
-        if !rest.starts_with('-') || !rest.ends_with(".jsonl.gz") {
-            return None;
-        }
-        day.parse::<u32>().ok()
-    });
+fn segment_day(name: &str) -> Option<u32> {
+    let (day, rest) = name.split_at_checked(8)?;
+    if !rest.starts_with('-') || !rest.ends_with(".jsonl.gz") {
+        return None;
+    }
+    day.parse::<u32>().ok()
 }
 
 /// Logs an upload the gateway refused, so a phone that silently stops
@@ -206,11 +315,12 @@ mod tests {
     #[test]
     fn a_segment_lands_under_its_device_directory() {
         let dir = temp_dir("store");
-        let store = AppLogStore::new_in(dir.clone(), 30);
+        let store = AppLogStore::new_in(dir.clone(), 30, APP_LOG_BYTE_CAP);
 
         let path = store
             .store("Taylors iPhone", "a1b2c3", &gzip_body())
-            .expect("segment stored");
+            .expect("segment stored")
+            .path;
 
         assert_eq!(
             path.parent().and_then(|parent| parent.file_name()),
@@ -229,12 +339,12 @@ mod tests {
     #[test]
     fn a_device_name_can_never_escape_the_store() {
         let dir = temp_dir("traversal");
-        let store = AppLogStore::new_in(dir.clone(), 30);
+        let store = AppLogStore::new_in(dir.clone(), 30, APP_LOG_BYTE_CAP);
 
         for hostile in ["../../etc", "..", "/", "....//", "."] {
             match store.store(hostile, "seg", &gzip_body()) {
                 Err(AppLogError::InvalidName("device")) => {}
-                Ok(path) => {
+                Ok(StoredSegment { path, .. }) => {
                     let canonical = path.canonicalize().expect("canonical path");
                     let root = dir.canonicalize().expect("canonical root");
                     assert!(
@@ -276,7 +386,7 @@ mod tests {
     #[test]
     fn a_body_that_is_not_gzip_is_refused() {
         let dir = temp_dir("gzip");
-        let store = AppLogStore::new_in(dir.clone(), 30);
+        let store = AppLogStore::new_in(dir.clone(), 30, APP_LOG_BYTE_CAP);
         assert_eq!(
             store.store("phone", "seg", b"{\"plain\":\"jsonl\"}"),
             Err(AppLogError::NotGzip)
@@ -299,7 +409,7 @@ mod tests {
         }
 
         // 2026-08-21 minus 30 days is 2026-07-22: the boundary file stays.
-        sweep_device_directory(&dir, 20_260_821, 30);
+        sweep_expired_day_files(&dir, 20_260_821, 30, segment_day);
 
         let mut remaining: Vec<String> = std::fs::read_dir(&dir)
             .expect("read dir")
@@ -321,16 +431,18 @@ mod tests {
     #[test]
     fn a_retry_after_midnight_replaces_the_original_segment() {
         let dir = temp_dir("midnight");
-        let store = AppLogStore::new_in(dir.clone(), 30);
+        let store = AppLogStore::new_in(dir.clone(), 30, APP_LOG_BYTE_CAP);
 
         let first = store
             .store_on(20_260_821, "phone", "seg-1", &gzip_body())
-            .expect("first upload");
+            .expect("first upload")
+            .path;
         let mut retried_body = gzip_body();
         retried_body.push(b'!');
         let retry = store
             .store_on(20_260_822, "phone", "seg-1", &retried_body)
-            .expect("retry");
+            .expect("retry")
+            .path;
 
         assert_eq!(retry, first);
         assert_eq!(std::fs::read(&first).expect("read back"), retried_body);
@@ -346,10 +458,11 @@ mod tests {
     #[test]
     fn a_failed_replacement_keeps_the_acknowledged_segment() {
         let dir = temp_dir("failed-replace");
-        let store = AppLogStore::new_in(dir.clone(), 30);
+        let store = AppLogStore::new_in(dir.clone(), 30, APP_LOG_BYTE_CAP);
         let path = store
             .store_on(20_260_821, "phone", "seg-1", &gzip_body())
-            .expect("first upload");
+            .expect("first upload")
+            .path;
 
         let device_dir = dir.join("phone");
         let mut permissions = std::fs::metadata(&device_dir)
@@ -369,7 +482,7 @@ mod tests {
     #[test]
     fn concurrent_uploads_of_one_segment_leave_one_whole_file() {
         let dir = temp_dir("concurrent");
-        let store = AppLogStore::new_in(dir.clone(), 30);
+        let store = AppLogStore::new_in(dir.clone(), 30, APP_LOG_BYTE_CAP);
 
         std::thread::scope(|scope| {
             for (today, marker) in [(20_260_821, b'a'), (20_260_822, b'b')] {
@@ -403,7 +516,7 @@ mod tests {
         let inactive = dir.join("old-phone");
         std::fs::create_dir_all(&inactive).expect("dir");
         std::fs::write(inactive.join("20260101-old.jsonl.gz"), b"x").expect("write");
-        let store = AppLogStore::new_in(dir.clone(), 30);
+        let store = AppLogStore::new_in(dir.clone(), 30, APP_LOG_BYTE_CAP);
 
         store
             .store_on(20_260_821, "phone", "seg-1", &gzip_body())
@@ -414,6 +527,49 @@ mod tests {
             "an emptied inactive device directory is removed"
         );
         assert!(dir.join("phone").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_byte_cap_evicts_the_oldest_segments_across_devices_and_records_the_cut() {
+        let dir = temp_dir("cap");
+        let body_size = u64::try_from(gzip_body().len()).expect("size");
+        let store = AppLogStore::new_in(dir.clone(), 30, body_size * 2);
+        let base = UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+        let mut stored = Vec::new();
+        for (offset, device, segment) in [(0, "phone", "a"), (60, "ipad", "b")] {
+            let segment = store
+                .store_on(20_260_821, device, segment, &gzip_body())
+                .expect("upload");
+            assert_eq!(segment.cap_eviction, None);
+            std::fs::File::options()
+                .write(true)
+                .open(&segment.path)
+                .and_then(|file| file.set_modified(base + std::time::Duration::from_secs(offset)))
+                .expect("set mtime");
+            stored.push(segment.path);
+        }
+
+        let newest = store
+            .store_on(20_260_821, "phone", "c", &gzip_body())
+            .expect("upload");
+
+        let eviction = newest.cap_eviction.expect("over the cap");
+        assert_eq!((eviction.files, eviction.bytes), (1, body_size));
+        assert_eq!(eviction.retained_bytes, body_size * 2);
+        assert_eq!(eviction.evicted_through, base);
+        assert!(
+            !stored[0].exists(),
+            "the oldest segment goes first, whatever its device"
+        );
+        assert!(stored[1].exists());
+        assert!(newest.path.exists());
+        let marker: Value = serde_json::from_slice(
+            &std::fs::read(dir.join(RETENTION_MARKER)).expect("marker written"),
+        )
+        .expect("marker is JSON");
+        assert_eq!(marker["evictedThroughMs"], json!(1_700_000_000_000_u64));
+        assert_eq!(marker["retentionDays"], json!(30));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

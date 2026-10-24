@@ -320,6 +320,10 @@ impl Journal {
         self.send_event("upload", event, fields);
     }
 
+    pub(crate) fn app_logs(&self, event: &str, fields: Value) {
+        self.send_event("app_logs", event, fields);
+    }
+
     pub(crate) fn transport(&self, event: &str, fields: Value) {
         self.send_event("transport", event, fields);
     }
