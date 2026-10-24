@@ -429,10 +429,14 @@ owner until the last fixture is dropped.
   so it is not a bare counter from 1. The payload's `epoch` is the notification history's epoch, so a
   client compares revisions only within one epoch. Every change is broadcast once as
   `daemon/activeTurns/changed` with the same payload the read returns. Committed
-  turn state and app-server inventory changes wake it at once; a tick, which
-  runs only while a client is connected, catches external activity and any
-  other path. Reads assemble gateway and app-server turns from current short
-  critical sections, including a read after a Stop acknowledgement. They never
+  turn state and app-server inventory changes wake it at once; a tick catches
+  external activity and any other path. Discovery, publication and coverage
+  run for the gateway's lifetime and never depend on which or whether clients
+  are connected: a one-shot reader such as `rc-gateway rpc` or the automations
+  service gets the same truthful snapshot as a long-lived app. Client presence
+  may gate delivery, never discovery. Work moved off a request path keeps its
+  freshness guarantee in the loop that now owns it. Reads assemble gateway and
+  app-server turns from current short critical sections, including a read after a Stop acknowledgement. They never
   wait for external discovery, ancestry or restart-journal I/O. The publisher
   owns a separate bounded discovery task outside its publication lock, cancelled
   with the publisher. It refreshes every 2 s while working and every 8 s idle;

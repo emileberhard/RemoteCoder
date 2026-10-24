@@ -223,9 +223,6 @@ impl Gateway {
                 () = self.activity.wake.notified() => {}
                 () = tokio::time::sleep(pause) => {}
             }
-            if self.clients.is_empty() {
-                continue;
-            }
             if let Err(error) = self.refresh_activity().await {
                 warn!(%error, "failed to publish activity");
             }
@@ -234,9 +231,7 @@ impl Gateway {
 
     async fn activity_discovery_loop(self: Arc<Self>) {
         loop {
-            if !self.clients.is_empty() {
-                self.refresh_activity_discovery().await;
-            }
+            self.refresh_activity_discovery().await;
             tokio::time::sleep(WORKING_ACTIVITY_TICK).await;
             tokio::select! {
                 () = self.activity.discovery_wake.notified() => {}
@@ -785,6 +780,99 @@ mod tests {
             refresh.abort();
             let _ = refresh.await;
         }).await;
+    }
+
+    #[tokio::test]
+    async fn coverage_and_external_activity_stay_fresh_without_connected_clients() {
+        crate::test_support::with_manual_time(async {
+            use std::os::unix::fs::PermissionsExt;
+            let settings =
+                Arc::new(crate::providers::claude::settings::ClaudeSettings::isolated_for_test());
+            let session = "00000000-0000-4000-8000-000000000001";
+            let cwd = settings.root_path().join("project");
+            let transcripts = settings.settings.claude_home.join("projects").join(
+                crate::providers::claude::project_slug(&cwd.to_string_lossy()),
+            );
+            std::fs::create_dir_all(&transcripts).unwrap();
+            std::fs::write(
+                transcripts.join(format!("{session}.jsonl")),
+                "{\"type\":\"system\",\"subtype\":\"turn_duration\",\"timestamp\":\"2026-10-24T12:00:00Z\"}\n",
+            )
+            .unwrap();
+            let listing = json!([{
+                "sessionId": session,
+                "cwd": cwd,
+                "startedAt": 0,
+                "pid": std::process::id(),
+                "status": "idle",
+            }]);
+            let program = settings.root_path().join("claude-cli");
+            std::fs::write(&program, format!("#!/bin/sh\nprintf '%s' '{listing}'\n")).unwrap();
+            std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+            let mut configured = settings.settings.clone();
+            configured.enabled = true;
+            configured.claude_path = program;
+            let gateway = crate::test_support::TestGateway::with_settings(
+                Arc::new(crate::providers::codex::daemon::CodexAppServer::new(
+                    std::path::PathBuf::from("/bin/true"),
+                    HashMap::new(),
+                )),
+                configured,
+                settings,
+            );
+            gateway.claude_recovery_ready.store(true, Ordering::Release);
+            gateway.start_activity_publisher().await;
+            assert!(gateway.clients.is_empty());
+
+            let observed = Arc::clone(&gateway);
+            let discovered_at = move || observed.activity.discovery.lock().unwrap().at;
+            let first = discovered_at.clone();
+            crate::test_support::wait_until("the first discovery", move || first().is_some()).await;
+            let started = discovered_at().unwrap();
+            while started.elapsed() <= Duration::from_secs(30) {
+                let previous = discovered_at();
+                gateway.activity.discovery_wake.notify_one();
+                tokio::time::advance(WORKING_ACTIVITY_TICK + Duration::from_millis(1)).await;
+                let current = discovered_at.clone();
+                crate::test_support::wait_until("the next discovery", move || current() != previous)
+                    .await;
+            }
+
+            let publisher = Arc::clone(&gateway);
+            crate::test_support::wait_until("the background publication", move || {
+                publisher
+                    .activity
+                    .published
+                    .try_lock()
+                    .ok()
+                    .and_then(|published| published.as_ref().map(|p| p.payload().unwrap()))
+                    .is_some_and(|payload| {
+                        payload["coverage"]["claude"] == true
+                            && payload["externalActivity"]["sessions"][0]["state"] == "idle"
+                    })
+            })
+            .await;
+            let published = gateway.activity.published.lock().await.as_ref().unwrap().payload().unwrap();
+            let (read_tx, mut reads) = mpsc::channel(8);
+            gateway
+                .handle_daemon_active_turns(&test_client(2, read_tx), Some(json!(1)))
+                .await
+                .unwrap();
+            let read = next_text(&mut reads)["result"].clone();
+            assert_eq!(read, published);
+            assert_eq!(read["coverage"]["claude"], true);
+            assert_eq!(read["externalActivity"]["claudeAvailable"], true);
+            assert_eq!(
+                read["externalActivity"]["sessions"],
+                json!([{
+                    "threadId": format!("claude_{session}"),
+                    "state": "idle",
+                    "owner": "client",
+                }])
+            );
+            gateway.stop_activity_publisher().await;
+        })
+        .await;
     }
 
     #[tokio::test]
