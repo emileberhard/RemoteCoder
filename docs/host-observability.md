@@ -622,8 +622,10 @@ only, never WebKit's processes, and it cannot apportion battery to a feature.
   started in one state and finished in the next counts toward the next. Battery
   levels appear on timeline stretches only; a 1 % step lands in whichever state
   held when iOS reported it, so no per-state battery rate is computed.
-- **Switching it off.** `perf-sim --disable resourceSampler` turns it off in
-  `RC_PERF_HARNESS` builds for the overhead comparison. There is no user setting.
+- **Switching it off.** `perf-sim --disable resourceSampler` turns the sampler
+  off in `RC_PERF_HARNESS` builds for the overhead comparison; the projection,
+  its device and network observers and the MetricKit states keep running, so the
+  comparison measures the sampler alone. There is no user setting.
 
 Decision summary (2026-10-24). The goal is to answer, for any hour in the last
 7 days, which version, state and minute spent CPU, wakeups, memory or disk, and
@@ -660,7 +662,9 @@ Follow-ups, tracked here while Linear is at its free cap: A/B the composer
 spinner through MetricKit's GPU time; mirror Mac dev-build dSYMs
 built on the MacBook to the Mini; background sampling during voice calls; a
 byte cap for the gateway journal (age-bounded, up to 1.2 GB a day); per-purpose
-network counters and gateway connection correlation.
+network counters and gateway connection correlation; an unknown initial phase in
+`ScenePhaseAggregate`, which starts as background, so a history read begun during
+a background launch stops holding its state through suspension.
 
 ### Checkpoint save phases
 
