@@ -258,6 +258,8 @@ struct GatewayLivenessTests {
         let client = try client(port: port)
         let failure = await #expect(throws: GatewayClient.ClientError.self) { try await client.connectIfNeeded() }
         #expect({ if case .gatewayNotReady = failure { true } else { false } }())
+        #expect(failure?.localizedDescription.hasPrefix("Cellular fixture closed the connection: ") == true)
+        #expect(failure?.localizedDescription.localizedStandardContains("restarting") == false)
         await client.retire()
         await peer.stop()
     }

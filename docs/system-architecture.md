@@ -629,7 +629,9 @@ gateway stops is accepted and closed with 4012 too. `GatewayClient` treats the
 first 4012 since its last connection as the start of a 120 s restart window
 (`Timeouts.restartWindow`) that ends at the next connection; later 4012s do not
 extend it, so a transition that never finishes turns red, and after the window a
-4012 reads as an ordinary refusal. Failed attempts
+4012 reads as an ordinary refusal. A refusal before `daemon/ready` names the
+host and the gateway's close reason ("<host> closed the connection: …"); only
+a 4012 inside the window reads as restarting. Failed attempts
 inside the window blame no route, so the LAN route is not suspended for the
 host's downtime, and surface `ClientError.gatewayRestarting`, which the drawer's
 automatic list refresh defers instead of recording as an error. `GatewayClient` announces
