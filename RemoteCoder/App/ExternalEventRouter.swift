@@ -39,7 +39,7 @@ final class ExternalEventRouter {
     @ObservationIgnored private var openWindow: (@MainActor (ConversationWindowValue) -> Void)?
     @ObservationIgnored private var mainWindowOpener: (@MainActor () -> Void)?
     @ObservationIgnored private let now: @MainActor () -> Date
-    @ObservationIgnored private let logger = Logger(subsystem: "RemoteCoder", category: "ExternalEvents")
+    @ObservationIgnored private let logger = AppLogger(category: "ExternalEvents")
 
     init(now: @escaping @MainActor () -> Date) {
         self.now = now

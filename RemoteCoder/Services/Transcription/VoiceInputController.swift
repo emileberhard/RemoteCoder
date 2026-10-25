@@ -66,7 +66,7 @@ final class VoiceInputController {
     private let haptics: HapticService
     let library: SharedDictationLibrary?
     private let captureOwner = UUID()
-    private let logger = Logger(subsystem: "RemoteCoder", category: "VoiceInput")
+    private let logger = AppLogger(category: "VoiceInput")
 
     private(set) var isRecording = false
     private(set) var isTranscribing = false
@@ -299,7 +299,7 @@ final class VoiceInputController {
         do {
             try await recordings.discard(recording)
         } catch {
-            logger.error("saved dictation could not be discarded: \(error.localizedDescription, privacy: .public)")
+            logger.error("saved dictation could not be discarded: \(error.localizedDescription)")
         }
     }
 
@@ -371,7 +371,7 @@ final class VoiceInputController {
         if active?.writer.id == id {
             let live = active?.live
             do { try await stopRecording() }
-            catch { logger.error("account-change capture stop failed: \(error.localizedDescription, privacy: .public)") }
+            catch { logger.error("account-change capture stop failed: \(error.localizedDescription)") }
             await live?.dictation.cancel()
         }
         if stopped?.recordingID == id {

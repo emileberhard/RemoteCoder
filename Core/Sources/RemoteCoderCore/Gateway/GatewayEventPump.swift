@@ -56,7 +56,7 @@ final class GatewayEventPump {
     private let gateway: GatewayClient
     private let conversations: ConversationSessions
     private weak var sink: (any GatewayEventSink)?
-    private let logger = Logger(subsystem: "RemoteCoder", category: "GatewayNotificationPump")
+    private let logger = AppLogger(category: "GatewayNotificationPump")
     private var task: Task<Void, Never>?
     private var connectionTask: Task<Void, Never>?
     private var networkTask: Task<Void, Never>?
@@ -147,7 +147,7 @@ final class GatewayEventPump {
                 guard generation == self.generation, isLive else { throw CancellationError() }
                 await conversations.adoptNotificationEpoch(response.epoch)
                 logger.notice(
-                    "replaying \(response.notifications.count) missed notifications after \(afterSequence) thread=\(threadID, privacy: .public) throughSequence=\(response.throughSequence)"
+                    "replaying \(response.notifications.count) missed notifications after \(afterSequence) thread=\(threadID) throughSequence=\(response.throughSequence)"
                 )
                 let events = await Self.routeReplayedNotifications(response.notifications)
                 for event in events { await apply(event, replay: true, generation: generation) }
@@ -282,7 +282,7 @@ final class GatewayEventPump {
             }
         } catch {
             if !(error is CancellationError), !Task.isCancelled {
-                logger.notice("Notification replay failed; reconciling every open conversation: \(String(describing: error), privacy: .public)")
+                logger.notice("Notification replay failed; reconciling every open conversation: \(String(describing: error))")
                 gap = .allThreads
             }
         }
@@ -307,7 +307,7 @@ final class GatewayEventPump {
         target: WeakPump,
         generation: UUID
     ) async {
-        let logger = Logger(subsystem: "RemoteCoder", category: "GatewayNotificationPump")
+        let logger = AppLogger(category: "GatewayNotificationPump")
         var keptConnection = false
         while Task.isCancelled == false {
             await conversations.revokeStreamingPrefixes()
@@ -332,7 +332,7 @@ final class GatewayEventPump {
                 if !Task.isCancelled { await target.value?.requestActivityRefresh() }
             } catch {
                 await target.value?.report(.disconnected, generation: generation)
-                logger.notice("Gateway connect failed for notification listener: \(String(describing: error), privacy: .public)")
+                logger.notice("Gateway connect failed for notification listener: \(String(describing: error))")
                 if Task.isCancelled { return }
                 if case GatewayClient.ClientError.retired = error { return }
                 continue

@@ -24,7 +24,7 @@ final class HostImagePreviews {
     private nonisolated static let decodableTypes = Set(CGImageSourceCopyTypeIdentifiers() as? [String] ?? [])
 
     private let access: any HostFileAccess
-    private let logger = Logger(subsystem: "RemoteCoder", category: "HostFiles")
+    private let logger = AppLogger(category: "HostFiles")
     private var cache: [HostFileReference: HostImagePreview] = [:]
     private var recency: [HostFileReference] = []
     private var pixelSizes: [HostFileReference: CGSize] = [:]
@@ -88,11 +88,11 @@ final class HostImagePreviews {
                 await access.release(lease)
                 try Task.checkCancellation()
                 if generation == cacheGeneration { store(preview, for: reference) }
-                logger.notice("image preview loaded type=\(reference.diagnosticType, privacy: .public) bytes=\(lease.metadata.bytes, privacy: .public) pixels=\(Int(preview.pixelSize.width), privacy: .public)x\(Int(preview.pixelSize.height), privacy: .public) elapsed=\(started.elapsedMilliseconds, privacy: .public)ms cached=\(self.cache.count, privacy: .public)")
+                logger.notice("image preview loaded type=\(reference.diagnosticType) bytes=\(lease.metadata.bytes) pixels=\(Int(preview.pixelSize.width))x\(Int(preview.pixelSize.height)) elapsed=\(started.elapsedMilliseconds)ms cached=\(self.cache.count)")
                 return preview
             } catch {
                 if !(error is CancellationError) {
-                    logger.error("image preview failed type=\(reference.diagnosticType, privacy: .public) elapsed=\(started.elapsedMilliseconds, privacy: .public)ms reason=\(error.diagnosticReason, privacy: .public)")
+                    logger.error("image preview failed type=\(reference.diagnosticType) elapsed=\(started.elapsedMilliseconds)ms reason=\(error.diagnosticReason)")
                 }
                 throw error
             }

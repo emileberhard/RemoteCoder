@@ -69,7 +69,7 @@ struct AgentPhotoCapture: DeviceTool {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer {
             do { try FileManager.default.removeItem(at: directory) }
-            catch { Logger(subsystem: "RemoteCoder", category: "DeviceTools").error("Photo staging cleanup failed: \(error.localizedDescription, privacy: .public)") }
+            catch { AppLogger(category: "DeviceTools").error("Photo staging cleanup failed: \(error.localizedDescription)") }
         }
         let name = "\(camera.rawValue)-\(lens.rawValue).jpg"
         let file = directory.appending(path: name)

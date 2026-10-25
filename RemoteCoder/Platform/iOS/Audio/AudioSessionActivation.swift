@@ -8,7 +8,7 @@ enum AudioSessionActivation {
         var errorDescription: String? { "The audio session did not activate." }
     }
 
-    private static let logger = Logger(subsystem: "RemoteCoder", category: "AudioSessionActivation")
+    private static let logger = AppLogger(category: "AudioSessionActivation")
     private static let retryDelays: [Duration] = [
         .milliseconds(250),
         .milliseconds(500),
@@ -35,7 +35,7 @@ enum AudioSessionActivation {
                 }
                 if attempt > 0 {
                     logger.notice(
-                        "activated audio session for \(context, privacy: .public) after \(attempt + 1) attempts"
+                        "activated audio session for \(context) after \(attempt + 1) attempts"
                     )
                 }
                 return
@@ -46,14 +46,14 @@ enum AudioSessionActivation {
                 let nsError = error as NSError
                 if attempt < retryDelays.count {
                     logger.notice(
-                        "audio-session activation for \(context, privacy: .public) was temporarily unavailable (domain: \(nsError.domain, privacy: .public), code: \(nsError.code)); retrying"
+                        "audio-session activation for \(context) was temporarily unavailable (domain: \(nsError.domain), code: \(nsError.code)); retrying"
                     )
                 }
             }
         }
 
         let error = latestError ?? ActivationFailed()
-        logger.error("audio-session activation for \(context, privacy: .public) failed: \(error.localizedDescription)")
+        logger.error("audio-session activation for \(context) failed: \(error.localizedDescription)")
         throw error
     }
 
@@ -61,14 +61,14 @@ enum AudioSessionActivation {
     static func deactivate(_ session: AVAudioSession, context: String) async -> Bool {
         do {
             guard try await session.deactivate(options: [.notifyOthersOnDeactivation]) else {
-                logger.error("audio-session deactivation for \(context, privacy: .public) did not complete")
+                logger.error("audio-session deactivation for \(context) did not complete")
                 return false
             }
-            logger.notice("deactivated audio session for \(context, privacy: .public)")
+            logger.notice("deactivated audio session for \(context)")
             return true
         } catch {
             logger.error(
-                "audio-session deactivation for \(context, privacy: .public) failed: \(error.localizedDescription)"
+                "audio-session deactivation for \(context) failed: \(error.localizedDescription)"
             )
             return false
         }

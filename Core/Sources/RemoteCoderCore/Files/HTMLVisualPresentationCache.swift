@@ -27,7 +27,7 @@ actor HTMLVisualPresentationCache {
     private static let maximumFileBytes = (24 << 20) + (1 << 20)
     private let directory: URL
     private let clock: any Clock<Duration>
-    private let logger = Logger(subsystem: "RemoteCoder", category: "HTMLVisualPresentationCache")
+    private let logger = AppLogger(category: "HTMLVisualPresentationCache")
     private var records: [HTMLVisualLayoutKey: Record] = [:]
     private var sequence: UInt64 = 0
     private var loaded = false
@@ -198,14 +198,14 @@ actor HTMLVisualPresentationCache {
         scheduledWrite = nil
         scheduledID = nil
         do { try writePending() }
-        catch { logger.error("Could not persist HTML visual presentation: \(error.localizedDescription, privacy: .public)") }
+        catch { logger.error("Could not persist HTML visual presentation: \(error.localizedDescription)") }
     }
 
     private func reportFailure(_ error: any Error, id: UUID) {
         guard scheduledID == id else { return }
         scheduledWrite = nil
         scheduledID = nil
-        logger.error("Could not schedule HTML visual presentation write: \(error.localizedDescription, privacy: .public)")
+        logger.error("Could not schedule HTML visual presentation write: \(error.localizedDescription)")
     }
 
     private func writePending() throws {

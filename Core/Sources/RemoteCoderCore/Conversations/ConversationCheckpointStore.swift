@@ -14,7 +14,7 @@ actor ConversationCheckpointStore {
     }
 
     private let metrics: PersistenceMetrics
-    private let logger = Logger(subsystem: "RemoteCoder", category: "ConversationCheckpointStore")
+    private let logger = AppLogger(category: "ConversationCheckpointStore")
     enum LoadResult: Sendable {
         case checkpoint(ConversationState.Checkpoint)
         case missing
@@ -319,7 +319,7 @@ actor ConversationCheckpointStore {
             try FileManager.default.moveItem(at: staging, to: published)
             sourceChanged(id)
         }
-        logger.notice("Conversation checkpoint recovered conversation=\(id.uuidString, privacy: .public) format=\(source.url.pathExtension, privacy: .public)")
+        logger.notice("Conversation checkpoint recovered conversation=\(id.uuidString) format=\(source.url.pathExtension)")
     }
 
     private func storedCheckpoint(_ id: UUID) throws -> (checkpoint: ConversationState.Checkpoint?, source: URL)? {
@@ -684,7 +684,7 @@ actor ConversationCheckpointStore {
             cacheBytes -= record.cacheBytes - (records[id]?.cacheBytes ?? 0)
         }
         if cacheBytes > budgetBytes {
-            logger.notice("Checkpoint cache stays over its allowance cacheBytes=\(cacheBytes, privacy: .public) limitBytes=\(self.budgetBytes, privacy: .public)")
+            logger.notice("Checkpoint cache stays over its allowance cacheBytes=\(cacheBytes) limitBytes=\(self.budgetBytes)")
         }
         return SaveReceipt(unavailableImages: checkpoint.unavailableImages, historyAdmitted: true)
     }
@@ -862,7 +862,7 @@ actor ConversationCheckpointStore {
     }
 
     private func refusePrimaryAdmission(_ requested: Int) throws -> Never {
-        logger.error("Primary checkpoint admission refused requestedBytes=\(requested, privacy: .public) limitBytes=\(self.primaryBudgetBytes, privacy: .public)")
+        logger.error("Primary checkpoint admission refused requestedBytes=\(requested) limitBytes=\(self.primaryBudgetBytes)")
         throw CapacityOverflow(requestedBytes: requested, limitBytes: primaryBudgetBytes)
     }
 

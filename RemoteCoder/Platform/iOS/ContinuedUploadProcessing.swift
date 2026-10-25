@@ -8,7 +8,7 @@ final class ContinuedUploadProcessing: UploadContinuation {
         guard let bundleID = Bundle.main.bundleIdentifier else { preconditionFailure("Missing bundle identifier") }
         return bundleID + ".upload."
     }()
-    private let logger = Logger(subsystem: "RemoteCoder", category: "Uploads")
+    private let logger = AppLogger(category: "Uploads")
 
     private struct Owner {
         weak var uploads: FileAttachmentImports?
@@ -35,7 +35,7 @@ final class ContinuedUploadProcessing: UploadContinuation {
             }
         }
         guard registered else {
-            logger.error("Upload continuation \(identifier, privacy: .public) is not a permitted task identifier")
+            logger.error("Upload continuation \(identifier) is not a permitted task identifier")
             return
         }
         state = .requested
@@ -44,7 +44,7 @@ final class ContinuedUploadProcessing: UploadContinuation {
             do {
                 try await Self.submit(identifier: identifier, title: title)
             } catch {
-                self?.logger.error("Upload continuation was not submitted: \(error.localizedDescription, privacy: .public)")
+                self?.logger.error("Upload continuation was not submitted: \(error.localizedDescription)")
                 guard let self, case .requested = self.state else { return }
                 self.state = .idle
             }

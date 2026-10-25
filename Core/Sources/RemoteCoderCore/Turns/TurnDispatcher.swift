@@ -88,7 +88,7 @@ final class TurnDispatcher {
     private let sessionIndex: ConversationIndex
     private let metadata: ConversationMetadataService
     private let drafts: ComposerDraftStore
-    private let logger = Logger(subsystem: "RemoteCoder", category: "TurnDispatcher")
+    private let logger = AppLogger(category: "TurnDispatcher")
     private let tasks = OwnedTasks<UUID>()
     private let queueReads = OwnedTasks<String>()
     private var acceptsWork = true
@@ -149,7 +149,7 @@ final class TurnDispatcher {
             guard previous.outcome != .pending, !previous.continuing else { return }
             finishStoppedTurn(key, id: previous.id)
         }
-        logger.notice("stop requested thread=\(turn.threadID, privacy: .public) turn=\(turn.turnID, privacy: .public)")
+        logger.notice("stop requested thread=\(turn.threadID) turn=\(turn.turnID)")
         let stopped = StoppedTurn(turn: turn, followUp: followUp)
         stoppedTurns[key] = stopped
         if let followUp { lock(conversationID: followUp.conversationID, sessionID: turn.threadID) }
@@ -165,7 +165,7 @@ final class TurnDispatcher {
             } catch is CancellationError {
                 if stoppedTurns[key]?.id == stopped.id { stoppedTurns[key]?.outcome = .failed }
             } catch {
-                logger.error("stop refused thread=\(turn.threadID, privacy: .public) turn=\(turn.turnID, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
+                logger.error("stop refused thread=\(turn.threadID) turn=\(turn.turnID) error=\(error.localizedDescription)")
                 if stoppedTurns[key]?.id == stopped.id { stoppedTurns[key]?.outcome = .failed }
                 continueStoppedTurn(key)
                 guard !isClosed else { return }
@@ -311,7 +311,7 @@ final class TurnDispatcher {
                 await session.applyQueue(entries, read: read, threadIsIdle: idle)
             } catch is CancellationError {
             } catch {
-                logger.notice("queue read failed thread=\(threadID, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
+                logger.notice("queue read failed thread=\(threadID) error=\(error.localizedDescription)")
             }
         }
     }
@@ -488,7 +488,7 @@ final class TurnDispatcher {
                 }
 
                 await session.accepted(userMessageID, turnID: turnID)
-                logger.notice("turn accepted thread=\(threadID, privacy: .public) new=\(sessionID == nil, privacy: .public) elapsed=\(String(describing: started.duration(to: .now)), privacy: .public)")
+                logger.notice("turn accepted thread=\(threadID) new=\(sessionID == nil) elapsed=\(String(describing: started.duration(to: .now)))")
                 if sessionID == nil, host.selectionIsCurrent(revision: settings.selectionRevision, threadID: threadID) {
                     await metadata.upsert(sessionID: threadID, modelID: settings.model.id,
                         reasoningSelectionID: settings.reasoning.id,

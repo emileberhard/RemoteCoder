@@ -90,7 +90,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
     @ObservationIgnored let htmlVisualPreparation: HTMLVisualPreparation
     @ObservationIgnored private let fileOpener: HostFileOpener
     @ObservationIgnored private let historyService: GatewayHistoryService
-    @ObservationIgnored private let logger = Logger(subsystem: "RemoteCoder", category: "ChatScreen")
+    @ObservationIgnored private let logger = AppLogger(category: "ChatScreen")
     private static let streamingMotionLogger = Logger(subsystem: "emileberhard.RemoteCoder", category: "streaming-motion")
 
     init(target: ChatTargetModel, newChat: UUID) {
@@ -513,7 +513,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         activeConversation = snapshot.header
         adoptModelProvider(snapshot.header.modelProvider, threadID: snapshot.header.id)
         await publish(result)
-        logger.notice("Conversation observation merged source=\(source, privacy: .public) revision=\(result.revision) messages=\(result.messages.count)")
+        logger.notice("Conversation observation merged source=\(source) revision=\(result.revision) messages=\(result.messages.count)")
     }
 
     // MARK: - Composer, send, resume and fork
@@ -860,7 +860,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         catch { throw MessageSaveError(underlying: error) }
         if let outgoing { drafts.submitted(outgoing, conversationID: conversationID) }
         saved = true
-        logger.notice("send shown=\(String(describing: started.duration(to: shown)), privacy: .public) saved=\(String(describing: started.duration(to: .now)), privacy: .public) steer=\(isSteering, privacy: .public)")
+        logger.notice("send shown=\(String(describing: started.duration(to: shown))) saved=\(String(describing: started.duration(to: .now))) steer=\(isSteering)")
         try await requireDispatchAdmission(userMessage.id, in: session)
         if currentConversationID == conversationID { observe(session) }
 
@@ -1135,14 +1135,14 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         historyEdges.reset()
         historyOpenSignpost.abandon(.cancelled)
 
-        logger.info("clear chat start summary=\(self.debugChatStateSummary(), privacy: .public)")
+        logger.info("clear chat start summary=\(self.debugChatStateSummary())")
         cancelResumeConversationLoad()
         dismissAlert()
 
         beginNewChat()
         if let draft = currentDraft, draft.newChat != nil { adoptSetup(of: draft) } else { refreshNewChatDefaults() }
         resetRendering()
-        logger.info("clear chat complete summary=\(self.debugChatStateSummary(), privacy: .public)")
+        logger.info("clear chat complete summary=\(self.debugChatStateSummary())")
     }
 
     private var newChatSetup: NewChatSetup {
@@ -1654,7 +1654,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
             restorePicker(from: refreshed, saved: saved)
         } catch {
             guard isCurrent() else { return }
-            logger.notice("Could not refresh conversation settings thread=\(thread.id, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            logger.notice("Could not refresh conversation settings thread=\(thread.id): \(error.localizedDescription)")
         }
         if isCurrent() {
             pickerSelection.failIfLoading("Could not load this conversation’s model settings. Reopen the conversation to retry.")
@@ -1678,7 +1678,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
             modelOption(id: $0, threadID: thread.id, effort: $1, fastMode: $2)
         }
         guard let source, let model = selectedModel else { return }
-        logger.notice("Restored conversation settings thread=\(thread.id, privacy: .public) model=\(model.id, privacy: .public) reasoning=\(self.reasoningSelection.id, privacy: .public) fast=\(self.fastModeSelection.map { String($0) } ?? "unknown", privacy: .public) source=\(source.rawValue, privacy: .public)")
+        logger.notice("Restored conversation settings thread=\(thread.id) model=\(model.id) reasoning=\(self.reasoningSelection.id) fast=\(self.fastModeSelection.map { String($0) } ?? "unknown") source=\(source.rawValue)")
     }
 
     func refreshNewChatDefaults(for provider: AgentProvider? = nil) {
@@ -1858,7 +1858,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
     private func applyPickerSettings(model: ModelOption, reasoning: ReasoningSelection,
                                      fastModeState: FastModeState, threadID: String?,
                                      source: SettingsChangeSource) {
-        logger.notice("\(source.rawValue, privacy: .public) thread=\(threadID ?? "new-chat", privacy: .public) model=\(model.id, privacy: .public) reasoning=\(reasoning.id, privacy: .public) fast=\(fastModeState.selection == true && model.supportsFastMode, privacy: .public)")
+        logger.notice("\(source.rawValue) thread=\(threadID ?? "new-chat") model=\(model.id) reasoning=\(reasoning.id) fast=\(fastModeState.selection == true && model.supportsFastMode)")
         if let threadID {
             applyConversationSettings(ConversationSettingsUpdate(threadID: threadID, model: model,
                 reasoning: reasoning, fastModeState: fastModeState))
@@ -2126,7 +2126,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
             return .init(context: updated, readModelAndEffort: response.thread.model != nil,
                 readFastMode: reportsTier)
         } catch {
-            logger.notice("Could not read incoming voice tier thread=\(context.threadID, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            logger.notice("Could not read incoming voice tier thread=\(context.threadID): \(error.localizedDescription)")
             guard ownsRead() else { return .init(context: context, readModelAndEffort: false, readFastMode: false) }
             return .init(context: updated, readModelAndEffort: false, readFastMode: false)
         }

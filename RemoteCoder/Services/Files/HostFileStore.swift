@@ -44,7 +44,7 @@ actor HostFileStore {
     private let directory: URL
     private let cacheBytes: Int64
     private let retirement = Mutex(false)
-    private let logger = Logger(subsystem: "RemoteCoder", category: "HostFiles")
+    private let logger = AppLogger(category: "HostFiles")
     private var entries: [UUID: Entry] = [:]
     private var latest: [String: UUID] = [:]
     private var leases: [UUID: UUID] = [:]
@@ -197,7 +197,7 @@ actor HostFileStore {
     func retire() async {
         beginRetirement()
         do { try prepare() }
-        catch { logger.error("Could not load retiring file-cache state: \(error.localizedDescription, privacy: .public)") }
+        catch { logger.error("Could not load retiring file-cache state: \(error.localizedDescription)") }
         let pending = Array(transfers.values)
         for transfer in pending { transfer.cancel() }
         for transfer in pending { _ = await transfer.result }
@@ -295,7 +295,7 @@ actor HostFileStore {
         if retired, entries.isEmpty, transfers.isEmpty {
             do { try FileManager.default.removeItem(at: directory) }
             catch let error as CocoaError where error.code == .fileNoSuchFile { return }
-            catch { logger.error("Could not remove a retired file-cache directory: \(error.localizedDescription, privacy: .public)") }
+            catch { logger.error("Could not remove a retired file-cache directory: \(error.localizedDescription)") }
         }
     }
 
@@ -313,7 +313,7 @@ actor HostFileStore {
             budget.release(id)
             return true
         } catch {
-            logger.error("Could not remove temporary file data: \(error.localizedDescription, privacy: .public)")
+            logger.error("Could not remove temporary file data: \(error.localizedDescription)")
             return false
         }
         budget.release(id)

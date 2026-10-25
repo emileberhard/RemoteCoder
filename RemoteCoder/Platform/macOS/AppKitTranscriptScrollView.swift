@@ -120,7 +120,7 @@ final class AppKitTranscriptContainer: NSScrollView, TranscriptReadingPositionCa
     private var readingReadinessTask: Task<Void, Never>?
     private var restoringReadingAnchor: TranscriptReadingAnchor? { readingRestoration?.pendingAnchor }
     private let transcriptDocument = AppKitTranscriptDocument()
-    private static let logger = Logger(subsystem: "RemoteCoder", category: "Transcript")
+    private static let logger = AppLogger(category: "Transcript")
     private var logicalRows: [String: TranscriptLogicalRow] = [:]
     private var rowPresentationOwner: ObjectIdentifier?
     private var rowHosts: [String: TranscriptRowHost] = [:]
@@ -267,7 +267,7 @@ final class AppKitTranscriptContainer: NSScrollView, TranscriptReadingPositionCa
         readingPosition?.recordRestorationOutcome(result)
         if reflowAnchor?.rowID == result.rowID { reflowAnchor = nil }
         if result.outcome.preservesBookmark {
-            Self.logger.notice("Reading position unavailable row=\(result.rowID, privacy: .public) outcome=\(result.outcome.rawValue, privacy: .public); kept known bookmark")
+            Self.logger.notice("Reading position unavailable row=\(result.rowID) outcome=\(result.outcome.rawValue); kept known bookmark")
             hostsDirty = true
             scheduleCommit()
         }

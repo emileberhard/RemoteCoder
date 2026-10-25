@@ -22,7 +22,7 @@ actor ConversationHeaderStore {
     }
 
     private let baseDirectory: URL
-    private let logger = Logger(subsystem: "RemoteCoder", category: "ConversationHeaderStore")
+    private let logger = AppLogger(category: "ConversationHeaderStore")
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
 
@@ -64,7 +64,7 @@ actor ConversationHeaderStore {
             cache = snapshot
             return snapshot
         } catch {
-            logger.error("Failed to load thread history cache for \(self.hostKey, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            logger.error("Failed to load thread history cache for \(self.hostKey): \(error.localizedDescription)")
             let empty = Snapshot(threads: [], lastSuccessfulRefreshAt: nil, revision: 0)
             cache = empty
             return empty
@@ -76,7 +76,7 @@ actor ConversationHeaderStore {
         let current = load()
         guard snapshot.revision >= current.revision else { return }
         guard snapshot.revision > current.revision || snapshot == current else {
-            logger.error("Rejected conflicting thread history revision for \(self.hostKey, privacy: .public)")
+            logger.error("Rejected conflicting thread history revision for \(self.hostKey)")
             return
         }
         cache = snapshot
@@ -103,7 +103,7 @@ actor ConversationHeaderStore {
             PersistenceMetrics.shared.wrote(.threadHeaders, bytes: data.count, elapsed: started.duration(to: .now))
         } catch {
             PersistenceMetrics.shared.failed(.threadHeaders)
-            logger.error("Failed to persist thread history cache for \(self.hostKey, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            logger.error("Failed to persist thread history cache for \(self.hostKey): \(error.localizedDescription)")
         }
     }
 

@@ -16,7 +16,7 @@ final class ConversationWarmer {
     private weak var host: (any ConversationWarmingHost)?
     private let conversations: ConversationSessions
     private let history: GatewayHistoryService
-    private let logger = Logger(subsystem: "RemoteCoder", category: "ConversationWarmer")
+    private let logger = AppLogger(category: "ConversationWarmer")
     private var ledger = HistoryWarmLedger()
 
     init(host: any ConversationWarmingHost, conversations: ConversationSessions, history: GatewayHistoryService) {
@@ -95,7 +95,7 @@ final class ConversationWarmer {
                 guard mayContinue, let host else { return }
                 let context = host.htmlVisualPreparationContext
                 let outcome = await host.prepareHTMLVisuals(references)
-                logger.notice("warmed thread=\(thread.id, privacy: .public) revision=\(thread.updatedAt) source=\(source, privacy: .public) visuals=\(references.count) outcome=\(String(describing: outcome), privacy: .public)")
+                logger.notice("warmed thread=\(thread.id) revision=\(thread.updatedAt) source=\(source) visuals=\(references.count) outcome=\(String(describing: outcome))")
                 switch outcome {
                 case .settled, .unsupported:
                     guard mayContinue, host.htmlVisualPreparationContext == context else { return }
@@ -106,7 +106,7 @@ final class ConversationWarmer {
             } catch is CancellationError {
                 return
             } catch {
-                logger.notice("History prefetch failed: \(error.localizedDescription, privacy: .public)")
+                logger.notice("History prefetch failed: \(error.localizedDescription)")
             }
         }
         guard let host else { return }

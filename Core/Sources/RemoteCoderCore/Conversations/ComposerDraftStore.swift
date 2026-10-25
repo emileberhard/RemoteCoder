@@ -108,7 +108,7 @@ final class ComposerDraftStore {
     private var discardingDrafts: Set<UUID> = []
     @ObservationIgnored private var discards: [UUID: Task<Void, Never>] = [:]
     @ObservationIgnored private var unsentDraftsRefresh: Task<Void, Never>?
-    @ObservationIgnored private let logger = Logger(subsystem: "RemoteCoder", category: "ComposerDrafts")
+    @ObservationIgnored private let logger = AppLogger(category: "ComposerDrafts")
     private var destinationErrors: [String: String] = [:]
     @ObservationIgnored private var destinationErrorOrder: [String] = []
     @ObservationIgnored private let directory: URL
@@ -192,7 +192,7 @@ final class ComposerDraftStore {
             unsentDrafts.removeAll { $0.id == id }
             if let draft { release(draft) }
         } catch {
-            logger.error("unsent draft discard failed: \(error.localizedDescription, privacy: .public)")
+            logger.error("unsent draft discard failed: \(error.localizedDescription)")
         }
         guard !Task.isCancelled else { return }
         discards[id] = nil
@@ -209,7 +209,7 @@ final class ComposerDraftStore {
                 guard !Task.isCancelled, state == .active, unsentDrafts != drafts else { return }
                 unsentDrafts = drafts
             } catch {
-                logger.error("unsent drafts could not be listed: \(error.localizedDescription, privacy: .public)")
+                logger.error("unsent drafts could not be listed: \(error.localizedDescription)")
             }
         }
     }

@@ -75,7 +75,7 @@ actor GatewayHistoryService {
     private var classificationAccess: UInt64 = 0
     private var retainedClassificationOffset = 0
     private let gateway: any CodexHistoryGateway
-    private let logger = Logger(subsystem: "RemoteCoder", category: "CodexGatewayHistory")
+    private let logger = AppLogger(category: "CodexGatewayHistory")
 
     init(gateway: any CodexHistoryGateway, cache: HistoryPageCache = .shared, now: @escaping @Sendable () -> Date = { .now }) {
         self.gateway = gateway
@@ -380,7 +380,7 @@ actor GatewayHistoryService {
                 fetchedThreads.append(header)
             }
             logger.info(
-                "thread/list provider=\(provider.rawValue, privacy: .public) page=\(pages, privacy: .public) requested=\(pageLimit, privacy: .public) received=\(response.data.count, privacy: .public) hasNextCursor=\(response.nextCursor != nil, privacy: .public)"
+                "thread/list provider=\(provider.rawValue) page=\(pages) requested=\(pageLimit) received=\(response.data.count) hasNextCursor=\(response.nextCursor != nil)"
             )
 
             guard let nextCursor = response.nextCursor else {
@@ -718,12 +718,12 @@ actor GatewayHistoryService {
             let settledKey = settled == nil || cursor == nil ? nil : await pageKey(header: header, request: "settled:" + request, stable: true)
             if !bypassCache {
                 if let settledKey, let cached = await cache.value(for: settledKey, now: now()) {
-                    logger.notice("history page cache=settled method=\(method, privacy: .public) bytes=\(cached.data.count)")
+                    logger.notice("history page cache=settled method=\(method) bytes=\(cached.data.count)")
                     return NativePage(value: try await Self.decodePage(cached.data), fetchedAt: cached.fetchedAt, bytes: cached.data.count,
                         source: .cachedPages, readStartedAt: cached.readStartedAt ?? readStartedAt)
                 }
                 if let cached = await cache.value(for: key, now: now()), cached.isFresh {
-                    logger.notice("history page cache=hit method=\(method, privacy: .public) bytes=\(cached.data.count)")
+                    logger.notice("history page cache=hit method=\(method) bytes=\(cached.data.count)")
                     return NativePage(value: try await Self.decodePage(cached.data), fetchedAt: cached.fetchedAt, bytes: cached.data.count,
                         source: .cachedPages, readStartedAt: cached.readStartedAt ?? readStartedAt)
                 }
@@ -733,7 +733,7 @@ actor GatewayHistoryService {
                 let logger = logger
                 let queuedAt = ContinuousClock.now
                 let operation: @Sendable () async throws -> Data = {
-                    logger.notice("history queue method=\(method, privacy: .public) wait=\(String(describing: queuedAt.duration(to: .now)), privacy: .public) source=\(priority.rawValue)")
+                    logger.notice("history queue method=\(method) wait=\(String(describing: queuedAt.duration(to: .now))) source=\(priority.rawValue)")
                     return try await gateway.historyPageData(method: method, params: params)
                 }
                 let page = if bypassCache {
@@ -752,11 +752,11 @@ actor GatewayHistoryService {
                 if nextPageLimits.count > 64 { nextPageLimits.removeAll() }
                 if data.count > 1024 * 1024 { nextPageLimits[sizingKey] = max(1, count * 1024 * 1024 / data.count) }
                 else if data.count < 512 * 1024, count == target { nextPageLimits[sizingKey] = min(maximum, count * 2) }
-                logger.notice("history decode method=\(method, privacy: .public) elapsed=\(String(describing: decodeTime), privacy: .public)")
+                logger.notice("history decode method=\(method) elapsed=\(String(describing: decodeTime))")
                 let fetchedAt = now()
                 let storeKey = settledKey.flatMap { settledKey in settled?(result) == true ? settledKey : nil } ?? key
                 try await cache.store(content, for: storeKey, fetchedAt: fetchedAt, startedAt: page.startedAt, readStartedAt: readStartedAt, persistence: cursor == nil ? .memory : .disk)
-                logger.notice("history page method=\(method, privacy: .public) bytes=\(data.count) source=\(priority.rawValue) count=\(count)")
+                logger.notice("history page method=\(method) bytes=\(data.count) source=\(priority.rawValue) count=\(count)")
                 return NativePage(value: result, fetchedAt: fetchedAt, bytes: content.count, source: .gateway, readStartedAt: page.startedAt)
             } catch let failure as GatewayRPCFailure where failure.historyPageSize != nil && count > 1 {
                 count = max(1, count / 2)

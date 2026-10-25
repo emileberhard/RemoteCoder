@@ -58,7 +58,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
     @ObservationIgnored private let makeModel: @MainActor (GatewayHostConfiguration, ModelPickerPreferences, SyncedPreferenceStore) -> ChatTargetModel
     @ObservationIgnored let voiceCalls: VoiceCallCenter
     @ObservationIgnored let gatewayPolicy: SharedGatewayPolicy
-    @ObservationIgnored private let logger = Logger(subsystem: "RemoteCoder", category: "ChatWorkspace")
+    @ObservationIgnored private let logger = AppLogger(category: "ChatWorkspace")
 
     func draftRetirementFailure(for target: ExecutionTarget?) -> (target: ExecutionTarget, message: String)? {
         targets.draftFailure(for: target)
@@ -297,7 +297,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         }
         window.attach()
         applyVisibility()
-        logger.notice("window attached \(self.windowDiagnostics(window), privacy: .public)")
+        logger.notice("window attached \(self.windowDiagnostics(window))")
         return window
     }
 
@@ -316,7 +316,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
             for screen in window.removeAllScreens() { screen.close() }
         }
         applyVisibility()
-        logger.notice("window detached \(self.windowDiagnostics(window), privacy: .public)")
+        logger.notice("window detached \(self.windowDiagnostics(window))")
     }
 
     func setWindowActive(_ window: ChatWindowModel, isActive: Bool) {
@@ -324,7 +324,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         events.setActive(isActive, screen: window.id)
         mirrorKeySelection()
         applyVisibility()
-        logger.notice("window active=\(isActive, privacy: .public) \(self.windowDiagnostics(window), privacy: .public)")
+        logger.notice("window active=\(isActive) \(self.windowDiagnostics(window))")
     }
 
     func windowDiagnostics(_ window: ChatWindowModel) -> String {
@@ -348,7 +348,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         events.setKey(screen: window.id)
         mirrorKeySelection()
         applyVisibility()
-        logger.notice("window key \(self.windowDiagnostics(window), privacy: .public)")
+        logger.notice("window key \(self.windowDiagnostics(window))")
     }
 
     var selectedHostID: UUID? { selectedHost?.id }
@@ -509,7 +509,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
     /// into a restart, a send or a device-wide publication.
     private func retire(_ model: ChatTargetModel, reason: String) {
         logger.notice(
-            "retiring chat model host=\(model.hostDisplayName, privacy: .public) reason=\(reason, privacy: .public)"
+            "retiring chat model host=\(model.hostDisplayName) reason=\(reason)"
         )
         model.hostServices.beginFileRetirement()
         model.beginRetirement()
@@ -1321,7 +1321,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
     func send(from source: ChatScreenModel) async -> Bool {
         guard !isQuiescing else { return false }
         guard source === selectedScreen else {
-            logger.error("send refused: source is not the key window's screen key=\(self.keyWindow.logID, privacy: .public) source=\(source.executionTarget.id, privacy: .public)|\(source.openThreadID ?? "none", privacy: .public)")
+            logger.error("send refused: source is not the key window's screen key=\(self.keyWindow.logID) source=\(source.executionTarget.id)|\(source.openThreadID ?? "none")")
             return false
         }
         return await source.send()
@@ -1539,7 +1539,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
             guard let payload = delivery.payload else {
                 guard await self.dismissCoverForNotification(payload: nil, generation: generation) else { return }
                 guard self.navigationIsCurrent(generation) else { return }
-                self.logger.error("notification tap payload unreadable field=\(delivery.decodingFailure ?? "root", privacy: .public)")
+                self.logger.error("notification tap payload unreadable field=\(delivery.decodingFailure ?? "root")")
                 self.notificationRoutingError = "This notification has no readable conversation identity. Open History to choose a conversation."
                 return
             }

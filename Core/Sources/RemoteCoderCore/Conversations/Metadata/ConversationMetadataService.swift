@@ -7,7 +7,7 @@ import OSLog
 actor ConversationMetadataService {
     private let remote: any ConversationMetadataRemote
     private let store: ConversationMetadataStore
-    private let logger = Logger(subsystem: "RemoteCoder", category: "CodexMetadata")
+    private let logger = AppLogger(category: "CodexMetadata")
     private var document = SessionMetadataLocalState()
     private var hasLoaded = false
     private var loadTask: (id: UUID, task: Task<SessionMetadataLocalState, Error>)?
@@ -40,7 +40,7 @@ actor ConversationMetadataService {
     private func publishStatus() { for observer in observers.values { observer.yield(status) } }
     private func failed(_ error: any Error) {
         status.error = "Conversation settings could not be synchronized: \(error.localizedDescription)"
-        logger.notice("\(self.status.error ?? "", privacy: .public)")
+        logger.notice("\(self.status.error ?? "")")
         publishStatus()
     }
 

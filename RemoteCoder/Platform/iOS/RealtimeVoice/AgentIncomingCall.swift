@@ -23,7 +23,7 @@ extension AgentCallFailure {
 }
 
 enum AgentCallDiagnostics {
-    private static let logger = Logger(subsystem: "RemoteCoder", category: "AgentCalls")
+    private static let logger = AppLogger(category: "AgentCalls")
 
     static func record(
         _ stage: String, callID: UUID?, hostID: UUID?, detail: String, error: Error?
@@ -36,10 +36,10 @@ enum AgentCallDiagnostics {
         )
         let call = callID?.uuidString.lowercased() ?? "unknown"
         let failure = entry.failure.map { "\($0.domain):\($0.code) \($0.reason)" } ?? "none"
-        logger.notice("call=\(call, privacy: .public) stage=\(stage, privacy: .public) detail=\(detail, privacy: .public) failure=\(failure, privacy: .public)")
+        logger.notice("call=\(call) stage=\(stage) detail=\(detail) failure=\(failure)")
         Task {
             do { try await DiagnosticsOutbox.shared.enqueue(line: entry.encodedLine(), kind: "call") }
-            catch { logger.error("Call diagnostic could not persist call=\(call, privacy: .public): \(error.localizedDescription, privacy: .public)") }
+            catch { logger.error("Call diagnostic could not persist call=\(call): \(error.localizedDescription)") }
         }
     }
 }

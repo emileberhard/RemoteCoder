@@ -60,7 +60,7 @@ private struct HostFileQuickLook: UIViewControllerRepresentable {
     }
 
     final class Host: UIViewController, QLPreviewControllerDelegate {
-        private let logger = Logger(subsystem: "RemoteCoder", category: "HostFiles")
+        private let logger = AppLogger(category: "HostFiles")
         var onDismiss: (() -> Void)?
         var onUnavailable: ((UUID) -> Void)?
         private var desired: OpenedFile?
@@ -91,14 +91,14 @@ private struct HostFileQuickLook: UIViewControllerRepresentable {
             guard !isDismissing else { return }
             if let preview {
                 guard desired?.id != preview.file.id else { return }
-                logger.notice("quick look dismissing file=\(preview.file.id.uuidString.prefix(8), privacy: .public) reason=\(self.desired == nil ? "cleared" : "replaced", privacy: .public)")
+                logger.notice("quick look dismissing file=\(preview.file.id.uuidString.prefix(8)) reason=\(self.desired == nil ? "cleared" : "replaced")")
                 isDismissing = true
                 preview.dismiss(animated: true) { [weak self] in self?.finished() }
             } else if let desired, viewIfLoaded?.window != nil {
                 var ancestor: UIViewController? = self
                 while let controller = ancestor {
                     if controller.presentedViewController != nil || controller.isBeingDismissed {
-                        logger.notice("quick look blocked by another presentation file=\(desired.id.uuidString.prefix(8), privacy: .public)")
+                        logger.notice("quick look blocked by another presentation file=\(desired.id.uuidString.prefix(8))")
                         self.desired = nil
                         let onUnavailable = onUnavailable
                         Task { @MainActor in onUnavailable?(desired.id) }
@@ -110,13 +110,13 @@ private struct HostFileQuickLook: UIViewControllerRepresentable {
                 self.preview = preview
                 preview.delegate = self
                 preview.modalPresentationStyle = .overFullScreen
-                logger.notice("quick look presenting file=\(desired.id.uuidString.prefix(8), privacy: .public) zoom=\(desired.transition != nil, privacy: .public)")
+                logger.notice("quick look presenting file=\(desired.id.uuidString.prefix(8)) zoom=\(desired.transition != nil)")
                 present(preview, animated: true)
             }
         }
 
         func previewControllerDidDismiss(_ controller: QLPreviewController) {
-            logger.notice("quick look dismissed file=\(self.preview?.file.id.uuidString.prefix(8) ?? "none", privacy: .public)")
+            logger.notice("quick look dismissed file=\(self.preview?.file.id.uuidString.prefix(8) ?? "none")")
             finished()
         }
 

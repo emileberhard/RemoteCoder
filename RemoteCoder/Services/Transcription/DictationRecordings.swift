@@ -31,8 +31,8 @@ extension DictationRecordingStore where Owner == ExecutionTarget {
             try await discard(recording)
         } catch {
             guard !(error is IncompleteDictationRecording<ExecutionTarget>) else { return }
-            Logger(subsystem: "RemoteCoder", category: "VoiceInput.Recording")
-                .error("dictation recording could not be closed after a failed start: \(error.localizedDescription, privacy: .public)")
+            AppLogger(category: "VoiceInput.Recording")
+                .error("dictation recording could not be closed after a failed start: \(error.localizedDescription)")
         }
     }
 }

@@ -13,7 +13,7 @@ actor ConversationMarksStore: ConversationMarksPersistence {
     private let fileURL: URL
     private let legacyURL: URL
     private let legacyAttentionURL: URL
-    private let logger = Logger(subsystem: "RemoteCoder", category: "ConversationMarksStore")
+    private let logger = AppLogger(category: "ConversationMarksStore")
 
     init(directory: URL) {
         fileURL = directory.appending(path: Self.fileName)
@@ -40,7 +40,7 @@ actor ConversationMarksStore: ConversationMarksPersistence {
         } catch CocoaError.fileReadNoSuchFile {
             return importLegacy()
         } catch {
-            logger.error("conversation marks unavailable: \(error.localizedDescription, privacy: .public)")
+            logger.error("conversation marks unavailable: \(error.localizedDescription)")
             return .unavailable
         }
         do {
@@ -50,12 +50,12 @@ actor ConversationMarksStore: ConversationMarksPersistence {
             if replica != before, !save(replica) { return .unavailable }
             return .stored(replica)
         } catch {
-            logger.error("conversation marks undecodable, setting them aside: \(error.localizedDescription, privacy: .public)")
+            logger.error("conversation marks undecodable, setting them aside: \(error.localizedDescription)")
         }
         do {
             try UndecodableStoreRecovery.setAside(fileURL)
         } catch {
-            logger.error("failed to set aside conversation marks: \(error.localizedDescription, privacy: .public)")
+            logger.error("failed to set aside conversation marks: \(error.localizedDescription)")
             return .unavailable
         }
         return .missing
@@ -68,14 +68,14 @@ actor ConversationMarksStore: ConversationMarksPersistence {
         } catch CocoaError.fileReadNoSuchFile {
             return .missing
         } catch {
-            logger.error("legacy conversation marks unavailable: \(error.localizedDescription, privacy: .public)")
+            logger.error("legacy conversation marks unavailable: \(error.localizedDescription)")
             return .unavailable
         }
         var replica: ConversationMarksReplica
         do {
             replica = try JSONDecoder().decode(ConversationMarksReplica.self, from: data)
         } catch {
-            logger.error("legacy conversation marks undecodable, starting fresh: \(error.localizedDescription, privacy: .public)")
+            logger.error("legacy conversation marks undecodable, starting fresh: \(error.localizedDescription)")
             return .missing
         }
         replica.retireDefaultScope()
@@ -90,7 +90,7 @@ actor ConversationMarksStore: ConversationMarksPersistence {
             try JSONEncoder().encode(replica).write(to: fileURL, options: .atomic)
             return true
         } catch {
-            logger.error("failed to persist conversation marks: \(error.localizedDescription, privacy: .public)")
+            logger.error("failed to persist conversation marks: \(error.localizedDescription)")
             return false
         }
     }

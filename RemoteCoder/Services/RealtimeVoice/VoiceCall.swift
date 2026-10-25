@@ -33,7 +33,7 @@ final class VoiceCall {
     private static let selectedVoiceKey = "realtimeVoice.selectedVoice"
     static let syncedPreferenceKeys: Set<String> = [selectedVoiceKey]
     private static let audioActivationDeadline: Duration = .seconds(5)
-    private let logger = Logger(subsystem: "RemoteCoder", category: "RealtimeVoice")
+    private let logger = AppLogger(category: "RealtimeVoice")
     private let diagnosticID: String
     private let systemBridge: CallSystemBridge
     let audioRoute = CallAudioRoute()
@@ -213,7 +213,7 @@ final class VoiceCall {
             try await loadVoiceCatalog(from: gateway)
         } catch {
             voiceCatalogError = error.localizedDescription
-            logger.error("voice catalog refresh failed: \(error.localizedDescription, privacy: .public)")
+            logger.error("voice catalog refresh failed: \(error.localizedDescription)")
         }
     }
 
@@ -254,7 +254,7 @@ final class VoiceCall {
                             callID: push.callId, deviceID: deviceID, reason: "failed"
                         )
                     } catch {
-                        logger.notice("Rejected call could not reach its gateway: \(error.localizedDescription, privacy: .public)")
+                        logger.notice("Rejected call could not reach its gateway: \(error.localizedDescription)")
                     }
                 }
             }
@@ -263,7 +263,7 @@ final class VoiceCall {
                 try await systemBridge.reportIncoming(callID: reportID)
                 systemBridge.reportEnded(callID: reportID, reason: .failed)
             } catch {
-                logger.notice("Unusable incoming call report rejected: \(error.localizedDescription, privacy: .public)")
+                logger.notice("Unusable incoming call report rejected: \(error.localizedDescription)")
             }
             return
         }
@@ -456,7 +456,7 @@ final class VoiceCall {
             try await systemBridge.requestMute(!isMuted, callID: conversationUUID)
         } catch {
             guard lifecycle.isCurrentCall(conversationUUID) else { return }
-            logger.error("system mute action failed: \(error.localizedDescription, privacy: .public)")
+            logger.error("system mute action failed: \(error.localizedDescription)")
             await failSession(error)
         }
     }
@@ -938,7 +938,7 @@ final class VoiceCall {
 
     private func failSession(_ error: Error) async {
         AgentCallDiagnostics.record("voiceFailed", callID: lifecycle.callID, hostID: incomingCall?.push.hostId, detail: "state=\(lifecycle.state)", error: error)
-        logger.error("realtime voice failed: \(error.localizedDescription, privacy: .public)")
+        logger.error("realtime voice failed: \(error.localizedDescription)")
         VoiceModeDiagnostics.log("realtime voice failed error=\(error.localizedDescription)")
         let message = error.localizedDescription
         if let conversationUUID = lifecycle.callID {
@@ -957,7 +957,7 @@ final class VoiceCall {
     }
 
     private func diagnostic(_ event: String) {
-        logger.notice("controller=\(self.diagnosticID, privacy: .public) \(event, privacy: .public)")
+        logger.notice("controller=\(self.diagnosticID) \(event)")
         VoiceModeDiagnostics.log("realtime controller=\(self.diagnosticID) \(event)")
     }
 
@@ -1014,7 +1014,7 @@ final class VoiceCall {
                         try await endingGateway.stopRealtimeVoiceSession()
                     }
                 } catch {
-                    logger.error("Voice cleanup could not reach its gateway: \(error.localizedDescription, privacy: .public)")
+                    logger.error("Voice cleanup could not reach its gateway: \(error.localizedDescription)")
                     AgentCallDiagnostics.record("gatewayCleanupFailed", callID: callID, hostID: endingIncomingCall?.push.hostId, detail: "", error: error)
                 }
                 await Task.yield()

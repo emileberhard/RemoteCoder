@@ -29,7 +29,7 @@ final class LaunchRestore {
     private var task: Task<Void, Never>?
     private let defaults: UserDefaults
     private let loadHeader: @MainActor (ChatTargetModel, String) async throws -> ConversationHeader
-    private let logger = Logger(subsystem: "RemoteCoder", category: "LaunchRestore")
+    private let logger = AppLogger(category: "LaunchRestore")
 
     init(defaults: UserDefaults,
          loadHeader: @escaping @MainActor (ChatTargetModel, String) async throws -> ConversationHeader) {
@@ -69,7 +69,7 @@ final class LaunchRestore {
             switch header {
             case .success(let loaded): thread = loaded
             case .failure(let error):
-                self.logger.notice("launch restore skipped thread=\(recorded.threadID, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
+                self.logger.notice("launch restore skipped thread=\(recorded.threadID) error=\(error.localizedDescription)")
                 return
             }
             guard thread.id == recorded.threadID, !owner.isRetired,

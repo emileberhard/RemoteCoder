@@ -23,10 +23,9 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
     #endif
     @ObservationIgnored private var activityReadRequested = false
 
-    @ObservationIgnored private let logger = Logger(
-        subsystem: "RemoteCoder",
-        category: "CodexChat"
-    )
+    @ObservationIgnored private let logger = AppLogger(category: "CodexChat")
+
+    @ObservationIgnored private let debugLogger = Logger(subsystem: AppLogger.subsystem, category: "CodexChat")
 
     /// The one gateway host this model speaks to for its whole lifetime.
     ///
@@ -160,7 +159,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
         guard acceptsWork, takeOver == nil || takeOver?.failure != nil else { return }
         let feedback = feedbackForCurrentConversation()
         takeOver = ConversationTakeOver(threadID: threadID)
-        logger.notice("take over requested thread=\(threadID, privacy: .public)")
+        logger.notice("take over requested thread=\(threadID)")
         ownedTasks.start(.takeOver) { [weak self] in
             guard let self else { return }
             do {
@@ -172,7 +171,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
             } catch is CancellationError {
                 self.takeOver = nil
             } catch {
-                self.logger.error("take over failed thread=\(threadID, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
+                self.logger.error("take over failed thread=\(threadID) error=\(error.localizedDescription)")
                 self.takeOver = ConversationTakeOver(threadID: threadID, failure: error.localizedDescription)
                 feedback(.error)
             }
@@ -181,7 +180,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
 
     func regenerateTitle(threadID: String, onFailure: @escaping @MainActor (String) -> Void) {
         guard acceptsWork, !ownedTasks.isRunning(.titleRegeneration(threadID)) else { return }
-        logger.notice("title regeneration requested thread=\(threadID, privacy: .public)")
+        logger.notice("title regeneration requested thread=\(threadID)")
         ownedTasks.start(.titleRegeneration(threadID)) { [weak self] in
             guard let self else { return }
             do {
@@ -189,7 +188,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
                 self.haptics.play(.success)
             } catch is CancellationError {
             } catch {
-                self.logger.error("title regeneration failed thread=\(threadID, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
+                self.logger.error("title regeneration failed thread=\(threadID) error=\(error.localizedDescription)")
                 self.haptics.play(.error)
                 onFailure(error.localizedDescription)
             }
@@ -205,7 +204,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
         turnStops.retain(running: turns.runningTurns)
         if change.countBefore != change.countAfter {
             logger.notice(
-                "active tasks changed old=\(change.countBefore, privacy: .public) new=\(change.countAfter, privacy: .public) summary=\(self.liveActivityDebugSummary(), privacy: .public)"
+                "active tasks changed old=\(change.countBefore) new=\(change.countAfter) summary=\(self.liveActivityDebugSummary())"
             )
         }
         if change.countAfter < change.countBefore { scheduleRouteMove() }
@@ -503,7 +502,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
         guard acceptsWork else { return }
         PerfBuild.count("host.prepareStarted")
         let started = ContinuousClock.now
-        logger.notice("host preparation started host=\(self.hostID.uuidString, privacy: .public)")
+        logger.notice("host preparation started host=\(self.hostID.uuidString)")
         _ = lifecycle.handle(.hostPrepared)
         if lifecycle.needsGatewayLoops {
             eventPump.startIfNeeded()
@@ -538,7 +537,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
         scheduleLiveActivitySync()
         let historyMs = historyStarted.duration(to: .now) / .milliseconds(1)
         let elapsedMs = started.duration(to: .now) / .milliseconds(1)
-        logger.notice("host preparation completed host=\(self.hostID.uuidString, privacy: .public) elapsedMs=\(elapsedMs, privacy: .public) metadataMs=\(metadataMs, privacy: .public) historyMs=\(historyMs, privacy: .public)")
+        logger.notice("host preparation completed host=\(self.hostID.uuidString) elapsedMs=\(elapsedMs) metadataMs=\(metadataMs) historyMs=\(historyMs)")
     }
 
     /// The live mapping this model actually reads, so migrated timelines can be
@@ -584,7 +583,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
 
     func handleScenePhaseActive() async {
         guard acceptsWork else { return }
-        logger.notice("scenePhase active before state update: \(self.liveActivityDebugSummary(), privacy: .public)")
+        logger.notice("scenePhase active before state update: \(self.liveActivityDebugSummary())")
         let effects = lifecycle.handle(.appPhase(.active))
         fileImports.resumeWaiting()
         await gateway.resumeLivenessChecks()
@@ -621,7 +620,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
         await refreshActiveConversationAfterDisconnectIfNeeded()
         guard isLive() else { return }
         await refreshTranscriptOnForegroundIfNeeded()
-        logger.notice("scenePhase active completed: \(self.liveActivityDebugSummary(), privacy: .public)")
+        logger.notice("scenePhase active completed: \(self.liveActivityDebugSummary())")
         await directoryRefresh
     }
 
@@ -762,9 +761,9 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
             screen.historyEdges.cancelReads()
             screen.historyOpenSignpost.abandon(.cancelled)
         }
-        logger.notice("scenePhase background before branch: \(self.liveActivityDebugSummary(), privacy: .public)")
+        logger.notice("scenePhase background before branch: \(self.liveActivityDebugSummary())")
         await perform(effects)
-        logger.notice("scenePhase background completed: \(self.liveActivityDebugSummary(), privacy: .public)")
+        logger.notice("scenePhase background completed: \(self.liveActivityDebugSummary())")
     }
 
     private func handleLifecycle(_ event: TargetLifecycle.Event) {
@@ -997,7 +996,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
         let requestsActivity = lifecycle.app != .active || lifecycle.backgroundSticky
 
         logger.notice(
-            "scheduleLiveActivitySync requested requestsActivity=\(requestsActivity, privacy: .public) bg=\(self.isInBackground, privacy: .public) sticky=\(self.lifecycle.backgroundSticky, privacy: .public) activeTaskCount=\(activeTaskCount, privacy: .public) epochSeconds=\(now.timeIntervalSince1970, privacy: .public) summary=\(self.liveActivityDebugSummary(), privacy: .public)"
+            "scheduleLiveActivitySync requested requestsActivity=\(requestsActivity) bg=\(self.isInBackground) sticky=\(self.lifecycle.backgroundSticky) activeTaskCount=\(activeTaskCount) epochSeconds=\(now.timeIntervalSince1970) summary=\(self.liveActivityDebugSummary())"
         )
         let registration = hostServices.registration
         ownedTasks.start(.liveActivitySync) { [self] in
@@ -1018,7 +1017,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
     #endif
 
     private func disconnectForBackground() async {
-        logger.notice("disconnectForBackground start: \(self.liveActivityDebugSummary(), privacy: .public)")
+        logger.notice("disconnectForBackground start: \(self.liveActivityDebugSummary())")
         eventPump.stop()
         ownedTasks.cancel(.routeMove)
         cancelActivityReads()
@@ -1287,7 +1286,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
                 scheduleActivityRead(after: TurnRegistry.confirmationWindow)
             case .retire(let jobIDs, let clearsActiveTurn):
                 logger.notice(
-                    "retiring gateway jobs confirmed inactive session=\(threadID, privacy: .public) jobs=\(jobIDs.sorted().joined(separator: ","), privacy: .public) clearsActiveTurn=\(clearsActiveTurn, privacy: .public)"
+                    "retiring gateway jobs confirmed inactive session=\(threadID) jobs=\(jobIDs.sorted().joined(separator: ",")) clearsActiveTurn=\(clearsActiveTurn)"
                 )
                 if isShown(threadID) { reconcileTranscriptAfterRetirement(sessionID: threadID) }
             }
@@ -1306,7 +1305,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
                 try await self.eventPump.replayThread(afterSequence: afterSequence, epoch: epoch, threadID: active.threadID, limit: 2_000)
             } catch {
                 self.turns.releaseReplay(jobID: active.jobID)
-                self.logger.notice("Failed to replay active Claude turn: \(String(describing: error), privacy: .public)")
+                self.logger.notice("Failed to replay active Claude turn: \(String(describing: error))")
             }
         }
     }
@@ -1322,7 +1321,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
             try await eventPump.replayThread(afterSequence: sequence - 1, epoch: snapshot.epoch, threadID: threadID, limit: 2_000)
         } catch {
             if !Task.isCancelled {
-                logger.notice("Failed to replay opened Claude turn: \(String(describing: error), privacy: .public)")
+                logger.notice("Failed to replay opened Claude turn: \(String(describing: error))")
             }
         }
     }
@@ -1364,7 +1363,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
                         scheduleLiveActivitySync()
                     } catch {
                         guard !Task.isCancelled else { return }
-                        logger.notice("Live Activity snapshot unavailable: \(error.localizedDescription, privacy: .public)")
+                        logger.notice("Live Activity snapshot unavailable: \(error.localizedDescription)")
                     }
                 }
             }
@@ -1453,7 +1452,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
                     _ = await session.merge(snapshot, read: read)
                 }
             } catch {
-                logger.notice("Failed to refresh conversation after notification gap thread=\(threadID, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                logger.notice("Failed to refresh conversation after notification gap thread=\(threadID): \(error.localizedDescription)")
             }
         }
         if !shownThreadIDs.isDisjoint(with: affected) {
@@ -1488,7 +1487,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
             #endif
         case .warning(let warning):
             gatewayWarning = warning
-            logger.error("\(warning.message, privacy: .public)")
+            logger.error("\(warning.message)")
         case .providerHealth(let health):
             guard !replay else { return }
             adoptProviderHealth(health)
@@ -1617,7 +1616,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
             || method == "turn/completed"
             || method == "item/completed"
         if shouldLogNotification {
-            logger.debug(
+            debugLogger.debug(
                 "gateway note method=\(method, privacy: .public) thread=\(threadID, privacy: .public) turn=\(turnID, privacy: .public) active=\((self.primaryScreen?.activeSessionID ?? "nil"), privacy: .public) job=\(jobID, privacy: .public) dispatchedVisible=\(self.isDispatchedTurnVisible(jobID)) knownActive=\(self.turns.turn(forThread: threadID) != nil) summary=\(self.primaryScreen?.debugChatStateSummary() ?? "none", privacy: .public)"
             )
         }
@@ -1632,7 +1631,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
         // Normalize because history uses "turn-1" while live notifications use "1".
         let normalizedTurnID = event.normalizedTurnID
         if turns.hasCompleted(threadID: threadID, turnID: normalizedTurnID) {
-            logger.debug(
+            debugLogger.debug(
                 "ignoring late gateway event method=\(method, privacy: .public) thread=\(threadID, privacy: .public) turn=\(normalizedTurnID, privacy: .public)"
             )
             return
@@ -1691,7 +1690,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
             guard let turn = turns.turn(forThread: sessionID) else { continue }
             transcriptRecovery.mark(sessionID: turn.threadID, turnID: turn.turnID)
             logger.notice(
-                "gateway turn lost connection; scheduling disconnect transcript refresh thread=\(turn.threadID, privacy: .public) turn=\(self.normalizeGatewayTurnID(turn.turnID), privacy: .public)"
+                "gateway turn lost connection; scheduling disconnect transcript refresh thread=\(turn.threadID) turn=\(self.normalizeGatewayTurnID(turn.turnID))"
             )
             Task { [self] in
                 try? await Task.sleep(for: .milliseconds(450))
@@ -1710,7 +1709,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
         turnID: String
     ) {
         guard let completed = turns.complete(threadID: threadID, turnID: turnID) else {
-            logger.debug(
+            debugLogger.debug(
                 "ignoring repeated gateway turn completion thread=\(threadID, privacy: .public) turn=\(self.normalizeGatewayTurnID(turnID), privacy: .public)"
             )
             return
@@ -1719,7 +1718,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
         dispatcher.turnCompleted(threadID: threadID, turnID: turnID)
 
         logger.info(
-            "gateway turn completed thread=\(completed.threadID, privacy: .public) turn=\(completed.normalizedTurnID, privacy: .public) job=\(completed.jobID, privacy: .public) active=\((self.primaryScreen?.activeSessionID ?? "nil"), privacy: .public) summary=\(self.primaryScreen?.debugChatStateSummary() ?? "none", privacy: .public)"
+            "gateway turn completed thread=\(completed.threadID) turn=\(completed.normalizedTurnID) job=\(completed.jobID) active=\((self.primaryScreen?.activeSessionID ?? "nil")) summary=\(self.primaryScreen?.debugChatStateSummary() ?? "none")"
         )
 
         synchronizeConversationActivity()

@@ -57,7 +57,7 @@ actor HistoryPageCache {
     private let memoryBudgetBytes: Int
     private let diskBudgetBytes: Int
     private let freshnessInterval: TimeInterval
-    private let logger = Logger(subsystem: "RemoteCoder", category: "HistoryPageCache")
+    private let logger = AppLogger(category: "HistoryPageCache")
     private var memory: [HistoryPageKey: MemoryEntry] = [:]
     private var disk: [HistoryPageKey: DiskEntry] = [:]
     private var memoryBytes = 0
@@ -108,7 +108,7 @@ actor HistoryPageCache {
             touchDisk(key, now: now)
             return entry(data: envelope.data, fetchedAt: envelope.fetchedAt, now: now, readStartedAt: record.readStartedAt)
         } catch {
-            logger.notice("History page cache read failed; discarding rebuildable entry: \(error.localizedDescription, privacy: .public)")
+            logger.notice("History page cache read failed; discarding rebuildable entry: \(error.localizedDescription)")
             discardDisk(key)
             return nil
         }
@@ -165,7 +165,7 @@ actor HistoryPageCache {
             trimDisk()
         } catch {
             PersistenceMetrics.shared.failed(.historyPages)
-            logger.notice("History page persistence failed: \(error.localizedDescription, privacy: .public)")
+            logger.notice("History page persistence failed: \(error.localizedDescription)")
         }
     }
 
@@ -230,7 +230,7 @@ actor HistoryPageCache {
         } catch {
             invalidatedKeys.insert(key)
             // A failed deletion is still accounted for until a later retry.
-            logger.notice("Could not remove history cache file: \(error.localizedDescription, privacy: .public)")
+            logger.notice("Could not remove history cache file: \(error.localizedDescription)")
         }
     }
 
@@ -309,14 +309,14 @@ actor HistoryPageCache {
                     disk[envelope.key] = DiskEntry(url: url, bytes: size, fingerprint: envelope.comparisonFingerprint ?? Data(SHA256.hash(data: envelope.data)), accessedAt: values.contentModificationDate ?? .distantPast, readStartedAt: nil)
                     diskBytes += size
                 } catch {
-                    logger.notice("Ignoring invalid history cache file: \(error.localizedDescription, privacy: .public)")
+                    logger.notice("Ignoring invalid history cache file: \(error.localizedDescription)")
                     try? FileManager.default.removeItem(at: url)
                 }
             }
             discardSuperseded(by: Dictionary(disk.keys.map { ($0.lineage, $0.generation) }, uniquingKeysWith: max))
             trimDisk()
         } catch {
-            logger.notice("History page cache directory unavailable: \(error.localizedDescription, privacy: .public)")
+            logger.notice("History page cache directory unavailable: \(error.localizedDescription)")
         }
     }
 }

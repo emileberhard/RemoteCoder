@@ -10,7 +10,7 @@ actor ConversationIndex {
     private var map: [String: UUID] = [:]
     private var hasLoaded = false
     private var needsSave = false
-    private let logger = Logger(subsystem: "RemoteCoder", category: "ConversationIndex")
+    private let logger = AppLogger(category: "ConversationIndex")
 
     init(hostID: UUID?, storage: HostStorage = .live) {
         fileURL = storage.directory(for: .target(hostID: hostID))
@@ -35,7 +35,7 @@ actor ConversationIndex {
 
     nonisolated static func adoptSynchronously(_ entries: [String: UUID], hostID: UUID, storage: HostStorage = .live) {
         guard entries.isEmpty == false else { return }
-        let logger = Logger(subsystem: "RemoteCoder", category: "ConversationIndex")
+        let logger = AppLogger(category: "ConversationIndex")
         createDirectoryIfNeeded(hostID: hostID, storage: storage, logger: logger)
         let url = fileURL(hostID: hostID, storage: storage)
         var map = (try? loadIndex(from: url)) ?? [:]
@@ -48,18 +48,18 @@ actor ConversationIndex {
         do {
             try JSONEncoder().encode(map).write(to: url, options: [.atomic])
         } catch {
-            logger.error("Failed to adopt session index entries: \(error.localizedDescription, privacy: .public)")
+            logger.error("Failed to adopt session index entries: \(error.localizedDescription)")
         }
     }
 
-    private nonisolated static func createDirectoryIfNeeded(hostID: UUID?, storage: HostStorage, logger: Logger) {
+    private nonisolated static func createDirectoryIfNeeded(hostID: UUID?, storage: HostStorage, logger: AppLogger) {
         do {
             try FileManager.default.createDirectory(
                 at: storage.directory(for: .target(hostID: hostID)),
                 withIntermediateDirectories: true
             )
         } catch {
-            logger.error("Failed to create session index directory: \(error.localizedDescription, privacy: .public)")
+            logger.error("Failed to create session index directory: \(error.localizedDescription)")
         }
     }
 
@@ -87,7 +87,7 @@ actor ConversationIndex {
     private func loadIfNeeded() {
         guard !hasLoaded else { return }
         do { map = try Self.loadIndex(from: fileURL) }
-        catch { logger.error("Failed to load session index: \(error.localizedDescription, privacy: .public)") }
+        catch { logger.error("Failed to load session index: \(error.localizedDescription)") }
         hasLoaded = true
     }
 
@@ -108,7 +108,7 @@ extension ConversationIndex {
             try data.write(to: fileURL, options: [.atomic])
             needsSave = false
         } catch {
-            logger.error("Failed to persist session index: \(error.localizedDescription, privacy: .public)")
+            logger.error("Failed to persist session index: \(error.localizedDescription)")
         }
     }
 }

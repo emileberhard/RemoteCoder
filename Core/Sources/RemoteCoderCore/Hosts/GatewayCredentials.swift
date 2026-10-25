@@ -16,7 +16,7 @@ struct KeychainGatewayCredentials: GatewayCredentialStorage {
         case relayRoute(hostID: UUID)
     }
 
-    private static let logger = Logger(subsystem: "RemoteCoder", category: "GatewayCredentials")
+    private static let logger = AppLogger(category: "GatewayCredentials")
     let scope: Scope
 
     private func query(dataProtection: Bool) -> [String: Any] {
@@ -84,7 +84,7 @@ struct KeychainGatewayCredentials: GatewayCredentialStorage {
         }
         let status = SecItemDelete(fileKeychain as CFDictionary)
         if status != errSecSuccess && status != errSecItemNotFound {
-            Self.logger.error("Moved gateway configuration to the data protection keychain but could not delete the file keychain copy (status \(status, privacy: .public)).")
+            Self.logger.error("Moved gateway configuration to the data protection keychain but could not delete the file keychain copy (status \(status)).")
         }
         return data
     }

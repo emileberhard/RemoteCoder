@@ -36,7 +36,7 @@ final class HostFileDiskBudget: Sendable {
     private let diskHeadroomBytes: Int64
     private let availableCapacity: @Sendable (URL) throws -> Int64
     private let state = Mutex(State())
-    private let logger = Logger(subsystem: "RemoteCoder", category: "HostFileDiskBudget")
+    private let logger = AppLogger(category: "HostFileDiskBudget")
 
     private struct Reservation {
         var bytes: Int64 = 0
@@ -166,7 +166,7 @@ final class HostFileDiskBudget: Sendable {
             var record = cached.record
             record.lastAccess = Date()
             do { try write(record, at: cached.directory) }
-            catch { logger.error("Could not update file-cache recency: \(error.localizedDescription, privacy: .public)") }
+            catch { logger.error("Could not update file-cache recency: \(error.localizedDescription)") }
             reservation.cached = HostFileCachedEntry(record: record, directory: cached.directory)
             reservation.unheld = true
             state.reservations[id] = reservation
@@ -201,7 +201,7 @@ final class HostFileDiskBudget: Sendable {
             state.reservations.removeValue(forKey: id)
             return true
         } catch {
-            logger.error("Could not evict cached file data: \(error.localizedDescription, privacy: .public)")
+            logger.error("Could not evict cached file data: \(error.localizedDescription)")
             return false
         }
         state.reservations.removeValue(forKey: id)

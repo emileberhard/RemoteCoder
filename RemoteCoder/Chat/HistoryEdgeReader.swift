@@ -52,7 +52,7 @@ final class HistoryEdgeReader {
     @ObservationIgnored private let historyService: GatewayHistoryService
     @ObservationIgnored private let conversations: ConversationSessions
     @ObservationIgnored private let networkPolicy: HistoryNetworkPolicy
-    @ObservationIgnored private let logger = Logger(subsystem: "RemoteCoder", category: "HistoryEdgeReader")
+    @ObservationIgnored private let logger = AppLogger(category: "HistoryEdgeReader")
 
     init(host: any HistoryEdgeHost, historyService: GatewayHistoryService, conversations: ConversationSessions,
          networkPolicy: HistoryNetworkPolicy) {
@@ -212,7 +212,7 @@ final class HistoryEdgeReader {
                 loadedTail = request == .reload || request == .latest
             } catch {
                 if !Task.isCancelled, self.host?.presentsTranscript(identity) == true {
-                    self.logger.notice("History page failed: \(error.localizedDescription, privacy: .public)")
+                    self.logger.notice("History page failed: \(error.localizedDescription)")
                     outcome = failure
                     failureMessage = error.localizedDescription
                     defersFailure = GatewayHistoryService.defersRead(error)

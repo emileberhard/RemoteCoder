@@ -114,7 +114,7 @@ final class TranscriptLogicalRow {
 
 @MainActor
 final class TranscriptRowHost {
-    private static let logger = Logger(subsystem: "RemoteCoder", category: "Transcript")
+    private static let logger = AppLogger(category: "Transcript")
     let view: NSHostingView<AnyView>
     weak var surfaceActivity: TranscriptSurfaceActivity?
     private(set) var hitRevision = 0

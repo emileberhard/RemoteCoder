@@ -17,7 +17,7 @@ import OSLog
 @MainActor
 enum HostScopedStateMigration {
     private static let completedKey = "gateway.hostScopedStateMigrated"
-    private static let logger = Logger(subsystem: "RemoteCoder", category: "HostScopedMigration")
+    private static let logger = AppLogger(category: "HostScopedMigration")
 
     @discardableResult
     static func runIfNeeded(
@@ -64,7 +64,7 @@ enum HostScopedStateMigration {
         }
         let limitation = limitations.isEmpty ? nil : limitations.joined(separator: "; ")
         logger.notice(
-            "host-scoped migration complete pins=\(pinResult.migrated, privacy: .public) sessions=\(indexResult.migrated, privacy: .public) limitation=\(limitation ?? "none", privacy: .public)"
+            "host-scoped migration complete pins=\(pinResult.migrated) sessions=\(indexResult.migrated) limitation=\(limitation ?? "none")"
         )
         return limitation
     }

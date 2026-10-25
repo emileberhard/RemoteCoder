@@ -4,7 +4,7 @@ import OSLog
 
 @MainActor
 final class AVCaptureAudioSession: CaptureAudioSession {
-    private let logger = Logger(subsystem: "RemoteCoder", category: "VoiceInput.AudioRecorder")
+    private let logger = AppLogger(category: "VoiceInput.AudioRecorder")
     private var inactiveObserver: NotificationCenter.ObservationToken?
     private var resumptionObserver: NotificationCenter.ObservationToken?
     private var routeChangeObserver: NSObjectProtocol?
@@ -85,7 +85,7 @@ final class AVCaptureAudioSession: CaptureAudioSession {
     func preferBuiltInInput(context: String) throws {
         let session = AVAudioSession.sharedInstance()
         guard let builtInMic = session.availableInputs?.first(where: { $0.portType == .builtInMic }) else {
-            logger.notice("built-in microphone unavailable during \(context, privacy: .public)")
+            logger.notice("built-in microphone unavailable during \(context)")
             return
         }
 
@@ -94,7 +94,7 @@ final class AVCaptureAudioSession: CaptureAudioSession {
         let activeInput = session.currentRoute.inputs.first
         if activeInput?.portType != .builtInMic {
             let activePort = activeInput?.portType.rawValue ?? "none"
-            logger.notice("requested built-in microphone during \(context), active input is \(activePort, privacy: .public)")
+            logger.notice("requested built-in microphone during \(context), active input is \(activePort)")
         }
     }
 }

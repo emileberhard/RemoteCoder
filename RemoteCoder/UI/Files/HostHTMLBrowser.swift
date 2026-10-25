@@ -13,7 +13,7 @@ final class HostHTMLBrowser {
     private(set) var dialogs = HostHTMLDialogs()
     @ObservationIgnored private let file: OpenedHostFile
     @ObservationIgnored private var destination: URL?
-    @ObservationIgnored private let logger = Logger(subsystem: "RemoteCoder", category: "HostFiles")
+    @ObservationIgnored private let logger = AppLogger(category: "HostFiles")
 
     init(file: OpenedHostFile) { self.file = file }
 
@@ -78,6 +78,6 @@ final class HostHTMLBrowser {
         else { reason = error }
         guard (reason as? URLError)?.code != .cancelled else { return }
         failure = reason.localizedDescription
-        logger.error("html preview failed file=\(self.file.id.uuidString.prefix(8), privacy: .public) reason=\(reason.diagnosticReason, privacy: .public)")
+        logger.error("html preview failed file=\(self.file.id.uuidString.prefix(8)) reason=\(reason.diagnosticReason)")
     }
 }

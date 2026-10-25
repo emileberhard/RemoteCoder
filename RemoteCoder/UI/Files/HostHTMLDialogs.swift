@@ -30,7 +30,7 @@ final class HostHTMLDialogs: WebPage.DialogPresenting {
     var showsFileImporter = false
     @ObservationIgnored private var continuation: CheckedContinuation<Reply, Never>?
     @ObservationIgnored private var scopedFiles: Set<URL> = []
-    @ObservationIgnored private let logger = Logger(subsystem: "RemoteCoder", category: "HostFiles")
+    @ObservationIgnored private let logger = AppLogger(category: "HostFiles")
     @ObservationIgnored private var closed = false
 
     deinit {
@@ -103,7 +103,7 @@ final class HostHTMLDialogs: WebPage.DialogPresenting {
 
     private func ask(_ kind: Kind, message: String, defaultText: String = "") async -> Reply {
         guard !closed else { return .cancel }
-        logger.notice("html dialog requested cancelled=\(Task.isCancelled, privacy: .public)")
+        logger.notice("html dialog requested cancelled=\(Task.isCancelled)")
         let id = UUID()
         return await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in

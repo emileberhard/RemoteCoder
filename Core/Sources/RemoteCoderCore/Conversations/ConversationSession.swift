@@ -83,7 +83,7 @@ actor ConversationSession {
         }
     }
     #endif
-    private let logger = Logger(subsystem: "RemoteCoder", category: "ConversationSession")
+    private let logger = AppLogger(category: "ConversationSession")
 
     init(conversationID: UUID, threadID: String? = nil, checkpoints: ConversationCheckpointStore, checkpointGeneration: UInt64,
         projectionSignposter: OSSignposter = ConversationProjection.signposter) {
@@ -137,7 +137,7 @@ actor ConversationSession {
             if case .loading(let currentID, _) = restoration, currentID == id {
                 restoration = .failed(error)
                 if !(error is ConversationCheckpointStore.CapacityOverflow) {
-                    logger.error("Conversation restore failed; checkpoint preserved: \(error.localizedDescription, privacy: .public)")
+                    logger.error("Conversation restore failed; checkpoint preserved: \(error.localizedDescription)")
                 }
             }
             throw error
@@ -609,7 +609,7 @@ actor ConversationSession {
         do { try await persist() }
         catch {
             if !(error is ConversationCheckpointStore.CapacityOverflow) {
-                logger.error("Conversation checkpoint failed: \(error.localizedDescription, privacy: .public)")
+                logger.error("Conversation checkpoint failed: \(error.localizedDescription)")
             }
         }
         scheduleProjection()
@@ -648,7 +648,7 @@ actor ConversationSession {
                 succeeded = true
             } catch is CancellationError {} catch {
                 if !(error is ConversationCheckpointStore.CapacityOverflow) {
-                    self?.logger.error("Conversation checkpoint failed: \(error.localizedDescription, privacy: .public)")
+                    self?.logger.error("Conversation checkpoint failed: \(error.localizedDescription)")
                 }
             }
             await self?.finishPersistence(id: id, succeeded: succeeded)
@@ -668,7 +668,7 @@ actor ConversationSession {
 
 /// The host owns identity bindings; each conversation independently owns its transcript.
 actor ConversationSessions {
-    private let logger = Logger(subsystem: "RemoteCoder", category: "ConversationSessions")
+    private let logger = AppLogger(category: "ConversationSessions")
     private final class WeakSession {
         weak var value: ConversationSession?
         init(_ value: ConversationSession) { self.value = value }
@@ -882,7 +882,7 @@ actor ConversationSessions {
         access.removeValue(forKey: id)
         let task = Task { [checkpoints, logger] in
             do { try await checkpoints.remove(id) }
-            catch { logger.error("Conversation invalidation failed; cleanup will retry on admission: \(error.localizedDescription, privacy: .public)") }
+            catch { logger.error("Conversation invalidation failed; cleanup will retry on admission: \(error.localizedDescription)") }
         }
         invalidations[id] = task
         await publishContentSubscriptions()

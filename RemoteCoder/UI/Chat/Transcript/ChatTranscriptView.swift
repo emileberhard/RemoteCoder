@@ -471,7 +471,7 @@ private struct TranscriptContentView<QuestionContent: View, BottomBar: View>: Vi
         PerfBuild.count("phase.\(phase)")
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("-html-visual-fixture") {
-            Logger(subsystem: "RemoteCoder", category: "HTMLVisual").notice("html visual fixture scroll phase=\(String(describing: phase), privacy: .public) uptime=\(ProcessInfo.processInfo.systemUptime, privacy: .public)")
+            AppLogger(category: "HTMLVisual").notice("html visual fixture scroll phase=\(String(describing: phase)) uptime=\(ProcessInfo.processInfo.systemUptime)")
             #if os(iOS)
             AppPerformanceDiagnostics.pointsOfInterest.emitEvent("HTMLVisualFixtureScroll",
                 "phase=\(String(describing: phase), privacy: .public) uptime=\(ProcessInfo.processInfo.systemUptime, privacy: .public) lowPower=\(energyPolicy.isLowPowerModeEnabled, privacy: .public) thermal=\(energyPolicy.thermalState.rawValue, privacy: .public)")
@@ -1114,7 +1114,7 @@ private final class TranscriptPosition {
     @ObservationIgnored private var initialAnchor: TranscriptReadingAnchor?
     @ObservationIgnored private weak var capture: TranscriptReadingCapture?
     @ObservationIgnored private var hasReportedClamp = false
-    private static let logger = Logger(subsystem: "RemoteCoder", category: "Transcript")
+    private static let logger = AppLogger(category: "Transcript")
 
     init(anchor: TranscriptReadingAnchor?) {
         if let anchor {
@@ -1143,7 +1143,7 @@ private final class TranscriptPosition {
         requestRevision += 1
         if alignment.isClamped, !hasReportedClamp {
             hasReportedClamp = true
-            Self.logger.notice("Reading position restored to nearest supported identity anchor for row=\(rowID, privacy: .public)")
+            Self.logger.notice("Reading position restored to nearest supported identity anchor for row=\(rowID)")
         }
     }
 
@@ -1151,7 +1151,7 @@ private final class TranscriptPosition {
         if result.outcome.preservesBookmark {
             value = ScrollPosition(idType: String.self)
             requestRevision += 1
-            Self.logger.notice("Reading position unavailable row=\(result.rowID, privacy: .public) outcome=\(result.outcome.rawValue, privacy: .public); kept known bookmark")
+            Self.logger.notice("Reading position unavailable row=\(result.rowID) outcome=\(result.outcome.rawValue); kept known bookmark")
         }
     }
 
@@ -1547,7 +1547,7 @@ struct TranscriptRow: Identifiable, Equatable {
 
 @MainActor
 final class TranscriptRowProjection {
-    private static let logger = Logger(subsystem: "RemoteCoder", category: "Transcript")
+    private static let logger = AppLogger(category: "Transcript")
     private static var latestRevision: UInt64 = 0
     private var items: [ChatStreamItem] = []
     private var itemRevisions: [UInt64] = []

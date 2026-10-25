@@ -24,7 +24,7 @@ final class DictationSession {
     @ObservationIgnored private let ownedTasks = OwnedTasks<OwnedTask>()
     @ObservationIgnored private weak var host: (any DictationHost)?
     @ObservationIgnored private let drafts: ComposerDraftStore
-    @ObservationIgnored private let logger = Logger(subsystem: "RemoteCoder", category: "DictationSession")
+    @ObservationIgnored private let logger = AppLogger(category: "DictationSession")
 
     init(host: any DictationHost, drafts: ComposerDraftStore) {
         self.host = host
@@ -83,7 +83,7 @@ final class DictationSession {
             let saved: [DictationRecording<ExecutionTarget>]
             do { saved = try await voice.savedRecordings() }
             catch {
-                self?.logger.error("saved dictations could not be listed: \(error.localizedDescription, privacy: .public)")
+                self?.logger.error("saved dictations could not be listed: \(error.localizedDescription)")
                 return
             }
             guard let self, !Task.isCancelled, !self.isRetired, self.host?.voice === voice else { return }
@@ -179,7 +179,7 @@ final class DictationSession {
             let maximumAge = TimeInterval(DictationRecordingStore<ExecutionTarget>.maximumAge.components.seconds)
             try await drafts.removeReceipts(receivedBefore: .now.addingTimeInterval(-maximumAge))
         } catch {
-            logger.error("dictation receipts could not be read: \(error.localizedDescription, privacy: .public)")
+            logger.error("dictation receipts could not be read: \(error.localizedDescription)")
             return
         }
         recoverable = pending

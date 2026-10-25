@@ -43,7 +43,7 @@ final class SiteIconStore {
     }
 
     private let disk: SiteIconDisk
-    private let logger = Logger(subsystem: "RemoteCoder", category: "SiteIcons")
+    private let logger = AppLogger(category: "SiteIcons")
     private var entries: [String: Entry] = [:]
     private var queue: [String] = []
     private var fetches: [String: Task<Void, Never>] = [:]
@@ -184,7 +184,7 @@ private struct StoredSiteIcon: Sendable {
 
 private enum SiteIconFetch {
     static let pixelSize = 64
-    private static let logger = Logger(subsystem: "RemoteCoder", category: "SiteIcons")
+    private static let logger = AppLogger(category: "SiteIcons")
 
     @concurrent
     static func icon(host: String) async throws -> SiteIconFetchResult {

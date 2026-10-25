@@ -26,7 +26,7 @@ struct ChatRootView: View {
     @State private var window: ChatWindowModel?
     @State private var composerSafeAreaOverlap: CGFloat = 0
     @Environment(\.scenePhase) private var scenePhase
-    private let logger = Logger(subsystem: "RemoteCoder", category: "ChatRootView")
+    private let logger = AppLogger(category: "ChatRootView")
 
     init(workspace: ChatWorkspaceModel, sceneValue: Binding<ConversationWindowValue?>) {
         self.workspace = workspace
@@ -126,7 +126,7 @@ struct ChatRootView: View {
         .onChange(of: workspace.settings.hosts) { _, _ in workspace.reconcileHosts() }
         .onOpenURL { url in
             guard let event = ExternalEvent(url: url) else { return }
-            logger.notice("Received deep link: \(url.absoluteString, privacy: .public)")
+            logger.notice("Received deep link: \(url.absoluteString)")
             workspace.events.receive(event)
         }
         #if os(iOS)
@@ -272,7 +272,7 @@ private struct ChatScreen: View {
     @State private var commandPalette: CommandPaletteCatalog?
     @State private var pinRequest: ConversationPinRequest?
     @State private var fileImportRequest = 0
-    private let logger = Logger(subsystem: "RemoteCoder", category: "ChatScreen")
+    private let logger = AppLogger(category: "ChatScreen")
 
     private struct HistoryDrawerState: Equatable {
         let isOpen: Bool
@@ -351,7 +351,7 @@ private struct ChatScreen: View {
             VoiceModeDiagnostics.log("chat screen appeared")
         }
         .onChange(of: ObjectIdentifier(screen), initial: true) { _, _ in
-            logger.notice("chat screen presents view=\(viewID, privacy: .public) window=\(window.logID, privacy: .public) target=\(screen.executionTarget.id, privacy: .public) thread=\(screen.activeSessionID ?? "none", privacy: .public)")
+            logger.notice("chat screen presents view=\(viewID) window=\(window.logID) target=\(screen.executionTarget.id) thread=\(screen.activeSessionID ?? "none")")
         }
         .modifier(WindowVisibility(isVisible: $isWindowVisible))
         .onChange(of: isWindowVisible, initial: true) { _, visible in
@@ -367,7 +367,7 @@ private struct ChatScreen: View {
             event.performIfCurrent(in: window, navigationGeneration: workspace.navigationGeneration, perform: perform)
         }
         .onChange(of: isHistoryOpen) { _, open in
-            logger.notice("drawer state open=\(open, privacy: .public) view=\(viewID, privacy: .public) window=\(window.logID, privacy: .public)")
+            logger.notice("drawer state open=\(open) view=\(viewID) window=\(window.logID)")
             if open {
                 dismissComposerFocus()
             }
@@ -778,7 +778,7 @@ private struct ChatScreen: View {
     private func selectConversation(_ address: ConversationAddress) -> ChatWorkspaceModel.ConversationSwitchOutcome {
         let outcome = workspace.switchConversation(to: address)
         logger.notice(
-            "history select view=\(viewID, privacy: .public) address=\(address.id, privacy: .public) outcome=\(String(describing: outcome), privacy: .public) presented=\(screen.executionTarget.id, privacy: .public)|\(screen.activeSessionID ?? "none", privacy: .public) \(workspace.windowDiagnostics(window), privacy: .public)"
+            "history select view=\(viewID) address=\(address.id) outcome=\(String(describing: outcome)) presented=\(screen.executionTarget.id)|\(screen.activeSessionID ?? "none") \(workspace.windowDiagnostics(window))"
         )
         guard outcome != .refusedWhileDictating else {
             presentDictationRefusal()

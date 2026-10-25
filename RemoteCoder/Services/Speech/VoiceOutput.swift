@@ -28,7 +28,7 @@ final class VoiceOutputController {
     private let access: GatewaySpeechAccess
     private let preferences: SpeechPreferences
     @ObservationIgnored private var synthesizer: (access: SpeechProviderAccess, synthesizer: SpeechSynthesizer<GeminiSpeechSynthesisProvider>)?
-    private let logger = Logger(subsystem: "RemoteCoder", category: "VoiceOutput")
+    private let logger = AppLogger(category: "VoiceOutput")
 
     private var currentTask: Task<Void, Never>?
     private var activeUtteranceID = UUID()
@@ -102,7 +102,7 @@ private extension VoiceOutputController {
             currentTask = nil
         } catch {
             let error = access.explain(error, provider: .gemini)
-            logger.error("Voice output failed: \(error.localizedDescription, privacy: .public)")
+            logger.error("Voice output failed: \(error.localizedDescription)")
             guard activeUtteranceID == utteranceID else { return }
             lastError = error.localizedDescription
             isPreparing = false

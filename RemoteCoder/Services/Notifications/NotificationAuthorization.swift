@@ -4,10 +4,7 @@ import UserNotifications
 struct NotificationAuthorization: Sendable {
     let registerForRemoteNotifications: @MainActor @Sendable () -> Void
 
-    private static let logger = Logger(
-        subsystem: "RemoteCoder",
-        category: "TaskCompletionNotifications"
-    )
+    private static let logger = AppLogger(category: "TaskCompletionNotifications")
 
     func ensureAuthorizedIfNeeded() async -> Bool {
         let center = UNUserNotificationCenter.current()
@@ -18,7 +15,7 @@ struct NotificationAuthorization: Sendable {
             do {
                 authorized = try await center.requestAuthorization(options: [.alert, .sound, .badge])
             } catch {
-                Self.logger.error("Notification authorization request failed: \(error.localizedDescription, privacy: .public)")
+                Self.logger.error("Notification authorization request failed: \(error.localizedDescription)")
                 authorized = false
             }
         case .denied:
@@ -34,7 +31,7 @@ struct NotificationAuthorization: Sendable {
         }
 
         Self.logger.notice(
-            "notification authorization status=\(settings.authorizationStatus.rawValue, privacy: .public) authorized=\(authorized, privacy: .public)"
+            "notification authorization status=\(settings.authorizationStatus.rawValue) authorized=\(authorized)"
         )
         if authorized {
             await registerForRemoteNotifications()

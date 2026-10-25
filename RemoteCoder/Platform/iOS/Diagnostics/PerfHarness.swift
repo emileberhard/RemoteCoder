@@ -20,7 +20,7 @@ final class PerfHarness {
     nonisolated static let commandNotification = "com.remotecoder.perf.command"
     nonisolated static let signposter = OSSignposter(subsystem: "RemoteCoder", category: "PerfHarness")
 
-    private let logger = Logger(subsystem: "RemoteCoder", category: "PerfHarness")
+    private let logger = AppLogger(category: "PerfHarness")
     private weak var workspace: ChatWorkspaceModel?
     private var window: MeasurementWindow?
     private var windowTask: Task<Void, Never>?
@@ -47,7 +47,7 @@ final class PerfHarness {
             Self.commandNotification as CFString, nil, .deliverImmediately
         )
         UIApplication.shared.isIdleTimerDisabled = true
-        logger.notice("perf harness ready directory=\(Self.directory.path, privacy: .public)")
+        logger.notice("perf harness ready directory=\(Self.directory.path)")
     }
 
     private func receiveCommand() {
@@ -59,7 +59,7 @@ final class PerfHarness {
             return
         }
         let id = command["id"] as? String ?? UUID().uuidString
-        logger.notice("perf command id=\(id, privacy: .public) cmd=\(name, privacy: .public)")
+        logger.notice("perf command id=\(id) cmd=\(name)")
         switch name {
         case "begin":
             begin(label: command["label"] as? String ?? "unnamed", commandID: id)
@@ -270,7 +270,7 @@ final class PerfHarness {
         windowTask?.cancel()
         window?.cancel()
         window = MeasurementWindow(label: label, commandID: commandID)
-        logger.notice("perf window begin label=\(label, privacy: .public)")
+        logger.notice("perf window begin label=\(label)")
     }
 
     /// Ends a command's window only if no newer window replaced it.
@@ -307,9 +307,9 @@ final class PerfHarness {
                 try (data + Data("\n".utf8)).write(to: url)
             }
         } catch {
-            logger.error("perf result not written: \(error.localizedDescription, privacy: .public)")
+            logger.error("perf result not written: \(error.localizedDescription)")
         }
-        logger.notice("perf result \(String(decoding: data, as: UTF8.self), privacy: .public)")
+        logger.notice("perf result \(String(decoding: data, as: UTF8.self))")
     }
 
     // MARK: Replay

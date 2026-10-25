@@ -15,7 +15,7 @@ struct TranscriptRowIndex {
 
     typealias PreservationAnchor = TranscriptReadingAnchor
 
-    private static let logger = Logger(subsystem: "RemoteCoder", category: "Transcript")
+    private static let logger = AppLogger(category: "Transcript")
     private let rows: [Row]
     private let positions: [String: Int]
     private let shortRunway: [Bool]
@@ -73,7 +73,7 @@ struct TranscriptRowIndex {
 
     private static func reject(_ reason: String) {
         PerfBuild.count("native.indexRejected")
-        logger.error("Rejected transcript placement: \(reason, privacy: .public)")
+        logger.error("Rejected transcript placement: \(reason)")
     }
 
     struct Visibility {

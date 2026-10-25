@@ -119,10 +119,8 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
     private let deviceTools: DeviceToolConnection?
     private var deviceResultTasks: [UUID: Task<Void, Never>] = [:]
     let timeouts: Timeouts
-    private let logger = Logger(
-        subsystem: "RemoteCoder",
-        category: "CodexGateway"
-    )
+    private let logger = AppLogger(category: "CodexGateway")
+    private let debugLogger = Logger(subsystem: AppLogger.subsystem, category: "CodexGateway")
 
     private var session: URLSession = URLSession(configuration: AppStorageScope.current.networkConfiguration(.default))
     private var webSocket: URLSessionWebSocketTask?
@@ -292,7 +290,7 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
         let candidates = await routes?.connectionRoutes() ?? [.configured]
         do {
             let route = try await connectOverAvailableRoute(candidates, startedAt: started)
-            logger.notice("Gateway connection attempt trigger=\(trigger.rawValue, privacy: .public) step=\(step) routes=\(candidates.count) elapsedMs=\(started.duration(to: .now) / .milliseconds(1)) outcome=connected route=\(String(describing: route), privacy: .public)")
+            logger.notice("Gateway connection attempt trigger=\(trigger.rawValue) step=\(step) routes=\(candidates.count) elapsedMs=\(started.duration(to: .now) / .milliseconds(1)) outcome=connected route=\(String(describing: route))")
         } catch {
             if !Task.isCancelled { await disconnectTransport(reason: error) }
             let failure: any Error = if let error = error as? URLError {
@@ -310,7 +308,7 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
             guard !Task.isCancelled, !isRetired, !(error is CancellationError) else { throw failure }
             lastConnectionFailure = failure
             let delay = reconnect.failed(at: .now, restartingSince: restartObservedAt)
-            logger.notice("Gateway connection attempt trigger=\(trigger.rawValue, privacy: .public) step=\(step) routes=\(candidates.count) elapsedMs=\(started.duration(to: .now) / .milliseconds(1)) outcome=failed nextDelayMs=\(delay / .milliseconds(1)) error=\(failure.localizedDescription, privacy: .public)")
+            logger.notice("Gateway connection attempt trigger=\(trigger.rawValue) step=\(step) routes=\(candidates.count) elapsedMs=\(started.duration(to: .now) / .milliseconds(1)) outcome=failed nextDelayMs=\(delay / .milliseconds(1)) error=\(failure.localizedDescription)")
             throw failure
         }
     }
@@ -320,7 +318,7 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
         guard !isRetired else { throw ClientError.retired }
         try Task.checkCancellation()
         if let webSocket {
-            logger.notice("WebSocket stale (state=\(webSocket.state.rawValue, privacy: .public)), reconnecting")
+            logger.notice("WebSocket stale (state=\(webSocket.state.rawValue)), reconnecting")
             await disconnectTransport()
         }
 
@@ -361,7 +359,7 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
     private func expediteReconnect(_ trigger: ReconnectTrigger) {
         guard !isConnected, connectionInFlight == nil, reconnect.expedite(at: .now) else { return }
         expeditedBy = trigger
-        logger.notice("Gateway reconnect expedited trigger=\(trigger.rawValue, privacy: .public)")
+        logger.notice("Gateway reconnect expedited trigger=\(trigger.rawValue)")
         wakeReconnectWaiters()
     }
 
@@ -422,7 +420,7 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
         } else {
             throw ClientError.invalidURL
         }
-        logger.notice("Connecting to gateway at \(url.absoluteString, privacy: .public)")
+        logger.notice("Connecting to gateway at \(url.absoluteString)")
         task.maximumMessageSize = GatewayTransportLimits.maximumMessageSizeBytes
         task.resume()
         let readyTimeout = timeouts.request
@@ -508,7 +506,7 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
     }
 
     private func handOver(to socket: GatewaySocket, over route: GatewayRoute) async -> Bool {
-        logger.notice("Handing the gateway connection over to the \(String(describing: route.kind), privacy: .public) route")
+        logger.notice("Handing the gateway connection over to the \(String(describing: route.kind)) route")
         let lostGeneration = closeSocket(failing: ClientError.connectionClosed)
         let installation = Task(name: "Codex gateway handover") { [self] in try await install(socket, over: route) }
         connectionInFlight = installation
@@ -700,7 +698,7 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
 
     private func disconnectTransport(reason: Error? = nil) async {
         logger.info(
-            "ws disconnect start reason=\(String(describing: reason), privacy: .public) pending=\(self.pending.count) notificationStreams=\(self.hub.streamCount)"
+            "ws disconnect start reason=\(String(describing: reason)) pending=\(self.pending.count) notificationStreams=\(self.hub.streamCount)"
         )
         let lostGeneration = closeSocket(failing: reason ?? ClientError.connectionClosed)
         announceUnavailability()
@@ -827,7 +825,7 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
                 try await closeSubscription(handle, connection: connection)
                 return
             } catch {
-                logger.error("late observation cleanup failed attempt=\(attempt + 1) error=\(error.localizedDescription, privacy: .public)")
+                logger.error("late observation cleanup failed attempt=\(attempt + 1) error=\(error.localizedDescription)")
                 guard attempt < 2 else {
                     if connection == connectionGeneration { failedObservationCleanup[handle] = connection }
                     return
@@ -931,7 +929,7 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
             _ = try await callConnected(method: "device/tools/declare",
                 params: encodeToJSONValue(deviceTools?.host.declarations ?? DeviceToolsDeclare(tools: [])), timeout: timeouts.request)
         } catch {
-            logger.notice("Device tools declaration failed; continuing without device tools: \(error.localizedDescription, privacy: .public)")
+            logger.notice("Device tools declaration failed; continuing without device tools: \(error.localizedDescription)")
         }
         guard generation == connectionGeneration, webSocket != nil else { throw ClientError.connectionClosed }
         try await synchronizeContentSubscriptions()
@@ -957,7 +955,7 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
         }
         if let failure = contentSubscriptionFailure {
             if case .unsupported = contentSubscriptionState {} else { contentSubscriptionState = .failed(failure) }
-            logger.error("Conversation subscription intent refused: \(failure.localizedDescription, privacy: .public)")
+            logger.error("Conversation subscription intent refused: \(failure.localizedDescription)")
             return
         }
         if changed {
@@ -1029,7 +1027,7 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
                         if contentSubscriptionFailure == nil, threads == contentSubscriptionThreads {
                             contentSubscriptionState = .failed(failure)
                         }
-                        logger.error("Conversation subscription revision=\(revision) failed; history and replay remain available: \(failure.localizedDescription, privacy: .public)")
+                        logger.error("Conversation subscription revision=\(revision) failed; history and replay remain available: \(failure.localizedDescription)")
                     }
                 }
             }
@@ -1061,10 +1059,10 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
         do {
             let payload = try JSONEncoder().encode(Cancellation(params: .init(id: id)))
             webSocket.send(.string(String(decoding: payload, as: UTF8.self))) { [logger] error in
-                if let error { logger.notice("Request cancellation delivery failed: \(error.localizedDescription, privacy: .public)") }
+                if let error { logger.notice("Request cancellation delivery failed: \(error.localizedDescription)") }
             }
         } catch {
-            logger.error("Request cancellation encoding failed: \(error.localizedDescription, privacy: .public)")
+            logger.error("Request cancellation encoding failed: \(error.localizedDescription)")
         }
         return true
     }
@@ -1093,7 +1091,7 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
                 error: ClientError.requestTimedOut(method: method)
             )
             if didFail {
-                self.logger.info("request timeout isolated to id=\(id) method=\(method, privacy: .public)")
+                self.logger.info("request timeout isolated to id=\(id) method=\(method)")
             }
         }
     }
@@ -1137,7 +1135,7 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
                     }
                 } catch let failure as GatewayFrameDecoder.Failure {
                     let opcode = if case .string = message { 1 } else { 2 }
-                    logger.error("Gateway frame decode failed opcode=\(opcode) bytes=\(data.count) decode=\(failure.decodePath.rawValue, privacy: .public) kind=\(failure.kind, privacy: .public) path=\(failure.path, privacy: .public) prefix=\(failure.prefix, privacy: .public)")
+                    logger.error("Gateway frame decode failed opcode=\(opcode) bytes=\(data.count) decode=\(failure.decodePath.rawValue) kind=\(failure.kind) path=\(failure.path) prefix=\(failure.prefix)")
                     throw ClientError.invalidResponse
                 }
                 guard generation == connectionGeneration, self.webSocket === webSocket else { return }
@@ -1150,7 +1148,7 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
                 case .rawResponse(let id, let raw):
                     if let request = pending.remove(id: id) {
                         request.timeoutTask.cancel()
-                        logger.notice("rpc method=\(request.method, privacy: .public) bytes=\(raw.count) elapsed=\(String(describing: request.startedAt.duration(to: .now)), privacy: .public) outcome=success")
+                        logger.notice("rpc method=\(request.method) bytes=\(raw.count) elapsed=\(String(describing: request.startedAt.duration(to: .now))) outcome=success")
                         request.succeed(raw: raw, receipt: receipt)
                     } else if let handle = await GatewayFrameDecoder.subscriptionHandle(from: raw) {
                         scheduleLateObservationCleanup(handle: handle, connection: receipt.connection)
@@ -1167,12 +1165,12 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
                             request.timeoutTask.cancel()
                             // .debug: per-frame stream-path noise; the gateway
                             // journal records every rpc response durably.
-                            logger.debug("ws response matched id=\(id, privacy: .public) pendingRemaining=\(self.pending.count, privacy: .public)")
+                            debugLogger.debug("ws response matched id=\(id, privacy: .public) pendingRemaining=\(self.pending.count, privacy: .public)")
                             let elapsed = request.startedAt.duration(to: .now)
-                            logger.notice("rpc method=\(request.method, privacy: .public) bytes=\(data.count) elapsed=\(String(describing: elapsed), privacy: .public) outcome=success")
+                            logger.notice("rpc method=\(request.method) bytes=\(data.count) elapsed=\(String(describing: elapsed)) outcome=success")
                             request.succeed(response.result, raw: data, receipt: receipt)
                         } else {
-                            logger.notice("ws response arrived after request completion id=\(id, privacy: .public)")
+                            logger.notice("ws response arrived after request completion id=\(id)")
                             if let fields = response.result.objectValue, fields["status"]?.stringValue == "subscribed",
                                let handle = fields["subscriptionId"]?.stringValue {
                                 scheduleLateObservationCleanup(handle: handle, connection: receipt.connection)
@@ -1189,7 +1187,7 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
                         if let request = pending.remove(id: id) {
                             request.timeoutTask.cancel()
                             logger.error(
-                                "ws error matched id=\(id) code=\(response.error.code) message=\(response.error.message, privacy: .public)"
+                                "ws error matched id=\(id) code=\(response.error.code) message=\(response.error.message)"
                             )
                             let code = Int(response.error.code)
                             if let failure = GatewayRPCFailure(code: code, message: response.error.message, data: response.error.data) {
@@ -1198,7 +1196,7 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
                                 request.fail(ClientError.serverError(message: response.error.message, code: Int(response.error.code)))
                             }
                         } else if response.error.data?.objectValue?["kind"]?.stringValue != "requestCancelled" {
-                            logger.notice("ws error arrived after request completion id=\(id, privacy: .public)")
+                            logger.notice("ws error arrived after request completion id=\(id)")
                         }
                     }
                 case .notification(let notification, let server, let sequence):
@@ -1237,10 +1235,10 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
                     logger.notice("Gateway closed the connection for a planned restart")
                 } else if ns.domain == NSPOSIXErrorDomain, ns.code == 40 {
                     logger.error(
-                        "Gateway receive loop failed (message too long; max=\(self.webSocket?.maximumMessageSize ?? -1, privacy: .public)): \(String(describing: error), privacy: .public)"
+                        "Gateway receive loop failed (message too long; max=\(self.webSocket?.maximumMessageSize ?? -1)): \(String(describing: error))"
                     )
                 } else {
-                    logger.error("Gateway receive loop failed: \(String(describing: error), privacy: .public)")
+                    logger.error("Gateway receive loop failed: \(String(describing: error))")
                 }
                 if didInitialize {
                     await disconnect(reason: error)
@@ -1275,7 +1273,7 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
                 if let refusal { scheduleDeviceToolResult(refusal, generation: generation) }
             }
         } catch {
-            logger.error("Invalid device tool notification method=\(method, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            logger.error("Invalid device tool notification method=\(method): \(error.localizedDescription)")
         }
         return true
     }
@@ -1308,7 +1306,7 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
             return
         } catch {
             guard generation == connectionGeneration else { return }
-            logger.error("Device tool result delivery failed: \(error.localizedDescription, privacy: .public)")
+            logger.error("Device tool result delivery failed: \(error.localizedDescription)")
         }
     }
 
@@ -1316,7 +1314,7 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
         let method = note.method
         // .debug: fires per notification; the gateway journal holds every
         // notify frame with its payload.
-        logger.debug(
+        debugLogger.debug(
             "notification fanout method=\(method, privacy: .public) globalStreams=\(self.hub.streamCount)"
         )
         if hub.publish(note) {
@@ -1383,11 +1381,11 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
             )
             webSocket.send(.string(string)) { [logger] error in
                 if let error {
-                    logger.error("Failed to send request response: \(String(describing: error), privacy: .public)")
+                    logger.error("Failed to send request response: \(String(describing: error))")
                 }
             }
         } catch {
-            logger.error("Failed to encode request response: \(String(describing: error), privacy: .public)")
+            logger.error("Failed to encode request response: \(String(describing: error))")
         }
     }
 
@@ -1409,7 +1407,7 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
         // Deliberately .debug, which on iOS is memory-only and never reaches the host log
         // copy: this fires on every frame in both directions, and the gateway journal already
         // records each one server-side with its full payload.
-        logger.debug(
+        debugLogger.debug(
             "ws frame \(direction, privacy: .public) \(metadata, privacy: .public) bytes=\(payload.utf8.count)"
         )
     }

@@ -37,7 +37,7 @@ actor AppPerformanceDiagnostics {
     private let voiceReporter: StateReporter<StableMetadata, VolatileMetadata>
     private let energyReporter: StateReporter<StableMetadata, VolatileMetadata>
     private let history = Mutex(HistoryOperations())
-    private let logger = Logger(subsystem: "RemoteCoder", category: "PerformanceDiagnostics")
+    private let logger = AppLogger(category: "PerformanceDiagnostics")
     private var metricsConsumer: Task<Void, Never>?
     private var diagnosticsConsumer: Task<Void, Never>?
 
@@ -85,9 +85,9 @@ actor AppPerformanceDiagnostics {
             let stored = try await DiagnosticsOutbox.shared.enqueuePerformanceReport(
                 report, kind: kind, timeRange: timeRange
             )
-            logger.notice("MetricKit report received kind=\(kind.rawValue, privacy: .public) queued=\(stored, privacy: .public) coverageStart=\(timeRange.start, privacy: .public) coverageEnd=\(timeRange.end, privacy: .public)")
+            logger.notice("MetricKit report received kind=\(kind.rawValue) queued=\(stored) coverageStart=\(timeRange.start) coverageEnd=\(timeRange.end)")
         } catch {
-            logger.error("MetricKit report persistence failed kind=\(kind.rawValue, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            logger.error("MetricKit report persistence failed kind=\(kind.rawValue): \(error.localizedDescription)")
         }
     }
 

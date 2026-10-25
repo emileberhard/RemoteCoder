@@ -15,7 +15,7 @@ import Synchronization
 final class PerfHarness {
     static let shared = PerfHarness()
 
-    private let logger = Logger(subsystem: "RemoteCoder", category: "PerfHarness")
+    private let logger = AppLogger(category: "PerfHarness")
     private weak var workspace: ChatWorkspaceModel?
     private var bench: Task<Void, Never>?
     private var configurationError: String?
@@ -87,7 +87,7 @@ final class PerfHarness {
         }
         guard let flag = arguments.firstIndex(of: "-rcPerfBench"), arguments.indices.contains(flag + 1) else { return }
         let json = arguments[flag + 1]
-        logger.notice("perf bench plan received bytes=\(json.utf8.count, privacy: .public)")
+        logger.notice("perf bench plan received bytes=\(json.utf8.count)")
         bench = Task { await run(json, workspace: workspace) }
     }
 
@@ -129,7 +129,7 @@ final class PerfHarness {
         } catch {
             Self.emit(["error": "report not written: \(error)"])
         }
-        logger.notice("perf bench finished label=\(plan.label, privacy: .public)")
+        logger.notice("perf bench finished label=\(plan.label)")
         if plan.quit { NSApp.terminate(nil) }
     }
 
@@ -254,7 +254,7 @@ private final class BenchmarkWindowObservation: NSObject {
 
 @MainActor
 fileprivate final class ScrollBench {
-    private let logger = Logger(subsystem: "RemoteCoder", category: "PerfHarness")
+    private let logger = AppLogger(category: "PerfHarness")
     let plan: BenchPlan
     let workspace: ChatWorkspaceModel
     let output: URL
@@ -341,7 +341,7 @@ fileprivate final class ScrollBench {
         let opened = ContinuousClock.now
         try await open(address)
         let loadMs = opened.duration(to: .now) / .milliseconds(1)
-        logger.notice("perf bench transcript loaded ms=\(loadMs, privacy: .public)")
+        logger.notice("perf bench transcript loaded ms=\(loadMs)")
         let (window, scrollView) = try await transcript()
         place(window)
         try await activate(window)
@@ -393,7 +393,7 @@ fileprivate final class ScrollBench {
         defer {
             if let recorder {
                 do { _ = try await recorder.finish() }
-                catch { logger.error("benchmark capture cleanup failed: \(error.localizedDescription, privacy: .public)") }
+                catch { logger.error("benchmark capture cleanup failed: \(error.localizedDescription)") }
             }
         }
         try validity.validate()
@@ -643,7 +643,7 @@ fileprivate final class ScrollBench {
         defer {
             if let recorder {
                 do { _ = try await recorder.finish() }
-                catch { logger.error("benchmark capture cleanup failed: \(error.localizedDescription, privacy: .public)") }
+                catch { logger.error("benchmark capture cleanup failed: \(error.localizedDescription)") }
             }
         }
         try validity.validate()

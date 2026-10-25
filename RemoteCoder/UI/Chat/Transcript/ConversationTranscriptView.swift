@@ -25,7 +25,7 @@ struct ConversationTranscriptView: View {
             screen?.openFileURL(url, transition: nil, presentationScope: nil) ?? .discarded
         })
     }
-    private let logger = Logger(subsystem: "RemoteCoder", category: "ChatScreen")
+    private let logger = AppLogger(category: "ChatScreen")
 
     var body: some View {
         ZStack(alignment: .topLeading) {
@@ -60,7 +60,7 @@ struct ConversationTranscriptView: View {
         }
         #endif
         .onChange(of: transcriptIdentity, initial: true) { _, identity in
-            logger.notice("transcript presents identity=\(identity, privacy: .public)")
+            logger.notice("transcript presents identity=\(identity)")
         }
     }
 

@@ -88,7 +88,7 @@ final class HTMLVisualPreparation {
     #else
     private static let preparesInBackground = false
     #endif
-    private static let logger = Logger(subsystem: "RemoteCoder", category: "HTMLVisual")
+    private static let logger = AppLogger(category: "HTMLVisual")
 
     init(renderer: HTMLVisualRenderer) {
         self.renderer = renderer
@@ -106,7 +106,7 @@ final class HTMLVisualPreparation {
         layoutContext = context
         finish(&background)
         #if DEBUG
-        Self.logger.notice("html visual context width=\(context.width ?? -1, privacy: .public) theme=\(context.theme != nil, privacy: .public) scale=\(context.displayScale ?? -1, privacy: .public)")
+        Self.logger.notice("html visual context width=\(context.width ?? -1) theme=\(context.theme != nil) scale=\(context.displayScale ?? -1)")
         #endif
         planNear()
         stateChanged()
@@ -118,7 +118,7 @@ final class HTMLVisualPreparation {
         self.conservesEnergy = conservesEnergy
         if !active { interacting = false }
         #if DEBUG
-        Self.logger.notice("html visual preparation active=\(active, privacy: .public) conserving=\(conservesEnergy, privacy: .public) uptime=\(ProcessInfo.processInfo.systemUptime, privacy: .public)")
+        Self.logger.notice("html visual preparation active=\(active) conserving=\(conservesEnergy) uptime=\(ProcessInfo.processInfo.systemUptime)")
         #endif
         stateChanged()
     }
@@ -397,7 +397,7 @@ final class HTMLVisualPreparation {
         await run.value
         if surface.instance === instance { surface.instance = nil }
         #if DEBUG
-        Self.logger.notice("html visual prepared digest=\(key.digest.prefix(8), privacy: .public) width=\(key.width, privacy: .public) stored=\(self.renderer.hasStoredSnapshot(for: key), privacy: .public) height=\(self.renderer.height(for: key) ?? -1, privacy: .public) priority=\(self.currentJob.map { String(describing: $0.priority) } ?? "none", privacy: .public) cancelled=\(Task.isCancelled, privacy: .public) ms=\(Int((ContinuousClock.now - started) / .milliseconds(1)), privacy: .public) uptime=\(ProcessInfo.processInfo.systemUptime, privacy: .public)")
+        Self.logger.notice("html visual prepared digest=\(key.digest.prefix(8)) width=\(key.width) stored=\(self.renderer.hasStoredSnapshot(for: key)) height=\(self.renderer.height(for: key) ?? -1) priority=\(self.currentJob.map { String(describing: $0.priority) } ?? "none") cancelled=\(Task.isCancelled) ms=\(Int((ContinuousClock.now - started) / .milliseconds(1))) uptime=\(ProcessInfo.processInfo.systemUptime)")
         #endif
         return instance.failure != nil
     }

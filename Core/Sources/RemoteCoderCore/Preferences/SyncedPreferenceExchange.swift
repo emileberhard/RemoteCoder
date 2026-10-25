@@ -14,7 +14,7 @@ final class SyncedPreferenceExchange {
     private var task: Task<Void, Never>?
     private var requested = false
     private var isRetired = false
-    private let logger = Logger(subsystem: "RemoteCoder", category: "PreferenceSync")
+    private let logger = AppLogger(category: "PreferenceSync")
 
     init(gateway: any SyncedPreferenceRemote, store: SyncedPreferenceStore, hostLabel: String) {
         self.gateway = gateway
@@ -61,7 +61,7 @@ final class SyncedPreferenceExchange {
                 guard !isRetired else { return }
                 store.merge(updated)
             } catch {
-                logger.notice("Preference sync failed host=\(self.hostLabel, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                logger.notice("Preference sync failed host=\(self.hostLabel): \(error.localizedDescription)")
                 if !requested { return }
             }
         }

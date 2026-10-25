@@ -111,7 +111,7 @@ extension ServerNotification {
 }
 
 extension ServerNotification {
-    private static let logger = Logger(subsystem: "RemoteCoder", category: "ServerNotification")
+    private static let logger = AppLogger(category: "ServerNotification")
 
     private struct Failure: Error {
         let reason: String
@@ -332,7 +332,7 @@ extension ServerNotification {
     @discardableResult
     private static func report(_ error: Error, method: String) -> String {
         let reason = describe(error)
-        logger.error("malformed notification method=\(method, privacy: .public) reason=\(reason, privacy: .public)")
+        logger.error("malformed notification method=\(method) reason=\(reason)")
         return reason
     }
 

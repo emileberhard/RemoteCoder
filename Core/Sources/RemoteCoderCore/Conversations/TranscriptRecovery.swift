@@ -26,7 +26,7 @@ final class TranscriptRecovery {
     private static let foregroundRefreshInterval: TimeInterval = 2
 
     private weak var source: (any TranscriptRecoverySource)?
-    private let logger = Logger(subsystem: "RemoteCoder", category: "TranscriptRecovery")
+    private let logger = AppLogger(category: "TranscriptRecovery")
     private var marks: [String: String] = [:]
     private var recovering: Set<String> = []
     private var reconciliation: Reconciliation?
@@ -39,7 +39,7 @@ final class TranscriptRecovery {
     var markCount: Int { marks.count }
 
     func mark(sessionID: String, turnID: String) {
-        logger.notice("markTranscriptRefreshNeeded session=\(sessionID, privacy: .public) turn=\(turnID, privacy: .public)")
+        logger.notice("markTranscriptRefreshNeeded session=\(sessionID) turn=\(turnID)")
         marks[sessionID] = GatewayNotificationRouting.normalizeTurnID(turnID)
     }
 
@@ -76,7 +76,7 @@ final class TranscriptRecovery {
         do {
             try await source.applyInputDeliveryEvidence(sessionID: sessionID)
         } catch {
-            logger.notice("Input delivery reconciliation failed: \(error.localizedDescription, privacy: .public)")
+            logger.notice("Input delivery reconciliation failed: \(error.localizedDescription)")
         }
     }
 
@@ -98,7 +98,7 @@ final class TranscriptRecovery {
                         try await source.applyReconciledHistory(sessionID: sessionID, source: reason)
                         succeeded = true
                     } catch {
-                        self.logger.notice("Transcript reconciliation failed source=\(reason, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                        self.logger.notice("Transcript reconciliation failed source=\(reason): \(error.localizedDescription)")
                         succeeded = false
                     }
                     if case .running(let current, _) = self.reconciliation, current == key {

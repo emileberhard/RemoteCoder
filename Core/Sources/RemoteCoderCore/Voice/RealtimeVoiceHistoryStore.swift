@@ -12,7 +12,7 @@ actor RealtimeVoiceHistoryStore {
     private static let saveDelay: Duration = .seconds(5)
 
     private let fileURL: URL
-    private let logger = Logger(subsystem: "RemoteCoder", category: "RealtimeVoiceHistoryStore")
+    private let logger = AppLogger(category: "RealtimeVoiceHistoryStore")
     private var entriesByThreadID: [String: [Entry]] = [:]
     private var hasLoaded = false
     private var loadFailed = false
@@ -93,7 +93,7 @@ actor RealtimeVoiceHistoryStore {
             return
         } catch {
             loadFailed = true
-            logger.error("Realtime voice history unreadable; leaving the file untouched: \(error.localizedDescription, privacy: .public)")
+            logger.error("Realtime voice history unreadable; leaving the file untouched: \(error.localizedDescription)")
             return
         }
         do {
@@ -107,14 +107,14 @@ actor RealtimeVoiceHistoryStore {
             return
         } catch {
             loadFailed = true
-            logger.error("Realtime voice history undecodable; setting it aside: \(error.localizedDescription, privacy: .public)")
+            logger.error("Realtime voice history undecodable; setting it aside: \(error.localizedDescription)")
         }
         do {
             try UndecodableStoreRecovery.setAside(fileURL)
             hasLoaded = true
             loadFailed = false
         } catch {
-            logger.error("Failed to set aside undecodable realtime voice history: \(error.localizedDescription, privacy: .public)")
+            logger.error("Failed to set aside undecodable realtime voice history: \(error.localizedDescription)")
         }
     }
 
@@ -129,7 +129,7 @@ actor RealtimeVoiceHistoryStore {
             hasUnsavedChanges = false
             return true
         } catch {
-            logger.error("Failed to persist realtime voice history: \(error.localizedDescription, privacy: .public)")
+            logger.error("Failed to persist realtime voice history: \(error.localizedDescription)")
             return false
         }
     }

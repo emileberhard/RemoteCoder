@@ -26,7 +26,7 @@ struct HTMLVisualInline: View {
     private static let keepsLiveSurfaceDuringMotion = ProcessInfo.processInfo.arguments.contains("-html-visual-fixture-live-during-motion")
     private static let probesBlank = ProcessInfo.processInfo.arguments.contains("-html-visual-fixture-probe")
     private static let keepsBaseRaster = ProcessInfo.processInfo.arguments.contains("-html-visual-fixture-base-raster")
-    private static let logger = Logger(subsystem: "RemoteCoder", category: "HTMLVisual")
+    private static let logger = AppLogger(category: "HTMLVisual")
     #else
     private static let keepsLiveSurfaceDuringMotion = false
     private static let keepsBaseRaster = false
@@ -272,7 +272,7 @@ struct HTMLVisualInline: View {
         .onChange(of: rowVisibility?.isVisible == true) { _, visible in
             guard visible, let reference else { return }
             let ready = currentSnapshot != nil ? "decoded" : (instance.page != nil && instance.measured ? "live" : "none")
-            Self.logger.notice("html visual visible ready=\(ready, privacy: .public) digest=\(reference.digest.prefix(8), privacy: .public) scrolling=\(rowVisibility?.isScrolling == true, privacy: .public)")
+            Self.logger.notice("html visual visible ready=\(ready) digest=\(reference.digest.prefix(8)) scrolling=\(rowVisibility?.isScrolling == true)")
         }
         #endif
         .onChange(of: canCapture, initial: true) { _, value in source?.renderer.setCaptureAllowed(instance, value) }

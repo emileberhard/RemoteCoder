@@ -15,7 +15,7 @@ final class SyncedPreferenceStore {
     private var replica: PreferenceReplica
     private var reconcileScheduled = false
     private var defaultsObservation: NotificationCenter.ObservationToken?
-    private let logger = Logger(subsystem: "RemoteCoder", category: "PreferenceSync")
+    private let logger = AppLogger(category: "PreferenceSync")
 
     var hasKeys: Bool { !keys.isEmpty }
 
@@ -28,7 +28,7 @@ final class SyncedPreferenceStore {
             do {
                 replica = try JSONDecoder().decode(PreferenceReplica.self, from: data)
             } catch {
-                logger.error("Unreadable preference sync state; host values win: \(error.localizedDescription, privacy: .public)")
+                logger.error("Unreadable preference sync state; host values win: \(error.localizedDescription)")
             }
         }
         for key in keys {
@@ -46,11 +46,11 @@ final class SyncedPreferenceStore {
         let received = document.entries.filter { key, entry in
             guard keys.contains(key) else { return false }
             guard PreferenceEntry.syncedVersions.contains(entry.updatedAt) else {
-                logger.error("Ignored preference \(key, privacy: .public): version \(entry.updatedAt, privacy: .public) is out of range")
+                logger.error("Ignored preference \(key): version \(entry.updatedAt) is out of range")
                 return false
             }
             guard entry.value == .null || entry.value.propertyList != nil else {
-                logger.error("Ignored preference \(key, privacy: .public): the value cannot be stored in user defaults")
+                logger.error("Ignored preference \(key): the value cannot be stored in user defaults")
                 return false
             }
             return true
@@ -71,7 +71,7 @@ final class SyncedPreferenceStore {
         return replica.newer(than: document.entries).filter { key, entry in
             guard keys.contains(key) else { return false }
             guard let encoded = try? JSONEncoder().encode(entry.value), encoded.count <= Self.valueByteLimit else {
-                logger.error("Preference \(key, privacy: .public) stays on this device: its value exceeds \(Self.valueByteLimit, privacy: .public) bytes")
+                logger.error("Preference \(key) stays on this device: its value exceeds \(Self.valueByteLimit) bytes")
                 return false
             }
             return true
@@ -105,7 +105,7 @@ final class SyncedPreferenceStore {
     private func currentValue(of key: String) -> JSONValue? {
         guard let object = defaults.object(forKey: key) else { return .null }
         guard let value = JSONValue(propertyList: object) else {
-            logger.error("Preference \(key, privacy: .public) holds a value that cannot sync")
+            logger.error("Preference \(key) holds a value that cannot sync")
             return nil
         }
         return value
@@ -115,7 +115,7 @@ final class SyncedPreferenceStore {
         do {
             defaults.set(try JSONEncoder().encode(replica), forKey: Self.stateKey)
         } catch {
-            logger.error("Preference sync state write failed: \(error.localizedDescription, privacy: .public)")
+            logger.error("Preference sync state write failed: \(error.localizedDescription)")
         }
     }
 }

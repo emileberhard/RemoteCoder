@@ -8,7 +8,7 @@ import notify
 final class LiveNavigationCoordinator: NSObject {
     static let shared = LiveNavigationCoordinator()
 
-    private let logger = Logger(subsystem: "RemoteCoder", category: "LiveNavigation")
+    private let logger = AppLogger(category: "LiveNavigation")
     private var serviceSession: CLServiceSession?
     private var backgroundSession: CLBackgroundActivitySession?
     private var rawLocationTask: Task<Void, Never>?
@@ -162,7 +162,7 @@ final class LiveNavigationCoordinator: NSObject {
                 }
             }
         }
-        logger.notice("Started live-navigation session \(command.sessionId, privacy: .public)")
+        logger.notice("Started live-navigation session \(command.sessionId)")
     }
 
     func stop(clearCommand: Bool = true) {

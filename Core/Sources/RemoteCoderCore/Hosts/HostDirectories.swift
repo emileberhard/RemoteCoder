@@ -23,7 +23,7 @@ final class HostDirectories {
     @ObservationIgnored private var favoritesReplica = DirectoryFavoritesReplica()
     @ObservationIgnored private var favoritesSync: Task<Void, Never>?
     @ObservationIgnored private var favoritesReadRequested = false
-    @ObservationIgnored private let logger = Logger(subsystem: "RemoteCoder", category: "HostDirectories")
+    @ObservationIgnored private let logger = AppLogger(category: "HostDirectories")
     @ObservationIgnored private var refreshLoopTask: Task<Void, Never>?
     @ObservationIgnored private var activeRefreshTask: Task<Void, Never>?
     @ObservationIgnored private var informationGeneration = UUID()
@@ -68,7 +68,7 @@ final class HostDirectories {
         var admitted = false
         updateFavorites { admitted = $0.record(change) }
         guard admitted else {
-            logger.error("Favorite change refused host=\(self.hostLabel, privacy: .public): invalid path or \(DirectoryFavoritesReplica.changeLimit, privacy: .public) changes already await the host")
+            logger.error("Favorite change refused host=\(self.hostLabel): invalid path or \(DirectoryFavoritesReplica.changeLimit) changes already await the host")
             return
         }
         startFavoritesSync()
@@ -108,7 +108,7 @@ final class HostDirectories {
             return true
         } catch {
             favoritesReadRequested = true
-            logger.notice("Favorites read failed host=\(self.hostLabel, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            logger.notice("Favorites read failed host=\(self.hostLabel): \(error.localizedDescription)")
             return false
         }
     }
@@ -120,12 +120,12 @@ final class HostDirectories {
             updateFavorites { $0.acknowledge(batch.count, current: current) }
             return true
         } catch GatewayClient.ClientError.serverError(let message, let code?) where code == Self.invalidParamsCode {
-            logger.error("Host refused favorite changes host=\(self.hostLabel, privacy: .public): \(message, privacy: .public)")
+            logger.error("Host refused favorite changes host=\(self.hostLabel): \(message)")
             updateFavorites { $0.reject(batch.count) }
             favoritesReadRequested = true
             return true
         } catch {
-            logger.notice("Favorite changes kept for the next connection host=\(self.hostLabel, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            logger.notice("Favorite changes kept for the next connection host=\(self.hostLabel): \(error.localizedDescription)")
             return false
         }
     }
@@ -137,7 +137,7 @@ final class HostDirectories {
             do {
                 favoritesReplica = try JSONDecoder().decode(DirectoryFavoritesReplica.self, from: data)
             } catch {
-                logger.error("Unreadable favorites cache host=\(self.hostLabel, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                logger.error("Unreadable favorites cache host=\(self.hostLabel): \(error.localizedDescription)")
             }
         } else if let legacy = defaults.stringArray(forKey: legacyFavoritesKey) {
             favoritesReplica = DirectoryFavoritesReplica(legacyPaths: legacy)
@@ -159,7 +159,7 @@ final class HostDirectories {
         do {
             defaults.set(try JSONEncoder().encode(favoritesReplica), forKey: favoritesKey)
         } catch {
-            logger.error("Favorites cache write failed host=\(self.hostLabel, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            logger.error("Favorites cache write failed host=\(self.hostLabel): \(error.localizedDescription)")
         }
     }
 
@@ -247,7 +247,7 @@ final class HostDirectories {
                     lastKnownHomePath = result.homeDirectory
                     HostPreferences.setRemoteHomePath(result.homeDirectory, hostID: hostID, defaults: defaults)
                 }
-                logger.notice("Resolved remote home for \(self.hostLabel, privacy: .public): \(result.homeDirectory, privacy: .public)")
+                logger.notice("Resolved remote home for \(self.hostLabel): \(result.homeDirectory)")
                 return result.homeDirectory
             } catch {
                 if generation == informationGeneration, !isRetired { homeResolutionTask = nil }
@@ -313,12 +313,12 @@ final class HostDirectories {
                 homeChildren = listing
             }
             logger.notice(
-                "Prefetched \(listing.childNames.count, privacy: .public) home subdirectories for \(self.hostLabel, privacy: .public) (reason=\(reason, privacy: .public))"
+                "Prefetched \(listing.childNames.count) home subdirectories for \(self.hostLabel) (reason=\(reason))"
             )
         } catch {
             guard isRetired == false else { return }
             logger.error(
-                "Prefetch refresh failed host=\(self.hostLabel, privacy: .public) reason=\(reason, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
+                "Prefetch refresh failed host=\(self.hostLabel) reason=\(reason) error=\(error.localizedDescription)"
             )
         }
     }

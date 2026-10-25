@@ -15,7 +15,7 @@ final class CodexModelCatalogService {
     @ObservationIgnored private let storage: CodexModelCatalogStorage
     @ObservationIgnored private let loadPage: PageLoader
     @ObservationIgnored private var hasRestoredCache = false
-    @ObservationIgnored private let logger = Logger(subsystem: "RemoteCoder", category: "CodexModelCatalog")
+    @ObservationIgnored private let logger = AppLogger(category: "CodexModelCatalog")
 
     private static let maxPages = 20
 
@@ -64,7 +64,7 @@ final class CodexModelCatalogService {
             return
         } catch {
             refreshError = error.localizedDescription
-            logger.error("Codex model list refresh failed: \(error.localizedDescription, privacy: .public)")
+            logger.error("Codex model list refresh failed: \(error.localizedDescription)")
         }
     }
 
@@ -90,7 +90,7 @@ private struct CodexModelCatalogSnapshot: Codable, Sendable {
 
 private actor CodexModelCatalogStorage {
     private let fileURL: URL
-    private let logger = Logger(subsystem: "RemoteCoder", category: "CodexModelCatalog")
+    private let logger = AppLogger(category: "CodexModelCatalog")
 
     init(fileURL: URL) {
         self.fileURL = fileURL
@@ -106,7 +106,7 @@ private actor CodexModelCatalogStorage {
             try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
             try JSONEncoder().encode(snapshot).write(to: fileURL, options: .atomic)
         } catch {
-            logger.error("Could not persist the Codex model list: \(error.localizedDescription, privacy: .public)")
+            logger.error("Could not persist the Codex model list: \(error.localizedDescription)")
         }
     }
 
@@ -117,7 +117,7 @@ private actor CodexModelCatalogStorage {
             let snapshot = try JSONDecoder().decode(CodexModelCatalogSnapshot.self, from: Data(contentsOf: fileURL))
             return prepare(snapshot)
         } catch {
-            logger.error("Ignoring an unreadable Codex model list: \(error.localizedDescription, privacy: .public)")
+            logger.error("Ignoring an unreadable Codex model list: \(error.localizedDescription)")
             return nil
         }
     }

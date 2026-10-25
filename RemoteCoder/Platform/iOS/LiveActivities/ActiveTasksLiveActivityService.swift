@@ -8,10 +8,7 @@ import OSLog
 /// activity and registers its push token; the host's gateway authors its
 /// content and ends it, so it stays correct while the app is suspended.
 actor ActiveTasksLiveActivityService {
-    private let logger = Logger(
-        subsystem: "RemoteCoder",
-        category: "ActiveTasksLiveActivity"
-    )
+    private let logger = AppLogger(category: "ActiveTasksLiveActivity")
 
     private let hostID: UUID
     private let hostName: String
@@ -67,9 +64,9 @@ actor ActiveTasksLiveActivityService {
                 pushType: .token
             )
             ensurePushTokenObserver(activity: activity, onPushTokenUpdate: onPushTokenUpdate)
-            logger.notice("Started active-tasks live activity id=\(activity.id, privacy: .public) count=\(state.activeTaskCount, privacy: .public)")
+            logger.notice("Started active-tasks live activity id=\(activity.id) count=\(state.activeTaskCount)")
         } catch {
-            logger.error("Failed to start active-tasks live activity: \(String(describing: error), privacy: .public)")
+            logger.error("Failed to start active-tasks live activity: \(String(describing: error))")
         }
     }
 
@@ -106,7 +103,7 @@ actor ActiveTasksLiveActivityService {
         for activity in legacy {
             await activity.end(nil, dismissalPolicy: .immediate)
         }
-        logger.notice("Retired \(legacy.count, privacy: .public) pre-multi-host live activities")
+        logger.notice("Retired \(legacy.count) pre-multi-host live activities")
     }
 
     private func endActivities(onEnded: (@Sendable () async -> Void)?) async {
@@ -126,7 +123,7 @@ actor ActiveTasksLiveActivityService {
             await onEnded()
         }
         logger.notice(
-            "Ended \(activities.count, privacy: .public) active-tasks live activities for \(self.hostName, privacy: .public)"
+            "Ended \(activities.count) active-tasks live activities for \(self.hostName)"
         )
     }
 

@@ -74,7 +74,7 @@ final class ConversationList {
         let interval: TimeInterval
     }
     @ObservationIgnored private var headerRecoveryFailures: [String: HeaderRecoveryFailure] = [:]
-    @ObservationIgnored private let logger = Logger(subsystem: "RemoteCoder", category: "ConversationHistory")
+    @ObservationIgnored private let logger = AppLogger(category: "ConversationHistory")
     private let service: GatewayHistoryService
     private let marksRemote: any ConversationMarksRemote
     private let legacyPins: ConversationPinStore
@@ -350,7 +350,7 @@ final class ConversationList {
             persistMarks()
         } catch {
             marksReadFailed = true
-            logger.error("conversation marks read failed: \(error.localizedDescription, privacy: .public)")
+            logger.error("conversation marks read failed: \(error.localizedDescription)")
         }
     }
 
@@ -362,7 +362,7 @@ final class ConversationList {
                 marksReplica.acknowledge(batch, delta: delta)
                 persistMarks()
             } catch {
-                logger.notice("conversation marks kept for the next connection: \(error.localizedDescription, privacy: .public)")
+                logger.notice("conversation marks kept for the next connection: \(error.localizedDescription)")
                 return
             }
         }
@@ -389,7 +389,7 @@ final class ConversationList {
                     projects[identity.cwd] = identity
                 }
             } catch {
-                logger.notice("project identities unavailable: \(error.localizedDescription, privacy: .public)")
+                logger.notice("project identities unavailable: \(error.localizedDescription)")
                 return
             }
         }
@@ -402,12 +402,12 @@ final class ConversationList {
         if let activeRefreshRequest {
             if activeRequestSatisfies(request: request, active: activeRefreshRequest) {
                 logger.notice(
-                    "refresh ignored; active request already satisfies it (reason=\(reason, privacy: .public), limit=\(limit, privacy: .public))"
+                    "refresh ignored; active request already satisfies it (reason=\(reason), limit=\(limit))"
                 )
                 return
             }
             queuePendingRefresh(request)
-            logger.info("refresh queued while loading (reason=\(reason, privacy: .public), limit=\(limit, privacy: .public))")
+            logger.info("refresh queued while loading (reason=\(reason), limit=\(limit))")
             return
         }
 
@@ -420,7 +420,7 @@ final class ConversationList {
         activeRefreshRequest = request
         if errorMessage != nil { errorMessage = nil }
         refreshDeferred = false
-        logger.info("refresh start (reason=\(reason, privacy: .public), limit=\(limit, privacy: .public), knownThreads=\(self.threads.count, privacy: .public))")
+        logger.info("refresh start (reason=\(reason), limit=\(limit), knownThreads=\(self.threads.count))")
 
         var persisted: ConversationHeaderStore.Snapshot?
         do {
@@ -487,21 +487,21 @@ final class ConversationList {
             let failure = result.failures.isEmpty ? nil : result.failures.joined(separator: "\n")
             if errorMessage != failure { errorMessage = failure }
             for warning in Set(result.agentWarnings + retained.warnings) {
-                logger.notice("Agent coverage: \(warning, privacy: .public)")
+                logger.notice("Agent coverage: \(warning)")
             }
-            logger.info("refresh success (reason=\(reason, privacy: .public), requested=\(limit, privacy: .public), fetched=\(result.threads.count, privacy: .public), merged=\(merged.count, privacy: .public))")
+            logger.info("refresh success (reason=\(reason), requested=\(limit), fetched=\(result.threads.count), merged=\(merged.count))")
             persisted = nextHeaderSnapshot()
         } catch is CancellationError {
             // SwiftUI cancels refresh tasks opportunistically (e.g. gesture conflicts).
             // Treat cancellations as a no-op rather than surfacing them as user-facing errors.
-            logger.info("refresh cancelled (reason=\(reason, privacy: .public), limit=\(limit, privacy: .public))")
+            logger.info("refresh cancelled (reason=\(reason), limit=\(limit))")
         } catch where GatewayHistoryService.defersRead(error) {
             refreshDeferred = true
-            logger.notice("refresh deferred until the gateway and Codex are ready (reason=\(reason, privacy: .public))")
+            logger.notice("refresh deferred until the gateway and Codex are ready (reason=\(reason))")
         } catch {
             guard !headerReadsRetired else { return }
             errorMessage = error.localizedDescription
-            logger.error("refresh failed (reason=\(reason, privacy: .public), limit=\(limit, privacy: .public)): \(error.localizedDescription, privacy: .public)")
+            logger.error("refresh failed (reason=\(reason), limit=\(limit)): \(error.localizedDescription)")
         }
         if showsLoading { isLoading = false }
         activeRefreshRequest = nil
@@ -513,7 +513,7 @@ final class ConversationList {
 
         if let pending = pendingRefreshRequest {
             pendingRefreshRequest = nil
-            logger.info("running queued refresh (reason=\(pending.reason, privacy: .public), limit=\(pending.limit, privacy: .public))")
+            logger.info("running queued refresh (reason=\(pending.reason), limit=\(pending.limit))")
             await refresh(limit: pending.limit, reason: pending.reason, intent: pending.intent)
         }
     }
@@ -564,7 +564,7 @@ final class ConversationList {
         applyWindow(ConversationHeaderStore.merging(current: [], fetched: snapshot.threads), promoting: [])
         lastSuccessfulRefreshAt = snapshot.lastSuccessfulRefreshAt
         hasLoadedPersistedThreads = true
-        logger.info("loaded persisted threads (count=\(self.threads.count, privacy: .public), hasLastRefresh=\(self.lastSuccessfulRefreshAt != nil, privacy: .public))")
+        logger.info("loaded persisted threads (count=\(self.threads.count), hasLastRefresh=\(self.lastSuccessfulRefreshAt != nil))")
     }
 
     func knownThread(id: String) async -> ConversationHeader? {
@@ -647,7 +647,7 @@ final class ConversationList {
             if query.isEmpty { continuation = advanced; olderProvider = next }
             else { searchContinuation = advanced; searchProvider = next }
             errorMessage = result.unavailable.isEmpty ? nil : "Some completion times couldn't be loaded; keeping their last known values."
-            for warning in result.warnings { logger.notice("Agent coverage: \(warning, privacy: .public)") }
+            for warning in result.warnings { logger.notice("Agent coverage: \(warning)") }
             await threadStore.save(snapshot: nextHeaderSnapshot())
             guard !headerReadsRetired, generation == listReadGeneration, !Task.isCancelled else { return }
             await resolveProjects()

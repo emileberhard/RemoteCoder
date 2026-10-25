@@ -6,7 +6,7 @@ import UserNotifications
 
 final class RemoteCoderAppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
     let app = RemoteCoderAppModel.live()
-    private static let logger = Logger(subsystem: "RemoteCoder", category: "AppDelegate")
+    private static let logger = AppLogger(category: "AppDelegate")
 
     func application(
         _ application: UIApplication,
@@ -60,7 +60,7 @@ final class RemoteCoderAppDelegate: NSObject, UIApplicationDelegate, UNUserNotif
             containsPayload: userInfo[TaskCompletionNotificationConstants.userInfoPayloadKey] != nil
         )
         if let field = delivery.decodingFailure {
-            Self.logger.error("notification payload unreadable field=\(field, privacy: .public)")
+            Self.logger.error("notification payload unreadable field=\(field)")
         }
         // Re-read UIKit after decoding: an inactive callback uses the system
         // surface; it must never consume a banner invisible during the transition.
@@ -110,7 +110,7 @@ final class RemoteCoderAppDelegate: NSObject, UIApplicationDelegate, UNUserNotif
         _ application: UIApplication,
         didFailToRegisterForRemoteNotificationsWithError error: Error
     ) {
-        Self.logger.error("Failed to register for remote notifications: \(error.localizedDescription, privacy: .public)")
+        Self.logger.error("Failed to register for remote notifications: \(error.localizedDescription)")
     }
 }
 

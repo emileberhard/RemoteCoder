@@ -329,7 +329,7 @@ final class HostFileOpener {
     private(set) var lastDocument: OpenedFile?
     @ObservationIgnored private let access: any HostFileAccess
     @ObservationIgnored private let canPreview: @MainActor (URL) -> Bool
-    @ObservationIgnored private let logger = Logger(subsystem: "RemoteCoder", category: "HostFiles")
+    @ObservationIgnored private let logger = AppLogger(category: "HostFiles")
     @ObservationIgnored private let reader = HostFileReader(render: HostFileReader.renderMarkdown)
     @ObservationIgnored private var generation = UUID()
     @ObservationIgnored private(set) var operation: Task<Void, Never>?
@@ -369,7 +369,7 @@ final class HostFileOpener {
             }
             request(reference, origin: origin, transition: transition)
         } catch {
-            logger.notice("file link rejected reason=\(error.diagnosticReason, privacy: .public)")
+            logger.notice("file link rejected reason=\(error.diagnosticReason)")
             let failure = HostFileFailure(reason: .invalidLink, reference: nil, message: error.localizedDescription, cached: nil)
             if dismissForNextAction(.failure(failure, origin)) { return .handled }
             invalidate()
@@ -409,7 +409,7 @@ final class HostFileOpener {
     }
 
     func presentationDismissed() {
-        if let shown = quickLook ?? lastDocument { logger.notice("file presentation dismissed file=\(Self.tag(shown.id), privacy: .public)") }
+        if let shown = quickLook ?? lastDocument { logger.notice("file presentation dismissed file=\(Self.tag(shown.id))") }
         quickLook = nil
         awaitsDismissal = false
         let next = pendingAction
@@ -433,7 +433,7 @@ final class HostFileOpener {
 
     func cancelDownload() {
         if let loadingReference {
-            logger.notice("file open cancelled operation=\(Self.tag(self.generation), privacy: .public) type=\(loadingReference.diagnosticType, privacy: .public)")
+            logger.notice("file open cancelled operation=\(Self.tag(self.generation)) type=\(loadingReference.diagnosticType)")
         }
         generation = UUID()
         pendingAction = nil
@@ -465,7 +465,7 @@ final class HostFileOpener {
 
     func quickLookUnavailable(_ id: UUID) {
         guard quickLook?.id == id else { return }
-        logger.notice("quick look unavailable file=\(Self.tag(id), privacy: .public)")
+        logger.notice("quick look unavailable file=\(Self.tag(id))")
         quickLook = nil
         awaitsDismissal = false
     }
@@ -490,14 +490,14 @@ final class HostFileOpener {
     private func start(_ reference: HostFileReference, origin: HostFileOrigin, transition: HostFileTransition?) {
         let token = begin(origin: origin, name: (reference.path as NSString).lastPathComponent)
         loadingReference = reference
-        logger.notice("file open requested operation=\(Self.tag(token), privacy: .public) type=\(reference.diagnosticType, privacy: .public) source=\(transition == nil ? "link" : "image", privacy: .public)")
+        logger.notice("file open requested operation=\(Self.tag(token)) type=\(reference.diagnosticType) source=\(transition == nil ? "link" : "image")")
         pendingWork = .download(reference, token, transition)
         runPendingWork()
     }
 
     private func start(_ embedded: EmbeddedFileRequest, origin: HostFileOrigin, frame: HostFileTransition.Frame?) {
         let token = begin(origin: origin, name: embedded.suggestedName.isEmpty ? "File" : embedded.suggestedName)
-        logger.notice("file open requested operation=\(Self.tag(token), privacy: .public) source=embedded length=\(embedded.dataURL.utf16.count, privacy: .public)")
+        logger.notice("file open requested operation=\(Self.tag(token)) source=embedded length=\(embedded.dataURL.utf16.count)")
         pendingWork = .embedded(embedded, token, frame)
         runPendingWork()
     }
@@ -562,12 +562,12 @@ final class HostFileOpener {
             }
         } catch {
             if !(error is CancellationError) {
-                logger.error("file open failed operation=\(Self.tag(token), privacy: .public) elapsed=\(started.elapsedMilliseconds, privacy: .public)ms reason=\(error.diagnosticReason, privacy: .public)")
+                logger.error("file open failed operation=\(Self.tag(token)) elapsed=\(started.elapsedMilliseconds)ms reason=\(error.diagnosticReason)")
             }
             await showTransferFailure(error, for: reference, token: token)
             return
         }
-        logger.notice("file open fetched operation=\(Self.tag(token), privacy: .public) bytes=\(lease.metadata.bytes, privacy: .public) elapsed=\(started.elapsedMilliseconds, privacy: .public)ms")
+        logger.notice("file open fetched operation=\(Self.tag(token)) bytes=\(lease.metadata.bytes) elapsed=\(started.elapsedMilliseconds)ms")
         guard generation == token, !Task.isCancelled else {
             await access.release(lease)
             return
@@ -598,7 +598,7 @@ final class HostFileOpener {
             prepared = try await Self.prepare(embedded, reader: reader, transitionImage: frame != nil)
         } catch {
             guard generation == token, !Task.isCancelled else { return }
-            logger.error("file open failed operation=\(Self.tag(token), privacy: .public) elapsed=\(started.elapsedMilliseconds, privacy: .public)ms reason=\(error.diagnosticReason, privacy: .public)")
+            logger.error("file open failed operation=\(Self.tag(token)) elapsed=\(started.elapsedMilliseconds)ms reason=\(error.diagnosticReason)")
             finishLoading()
             sheet = HostFileSheet(content: .failure(HostFileFailure(reason: .preparation,
                 reference: nil, message: error.localizedDescription, cached: nil)))
@@ -609,7 +609,7 @@ final class HostFileOpener {
         } else { nil }
         let file = OpenedEmbeddedFile(staged: prepared.staged, transition: transition)
         guard generation == token, !Task.isCancelled else { return }
-        logger.notice("file open staged operation=\(Self.tag(token), privacy: .public) bytes=\(prepared.staged.bytes, privacy: .public) elapsed=\(started.elapsedMilliseconds, privacy: .public)ms")
+        logger.notice("file open staged operation=\(Self.tag(token)) bytes=\(prepared.staged.bytes) elapsed=\(started.elapsedMilliseconds)ms")
         present(.embedded(file), content: prepared.content, prefersQuickLook: true)
     }
 
@@ -655,14 +655,14 @@ final class HostFileOpener {
         finishLoading()
         lastDocument = file
         if let host = file.host, HostHTMLDocument.admits(host.lease) {
-            logger.notice("file presented file=\(Self.tag(file.id), privacy: .public) as=html")
+            logger.notice("file presented file=\(Self.tag(file.id)) as=html")
             sheet = HostFileSheet(content: .html(host))
         } else if content == nil, prefersQuickLook, HostFilePreviewPolicy.permitsQuickLook(file.name),
            canPreview(file.url) {
-            logger.notice("file presented file=\(Self.tag(file.id), privacy: .public) as=quickLook zoom=\(file.transition != nil, privacy: .public)")
+            logger.notice("file presented file=\(Self.tag(file.id)) as=quickLook zoom=\(file.transition != nil)")
             quickLook = file
         } else {
-            logger.notice("file presented file=\(Self.tag(file.id), privacy: .public) as=\(content == nil ? "information" : "reader", privacy: .public)")
+            logger.notice("file presented file=\(Self.tag(file.id)) as=\(content == nil ? "information" : "reader")")
             sheet = HostFileSheet(content: .document(file, content))
         }
     }

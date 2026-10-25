@@ -11,7 +11,7 @@ extension View {
 }
 
 private struct HTMLVisualEnvironment: ViewModifier {
-    private static let logger = Logger(subsystem: "RemoteCoder", category: "HTMLVisual")
+    private static let logger = AppLogger(category: "HTMLVisual")
     @Environment(\.htmlVisualSource) private var source
     @Environment(\.self) private var environment
     @Environment(AppThemeStore.self) private var themeStore
@@ -21,7 +21,7 @@ private struct HTMLVisualEnvironment: ViewModifier {
         let theme = HTMLVisualTheme(fontSize: fontSize, environment: environment, accent: themeStore.theme.colors.accentTint)
         content.environment(\.htmlVisualTheme, theme)
         .onChange(of: theme.isDark, initial: true) { _, dark in
-            Self.logger.notice("html visual theme dark=\(dark, privacy: .public) phase=\(String(describing: environment.scenePhase), privacy: .public)")
+            Self.logger.notice("html visual theme dark=\(dark) phase=\(String(describing: environment.scenePhase))")
         }
         .task(id: source.map { ObjectIdentifier($0.renderer) }) {
             if let source { await source.renderer.load() }

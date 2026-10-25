@@ -43,8 +43,8 @@ actor ComposerDraftPersistence {
         let context = try ComposerDraftStore.makeContext(directory: directory)
         do { try Self.adoptLegacyNewChatDrafts(in: context) } catch {
             context.rollback()
-            Logger(subsystem: "RemoteCoder", category: "ComposerDrafts")
-                .error("legacy new-chat drafts were not adopted: \(error.localizedDescription, privacy: .public)")
+            AppLogger(category: "ComposerDrafts")
+                .error("legacy new-chat drafts were not adopted: \(error.localizedDescription)")
         }
         modelContainer = context.container
         modelExecutor = DefaultSerialModelExecutor(modelContext: context)

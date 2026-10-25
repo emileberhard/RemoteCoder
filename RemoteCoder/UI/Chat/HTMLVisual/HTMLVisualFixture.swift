@@ -6,7 +6,7 @@ import OSLog
 import SwiftUI
 
 struct HTMLVisualFixture: View {
-    private static let logger = Logger(subsystem: "RemoteCoder", category: "HTMLVisual")
+    private static let logger = AppLogger(category: "HTMLVisual")
     @Environment(\.appEnergyPolicy) private var systemEnergyPolicy
     @Environment(\.displayScale) private var systemDisplayScale
     @State private var fixture = HTMLVisualFixtureModel()
@@ -45,7 +45,7 @@ struct HTMLVisualFixture: View {
         }
         .preferredColorScheme(dark ? .dark : .light)
         .onChange(of: energyPolicy, initial: true) { _, policy in
-            Self.logger.notice("html visual fixture energy lowPower=\(policy.isLowPowerModeEnabled, privacy: .public) thermal=\(policy.thermalState.rawValue, privacy: .public)")
+            Self.logger.notice("html visual fixture energy lowPower=\(policy.isLowPowerModeEnabled) thermal=\(policy.thermalState.rawValue)")
         }
         .dynamicTypeSize(largeText ? .accessibility2 : .large)
         .task(id: textOnly) {
@@ -155,7 +155,7 @@ private final class HTMLVisualFixtureModel {
         guard let deferred else { return }
         self.deferred = nil
         items = deferred
-        Logger(subsystem: "RemoteCoder", category: "HTMLVisual").notice("html visual fixture ready rows=\(deferred.count, privacy: .public) uptime=\(ProcessInfo.processInfo.systemUptime, privacy: .public)")
+        AppLogger(category: "HTMLVisual").notice("html visual fixture ready rows=\(deferred.count) uptime=\(ProcessInfo.processInfo.systemUptime)")
     }
     @ObservationIgnored private var revision: UInt64 = 0
     @ObservationIgnored private var requestToken = 0
@@ -209,7 +209,7 @@ private final class HTMLVisualFixtureModel {
             }
             items = next
             failure = nil
-            Logger(subsystem: "RemoteCoder", category: "HTMLVisual").notice("html visual fixture ready rows=\(next.count, privacy: .public) uptime=\(ProcessInfo.processInfo.systemUptime, privacy: .public)")
+            AppLogger(category: "HTMLVisual").notice("html visual fixture ready rows=\(next.count) uptime=\(ProcessInfo.processInfo.systemUptime)")
             if request == nil {
                 switch Self.argument("-html-visual-fixture-start") {
                 case "bottom": break
@@ -231,10 +231,10 @@ private final class HTMLVisualFixtureModel {
 
     func drive() async {
         guard let script = Self.argument("-html-visual-fixture-drive") else { return }
-        let logger = Logger(subsystem: "RemoteCoder", category: "HTMLVisual")
+        let logger = AppLogger(category: "HTMLVisual")
         for step in script.split(separator: ";").map(String.init) {
             let parts = step.split(separator: ":").map(String.init)
-            logger.notice("html visual fixture step=\(step, privacy: .public) uptime=\(ProcessInfo.processInfo.systemUptime, privacy: .public)")
+            logger.notice("html visual fixture step=\(step) uptime=\(ProcessInfo.processInfo.systemUptime)")
             switch parts.first {
             case "open": open()
             case "wait": try? await Task.sleep(for: .milliseconds(Int(parts[1]) ?? 0))
@@ -244,7 +244,7 @@ private final class HTMLVisualFixtureModel {
             default: break
             }
         }
-        logger.notice("html visual fixture drive finished uptime=\(ProcessInfo.processInfo.systemUptime, privacy: .public)")
+        logger.notice("html visual fixture drive finished uptime=\(ProcessInfo.processInfo.systemUptime)")
     }
 
     static func argument(_ name: String) -> String? {

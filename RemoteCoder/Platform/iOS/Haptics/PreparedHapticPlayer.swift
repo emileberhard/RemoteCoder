@@ -62,7 +62,8 @@ final class PreparedHapticPlayer: HapticInteractionPlaying {
     private var ending = false
     private var strength: HapticStrength = .standard
     private var canPlay: @MainActor () -> Bool = { false }
-    private let logger = Logger(subsystem: "RemoteCoder", category: "Haptics")
+    private let logger = AppLogger(category: "Haptics")
+    private let debugLogger = Logger(subsystem: AppLogger.subsystem, category: "Haptics")
 
     func prepare(strength: HapticStrength, canPlay: @escaping @MainActor () -> Bool) {
         self.strength = strength
@@ -85,7 +86,7 @@ final class PreparedHapticPlayer: HapticInteractionPlaying {
         // A new interaction event replaces a still-playing lift/tail, never layers over it.
         if let activePlayer {
             do { try activePlayer.stop(atTime: CHHapticTimeImmediate) }
-            catch { logger.debug("Could not stop haptic accent: \(error.localizedDescription, privacy: .public)") }
+            catch { debugLogger.debug("Could not stop haptic accent: \(error.localizedDescription, privacy: .public)") }
             self.activePlayer = nil
         }
         if let accent = event.accent(for: strength), ready, let player = players[accent] {
@@ -94,7 +95,7 @@ final class PreparedHapticPlayer: HapticInteractionPlaying {
                 activePlayer = player
                 return
             } catch {
-                logger.debug("Haptic accent unavailable; using native impact: \(error.localizedDescription, privacy: .public)")
+                debugLogger.debug("Haptic accent unavailable; using native impact: \(error.localizedDescription, privacy: .public)")
             }
         }
         switch event.recipe(for: strength) {
@@ -182,7 +183,7 @@ final class PreparedHapticPlayer: HapticInteractionPlaying {
                 }
             }
         } catch {
-            logger.debug("Haptic preparation unavailable; native feedback remains active: \(error.localizedDescription, privacy: .public)")
+            debugLogger.debug("Haptic preparation unavailable; native feedback remains active: \(error.localizedDescription, privacy: .public)")
             discardCustomEngine()
         }
     }

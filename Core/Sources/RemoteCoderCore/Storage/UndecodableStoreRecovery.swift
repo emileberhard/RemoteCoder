@@ -5,7 +5,7 @@ import Synchronization
 nonisolated enum UndecodableStoreRecovery {
     private static let maximumCopies = 3
     private static let lock = Mutex(())
-    private static let logger = Logger(subsystem: "RemoteCoder", category: "UndecodableStoreRecovery")
+    private static let logger = AppLogger(category: "UndecodableStoreRecovery")
 
     static func setAside(_ fileURL: URL) throws {
         try lock.withLock { _ in
@@ -36,7 +36,7 @@ nonisolated enum UndecodableStoreRecovery {
             let name = sequence == 0 ? "\(baseName).json" : "\(baseName).\(sequence).json"
             let destination = directory.appending(path: name)
             try manager.moveItem(at: fileURL, to: destination)
-            logger.notice("Preserved undecodable store at \(destination.path, privacy: .public)")
+            logger.notice("Preserved undecodable store at \(destination.path)")
 
             for copy in copies.prefix(max(0, copies.count + 1 - maximumCopies)) {
                 try evict(copy.url)
@@ -55,6 +55,6 @@ nonisolated enum UndecodableStoreRecovery {
 
     private static func evict(_ url: URL) throws {
         try FileManager.default.removeItem(at: url)
-        logger.notice("Evicted oldest undecodable store copy at \(url.path, privacy: .public); retaining at most \(maximumCopies) copies per store")
+        logger.notice("Evicted oldest undecodable store copy at \(url.path); retaining at most \(maximumCopies) copies per store")
     }
 }

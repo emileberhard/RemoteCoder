@@ -27,7 +27,7 @@ final class CompletionNotificationCenter {
     @ObservationIgnored private var dismissTask: Task<Void, Never>?
     @ObservationIgnored private var authorizationTask: Task<Void, Never>?
     @ObservationIgnored private let defaults: UserDefaults
-    @ObservationIgnored private let logger = Logger(subsystem: "RemoteCoder", category: "CompletionNotifications")
+    @ObservationIgnored private let logger = AppLogger(category: "CompletionNotifications")
 
     init(defaults: UserDefaults, authorization: NotificationAuthorization) {
         self.defaults = defaults
@@ -60,7 +60,7 @@ final class CompletionNotificationCenter {
         if delivery.isConversationAlert, !isEnabled { return .suppressed }
         guard applicationIsActive else { return .system }
         if let payload = delivery.payload, isOpen(payload) {
-            logger.notice("notification suppressed for open conversation event=\(payload.eventID, privacy: .public)")
+            logger.notice("notification suppressed for open conversation event=\(payload.eventID)")
             return .suppressed
         }
         return presentInForeground(delivery)
@@ -70,7 +70,7 @@ final class CompletionNotificationCenter {
         dismissTask?.cancel()
         dismissTask = nil
         banner = .init(delivery: delivery)
-        logger.notice("notification in-app event=\(delivery.payload?.eventID ?? "unattributed", privacy: .public)")
+        logger.notice("notification in-app event=\(delivery.payload?.eventID ?? "unattributed")")
     }
 
     /// Expiry begins only when the scene's banner renderer is actually mounted.

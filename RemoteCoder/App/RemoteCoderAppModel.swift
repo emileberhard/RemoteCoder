@@ -15,7 +15,7 @@ final class RemoteCoderAppModel {
     var isApplicationActive: Bool { scenes.isActive }
 
     private let scenes: ScenePhaseAggregate
-    private let logger = Logger(subsystem: "RemoteCoder", category: "ChatWorkspace")
+    private let logger = AppLogger(category: "ChatWorkspace")
     private var hasStarted = false
     private var bootstrapTask: Task<Void, Never>?
     private var hostSynchronizationTask: Task<Void, Never>?
@@ -187,7 +187,7 @@ final class RemoteCoderAppModel {
     }
 
     private func enter(_ phase: ScenePhase) async {
-        logger.notice("scenePhase -> \(String(describing: phase), privacy: .public)")
+        logger.notice("scenePhase -> \(String(describing: phase))")
         energy.refresh()
         telemetry.sceneChanged()
         switch phase {

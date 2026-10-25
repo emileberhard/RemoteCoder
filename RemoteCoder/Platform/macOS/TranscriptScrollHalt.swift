@@ -10,7 +10,7 @@ final class TranscriptScrollHalt {
     private(set) weak var scrollView: AppKitTranscriptContainer?
     private var isScrolling = false
     private weak var cursorRectsWindow: NSWindow?
-    private static let logger = Logger(subsystem: "RemoteCoder", category: "Transcript")
+    private static let logger = AppLogger(category: "Transcript")
 
     func attach(_ view: AppKitTranscriptContainer) {
         if scrollView !== view {
@@ -18,7 +18,7 @@ final class TranscriptScrollHalt {
             let described = views.map { view in
                 view.map { "\(type(of: $0)) responsive=\(type(of: $0).isCompatibleWithResponsiveScrolling) layer=\($0.layer != nil)" } ?? "nil"
             }
-            Self.logger.notice("transcript scroll view \(described.joined(separator: "; "), privacy: .public)")
+            Self.logger.notice("transcript scroll view \(described.joined(separator: "; "))")
         }
         scrollView = view
         updateCursorRects()

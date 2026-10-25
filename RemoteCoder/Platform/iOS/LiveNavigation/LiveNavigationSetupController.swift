@@ -23,7 +23,7 @@ final class LiveNavigationSetupController {
     static let setupEnabledKey = "liveNavigation.setupEnabled"
 
     private let locationManager: CLLocationManager
-    private let logger = Logger(subsystem: "RemoteCoder", category: "LiveNavigationSetup")
+    private let logger = AppLogger(category: "LiveNavigationSetup")
     private var serviceSession: CLServiceSession?
     private var refreshTask: Task<Void, Never>?
 
@@ -105,7 +105,7 @@ final class LiveNavigationSetupController {
             pushTokens.receiveLocation(credentials(token: token))
             UserDefaults.standard.set(true, forKey: Self.setupEnabledKey)
         } catch {
-            logger.error("Live-location setup failed: \(error.localizedDescription, privacy: .public)")
+            logger.error("Live-location setup failed: \(error.localizedDescription)")
             errorMessage = error.localizedDescription
         }
     }
@@ -127,7 +127,7 @@ final class LiveNavigationSetupController {
             do {
                 refreshed = try await locationPushToken()
             } catch {
-                logger.error("Location-push token refresh failed: \(error.localizedDescription, privacy: .public)")
+                logger.error("Location-push token refresh failed: \(error.localizedDescription)")
             }
         }
         readAuthorization()
@@ -138,7 +138,7 @@ final class LiveNavigationSetupController {
     private func locationPushToken() async throws -> String {
         logger.notice("Requesting the location-push token.")
         let token = try await locationManager.startMonitoringLocationPushes()
-        logger.notice("Received location-push token (\(token.count, privacy: .public) bytes).")
+        logger.notice("Received location-push token (\(token.count) bytes).")
         return token.map { String(format: "%02x", $0) }.joined()
     }
 

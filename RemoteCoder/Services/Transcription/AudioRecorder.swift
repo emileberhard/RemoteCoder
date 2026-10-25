@@ -24,7 +24,7 @@ enum AudioCaptureError: LocalizedError, Sendable {
 
 @MainActor
 final class AudioRecorder {
-    private let logger = Logger(subsystem: "RemoteCoder", category: "VoiceInput.AudioRecorder")
+    private let logger = AppLogger(category: "VoiceInput.AudioRecorder")
     private let session: any CaptureAudioSession
     private var audioEngine = AVAudioEngine()
     private let levelMeter = AudioLevelMeter()
@@ -231,7 +231,7 @@ final class AudioRecorder {
         if inputLost, audioEngine.isRunning {
             audioEngine.pause()
             pausedForRouteLoss = true
-            logger.notice("paused recording due to route change: \(reasonCode, privacy: .public)")
+            logger.notice("paused recording due to route change: \(reasonCode)")
         }
 
         if pausedForRouteLoss, session.isInputAvailable {
@@ -260,11 +260,11 @@ final class AudioRecorder {
             try session.preferBuiltInInput(context: context)
             try audioEngine.start()
             pausedForRouteLoss = false
-            logger.notice("resumed recording after \(context, privacy: .public)")
+            logger.notice("resumed recording after \(context)")
         } catch is CancellationError {
             return
         } catch {
-            logger.error("failed to reactivate audio session after \(context, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            logger.error("failed to reactivate audio session after \(context): \(error.localizedDescription)")
         }
     }
 }

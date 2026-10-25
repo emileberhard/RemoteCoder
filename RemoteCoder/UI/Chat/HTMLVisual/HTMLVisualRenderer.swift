@@ -99,7 +99,7 @@ final class HTMLVisualRenderer {
     private struct SharedSharpRaster { weak var raster: HTMLVisualPreparedRaster? }
     private var sharpRasters: [RasterKey: SharedSharpRaster] = [:]
     private var sharpWork: [RasterKey: Task<HTMLVisualRaster?, Never>] = [:]
-    private static let logger = Logger(subsystem: "RemoteCoder", category: "HTMLVisual")
+    private static let logger = AppLogger(category: "HTMLVisual")
     private var admission = HTMLVisualPageAdmission()
     private var waiters: [UUID: CheckedContinuation<Void, any Error>] = [:]
     private var work: [UUID: Task<Void, Never>] = [:]
@@ -159,7 +159,7 @@ final class HTMLVisualRenderer {
                     }
                     persistedImages = Set(entries.filter(\.value.hasImage).keys)
                 } catch is CancellationError { return }
-                catch { Self.logger.error("html visual cache load failed reason=\(error.localizedDescription, privacy: .public)") }
+                catch { Self.logger.error("html visual cache load failed reason=\(error.localizedDescription)") }
                 isReady = true
             }
         }
@@ -177,7 +177,7 @@ final class HTMLVisualRenderer {
             cached.revision = nextSnapshotRevision()
             trimSnapshots()
         } catch is CancellationError { }
-        catch { Self.logger.error("html visual snapshot restore failed reason=\(error.localizedDescription, privacy: .public)") }
+        catch { Self.logger.error("html visual snapshot restore failed reason=\(error.localizedDescription)") }
         return snapshot(for: key)
     }
 
@@ -235,7 +235,7 @@ final class HTMLVisualRenderer {
             #if DEBUG
             let retained = rasterOrder.map { "\($0.key.digest.prefix(4))@\($0.revision)\(rasterPins[$0.key] != nil ? "p" : "")\(isHeld($0) ? "h" : "")" }
             let outside = rasterBudget.reservedPixels - rasterOrder.reduce(0) { $0 + pixelCount(rasters[$1]) }
-            Self.logger.notice("html visual decode digest=\(rasterKey.key.digest.prefix(8), privacy: .public) revision=\(rasterKey.revision, privacy: .public) pinned=\(self.rasterPins[rasterKey.key] != nil, privacy: .public) available=\(self.rasterBudget.availablePixels, privacy: .public) retained=\(retained.joined(separator: ","), privacy: .public) outside=\(outside, privacy: .public)")
+            Self.logger.notice("html visual decode digest=\(rasterKey.key.digest.prefix(8)) revision=\(rasterKey.revision) pinned=\(self.rasterPins[rasterKey.key] != nil) available=\(self.rasterBudget.availablePixels) retained=\(retained.joined(separator: ",")) outside=\(outside)")
             #endif
         }
         let task = rasterWork[rasterKey]?.task ?? Task { await prepareImage(data, displayScale: rasterKey.scale) }
@@ -272,7 +272,7 @@ final class HTMLVisualRenderer {
         let task = sharpWork[rasterKey] ?? startSharpDecode(pdf, as: rasterKey, above: reservation.scale)
         let raster = await task.value
         #if DEBUG
-        Self.logger.notice("html visual sharp digest=\(base.key.digest.prefix(8), privacy: .public) revision=\(base.revision, privacy: .public) base=\(reservation.scale, privacy: .public) granted=\(raster?.reservation.scale ?? 0, privacy: .public) cancelled=\(Task.isCancelled, privacy: .public)")
+        Self.logger.notice("html visual sharp digest=\(base.key.digest.prefix(8)) revision=\(base.revision) base=\(reservation.scale) granted=\(raster?.reservation.scale ?? 0) cancelled=\(Task.isCancelled)")
         #endif
         guard let raster, !Task.isCancelled else { return nil }
         if let shared = sharpRasters[rasterKey]?.raster { return shared }
@@ -388,7 +388,7 @@ final class HTMLVisualRenderer {
     private nonisolated func prepareImage(_ pdf: Data, displayScale: Double) async -> HTMLVisualRaster? {
         let raster = await rasterBudget.rasterize(pdf, displayScale: displayScale, minimumScale: min(1, displayScale))
         #if DEBUG
-        Logger(subsystem: "RemoteCoder", category: "HTMLVisual").notice("html visual raster granted=\(raster != nil, privacy: .public) reserved=\(self.rasterBudget.reservedPixels, privacy: .public)")
+        AppLogger(category: "HTMLVisual").notice("html visual raster granted=\(raster != nil) reserved=\(self.rasterBudget.reservedPixels)")
         #endif
         return raster
     }
@@ -446,13 +446,13 @@ final class HTMLVisualRenderer {
         }
         work[id] = task
         instance.status = .loading
-        Self.logger.notice("html visual admitted live=\(self.admission.live.count, privacy: .public) waiting=\(self.admission.waiting.count, privacy: .public)")
+        Self.logger.notice("html visual admitted live=\(self.admission.live.count) waiting=\(self.admission.waiting.count)")
         await withTaskCancellationHandler {
             await task.value
         } onCancel: { task.cancel() }
         work.removeValue(forKey: id)
         #if DEBUG
-        Self.logger.notice("html visual teardown status=\(String(describing: instance.status), privacy: .public) stored=\(self.snapshots[key]?.image != nil, privacy: .public) digest=\(key.digest.prefix(8), privacy: .public)")
+        Self.logger.notice("html visual teardown status=\(String(describing: instance.status)) stored=\(self.snapshots[key]?.image != nil) digest=\(key.digest.prefix(8))")
         #endif
         if instance.requestID == id {
             instance.page?.stopLoading()
@@ -475,7 +475,7 @@ final class HTMLVisualRenderer {
             instance.onPinChange = { _ in }
         }
         release(id)
-        Self.logger.notice("html visual released live=\(self.admission.live.count, privacy: .public) waiting=\(self.admission.waiting.count, privacy: .public)")
+        Self.logger.notice("html visual released live=\(self.admission.live.count) waiting=\(self.admission.waiting.count)")
     }
 
     func update(_ instance: HTMLVisualInstance, key: HTMLVisualLayoutKey) {
@@ -574,7 +574,7 @@ final class HTMLVisualRenderer {
                 Self.logger.notice("html visual web process terminated")
             } else {
                 instance.status = .unavailable(error.localizedDescription)
-                Self.logger.error("html visual failed reason=\(error.localizedDescription, privacy: .public)")
+                Self.logger.error("html visual failed reason=\(error.localizedDescription)")
             }
         }
     }
@@ -676,7 +676,7 @@ final class HTMLVisualRenderer {
                     let signpostID = signposter.makeSignpostID()
                     let interval = signposter.beginInterval("HTMLVisualSnapshot", id: signpostID)
                     #if DEBUG
-                    Self.logger.notice("html visual snapshot began id=\(signpostID.rawValue, privacy: .public)")
+                    Self.logger.notice("html visual snapshot began id=\(signpostID.rawValue)")
                     #endif
                     let data: Data
                     do {
@@ -686,13 +686,13 @@ final class HTMLVisualRenderer {
                             allowTransparentBackground: true))
                     }
                     #if DEBUG
-                    Self.logger.notice("html visual snapshot completed id=\(signpostID.rawValue, privacy: .public) bytes=\(data.count, privacy: .public)")
+                    Self.logger.notice("html visual snapshot completed id=\(signpostID.rawValue) bytes=\(data.count)")
                     #endif
                     try Task.checkCancellation()
                     guard instance.page === page, instance.key == key else { continue }
                     guard let captured = store(data, for: key, height: instance.height) else {
                         instance.capturedImage = nil
-                        Self.logger.notice("html visual snapshot discarded bytes=\(data.count, privacy: .public) limit=\(HTMLVisualCapturedImage.maximumBytes, privacy: .public)")
+                        Self.logger.notice("html visual snapshot discarded bytes=\(data.count) limit=\(HTMLVisualCapturedImage.maximumBytes)")
                         continue
                     }
                     instance.snapshot = snapshot(for: key)
@@ -702,7 +702,7 @@ final class HTMLVisualRenderer {
             } catch is CancellationError {
             } catch {
                 instance.needsSnapshot = false
-                Self.logger.error("html visual snapshot failed reason=\(error.localizedDescription, privacy: .public)")
+                Self.logger.error("html visual snapshot failed reason=\(error.localizedDescription)")
             }
         }
     }
@@ -766,7 +766,7 @@ final class HTMLVisualRenderer {
                 do {
                     let entries = try await cache.store(key, height: value.height, image: value.image)
                     persistedImages = Set(entries.filter(\.value.hasImage).keys)
-                } catch { Self.logger.error("html visual cache save failed reason=\(error.localizedDescription, privacy: .public)") }
+                } catch { Self.logger.error("html visual cache save failed reason=\(error.localizedDescription)") }
                 if Task.isCancelled { return }
             }
         }

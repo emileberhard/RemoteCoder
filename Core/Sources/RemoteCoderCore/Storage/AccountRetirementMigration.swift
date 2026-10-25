@@ -176,7 +176,7 @@ enum AccountRetirementMigration {
                     } catch is CancellationError {
                         return outcome
                     } catch {
-                        logger.error("Account retirement failed host=\(host, privacy: .public) account=\(account, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                        logger.error("Account retirement failed host=\(host) account=\(account): \(error.localizedDescription)")
                         outcome.issues.append("Saved conversations on \(host) could not be imported. Source data has been retained: \(error.localizedDescription)")
                     }
                 }
@@ -208,7 +208,7 @@ enum AccountRetirementMigration {
         }
     }
 
-    private static let logger = Logger(subsystem: "RemoteCoder", category: "AccountRetirementMigration")
+    private static let logger = AppLogger(category: "AccountRetirementMigration")
 
     static func draftSlot(hostID: UUID, accountID: UUID, slot: UUID) -> UUID {
         identifier("draft|\(hostID)|\(accountID)|\(slot)")

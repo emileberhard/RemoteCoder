@@ -20,7 +20,7 @@ final class ChatWindowModel {
     private(set) var settledRowLimit = ConversationDrawerArrangement.initialSettledRowLimit
     private var screens: [ExecutionTarget: ChatScreenModel] = [:]
     @ObservationIgnored private let focusTasks = OwnedTasks<FocusTask>()
-    @ObservationIgnored private let logger = Logger(subsystem: "RemoteCoder", category: "ChatWindow")
+    @ObservationIgnored private let logger = AppLogger(category: "ChatWindow")
     #if RC_PERF_HARNESS
     @ObservationIgnored var performanceActions: (@MainActor () -> ChatWindowActions?)?
     #endif
@@ -79,7 +79,7 @@ final class ChatWindowModel {
     func select(_ target: ExecutionTarget?) {
         guard selectedTarget != target else { return }
         cancelComposerFocus()
-        logger.notice("window select id=\(self.logID, privacy: .public) from=\(self.selectedTarget?.id ?? "none", privacy: .public) to=\(target?.id ?? "none", privacy: .public)")
+        logger.notice("window select id=\(self.logID) from=\(self.selectedTarget?.id ?? "none") to=\(target?.id ?? "none")")
         selectedTarget = target
     }
 

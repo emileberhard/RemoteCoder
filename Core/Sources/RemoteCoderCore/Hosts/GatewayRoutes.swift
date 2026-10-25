@@ -246,7 +246,7 @@ actor GatewayRoutes {
     private let trust: GatewayLANTrust
     private let forcesRelay: Bool
     private let localNetworkUpdates: AsyncStream<GatewayNetworkPath>.Continuation
-    private let logger = Logger(subsystem: "RemoteCoder", category: "GatewayRoutes")
+    private let logger = AppLogger(category: "GatewayRoutes")
     private var policy: GatewayRoutePolicy
     private var relayLoaded = false
     private var relayUnpersisted = false
@@ -390,7 +390,7 @@ actor GatewayRoutes {
         let isLAN = if case .lan = route { true } else { false }
         guard isLAN || GatewayRoute.isPathFailure(error) else { return false }
         policy.failed(route, at: .now)
-        logger.notice("Gateway route \(Self.describe(route), privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
+        logger.notice("Gateway route \(Self.describe(route)) failed: \(error.localizedDescription)")
         if isLAN {
             learnedAt = nil
             learnIfDue(over: .configured)
@@ -478,7 +478,7 @@ actor GatewayRoutes {
     private func succeeded(_ route: GatewayRoute) {
         guard !isRetired else { return }
         if policy.succeeded(route) {
-            logger.notice("Route penalties reset: \(Self.describe(route), privacy: .public) succeeded")
+            logger.notice("Route penalties reset: \(Self.describe(route)) succeeded")
         }
     }
 
@@ -566,7 +566,7 @@ actor GatewayRoutes {
             apply(reported)
         } catch {
             guard !isRetired else { return }
-            logger.notice("Could not read the LAN route from /health: \(error.localizedDescription, privacy: .public)")
+            logger.notice("Could not read the LAN route from /health: \(error.localizedDescription)")
         }
         do {
             let relay = try await relay(over: route)
@@ -574,7 +574,7 @@ actor GatewayRoutes {
             applyRelay(relay)
         } catch {
             guard !isRetired else { return }
-            logger.notice("Could not read the relay route: \(error.localizedDescription, privacy: .public)")
+            logger.notice("Could not read the relay route: \(error.localizedDescription)")
         }
     }
 
@@ -583,7 +583,7 @@ actor GatewayRoutes {
         trust.replacePin(endpoint?.spkiSHA256)
         persist(endpoint)
         if let endpoint {
-            logger.notice("Learned LAN route \(endpoint.host, privacy: .public):\(endpoint.port)")
+            logger.notice("Learned LAN route \(endpoint.host):\(endpoint.port)")
         } else {
             logger.notice("The gateway reports no LAN route")
         }
@@ -600,11 +600,11 @@ actor GatewayRoutes {
             relayUnpersisted = false
         } catch {
             relayUnpersisted = true
-            logger.error("Could not keep the relay route: \(error.localizedDescription, privacy: .public)")
+            logger.error("Could not keep the relay route: \(error.localizedDescription)")
         }
         guard changed else { return }
         if let relay {
-            logger.notice("Learned relay route \(relay.targetHost, privacy: .public):\(relay.targetPort) through \(relay.proxyHost, privacy: .public)")
+            logger.notice("Learned relay route \(relay.targetHost):\(relay.targetPort) through \(relay.proxyHost)")
         } else {
             logger.notice("The gateway reports no relay route")
         }
@@ -619,9 +619,9 @@ actor GatewayRoutes {
             let cached = try JSONDecoder().decode(CachedRelay.self, from: data)
             if cached.learnedFrom == host.connectionSummary { _ = policy.learnRelay(cached.relay) }
         } catch let error as GatewayCredentialFailure {
-            logger.error("The relay route is unavailable: \(error.localizedDescription, privacy: .public)")
+            logger.error("The relay route is unavailable: \(error.localizedDescription)")
         } catch {
-            logger.error("Ignoring an unreadable relay route: \(error.localizedDescription, privacy: .public)")
+            logger.error("Ignoring an unreadable relay route: \(error.localizedDescription)")
         }
     }
 
@@ -637,7 +637,7 @@ actor GatewayRoutes {
         } catch let error as CocoaError where error.code == .fileNoSuchFile {
             return
         } catch {
-            logger.error("Could not persist the LAN route: \(error.localizedDescription, privacy: .public)")
+            logger.error("Could not persist the LAN route: \(error.localizedDescription)")
         }
     }
 
@@ -716,14 +716,14 @@ actor GatewayRoutes {
     }
 
     private static func loadEndpoint(from file: URL, learnedFrom address: String) -> GatewayLANEndpoint? {
-        let logger = Logger(subsystem: "RemoteCoder", category: "GatewayRoutes")
+        let logger = AppLogger(category: "GatewayRoutes")
         do {
             let cached = try JSONDecoder().decode(CachedEndpoint.self, from: Data(contentsOf: file))
             return cached.learnedFrom == address ? cached.endpoint : nil
         } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
             return nil
         } catch {
-            logger.error("Ignoring an unreadable LAN route cache: \(error.localizedDescription, privacy: .public)")
+            logger.error("Ignoring an unreadable LAN route cache: \(error.localizedDescription)")
             return nil
         }
     }
