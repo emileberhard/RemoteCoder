@@ -62,7 +62,6 @@ struct ConversationHistoryView: View {
                 }
                 pending = nil
                 isInteracting = false
-                apply(workspace.sidebarSnapshot(arrangedBy: capturedLayout, in: window))
                 for await snapshot in Observations({ @MainActor [workspace, window] in
                     workspace.sidebarSnapshot(arrangedBy: layout ?? capturedLayout, in: window)
                 }) {
