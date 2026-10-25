@@ -493,6 +493,12 @@ async fn serve_http(
         );
     }
     journal.runtime("full_disk_access", serde_json::to_value(&full_disk_access)?);
+    let app_logs = AppLogStore::new_in(
+        settings.host_paths.logs("app-logs"),
+        APP_LOG_RETENTION_DAYS,
+        APP_LOG_BYTE_CAP,
+    );
+    app_logs.start_sweeping(journal.clone());
     let state = HttpState {
         full_disk_access,
         router,
@@ -503,11 +509,7 @@ async fn serve_http(
         gateway: Arc::clone(gateway),
         codex_version: settings.codex_version.clone(),
         codex_code_mode_host_path: settings.codex_code_mode_host_path.clone(),
-        app_logs: AppLogStore::new_in(
-            settings.host_paths.logs("app-logs"),
-            APP_LOG_RETENTION_DAYS,
-            APP_LOG_BYTE_CAP,
-        ),
+        app_logs: app_logs.clone(),
         uploads,
         files: crate::files::FileDownloads::default(),
         requests: RequestAdmission::default(),
@@ -516,6 +518,7 @@ async fn serve_http(
         relay_route,
     };
     let server_res = run_http_server(settings.bind_host.clone(), settings.port, state, lan).await;
+    app_logs.stop_sweeping(JOURNAL_DRAIN_DEADLINE).await;
 
     info!("http server stopped, shutting down");
     if let Err(err) = &server_res {

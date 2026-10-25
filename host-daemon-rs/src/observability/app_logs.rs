@@ -13,12 +13,13 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde_json::{Value, json};
 use tracing::{info, warn};
 
-use crate::observability::journal::{sweep_expired_day_files, today_utc};
+use crate::observability::journal::{Journal, sweep_expired_day_files, today_utc};
+use crate::observability::writer::WriterHandle;
 use crate::storage::private_state;
 
 /// A rejected upload, and the reason to hand back to the client.
@@ -47,8 +48,9 @@ impl AppLogError {
 /// anything longer is a client bug or an attack, not a real device name.
 const MAX_NAME_LENGTH: usize = 64;
 
-pub(crate) const APP_LOG_RETENTION_DAYS: u64 = 14;
+pub(crate) const APP_LOG_RETENTION_DAYS: u64 = 7;
 pub(crate) const APP_LOG_BYTE_CAP: u64 = 1024 * 1024 * 1024;
+const SWEEP_INTERVAL: Duration = Duration::from_secs(60 * 60);
 const RETENTION_MARKER: &str = "retention.json";
 
 #[derive(Debug, Clone)]
@@ -57,6 +59,7 @@ pub(crate) struct AppLogStore {
     retention_days: u64,
     byte_cap: u64,
     publishing: Arc<Mutex<()>>,
+    sweeper: Arc<WriterHandle>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -111,7 +114,45 @@ impl AppLogStore {
             retention_days,
             byte_cap,
             publishing: Arc::new(Mutex::new(())),
+            sweeper: Arc::default(),
         }
+    }
+
+    pub(crate) fn start_sweeping(&self, journal: Journal) {
+        let store = self.clone();
+        let stop = self.sweeper.stop_signal();
+        self.sweeper.attach(tokio::spawn(async move {
+            let mut hourly = tokio::time::interval(SWEEP_INTERVAL);
+            loop {
+                tokio::select! {
+                    _ = hourly.tick() => {}
+                    () = stop.cancelled() => break,
+                }
+                let sweeping = store.clone();
+                match tokio::task::spawn_blocking(move || sweeping.sweep_on(today_utc())).await {
+                    Ok(Some(outcome)) => journal.app_logs(outcome.event(), outcome.fields()),
+                    Ok(None) => {}
+                    Err(error) => warn!(%error, "app log sweep task failed"),
+                }
+            }
+        }));
+    }
+
+    pub(crate) async fn stop_sweeping(&self, deadline: Duration) {
+        self.sweeper.drain(deadline, "app log sweep").await;
+    }
+
+    fn sweep_on(&self, today: u32) -> Option<CapOutcome> {
+        if matches!(std::fs::metadata(&self.dir), Err(error) if error.kind() == std::io::ErrorKind::NotFound)
+        {
+            return None;
+        }
+        let _publishing = self
+            .publishing
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        sweep_all_devices(&self.dir, today, self.retention_days);
+        self.record_cap(enforce_byte_cap(&self.dir, self.byte_cap))
     }
 
     /// Stores one segment and returns where it landed. Re-uploading a segment
@@ -471,6 +512,67 @@ mod tests {
                 "notes.txt",
             ]
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_retention_window_is_today_and_the_seven_previous_days() {
+        let dir = temp_dir("window");
+        let device_dir = dir.join("phone");
+        std::fs::create_dir_all(&device_dir).expect("dir");
+        for name in [
+            "20260925-expired.jsonl.gz",
+            "20260926-boundary.jsonl.gz",
+            "20261003-today.jsonl.gz",
+        ] {
+            std::fs::write(device_dir.join(name), b"x").expect("write");
+        }
+        let store = AppLogStore::new_in(dir.clone(), APP_LOG_RETENTION_DAYS, APP_LOG_BYTE_CAP);
+
+        store.sweep_on(20_261_003);
+
+        let mut remaining: Vec<String> = std::fs::read_dir(&device_dir)
+            .expect("read dir")
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().to_string())
+            .collect();
+        remaining.sort();
+        assert_eq!(
+            remaining,
+            vec!["20260926-boundary.jsonl.gz", "20261003-today.jsonl.gz"]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn sweeping_a_store_that_was_never_written_creates_and_reports_nothing() {
+        let dir = temp_dir("never-written");
+        let store = AppLogStore::new_in(dir.clone(), APP_LOG_RETENTION_DAYS, APP_LOG_BYTE_CAP);
+
+        assert_eq!(store.sweep_on(20_261_003), None);
+
+        assert!(!dir.exists());
+    }
+
+    #[tokio::test]
+    async fn a_store_that_receives_no_uploads_ages_out_an_expired_segment() {
+        let dir = temp_dir("periodic");
+        let device_dir = dir.join("phone");
+        std::fs::create_dir_all(&device_dir).expect("dir");
+        let expired = device_dir.join("20200101-old.jsonl.gz");
+        std::fs::write(&expired, b"x").expect("write");
+        let store = AppLogStore::new_in(dir.clone(), APP_LOG_RETENTION_DAYS, APP_LOG_BYTE_CAP);
+
+        store.start_sweeping(Journal::disabled());
+        for _ in 0..500 {
+            if !expired.exists() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        store.stop_sweeping(Duration::from_secs(5)).await;
+
+        assert!(!expired.exists(), "the periodic sweep removed the segment");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
