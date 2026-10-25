@@ -221,7 +221,9 @@ pub(super) async fn app_logs(
             warn_rejected(device, &error);
             let status = match error {
                 AppLogError::Io(_) => StatusCode::INTERNAL_SERVER_ERROR,
-                AppLogError::InvalidSegment | AppLogError::NotGzip => StatusCode::UNPROCESSABLE_ENTITY,
+                AppLogError::InvalidSegment | AppLogError::NotGzip => {
+                    StatusCode::UNPROCESSABLE_ENTITY
+                }
                 AppLogError::InvalidDevice => StatusCode::BAD_REQUEST,
             };
             (status, Json(json!({ "error": error.message() }))).into_response()
