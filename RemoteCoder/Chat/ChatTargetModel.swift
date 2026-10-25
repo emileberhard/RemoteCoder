@@ -50,6 +50,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
     @ObservationIgnored let metadataService: ConversationMetadataService
     private(set) var metadataStatus = SessionMetadataStatus()
     var gatewayWarning: GatewayWarning?
+    private(set) var providerHealth: ProviderHealth?
     private(set) var isResolvingMetadata = false
 
     @ObservationIgnored let voiceHistoryStore: RealtimeVoiceHistoryStore
@@ -278,7 +279,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
         modelCatalog.pickerOptions(including: selection)
     }
     func newChatDefaultModel() -> NewChatModelLookup {
-        modelCatalog.newChatDefault()
+        modelCatalog.newChatDefault(for: nil, health: providerHealth)
     }
     func configuredModel(id: String) -> NewChatModelLookup {
         modelCatalog.configured(id: id)
@@ -1503,6 +1504,10 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
         case .warning(let warning):
             gatewayWarning = warning
             logger.error("\(warning.message, privacy: .public)")
+        case .providerHealth(let health):
+            guard !replay, health != providerHealth else { return }
+            providerHealth = health
+            for screen in screens { screen.providerHealthChanged() }
         case .settings(let notification, _):
             await metadataService.observeSettings(notification, observedAt: .now)
             guard !isRetired else { return }

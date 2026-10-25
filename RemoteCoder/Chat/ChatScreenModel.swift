@@ -104,7 +104,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         historyService = target.historyService
         dictation = DictationSession(host: target, drafts: target.drafts)
         workingDirectory = HostPreferences.workingDirectory(hostID: target.hostID, defaults: target.chatDefaults)
-        let model = target.modelCatalog.newChatDefault().model
+        let model = target.newChatDefaultModel().model
         let reasoning = NewChatDefaults.reasoningSelection(defaults: target.chatDefaults)
         pickerSelection = ConversationSettingsSelection(
             model: model, reasoning: model.map { target.modelPickerPreferences.clamped(reasoning, for: $0) } ?? reasoning,
@@ -1652,13 +1652,29 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
 
     func refreshNewChatDefaults(for provider: AgentProvider? = nil) {
         guard activeSessionID == nil else { return }
-        let model = target.modelCatalog.newChatDefault(for: provider).model
+        let model = target.modelCatalog.newChatDefault(for: provider, health: target.providerHealth).model
         newChatModelSource = .resolvedDefault(provider)
         let reasoning = NewChatDefaults.reasoningSelection(defaults: target.chatDefaults)
         let fastMode = FastModeState.selection(NewChatDefaults.fastModeEnabled(defaults: target.chatDefaults))
         pickerSelection.choose(model: model, reasoning: model.map { visibleReasoning(reasoning, for: $0) } ?? reasoning,
                                fastMode: fastMode)
         recordBlankNewChatSetup()
+    }
+
+    func providerHealthChanged() {
+        guard activeSessionID == nil, case .resolvedDefault(nil) = newChatModelSource,
+              target.newChatDefaultModel().model?.id != selectedModel?.id else { return }
+        refreshNewChatDefaults()
+    }
+
+    var providerNotice: String? {
+        guard let health = target.providerHealth, let model = selectedModel else { return nil }
+        guard activeSessionID == nil else { return health.warning(for: model, isNewChat: false) }
+        if case .resolvedDefault(nil) = newChatModelSource, let preferred = target.modelCatalog.preferredProvider,
+           let notice = health.switchNotice(preferred: preferred, selected: model.provider) {
+            return notice
+        }
+        return health.warning(for: model, isNewChat: true)
     }
 
     func applyModelCatalog(for provider: AgentProvider, visibilityBefore: ModelVisibility) {

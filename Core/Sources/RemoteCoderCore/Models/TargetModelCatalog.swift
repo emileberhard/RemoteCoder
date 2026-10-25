@@ -6,7 +6,7 @@ struct TargetModelCatalog {
     let preferences: ModelPickerPreferences
     let defaults: UserDefaults
 
-    private var preferredProvider: AgentProvider? {
+    var preferredProvider: AgentProvider? {
         NewChatModelResolution.provider(preferredID: NewChatDefaults.preferredModelID(defaults: defaults), providers: Set(AgentProvider.allCases))
     }
 
@@ -45,8 +45,15 @@ struct TargetModelCatalog {
                                      providers: [provider])
     }
 
-    func newChatDefault(for provider: AgentProvider? = nil) -> NewChatModelLookup {
-        let providers = provider.map { Set([$0]) } ?? Set(AgentProvider.allCases)
+    func newChatDefault(for provider: AgentProvider?, health: ProviderHealth?) -> NewChatModelLookup {
+        if provider == nil, let working = health?.workingProviders, working.count < AgentProvider.allCases.count,
+           case .available(let model) = newChatDefault(among: working) {
+            return .available(model)
+        }
+        return newChatDefault(among: provider.map { [$0] } ?? Set(AgentProvider.allCases))
+    }
+
+    private func newChatDefault(among providers: Set<AgentProvider>) -> NewChatModelLookup {
         let preferredID = NewChatDefaults.preferredModelID(defaults: defaults)
         guard let model = NewChatModelResolution.model(
             preferredID: preferredID,
