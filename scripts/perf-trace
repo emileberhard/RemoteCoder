@@ -18,9 +18,8 @@ over which the summary reports Apple's hitch rate in ms/s with its rating, the m
 thread's CPU share and commits per second, so runs compare only the scrolling, not
 idle time around it. Samples whose stacks run in XCTest's automation frameworks
 (agent-device, XCUITest or Xcode device interaction snapshotting the app's
-accessibility tree on its main thread) are attributed separately, and a trace that
-contains them is rejected, because its CPU, commit and hitch figures are not the
-app's own.
+accessibility tree on its main thread) are attributed separately, and their CPU shares stay visible. A trace is rejected when automation exceeds
+1% of app CPU or main-thread CPU, or an observed automation share is unknown.
 
 Every xctrace export loads the whole trace, so exports run one at a time and stop
 at a quarter of the host's memory or after 120 seconds. One recording or summary
@@ -61,6 +60,8 @@ IPHONE_RENDER_SERVER = "backboardd"
 MAC_RENDER_SERVER = "WindowServer"
 INSTRUMENTS = ["Hitches", "GPU", "Thermal State"]
 TEMPLATES = ("Time Profiler", "Processor Trace", "Swift Concurrency", "System Trace", "File Activity", "Allocations")
+AUTOMATION_CPU_SHARE_LIMIT_PERCENT = 1
+AUTOMATION_FRAME_NAMES = ("_accessibilityUserTestingSnapshot", "_AXXMIGCopyParameterizedAttributeValue")
 DEVELOPER_TOOLING = re.compile(r"/Developer/Library/(Private)?Frameworks/")
 SIGNPOST_SUBSYSTEM = "RemoteCoder"
 MOTION_SIGNPOST = "TranscriptScroll"
@@ -254,10 +255,19 @@ def table_rows(trace: str, schema: str, columns: set[str]):
                 values[identifier] = Frame(
                     int(element.get("addr"), 16), None if binary is None else resolve(binary), element.get("name") or "",
                 )
-            elif element.tag in ("backtrace", "tagged-backtrace"):
+            elif element.tag in ("backtrace", "tagged-backtrace", "text-backtrace"):
                 values[identifier] = tuple(resolve(frame) for frame in element.iter("frame"))
             elif element.tag in kinds:
                 values[identifier] = element
+
+
+def explicit_symbol_files(path: Path) -> list[Path]:
+    if path.is_file():
+        return [path]
+    if path.suffix == ".dSYM":
+        return list((path / "Contents/Resources/DWARF").glob("*"))
+    return [root / name for root in (path, path / "Contents/MacOS")
+            for name in (APP, f"{APP}.debug.dylib")]
 
 
 def symbolicate(frames: set[Frame], apps: list[Path]) -> tuple[dict[Frame, tuple[str, ...]], dict[Frame, tuple[str, ...]]]:
@@ -267,8 +277,7 @@ def symbolicate(frames: set[Frame], apps: list[Path]) -> tuple[dict[Frame, tuple
     for frame in frames:
         if frame.binary is not None:
             by_binary[frame.binary].append(frame)
-    app_files = [root / name for app in apps for root in (app, app / "Contents/MacOS")
-                 for name in (APP, f"{APP}.debug.dylib")]
+    app_files = [file for app in apps for file in explicit_symbol_files(app)]
     files = symbol_files([binary.path for binary in by_binary], app_files)
     if missing := sorted({binary.name for binary in by_binary if binary.uuid not in files}):
         print(f"warning: no symbols with a matching UUID for {', '.join(missing)}", file=sys.stderr)
@@ -322,8 +331,9 @@ def recorded_run(trace: str) -> Run:
     )
 
 
-def is_developer_tooling(frame: Frame) -> bool:
-    return frame.binary is not None and DEVELOPER_TOOLING.search(frame.binary.path) is not None
+def is_automation_frame(frame: Frame) -> bool:
+    return (any(name in frame.name for name in AUTOMATION_FRAME_NAMES)
+            or (frame.binary is not None and DEVELOPER_TOOLING.search(frame.binary.path) is not None))
 
 
 def time_profile(trace: str) -> tuple[Counter, Counter, list[Sample], Counter]:
@@ -345,7 +355,7 @@ def time_profile(trace: str) -> tuple[Counter, Counter, list[Sample], Counter]:
         name = "main" if "Main Thread" in name else name.split(" (0x", 1)[0] or "other"
         stack = row.get("stack")
         stack = stack if isinstance(stack, tuple) else ()
-        automation = any(map(is_developer_tooling, stack))
+        automation = any(map(is_automation_frame, stack))
         if automation:
             automation_samples[name] += 1
         if weight is not None:
@@ -360,15 +370,20 @@ def thread_ms(samples: Iterable[Sample]) -> Counter:
     return totals
 
 
-def automation_summary(samples: list[Sample], counts: Counter) -> dict:
+def automation_summary(samples: list[Sample], counts: Counter, unweighted: int) -> dict:
     by_thread = thread_ms(sample for sample in samples if sample.automation)
     complete = counts.total() == sum(sample.automation for sample in samples)
+    total_cpu = sum(sample.weight_ms for sample in samples)
+    main_cpu = sum(sample.weight_ms for sample in samples if sample.thread == "main")
     return {
         "samples": counts.total(),
         "samplesByThread": dict(counts.most_common(8)),
         "cpuMs": round(by_thread.total(), 1) if complete else None,
         "cpuMsByThread": {name: round(ms, 1) for name, ms in by_thread.most_common(8)} if complete else None,
-        "source": "app samples whose stack includes a framework under /Developer/Library (XCTest automation)",
+        "cpuSharePercent": by_thread.total() / total_cpu * 100 if complete and not unweighted and total_cpu else None,
+        "mainThreadCpuSharePercent": by_thread["main"] / main_cpu * 100 if complete and not unweighted and main_cpu else None,
+        "rejectionThresholdPercent": AUTOMATION_CPU_SHARE_LIMIT_PERCENT,
+        "source": "app stacks containing /Developer/Library frameworks or accessibility user-testing snapshot/MIG frames",
     }
 
 
@@ -724,30 +739,69 @@ def frame_statistics(samples: list[Sample], names: dict):
     return stacks, inclusive, self_by_binary
 
 
-def processor_trace(trace: str, run: Run, count: int) -> dict | None:
+def processor_trace(trace: str, run: Run, count: int, apps: list[Path]) -> dict | None:
     if "processor-trace-intervals" not in run.schemas:
         return {"topFunctions": None, "unavailableReason": "no processor-trace-intervals export"} if run.template == "Processor Trace" else None
-    functions = defaultdict(lambda: {"callIntervals": 0, "selfMs": 0, "selfCycles": 0, "selfInstructions": 0})
+    profiles = {}
     missing = Counter()
-    for row in table_rows(trace, "processor-trace-intervals", {"process", "name", "self-duration", "self-cycles", "self-instructions"}):
+    frames = set()
+    columns = {"process", "name", "self-duration", "self-cycles", "self-instructions", "backtrace"}
+    for row in table_rows(trace, "processor-trace-intervals", columns):
         if process_name(row.get("process")) != APP:
             continue
         name = element_text(row.get("name")) or "<unavailable function>"
-        entry = functions[name]
+        stack = row.get("backtrace")
+        frame = stack[0] if isinstance(stack, tuple) and stack else None
+        identity = (frame.binary.uuid, frame.address) if frame is not None and frame.binary is not None else name
+        if identity not in profiles:
+            profiles[identity] = {"name": name, "frame": frame, "callIntervals": 0, "selfMs": 0,
+                                  "selfCycles": 0, "selfInstructions": 0}
+        entry = profiles[identity]
+        if frame is not None:
+            frames.add(frame)
         entry["callIntervals"] += 1
-        for column, field, divisor in (("self-duration", "selfMs", 1e6), ("self-cycles", "selfCycles", 1),
-                                       ("self-instructions", "selfInstructions", 1)):
+        for column, field in (("self-duration", "selfMs"), ("self-cycles", "selfCycles"),
+                              ("self-instructions", "selfInstructions")):
             value = trace_number(row.get(column))
             if value is None:
                 entry[field] = None
                 missing[column] += 1
             elif entry[field] is not None:
-                entry[field] += value / divisor
-    top = sorted(functions.items(), key=lambda item: item[1]["selfCycles"] or 0, reverse=True)[:count or 30]
-    return {"schema": "processor-trace-intervals", "topFunctions": dict(top) or None,
+                entry[field] += value / 1e6 if field == "selfMs" else int(value)
+    names, locations = symbolicate(frames, apps) if frames else ({}, {})
+    functions = {}
+    app_functions = set()
+    details = defaultdict(list)
+    app_roots = app_bundle_roots(frames)
+    for profile in profiles.values():
+        frame = profile["frame"]
+        label = profile["name"]
+        if frame is not None and frame.binary is not None:
+            if resolved := names.get(frame):
+                label = f"{resolved[-1]} (in {frame.binary.name})"
+            if frame_owner(frame, app_roots) == "app":
+                app_functions.add(label)
+            if len(details[label]) < 10:
+                details[label].append({"uuid": frame.binary.uuid, "binary": frame.binary.name,
+                    "address": hex(frame.address), "inlineFrames": list(locations.get(frame, ())),
+                    "unavailableReason": None if locations.get(frame) else
+                        "address has no named debug frame in the matching image" if frame in locations else
+                        "no UUID-matching symbol file"})
+        if label not in functions:
+            functions[label] = {"callIntervals": 0, "selfMs": 0, "selfCycles": 0, "selfInstructions": 0}
+        for field in functions[label]:
+            value = profile[field]
+            functions[label][field] = None if value is None or functions[label][field] is None else functions[label][field] + value
+    ordered = sorted(functions, key=lambda label: functions[label]["selfCycles"] or 0, reverse=True)
+    top = ordered[:count or 30]
+    top_app = [label for label in ordered if label in app_functions][:count or 30]
+    return {"schema": "processor-trace-intervals", "topFunctions": {label: functions[label] for label in top} or None,
+            "topAppFunctions": {label: functions[label] for label in top_app} or None,
+            "symbolLocations": {label: details[label] for label in dict.fromkeys([*top, *top_app]) if label in details},
             "unavailableReason": None if functions else "no app function-call intervals exported",
             "unavailableValueRows": dict(missing), "functionsObserved": len(functions),
-            "scope": "observed call intervals; calls crossing capture boundaries can be incomplete"}
+            "scope": "observed call intervals; calls crossing capture boundaries can be incomplete",
+            "selfTimeScope": "exported self-duration is elapsed time and can include off-CPU waits; rank CPU work by selfCycles"}
 
 
 def file_activity(trace: str, schemas: frozenset[str]) -> dict | None:
@@ -850,6 +904,7 @@ def summarize(trace: str, frames: int, callers: list[str], apps: list[Path]) -> 
     cpu_ms, unweighted, samples, automation_samples = (time_profile(trace) if "time-profile" in run.schemas
                                                         else (Counter(), Counter(), [], Counter()))
     app_threads = thread_ms(samples)
+    app_threads_without_automation = thread_ms(sample for sample in samples if not sample.automation)
     commits, app_frames, commit_starts = (hitch_updates(trace) if "hitches-updates" in run.schemas
                                           else (None, set(), None))
     gpu_ms, unavailable_gpu = gpu_ms_by_process(trace) if "metal-gpu-intervals" in run.schemas else (None, Counter())
@@ -876,6 +931,7 @@ def summarize(trace: str, frames: int, callers: list[str], apps: list[Path]) -> 
                                 if frame_owner(frame, app_roots) == owner}).most_common(frames or 10)
     )
     stacks, inclusive, self_by_binary = frame_statistics(samples, names)
+    _, clean_inclusive, _ = frame_statistics([sample for sample in samples if not sample.automation], names)
 
     def rate(value: float) -> float:
         return round(value / run.seconds, 2)
@@ -927,7 +983,12 @@ def summarize(trace: str, frames: int, callers: list[str], apps: list[Path]) -> 
         "app": {
             **app_cpu,
             "cpuMsByThread": None if app_cpu["cpuUnavailableReason"] else {name: round(ms, 1) for name, ms in app_threads.most_common(8)},
-            "automation": automation_summary(samples, automation_samples),
+            "mainThreadCpuMs": None if app_cpu["cpuUnavailableReason"] else round(app_threads["main"], 1),
+            "mainThreadCpuMsExcludingAutomation": None if app_cpu["cpuUnavailableReason"] else round(app_threads_without_automation["main"], 1),
+            "automation": automation_summary(samples, automation_samples, unweighted[APP]) if "time-profile" in run.schemas else {
+                "samples": None, "samplesByThread": None, "cpuMs": None, "cpuMsByThread": None,
+                "unavailableReason": "trace has no time-profile stacks to check for XCTest automation",
+            },
             "commits": commits[APP] if commits is not None else None,
             "commitsPerSecond": rate(commits[APP]) if commits is not None else None,
             "commitsUnavailableReason": "trace did not collect hitches-updates" if commits is None else None,
@@ -944,6 +1005,7 @@ def summarize(trace: str, frames: int, callers: list[str], apps: list[Path]) -> 
         "mainTopFunctionsSelfMs": top_functions([sample for sample in samples if sample.thread == "main"], names, frames)
                                   if frames else None,
         "appFramesInclusiveMs": heaviest(inclusive["app"], frames),
+        "appFramesInclusiveMsExcludingAutomation": heaviest(clean_inclusive["app"], frames),
         "systemFramesInclusiveMs": heaviest(inclusive["system"], frames),
         "appSelfMsByBinary": heaviest(self_by_binary, 10),
         "nearestAppCallersMs": {
@@ -966,7 +1028,7 @@ def summarize(trace: str, frames: int, callers: list[str], apps: list[Path]) -> 
              "unavailableReason": None if locations.get(frame) else "no matching debug information for this address"}
             for frame in location_frames if frame.binary is not None
         ] if frames or callers else None,
-        "processorTrace": processor_trace(trace, run, frames),
+        "processorTrace": processor_trace(trace, run, frames, apps),
         "allocations": {"unavailableReason": "xctrace does not expose allocation events in this trace", "events": None}
                        if run.template == "Allocations" else None,
     }
@@ -1040,8 +1102,8 @@ def recording(trace: Path, seconds: int, target: list[str], instruments: list[st
                 break
         else:
             sys.exit(f"xctrace exited ({recorder.wait()}) before it started recording {trace}. "
-                     + ("Processor Trace requires A18+/M4+ hardware and Developer → Processor Trace enabled on the device."
-                        if template == "Processor Trace" else "Keep RemoteCoder running and the device unlocked. Single-process templates require a debuggable install with get-task-allow."))
+                     + ("Processor Trace requires a debuggable install signed with get-task-allow (distribution builds are excluded from attach discovery), A18+/M4+ hardware, and Developer → Processor Trace enabled on the device."
+                        if template == "Processor Trace" else "Keep RemoteCoder running and the device unlocked. Single-process recording requires a debuggable install signed with get-task-allow; distribution builds are excluded from xctrace attach discovery."))
         try:
             yield
         finally:
@@ -1062,12 +1124,23 @@ def selected_instruments(template: str, swiftui: bool, extra: Iterable[str]) -> 
 def reject_automation(summary: dict) -> None:
     automation = summary["app"]["automation"]
     if automation["samples"]:
-        sys.exit(f"{summary['trace']} is not a measurement of {APP}: {automation['samples']} of its samples "
-                 f"({automation['samplesByThread']}, {automation['cpuMs']} ms) ran inside XCTest automation, "
+        app_share = automation.get("cpuSharePercent")
+        main_share = automation.get("mainThreadCpuSharePercent")
+        if (app_share is not None and app_share <= AUTOMATION_CPU_SHARE_LIMIT_PERCENT
+                and (main_share is None or main_share <= AUTOMATION_CPU_SHARE_LIMIT_PERCENT)):
+            return
+        sys.exit(f"{summary['trace']} exceeds the automation allowance for {APP}: {automation['samples']} of its samples "
+                 f"({automation['samplesByThread']}, {automation['cpuMs']} ms, app share {app_share}%, main-thread share {main_share}%) ran inside XCTest automation, "
                  "such as the accessibility snapshots "
                  "agent-device, XCUITest or Xcode device interaction take on the app's main thread, so its CPU, commit "
-                 "and hitch figures are not the app's. Drive the journey with perf-sim's in-app harness or by hand, "
+                 f"and hitch figures are contaminated beyond the {AUTOMATION_CPU_SHARE_LIMIT_PERCENT}% CPU limit or its share is unknown. Drive the journey with perf-sim's in-app harness or by hand, "
                  "then record again")
+
+
+def require_app_measurement(summary: dict) -> None:
+    processor = summary.get("processorTrace")
+    if summary["app"]["cpuUnavailableReason"] and not (processor and processor["topFunctions"]):
+        sys.exit(summary["app"]["cpuUnavailableReason"])
 
 
 def report(summary: dict, remedy: str) -> None:
@@ -1075,8 +1148,7 @@ def report(summary: dict, remedy: str) -> None:
     if summary["endReason"] != TRACE_COMPLETE:
         sys.exit(f"{summary['trace']} stopped after {summary['seconds']} s: {summary['endReason']}; {remedy}")
     reject_automation(summary)
-    if summary["app"]["cpuUnavailableReason"]:
-        sys.exit(summary["app"]["cpuUnavailableReason"])
+    require_app_measurement(summary)
 
 
 def record_device(device: str, label: str, seconds: int, frames: int, callers: list[str], apps: list[Path], swiftui: bool, template: str = "Time Profiler", instruments: Iterable[str] = ()) -> None:
@@ -1179,8 +1251,8 @@ def main() -> None:
                         "and the main thread's top functions by self time")
     parser.add_argument("--callers", action="append", default=[], metavar="REGEX",
                         help="attribute time in frames matching REGEX to their nearest RemoteCoder caller; repeatable")
-    parser.add_argument("--symbols", action="append", default=[], type=Path, metavar="APP",
-                        help="RemoteCoder.app build of the traced install that has no retained dSYM, e.g. a perf-sim build")
+    parser.add_argument("--symbols", action="append", default=[], type=Path, metavar="PATH",
+                        help="matching .app, .dSYM, or Mach-O symbol file; repeatable")
     commands = parser.add_subparsers(dest="command", required=True)
     record_parser = commands.add_parser("record", help="record a system-wide trace of the current journey, then summarize it")
     record_parser.add_argument("label", help="trace name, e.g. before-streaming")
@@ -1227,8 +1299,7 @@ def main() -> None:
             summary = summarize(args.trace, args.frames, args.callers, args.symbols)
             print(json.dumps(summary, indent=2))
             reject_automation(summary)
-            if summary["app"]["cpuUnavailableReason"]:
-                sys.exit(summary["app"]["cpuUnavailableReason"])
+            require_app_measurement(summary)
         elif args.mac:
             record_mac(args.label, args.seconds, args.frames, args.callers, args.symbols, args)
         else:

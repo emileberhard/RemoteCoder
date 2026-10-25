@@ -18,6 +18,17 @@ sys.modules[spec.name] = trace
 loader.exec_module(trace)
 
 
+class ExplicitSymbolsTests(unittest.TestCase):
+    def test_dsym_and_direct_binary(self):
+        with tempfile.TemporaryDirectory() as directory:
+            bundle = Path(directory) / "RemoteCoder.app.dSYM"
+            binary = bundle / "Contents/Resources/DWARF/RemoteCoder"
+            binary.parent.mkdir(parents=True)
+            binary.touch()
+            self.assertEqual(trace.explicit_symbol_files(bundle), [binary])
+            self.assertEqual(trace.explicit_symbol_files(binary), [binary])
+
+
 class Export:
     pid = 0
 
@@ -161,6 +172,87 @@ NO_AUTOMATION = {"app": {"automation": {"samples": 0}, "cpuUnavailableReason": N
 
 
 class PerfTraceTests(unittest.TestCase):
+    def test_processor_calls_use_uuid_matched_symbols_and_preserve_inline_locations(self):
+        xml = """<trace-query-result><node><schema name="processor-trace-intervals">
+        <col><mnemonic>process</mnemonic><engineering-type>process</engineering-type></col>
+        <col><mnemonic>name</mnemonic><engineering-type>text-location</engineering-type></col>
+        <col><mnemonic>self-duration</mnemonic><engineering-type>duration</engineering-type></col>
+        <col><mnemonic>self-cycles</mnemonic><engineering-type>uint64</engineering-type></col>
+        <col><mnemonic>self-instructions</mnemonic><engineering-type>uint64</engineering-type></col>
+        <col><mnemonic>backtrace</mnemonic><engineering-type>text-backtrace</engineering-type></col>
+        </schema><row><process id="1" fmt="RemoteCoder (12)"/><text-location id="2" fmt="0x1010 RemoteCoder"/>
+        <duration id="3">2000000</duration><uint64 id="4">100</uint64><uint64 id="5">50</uint64>
+        <text-backtrace id="6"><frame id="7" name="0x1010" addr="0x1010"><binary id="8" name="RemoteCoder"
+        UUID="A" arch="arm64" load-addr="0x1000" path="/RemoteCoder.app/RemoteCoder"/></frame></text-backtrace></row>
+        <row><process ref="1"/><text-location ref="2"/><duration ref="3"/><uint64 ref="4"/>
+        <uint64 ref="5"/><text-backtrace ref="6"/></row></node></trace-query-result>"""
+        from symbols import SymbolFile
+        lines = ("inner (in RemoteCoder) (Parser.swift:10)", "parse (in RemoteCoder) (Parser.swift:20)")
+        run = trace.Run(2, "Time limit reached", "iOS", frozenset({"processor-trace-intervals"}), "now")
+        with (patch.object(trace.subprocess, "Popen", return_value=Export(xml)),
+              patch.object(trace, "symbol_files", return_value={"A": SymbolFile(Path("/matching-dsym"), "arm64")}),
+              patch.object(trace, "atos", return_value=[lines])):
+            result = trace.processor_trace("x.trace", run, 10, [])
+        self.assertEqual(result["topAppFunctions"], {"parse (in RemoteCoder)": {
+            "callIntervals": 2, "selfMs": 4, "selfCycles": 200, "selfInstructions": 100}})
+        self.assertEqual(result["symbolLocations"]["parse (in RemoteCoder)"][0]["inlineFrames"], list(lines))
+
+    def test_accessibility_snapshot_ancestors_count_as_automation_without_developer_frames(self):
+        for name in ("-[NSObject(UIAccessibilityAutomation) _accessibilityUserTestingSnapshotWithOptions:]",
+                     "_AXXMIGCopyParameterizedAttributeValue"):
+            xml = PROFILE_XML.replace("__XCTPerformOnMainRunLoop_block_invoke", name)
+            xml = xml.replace("/System/Developer/Library/PrivateFrameworks/XCTAutomationSupport.framework/XCTAutomationSupport",
+                              "/System/Library/AccessibilityBundles/UIKit.axbundle/UIKit")
+            result, _ = self.summary({"time-profile"}, tables={"time-profile": xml})
+            self.assertEqual(result["app"]["mainThreadCpuMs"], 7)
+            self.assertEqual(result["app"]["mainThreadCpuMsExcludingAutomation"], 3)
+            self.assertEqual(result["app"]["automation"]["cpuMs"], 4)
+            with self.assertRaises(SystemExit):
+                trace.reject_automation(result)
+
+    def test_automation_rejection_uses_app_and_main_thread_cpu_shares(self):
+        cases = [(4, 20000, 18491, "main", 0, False), (1, 99, 0, "main", 0, False),
+                 (2, 98, 10000, "main", 0, True), (2, 98, 0, "worker", 0, True),
+                 (4, 20000, 0, "main", 1, True)]
+        for automated, clean, background, thread, unweighted, reject in cases:
+            with self.subTest(case=(automated, clean, background, thread, unweighted)):
+                samples = [trace.Sample(0, thread, automated, (), True),
+                           trace.Sample(1, thread, clean, (), False),
+                           trace.Sample(2, "background", background, (), False)]
+                automation = trace.automation_summary(samples, trace.Counter({thread: 1}), unweighted)
+                summary = {"trace": "fixture.trace", "app": {"automation": automation}}
+                if reject:
+                    with self.assertRaises(SystemExit):
+                        trace.reject_automation(summary)
+                else:
+                    trace.reject_automation(summary)
+                    self.assertLessEqual(automation["cpuSharePercent"], 1)
+
+    def test_processor_only_trace_preserves_unknown_sampled_cpu_and_automation(self):
+        xml = """<trace-query-result><node><schema name="processor-trace-intervals">
+        <col><mnemonic>process</mnemonic><engineering-type>process</engineering-type></col>
+        <col><mnemonic>name</mnemonic><engineering-type>text-location</engineering-type></col>
+        <col><mnemonic>self-duration</mnemonic><engineering-type>duration</engineering-type></col>
+        <col><mnemonic>self-cycles</mnemonic><engineering-type>uint64</engineering-type></col>
+        <col><mnemonic>self-instructions</mnemonic><engineering-type>uint64</engineering-type></col>
+        </schema><row><process fmt="RemoteCoder (12)"/><text-location fmt="encode"/>
+        <duration>500000</duration><uint64>17</uint64><uint64>12</uint64></row></node></trace-query-result>"""
+        summary, _ = self.summary({"processor-trace-intervals"}, tables={"processor-trace-intervals": xml})
+        self.assertEqual(summary["processorTrace"]["topFunctions"]["encode"]["selfCycles"], 17)
+        self.assertIsNone(summary["app"]["cpuMs"])
+        self.assertIsNone(summary["app"]["automation"]["samples"])
+        with redirect_stdout(io.StringIO()):
+            trace.report(summary, "retry")
+
+    def test_single_process_attach_failure_explains_debug_signing(self):
+        recorder = Recorder()
+        recorder.stdout = io.StringIO("")
+        recorder.returncode = 19
+        with (patch.object(trace.subprocess, "Popen", return_value=recorder),
+              self.assertRaisesRegex(SystemExit, "debuggable.*get-task-allow.*distribution"),
+              trace.recording(Path("x.trace"), 5, ["--attach", "RemoteCoder"], [], "Allocations")):
+            pass
+
     def test_new_template_tables_preserve_unknown_metrics_and_filter_other_apps(self):
         import xml.etree.ElementTree as ET
 
@@ -182,7 +274,7 @@ class PerfTraceTests(unittest.TestCase):
         ]
         run = trace.Run(2, "Time limit reached", "iOS", frozenset({"processor-trace-intervals"}), "now")
         with patch.object(trace, "table_rows", return_value=iter(rows)):
-            result = trace.processor_trace("x.trace", run, 10)
+            result = trace.processor_trace("x.trace", run, 10, [])
         self.assertEqual(result["topFunctions"], {"encode": {"callIntervals": 2, "selfMs": None,
                                                            "selfCycles": 110, "selfInstructions": 55}})
         self.assertEqual(result["unavailableValueRows"], {"self-duration": 1})
