@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 pub(crate) const EXTERNAL_PROVIDERS_ENV_KEY: &str = "RC_CODEX_GATEWAY_EXTERNAL_PROVIDERS_FILE";
 pub(crate) const NATIVE_PROVIDER: &str = "openai";
@@ -245,8 +245,13 @@ impl ExternalProviders {
             fields.remove("serviceTierForTurn"),
         ];
         let mut mapped = tiers.iter().any(Option::is_some);
+        if mapped {
+            debug!("dropped a service tier for the Codex fallback provider");
+        }
         if let Some(requested) = fields.get("model").and_then(native) {
-            match matching_model(models, &requested) {
+            let slug = matching_model(models, &requested);
+            debug!(%requested, fallback = ?slug, "mapped a native model onto the Codex fallback provider");
+            match slug {
                 Some(slug) => fields.insert("model".into(), slug),
                 None => fields.remove("model"),
             };
@@ -258,6 +263,7 @@ impl ExternalProviders {
             && let Some(requested) = native(model)
             && let Some(slug) = matching_model(models, &requested)
         {
+            debug!(%requested, fallback = %slug, "mapped a native collaboration model onto the Codex fallback provider");
             *model = slug;
             mapped = true;
         }

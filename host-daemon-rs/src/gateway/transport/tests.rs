@@ -1213,3 +1213,81 @@ async fn historical_id_capacity_rejects_owned_identifiers_before_projection_and_
     client.closed.cancel();
     server.abort();
 }
+
+async fn gateway_with_unreachable_codex() -> (tempfile::TempDir, std::path::PathBuf, TestGateway) {
+    use crate::providers::codex::daemon::CodexAppServer;
+
+    let home = tempfile::tempdir().unwrap();
+    let directory = home.path().join("app-server-control");
+    tokio::fs::create_dir_all(&directory).await.unwrap();
+    let gateway = TestGateway::with_codex(
+        Arc::new(CodexAppServer::new_for_test_socket(home.path().into())),
+        None,
+    );
+    *gateway.control_init_result.lock().await = Some(json!({}));
+    (home, directory.join("app-server-control.sock"), gateway)
+}
+
+#[tokio::test]
+async fn a_connection_that_could_not_reach_codex_reconnects_once_it_can() {
+    use tokio::net::UnixListener;
+    use tokio_tungstenite::accept_async;
+
+    let (_home, path, gateway) = gateway_with_unreachable_codex().await;
+    let (mut socket, server) = connect_client(&gateway).await;
+    assert_eq!(next_json(&mut socket).await["method"], "daemon/ready");
+    let client_id = *gateway.clients.iter().next().unwrap().key();
+    assert!(gateway.is_degraded(client_id));
+
+    let listener = UnixListener::bind(path).unwrap();
+    let upstream = tokio::spawn(async move {
+        loop {
+            let (stream, _) = listener.accept().await.unwrap();
+            tokio::spawn(async move {
+                let mut socket = accept_async(stream).await.unwrap();
+                while socket.next().await.is_some() {}
+            });
+        }
+    });
+    let close = tokio::time::timeout(Duration::from_secs(15), async {
+        loop {
+            if let UpstreamMessage::Close(frame) = socket.next().await.unwrap().unwrap() {
+                break frame.unwrap();
+            }
+        }
+    })
+    .await
+    .expect("the connection must close once Codex is reachable");
+    server.abort();
+    upstream.abort();
+    assert_eq!(u16::from(close.code), RESTARTING_CLOSE_CODE);
+    assert_eq!(&*close.reason, "Codex is available; reconnect");
+    assert!(!gateway.is_degraded(client_id));
+}
+
+#[tokio::test]
+async fn a_degraded_connection_that_closes_first_leaves_no_reconnect_probe() {
+    use tokio::net::UnixListener;
+
+    let (_home, path, gateway) = gateway_with_unreachable_codex().await;
+    let (mut socket, server) = connect_client(&gateway).await;
+    assert_eq!(next_json(&mut socket).await["method"], "daemon/ready");
+    let client_id = *gateway.clients.iter().next().unwrap().key();
+    socket.close(None).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !gateway.clients.is_empty() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(!gateway.is_degraded(client_id));
+
+    let listener = UnixListener::bind(path).unwrap();
+    let probed = tokio::time::timeout(Duration::from_secs(7), listener.accept()).await;
+    server.abort();
+    assert!(
+        probed.is_err(),
+        "a closed connection must not keep probing Codex"
+    );
+}

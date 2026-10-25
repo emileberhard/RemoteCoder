@@ -810,7 +810,7 @@ async fn answer_reset_account(gateway: &Arc<Gateway>, control: &mut FakeControl)
 }
 
 #[tokio::test]
-async fn interrupted_work_waits_for_sign_in_and_nothing_pending_starts_without_it() {
+async fn interrupted_work_waits_a_bounded_time_for_sign_in_and_nothing_pending_starts_without_it() {
     use crate::gateway::provider_health::CodexHealth;
     use crate::runtime::recovery::{
         RecoveryJournal, RecoveryStore, RecoveryTask, RecoveryTaskStatus,
@@ -864,7 +864,16 @@ async fn interrupted_work_waits_for_sign_in_and_nothing_pending_starts_without_i
     .unwrap();
     assert!(!waiting.is_finished());
     assert!(!fixture.gateway.codex_unavailable().await.retryable);
-    waiting.abort();
+
+    tokio::time::pause();
+    let started = tokio::time::Instant::now();
+    tokio::time::timeout(Duration::from_secs(300), waiting)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(started.elapsed() >= Duration::from_secs(110));
+    assert_ne!(fixture.gateway.published_codex_health(), awaiting);
 }
 
 #[tokio::test]

@@ -53,7 +53,7 @@ and tells the client which provider is broken and why.
 - When Codex control becomes ready, the gateway closes every such connection
   with 4012 so the app reconnects through the ordinary path and gets a full
   connection. A connection whose own app-server connect failed while control
-  was ready retries the connect after 1 s, doubling to 30 s, for as long as it
+  was ready retries the connect after 5 s, doubling to 30 s, for as long as it
   stays open, and closes with 4012 on the first success. There is no in-place
   upstream attach.
 - New Codex work (requests that need admission) on any connection waits for
@@ -64,10 +64,12 @@ and tells the client which provider is broken and why.
 
 ## Copilot fallback
 
-- Codex sign-in gates readiness only while the recovery journal has pending
-  tasks: interrupted turns resume after sign-in succeeds rather than into a
-  certain auth failure, retrying from 1 s, doubling to 30 s. Pending work on
-  fallback threads waits too. With nothing pending, a failed router token
+- While the recovery journal has pending tasks, Codex readiness waits up to
+  2 minutes for sign-in, retrying every 5 s, so interrupted turns resume
+  signed in rather than into a certain auth failure. After that, recovery runs
+  anyway: interrupted native turns fail visibly with Codex's sign-in error and
+  Codex becomes ready with the fallback, so pending work on fallback threads
+  waits at most that long. With nothing pending, a failed router token
   issue is recorded in the generation's auth state, Codex becomes ready, and
   the renewal loop retries every 30 seconds until a token is installed.
 - The first provider in the operator's external providers file is the

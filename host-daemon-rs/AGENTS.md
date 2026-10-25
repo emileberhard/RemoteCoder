@@ -85,7 +85,7 @@ owner until the last fixture is dropped.
   the client is served without Codex: gateway-owned requests run, `initialize`
   is answered locally and native requests fail with `providerUnavailable`.
   Codex becoming ready closes those connections with 4012; a connection whose
-  own connect failed while control was ready retries it (1 s doubling to 30 s)
+  own connect failed while control was ready retries it (5 s doubling to 30 s)
   and closes with 4012 on success. New Codex work on any connection waits for
   ready control, which follows restart recovery.
 - Every authenticated remote WebSocket gets its own Unix WebSocket. The
@@ -322,8 +322,8 @@ owner until the last fixture is dropped.
   - `model/list` is gateway-owned: the native list plus one row per external
     model, with `modelProvider` and `modelProviderName`, on the last page.
   - The first configured provider is the Codex fallback. A failed router token
-    issue gates Codex readiness only while the recovery journal has pending
-    tasks; while no valid subscription token is installed, client
+    issue holds Codex readiness for at most 2 minutes while the recovery
+    journal has pending tasks; while no valid subscription token is installed, client
     `thread/start` on the native provider moves to the fallback's matching or
     first model, and threads never change provider afterwards. On fallback
     threads, every thread-scoped request (`thread/resume`, `thread/fork`,
