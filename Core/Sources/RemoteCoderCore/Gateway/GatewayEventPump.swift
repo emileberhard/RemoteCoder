@@ -321,7 +321,7 @@ final class GatewayEventPump {
                     await target.value?.report(afterSequence == nil ? .connecting : .reconnecting, generation: generation)
                 }
                 keptConnection = false
-                try await gateway.connectIfNeeded()
+                try await gateway.connectWhenPermitted()
                 await target.value?.report(.connected, generation: generation)
 
                 // Replay notifications missed since the last delivered gateway sequence.
@@ -334,7 +334,7 @@ final class GatewayEventPump {
                 await target.value?.report(.disconnected, generation: generation)
                 logger.notice("Gateway connect failed for notification listener: \(String(describing: error), privacy: .public)")
                 if Task.isCancelled { return }
-                try? await Task.sleep(for: .milliseconds(450))
+                if case GatewayClient.ClientError.retired = error { return }
                 continue
             }
 
@@ -385,7 +385,6 @@ final class GatewayEventPump {
             keptConnection = await gateway.disconnections == disconnections
             if keptConnection { continue }
             await target.value?.report(.disconnected, generation: generation)
-            try? await Task.sleep(for: .milliseconds(450))
         }
     }
 }

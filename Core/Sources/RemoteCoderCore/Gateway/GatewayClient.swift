@@ -141,6 +141,10 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
     private var didInitialize: Bool = false
     private var supportsRequestCancellation = false
     private var connectionInFlight: Task<Void, Error>?
+    private var reconnect = GatewayReconnectPolicy()
+    private var lastConnectionFailure: (any Error)?
+    private var reconnectWaiters: [UUID: CheckedContinuation<Void, Never>] = [:]
+    private var expeditedBy: ReconnectTrigger?
     private var initializeInFlight: Task<Void, Error>?
     private var contentSubscriptionRevision: UInt64 = 0
     private var contentSubscriptionThreads: Set<String> = []
@@ -230,9 +234,31 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
         }
     }
 
+    private enum ReconnectTrigger: String {
+        case demand
+        case backoff
+        case foreground
+        case networkPath
+    }
+
     func connectIfNeeded() async throws {
+        try await connect(waitingAtMost: timeouts.request)
+    }
+
+    func connectWhenPermitted() async throws {
+        try await connect(waitingAtMost: nil)
+    }
+
+    private func connect(waitingAtMost budget: Duration?) async throws {
         guard !isRetired else { throw ClientError.retired }
         try Task.checkCancellation()
+        let deadline = budget.map { ContinuousClock.now + $0 }
+        while connectionInFlight == nil, let notBefore = reconnect.notBefore, notBefore > .now {
+            if let deadline, deadline < notBefore { throw lastConnectionFailure ?? ClientError.connectionClosed }
+            await waitForReconnect(until: notBefore)
+            guard !isRetired else { throw ClientError.retired }
+            try Task.checkCancellation()
+        }
         if didInitialize, webSocket?.state == .running {
             try await synchronizeContentSubscriptions()
             return
@@ -244,8 +270,10 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
             return
         }
 
+        let trigger = expeditedBy ?? (reconnect.failures > 0 ? .backoff : .demand)
+        expeditedBy = nil
         let task = Task(name: "Codex gateway connection") { [self] in
-            try await establishConnection()
+            try await establishConnection(trigger: trigger)
         }
         connectionInFlight = task
         do {
@@ -258,24 +286,37 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
         }
     }
 
-    private func establishConnection() async throws {
+    private func establishConnection(trigger: ReconnectTrigger) async throws {
+        let started = ContinuousClock.now
+        let step = reconnect.failures
+        let candidates = await routes?.connectionRoutes() ?? [.configured]
         do {
-            try await connectOverAvailableRoute()
+            let route = try await connectOverAvailableRoute(candidates, startedAt: started)
+            logger.notice("Gateway connection attempt trigger=\(trigger.rawValue, privacy: .public) step=\(step) routes=\(candidates.count) elapsedMs=\(started.duration(to: .now) / .milliseconds(1)) outcome=connected route=\(String(describing: route), privacy: .public)")
         } catch {
             if !Task.isCancelled { await disconnectTransport(reason: error) }
-            guard let error = error as? URLError else { throw error }
-            // Only transport failures are reattributed: a dead host and a wrong
-            // active host both surface as a bare "Could not connect to the
-            // server.", which names neither. Protocol errors already say what
-            // they are and pass through untouched.
-            throw ClientError.connectionFailed(
-                host: config.hostLabel,
-                reason: error.localizedDescription
-            )
+            let failure: any Error = if let error = error as? URLError {
+                // Only transport failures are reattributed: a dead host and a wrong
+                // active host both surface as a bare "Could not connect to the
+                // server.", which names neither. Protocol errors already say what
+                // they are and pass through untouched.
+                ClientError.connectionFailed(
+                    host: config.hostLabel,
+                    reason: error.localizedDescription
+                )
+            } else {
+                error
+            }
+            guard !Task.isCancelled, !isRetired, !(error is CancellationError) else { throw failure }
+            lastConnectionFailure = failure
+            let delay = reconnect.failed(at: .now, restartingSince: restartObservedAt)
+            logger.notice("Gateway connection attempt trigger=\(trigger.rawValue, privacy: .public) step=\(step) routes=\(candidates.count) elapsedMs=\(started.duration(to: .now) / .milliseconds(1)) outcome=failed nextDelayMs=\(delay / .milliseconds(1)) error=\(failure.localizedDescription, privacy: .public)")
+            throw failure
         }
     }
 
-    private func connectOverAvailableRoute() async throws {
+    private func connectOverAvailableRoute(_ candidates: [GatewayRoute], startedAt started: ContinuousClock.Instant)
+        async throws -> GatewayRoute.Kind {
         guard !isRetired else { throw ClientError.retired }
         try Task.checkCancellation()
         if let webSocket {
@@ -287,10 +328,41 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
             throw ClientError.invalidURL
         }
 
-        let started = ContinuousClock.now
-        let race = try await race(await routes?.connectionRoutes() ?? [.configured])
+        let race = try await race(candidates)
         try await install(race.socket, over: race.route)
         await routes?.connected(over: race.route, startedAt: started, afterFailing: race.unrecorded)
+        return race.route.kind
+    }
+
+    private func waitForReconnect(until deadline: ContinuousClock.Instant) async {
+        let id = UUID()
+        let timer = Task { [weak self] in
+            guard (try? await Task.sleep(until: deadline)) != nil else { return }
+            await self?.wakeReconnectWaiter(id)
+        }
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { reconnectWaiters[id] = $0 }
+        } onCancel: {
+            Task { [weak self] in await self?.wakeReconnectWaiter(id) }
+        }
+        timer.cancel()
+    }
+
+    private func wakeReconnectWaiter(_ id: UUID) {
+        reconnectWaiters.removeValue(forKey: id)?.resume()
+    }
+
+    private func wakeReconnectWaiters() {
+        let waiters = reconnectWaiters.values
+        reconnectWaiters.removeAll()
+        for waiter in waiters { waiter.resume() }
+    }
+
+    private func expediteReconnect(_ trigger: ReconnectTrigger) {
+        guard !isConnected, connectionInFlight == nil, reconnect.expedite(at: .now) else { return }
+        expeditedBy = trigger
+        logger.notice("Gateway reconnect expedited trigger=\(trigger.rawValue, privacy: .public)")
+        wakeReconnectWaiters()
     }
 
     private struct GatewaySocket: Sendable {
@@ -315,7 +387,10 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
             outcome.winner?.connection.task.cancel(with: .goingAway, reason: nil)
             throw isRetired ? ClientError.retired : CancellationError()
         }
-        var failure: (any Error)?
+        guard let winner = outcome.winner else {
+            let failure = outcome.failures.first { $0.route == .configured }?.error ?? outcome.failures.first?.error
+            throw isRestarting ? ClientError.gatewayRestarting : failure ?? ClientError.connectionClosed
+        }
         var unrecorded: [GatewayRoute] = []
         for (route, error) in outcome.failures {
             let blamesRoute = switch error {
@@ -323,10 +398,6 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
             default: !isRestarting
             }
             if blamesRoute, await routes?.failed(route, error: error, startedAt: started) == false { unrecorded.append(route) }
-            if route == .configured || failure == nil { failure = error }
-        }
-        guard let winner = outcome.winner else {
-            throw isRestarting ? ClientError.gatewayRestarting : failure ?? ClientError.connectionClosed
         }
         return RaceWinner(route: winner.route, socket: winner.connection, unrecorded: unrecorded)
     }
@@ -430,6 +501,7 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
         }
         logger.notice("Gateway connected and initialized")
         restartObservedAt = nil
+        reconnect.connected(at: .now)
         if !livenessSuspended { resumeLivenessChecks() }
         announced = .connected(route.kind)
         hub.emit(.connected(connection: generation, route: route.kind))
@@ -547,7 +619,10 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
         pingTask = nil
         pendingPingID = nil
         receiveDeadline.resume(at: .now)
-        guard didInitialize, let socket = webSocket else { return }
+        guard didInitialize, let socket = webSocket else {
+            expediteReconnect(.foreground)
+            return
+        }
         let generation = connectionGeneration
         sendPing(socket: socket, generation: generation)
         pingTask = Task { [weak self] in
@@ -561,7 +636,11 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
     }
 
     func networkPathChanged() {
-        guard !isRetired, didInitialize, !livenessSuspended, let socket = webSocket else { return }
+        guard !isRetired, !livenessSuspended else { return }
+        guard didInitialize, let socket = webSocket else {
+            expediteReconnect(.networkPath)
+            return
+        }
         receiveDeadline.allowStandby()
         sendPing(socket: socket, generation: connectionGeneration)
     }
@@ -602,6 +681,7 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
     /// Retirement is terminal: late callbacks cannot reconnect a removed host.
     func retire() async {
         isRetired = true
+        wakeReconnectWaiters()
         let connecting = connectionInFlight
         let receiving = receiveTask
         let cleanup = Array(observationCleanupTasks.values)
@@ -638,8 +718,10 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
     }
 
     private func closeSocket(failing error: Error) -> UUID {
-        if isConnected { restartObservedAt = nil }
+        let wasConnected = isConnected
+        if wasConnected { restartObservedAt = nil }
         let error = webSocket.map(observeRestart(closing:)) == true ? ClientError.gatewayRestarting : error
+        if wasConnected { reconnect.disconnected(at: .now, restartingSince: restartObservedAt) }
         let lostGeneration = connectionGeneration
         connectionGeneration = UUID()
         receiveDeadline = GatewayReceiveDeadline(now: .now)

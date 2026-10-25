@@ -146,6 +146,26 @@ struct GatewayEventPumpTests {
         }
     }
 
+    @Test func requestsDuringARefusalJoinTheScheduledAttemptOrFailFastInsteadOfDialing() async throws {
+        var timeouts = GatewayClient.Timeouts()
+        timeouts.request = .seconds(1)
+        try await withRecordingPump(timeouts: timeouts) { client, socket, sink in
+            try #require(await waitUntil { sink.connectivity.last == .connected(.configured) })
+            await socket.closeBeforeReady()
+            await socket.closeConnections(code: .protocolCode(.internalServerError))
+            try #require(await waitUntil { sink.connectivity.last == .disconnected })
+
+            let before = await socket.acceptedConnections
+            let started = ContinuousClock.now
+            for _ in 0..<10 { _ = try? await client.listModels(cursor: nil) }
+            #expect(started.duration(to: .now) < .seconds(5))
+            #expect(await socket.acceptedConnections - before <= 3)
+
+            await socket.admitConnections()
+            #expect(await waitUntil(timeout: .seconds(20)) { sink.connectivity.last == .connected(.configured) })
+        }
+    }
+
     private func withRecordingPump(timeouts: GatewayClient.Timeouts,
                                    _ body: (GatewayClient, DeviceToolSocketFixture, LinkRecordingSink) async throws -> Void)
         async throws {
