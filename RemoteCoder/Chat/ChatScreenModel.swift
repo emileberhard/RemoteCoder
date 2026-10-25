@@ -211,6 +211,20 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         activeModelProvider = provider
     }
 
+    func adoptReportedModel(_ modelID: String?, threadID: String, selectionRevision: UInt64) {
+        guard activeModelProvider?.externalID != nil, let modelID, modelID != selectedModel?.id,
+              selectionIsCurrent(revision: selectionRevision, threadID: threadID),
+              let option = modelOption(id: modelID, threadID: threadID, effort: reasoningSelection.effort?.rawValue,
+                                       fastMode: fastModeSelection == true) else { return }
+        pickerSelection.adoptModel(option)
+        refreshReasoningVisibility()
+    }
+
+    private func modelOption(id: String, threadID: String, effort: String?, fastMode: Bool) -> ModelOption? {
+        target.modelCatalog.option(id: id, threadID: threadID, modelProvider: threadID == activeSessionID ? activeModelProvider : nil,
+                                   effort: effort, fastMode: fastMode)
+    }
+
     func beginNewChat() {
         withAnimation(.spring(duration: 0.25, bounce: 0)) {
             messages.removeAll()
@@ -1645,7 +1659,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
     @discardableResult
     func restorePendingConversationSettings(for threadID: String) -> Bool {
         guard activeSessionID == threadID, let pending = pendingSettings[threadID],
-              let option = target.modelCatalog.option(id: pending.model, threadID: threadID, effort: pending.effort,
+              let option = modelOption(id: pending.model, threadID: threadID, effort: pending.effort,
                                        fastMode: pending.fastMode == true) else { return false }
         pickerSelection.restore(model: option, reasoning: pending.reasoningSelection, fastMode: pending.fastModeState)
         refreshReasoningVisibility()
@@ -1653,8 +1667,9 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
     }
 
     func restorePicker(from thread: ConversationHeader, saved: ConversationMetadata?) {
+        adoptModelProvider(thread.modelProvider, threadID: thread.id)
         let source = pickerSelection.restore(from: thread, saved: saved) {
-            target.modelCatalog.option(id: $0, threadID: thread.id, effort: $1, fastMode: $2)
+            modelOption(id: $0, threadID: thread.id, effort: $1, fastMode: $2)
         }
         guard let source, let model = selectedModel else { return }
         logger.notice("Restored conversation settings thread=\(thread.id, privacy: .public) model=\(model.id, privacy: .public) reasoning=\(self.reasoningSelection.id, privacy: .public) fast=\(self.fastModeSelection.map { String($0) } ?? "unknown", privacy: .public) source=\(source.rawValue, privacy: .public)")
@@ -1705,7 +1720,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         guard current.provider == provider else { return }
         let option: ModelOption?
         if let activeSessionID {
-            option = target.modelCatalog.option(id: current.id, threadID: activeSessionID,
+            option = modelOption(id: current.id, threadID: activeSessionID,
                 effort: reasoningSelection.effort?.rawValue, fastMode: fastModeSelection == true)
         } else {
             option = target.configuredModel(id: current.id).model
@@ -1805,7 +1820,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
             }
         }
         if let voice = voiceConversationSettings, voice.threadId != activeSessionID,
-           let model = target.modelCatalog.option(id: voice.model, threadID: voice.threadId, effort: voice.effort, fastMode: voice.fastMode == true) {
+           let model = modelOption(id: voice.model, threadID: voice.threadId, effort: voice.effort, fastMode: voice.fastMode == true) {
             let selection = visibleReasoning(voice.reasoningSelection, for: model)
             if selection != voice.reasoningSelection {
                 applyPickerSettings(model: model, reasoning: selection, fastModeState: voice.fastModeState,
@@ -1821,7 +1836,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
             return (selectedModel, reasoningSelection, fastModeState)
         }
         guard let settings = voiceConversationSettings, settings.threadId == threadID,
-              let model = target.modelCatalog.option(id: settings.model, threadID: settings.threadId, effort: settings.effort,
+              let model = modelOption(id: settings.model, threadID: settings.threadId, effort: settings.effort,
                                       fastMode: settings.fastMode == true) else { return nil }
         return (model, settings.reasoningSelection, settings.fastModeState)
     }
@@ -1885,14 +1900,14 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
 
     var voiceSelectedModel: ModelOption? {
         voiceConversationSettings.flatMap {
-            target.modelCatalog.option(id: $0.model, threadID: $0.threadId, effort: $0.effort, fastMode: $0.fastMode == true)
+            modelOption(id: $0.model, threadID: $0.threadId, effort: $0.effort, fastMode: $0.fastMode == true)
         }
     }
 
     var voiceConversationSettings: ConversationSettingsUpdate? {
         guard target.realtimeVoice.callOwner == executionTarget,
               let context = target.realtimeVoice.conversationContext,
-              let model = target.modelCatalog.option(id: context.model, threadID: context.threadID, effort: context.effort,
+              let model = modelOption(id: context.model, threadID: context.threadID, effort: context.effort,
                                       fastMode: context.fastModeSelection == true) else { return nil }
         return pendingSettings[context.threadID] ?? ConversationSettingsUpdate(
             threadID: context.threadID, model: model,
@@ -1904,8 +1919,8 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
     private func normalizedConversationSettings(
         _ settings: ConversationSettingsUpdate
     ) -> (settings: ConversationSettingsUpdate, model: ModelOption?) {
-        guard let model = target.modelCatalog.option(id: settings.model, threadID: settings.threadId,
-                                                     effort: settings.effort, fastMode: settings.fastMode == true)
+        guard let model = modelOption(id: settings.model, threadID: settings.threadId,
+                                      effort: settings.effort, fastMode: settings.fastMode == true)
         else { return (settings, nil) }
         return (ConversationSettingsUpdate(threadID: settings.threadId, model: model,
                     reasoning: visibleReasoning(settings.reasoningSelection, for: model),

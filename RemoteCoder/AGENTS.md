@@ -1077,7 +1077,8 @@ entrypoint linked above.
     `pickerTitle` (`Model · Provider`), and an existing conversation's picker
     offers only models of its own model provider: the thread's
     `modelProvider` (`ThreadModelProvider`) when known, else the selected
-    model's. New chats send only the
+    model's. An external thread selects the model it reports, and
+    `TargetModelCatalog.option` resolves ids on that route. New chats send only the
     model; the gateway resolves its provider.
   - `ModelVisibility` stores per-model overrides by id and is read
     through `ModelPickerPreferences`, separately for each provider. New Codex models appear

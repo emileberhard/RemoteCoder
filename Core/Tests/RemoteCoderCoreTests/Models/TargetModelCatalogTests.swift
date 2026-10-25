@@ -27,8 +27,8 @@ struct TargetModelCatalogTests {
         }
         await service.refresh()
         let catalog = TargetModelCatalog(service: service, preferences: ModelPickerPreferences(defaults: defaults), defaults: defaults)
-        let external = try #require(catalog.option(id: "relay/model-a", threadID: "t", effort: nil, fastMode: false))
-        let native = try #require(catalog.option(id: CodexModelFixtures.solID, threadID: "t", effort: nil, fastMode: false))
+        let external = try #require(catalog.option(id: "relay/model-a", threadID: "t", modelProvider: nil, effort: nil, fastMode: false))
+        let native = try #require(catalog.option(id: CodexModelFixtures.solID, threadID: "t", modelProvider: nil, effort: nil, fastMode: false))
 
         #expect(external.pickerTitle == "Model A · Relay")
         #expect(native.pickerTitle == "GPT-6.1 Sol")
@@ -40,6 +40,23 @@ struct TargetModelCatalogTests {
 
         let encoded = try JSONEncoder().encode(models.last)
         #expect(try JSONDecoder().decode(CodexAppServerV2.Model.self, from: encoded).modelProvider == external.modelProvider)
+    }
+
+    @Test func anUnlistedModelOnAnExternalRouteGetsAReadableNameAndItsProvider() throws {
+        let defaults = try #require(UserDefaults(suiteName: "TargetModelCatalogTests.\(UUID())"))
+        let service = CodexModelCatalogService(directory: .temporaryDirectory) { _ in throw URLError(.notConnectedToInternet) }
+        let catalog = TargetModelCatalog(service: service, preferences: ModelPickerPreferences(defaults: defaults), defaults: defaults)
+        let external = try #require(catalog.option(id: "copilot/gemini-4-argon", threadID: "t",
+            modelProvider: .external(id: "copilot"), effort: "high", fastMode: false))
+        let native = try #require(catalog.option(id: "copilot/gemini-4-argon", threadID: "t",
+            modelProvider: .native, effort: nil, fastMode: false))
+
+        #expect(external.pickerTitle == "Gemini 4 Argon · Copilot")
+        #expect(external.reasoningEfforts == [.high])
+        #expect(catalog.pickerOptions(including: external, threadModelProvider: .external(id: "copilot")).map(\.id)
+            == ["copilot/gemini-4-argon"])
+        #expect(native.pickerTitle == "copilot/gemini-4-argon")
+        #expect(native.modelProvider == nil)
     }
 
     @Test func hiddenClaudeModelsLeavePickersAndDefaultsButKeepTheirIdentity() throws {
@@ -54,7 +71,7 @@ struct TargetModelCatalogTests {
         #expect(catalog.options(for: .claude).map(\.id) == ["fable", "sonnet", "haiku"])
         #expect(catalog.newChatDefault(for: nil, health: nil).model?.id == "fable")
         #expect(catalog.configured(id: "claude-opus-5").model == opus)
-        #expect(catalog.option(id: "claude-opus-5", threadID: "claude_existing", effort: nil, fastMode: false) == opus)
+        #expect(catalog.option(id: "claude-opus-5", threadID: "claude_existing", modelProvider: nil, effort: nil, fastMode: false) == opus)
         #expect(catalog.pickerOptions(including: opus, threadModelProvider: nil).map(\.id) == ["fable", "sonnet", "haiku", "opus"])
 
         preferences.setClaudeModelVisible(false, id: "fable")

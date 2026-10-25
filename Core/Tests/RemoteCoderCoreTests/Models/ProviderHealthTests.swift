@@ -3,7 +3,7 @@ import Testing
 @testable import RemoteCoderCore
 
 struct ProviderHealthTests {
-    private let native = ModelOption.unlisted(id: "gpt-6.1-sol", reportedEffort: nil, reportedFastMode: false)
+    private let native = ModelOption.unlisted(id: "gpt-6.1-sol", modelProvider: nil, reportedEffort: nil, reportedFastMode: false)
     private let copilot = ModelOption(id: "copilot/gpt-6", displayName: "GPT-6", reasoningEfforts: [], supportsFastMode: false,
                                       supportsDaybreakBlue: false, acceptsImages: true, provider: .codex,
                                       modelProvider: .init(id: "copilot", name: "Copilot"), isListed: true)

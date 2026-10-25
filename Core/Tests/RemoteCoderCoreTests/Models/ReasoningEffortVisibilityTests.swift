@@ -16,7 +16,7 @@ struct ReasoningEffortVisibilityTests {
     }
 
     @Test func unlistedModelsKeepTheirReportedEffortRegardlessOfVisibility() {
-        let model = ModelOption.unlisted(id: "gpt-retired", reportedEffort: .ultra, reportedFastMode: false)
+        let model = ModelOption.unlisted(id: "gpt-retired", modelProvider: nil, reportedEffort: .ultra, reportedFastMode: false)
         let visibility = ReasoningEffortVisibility(rawValue: "medium")
         #expect(visibility.efforts(for: model) == [.ultra])
         #expect(visibility.clamped(.effort(.ultra), for: model) == .effort(.ultra))

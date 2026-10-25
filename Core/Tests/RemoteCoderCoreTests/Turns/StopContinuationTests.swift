@@ -240,7 +240,7 @@ private final class StopFixture: TurnDispatchHost {
     let stops: TurnStops
     let conversations: ConversationSessions
     let drafts: ComposerDraftStore
-    let settings = TurnDispatcher.Settings(model: .unlisted(id: "gpt-6.1-sol", reportedEffort: .medium, reportedFastMode: false),
+    let settings = TurnDispatcher.Settings(model: .unlisted(id: "gpt-6.1-sol", modelProvider: nil, reportedEffort: .medium, reportedFastMode: false),
         reasoning: .automatic, serviceTier: nil, fastModeState: .selection(false), workingDirectory: "/tmp", selectionRevision: 0)
     var isRetired = false
     var refreshed = false
