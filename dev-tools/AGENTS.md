@@ -51,8 +51,8 @@ evidence. It never connects to an installed gateway or starts an agent turn.
   with code 1001, 1012, 1013 or 4012); callers may retry, and a `claude/message` retry reuses its `deliveryId`. Every other failure
   exits 2. A 409 is a permanent rejection with the gateway
   response body. Turn connection
-  setup failures write `dispatch.not_started` and their retryability to the event
-  log. So does a thread/turn request the gateway refuses before dispatch: a
+  setup failures, including configuration discovery before opening a socket,
+  write `dispatch.not_started` and their retryability to the event log. So does a thread/turn request the gateway refuses before dispatch: a
   JSON-RPC error with code -32600..-32602, -32001, -32002, -32003 or -32009 and no
   `data.kind` ending in `Uncertain`/`Unknown`; `data.retryable` wins, else the
   -3200x codes are retryable. Any other failure after handoff, including -32603

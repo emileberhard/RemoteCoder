@@ -284,7 +284,7 @@ class GatewayDiscoveryTests(unittest.TestCase):
         from unittest.mock import patch
         with patch.object(gateway_config.socket, "gethostname", return_value="workstation"), \
              patch.object(gateway_config.subprocess, "run", side_effect=gateway_config.subprocess.TimeoutExpired("ssh", 10)) as run:
-            with self.assertRaisesRegex(RuntimeError, "timed out after 10 seconds"):
+            with self.assertRaisesRegex(TimeoutError, "timed out after 10 seconds"):
                 gateway_config._ssh_read_env("laptop", "~/.remote-coder/codex-gateway.env")
         self.assertEqual(run.call_args.kwargs["timeout"], 10)
 
@@ -923,6 +923,26 @@ class JournalProbeTests(unittest.IsolatedAsyncioTestCase):
 
 
 class TurnSetupReceiptTests(unittest.IsolatedAsyncioTestCase):
+    async def test_configuration_failures_record_non_submission_for_both_providers(self) -> None:
+        import tempfile
+
+        for command, handler in (("turn", gateway_cli.cmd_turn), ("claude-turn", gateway_cli.cmd_claude_turn)):
+            for timeout in (True, False):
+                with self.subTest(command=command, timeout=timeout), tempfile.TemporaryDirectory() as directory:
+                    path = Path(directory) / "gateway.jsonl"
+                    arguments = ["--ssh-host", "unreachable", "--local-config", str(Path(directory) / "missing.json"), command]
+                    arguments += ["--prompt", "run"] if command == "turn" else ["run"]
+                    args = gateway_cli.build_parser().parse_args([*arguments, "--event-log", str(path)])
+                    error = gateway_config.subprocess.TimeoutExpired("ssh", 10) if timeout else FileNotFoundError("ssh unavailable")
+                    with patch.dict(gateway_config.os.environ, {}, clear=True), \
+                         patch.object(gateway_config.subprocess, "run", side_effect=error), \
+                         patch.object(gateway_cli, "_ws_connect", AsyncMock()) as connect:
+                        with self.assertRaises(TimeoutError if timeout else SystemExit):
+                            await handler(args)
+                    connect.assert_not_called()
+                    rows = [json.loads(line) for line in path.read_text().splitlines()]
+                    self.assertEqual(rows, [{"type": "dispatch.not_started", "retryable": timeout}])
+
     async def test_setup_timeout_is_retryable_but_submitted_requests_stay_uncertain(self) -> None:
         import tempfile
         from websockets.asyncio.server import serve

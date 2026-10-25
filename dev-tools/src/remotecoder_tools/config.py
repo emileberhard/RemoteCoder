@@ -160,7 +160,7 @@ def _ssh_read_env(ssh_host: str, env_path: str) -> str:
     try:
         res = subprocess.run(cmd, stdin=subprocess.DEVNULL, check=True, capture_output=True, text=True, timeout=10)
     except subprocess.TimeoutExpired as exc:
-        raise RuntimeError(f"Gateway configuration read through SSH to {ssh_host} timed out after 10 seconds") from exc
+        raise TimeoutError(f"Gateway configuration read through SSH to {ssh_host} timed out after 10 seconds") from exc
     except subprocess.CalledProcessError as exc:
         stderr = (exc.stderr or "").strip()
         msg = f"ssh failed: {shlex.join(cmd)}"
@@ -270,7 +270,7 @@ def _resolve_config(args: argparse.Namespace) -> GatewayConfig:
             token = token or env.get("RC_CODEX_GATEWAY_AUTH_TOKEN")
         except Exception as error:
             # Keep going; dev tool should still be usable with explicit flags.
-            discovery_error = str(error)
+            discovery_error = error
 
     # If discovery only gives us a bind host, connect through the selected remote host
     # or this machine's loopback for a local read.
@@ -294,6 +294,9 @@ def _resolve_config(args: argparse.Namespace) -> GatewayConfig:
             except (TypeError, ValueError):
                 port = None
         token = token or local_config.get("codexGatewayAuthToken")
+
+    if (host is None or port is None or token is None or (needs_tls_identity and not env)) and isinstance(discovery_error, TimeoutError):
+        raise discovery_error
 
     if host is None:
         raise SystemExit(discovery_error or "missing gateway host (use --host or enable SSH discovery)")

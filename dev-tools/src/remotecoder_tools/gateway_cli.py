@@ -98,7 +98,7 @@ async def cmd_health(args: argparse.Namespace) -> int:
     return 0
 
 
-def _transient_connection_failure(error: Exception, *, sent: bool) -> bool:
+def _transient_connection_failure(error: BaseException, *, sent: bool) -> bool:
     from websockets.exceptions import ConnectionClosed, InvalidStatus
 
     if isinstance(error, ConnectionClosed):
@@ -267,10 +267,11 @@ async def cmd_active_turns(args: argparse.Namespace) -> int:
 
 
 @asynccontextmanager
-async def _turn_connection(cfg, timeout_s: float, record):
+async def _turn_connection(args, timeout_s: float, record):
     try:
+        cfg = _resolve_config(args)
         socket = await _ws_connect(cfg)
-    except Exception as error:
+    except (Exception, SystemExit) as error:
         record({"type": "dispatch.not_started", "retryable": _transient_connection_failure(error, sent=False)})
         raise
     async with socket as ws:
@@ -289,7 +290,6 @@ async def _turn_connection(cfg, timeout_s: float, record):
 
 
 async def cmd_turn(args: argparse.Namespace) -> int:
-    cfg = _resolve_config(args)
     if args.prompt is None:
         raise SystemExit("--prompt is required")
     counts: dict[str, int] = {}
@@ -313,7 +313,7 @@ async def cmd_turn(args: argparse.Namespace) -> int:
         for raw in args.image_path or []:
             input_items.append({"type": "image", "url": await finish_thread_io(_data_url_for_image_path, Path(raw))})
 
-        async with _turn_connection(cfg, args.timeout, record) as (ws, ready):
+        async with _turn_connection(args, args.timeout, record) as (ws, ready):
             if args.event_log:
                 _reader(ws).observe(record)
             bump(ready.get("method"))
@@ -504,8 +504,6 @@ async def cmd_thread_list(args: argparse.Namespace) -> int:
 
 
 async def cmd_claude_turn(args: argparse.Namespace) -> int:
-    cfg = _resolve_config(args)
-
     async with event_log(args.event_log) as record:
         input_items: list[dict[str, Any]] = []
         if args.prompt:
@@ -536,7 +534,7 @@ async def cmd_claude_turn(args: argparse.Namespace) -> int:
                 item = params.get("item") or {}
                 print(f"  [{method}] {item.get('type')} {str(item.get('id') or '')}")
 
-        async with _turn_connection(cfg, args.timeout, record) as (ws, _ready):
+        async with _turn_connection(args, args.timeout, record) as (ws, _ready):
             ids = iter(range(1, 1_000_000))
             thread_id = ""
 
