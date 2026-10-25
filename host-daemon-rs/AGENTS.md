@@ -85,7 +85,7 @@ owner until the last fixture is dropped.
   the client is served without Codex: gateway-owned requests run, `initialize`
   is answered locally and native requests fail with `providerUnavailable`.
   Codex becoming ready closes those connections with 4012; a connection whose
-  own connect failed while control was ready retries it (1 s doubling to 30 s)
+  own connect failed while control was ready retries it (5 s doubling to 30 s)
   and closes with 4012 on success. New Codex work on any connection waits for
   ready control, which follows restart recovery.
 - Every authenticated remote WebSocket gets its own Unix WebSocket. The

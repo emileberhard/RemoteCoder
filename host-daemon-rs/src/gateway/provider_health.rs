@@ -17,6 +17,7 @@ const CODEX_AWAITING_SIGN_IN: &str =
 const CODEX_SIGN_IN_FAILED: &str = "Codex subscription sign-in failed";
 const CODEX_CONNECTION_FAILED: &str = "This connection could not reach Codex; reconnect";
 const CODEX_READY_CLOSE_REASON: &str = "Codex is available; reconnect";
+const CODEX_RECONNECT_FIRST_PROBE: Duration = Duration::from_secs(5);
 const CODEX_RECONNECT_PROBE_LIMIT: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -163,6 +164,15 @@ impl Gateway {
     }
 
     #[cfg(test)]
+    pub(super) fn is_degraded(&self, client_id: u64) -> bool {
+        self.provider_health
+            .degraded_clients
+            .lock()
+            .expect("degraded clients poisoned")
+            .contains(&client_id)
+    }
+
+    #[cfg(test)]
     pub(super) fn published_codex_health(&self) -> CodexHealth {
         self.provider_health
             .published
@@ -225,7 +235,7 @@ impl Gateway {
     }
 
     pub(super) async fn reconnect_once_codex_is_reachable(&self, client_id: u64) {
-        let mut retry = Duration::from_secs(1);
+        let mut retry = CODEX_RECONNECT_FIRST_PROBE;
         loop {
             tokio::time::sleep(retry).await;
             retry = (retry * 2).min(CODEX_RECONNECT_PROBE_LIMIT);
