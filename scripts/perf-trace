@@ -110,6 +110,10 @@ TRACE_COMPLETE = "Time limit reached"
 RECORDING_STARTED = "Ctrl-C to stop the recording"
 
 
+class ExportLimitExceeded(SystemExit):
+    pass
+
+
 @dataclass(frozen=True)
 class Binary:
     name: str
@@ -166,7 +170,7 @@ def guarded_export(arguments: list[str], label: str):
     failure_lock = threading.Lock()
     started = time.monotonic()
     with subprocess.Popen(command, stdout=subprocess.PIPE) as export:
-        def stop_export(reason: str) -> None:
+        def stop_export(reason: SystemExit) -> None:
             nonlocal breach
             with failure_lock:
                 if not stop.is_set():
@@ -177,8 +181,8 @@ def guarded_export(arguments: list[str], label: str):
         def deadline() -> None:
             if not stop.wait(EXPORT_TIMEOUT_SECONDS):
                 elapsed = time.monotonic() - started
-                stop_export(f"stopped exporting {label} after {elapsed:.1f} seconds "
-                            f"(limit {EXPORT_TIMEOUT_SECONDS} seconds); record a shorter trace")
+                stop_export(ExportLimitExceeded(f"stopped exporting {label} after {elapsed:.1f} seconds "
+                            f"(limit {EXPORT_TIMEOUT_SECONDS} seconds); record a shorter trace"))
 
         def watch() -> None:
             nonlocal peak
@@ -192,12 +196,12 @@ def guarded_export(arguments: list[str], label: str):
                     available = sysctl_number("kern.memorystatus_level")
                 except (OSError, ValueError, subprocess.SubprocessError) as error:
                     if export.poll() is None:
-                        stop_export(f"stopped exporting {label}: memory probe failed: {error}; "
-                                    "restore host monitoring before tracing again")
+                        stop_export(SystemExit(f"stopped exporting {label}: memory probe failed: {error}; "
+                                    "restore host monitoring before tracing again"))
                     return
                 if peak > limit or available < MINIMUM_AVAILABLE_MEMORY_PERCENT:
-                    stop_export(f"stopped exporting {label}: xctrace reached {peak / 2**30:.1f} GiB (limit "
-                                f"{limit / 2**30:.0f} GiB) with {available}% of memory available; record a shorter trace")
+                    stop_export(ExportLimitExceeded(f"stopped exporting {label}: xctrace reached {peak / 2**30:.1f} GiB (limit "
+                                f"{limit / 2**30:.0f} GiB) with {available}% of memory available; record a shorter trace"))
                     return
 
         guards = []
@@ -218,7 +222,7 @@ def guarded_export(arguments: list[str], label: str):
                 if guard.ident is not None:
                     guard.join()
     if breach is not None:
-        sys.exit(breach)
+        raise breach
     print(f"exported {label} in {time.monotonic() - started:.1f} s, peak {peak / 2**30:.1f} GiB", file=sys.stderr)
     if export.returncode != 0:
         raise subprocess.CalledProcessError(export.returncode, command)
@@ -740,6 +744,14 @@ def frame_statistics(samples: list[Sample], names: dict):
 
 
 def processor_trace(trace: str, run: Run, count: int, apps: list[Path]) -> dict | None:
+    try:
+        return processor_trace_functions(trace, run, count, apps)
+    except ExportLimitExceeded as error:
+        return {"schema": "processor-trace-intervals", "status": "exceeds export limit",
+                "topFunctions": None, "topAppFunctions": None, "unavailableReason": str(error)}
+
+
+def processor_trace_functions(trace: str, run: Run, count: int, apps: list[Path]) -> dict | None:
     if "processor-trace-intervals" not in run.schemas:
         return {"topFunctions": None, "unavailableReason": "no processor-trace-intervals export"} if run.template == "Processor Trace" else None
     profiles = {}

@@ -339,7 +339,9 @@ measurably beat SwiftUI.
   reports observed function-call intervals and self cycles. Processor Trace
   backtraces resolve by UUID through the same dSYMs; its elapsed self duration
   can include off-CPU waits, so use self cycles to rank CPU work. Unsupported export
-  tables, including allocation events on current Xcode, stay unavailable.
+  tables, including allocation events on current Xcode, stay unavailable. A Processor
+  Trace table that hits a guard reports `exceeds export limit`; other measurements
+  in the summary remain available.
   `--frames` includes UUID/address/source and inline-frame details alongside
   the existing frame aggregates. Device builds mirror their matching dSYMs to
   the configured tracing host under leased `RemoteCoder-Build/runs` retention;

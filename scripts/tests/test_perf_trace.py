@@ -198,6 +198,14 @@ class PerfTraceTests(unittest.TestCase):
         self.assertEqual(result["symbolLocations"]["parse (in RemoteCoder)"][0]["inlineFrames"], list(lines))
         self.assertEqual(result["symbolLocations"]["parse (in RemoteCoder)"][0]["selfCycles"], 200)
 
+    def test_processor_export_limit_is_explicitly_unavailable(self):
+        run = trace.Run(7, "Time limit reached", "iOS", frozenset({"processor-trace-intervals"}), "now")
+        with patch.object(trace, "table_rows", side_effect=trace.ExportLimitExceeded("xctrace exceeded 16 GiB")):
+            result = trace.processor_trace("large.trace", run, 10, [])
+        self.assertEqual(result["status"], "exceeds export limit")
+        self.assertIsNone(result["topAppFunctions"])
+        self.assertEqual(result["unavailableReason"], "xctrace exceeded 16 GiB")
+
     def test_accessibility_snapshot_ancestors_count_as_automation_without_developer_frames(self):
         for name in ("-[NSObject(UIAccessibilityAutomation) _accessibilityUserTestingSnapshotWithOptions:]",
                      "_AXXMIGCopyParameterizedAttributeValue"):
