@@ -6,7 +6,7 @@ from .app_telemetry_builds import Attribution, Build
 from .app_telemetry_summary import WAKEUPS, sample_intervals, scalar
 
 FOREGROUND_TOLERANCE_SECONDS = 1.0
-FOREGROUND_ONLY_DOMAINS = frozenset({"history"})
+FOREGROUND_ONLY_DOMAINS = frozenset({"history", "surface", "turn", "connection"})
 MIN_MEASURED_MINUTES = 30.0
 MIN_SPREAD_MINUTES = 1.0
 LAUNCH_METRICS = ("timeToFirstDraw", "optimizedTimeToFirstDraw", "applicationResume", "extendedLaunch")

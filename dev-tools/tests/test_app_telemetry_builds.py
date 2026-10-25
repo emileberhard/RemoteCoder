@@ -160,7 +160,7 @@ def aggregated(record: dict, attribution: Attribution | None = None) -> dict:
     return aggregate_states([(summary, record["report"], attribution or unknown)])
 
 
-def test_state_time_beyond_the_entry_total_and_stuck_history_states_are_flagged():
+def test_state_time_beyond_the_entry_total_and_stuck_foreground_states_are_flagged():
     record = metrics_record("r1", [
         state_entry("connection", "connected", 50_000, 700),
         state_entry("connection", "connecting", 100, 400),
@@ -177,7 +177,7 @@ def test_state_time_beyond_the_entry_total_and_stuck_history_states_are_flagged(
         {"domain": "emileberhard.RemoteCoder.connection", "stateForegroundSeconds": 1100.0, "entryForegroundSeconds": 1000.0}]
     assert rows[("history", "opening")]["flags"] == ["stateExceedsCoverage", "suspectedStuck"]
     assert rows[("history", "paging")]["flags"] == []
-    assert rows[("connection", "connected")]["flags"] == []
+    assert rows[("connection", "connected")]["flags"] == ["suspectedStuck"]
     assert rows[("history", "opening")]["longestEntrySeconds"] == 86_417
     assert aggregated(metrics_record("r2", [], exceeded=None))["reports"][0]["hasExceededStateLimit"] is None
     assert aggregated(metrics_record("r3", [], exceeded=True))["reports"][0]["hasExceededStateLimit"] is True

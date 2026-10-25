@@ -522,9 +522,9 @@ animation-weighted ratio, the hang histogram, launch histograms and each
 signpost's count with p50 and p95 upper bounds from its duration histogram. A
 signpost whose CPU time, logical writes and average memory are all exactly 0 was
 not measured (OSSignposter) and prints `resources: unknown`. Flags state what
-looks wrong rather than hiding it: `suspectedStuck` (a history state, which
-clears when its load finishes, lasting longer than the report's whole foreground
-time), `stateExceedsCoverage`, and per report `domainForegroundExceedsEntryTotal`
+looks wrong rather than hiding it: `suspectedStuck` (a history, surface, turn or
+connection state, which the app clears outside the active scene, lasting longer
+than the report's whole foreground time), `stateExceedsCoverage`, and per report `domainForegroundExceedsEntryTotal`
 (a domain's per-state foreground times add up to more than the full-day entry's)
 and `hasExceededStateLimit` (null when the report omits it). It also groups
 diagnostics by the states active before them, counting kinds and builds and
