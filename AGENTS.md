@@ -343,7 +343,8 @@ measurably beat SwiftUI.
   measurement that hits a guard reports `exceeds export limit` in `exportFailures`;
   other measurements remain available. The memory budget counts xctrace and Python
   together; the XML parser detaches consumed rows, interns frames, and checks its
-  own budget while reducing the table.
+  own budget while reducing the table. Sampled-frame and journey analysis share
+  the measurement boundary; unavailable frame details preserve app CPU totals.
   `--frames` includes UUID/address/source and inline-frame details alongside
   the existing frame aggregates. Device builds mirror their matching dSYMs to
   the configured tracing host under leased `RemoteCoder-Build/runs` retention;

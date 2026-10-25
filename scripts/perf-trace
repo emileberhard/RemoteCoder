@@ -236,6 +236,17 @@ def check_python_memory(label: str, limit: int) -> None:
                                   f"(limit {limit / 2**30:.0f} GiB); record a shorter trace")
 
 
+def budgeted(values: Iterable, label: str):
+    limit = int(sysctl_number("hw.memsize") * EXPORT_MEMORY_FRACTION)
+    next_check = 0
+    for index, value in enumerate(values):
+        if index % 1024 == 0 and time.monotonic() >= next_check:
+            check_python_memory(label, limit)
+            next_check = time.monotonic() + 0.5
+        yield value
+    check_python_memory(label, limit)
+
+
 def measurement(label: str, operation, failures: dict):
     try:
         limit = int(sysctl_number("hw.memsize") * EXPORT_MEMORY_FRACTION)
@@ -309,10 +320,10 @@ def explicit_symbol_files(path: Path) -> list[Path]:
 
 
 def symbolicate(frames: set[Frame], apps: list[Path]) -> tuple[dict[Frame, tuple[str, ...]], dict[Frame, tuple[str, ...]]]:
-    names = {frame: (frame.name,) for frame in frames if is_symbol(frame.name)}
+    names = {frame: (frame.name,) for frame in budgeted(frames, "sampledFrames") if is_symbol(frame.name)}
     locations = {}
     by_binary: defaultdict[Binary, list[Frame]] = defaultdict(list)
-    for frame in frames:
+    for frame in budgeted(frames, "sampledFrames"):
         if frame.binary is not None:
             by_binary[frame.binary].append(frame)
     app_files = [file for app in apps for file in explicit_symbol_files(app)]
@@ -325,11 +336,11 @@ def symbolicate(frames: set[Frame], apps: list[Path]) -> tuple[dict[Frame, tuple
             for binary, binary_frames in by_binary.items()
             if (file := files.get(binary.uuid)) is not None
         }
-    for binary, result in results.items():
+    for binary, result in budgeted(results.items(), "sampledFrames"):
         resolved = result.result()
-        locations.update(zip(by_binary[binary], resolved, strict=True))
+        locations.update(budgeted(zip(by_binary[binary], resolved, strict=True), "sampledFrames"))
         names.update((frame, tuple(line.split(" (in ", 1)[0] for line in lines))
-                     for frame, lines in zip(by_binary[binary], resolved, strict=True) if lines)
+                     for frame, lines in budgeted(zip(by_binary[binary], resolved, strict=True), "sampledFrames") if lines)
     return names, locations
 
 
@@ -340,7 +351,7 @@ def process_name(element) -> str:
 
 
 def app_bundle_roots(frames: Iterable[Frame]) -> set[str]:
-    return {str(parent) for frame in frames
+    return {str(parent) for frame in budgeted(frames, "sampledFrames")
             if (binary := frame.binary) is not None and binary.name in (APP, f"{APP}.debug.dylib")
             for parent in Path(binary.path).parents if parent.suffix == ".app"}
 
@@ -434,7 +445,7 @@ def automation_summary(samples: list[Sample], counts: Counter, unweighted: int) 
 
 def top_functions(samples: list[Sample], names: dict, count: int) -> dict[str, float]:
     self_ms = Counter()
-    for sample in samples:
+    for sample in budgeted(samples, "sampledFrames"):
         leaf = sample.stack[0] if sample.stack else None
         if leaf is None:
             label = "<no stack>"
@@ -701,7 +712,7 @@ def nearest_app_callers(stacks: dict[str, Counter], names: dict, pattern: str) -
     app_roots = app_bundle_roots(frame for counter in stacks.values() for stack in counter for frame in stack)
     callers = {bucket: Counter() for bucket in stacks}
     for bucket, counter in stacks.items():
-        for stack, weight_ms in counter.items():
+        for stack, weight_ms in budgeted(counter.items(), "sampledFrames"):
             index = next((i for i, frame in enumerate(stack) if any(map(regex.search, names.get(frame, ())))), None)
             if index is None:
                 continue
@@ -745,10 +756,10 @@ def motion_summary(intervals: list[tuple[float, float]], samples: list[Sample], 
     }
     if cpu_unavailable:
         summary["cpuUnavailableReason"] = cpu_unavailable
-    elif unlocated := sum(sample.time_ns is None for sample in samples):
+    elif unlocated := sum(sample.time_ns is None for sample in budgeted(samples, "sampledFrames")):
         summary["cpuUnavailableReason"] = f"{unlocated} app samples have no time"
     else:
-        moving = [sample for sample in samples if inside(sample.time_ns)]
+        moving = [sample for sample in budgeted(samples, "sampledFrames") if inside(sample.time_ns)]
         main = [sample for sample in moving if sample.thread == "main"]
         main_ms = sum(sample.weight_ms for sample in main)
         summary |= {
@@ -770,13 +781,13 @@ def motion_summary(intervals: list[tuple[float, float]], samples: list[Sample], 
 
 def frame_statistics(samples: list[Sample], names: dict):
     stacks = {"main": Counter(), "background": Counter()}
-    for sample in samples:
+    for sample in budgeted(samples, "sampledFrames"):
         stacks["main" if sample.thread == "main" else "background"][sample.stack] += sample.weight_ms
-    app_roots = app_bundle_roots(frame for sample in samples for frame in sample.stack)
+    app_roots = app_bundle_roots(frame for sample in budgeted(samples, "sampledFrames") for frame in sample.stack)
     inclusive = {owner: {bucket: Counter() for bucket in stacks} for owner in ("app", "system")}
     self_by_binary = {bucket: Counter() for bucket in stacks}
     for bucket, counter in stacks.items():
-        for stack, weight_ms in counter.items():
+        for stack, weight_ms in budgeted(counter.items(), "sampledFrames"):
             for owner, symbol in {(frame_owner(frame, app_roots), symbol) for frame in stack for symbol in names.get(frame, ())}:
                 inclusive[owner][bucket][symbol] += weight_ms
             leaf = stack[0].binary if stack else None
@@ -986,24 +997,6 @@ def summarize(trace: str, frames: int, callers: list[str], apps: list[Path]) -> 
     concurrency_summary = measure("swiftConcurrency", lambda: swift_concurrency(trace, run.schemas))
     processor_summary = measure("processorTrace", lambda: processor_trace(trace, run, frames, apps))
 
-    all_frames = {frame for sample in samples for frame in sample.stack}
-    names, locations = symbolicate(all_frames, apps) if frames or callers else ({}, {})
-    location_weights = Counter()
-    location_self = Counter()
-    for sample in samples:
-        if sample.stack:
-            location_self[sample.stack[0]] += sample.weight_ms
-        for frame in set(sample.stack):
-            location_weights[frame] += sample.weight_ms
-    app_roots = app_bundle_roots(all_frames)
-    location_frames = dict.fromkeys(
-        frame for weights in (location_self, location_weights) for owner in ("app", "system")
-        for frame, _ in Counter({frame: weight for frame, weight in weights.items()
-                                if frame_owner(frame, app_roots) == owner}).most_common(frames or 10)
-    )
-    stacks, inclusive, self_by_binary = frame_statistics(samples, names)
-    _, clean_inclusive, _ = frame_statistics([sample for sample in samples if not sample.automation], names)
-
     def rate(value: float) -> float:
         return round(value / run.seconds, 2)
 
@@ -1032,27 +1025,77 @@ def summarize(trace: str, frames: int, callers: list[str], apps: list[Path]) -> 
         }
 
     app_cpu = cpu_summary(APP)
-    journey = None
-    if journey_intervals:
-        journey = motion_summary(journey_intervals, samples, app_cpu["cpuUnavailableReason"], hitch_rows, commit_starts, names, frames)
-        journey["source"] = f"{SIGNPOST_SUBSYSTEM} ReplayJourney Points of Interest intervals"
-        journey.pop("hitchRateRating", None)
-        if not app_cpu["cpuUnavailableReason"] and all(sample.time_ns is not None for sample in samples):
-            inside = within(journey_intervals)
-            scoped = [sample for sample in samples if inside(sample.time_ns)]
-            scoped_stacks, scoped_inclusive, scoped_self = frame_statistics(scoped, names)
-            journey["cpuMsByThread"] = dict(thread_ms(scoped).most_common())
-            journey["appFramesInclusiveMs"] = heaviest(scoped_inclusive["app"], frames)
-            journey["systemFramesInclusiveMs"] = heaviest(scoped_inclusive["system"], frames)
-            journey["selfMsByBinary"] = heaviest(scoped_self, 30)
-            journey["nearestAppCallersMs"] = {pattern: heaviest(nearest_app_callers(scoped_stacks, names, pattern), frames or 10) for pattern in callers}
+
+    def analyze_sampled_frames():
+        all_frames = {frame for frame in budgeted((frame for sample in samples for frame in sample.stack), "sampledFrames")}
+        names, locations = symbolicate(all_frames, apps) if frames or callers else ({}, {})
+        location_weights = Counter()
+        location_self = Counter()
+        for sample in budgeted(samples, "sampledFrames"):
+            if sample.stack:
+                location_self[sample.stack[0]] += sample.weight_ms
+            for frame in set(sample.stack):
+                location_weights[frame] += sample.weight_ms
+        app_roots = app_bundle_roots(all_frames)
+        location_frames = dict.fromkeys(
+            frame for weights in (location_self, location_weights) for owner in ("app", "system")
+            for frame, _ in Counter({frame: weight for frame, weight in budgeted(weights.items(), "sampledFrames")
+                                    if frame_owner(frame, app_roots) == owner}).most_common(frames or 10)
+        )
+        stacks, inclusive, self_by_binary = frame_statistics(samples, names)
+        _, clean_inclusive, _ = frame_statistics([sample for sample in budgeted(samples, "sampledFrames") if not sample.automation], names)
+
+        journey = None
+        if journey_intervals:
+            journey = motion_summary(journey_intervals, samples, app_cpu["cpuUnavailableReason"], hitch_rows, commit_starts, names, frames)
+            journey["source"] = f"{SIGNPOST_SUBSYSTEM} ReplayJourney Points of Interest intervals"
+            journey.pop("hitchRateRating", None)
+            if not app_cpu["cpuUnavailableReason"] and all(sample.time_ns is not None for sample in samples):
+                inside = within(journey_intervals)
+                scoped = [sample for sample in budgeted(samples, "sampledFrames") if inside(sample.time_ns)]
+                scoped_stacks, scoped_inclusive, scoped_self = frame_statistics(scoped, names)
+                journey["cpuMsByThread"] = dict(thread_ms(budgeted(scoped, "sampledFrames")).most_common())
+                journey["appFramesInclusiveMs"] = heaviest(scoped_inclusive["app"], frames)
+                journey["systemFramesInclusiveMs"] = heaviest(scoped_inclusive["system"], frames)
+                journey["selfMsByBinary"] = heaviest(scoped_self, 30)
+                journey["nearestAppCallersMs"] = {pattern: heaviest(nearest_app_callers(scoped_stacks, names, pattern), frames or 10) for pattern in callers}
+        return {
+            "journey": journey,
+            "motion": motion_summary(intervals, samples, app_cpu["cpuUnavailableReason"], hitch_rows, commit_starts, names,
+                                     frames) if intervals else None,
+            "mainTopFunctionsSelfMs": top_functions([sample for sample in budgeted(samples, "sampledFrames") if sample.thread == "main"], names, frames)
+                                      if frames and "time-profile" not in failures else None,
+            "appFramesInclusiveMs": None if "time-profile" in failures else heaviest(inclusive["app"], frames),
+            "appFramesInclusiveMsExcludingAutomation": None if "time-profile" in failures else heaviest(clean_inclusive["app"], frames),
+            "systemFramesInclusiveMs": None if "time-profile" in failures else heaviest(inclusive["system"], frames),
+            "appSelfMsByBinary": None if "time-profile" in failures else heaviest(self_by_binary, 10),
+            "nearestAppCallersMs": None if "time-profile" in failures else {
+                pattern: heaviest(nearest_app_callers(stacks, names, pattern), frames or 10) for pattern in callers
+            },
+            "symbolLocations": [
+                {"binary": frame.binary.name, "uuid": frame.binary.uuid, "address": hex(frame.address),
+                 "inclusiveMs": round(location_weights[frame], 2), "selfMs": round(location_self[frame], 2),
+                 "inlineFrames": list(locations.get(frame, ())),
+                 "unavailableReason": None if locations.get(frame) else "no matching debug information for this address"}
+                for frame in location_frames if frame.binary is not None
+            ] if (frames or callers) and "time-profile" not in failures else None,
+        }
+
+    frame_details = measure("sampledFrames", analyze_sampled_frames)
+    if frame_details is None:
+        frame_details = dict.fromkeys((
+            "journey", "motion", "mainTopFunctionsSelfMs", "appFramesInclusiveMs",
+            "appFramesInclusiveMsExcludingAutomation", "systemFramesInclusiveMs", "appSelfMsByBinary",
+            "nearestAppCallersMs", "symbolLocations",
+        ))
+        frame_details["frameAnalysisUnavailableReason"] = failures["sampledFrames"]["unavailableReason"]
     return {
         "trace": trace,
         "seconds": round(run.seconds, 2),
         "endReason": run.end_reason,
         "platform": run.platform,
         "scriptedScroll": scroll,
-        "journey": journey,
+        **frame_details,
         "app": {
             **app_cpu,
             "cpuMsByThread": None if app_cpu["cpuUnavailableReason"] else {name: round(ms, 1) for name, ms in app_threads.most_common(8)},
@@ -1070,22 +1113,12 @@ def summarize(trace: str, frames: int, callers: list[str], apps: list[Path]) -> 
             "hitchesUnavailableReason": failures.get("hitches", {}).get("unavailableReason"),
             "presentedFrames": cadence,
         },
-        "motion": motion_summary(intervals, samples, app_cpu["cpuUnavailableReason"], hitch_rows, commit_starts, names,
-                                 frames) if intervals else None,
         "motionUnavailableReason": (
+            failures["sampledFrames"]["unavailableReason"] if intervals and "sampledFrames" in failures else
             failures["TranscriptScroll"]["unavailableReason"] if "TranscriptScroll" in failures else
             "trace has no OSSignpostIntervals table" if intervals is None else
             f"no {MOTION_SIGNPOST} interval completed in {APP}" if not intervals else None
         ),
-        "mainTopFunctionsSelfMs": top_functions([sample for sample in samples if sample.thread == "main"], names, frames)
-                                  if frames and "time-profile" not in failures else None,
-        "appFramesInclusiveMs": None if "time-profile" in failures else heaviest(inclusive["app"], frames),
-        "appFramesInclusiveMsExcludingAutomation": None if "time-profile" in failures else heaviest(clean_inclusive["app"], frames),
-        "systemFramesInclusiveMs": None if "time-profile" in failures else heaviest(inclusive["system"], frames),
-        "appSelfMsByBinary": None if "time-profile" in failures else heaviest(self_by_binary, 10),
-        "nearestAppCallersMs": None if "time-profile" in failures else {
-            pattern: heaviest(nearest_app_callers(stacks, names, pattern), frames or 10) for pattern in callers
-        },
         "renderServer": {
             "process": render_server,
             **cpu_summary(render_server),
@@ -1097,13 +1130,6 @@ def summarize(trace: str, frames: int, callers: list[str], apps: list[Path]) -> 
         "swiftConcurrency": concurrency_summary if "swiftConcurrency" not in failures else {**failures["swiftConcurrency"], "taskStateMs": None},
         "exportFailures": failures,
         "exportedSchemas": sorted(run.schemas),
-        "symbolLocations": [
-            {"binary": frame.binary.name, "uuid": frame.binary.uuid, "address": hex(frame.address),
-             "inclusiveMs": round(location_weights[frame], 2), "selfMs": round(location_self[frame], 2),
-             "inlineFrames": list(locations.get(frame, ())),
-             "unavailableReason": None if locations.get(frame) else "no matching debug information for this address"}
-            for frame in location_frames if frame.binary is not None
-        ] if (frames or callers) and "time-profile" not in failures else None,
         "processorTrace": processor_summary if "processorTrace" not in failures else {
             **failures["processorTrace"], "schema": "processor-trace-intervals",
             "topFunctions": None, "topAppFunctions": None},

@@ -364,6 +364,38 @@ class PerfTraceTests(unittest.TestCase):
                     self.assertIsNone(result["processorTrace"]["topAppFunctions"])
                 json.dumps(result)
 
+    def test_frame_memory_overflow_preserves_cpu_totals_after_symbolication_or_journey_reduction(self):
+        original = trace.frame_statistics
+        for stage in ("symbolicate", "journey"):
+            with self.subTest(stage=stage):
+                exceeded = False
+                def symbols(frames, apps):
+                    nonlocal exceeded
+                    if stage == "symbolicate":
+                        exceeded = True
+                    return {}, {}
+                def statistics(samples, names):
+                    nonlocal exceeded
+                    if stage == "journey" and len(samples) == 1 and samples[0].time_ns == 1.2e9:
+                        exceeded = True
+                    return original(samples, names)
+                with (patch.object(trace, "symbolicate", side_effect=symbols),
+                      patch.object(trace, "frame_statistics", side_effect=statistics),
+                      patch.object(trace, "resident_bytes", side_effect=lambda pid: 17 * 2**30 if exceeded else 0)):
+                    result, _ = self.summary({"time-profile", "OSSignpostIntervals"}, frames=10, tables={
+                        "time-profile": PROFILE_XML,
+                        "OSSignpostIntervals": SIGNPOST_XML.replace("TranscriptScroll", "ReplayJourney"),
+                    })
+                self.assertTrue(exceeded)
+                self.assertEqual(result["app"]["cpuMs"], 7)
+                self.assertEqual(result["app"]["mainThreadCpuMs"], 7)
+                self.assertEqual(result["app"]["automation"]["cpuMs"], 4)
+                self.assertEqual(result["exportFailures"]["sampledFrames"]["status"], "exceeds export limit")
+                self.assertIn("Python reached", result["frameAnalysisUnavailableReason"])
+                for key in ("appFramesInclusiveMs", "mainTopFunctionsSelfMs", "symbolLocations", "journey"):
+                    self.assertIsNone(result[key])
+                json.dumps(result)
+
     def test_parser_detaches_rows_and_stops_at_its_python_memory_budget(self):
         original = trace.ET.iterparse
         nodes = []
@@ -425,7 +457,7 @@ class PerfTraceTests(unittest.TestCase):
         _, keys, _ = trace.hitch_updates("recording.trace")
         return trace.presented_frames("recording.trace", run, scroll, keys)
 
-    def summary(self, schemas, gpu_rows="", swiftui_xml=SWIFTUI_XML, platform="macOS", tables=None):
+    def summary(self, schemas, gpu_rows="", swiftui_xml=SWIFTUI_XML, platform="macOS", tables=None, frames=0):
         toc = '<trace-toc><run number="1"><info><summary><duration>2</duration><end-reason>Time limit reached</end-reason><start-date>2026-10-08T00:00:00+02:00</start-date></summary><target><device platform="macOS"/><environment><item key="SENTINEL_SECRET" value="fixture-secret-must-not-reach-summary"/></environment></target></info><data>'
         toc = toc.replace('platform="macOS"', f'platform="{platform}"')
         toc += ''.join(f'<table schema="{name}"/>' for name in schemas)
@@ -460,7 +492,7 @@ class PerfTraceTests(unittest.TestCase):
             return Export('<trace-query-result><node/></trace-query-result>')
 
         with patch.object(trace.subprocess, "Popen", side_effect=export), patch.object(trace, "scroll_receipt", return_value=None):
-            result = trace.summarize("recording.trace", 0, [], [])
+            result = trace.summarize("recording.trace", frames, [], [])
         return result, exported
 
     def test_device_swiftui_cli_preflights_then_records_and_reports(self):
