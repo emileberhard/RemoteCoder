@@ -4,7 +4,7 @@ import { isAbsolute, join, resolve } from "node:path";
 import { IsolatedGateway } from "./isolated-gateway.mjs";
 
 if (process.argv[2] === "--help") {
-    console.log("Usage: bun dev-tools/probes/provider-fallback.mjs CANDIDATE_BINARY\nRuns an owned isolated gateway against the host router with the Codex subscription sign-in failing on purpose. Proves Codex reports the Copilot fallback, a Claude turn completes and a new Codex turn runs on Copilot. Production stays unchanged.");
+    console.log("Usage: bun dev-tools/probes/provider-fallback.mjs CANDIDATE_BINARY\nRuns an owned isolated gateway against the host router with the Codex subscription sign-in failing on purpose. Proves Codex reports the Copilot fallback, a Claude turn completes, and a new Codex conversation that names a native model without a Copilot counterpart starts on the first Copilot model and keeps it through a follow-up Fast turn. Production stays unchanged.");
     process.exit(0);
 }
 const [binary] = process.argv.slice(2);
@@ -12,6 +12,8 @@ assert(binary && isAbsolute(binary), "Pass the built gateway executable as an ab
 const lab = await IsolatedGateway.create(binary);
 const wrapper = resolve(import.meta.dir, "../rc-gateway");
 const secrets = [lab.path("router-key"), lab.path("copilot-key")];
+const NATIVE_MODEL = "gpt-6.1-sol";
+const FALLBACK_MODEL = "copilot/gemini-4-argon";
 let failure;
 
 function envValues(source) {
@@ -40,14 +42,15 @@ async function readyProviders() {
     }
 }
 
-async function turn(provider, model, prompt) {
+async function turn(label, provider, model, prompt, extra = []) {
     const cwd = lab.path(provider);
     await mkdir(cwd, { recursive: true, mode: 0o700 });
-    const events = lab.path(`${provider}.events.jsonl`);
+    const events = lab.path(`${label}.events.jsonl`);
     const args = [wrapper, "--host", "127.0.0.1", "--port", String(lab.port), "--scheme", "ws", "--no-ssh-env",
         "--local-config", lab.path("no-config.json"), provider === "claude" ? "claude-turn" : "turn",
         "--model", model, "--effort", "medium", "--cwd", cwd, "--purpose", "probe", "--timeout", "300",
-        "--event-log", events, ...(provider === "claude" ? [prompt] : ["--prompt", prompt, "--print-assistant"])];
+        "--event-log", events, ...extra,
+        ...(provider === "claude" ? [prompt] : ["--prompt", prompt, "--print-assistant"])];
     const child = Bun.spawn(args, {
         env: { ...process.env, RC_CODEX_GATEWAY_AUTH_TOKEN: lab.token },
         cwd: resolve(import.meta.dir, "../.."), stdout: "pipe", stderr: "pipe",
@@ -57,7 +60,7 @@ async function turn(provider, model, prompt) {
     ]);
     const lines = await Bun.file(events).exists() ? (await readFile(events, "utf8")).split("\n").filter(Boolean) : [];
     const threadId = lines.map(line => JSON.parse(line)).find(event => event.type === "thread.started")?.thread_id;
-    return { provider, model, exitCode, threadId, stdout: stdout.trim().slice(-500), stderr: stderr.trim().slice(-2000) };
+    return { label, provider, model, exitCode, threadId, stdout: stdout.trim().slice(-500), stderr: stderr.trim().slice(-2000) };
 }
 
 try {
@@ -70,7 +73,7 @@ try {
     await copyFile(values.RC_CODEX_GATEWAY_ROUTER_KEY_FILE, secrets[0]);
     await copyFile(copilot.keyFile, secrets[1]);
     await lab.write(lab.path("external-providers.json"), JSON.stringify({ providers: [{
-        ...copilot, keyFile: secrets[1], models: ["copilot/gpt-6.1-sol", "copilot/gemini-4-argon"],
+        ...copilot, keyFile: secrets[1], models: [FALLBACK_MODEL],
     }] }));
     await mkdir(join(lab.nativeDefault, "packages/standalone"), { recursive: true, mode: 0o700 });
     await symlink(join(lab.realHome, ".codex/packages/standalone/current"), join(lab.nativeDefault, "packages/standalone/current"));
@@ -94,22 +97,31 @@ try {
         return current?.codex?.state === "fallback" ? current : null;
     }, 120);
     assert.equal(providers.codex.fallback, "copilot");
-    const turns = await Promise.all([
-        turn("claude", "claude-sonnet-5-5", "Reply with exactly: claude ok"),
-        turn("codex", "gpt-6.1-sol", "Reply with exactly: copilot ok"),
+    const codexConversation = async () => {
+        const first = await turn("codex-first", "codex", NATIVE_MODEL, "Reply with exactly: copilot ok");
+        if (!first.threadId) return [first];
+        const followUp = await turn("codex-follow-up", "codex", NATIVE_MODEL, "Reply with exactly: still copilot",
+            ["--resume", first.threadId, "--service-tier", "fast"]);
+        return [first, { ...followUp, threadId: followUp.threadId ?? first.threadId }];
+    };
+    const [claude, codexTurns] = await Promise.all([
+        turn("claude", "claude", "claude-sonnet-5-5", "Reply with exactly: claude ok"),
+        codexConversation(),
     ]);
+    const turns = [claude, ...codexTurns];
     const client = await lab.connect();
-    const codex = turns.find(result => result.provider === "codex");
-    assert(codex.threadId, "The Codex turn never created a thread");
-    const read = await client.rpc("thread/read", { threadId: codex.threadId, includeTurns: false });
-    const claude = turns.find(result => result.provider === "claude");
+    const codexThreadId = codexTurns[0].threadId;
+    assert(codexThreadId, "The Codex turn never created a thread");
+    const read = await client.rpc("thread/read", { threadId: codexThreadId, includeTurns: false });
     if (claude.threadId) await client.rpc("claude/thread/release", { threadId: claude.threadId });
     const receipt = {
         providers, turns, codexThread: { modelProvider: read.result?.thread?.modelProvider, model: read.result?.thread?.model },
     };
     console.log(JSON.stringify(receipt, null, 2));
-    for (const result of turns) assert.equal(result.exitCode, 0, `${result.provider} turn failed: ${result.stderr}`);
+    for (const result of turns) assert.equal(result.exitCode, 0, `${result.label} turn failed: ${result.stderr}`);
+    assert.equal(codexTurns.length, 2, "The follow-up Codex turn never ran");
     assert.equal(receipt.codexThread.modelProvider, "copilot");
+    assert.equal(receipt.codexThread.model, FALLBACK_MODEL);
 } catch (error) {
     failure = error;
     console.error(JSON.stringify({ error: String(error.message), isolatedHome: lab.root }));

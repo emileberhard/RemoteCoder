@@ -66,7 +66,7 @@ fn copilot_fallback(
     let provider: ExternalProvider = serde_json::from_value(json!({
         "id": "copilot", "name": "Copilot", "baseUrl": "http://127.0.0.1:9/v1",
         "keyFile": "/private/copilot.key",
-        "models": ["copilot/gpt-6.1-sol", "copilot/gemini-4-argon"],
+        "models": ["copilot/gemini-4-argon"],
     }))
     .unwrap();
     let catalogs = state.join("external-models");
@@ -74,7 +74,7 @@ fn copilot_fallback(
     private_state::ensure_private_directory(&catalogs).unwrap();
     private_state::write_json(
         &catalogs.join("copilot.json"),
-        &json!({"models": [{"slug": "copilot/gpt-6.1-sol"}, {"slug": "copilot/gemini-4-argon"}]}),
+        &json!({"models": [{"slug": "copilot/gemini-4-argon"}]}),
     )
     .unwrap();
     ExternalProviders::new(vec![provider], state)
@@ -851,14 +851,19 @@ async fn a_router_token_failure_leaves_codex_ready_and_starts_new_chats_on_the_f
     fixture.gateway.start_on_fallback(&mut start).await.unwrap();
     assert_eq!(
         start,
-        json!({"model": "copilot/gpt-6.1-sol", "modelProvider": "copilot",
-            "collaborationMode": {"mode": "default", "settings": {"model": "copilot/gpt-6.1-sol"}}})
+        json!({"model": "copilot/gemini-4-argon", "modelProvider": "copilot",
+            "collaborationMode": {"mode": "default", "settings": {"model": "copilot/gemini-4-argon"}}})
     );
-    let mut unknown = json!({"model": "gpt-9"});
-    fixture
-        .gateway
-        .start_on_fallback(&mut unknown)
-        .await
-        .unwrap();
-    assert_eq!(unknown["model"], "copilot/gpt-6.1-sol");
+
+    let external = fixture.gateway.external_providers.as_deref().unwrap();
+    for method in ["thread/resume", "turn/start"] {
+        let mut follow_up =
+            json!({"threadId": "thr_copilot", "model": "gpt-6.1-sol", "serviceTier": "fast"});
+        external
+            .admit(method, &mut follow_up, Some("copilot"))
+            .await
+            .unwrap();
+        assert!(follow_up.get("model").is_none(), "{method}");
+        assert!(follow_up.get("serviceTier").is_none(), "{method}");
+    }
 }
