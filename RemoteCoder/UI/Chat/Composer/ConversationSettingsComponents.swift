@@ -64,7 +64,7 @@ struct ConversationModelMenu: View {
         AppMenu {
             Picker("Model", selection: $selection.nativeSelectionFeedback()) {
                 ForEach(models) { option in
-                    modelLabel(option).tag(option)
+                    ModelPickerRow(option: option).tag(option)
                 }
             }
             .pickerStyle(.inline)
@@ -80,12 +80,24 @@ struct ConversationModelMenu: View {
         .accessibilityValue(selection.supportsDaybreakBlue ? "\(selection.displayName), Daybreak Blue" : selection.displayName)
         .accessibilityIdentifier("conversation-model-menu")
     }
+}
 
-    @ViewBuilder private func modelLabel(_ option: ModelOption) -> some View {
-        if option.supportsDaybreakBlue {
-            Label("\(option.pickerTitle) · Daybreak Blue", systemImage: "shield")
+extension EnvironmentValues {
+    @Entry var providerHealth: ProviderHealth?
+}
+
+private struct ModelPickerRow: View {
+    let option: ModelOption
+    @Environment(\.providerHealth) private var providerHealth
+
+    var body: some View {
+        let title = option.supportsDaybreakBlue ? "\(option.pickerTitle) · Daybreak Blue" : option.pickerTitle
+        if providerHealth?.isImpaired(option) == true {
+            Label(title, systemImage: "exclamationmark.triangle")
+        } else if option.supportsDaybreakBlue {
+            Label(title, systemImage: "shield")
         } else {
-            Text(option.pickerTitle)
+            Text(title)
         }
     }
 }
@@ -102,7 +114,7 @@ struct UnresolvedModelControls: View {
                 AppMenu {
                     Picker("Model", selection: $selection.nativeSelectionFeedback()) {
                         ForEach(models) { option in
-                            Text(option.pickerTitle).tag(Optional(option))
+                            ModelPickerRow(option: option).tag(Optional(option))
                         }
                     }
                     .pickerStyle(.inline)

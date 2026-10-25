@@ -172,6 +172,13 @@ struct ChatComposerView: View {
             }
             ConversationSettingsStatus(screen: screen, threadID: screen.activeSessionID)
                 .padding(.horizontal, 12)
+            if let notice = screen.providerNotice {
+                ProviderWarningLabel(text: notice)
+                    .scaledFont(.caption)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 12)
+                    .accessibilityIdentifier("provider-notice")
+            }
 
             if let warning = screen.target.gatewayWarning {
                 dismissibleNotice(warning.message) { screen.target.gatewayWarning = nil }
@@ -203,6 +210,7 @@ struct ChatComposerView: View {
         }
         .animation(reduceMotion ? nil : .smooth, value: screen.pendingQuestion?.itemID)
         .animation(reduceMotion ? nil : .smooth, value: attachmentStripState)
+        .environment(\.providerHealth, screen.target.providerHealth)
         .padding(.horizontal, LayoutMetrics.surfaceInset)
         .padding(.top, 4)
         .padding(.bottom, 8)

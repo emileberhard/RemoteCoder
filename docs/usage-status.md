@@ -48,6 +48,38 @@ with each provider's brand color: Claude `#D97757`, Codex the
 (`@lobehub/icons-static-svg` 1.95.0, MIT, LobeHub). Each SVG records its source. Codex slots are classified by their reported window duration, never by
 a primary/secondary assumption.
 
+## Provider health
+
+Each gateway reports every provider as `ready`, `fallback` (Codex turns run on
+a gateway fallback route such as Copilot because the subscription path fails)
+or `unavailable`, with a one-line reason unless ready, in `daemon/ready` and in
+`gateway/providerHealth` whenever it changes. `ChatTargetModel.providerHealth`
+holds the latest value for its host and the rings read the selected host's. A
+gateway that reports nothing leaves health unknown, and the app shows nothing.
+Replayed notifications never change it, because every connection's
+`daemon/ready` carries the current value.
+
+- A broken (`fallback` or `unavailable`) provider's ring dims its logo and adds
+  a small warning badge. Its popover states the reason in one line, and
+  VoiceOver reads the reason before the usage.
+- The model picker keeps every model and marks the broken provider's with a
+  warning symbol: every model of an unavailable provider, and during fallback
+  only native Codex models, not those of an external `modelProvider`.
+- One warning line below the composer's model controls covers the selected
+  model. During fallback a new chat on a native Codex model reads "New chats
+  run on Copilot": new Codex conversations start on the fallback route and stay
+  there. An existing native Codex conversation keeps its subscription provider,
+  so it shows the reason, and its turns fail until the subscription recovers.
+  An unavailable provider shows the reason everywhere.
+- While the preferred new-chat provider is unavailable, a new chat whose model
+  was not chosen starts on a working provider's default model, and the warning
+  line shows the unavailable provider's reason. When no working provider has a
+  visible model, the default stays. Health changes re-resolve such a chat, so
+  it returns once the provider recovers. Existing conversations never change
+  provider, and the stored preference stays unchanged.
+- A native request refused with `providerUnavailable` reads as its reason,
+  including as a send error.
+
 ## Ownership and recovery
 
 In router mode, Claude authentication and subscription selection belong to llm-router. The

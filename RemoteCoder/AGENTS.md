@@ -1098,6 +1098,11 @@ entrypoint linked above.
     Settings hides it.
   - With no list yet, a new Codex chat has no model: the composer says why,
     offers Retry and blocks sending.
+  - While the gateway reports the preferred provider unavailable, a new chat
+    whose model was not chosen resolves on a working provider
+    (`TargetModelCatalog.newChatDefault(for:health:)`); the picker marks broken
+    providers' models and the composer shows one warning line
+    (`docs/usage-status.md`, *Provider health*).
   - Opening a conversation keeps its model even when it is hidden or missing
     from the list; a missing model keeps only its reported effort.
   - Only explicit composer or voice-picker actions record manual preferences.
@@ -1360,6 +1365,9 @@ entrypoint linked above.
     removal, sign-in and reconnect to llm-router. Without a router, its
     account-management and speech features remain unavailable.
     Codex usage follows the selected host default. Missing usage stays unknown.
+    A provider the selected host's gateway reports broken dims its logo and
+    adds a warning badge; its popover states the reason. Unreported health
+    shows nothing.
   - `AccountDirectory` owns Codex reset redemption; `ClaudeAccountDirectory`
     owns Claude redemption. Their `AccountResetRedemptions` persists one pending
     attempt per subscription before submission. Retry retains its host, offer

@@ -55,15 +55,16 @@ struct UsageRingButton: View {
     var body: some View {
         let account = workspace.codexAccount
         let rows = account?.sample.usageRows ?? []
+        let status = workspace.providerStatus(of: .codex)
         Button(action: showUsage) {
-            UsageRings(provider: .codex, rows: rows, diameter: diameter)
+            UsageRings(provider: .codex, rows: rows, status: status, diameter: diameter)
                 .padding(4)
                 .contentShape(.circle)
         }
         .buttonStyle(ResponsiveButtonStyle(feedback: .iconPress, pressedScale: 0.96, pressedOpacity: 0.9))
         .tooltip("Show Codex usage")
         .accessibilityLabel("Codex usage, \(account?.title ?? "no account selected")")
-        .accessibilityValue(rows.isEmpty ? "Unavailable" : rows.map(\.ringAccessibilityValue).joined(separator: ". "))
+        .accessibilityValue(UsageRings.accessibilityValue(rows: rows, status: status))
         .accessibilityIdentifier("usage-codex")
         .contextMenuPreviewShape(Circle())
         .contextMenu {
@@ -112,14 +113,21 @@ struct UsageRings: View {
     let diameter: CGFloat
     private let weekly: CodexUsageLimitRow?
     private let fiveHour: CodexUsageLimitRow?
+    private let isBroken: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorSchemeContrast) private var contrast
 
-    init(provider: AgentProvider, rows: [CodexUsageLimitRow], diameter: CGFloat) {
+    init(provider: AgentProvider, rows: [CodexUsageLimitRow], status: ProviderStatus?, diameter: CGFloat) {
         self.provider = provider
         self.diameter = diameter
         weekly = rows.first { $0.kind == .weekly }
         fiveHour = rows.first { $0.kind == .fiveHour && $0.runOutWarning != nil }
+        isBroken = status?.isBroken == true
+    }
+
+    static func accessibilityValue(rows: [CodexUsageLimitRow], status: ProviderStatus?) -> String {
+        let usage = rows.isEmpty ? "Unavailable" : rows.map(\.ringAccessibilityValue).joined(separator: ". ")
+        return status?.reason.map { "\($0). \(usage)" } ?? usage
     }
 
     var body: some View {
@@ -138,9 +146,19 @@ struct UsageRings: View {
                 .scaledToFit()
                 .foregroundStyle(provider.markStyle)
                 .frame(width: diameter * 0.46, height: diameter * 0.46)
-                .opacity(weekly.map { $0.isStale ? 0.5 : 1 } ?? 0.5)
+                .opacity(isBroken ? 0.3 : weekly.map { $0.isStale ? 0.5 : 1 } ?? 0.5)
         }
         .frame(width: diameter, height: diameter)
+        .overlay(alignment: .topTrailing) {
+            if isBroken {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .resizable()
+                    .scaledToFit()
+                    .symbolRenderingMode(.multicolor)
+                    .frame(width: diameter * 0.42, height: diameter * 0.42)
+                    .offset(x: diameter * 0.08, y: -diameter * 0.04)
+            }
+        }
         .animation(style.animation, value: fiveHour?.runOutWarning)
         .accessibilityHidden(true)
     }
@@ -197,6 +215,9 @@ struct UsageDetailsView: View {
             }
             .buttonStyle(.plain)
             AccountResetCount(resets: account?.sample.resets, isStale: account?.sample.stale ?? false)
+            if let reason = workspace.providerStatus(of: .codex)?.reason {
+                ProviderWarningLabel(text: reason).scaledFont(.footnote)
+            }
             UsageDetailsContent(
                 rows: account?.sample.usageRows ?? [],
                 notice: account?.sample.usageNotice,
@@ -205,6 +226,17 @@ struct UsageDetailsView: View {
         }
         .padding([.horizontal, .bottom], 16)
         .padding(.top, 6)
+    }
+}
+
+struct ProviderWarningLabel: View {
+    let text: String
+
+    var body: some View {
+        Label(text, systemImage: "exclamationmark.triangle.fill")
+            .symbolRenderingMode(.multicolor)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
     }
 }
 

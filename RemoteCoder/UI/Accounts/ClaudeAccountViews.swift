@@ -11,15 +11,16 @@ struct ClaudeUsageRingButton: View {
     var body: some View {
         let selected = directory.effectiveAccount
         let rows = selected?.usageRows(now: .now) ?? []
+        let status = workspace.providerStatus(of: .claude)
         Button(action: showUsage) {
-            UsageRings(provider: .claude, rows: rows, diameter: diameter)
+            UsageRings(provider: .claude, rows: rows, status: status, diameter: diameter)
                 .padding(4)
                 .contentShape(.circle)
         }
         .buttonStyle(ResponsiveButtonStyle(feedback: .iconPress, pressedScale: 0.96, pressedOpacity: 0.9))
         .tooltip("Show Claude usage")
         .accessibilityLabel("Claude usage, \(selected?.label ?? "no account selected")")
-        .accessibilityValue(rows.isEmpty ? "Unavailable" : rows.map(\.ringAccessibilityValue).joined(separator: ". "))
+        .accessibilityValue(UsageRings.accessibilityValue(rows: rows, status: status))
         .accessibilityIdentifier("usage-claude")
         .contextMenuPreviewShape(Circle())
         .contextMenu {
@@ -28,10 +29,12 @@ struct ClaudeUsageRingButton: View {
                 Task { await directory.refresh(interactive: true) }
             }
         } preview: {
-            ClaudeUsageDetailsView(directory: directory, onShowAllAccounts: {})
+            ClaudeUsageDetailsView(directory: directory, providerReason: status?.reason, onShowAllAccounts: {})
         }
         .popover(isPresented: binding(.usage), arrowEdge: .top) {
-            ClaudeUsageDetailsView(directory: directory) { presentation = .leavingUsageForAccounts }
+            ClaudeUsageDetailsView(directory: directory, providerReason: status?.reason) {
+                presentation = .leavingUsageForAccounts
+            }
                 .task { await directory.refresh(interactive: true) }
                 .onDisappear {
                     if presentation == .leavingUsageForAccounts { presentation = .accounts }
@@ -52,6 +55,7 @@ struct ClaudeUsageRingButton: View {
 
 struct ClaudeUsageDetailsView: View {
     var directory: ClaudeAccountDirectory
+    let providerReason: String?
     let onShowAllAccounts: () -> Void
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @InterfaceScaledMetric(relativeTo: .headline) private var markSize = 18
@@ -105,6 +109,9 @@ struct ClaudeUsageDetailsView: View {
             }
             .accessibilityLabel("Claude account")
             .accessibilityValue(directory.effectiveAccount?.label ?? "None selected")
+            if let providerReason {
+                ProviderWarningLabel(text: providerReason).scaledFont(.footnote)
+            }
             if let error = directory.error {
                 Text(error).scaledFont(.footnote).foregroundStyle(.secondary)
             }

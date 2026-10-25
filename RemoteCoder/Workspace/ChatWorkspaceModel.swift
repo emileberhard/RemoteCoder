@@ -208,6 +208,10 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         accountDirectory.groups.first { $0.provider == .codex && $0.hosts.contains { $0.host.id == selectedHostID } }
     }
 
+    func providerStatus(of provider: AgentProvider) -> ProviderStatus? {
+        selectedHostID.flatMap(model(for:))?.providerHealth?.status(of: provider)
+    }
+
     func select(target: ExecutionTarget) {
         guard !isQuiescing else { return }
         supersedePendingNavigation()
