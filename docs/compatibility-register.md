@@ -98,3 +98,12 @@ an old backup keeps its item until the check passes.
 
 | Legacy compilation eviction activation | `scripts/build_cache.py.load_policy`, configs `build/compilation-cache-policy.json` and `build/compilation-cache-eviction.json` | The legacy policy flag stays false while the new activation file enables only the corrected owner; stale worktrees must not delete outside RemoteCoder-Build | No supported release or live worktree uses the old activation flag or its broader eviction implementation |
 | Legacy six-key `build/macos-cache-policy.json` reader | Pinned older `scripts/build_cache.py` in immutable release tags and live worktrees; source in the private maintainer build policy | Re-running supported releases and older worktrees must keep reading their exact policy schema. New runners use `compilation-cache-policy.json` for retention and `compilation-cache-eviction.json` for activation | No supported release tag or live worktree predating the aggregate compilation policy still loads this file |
+
+## Planned checkpoint database rollout
+
+This path is not active; checkpoints still use schema 1. The deferred schema-2
+PR must introduce the reader before enabling its writer.
+
+| Path | Owner | Reason | Removal condition |
+|---|---|---|---|
+| Planned schema-2 checkpoint reader with a schema-1 writer, followed by schema-2 writes in a later release | `CheckpointDatabase` | Rollback, preview and branch builds must read every canonical checkpoint without stranding unique local records in recovery | Enable schema-2 writes only after every supported rollback/install consumer reads schema 2; remove schema-1 migration only after all retained databases are migrated or explicitly retired and no supported writer creates schema 1 |

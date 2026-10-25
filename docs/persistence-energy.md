@@ -238,3 +238,36 @@ rather than retaining decoded checkpoints or adding a connection/cache owner.
 The bit lasts only until an owner-observed source change or load. Repeated failed
 reads are deliberately not cached; any later identity-based backoff must preserve
 retry after the source changes.
+
+## Deferred content-defined checkpoint chunks
+
+`checkpoint-cdc` is an unshipped prototype for reducing changed payload bytes on
+older-page prepends and early edits. Schema 1 remains the shipped format. The
+prototype's schema 2 is currently unsafe for rollback: an older reader treats it
+as unreadable, moves the original into recovery and discards the canonical file;
+a later upgrade does not re-import those unique local records.
+
+Before a later PR:
+
+- Record the decision and obtain an independent architecture challenge. Keep the
+  database as the chunk/reference/transaction owner and validate the costs of
+  chunking, hashing and SQL separately in optimized, serial measurements.
+- Roll out in two releases: first read schema 2 while still writing schema 1;
+  only a later release may write schema 2, once every supported rollback build
+  can read it. Preview/branch installs and both Mac app builders are rollback
+  consumers too. Track that boundary in the
+  [compatibility register](compatibility-register.md#planned-checkpoint-database-rollout).
+- Reclaim migration space once with `VACUUM` and `wal_checkpoint(TRUNCATE)` before
+  budget eviction uses the migrated disk total. Migration currently roughly
+  doubles counted bytes and can evict offline caches. This one-time format
+  transition does not justify vacuuming on ordinary saves.
+- Replace global unreferenced-chunk scans on every save with collection of only
+  hashes formerly held by changed or removed record rows.
+- Frame the later change and its title around prepends and early edits, rather
+  than 436a281's streaming-delta title: the measured six-byte streaming save
+  remains 31,002 changed payload bytes. Keep the existing prototype commits
+  unchanged and reword when preparing the later PR.
+
+Image admission (`preservedImageEvictions` and `oldestSettledImage`) also decodes
+image-bearing items on saves/loop passes. This is separate follow-up work if the
+new admission phase measurements show a material cost.
