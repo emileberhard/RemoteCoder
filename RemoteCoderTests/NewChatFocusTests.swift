@@ -14,16 +14,14 @@ struct NewChatFocusTests {
         defer { await fixture.cleanUp() }
         let scene = try #require(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let hosted = HostedWindow(scene: scene)
-        let commands = SceneCommands()
         let controller = UIHostingController(rootView: ChatRootView(workspace: fixture.workspace, sceneValue: .constant(nil))
             .environment(fixture.workspace.settings)
             .environment(fixture.workspace.modelPickerPreferences)
             .environment(AppThemeStore())
             .environment(\.scenePhase, .active)
-            .environment(\.horizontalSizeClass, .compact)
-            .overlay { SceneCommandObserver(commands: commands) })
+            .environment(\.horizontalSizeClass, .compact))
         hosted.show(controller)
-        defer { controller.view.endEditing(true); hosted.close(); commands.actions = nil }
+        defer { controller.view.endEditing(true); hosted.close() }
         #expect(await waitUntil { fixture.workspace.keyWindow.isAttached && fixture.workspace.events.keyScreenID != nil })
 
         fixture.workspace.events.receive(.open(.newChat(slot: UUID())))
@@ -35,10 +33,10 @@ struct NewChatFocusTests {
         var drawerAction: ChatWindowActions?
         if case .drawer = navigation {
             try #require(await waitUntil {
-                guard let actions = commands.actions, actions.isEnabled(.toggleSidebar) else { return false }
+                guard let actions = fixture.workspace.keyWindow.performanceActions?(), actions.isEnabled(.toggleSidebar) else { return false }
                 drawerAction = actions
                 return true
-            }, "The focused scene must publish its real drawer command before queuing focus")
+            }, "The window must expose its real drawer command before queuing focus")
         }
 
         let before = try #require(fixture.workspace.selectedScreen).transcriptIdentity
@@ -81,22 +79,6 @@ struct NewChatFocusTests {
     private func findButton(in view: UIView, identifier: String) -> UIButton? {
         if let button = view as? UIButton, button.accessibilityIdentifier == identifier { return button }
         return view.subviews.lazy.compactMap { findButton(in: $0, identifier: identifier) }.first
-    }
-
-    private final class SceneCommands {
-        var actions: ChatWindowActions?
-    }
-
-    private struct SceneCommandObserver: View {
-        let commands: SceneCommands
-        @FocusedValue(\.chatWindowActions) private var actions
-
-        var body: some View {
-            Color.clear.frame(width: 0, height: 0)
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
-                .onChange(of: actions, initial: true) { _, actions in commands.actions = actions }
-        }
     }
 
     private func hasComposerFirstResponder(in view: UIView) -> Bool {

@@ -251,7 +251,11 @@ struct ChatWindowActionsPublisher: View {
             return ChatWindowActions(state: context.commandState, performer: performer)
         }
         #endif
+        #if os(macOS)
         return ChatWindowFocusPublication(actions: ChatWindowActions(state: context.commandState, performer: performer)).equatable()
+        #else
+        return EmptyView()
+        #endif
     }
 
     private var context: ChatWindowActionContext {

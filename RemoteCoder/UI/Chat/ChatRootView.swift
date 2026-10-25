@@ -312,6 +312,7 @@ private struct ChatScreen: View {
         .onChange(of: screen.acceptsConversationInput) { _, acceptsInput in
             if !acceptsInput { composerPresentations.dismiss() }
         }
+        #if os(macOS) || RC_PERF_HARNESS
         .background {
             ChatWindowActionsPublisher(
                 workspace: workspace,
@@ -339,6 +340,7 @@ private struct ChatScreen: View {
                 }
             )
         }
+        #endif
         .onChange(of: usesPersistentSidebar, initial: true) { _, persistent in isHistoryOpen = persistent }
         .onAppear {
             VoiceModeDiagnostics.log("chat screen appeared")
