@@ -32,9 +32,8 @@ struct DiagnosticsDestination: Sendable {
 /// them to the gateway host.
 ///
 /// The phone's log store rotates within hours, so anything a bug report would
-/// need is usually gone before anyone asks. Every record logged through
-/// `AppLogger` reaches the host copy; the Settings archive adds the system
-/// frameworks' records on demand.
+/// need is usually gone before anyone asks. Records logged through
+/// `AppLogger` reach the host copy within the queue's memory and disk limits.
 actor DiagnosticsOutbox: DiagnosticsExporting {
     /// Total on-device bytes of undelivered segments before the oldest are
     /// evicted. Uploaded segments are deleted immediately, so this only fills
@@ -222,9 +221,13 @@ actor DiagnosticsOutbox: DiagnosticsExporting {
     }
 
     func persistPending() {
+        let started = clock.now
         var cost = ExportCost(reason: "persist")
         writeLogSegments(&cost)
-        if cost.logWrite != nil { telemetry.record(.export(cost)) }
+        cost.flushedRecords = flushTelemetry()
+        guard cost.logWrite != nil else { return }
+        cost.totalMilliseconds = started.duration(to: clock.now).milliseconds
+        telemetry.record(.export(cost))
         _ = flushTelemetry()
     }
 

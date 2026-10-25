@@ -176,7 +176,7 @@ struct FieldTelemetryTests {
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
         #expect(try logMessages(in: directory).isEmpty)
         await outbox.drain(reason: "background")
-        #expect(try logMessages(in: directory).first == "kept")
+        #expect(try logMessages(in: directory) == ["kept"])
         let exports = try telemetryBatches(in: directory).flatMap { $0 }.filter { $0["recordType"] as? String == "export" }
         #expect(exports.last?["logWrite"] as? String == "written")
     }
@@ -189,6 +189,60 @@ struct FieldTelemetryTests {
         #expect(batch.records.last?.message == "record 39")
         #expect(batch.dropped == 40 - batch.records.count + 1)
         #expect(sink.take().records.isEmpty)
+    }
+
+    @Test func aHandlerInstalledAfterTheQueueCrossedHalfIsSignalledAtOnce() {
+        let sink = AppLogSink(byteLimit: 2_000)
+        for index in 0..<12 { sink.append(logRecord("record \(index)")) }
+        let signals = Mutex(0)
+        sink.setHighWaterHandler { signals.withLock { $0 += 1 } }
+        #expect(signals.withLock { $0 } == 1)
+    }
+
+    @Test func anOverlappingDrainPersistsNewRecordsBeforeJoiningTheUpload() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let sink = AppLogSink()
+        let upload = UploadGate()
+        let outbox = DiagnosticsOutbox(directory: directory, logSink: sink, deviceLabel: { "test-device" })
+        await outbox.setDestination(upload.destination)
+        sink.append(logRecord("first"))
+        let first = Task { await outbox.drain(reason: "interval") }
+        await upload.firstRequest()
+        sink.append(logRecord("second"))
+        let second = Task { await outbox.drain(reason: "highWater") }
+        var persisted = false
+        for _ in 0..<200 where !persisted {
+            persisted = try logMessages(in: directory).contains("second")
+            if !persisted { try await Task.sleep(for: .milliseconds(10)) }
+        }
+        #expect(persisted)
+        upload.open()
+        await first.value
+        await second.value
+    }
+
+    @Test func stoppingWaitsForTheRunningDrain() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let sink = AppLogSink()
+        let upload = UploadGate()
+        let outbox = DiagnosticsOutbox(directory: directory, logSink: sink, deviceLabel: { "test-device" })
+        await outbox.setDestination(upload.destination)
+        sink.append(logRecord("first"))
+        let drain = Task { await outbox.drain(reason: "interval") }
+        await upload.firstRequest()
+        let stopped = Mutex(false)
+        let stop = Task {
+            await outbox.stopPumping()
+            stopped.withLock { $0 = true }
+        }
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(!stopped.withLock { $0 })
+        upload.open()
+        await stop.value
+        #expect(stopped.withLock { $0 })
+        await drain.value
     }
 
     @Test func crossingHalfTheBudgetSignalsOnceUntilTheNextTake() {
@@ -289,5 +343,52 @@ struct FieldTelemetryTests {
         }
         #expect(samples.map(\.reason) == [.launch, .foreground])
         #expect(samples.map(\.mixed) == [false, true])
+    }
+}
+
+private final class UploadGate: Sendable {
+    private struct State {
+        var isOpen = false
+        var waiters: [CheckedContinuation<Void, Never>] = []
+    }
+
+    private let state = Mutex(State())
+    private let requests = AsyncStream.makeStream(of: Void.self)
+
+    var destination: DiagnosticsDestination {
+        let host = GatewayHostConfiguration(id: UUID(), name: "Fixture", hostname: "diagnostics.test", port: 8787,
+                                            authToken: "fixture-token")
+        return DiagnosticsDestination(host: host) { [self] request in
+            requests.continuation.yield()
+            await waitUntilOpen()
+            let url = try #require(request.url)
+            let response = try #require(HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil))
+            return (Data(), response)
+        }
+    }
+
+    func firstRequest() async {
+        var iterator = requests.stream.makeAsyncIterator()
+        _ = await iterator.next()
+    }
+
+    func open() {
+        let waiters = state.withLock { state in
+            state.isOpen = true
+            defer { state.waiters.removeAll() }
+            return state.waiters
+        }
+        for waiter in waiters { waiter.resume() }
+    }
+
+    private func waitUntilOpen() async {
+        await withCheckedContinuation { continuation in
+            let resumeNow = state.withLock { state in
+                if state.isOpen { return true }
+                state.waiters.append(continuation)
+                return false
+            }
+            if resumeNow { continuation.resume() }
+        }
     }
 }

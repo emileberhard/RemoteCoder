@@ -480,7 +480,9 @@ def export_costs(runs: list[dict]) -> dict:
             "scanned": _present_sum(scans, "scanned"),
             **{name: sum(int(record.get(name, 0)) for record in items)
                for name in ("kept", "segments", "bytes", "flushedRecords", "uploadedSegments", "uploadedBytes")},
-            "processCpuSecondsDuringExports": round(sum(int(record.get("processCpuNs") or 0) for record in items) / 1e9, 3),
+            "processCpuSecondsDuringExports": round(sum(int(record["processCpuNs"]) for record in items
+                                                        if record.get("processCpuNs") is not None) / 1e9, 3),
+            "exportsWithoutCpu": sum(record.get("processCpuNs") is None for record in items),
             "sampledFootprintGrowthBytes": max(growth, default=None),
         }
     covered_cpu = sampled_cpu = 0.0
@@ -493,12 +495,12 @@ def export_costs(runs: list[dict]) -> dict:
             continue
         first, last = _parse(intervals[0]["start"]), _parse(intervals[-1]["end"])
         for record in run["records"]:
-            if record.get("recordType") != "export":
+            if record.get("recordType") != "export" or record.get("processCpuNs") is None:
                 continue
             finished = _parse(record["ts"])
             started = finished - datetime.timedelta(milliseconds=float(record.get("totalMs", 0)))
             if first <= started and finished <= last:
-                covered_cpu += int(record.get("processCpuNs") or 0) / 1e9
+                covered_cpu += int(record["processCpuNs"]) / 1e9
             else:
                 uncovered += 1
     read_ns = [int(record.get("readNs") or 0) for record in samples]

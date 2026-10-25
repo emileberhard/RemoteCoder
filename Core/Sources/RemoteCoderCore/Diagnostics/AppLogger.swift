@@ -68,7 +68,11 @@ final class AppLogSink: Sendable {
     }
 
     func setHighWaterHandler(_ handler: (@Sendable () -> Void)?) {
-        state.withLock { $0.onHighWater = handler }
+        let signal = state.withLock { state in
+            state.onHighWater = handler
+            return pendingSignal(&state)
+        }
+        signal?()
     }
 
     func append(_ record: AppLogRecord) {
@@ -82,9 +86,7 @@ final class AppLogSink: Sendable {
             state.records.append(record)
             state.bytes += size
             if state.bytes > byteLimit { evict(&state) }
-            guard !state.signaled, state.bytes > byteLimit / 2 else { return nil }
-            state.signaled = true
-            return state.onHighWater
+            return pendingSignal(&state)
         }
         signal?()
     }
@@ -108,6 +110,12 @@ final class AppLogSink: Sendable {
             state.signaled = true
             if state.bytes > byteLimit { evict(&state) }
         }
+    }
+
+    private func pendingSignal(_ state: inout State) -> (@Sendable () -> Void)? {
+        guard !state.signaled, state.bytes > byteLimit / 2, let handler = state.onHighWater else { return nil }
+        state.signaled = true
+        return handler
     }
 
     private func evict(_ state: inout State) {

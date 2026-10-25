@@ -236,6 +236,7 @@ def test_export_share_counts_only_exports_inside_the_sampled_coverage():
     assert cost["reasons"]["highWater"]["collections"] == {}
     assert cost["reasons"]["highWater"]["stageMs"]["scan"] is None
     assert cost["reasons"]["highWater"]["scanned"] is None
+    assert cost["reasons"]["highWater"]["exportsWithoutCpu"] == 0
     assert cost["reasons"]["interval"]["sampledFootprintGrowthBytes"] == 50
     assert cost["sampledProcessCpuSeconds"] == 5.1
     assert cost["exportShareOfSampledCpu"] == 0.1
