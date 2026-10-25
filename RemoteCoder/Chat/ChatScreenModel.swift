@@ -999,8 +999,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
 
     private func loadResumeConversation(_ thread: ConversationHeader, session: ConversationSession, previousOwner: ConversationSession?,
                                         loadID: UUID, settingsRevision: UInt64) async -> ResumeOutcome {
-        let operation = await AppPerformanceDiagnostics.shared.beginHistory(.opening,
-            provider: thread.id.hasPrefix("claude_") ? .claude : .codex, mode: .mixed)
+        let operation = AppPerformanceDiagnostics.shared.beginHistory(.opening, threadID: thread.id)
         async let settings: Void = restoreConversationSettings(thread, loadID: loadID, revision: settingsRevision)
         var failure: (any Error)?
         do {
@@ -1033,7 +1032,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         }
         await settings
         guard isCurrentResumeLoad(loadID, threadID: thread.id) else {
-            await AppPerformanceDiagnostics.shared.finishHistory(operationID: operation)
+            AppPerformanceDiagnostics.shared.finishHistory(operationID: operation)
             return .superseded
         }
         finishResumeLoad()
@@ -1041,7 +1040,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         if failure != nil { historyEdges.retainFailedOpening() }
         else { historyEdges.prefetchEarlier() }
         if messages.isEmpty { historyOpenSignpost.abandon(failure == nil ? .empty : .failed) }
-        await AppPerformanceDiagnostics.shared.finishHistory(operationID: operation)
+        AppPerformanceDiagnostics.shared.finishHistory(operationID: operation)
         await conversations.evictIdle(keeping: target.presentedConversationIDs)
         target.warmConversationsIfIdle()
         return failure.map(ResumeOutcome.failed) ?? .loaded
@@ -1127,7 +1126,6 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         resumeStagedUploads()
         historyEdges.reset()
         historyOpenSignpost.abandon(.cancelled)
-        Task { await AppPerformanceDiagnostics.shared.clearHistory() }
 
         logger.info("clear chat start summary=\(self.debugChatStateSummary(), privacy: .public)")
         cancelResumeConversationLoad()

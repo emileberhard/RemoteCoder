@@ -333,14 +333,14 @@ def record_transfer_failure(shell: list[str], run: Path):
         )
 
 
-def prepare_transfer(shell: list[str], run: Path):
+def prepare_transfer(shell: list[str], run: Path, scripts: Path):
     prepare = ("import json,pathlib,sys; run=pathlib.Path(sys.argv[1]); "
                "run.joinpath('repo').mkdir(parents=True,exist_ok=True); "
                "bootstrap=run/'receiver-bootstrap'; bootstrap.mkdir(exist_ok=True); "
                "payload=json.load(sys.stdin); "
                "[bootstrap.joinpath(name).write_text(payload[name]) for name in ['build_support.py','process_group.py','job_power.py']]; "
                "run.joinpath('rsync-receiver.py').write_text(payload['receiver'])")
-    payload = {name: Path(__file__).with_name(name).read_text()
+    payload = {name: (scripts / name).read_text()
                for name in ["build_support.py", "process_group.py", "job_power.py"]}
     payload["receiver"] = TRANSFER_RECEIVER
     subprocess.run([*shell, "umask 077; " + shlex.join(["python3", "-c", prepare, str(run)])],
@@ -373,7 +373,7 @@ atomic_json(run/'symbol-cache.json',evidence)
 """
 
 
-def mirror_device_symbols(artifact: dict, manifest: dict) -> dict:
+def mirror_device_symbols(artifact: dict, manifest: dict, scripts: Path) -> dict:
     host = build_hosts.TEST_DEVICE_HOST
     local = build_hosts.is_local(host)
     shell = ["bash", "-c"] if local else [*SSH, host]
@@ -382,13 +382,13 @@ def mirror_device_symbols(artifact: dict, manifest: dict) -> dict:
         [*shell, "python3 -c 'import json,pathlib; print(json.dumps(str(pathlib.Path.home())))'"], text=True))
     run = Path(home) / "Library/Caches/RemoteCoder-Build/runs" / ("symbols-" + manifest["buildId"])
     try:
-        prepare_transfer(shell, run)
+        prepare_transfer(shell, run, scripts)
         with host_job_assertion(shell, lease_path(run.parent.parent, "runs", run.name)):
             source = Path(artifact["symbols"][0]["path"])
             with file_lease(lease_path(run.parent.parent, "runs", run.name)) if local else nullcontext():
                 subprocess.run(["rsync", "-a", *owned_rsync_options(destination, run),
                                 str(source) + "/", destination + str(run / "symbols") + "/"], check=True)
-            payload = json.dumps({name: Path(__file__).with_name(name).read_text()
+            payload = json.dumps({name: (scripts / name).read_text()
                                   for name in ("build_artifacts.py", "build_cache.py")})
             subprocess.run([*shell, shlex.join(["python3", "-c", SYMBOL_MIRROR_FINALIZE, str(run)])],
                            input=payload + "\n" + json.dumps(artifact["symbols"][0]["sha256"]) + "\n",
@@ -401,7 +401,7 @@ def mirror_device_symbols(artifact: dict, manifest: dict) -> dict:
 
 def transfer_source(shell: list[str], destination: str, run: Path, manifest: dict):
     try:
-        prepare_transfer(shell, run)
+        prepare_transfer(shell, run, Path(__file__).parent)
         ownership = (
             nullcontext()
             if destination
@@ -784,7 +784,7 @@ def worker(run: Path) -> dict:
         if manifest["kind"] == "ios-install" and status == 0:
             receipt["iosArtifact"] = str(ios_artifact)
             receipt["iosBuild"] = artifact_evidence
-            receipt["profilingSymbols"] = mirror_device_symbols(artifact_evidence, manifest)
+            receipt["profilingSymbols"] = mirror_device_symbols(artifact_evidence, manifest, repository / "scripts")
             receipt["deliveryRequested"] = "--build-only" not in manifest["arguments"]
         if stages_path.is_file():
             receipt["stages"] = stages

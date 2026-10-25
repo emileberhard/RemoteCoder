@@ -13,7 +13,7 @@ there is no flag that turns any of this off.
 | Managed app-server stderr | `~/.codex/app-server-daemon/app-server.stderr.log` | Codex/app-server errors, including persistence and tool failures |
 | Desktop decisions | `desktop/desktop-YYYYMMDD.jsonl` | Every ChatGPT reconciliation: what it observed, the reason it chose, and every signal or relaunch that followed |
 | Desktop helper | `chatgpt-shared-codex.log` / `.error.log` | The launcher's stdout/stderr — a bare startup banner, and the final error when a check fails |
-| App logs | `app-logs/<device>/YYYYMMDD-<segment>.jsonl.gz` | The iOS OSLog stream, versioned MetricKit reports and [field telemetry](#field-telemetry), uploaded from the phone (14 days, 1 GiB in total) |
+| App logs | `app-logs/<device>/YYYYMMDD-<segment>.jsonl.gz` | The iOS OSLog stream, versioned MetricKit reports and [field telemetry](#field-telemetry), uploaded from the phone (7 days, 1 GiB in total) |
 | Voice sessions | `voice-sessions/<started>-<thread>.jsonl` | Per-call transcripts, delegation lifecycle, latencies, close summary (newest 100) |
 | Deployments | `deployments/*.log` | Install runs with their git commit (per-run entries kept 7 days, pruned by each app install) |
 | launchd redirect | `codex-gateway.out.log` / `.err.log` | Startup banner and panics only |
@@ -283,9 +283,9 @@ kind-specific fields.
   `rejection` kind for a request refused after authentication. Failed authentication is not
   journalled. Never keys, URLs, query strings, audio or transcripts.
 - `app_logs` — `cap_evicted` when the uploaded app-log store went over its
-  1 GiB cap and lost segments still inside the 14-day window, `cap_unmet` when
+  1 GiB cap and lost segments still inside the 7-day window, `cap_unmet` when
   its total is still over the cap afterwards or unknown because entries could
-  not be read, and `cap_met` on the first upload that finds an unmet cap met
+  not be read, and `cap_met` on the first sweep or upload that finds an unmet cap met
   again: `met`, `files`, `bytes`, `retainedBytes` (null when unknown),
   `capBytes`, `unreadableEntries`, `evictedThroughMs` (the newest removed
   segment's mtime, or null) and `atMs`. Each one also rewrites
@@ -464,7 +464,12 @@ copy useless for its purpose.
   record of whatever size MetricKit delivered, up to the queue cap, so its
   upload compresses it whole.
   A segment is deleted locally only after a 2xx, so a broken upload path
-  retries rather than losing data.
+  retries rather than losing data. The gateway answers a refusal of one
+  segment (not gzip, unusable segment name) with 422, which moves that segment
+  to export-only with a `loss` record while the pass continues. Any other
+  refusal, including a bad device name (400) or a proxy's 413, or a network
+  failure ends the pass and keeps everything queued, so a wrong destination or
+  an older gateway cannot quarantine the queue.
 - **Transport.** `POST /app-logs` on the gateway, bearer-authed like `/health`,
   body is gzipped JSONL, `X-RemoteCoder-Device` and `X-RemoteCoder-Segment`
   headers name the file. Foundation has no gzip writer, so `GzipEncoding`
@@ -474,8 +479,11 @@ copy useless for its purpose.
   path component each (everything outside `[A-Za-z0-9._-]` becomes `-`), so a
   name arriving from the network can never escape the store. Bodies are stored
   unparsed after a gzip magic-byte check, with a 16 MiB per-request ceiling.
-  Segments age out after 14 days; past 1 GiB for all devices together the oldest
-  go first, which the `app_logs` journal kind and `retention.json` report.
+  A segment's day is its arrival UTC day, and segments are kept for today plus the
+  7 previous UTC days. The store sweeps at gateway start and then hourly, whether
+  or not uploads arrive, and also on every upload; past 1 GiB for all devices
+  together the oldest go first, which the `app_logs` journal kind and
+  `retention.json` report.
 
 Two rules that must not be relaxed: the app never logs the gateway bearer
 token, and the uploader's own category (`AppLogExport`) is filtered out of
@@ -484,7 +492,7 @@ every drain — otherwise uploading a segment generates the next one.
 **Reading it back.** The phone uploads to whichever gateway it can reach, so one
 device's history is split across hosts. `just app-telemetry stores` lists every
 device directory on this host and the configured gateway hosts (read over SSH);
-`metrickit`, `diagnostics --symbolicate`, `counts`, `persistence`, `timeline`,
+`metrickit`, `states`, `compare`, `diagnostics`, `counts`, `persistence`, `timeline`,
 `activity` and `export-cost` take the exact `--device` and print JSON that names
 the stores read and any that failed, when the host cap removed data or is
 unmet, and each segment it could not read (corrupt, or expanding beyond the
@@ -498,9 +506,60 @@ an entry goes when its segment does. MetricKit's daily entry is never added to
 its subintervals, subintervals get no clock times, and per-foreground-minute
 rates are labelled as normalizations because the daily totals include background
 work. Persistence counters are cumulative per run, so the reader splits runs where
-a counter falls. `scripts/symbols.py`, shared with `perf-trace`, matches retained
-dSYMs and Xcode's DeviceSupport symbols by UUID. Raw records remain readable with
+a counter falls. Raw records remain readable with
 `gunzip -c ~/Library/Logs/remote-coder/app-logs/<device>/*.jsonl.gz | jq`.
+
+**Builds.** A MetricKit report's own build label is the build installed when
+Apple delivered it, and its `includesMultipleApplicationVersions` stays false
+while the phone switches builds several times a day, so no MetricKit number
+takes its build from the report. The reader places each report and diagnostic on
+the device's telemetry runs instead (a run lasts from its header's `startedAt`
+to its last record) and prints `attributedBuild` as `single` (exactly one build
+ran in the coverage), `mixed` (several, listed with their seconds) or `unknown`
+(no run covers it); `reportedBuild` keeps the report's own label for reference.
+A build is `appVersion`, `build` and, from 3.69.0, the run header's
+`sourceCommit`; dev builds all report 0.0.0 and differ by build number. MetricKit
+interval entries carry a duration but no start time, so every entry of a report
+gets the report coverage's status, and a mixed day cannot be split.
+`coveredSeconds` against `windowSeconds` shows how much of the coverage had run
+records. History older than the telemetry is `unknown`, never the delivery label.
+
+`states` aggregates a report's state entries per domain, label, stable
+metadata, attributed build and device model: state, foreground and background seconds, hitch time and its
+animation-weighted ratio, the hang histogram, launch histograms and each
+signpost's count with p50 and p95 upper bounds from its duration histogram. A
+signpost whose CPU time, logical writes and average memory are all exactly 0 was
+not measured (OSSignposter) and prints `resources: unknown`. Flags state what
+looks wrong rather than hiding it: `suspectedStuck` (a history, surface, turn or
+route state, which the app clears in the background, lasting longer than the
+report's whole foreground time), `stateExceedsCoverage`, and per report `domainForegroundExceedsEntryTotal`
+(a domain's per-state foreground times add up to more than the full-day entry's)
+and `hasExceededStateLimit` (null when the report omits it). It also groups
+diagnostics by the states active before them, counting kinds and builds and
+giving the longest state at the event; `not reported` means the diagnostic
+carried no state list, which differs from an empty one.
+
+`compare --before BUILD --after BUILD` (a build number, version or source commit
+prefix; an ambiguous or unseen one exits 2 and lists the candidates) puts two
+builds side by side per device model and app state (`--by` as for `activity`).
+Sampler numbers come from measured intervals only: CPU, wakeups and
+persistence writes and bytes per measured minute with their spread across runs.
+MetricKit numbers, including GPU time, come from the
+full-day entry of reports whose coverage ran exactly one of the two builds,
+labelled per foreground hour because the totals include background work. A model
+whose side has fewer than `--min-minutes` (default 30) measured minutes is
+listed as refused with the reason; when no model remains the command exits 3.
+A state measured for under a minute on either side keeps its rates but gets no
+`change`; `changeRefused` says which side was too thin.
+
+`diagnostics --symbolicate` names every frame of every call stack tree, one
+`atos` batch per binary UUID and load address, and keeps the heaviest path.
+Each diagnostic adds a `profile` of its attributed thread's functions by
+inclusive and self samples. `missingSymbols` lists each unresolved binary with
+its name, UUID, the builds whose diagnostics used it, its frame count and the
+reason, because every build's app binary is called RemoteCoder.
+`scripts/symbols.py`, shared with `perf-trace`, matches retained dSYMs and
+Xcode's DeviceSupport symbols by UUID.
 A conversation switch leaves one `.notice` trail: `history select` (the tapped
 address, outcome and what was on screen), `window select` (a target change),
 `chat screen presents` and `transcript presents` (what the window actually
@@ -519,7 +578,7 @@ only, never WebKit's processes, and it cannot apportion battery to a feature.
 
 - **Sampling.** `ProcessResourceSampler` (Core) reads `TASK_POWER_INFO_V2` and
   `TASK_VM_INFO`: user and system CPU in nanoseconds (converted from Mach time),
-  interrupt, idle and timer wakeups, and the physical footprint. It samples on
+  interrupt, idle and timer wakeups and the physical footprint. It samples on
   launch, every 30 s while a scene is active, on each state change (at least
   1 s apart), once on backgrounding and once on return. A change it could not
   sample at once marks the next sample `mixed`. It runs on the main actor, where
@@ -527,15 +586,21 @@ only, never WebKit's processes, and it cannot apportion battery to a feature.
   `TelemetryBuffer` without waiting for the exporter, so samples carry the time
   of their read and lifecycle work never waits behind a log scan. It stops in
   the background, so nothing runs or wakes while suspended.
-  P-core time, CPU energy and GPU time stay out until a device run validates them.
+  The task's GPU counter stays out: the render server draws UIKit and SwiftUI,
+  so it read 0 through launch and active use on the test iPhone; MetricKit's
+  `gpuTimeMetric` is the GPU source. P-core time and CPU energy stay out until a
+  device run validates them.
 - **State.** `TelemetryContext` (app) projects the scene, the visible surface
   (chat or drawer), whether the shown conversation has a running turn, a voice
   call, thermal state and Low Power Mode, battery level, charging and
   brightness in 10 % steps (iOS), the network interface and the shown host's
-  route. Each sample carries the whole state; an absent field is unknown.
+  route. Each sample carries the whole state; an absent field is unknown. The
+  same projection drives the MetricKit state domains (see *iOS 27 performance
+  reports*); `TelemetryContext.publish` feeds both, including scene changes,
+  which are not observable.
 - **Records.** `TelemetryRecord` lines go into `<stamp>-<id>-telemetry.jsonl`
-  batches: a `run` header (`runID`, installation ID, model, app version and
-  build, OS build, wall and monotonic anchors, `flushedThroughSeq`), then
+  batches: a `run` header (`runID`, installation ID, model, app version,
+  build and source commit, OS build, wall and monotonic anchors, `flushedThroughSeq`), then
   `sample`, `export` and `loss` lines with `schemaVersion`, `runID`, a per-run
   `seq`, `ts` and `monoNs`. Samples hold cumulative counters and the
   `PersistenceMetrics` snapshot; the reader takes the deltas. `export` records
@@ -557,11 +622,13 @@ only, never WebKit's processes, and it cannot apportion battery to a feature.
   started in one state and finished in the next counts toward the next. Battery
   levels appear on timeline stretches only; a 1 % step lands in whichever state
   held when iOS reported it, so no per-state battery rate is computed.
-- **Switching it off.** `perf-sim --disable resourceSampler` turns it off in
-  `RC_PERF_HARNESS` builds for the overhead comparison. There is no user setting.
+- **Switching it off.** `perf-sim --disable resourceSampler` turns the sampler
+  off in `RC_PERF_HARNESS` builds for the overhead comparison; the projection,
+  its device and network observers and the MetricKit states keep running, so the
+  comparison measures the sampler alone. There is no user setting.
 
 Decision summary (2026-10-24). The goal is to answer, for any hour in the last
-14 days, which version, state and minute spent CPU, wakeups, memory or disk, and
+7 days, which version, state and minute spent CPU, wakeups, memory or disk, and
 what the telemetry itself cost, with a phone-side cost small enough to measure.
 `DiagnosticsOutbox` owns durable batches, upload and loss records;
 `ProcessResourceSampler` owns the Mach reads; `TelemetryContext` owns only the
@@ -577,11 +644,27 @@ tracked surface because its presentation is view-local, the network interface
 comes from one path monitor in `TelemetryContext`, and on-device segments stay
 uncompressed with their size bounded by the record cap. Costly to change later:
 the record schema and identity fields, hence `schemaVersion` from the first
-record. Next, once two days of `export-cost` exist: the log diet (raw
-RemoteCoder, error and selected Apple records, per-minute counts for the rest),
-then MetricKit activity states, operation signposts, per-purpose network
-counters and gateway connection correlation, as far as the data still shows
-gaps.
+record.
+
+Decision summary (2026-10-25, field observability). Goal: find the next
+performance target from ordinary use alone, by state, exact build and device,
+with symbolicated stacks, keeping 7 rolling days. The projection gained a
+second sink (MetricKit states) instead of features reporting state; scroll is
+an animation interval rather than a state because its phase is view-local;
+MetricKit's GPU time, not battery (iOS reports 5 % steps) and not the task's own
+GPU counter (render server work is invisible to it), is the field signal for
+render work such as the composer spinner. Rejected: a log diet (it discards data and
+volume is about 65 MiB a day), signposts for checkpoints and cache writes
+(`PersistenceMetrics` covers them), `trackLaunchTask` (bootstrap waits on
+gateways while cached content is already visible), kind-ordered host eviction
+(the 1 GiB cap does not bind at 7 days) and trusting MetricKit's build label.
+Follow-ups, tracked here while Linear is at its free cap: A/B the composer
+spinner through MetricKit's GPU time; mirror Mac dev-build dSYMs
+built on the MacBook to the Mini; background sampling during voice calls; a
+byte cap for the gateway journal (age-bounded, up to 1.2 GB a day); per-purpose
+network counters and gateway connection correlation; an unknown initial phase in
+`ScenePhaseAggregate`, which starts as background, so a history read begun during
+a background launch stops holding its state through suspension.
 
 ### Checkpoint save phases
 
@@ -641,12 +724,39 @@ preflight, predecessor waits and finalization that the old write duration exclud
 ### iOS 27 performance reports and history timing
 
 `AppPerformanceDiagnostics` owns one `MetricManager`, one consumer for each
-report stream, and StateReporting domains
-`emileberhard.RemoteCoder.history` and `emileberhard.RemoteCoder.connection`.
-History states cover a foreground open or page load and clear when it finishes;
-connection states describe the selected host. Stable metadata contains only provider and
-cache/network mode. Volatile fields carry a local operation UUID and byte/read
-counters; prompts, paths, credentials and conversation IDs are excluded.
+report stream, and the StateReporting domains under `emileberhard.RemoteCoder.`:
+
+| Domain | Labels | Source |
+|---|---|---|
+| `surface` | `chat`, `drawer` | `TelemetryContext` projection, foreground only |
+| `turn` | `running` | the shown conversation has a running turn, foreground only |
+| `route` | `lan`, `configured`, `relay`, `restarting`, `disconnected` | the shown host's route, foreground only |
+| `voice` | `call` | a voice call, also in the background |
+| `energy` | `conserving` | `AppEnergyPolicy.conservesEnergy` |
+| `history` | `opening`, `paging` | history opens and user-requested pages (not prefetch), stable metadata `provider` |
+
+`UsageStateLabels` (Core) maps the projection to labels and
+`HistoryOperations` (Core) holds in-flight history operations: `opening` while
+any open runs, otherwise `paging`; entering the background clears them, and
+each operation finishes its own ID on every path. All reporting is synchronous
+under one lock, so a late finish cannot overwrite a newer state. StateReporting
+ignores a repeated label with the same stable metadata, so a change of the
+current operation alone is a volatile metadata update, and a diagnostic's
+`activeStates` lists the states held before it. Volatile fields carry a local
+operation UUID; prompts, paths, credentials and conversation IDs are excluded.
+Before 3.69.0, one shared operation ID let `history` states leak for hours and a
+`connection` domain came from per-target calls; `route` replaces it, and older
+reports' history entries are not comparable.
+
+`TranscriptScroll` (iOS) is both a Points of Interest interval, which
+`perf-trace` reads, and a MetricKit animation interval in category
+`Transcript`, which gives scroll hitch ratio, hitch and animation time.
+`HistorySelectionToFirstContent` uses `mxSignpost`, so MetricKit measures CPU,
+memory and logical writes for it; `OSSignposter` intervals report those as 0.
+Signpost CPU is whole-process during the interval, so it is association, not
+the operation's own cost. A metrics report's own application build is the build
+at delivery, not the build that ran during its coverage; the reader attributes
+entries to builds through the telemetry `run` headers.
 
 Full Codable metrics/diagnostics are versioned JSONL envelopes from
 `AppPerformanceReportRecord`, retaining receipt time, coverage and content hash.
@@ -805,12 +915,24 @@ hold: frame-wait durations and the intervals between observed wait ends, per
 display, for the whole trace and for the scripted scroll. They are a subset of
 frames, not the frame rate.
 
+Release symbols live in `~/Library/Logs/remote-coder/deployments/testflight-<platform>-<version>-<build>/symbols`.
+The release lane writes them on the primary service host and the GUI test host
+catch-up mirrors them (`rsync -a` keeps the directory's modification time, which
+is the age used for retention). They are not Spotlight-indexed. `app-telemetry
+diagnostics --symbolicate` and `perf-trace` both read them, and MetricKit
+diagnostics arrive a day or more after the event, so retention is by age, not
+by count. `release-cache.py prune_symbols` keeps every release version whose
+symbols were retained within the last seven days, the newest older version (the
+build that was current when the window began) and the published version; a
+version's iOS and Mac directories are kept or removed together. A total cap of
+5 GiB over all retained release symbols then removes the oldest unpublished
+versions first. When the published version alone exceeds the cap, the command
+warns on stderr and reports `overCapBytes` in its JSON result.
+
 The summary symbolicates frames itself and never rewrites the trace. It matches
 each image's UUID in the trace to the retained dSYMs under
 `~/Library/Logs/remote-coder/deployments/` (device and Mac installs from the last
-seven days and the newest of each kind, plus the newest ten TestFlight archives
-as `testflight-<platform>-<version>-<build>`, which the release lane keeps on the
-primary service host and the GUI test host catch-up mirrors onto the GUI test host) and to the shared-cache symbols Xcode
+seven days and the newest of each kind, plus the release symbols above) and to the shared-cache symbols Xcode
 extracts into `~/Library/Developer/Xcode/iOS DeviceSupport/` when the phone first
 connects to it, then resolves addresses with `atos`, including inlined frames.
 A build without retained dSYMs, such as a `dev-tools/perf-sim` build, is

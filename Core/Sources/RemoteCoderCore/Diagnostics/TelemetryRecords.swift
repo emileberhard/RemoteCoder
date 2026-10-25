@@ -76,6 +76,7 @@ struct TelemetryRun: Encodable, Sendable {
     let model: String?
     let simulator: Bool
     let appVersion: String?
+    let sourceCommit: String?
     let build: String?
     let osVersion: String
     let osBuild: String?
@@ -99,6 +100,7 @@ struct TelemetryRun: Encodable, Sendable {
             model: model,
             simulator: simulator,
             appVersion: bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
+            sourceCommit: BuildIdentity(info: bundle.infoDictionary ?? [:]).commit,
             build: bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String,
             osVersion: ProcessInfo.processInfo.operatingSystemVersionString,
             osBuild: sysctlString("kern.osversion"),

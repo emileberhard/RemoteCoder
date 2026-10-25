@@ -16,6 +16,10 @@ NORMALIZED_NOTE = (
     "Daily totals divided by foreground minutes. The totals include background work, "
     "so this is a normalization, not measured foreground utilization."
 )
+REPORTED_BUILD_NOTE = (
+    "The build installed when MetricKit delivered the report, not necessarily the one that ran in its coverage; "
+    "attributedBuild comes from the run headers."
+)
 SUBINTERVAL_NOTE = "Subintervals in report order. MetricKit gives no start times, so their clock placement is unknown."
 
 
@@ -150,8 +154,11 @@ def metrickit_report(record: dict, host: str, device: str) -> dict:
         "receivedAt": record.get("ts"),
         "coverageStart": reference_date(coverage["start"]) if isinstance(coverage.get("start"), (int, float)) else None,
         "coverageSeconds": coverage.get("duration"),
-        "appVersion": environment.get("latestApplicationVersion") or environment.get("applicationVersion"),
-        "build": environment.get("applicationBuildVersion"),
+        "reportedBuild": {
+            "appVersion": environment.get("latestApplicationVersion") or environment.get("applicationVersion"),
+            "build": environment.get("applicationBuildVersion"),
+            "note": REPORTED_BUILD_NOTE,
+        },
         "deviceType": environment.get("deviceType"),
         "os": f"{os_version.get('number')} ({os_version.get('buildNumber')})" if os_version else None,
         "flags": {field: environment[field] for field in (
@@ -189,11 +196,21 @@ def diagnostic_kind(report: dict) -> str | None:
     return next((key for key in report if key.endswith("Diagnostic")), None)
 
 
-def heaviest_path(call_stack_tree: dict) -> list[dict]:
+def tree_roots(call_stack_tree: dict) -> list[dict]:
     threads = call_stack_tree.get("callStackThreads", [])
     if call_stack_tree.get("callStackPerThread"):
         threads = [thread for thread in threads if thread.get("threadAttributed")] or threads
-    frames = [frame for thread in threads for frame in thread.get("rootFrames", [])]
+    return [frame for thread in threads for frame in thread.get("rootFrames", [])]
+
+
+def call_stack_tree(record: dict) -> dict:
+    report = record.get("report") or {}
+    kind = diagnostic_kind(report)
+    return (report.get(kind) or {}).get("callStackTree") or {} if kind else {}
+
+
+def heaviest_path(call_stack_tree: dict) -> list[dict]:
+    frames = tree_roots(call_stack_tree)
     path = []
     while frames:
         frame = max(frames, key=lambda candidate: candidate.get("sampleCount", 0))
@@ -218,7 +235,7 @@ def diagnostic(record: dict, host: str, device: str) -> dict:
                          "osBuild": (environment.get("osVersion") or {}).get("buildNumber")},
         "details": {field: measurement(value) for field, value in body.items()},
         "signpostData": environment.get("signpostData") or [],
-        "activeStates": environment.get("states") or [],
+        "activeStates": environment.get("states"),
         "stackOrder": "innermostFirst" if tree.get("callStackPerThread") else "outermostFirst",
         "heaviestStack": [
             {"binary": binaries.get(frame.get("binaryUUID")), "uuid": frame.get("binaryUUID"),
@@ -358,6 +375,8 @@ def sample_intervals(records: list[dict]) -> list[dict]:
             "footprintBytes": max(_counter(start, "footprintBytes"), _counter(end, "footprintBytes")),
             "persistenceBytes": {owner: int(counters.get("bytes", 0)) - int(start_persistence.get(owner, {}).get("bytes", 0))
                                  for owner, counters in end_persistence.items()},
+            "persistenceWrites": {owner: int(counters.get("writes", 0)) - int(start_persistence.get(owner, {}).get("writes", 0))
+                                  for owner, counters in end_persistence.items()},
         })
     return intervals
 

@@ -47,7 +47,7 @@ class ProfilingSymbolsTests(unittest.TestCase):
                   patch.object(module.build_hosts, "TEST_DEVICE_HOST", "local"),
                   patch.object(module.subprocess, "check_output", return_value=json.dumps(str(home))),
                   patch.object(module, "host_job_assertion", return_value=nullcontext())):
-                mirrored = module.mirror_device_symbols(artifact, {"buildId": "fixture-symbols"})
+                mirrored = module.mirror_device_symbols(artifact, {"buildId": "fixture-symbols"}, HELPER.parent)
             shutil.rmtree(source)
             copied = Path(mirrored["directory"])
             self.assertEqual((copied / dwarf.relative_to(source)).read_bytes(), b"debug information")
@@ -1034,7 +1034,7 @@ class TransferLifecycleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
             run = root / "cache/runs/receiver"
-            module.prepare_transfer(["bash", "-c"], run)
+            module.prepare_transfer(["bash", "-c"], run, HELPER.parent)
             receiver = subprocess.Popen(
                 [
                     sys.executable,

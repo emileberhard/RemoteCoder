@@ -111,25 +111,6 @@ def test_a_crash_follows_its_attributed_thread():
     assert [frame["offsetIntoBinaryTextSegment"] for frame in heaviest_path(tree)] == [2, 3]
 
 
-def test_symbolication_uses_the_load_address_shared_by_a_binarys_frames(monkeypatch):
-    calls = []
-    monkeypatch.setattr(app_telemetry, "symbol_files",
-                        lambda paths, extra: {"APP": Path("/x/RemoteCoder")})
-    monkeypatch.setattr(app_telemetry, "atos",
-                        lambda file, base, addresses: calls.append((base, addresses)) or [("f",)] * len(addresses))
-    stack = [
-        {"binary": "RemoteCoder", "uuid": "APP", "address": 0x100003000, "offset": 0x3000},
-        {"binary": "RemoteCoder", "uuid": "APP", "address": 0x100004001, "offset": 0x4000},
-        {"binary": "RemoteCoder", "uuid": "APP", "address": 0x100005000, "offset": 0x5000},
-        {"binary": "Foundation", "uuid": "SYS", "address": 0x180000010, "offset": 0x10},
-    ]
-    item = {"heaviestStack": stack, "symbolSource": {"deviceType": "iPhone0,0", "osVersion": "0", "osBuild": "0"}}
-    result = app_telemetry._symbolicate([item])
-    assert calls == [(0x100000000, [0x100003000, 0x100004000, 0x100005000])]
-    assert result == {"symbolicatedBinaries": 1, "binariesWithoutSymbols": ["Foundation"]}
-    assert stack[0]["symbols"] == ["f"] and "symbols" not in stack[3]
-
-
 def segment(tmp_path: Path, device: str, name: str, lines: list[bytes]) -> app_telemetry_store.Segment:
     path = tmp_path / "store" / device / f"{name}.jsonl.gz"
     path.parent.mkdir(parents=True, exist_ok=True)

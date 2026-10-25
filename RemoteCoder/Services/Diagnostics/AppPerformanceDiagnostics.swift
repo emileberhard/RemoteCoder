@@ -2,22 +2,20 @@ import Foundation
 import MetricKit
 import OSLog
 import StateReporting
+import Synchronization
 
-/// Process-lifetime ownership of Apple's report streams and the two foreground
-/// state domains. Apple reports are delayed/sampled; silence is not a health check.
+/// Process-lifetime ownership of Apple's report streams and the StateReporting
+/// domains. Apple reports are delayed/sampled; silence is not a health check.
 actor AppPerformanceDiagnostics {
     static let shared = AppPerformanceDiagnostics()
-    nonisolated static let signposter = OSSignposter(logHandle: MetricManager.logHandle(category: "History"))
+    nonisolated static let historyLog = MetricManager.logHandle(category: "History")
+    nonisolated static let transcriptLog = MetricManager.logHandle(category: "Transcript")
+    nonisolated static let signposter = OSSignposter(logHandle: historyLog)
     nonisolated static let pointsOfInterest = OSSignposter(subsystem: "RemoteCoder", category: .pointsOfInterest)
-
-    enum Provider: String, Sendable { case codex, claude }
-    enum LoadingMode: String, Sendable { case cache, network, mixed }
-    enum HistoryState: String, Sendable { case opening, paging }
 
     @ReportableMetadata
     fileprivate struct StableMetadata: Sendable {
         let provider: String
-        let loadingMode: String
     }
 
     @ReportableMetadata
@@ -26,26 +24,38 @@ actor AppPerformanceDiagnostics {
     }
 
     private static let historyDomain = "emileberhard.RemoteCoder.history"
-    private static let connectionDomain = "emileberhard.RemoteCoder.connection"
+    private static let routeDomain = "emileberhard.RemoteCoder.route"
+    private static let surfaceDomain = "emileberhard.RemoteCoder.surface"
+    private static let turnDomain = "emileberhard.RemoteCoder.turn"
+    private static let voiceDomain = "emileberhard.RemoteCoder.voice"
+    private static let energyDomain = "emileberhard.RemoteCoder.energy"
     private let manager: MetricManager
     private let historyReporter: StateReporter<StableMetadata, VolatileMetadata>
-    private let connectionReporter: StateReporter<StableMetadata, VolatileMetadata>
+    private let routeReporter: StateReporter<StableMetadata, VolatileMetadata>
+    private let surfaceReporter: StateReporter<StableMetadata, VolatileMetadata>
+    private let turnReporter: StateReporter<StableMetadata, VolatileMetadata>
+    private let voiceReporter: StateReporter<StableMetadata, VolatileMetadata>
+    private let energyReporter: StateReporter<StableMetadata, VolatileMetadata>
+    private let history = Mutex(HistoryOperations())
     private let logger = Logger(subsystem: "RemoteCoder", category: "PerformanceDiagnostics")
     private var metricsConsumer: Task<Void, Never>?
     private var diagnosticsConsumer: Task<Void, Never>?
-    private var operationID: UUID?
 
     private init() {
-        manager = MetricManager(enabledStateReportingDomains: [
-            StateReportingDomain(rawValue: Self.historyDomain),
-            StateReportingDomain(rawValue: Self.connectionDomain)
-        ])
-        historyReporter = StateReporter.reporter(
-            for: Self.historyDomain, stableMetadata: StableMetadata.self, volatileMetadata: VolatileMetadata.self
-        )
-        connectionReporter = StateReporter.reporter(
-            for: Self.connectionDomain, stableMetadata: StableMetadata.self, volatileMetadata: VolatileMetadata.self
-        )
+        let domains = [
+            Self.historyDomain, Self.routeDomain, Self.surfaceDomain, Self.turnDomain, Self.voiceDomain,
+            Self.energyDomain
+        ]
+        manager = MetricManager(enabledStateReportingDomains: Set(domains.map(StateReportingDomain.init(rawValue:))))
+        func reporter(_ domain: String) -> StateReporter<StableMetadata, VolatileMetadata> {
+            StateReporter.reporter(for: domain, stableMetadata: StableMetadata.self, volatileMetadata: VolatileMetadata.self)
+        }
+        historyReporter = reporter(Self.historyDomain)
+        routeReporter = reporter(Self.routeDomain)
+        surfaceReporter = reporter(Self.surfaceDomain)
+        turnReporter = reporter(Self.turnDomain)
+        voiceReporter = reporter(Self.voiceDomain)
+        energyReporter = reporter(Self.energyDomain)
     }
 
     func start() {
@@ -82,35 +92,48 @@ actor AppPerformanceDiagnostics {
     }
 
     /// Only foreground operations enter this domain; prefetch uses request logs.
-    func beginHistory(_ state: HistoryState, provider: Provider, mode: LoadingMode) -> UUID {
-        let id = UUID()
-        operationID = id
-        historyReporter.reportTransition(
-            to: state.rawValue, stableMetadata: StableMetadata(provider: provider.rawValue, loadingMode: mode.rawValue),
-            volatileMetadata: VolatileMetadata(operationID: id.uuidString)
-        )
-        return id
+    nonisolated func beginHistory(_ activity: HistoryActivity, threadID: String) -> UUID {
+        history.withLock { operations in
+            let id = operations.begin(activity, provider: AgentProvider.provider(forThreadID: threadID))
+            reportHistory(&operations)
+            return id
+        }
     }
 
-    func finishHistory(operationID id: UUID) {
-        guard operationID == id else { return }
-        clearHistory()
+    nonisolated func finishHistory(operationID id: UUID) {
+        history.withLock { operations in
+            operations.finish(id)
+            reportHistory(&operations)
+        }
     }
 
-    func clearHistory() {
-        operationID = nil
-        historyReporter.reportTransition(to: nil)
+    nonisolated func usageChanged(_ context: UsageContext, conservesEnergy: Bool) {
+        let labels = UsageStateLabels(context, conservesEnergy: conservesEnergy)
+        surfaceReporter.reportTransition(to: labels.surface)
+        turnReporter.reportTransition(to: labels.turn)
+        routeReporter.reportTransition(to: labels.route)
+        voiceReporter.reportTransition(to: labels.voice)
+        energyReporter.reportTransition(to: labels.energy)
+        history.withLock { operations in
+            operations.sceneChanged(background: context.scene == .background)
+            reportHistory(&operations)
+        }
     }
 
-    func connectionChanged(_ state: GatewayEventPump.Link, provider: Provider) {
-        connectionReporter.reportTransition(
-            to: state.rawValue,
-            stableMetadata: StableMetadata(provider: provider.rawValue, loadingMode: "network")
-        )
-    }
-
-    func clearConnection() {
-        connectionReporter.reportTransition(to: nil)
+    private nonisolated func reportHistory(_ operations: inout HistoryOperations) {
+        switch operations.report() {
+        case nil:
+            return
+        case .transition(nil):
+            historyReporter.reportTransition(to: nil)
+        case .transition(let current?):
+            historyReporter.reportTransition(
+                to: current.activity.rawValue, stableMetadata: StableMetadata(provider: current.provider.rawValue),
+                volatileMetadata: VolatileMetadata(operationID: current.id.uuidString)
+            )
+        case .operationChanged(let id):
+            historyReporter.reportVolatileMetadataUpdate(VolatileMetadata(operationID: id.uuidString))
+        }
     }
 }
 
@@ -121,17 +144,18 @@ struct HistoryOpenSignpost {
     enum Abandonment: String { case superseded, cancelled, empty, failed }
 
     private static let name: StaticString = "HistorySelectionToFirstContent"
-    private var interval: OSSignpostIntervalState?
+    private var interval: OSSignpostID?
 
     mutating func begin() {
         abandon(.superseded)
-        let signposter = AppPerformanceDiagnostics.signposter
-        interval = signposter.beginInterval(Self.name, id: signposter.makeSignpostID())
+        let id = OSSignpostID(log: AppPerformanceDiagnostics.historyLog)
+        mxSignpost(.begin, log: AppPerformanceDiagnostics.historyLog, name: Self.name, signpostID: id)
+        interval = id
     }
 
     mutating func contentVisible() {
         guard let interval else { return }
-        AppPerformanceDiagnostics.signposter.endInterval(Self.name, interval)
+        mxSignpost(.end, log: AppPerformanceDiagnostics.historyLog, name: Self.name, signpostID: interval)
         self.interval = nil
     }
 
@@ -139,5 +163,23 @@ struct HistoryOpenSignpost {
         guard interval != nil else { return }
         AppPerformanceDiagnostics.signposter.emitEvent("HistoryOpenAbandoned", "outcome=\(reason.rawValue, privacy: .public)")
         interval = nil
+    }
+}
+
+struct TranscriptScrollSignpost {
+    private static let name: StaticString = "TranscriptScroll"
+    private let pointOfInterest: OSSignpostIntervalState
+    private let animation: OSSignpostID
+
+    init() {
+        let signposter = AppPerformanceDiagnostics.pointsOfInterest
+        pointOfInterest = signposter.beginInterval(Self.name, id: signposter.makeSignpostID())
+        animation = OSSignpostID(log: AppPerformanceDiagnostics.transcriptLog)
+        mxSignpostAnimationIntervalBegin(log: AppPerformanceDiagnostics.transcriptLog, name: Self.name, signpostID: animation)
+    }
+
+    func end() {
+        mxSignpost(.end, log: AppPerformanceDiagnostics.transcriptLog, name: Self.name, signpostID: animation)
+        AppPerformanceDiagnostics.pointsOfInterest.endInterval(Self.name, pointOfInterest)
     }
 }

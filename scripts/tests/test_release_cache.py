@@ -14,7 +14,7 @@ import tempfile
 import time
 import types
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
@@ -231,6 +231,91 @@ def write(path, data):
     path.write_bytes(data)
 
 
+class SymbolRetentionTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.deployments = Path(temporary.name).resolve() / "deployments"
+        self.deployments.mkdir()
+        self.enterContext(patch.object(module, "DEPLOYMENTS", self.deployments))
+
+    def retain(self, version, days_old, platforms=("ios", "mac")):
+        for platform in platforms:
+            directory = module.symbol_directory(platform, version)
+            write(directory / "symbols/RemoteCoder.app.dSYM/dwarf", b"x" * 100_000)
+            stamp = time.time() - days_old * 86400
+            os.utime(directory, (stamp, stamp))
+
+    def present(self):
+        return sorted({module.re.fullmatch(module.SYMBOL_DIRECTORY, p.name)[1] for p in self.deployments.glob("testflight-*")})
+
+    def test_versions_retained_within_seven_days_the_newest_older_one_and_the_published_one_stay(self):
+        self.retain("3.40.0", 30)
+        self.retain("3.41.0", 20)
+        self.retain("3.42.0", 8)
+        self.retain("3.43.0", 6.9)
+        self.retain("3.44.0", 0)
+        unrelated = self.deployments / ("ios-" + "1" * 32)
+        unrelated.mkdir()
+        os.utime(unrelated, (1, 1))
+        result = module.prune_symbols("3.40.0")
+        self.assertEqual(self.present(), ["3.40.0", "3.42.0", "3.43.0", "3.44.0"])
+        self.assertEqual(
+            sorted(result["removed"]),
+            [module.symbol_directory(platform, "3.41.0").name for platform in ("ios", "mac")],
+        )
+        self.assertTrue(unrelated.is_dir())
+
+    def test_the_newest_older_version_stays_when_nothing_is_published(self):
+        self.retain("3.40.0", 30)
+        self.retain("3.41.0", 20)
+        self.retain("3.42.0", 0)
+        module.prune_symbols(None)
+        self.assertEqual(self.present(), ["3.41.0", "3.42.0"])
+
+    def test_ios_and_mac_directories_of_one_version_are_kept_or_removed_together(self):
+        self.retain("3.40.0", 30, ("ios",))
+        self.retain("3.41.0", 20, ("mac",))
+        self.retain("3.42.0", 2, ("ios",))
+        self.retain("3.42.0", 10, ("mac",))
+        module.prune_symbols(None)
+        self.assertEqual(self.present(), ["3.41.0", "3.42.0"])
+        self.assertTrue(module.symbol_directory("mac", "3.42.0").is_dir())
+        self.assertTrue(module.symbol_directory("ios", "3.42.0").is_dir())
+
+    def test_the_cap_evicts_the_oldest_unpublished_versions_first(self):
+        for index in range(4):
+            self.retain(f"3.40.{index}", 3 - index)
+        size = module.allocated_bytes(module.symbol_directory("ios", "3.40.0")) * 2
+        with patch.object(module, "SYMBOL_BYTE_CAP", size * 2 + 1):
+            result = module.prune_symbols("3.40.0")
+        self.assertEqual(self.present(), ["3.40.0", "3.40.3"])
+        self.assertEqual(result["bytes"], size * 2)
+        self.assertEqual(result["overCapBytes"], 0)
+
+    def test_a_cap_that_the_published_release_alone_exceeds_is_reported(self):
+        self.retain("3.40.0", 1)
+        self.retain("3.41.0", 0)
+        size = module.allocated_bytes(module.symbol_directory("ios", "3.40.0")) * 2
+        with patch.object(module, "SYMBOL_BYTE_CAP", size - 10), redirect_stderr(io.StringIO()) as warning:
+            result = module.prune_symbols("3.40.0")
+        self.assertEqual(self.present(), ["3.40.0"])
+        self.assertEqual((result["bytes"], result["overCapBytes"]), (size, 10))
+        self.assertIn("10 over the", warning.getvalue())
+
+    def test_retaining_a_release_archive_reports_the_retention_result(self):
+        self.retain("3.40.0", 30)
+        self.retain("3.41.0", 20)
+        archive = self.deployments.parent / "RemoteCoder.xcarchive"
+        write(archive / "dSYMs/RemoteCoder.app.dSYM/Contents/Info.plist", b"dsym")
+        with patch.object(module, "published_version", return_value="3.45.0"):
+            result = module.retain_symbols("mac", "3.45.0", archive)
+        self.assertEqual(result["retained"], str(module.symbol_directory("mac", "3.45.0")))
+        self.assertEqual(sorted(result["removed"]), [module.symbol_directory(p, "3.40.0").name for p in ("ios", "mac")])
+        self.assertEqual(self.present(), ["3.41.0", "3.45.0"])
+        self.assertEqual(result["overCapBytes"], 0)
+
+
 class ReleasePublicationTests(unittest.TestCase):
     commit = "c" * 40
 
@@ -356,12 +441,12 @@ class ReleasePublicationTests(unittest.TestCase):
             for version in ("3.46.0", "3.47.0", "3.48.0"):
                 os.utime(module.admit(version, self.commit), (old, old))
             os.utime(module.RELEASES / "3.45.0", (old, old))
-            for index in range(module.RETAINED_RELEASE_SYMBOLS):
+            for index in range(10):
                 newer = module.symbol_directory("ios", f"3.46.{index}")
                 newer.mkdir(parents=True)
             os.utime(module.symbol_directory("mac", "3.45.0"), (1, 1))
             module.admit("3.49.0", self.commit)
-            module.prune_symbols()
+            module.prune_symbols("3.45.0")
             self.assertTrue((module.RELEASES / "3.45.0" / module.gateway_bundle.NAME).is_dir())
             self.assertTrue(module.symbol_directory("mac", "3.45.0").is_dir())
         plan = self.catch_up({"gateway": "3.44.1", "app": "3.44.1"})
@@ -369,22 +454,6 @@ class ReleasePublicationTests(unittest.TestCase):
 
     def test_nothing_published_plans_nothing(self):
         self.assertEqual(self.catch_up({"gateway": "3.44.1", "app": "3.44.1"}), {"version": None})
-
-    def test_symbol_retention_keeps_the_newest_ten_release_archives(self):
-        with self.on("mini"):
-            for index in range(10):
-                old = module.symbol_directory("ios", f"3.40.{index}")
-                old.mkdir(parents=True)
-                os.utime(old, (1_000 + index, 1_000 + index))
-            unrelated = module.DEPLOYMENTS / ("ios-" + "1" * 32)
-            unrelated.mkdir()
-            os.utime(unrelated, (1, 1))
-            archive = self.root / "RemoteCoder.xcarchive"
-            write(archive / "dSYMs/RemoteCoder.app.dSYM/Contents/Info.plist", b"dsym")
-            result = module.retain_symbols("mac", "3.45.0", archive)
-            self.assertEqual(result["removed"], ["testflight-ios-3.40.0-3040000"])
-            self.assertTrue((module.symbol_directory("mac", "3.45.0") / "symbols/RemoteCoder.app.dSYM").is_dir())
-            self.assertTrue(unrelated.is_dir())
 
     def test_tag_admission_requires_the_highest_peeled_release_tag_on_a_clean_checkout(self):
         tags = "\n".join([

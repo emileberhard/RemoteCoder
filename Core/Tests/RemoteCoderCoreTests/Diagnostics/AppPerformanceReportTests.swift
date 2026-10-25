@@ -198,6 +198,40 @@ struct AppPerformanceReportTests {
         #expect(requests[0].segment == requests[1].segment)
         #expect(requests[0].authorization == "Bearer fixture-token")
     }
+
+    @Test(arguments: [(422, true), (400, false), (413, false), (503, false)])
+    func hostRejectionQuarantinesOnlySegmentSpecificRefusals(status: Int, quarantines: Bool) async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let exporter = DiagnosticsOutbox(directory: directory, deviceLabel: { "test-device" })
+        let refused = Mutex<String?>(nil)
+        await exporter.setDestination(DiagnosticsDestination(host: GatewayHostConfiguration(
+            id: UUID(), name: "Fixture", hostname: "rejecting.diagnostics.test", port: 8787, authToken: "fixture-token"
+        )) { request in
+            let segment = request.value(forHTTPHeaderField: "X-RemoteCoder-Segment")
+            let code = refused.withLock { first in
+                if first == nil { first = segment }
+                return first == segment ? status : 200
+            }
+            guard let url = request.url,
+                  let response = HTTPURLResponse(url: url, statusCode: code, httpVersion: nil, headerFields: nil)
+            else { throw URLError(.badServerResponse) }
+            return (Data(), response)
+        })
+        try await exporter.enqueuePerformanceReport(fixture, kind: .diagnostic, timeRange: timeRange)
+        try await exporter.enqueuePerformanceReport(
+            Fixture(category: "otherDiagnostic", details: [:]), kind: .diagnostic, timeRange: timeRange
+        )
+        #expect(await exporter.uploadPendingSegments().segments == (quarantines ? 1 : 0))
+        let rejected = try #require(refused.withLock { $0 })
+        let files = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+        #expect(files.contains("\(rejected).jsonl.export-only") == quarantines)
+        #expect(try segments(in: directory).count == (quarantines ? 0 : 2))
+        let losses = exporter.telemetry.take().filter {
+            if case .loss(let loss) = $0.record { loss.what == .metricKitSegment } else { false }
+        }
+        #expect(losses.count == (quarantines ? 1 : 0))
+    }
 }
 
 private final class ReportUploadProtocol: URLProtocol, @unchecked Sendable {

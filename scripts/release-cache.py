@@ -40,7 +40,9 @@ MAC_APP = "RemoteCoderMac-direct.app"
 MAC_PACKAGE = "RemoteCoderMac.pkg"
 MIRRORED = ("gateway", "mac-app", "mac-package", "ios-symbols", "mac-symbols")
 COMPONENTS = ("gateway", "app")
-RETAINED_RELEASE_SYMBOLS = 10
+SYMBOL_DIRECTORY = rf"testflight-(?:ios|mac)-({VERSION})-[0-9]+"
+SYMBOL_WINDOW_SECONDS = 7 * 24 * 3600
+SYMBOL_BYTE_CAP = 5 * 1024**3
 
 
 def load(name: str, file: str):
@@ -251,24 +253,53 @@ def attach(version: str, platform: str) -> dict:
     return record
 
 
-def prune_symbols() -> list[str]:
-    pattern = rf"testflight-(?:ios|mac)-({VERSION})-[0-9]+"
-    published = published_version()
-    retained = sorted(
-        (
-            path
-            for path in DEPLOYMENTS.glob("testflight-*")
-            if (match := re.fullmatch(pattern, path.name)) and match[1] != published
-        ),
-        key=lambda path: path.stat().st_mtime,
-        reverse=True,
-    )
+def allocated_bytes(path: Path) -> int:
+    total = 0
+    for current, directories, files in os.walk(path):
+        for name in (".", *directories, *files):
+            with contextlib.suppress(FileNotFoundError):
+                total += os.lstat(Path(current) / name).st_blocks * 512
+    return total
+
+
+def prune_symbols(published: str | None) -> dict:
+    by_version: dict[str, list[Path]] = {}
+    for path in DEPLOYMENTS.glob("testflight-*"):
+        if match := re.fullmatch(SYMBOL_DIRECTORY, path.name):
+            by_version.setdefault(match[1], []).append(path)
+    newest_first = sorted(by_version, key=version_key, reverse=True)
+    cutoff = time.time() - SYMBOL_WINDOW_SECONDS
+    recent = [v for v in newest_first if max(p.stat().st_mtime for p in by_version[v]) >= cutoff]
+    older = [v for v in newest_first if v not in recent]
+    kept = {*recent, *older[:1], *({published} & by_version.keys())}
     removed = []
-    for path in retained[RETAINED_RELEASE_SYMBOLS:]:
-        with contextlib.suppress(FileNotFoundError):
-            shutil.rmtree(path)
-            removed.append(path.name)
-    return removed
+
+    def evict(version: str) -> None:
+        for path in by_version[version]:
+            with contextlib.suppress(FileNotFoundError):
+                shutil.rmtree(path)
+                removed.append(path.name)
+        kept.discard(version)
+
+    for version in newest_first:
+        if version not in kept:
+            evict(version)
+    sizes = {v: sum(allocated_bytes(p) for p in by_version[v]) for v in kept}
+    total = sum(sizes.values())
+    for version in reversed(newest_first):
+        if total <= SYMBOL_BYTE_CAP:
+            break
+        if version in kept and version != published:
+            evict(version)
+            total -= sizes[version]
+    over = max(0, total - SYMBOL_BYTE_CAP)
+    if over:
+        print(
+            f"Release symbols use {total} bytes, {over} over the {SYMBOL_BYTE_CAP}-byte cap; "
+            f"only the published release {published} remains to evict.",
+            file=sys.stderr,
+        )
+    return {"removed": removed, "bytes": total, "overCapBytes": over}
 
 
 def retain_symbols(platform: str, version: str, archive: Path) -> dict:
@@ -281,7 +312,7 @@ def retain_symbols(platform: str, version: str, archive: Path) -> dict:
     (destination / "symbols").mkdir(parents=True)
     for path in symbols:
         shutil.copytree(path, destination / "symbols" / path.name, symlinks=True)
-    return {"retained": str(destination), "removed": prune_symbols()}
+    return {"retained": str(destination), **prune_symbols(published_version())}
 
 
 def installed_gateway() -> str:
@@ -401,7 +432,7 @@ def catch_up(host: str) -> dict:
     for name, target in targets.items():
         if name in artifacts:
             mirror(host, name, artifacts[name], target)
-    prune_symbols()
+    pruned = prune_symbols(version)
     package = None
     if plan["gateway"] == "deliver":
         package = directory / "codex-package"
@@ -415,6 +446,7 @@ def catch_up(host: str) -> dict:
         "gatewayBundle": str(targets["gateway"]),
         "codexPackage": None if package is None else str(package),
         "installed": facts,
+        "symbols": pruned,
         **plan,
     }
 
