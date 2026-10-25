@@ -691,7 +691,7 @@ actor ConversationCheckpointStore {
 
     private func committedRevision(_ checkpoint: ConversationState.Checkpoint, id: UUID, presented: Bool) -> UInt64? {
         guard let saved = revisions[id], checkpoint.durableRevision <= saved,
-              !(presented && omittedHistory[id] != nil) else { return nil }
+              !(checkpoint.durableRevision == saved && presented && omittedHistory[id] != nil) else { return nil }
         return saved
     }
 

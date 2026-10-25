@@ -1680,6 +1680,27 @@ struct ConversationCheckpointStoreTests: ConversationHistoryFixtures {
         #expect(try await store.load(first.conversationID)?.turns.values.contains { $0.items["a"] != nil } == true)
     }
 
+    @Test func readmittingShedHistoryNeverAcceptsAnOlderCheckpoint() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = ConversationCheckpointStore(hostID: UUID(), directory: directory, budgetBytes: 1,
+            primaryBudgetBytes: 512 * 1_024 * 1_024)
+        var first = ConversationState(conversationID: UUID(), threadID: "first")
+        first.merge(history(items: [.agentMessage(id: "a", text: "First answer")], threadID: "first"))
+        first.submit(ChatMessage(role: .user, text: "Keep my first send"))
+        let stale = first.checkpoint
+        first.submit(ChatMessage(role: .user, text: "Keep my newer send"))
+        try await store.save(first.checkpoint, conversationID: first.conversationID, presented: false)
+        var second = ConversationState(conversationID: UUID(), threadID: "second")
+        second.merge(history(items: [.agentMessage(id: "b", text: "Second answer")], threadID: "second"))
+        second.submit(ChatMessage(role: .user, text: "Keep my second send"))
+        try await store.save(second.checkpoint, conversationID: second.conversationID, presented: false)
+
+        let receipt = try await store.save(stale, conversationID: first.conversationID, presented: true)
+        #expect(!receipt.historyAdmitted)
+        #expect(try await store.load(first.conversationID)?.submissions.count == 2)
+    }
+
     @Test func aColdStoreEvictsOnlyRebuildableCheckpointsItFindsOnDisk() async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
