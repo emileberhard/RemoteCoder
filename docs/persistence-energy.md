@@ -6,7 +6,7 @@ the exact result slice, including unknown provider fields, number spellings and
 opaque cursors, without a second JSON object graph or serialization. Typed re-encoding would
 lose unknown fields, so JSONDecoder remains the validator and the byte scan
 only locates the retained span. Duplicate
-result keys are rejected. Existing canonical JSON cache entries remain readable.
+result keys are rejected.
 
 The assembled tail window is the one durable tail representation. Its raw
 cursorless item/turn pages use only the existing bounded memory cache; older
@@ -14,12 +14,16 @@ cursor-addressed pages remain independently durable. Refreshing a cursorless
 page removes its obsolete disk copy, including files from older app versions.
 Persisted windows keep each page's actual fetchedAt because overlapping pages
 use it to reject older content. A separate comparison fingerprint excludes those
-timestamps; freshness alone does not replace the file. The optional fingerprint
-lives beside the unchanged window data in the cache envelope, so cold comparisons
-still skip unchanged writes and older builds retain the correct ordering values.
-Envelopes without that fingerprint remain readable. Freshness remains conservative
-after relaunch. Failed replacements keep the last-good file and retry on the next
-save. Cache access recency is memory-only.
+timestamps; freshness alone does not replace the file. Saved timestamps can
+therefore precede a later unchanged verification. Before a cached page replaces
+overlapping items or turn metadata with different content, the history service
+refetches it from the gateway under the existing invalidation fences. A failed
+refetch propagates without applying the conflicting cache entry. Unchanged
+refreshes and nonconflicting cache reads keep their write and read savings.
+Cache envelope version 3 identifies this validation contract: older builds discard
+these files, and current builds discard prior versions as rebuildable cache.
+Freshness remains conservative after relaunch. Failed replacements keep the
+last-good file and retry on the next save. Cache access recency is memory-only.
 
 Write ordering outlives memory eviction and disk removal. The cache retains the
 latest accepted read start for at most 64 page identities. At capacity, a monotonic
@@ -46,14 +50,15 @@ count or encoded size.
 
 A MacBook Pro M1 Max Release Core workload (50 synthetic items, about 480 KB, one initial
 read and 20 unchanged forced tail refreshes) reduced logical persistence from
-23 writes / 10,709,394 bytes to 1 write / 486,843 bytes. Process CPU fell from
-150.023 ms to 81.602 ms. Both runs used SwiftPM Release on the same MacBook;
+23 writes / 10,709,394 bytes to 1 write / 486,844 bytes. Process CPU fell from
+150.023 ms to 81.230 ms. Both runs used SwiftPM Release on the same MacBook;
 these measure this path, not device energy or physical flash amplification.
 The regression also verifies changed replies survive a cold read, independent
 older pages keep exact unknown fields and cursors, and invalidation removes
 both memory and disk state. Restored edited replies reject stale overlapping
 pages. Late reads cannot repopulate evicted pages, including after ordering-stamp
-compaction. Unchanged cold refreshes preserve file identity.
+compaction. Unchanged cold refreshes preserve file identity. A conflicting cached
+reply between two identical authoritative tail reads is refetched after restoration.
 
 Conversation persistence revisions are separate from presentation revisions.
 Clean flushes skip serialization. One owned task coalesces remote checkpoints

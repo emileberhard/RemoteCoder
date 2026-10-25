@@ -70,7 +70,7 @@ actor HistoryPageCache {
     private var writeOrderFloor: ContinuousClock.Instant?
     private static let writeOrderLimit = 64
     private var loadedDiskIndex = false
-    private static let version = 2
+    private static let version = 3
 
     static let shared = HistoryPageCache(directory: HostStorage.live.directory(for: .device)
         .appendingPathComponent("history-pages", isDirectory: true))

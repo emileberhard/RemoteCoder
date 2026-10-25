@@ -211,14 +211,14 @@ struct HistoryInfrastructureTests {
         #expect(try diskBytes(in: directory) <= 2600)
     }
 
-    @Test func corruptAndObsoleteEnvelopesAreCacheMisses() async throws {
+    @Test(arguments: [0, 2]) func corruptAndObsoleteEnvelopesAreCacheMisses(_ version: Int) async throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let cache = HistoryPageCache(directory: directory)
         try await cache.store(Data([1]), for: key("page"), startedAt: .now, readStartedAt: .now)
         let url = try #require(FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil).first)
         var envelope = try #require(PropertyListSerialization.propertyList(from: Data(contentsOf: url), format: nil) as? [String: Any])
-        envelope["version"] = 0
+        envelope["version"] = version
         try PropertyListSerialization.data(fromPropertyList: envelope, format: .binary, options: 0).write(to: url)
         #expect(await HistoryPageCache(directory: directory).value(for: key("page")) == nil)
         try Data("broken".utf8).write(to: url)

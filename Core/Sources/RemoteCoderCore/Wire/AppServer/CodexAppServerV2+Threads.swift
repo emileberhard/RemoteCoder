@@ -69,7 +69,7 @@ extension CodexAppServerV2 {
         }
     }
 
-    struct Turn: Sendable {
+    struct Turn: Equatable, Sendable {
         let id: String
         let items: [ThreadItem]
         let startedAt: Int64?
@@ -78,7 +78,7 @@ extension CodexAppServerV2 {
         let error: TurnError?
     }
 
-    struct TurnError: Codable, Sendable {
+    struct TurnError: Codable, Equatable, Sendable {
         let message: String
     }
 
@@ -170,7 +170,7 @@ extension CodexAppServerV2 {
     }
 
     struct ThreadItemsListResponse: Codable, Sendable {
-        struct Entry: Codable, Sendable {
+        struct Entry: Codable, Equatable, Sendable {
             let turnId: String
             let item: ThreadItem
             var startedAtOrdinal: Int64?

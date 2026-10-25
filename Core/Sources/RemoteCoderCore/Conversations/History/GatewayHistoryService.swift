@@ -463,9 +463,16 @@ actor GatewayHistoryService {
         let generation = generations[header.id]
         let readStartedAt = ContinuousClock.now
         do {
-            let page: NativePage<ItemsResponse> = try await nativePage(header: header, method: "thread/items/list",
+            var page: NativePage<ItemsResponse> = try await nativePage(header: header, method: "thread/items/list",
                 cursor: cursor, direction: direction, priority: priority, limit: Self.itemPageLimit,
                 settled: { $0.data.allSatisfy { $0.isComplete == true } })
+            if page.source == .cachedPages, base.items.hasConflictingOverlap(with: page.value.data, fetchedAt: page.fetchedAt) {
+                try Task.checkCancellation()
+                guard epoch == readEpoch, generations[header.id] == generation else { throw HistoryReadFailure.invalidated }
+                page = try await nativePage(header: header, method: "thread/items/list",
+                    cursor: cursor, direction: direction, priority: priority, limit: Self.itemPageLimit, bypassCache: true,
+                    settled: { $0.data.allSatisfy { $0.isComplete == true } })
+            }
             guard page.value.nextCursor != cursor else { throw GatewayClient.ClientError.invalidMessage }
             let placement: HistoryWindow.Placement = direction == .desc ? .older(cursor) : .newer(cursor)
             var update = HistoryWindow.Update(items: Self.measured(HistoryWindow.ItemPage(page.value.data, next: page.value.nextCursor,
@@ -526,12 +533,20 @@ actor GatewayHistoryService {
 
     private func coverMetadata(_ update: inout HistoryWindow.Update, window: inout HistoryWindow,
                                header: ConversationHeader, priority: HistoryReadScheduler.Priority, newer: Bool) async throws {
+        let readEpoch = epoch
+        let generation = generations[header.id]
         for _ in 0..<Self.metadataPageLimit {
             guard !window.turnsLackingMetadata.isEmpty,
                   let cursor = newer ? window.metadata.newer : window.metadata.older else { return }
             let direction: CodexAppServerV2.SortDirection = newer ? .asc : .desc
-            let page: NativePage<TurnsResponse> = try await nativePage(header: header, method: "thread/turns/list",
+            var page: NativePage<TurnsResponse> = try await nativePage(header: header, method: "thread/turns/list",
                 cursor: cursor, direction: direction, priority: priority, limit: Self.turnPageLimit)
+            if page.source == .cachedPages, window.metadata.hasConflictingOverlap(with: page.value.data, fetchedAt: page.fetchedAt) {
+                try Task.checkCancellation()
+                guard epoch == readEpoch, generations[header.id] == generation else { throw HistoryReadFailure.invalidated }
+                page = try await nativePage(header: header, method: "thread/turns/list",
+                    cursor: cursor, direction: direction, priority: priority, limit: Self.turnPageLimit, bypassCache: true)
+            }
             guard page.value.nextCursor != cursor else { throw GatewayClient.ClientError.invalidMessage }
             let placement: HistoryRange<CodexAppServerV2.Turn>.Placement = newer ? .newer(cursor) : .older(cursor)
             let turns = HistoryWindow.Update.Metadata(page: Self.measured(HistoryWindow.TurnPage(page.value.data, next: page.value.nextCursor,

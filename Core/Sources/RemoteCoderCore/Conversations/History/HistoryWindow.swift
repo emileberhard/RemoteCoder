@@ -85,6 +85,15 @@ struct HistoryRange<Element: Codable & Sendable & Identifiable>: Codable, Sendab
         }
     }
 
+    func hasConflictingOverlap(with incoming: [Element], fetchedAt: Date) -> Bool where Element: Equatable {
+        let updates = Dictionary(incoming.map { ($0.id, $0) }, uniquingKeysWith: { _, new in new })
+        return pages.contains { page in
+            page.fetchedAt <= fetchedAt && page.elements.contains { element in
+                updates[element.id].map { $0 != element } ?? false
+            }
+        }
+    }
+
     var comparisonValue: Self {
         var value = self
         for index in value.pages.indices { value.pages[index].fetchedAt = .distantPast }

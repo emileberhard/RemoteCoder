@@ -402,7 +402,10 @@ entrypoint linked above.
     only in start order; directional pages rely on their cursors.
   - `HistoryPageCache` persists the assembled tail window, with freshness outside
     its content identity; actual page timestamps remain on disk for overlap
-    ordering. Bounded write-order stamps and a monotonic floor outlive payload
+    ordering. Cached overlaps that would replace different items or metadata must
+    refetch before applying: an unchanged verification may be newer than the saved
+    timestamp. Cache format 3 makes older builds discard files requiring this validation.
+    Bounded write-order stamps and a monotonic floor outlive payload
     eviction. Raw cursorless pages are memory-only; cursor-addressed
     older pages retain their disk cache. Wire result byte counts seed window
     budgets; spliced pages remeasure retained content.

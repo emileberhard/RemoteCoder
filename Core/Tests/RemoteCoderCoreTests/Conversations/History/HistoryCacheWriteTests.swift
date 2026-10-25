@@ -93,6 +93,40 @@ struct HistoryCacheWriteTests {
         #expect(preservesEditedReplies)
     }
 
+    @Test func unchangedRefreshRefetchesConflictingColdOverlap() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let gateway = try CacheWriteGateway()
+        let first = Date(timeIntervalSince1970: 1000)
+        let conflicting = Date(timeIntervalSince1970: 1100)
+        let verified = Date(timeIntervalSince1970: 1200)
+        let date = Mutex(first)
+        let service = GatewayHistoryService(gateway: gateway, cache: HistoryPageCache(directory: directory), now: { date.withLock { $0 } })
+        let header = ConversationHeader.historyFixture(id: "verified-unchanged")
+        let original = try await service.openTail(header: header, base: nil, bypassCache: true)
+        let files = try identities(directory)
+        date.withLock { $0 = conflicting }
+        await gateway.changeReplies()
+        try await gateway.useCurrentRepliesForOlderPage()
+        var browsing = HistoryWindow()
+        browsing.apply(.init(items: .init(elements: [], older: "older-opaque", newer: "towards-tail", fetchedAt: first), placement: .reset, metadata: []))
+        _ = try await service.page(header: header, window: browsing, direction: .desc, priority: .foreground)
+        date.withLock { $0 = verified }
+        await gateway.restoreReplies()
+        _ = try await service.openTail(header: header, base: nil, bypassCache: true)
+        let after = try identities(directory)
+        #expect(files.allSatisfy { after[$0.key] == $0.value })
+        try await gateway.useCurrentRepliesForOlderPage()
+        let cold = GatewayHistoryService(gateway: gateway, cache: HistoryPageCache(directory: directory), now: { verified })
+        let restored = try #require(await cold.cachedConversation(header: header))
+        let reads = await gateway.olderReads
+        let paged = try await cold.page(header: header, window: restored.window, direction: .desc, priority: .foreground)
+        let preservesVerifiedReplies = paged.window.turns.flatMap { $0.entries.map(\.item) } == original.window.turns.flatMap { $0.entries.map(\.item) }
+        #expect(preservesVerifiedReplies)
+        #expect(await gateway.olderReads == reads + 1)
+        #expect(paged.source == .gateway)
+    }
+
     private func identities(_ directory: URL) throws -> [String: FileIdentity] {
         try Dictionary(uniqueKeysWithValues: FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
             .map { ($0.lastPathComponent, try FileIdentity($0)) })
@@ -102,6 +136,7 @@ struct HistoryCacheWriteTests {
 private actor CacheWriteGateway: CodexHistoryGateway {
     let historyHostID = "cache-write-host"
     private(set) var itemReads = 0
+    private(set) var olderReads = 0
     var payloads: [Data] { [items, turns] }
     private var olderItems: Data?
     private var items: Data
@@ -123,6 +158,10 @@ private actor CacheWriteGateway: CodexHistoryGateway {
         olderItems = try JSONSerialization.data(withJSONObject: envelope)
     }
 
+    func restoreReplies() {
+        items = Data(String(decoding: items, as: UTF8.self).replacingOccurrences(of: "changedxxx", with: "abcdefghij").utf8)
+    }
+
     func changeReplies() {
         items = Data(String(decoding: items, as: UTF8.self).replacingOccurrences(of: "abcdefghij", with: "changedxxx").utf8)
     }
@@ -130,6 +169,7 @@ private actor CacheWriteGateway: CodexHistoryGateway {
     func historyPageData(method: String, params: JSONValue) throws -> Data {
         if method == "thread/items/list" {
             if params.objectValue?["cursor"] != nil {
+                olderReads += 1
                 if let olderItems { return olderItems }
                 return Data(#"{"metadata":{"result":"ignored \"}[]"},"re\u0073ult":{"data":[],"nextCursor":null,"backwardsCursor":"opaque\\\"}[]é","futureField":{"result":[1e100,{"value":"\\\"}"}]}},"id":999}"#.utf8)
             }
