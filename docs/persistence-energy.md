@@ -1,9 +1,35 @@
 # Persistence and idle energy
 
-History pages persist canonical RPC result content rather than request IDs.
-Unchanged pages and thread headers update freshness in memory without writing.
-Cache access recency is memory-only. A failed replacement preserves the last-good
-file, and an identical subsequent save retries until persistence succeeds.
+History pages persist RPC result content rather than request IDs. The typed
+response decoder validates the envelope once; a structural byte scan then retains
+the exact result slice, including unknown provider fields, number spellings and
+opaque cursors, without a second JSON object graph or serialization. Typed re-encoding would
+lose unknown fields, so JSONDecoder remains the validator and the byte scan
+only locates the retained span. Duplicate
+result keys are rejected. Existing canonical JSON cache entries remain readable.
+
+The assembled tail window is the one durable tail representation. Its raw
+cursorless item/turn pages use only the existing bounded memory cache; older
+cursor-addressed pages remain independently durable. Refreshing a cursorless
+page removes its obsolete disk copy, including files from older app versions.
+The window's persisted content uses fixed page freshness timestamps and sorted
+keys, so freshness alone cannot rewrite it. Actual freshness remains in the cache
+envelope and memory; a cold restore is conservative. Failed replacements keep the
+last-good file and retry on the next save. Cache access recency is memory-only.
+
+Page byte budgets use the result bytes already received rather than encoding
+every decoded item and turn again. Pages changed by overlap still remeasure their
+retained content before enforcing the window budget.
+
+
+An optimized macOS Core workload (50 synthetic items, about 480 KB, one initial
+read and 20 unchanged forced tail refreshes) reduced logical persistence from
+23 writes / 10,709,397 bytes to 1 write / 486,769 bytes. Process CPU fell from
+71.609 ms to 31.267 ms. Both runs used SwiftPM Release on the same machine;
+these measure this path, not device energy or physical flash amplification.
+The regression also verifies changed replies survive a cold read, independent
+older pages keep exact unknown fields and cursors, and invalidation removes
+both memory and disk state.
 
 Conversation persistence revisions are separate from presentation revisions.
 Clean flushes skip serialization. One owned task coalesces remote checkpoints

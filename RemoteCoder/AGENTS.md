@@ -400,6 +400,10 @@ entrypoint linked above.
   - Every history read starts with `ConversationSession.beginHistoryRead()`,
     which captures its base window and start order. Tail and reset reads apply
     only in start order; directional pages rely on their cursors.
+  - `HistoryPageCache` persists the assembled tail window, with freshness outside
+    its content identity. Raw cursorless pages are memory-only; cursor-addressed
+    older pages retain their disk cache. Wire result byte counts seed window
+    budgets; spliced pages remeasure retained content.
   - Browsing never resumes a thread or requests full history.
 - `Core/Sources/RemoteCoderCore/Wire/AppServer/` holds wire models for the app-server
   protocol v2, namespaced under the empty enum `CodexAppServerV2` to avoid

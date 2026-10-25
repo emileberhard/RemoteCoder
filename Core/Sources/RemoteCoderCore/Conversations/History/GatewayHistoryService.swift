@@ -100,14 +100,15 @@ actor GatewayHistoryService {
             bytes += page.bytes
             guard bytes <= Self.observationByteLimit else { throw ConversationSession.ObservationError.capacity }
             turns = page.value.data.reversed()
-            metadata.append(.init(page: try await Self.measured(HistoryWindow.TurnPage(page.value.data, next: page.value.nextCursor,
-                backwards: page.value.backwardsCursor, direction: .desc, placement: .tail, fetchedAt: page.fetchedAt)), placement: .tail))
+            metadata.append(.init(page: Self.measured(HistoryWindow.TurnPage(page.value.data, next: page.value.nextCursor,
+                backwards: page.value.backwardsCursor, direction: .desc, placement: .tail, fetchedAt: page.fetchedAt), bytes: page.bytes), placement: .tail))
             try checkFence()
         }
         guard var cursor = checkpoint.itemsBackwardsCursor else {
             return ObservationHistory(turns: turns, entries: [], update: nil)
         }
         let known = Set(previous?.newer == nil ? previous?.items.pages.flatMap { $0.elements.map(\.id) } ?? [] : [])
+        let metadataBytes = bytes
         var entries: [ItemsResponse.Entry] = []
         var older: String?
         var fetchedAt: Date?
@@ -126,7 +127,7 @@ actor GatewayHistoryService {
             cursor = next
         }
         var update = HistoryWindow.Update(
-            items: try await Self.measured(HistoryWindow.ItemPage(elements: entries.reversed(), older: older, newer: nil, fetchedAt: fetchedAt ?? now())),
+            items: Self.measured(HistoryWindow.ItemPage(elements: entries.reversed(), older: older, newer: nil, fetchedAt: fetchedAt ?? now()), bytes: bytes - metadataBytes),
             placement: .tail, metadata: metadata)
         try checkFence()
         var window = previous ?? HistoryWindow()
@@ -466,8 +467,8 @@ actor GatewayHistoryService {
                 settled: { $0.data.allSatisfy { $0.isComplete == true } })
             guard page.value.nextCursor != cursor else { throw GatewayClient.ClientError.invalidMessage }
             let placement: HistoryWindow.Placement = direction == .desc ? .older(cursor) : .newer(cursor)
-            var update = HistoryWindow.Update(items: try await Self.measured(HistoryWindow.ItemPage(page.value.data, next: page.value.nextCursor,
-                backwards: page.value.backwardsCursor, direction: direction, placement: placement, fetchedAt: page.fetchedAt)),
+            var update = HistoryWindow.Update(items: Self.measured(HistoryWindow.ItemPage(page.value.data, next: page.value.nextCursor,
+                backwards: page.value.backwardsCursor, direction: direction, placement: placement, fetchedAt: page.fetchedAt), bytes: page.bytes),
                 placement: placement, metadata: [])
             var window = base
             window.apply(update)
@@ -502,11 +503,11 @@ actor GatewayHistoryService {
         let (itemPage, turnPage) = try await (items, turns)
         let metadataPlacement: HistoryRange<CodexAppServerV2.Turn>.Placement = placement == .reset ? .reset : .tail
         var update = HistoryWindow.Update(
-            items: try await Self.measured(HistoryWindow.ItemPage(itemPage.value.data, next: itemPage.value.nextCursor,
-                backwards: itemPage.value.backwardsCursor, direction: .desc, placement: placement, fetchedAt: itemPage.fetchedAt)),
+            items: Self.measured(HistoryWindow.ItemPage(itemPage.value.data, next: itemPage.value.nextCursor,
+                backwards: itemPage.value.backwardsCursor, direction: .desc, placement: placement, fetchedAt: itemPage.fetchedAt), bytes: itemPage.bytes),
             placement: placement,
-            metadata: [.init(page: try await Self.measured(HistoryWindow.TurnPage(turnPage.value.data, next: turnPage.value.nextCursor,
-                backwards: turnPage.value.backwardsCursor, direction: .desc, placement: metadataPlacement, fetchedAt: turnPage.fetchedAt)),
+            metadata: [.init(page: Self.measured(HistoryWindow.TurnPage(turnPage.value.data, next: turnPage.value.nextCursor,
+                backwards: turnPage.value.backwardsCursor, direction: .desc, placement: metadataPlacement, fetchedAt: turnPage.fetchedAt), bytes: turnPage.bytes),
                 placement: metadataPlacement)])
         var window = base ?? HistoryWindow()
         if window.apply(update) {
@@ -532,8 +533,8 @@ actor GatewayHistoryService {
                 cursor: cursor, direction: direction, priority: priority, limit: Self.turnPageLimit)
             guard page.value.nextCursor != cursor else { throw GatewayClient.ClientError.invalidMessage }
             let placement: HistoryRange<CodexAppServerV2.Turn>.Placement = newer ? .newer(cursor) : .older(cursor)
-            let turns = HistoryWindow.Update.Metadata(page: try await Self.measured(HistoryWindow.TurnPage(page.value.data, next: page.value.nextCursor,
-                backwards: page.value.backwardsCursor, direction: direction, placement: placement, fetchedAt: page.fetchedAt)),
+            let turns = HistoryWindow.Update.Metadata(page: Self.measured(HistoryWindow.TurnPage(page.value.data, next: page.value.nextCursor,
+                backwards: page.value.backwardsCursor, direction: direction, placement: placement, fetchedAt: page.fetchedAt), bytes: page.bytes),
                 placement: placement)
             window.apply(turns)
             update.metadata.append(turns)
@@ -546,16 +547,68 @@ actor GatewayHistoryService {
 
     @concurrent private static func decodeWirePage<T: Decodable & Sendable>(_ data: Data) async throws -> (T, Data) {
         let result = try JSONDecoder().decode(RPCResult<T>.self, from: data).result
-        guard let envelope = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let payload = envelope["result"] else { throw GatewayClient.ClientError.invalidMessage }
         // Keep unknown provider fields and opaque cursors, but not transport IDs.
-        let content = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys, .fragmentsAllowed])
+        let content = try resultContent(in: data)
         return (result, content)
     }
 
-    @concurrent private static func measured<Element>(_ page: HistoryRange<Element>.Page) async throws -> HistoryRange<Element>.Page {
+    private static func resultContent(in data: Data) throws -> Data {
+        try data.withUnsafeBytes { (bytes: UnsafeRawBufferPointer) in
+            var index = 0
+            func whitespace() {
+                while index < bytes.count, [9, 10, 13, 32].contains(bytes[index]) { index += 1 }
+            }
+            func stringEnd() throws {
+                guard index < bytes.count, bytes[index] == 34 else { throw GatewayClient.ClientError.invalidMessage }
+                index += 1
+                while index < bytes.count {
+                    let byte = bytes[index]
+                    index += 1
+                    if byte == 34 { return }
+                    if byte == 92 { index += 1 }
+                }
+                throw GatewayClient.ClientError.invalidMessage
+            }
+            whitespace()
+            guard index < bytes.count, bytes[index] == 123 else { throw GatewayClient.ClientError.invalidMessage }
+            index += 1
+            var result: Range<Int>?
+            while index < bytes.count {
+                whitespace()
+                if bytes[index] == 125 { break }
+                let keyStart = index
+                try stringEnd()
+                let key = try JSONDecoder().decode(String.self, from: Data(bytes[keyStart..<index]))
+                whitespace()
+                guard index < bytes.count, bytes[index] == 58 else { throw GatewayClient.ClientError.invalidMessage }
+                index += 1
+                whitespace()
+                let start = index
+                var depth = 0
+                while index < bytes.count {
+                    let byte = bytes[index]
+                    if byte == 34 { try stringEnd(); continue }
+                    if depth == 0, byte == 44 || byte == 125 { break }
+                    if byte == 123 || byte == 91 { depth += 1 }
+                    if byte == 125 || byte == 93 { depth -= 1 }
+                    index += 1
+                }
+                if key == "result" {
+                    guard result == nil else { throw GatewayClient.ClientError.invalidMessage }
+                    var end = index
+                    while end > start, [9, 10, 13, 32].contains(bytes[end - 1]) { end -= 1 }
+                    result = start..<end
+                }
+                if index < bytes.count, bytes[index] == 44 { index += 1 } else { break }
+            }
+            guard let result else { throw GatewayClient.ClientError.invalidMessage }
+            return Data(bytes[result])
+        }
+    }
+
+    private static func measured<Element>(_ page: HistoryRange<Element>.Page, bytes: Int) -> HistoryRange<Element>.Page {
         var measured = page
-        measured.encodedBytes = try JSONEncoder().encode(page).count
+        measured.encodedBytes = bytes
         return measured
     }
 
@@ -564,7 +617,9 @@ actor GatewayHistoryService {
     }
 
     @concurrent private static func encodeWindow(_ window: HistoryWindow) async throws -> Data {
-        try JSONEncoder().encode(window)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        return try encoder.encode(window.persistenceValue)
     }
 
     private func persist(_ snapshot: ConversationSnapshot, startedAt: ContinuousClock.Instant, readStartedAt: ContinuousClock.Instant, readEpoch: UInt64, generation: UInt64) async throws {
@@ -651,9 +706,9 @@ actor GatewayHistoryService {
                 logger.notice("history decode method=\(method, privacy: .public) elapsed=\(String(describing: decodeTime), privacy: .public)")
                 let fetchedAt = now()
                 let storeKey = settledKey.flatMap { settledKey in settled?(result) == true ? settledKey : nil } ?? key
-                try await cache.store(content, for: storeKey, fetchedAt: fetchedAt, startedAt: page.startedAt, readStartedAt: readStartedAt)
+                try await cache.store(content, for: storeKey, fetchedAt: fetchedAt, startedAt: page.startedAt, readStartedAt: readStartedAt, persistence: cursor == nil ? .memory : .disk)
                 logger.notice("history page method=\(method, privacy: .public) bytes=\(data.count) source=\(priority.rawValue) count=\(count)")
-                return NativePage(value: result, fetchedAt: fetchedAt, bytes: data.count, source: .gateway, readStartedAt: page.startedAt)
+                return NativePage(value: result, fetchedAt: fetchedAt, bytes: content.count, source: .gateway, readStartedAt: page.startedAt)
             } catch let failure as GatewayRPCFailure where failure.historyPageSize != nil && count > 1 {
                 count = max(1, count / 2)
             } catch let failure as GatewayRPCFailure where failure.historyPageSize != nil {

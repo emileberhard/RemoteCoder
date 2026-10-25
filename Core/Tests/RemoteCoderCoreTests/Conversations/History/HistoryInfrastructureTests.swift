@@ -115,6 +115,18 @@ struct HistoryInfrastructureTests {
         #expect(await HistoryPageCache(directory: directory).value(for: key, now: first.addingTimeInterval(320))?.isFresh == false)
     }
 
+    @Test func memoryOnlyRefreshRemovesAnOlderDurableCopy() async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let cache = HistoryPageCache(directory: directory)
+        let key = key("tail")
+        try await cache.store(Data("old".utf8), for: key, startedAt: .now, readStartedAt: .now)
+        try await cache.store(Data("new".utf8), for: key, startedAt: .now, readStartedAt: .now, persistence: .memory)
+        #expect(await cache.value(for: key)?.data == Data("new".utf8))
+        #expect(await HistoryPageCache(directory: directory).value(for: key) == nil)
+        #expect(try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil).isEmpty)
+    }
+
     @Test func pageRequestsKeepIndependentFreshnessAcrossRelaunch() async throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

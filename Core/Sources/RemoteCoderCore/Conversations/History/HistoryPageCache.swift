@@ -16,6 +16,8 @@ nonisolated struct HistoryPageKey: Hashable, Codable, Sendable {
 }
 
 actor HistoryPageCache {
+    enum Persistence { case memory, disk }
+
     private enum Scope: Hashable {
         case host(String)
         case thread(hostID: String, threadID: String)
@@ -109,7 +111,7 @@ actor HistoryPageCache {
     }
 
     /// Call only after a successful response has been decoded and validated.
-    func store(_ data: Data, for key: HistoryPageKey, fetchedAt: Date = Date(), startedAt: ContinuousClock.Instant, readStartedAt: ContinuousClock.Instant) throws {
+    func store(_ data: Data, for key: HistoryPageKey, fetchedAt: Date = Date(), startedAt: ContinuousClock.Instant, readStartedAt: ContinuousClock.Instant, persistence: Persistence = .disk) throws {
         let cutoff = [invalidationFloor, invalidations[.host(key.hostID)],
             invalidations[.thread(hostID: key.hostID, threadID: key.threadID)]].compactMap { $0 }.max()
         guard cutoff.map({ readStartedAt > $0 }) ?? true else { throw HistoryReadFailure.invalidated }
@@ -123,6 +125,10 @@ actor HistoryPageCache {
             return
         }
         insertMemory(data, for: key, fetchedAt: fetchedAt, readStartedAt: startedAt)
+        guard persistence == .disk else {
+            discardDisk(key)
+            return
+        }
         let fingerprint = SHA256.hash(data: data)
         if disk[key]?.fingerprint == fingerprint, !invalidatedKeys.contains(key) {
             disk[key]?.readStartedAt = startedAt

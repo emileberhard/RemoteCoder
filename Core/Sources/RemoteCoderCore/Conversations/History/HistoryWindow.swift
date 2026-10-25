@@ -5,7 +5,7 @@ struct HistoryRange<Element: Codable & Sendable & Identifiable>: Codable, Sendab
         var elements: [Element]
         var older: String?
         var newer: String?
-        let fetchedAt: Date
+        var fetchedAt: Date
         var encodedBytes: Int?
 
         init(elements: [Element], older: String?, newer: String?, fetchedAt: Date) {
@@ -85,6 +85,12 @@ struct HistoryRange<Element: Codable & Sendable & Identifiable>: Codable, Sendab
         }
     }
 
+    var persistenceValue: Self {
+        var value = self
+        for index in value.pages.indices { value.pages[index].fetchedAt = .distantPast }
+        return value
+    }
+
     mutating func measure(_ bytes: (Page) -> Int) {
         for index in pages.indices where pages[index].encodedBytes == nil {
             pages[index].encodedBytes = bytes(pages[index])
@@ -160,6 +166,13 @@ struct HistoryWindow: Codable, Sendable {
     private(set) var metadata = HistoryRange<CodexAppServerV2.Turn>()
     private(set) var turns: [Turn] = []
     private var turnIndex: [String: Int] = [:]
+
+    var persistenceValue: Self {
+        var value = self
+        value.items = items.persistenceValue
+        value.metadata = metadata.persistenceValue
+        return value
+    }
 
     var isLoaded: Bool { items.isLoaded }
     var older: String? { items.older }
