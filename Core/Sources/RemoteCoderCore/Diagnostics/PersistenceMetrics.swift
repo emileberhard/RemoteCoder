@@ -17,7 +17,7 @@ final class PersistenceMetrics: Sendable {
         var milliseconds = 0.0
         var checkpoint: CheckpointCounters?
     }
-    enum CheckpointPhase: String, Sendable, CaseIterable {
+    enum CheckpointPhase: String, Sendable {
         case total, preflight, predecessorWait, encodeWait, encodeQueue, encodeRun, encodeResume
         case admission, database, chunking, sqlCommit, finalize, historyShedRead
     }
@@ -171,7 +171,7 @@ final class PersistenceMetrics: Sendable {
             guard state.reportDue, state.reportedAt.duration(to: .now) >= .seconds(60) else { return nil }
             state.reportDue = false
             state.reportedAt = .now
-            return state.snapshot()
+            return state.counters
         }
         guard let values else { return }
         for owner in Owner.allCases {
