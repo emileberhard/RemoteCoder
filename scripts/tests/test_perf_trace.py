@@ -185,26 +185,19 @@ class PerfTraceTests(unittest.TestCase):
         <text-backtrace id="6"><frame id="7" name="0x1010" addr="0x1010"><binary id="8" name="RemoteCoder"
         UUID="A" arch="arm64" load-addr="0x1000" path="/RemoteCoder.app/RemoteCoder"/></frame></text-backtrace></row>
         <row><process ref="1"/><text-location ref="2"/><duration ref="3"/><uint64 ref="4"/>
-        <uint64 ref="5"/><text-backtrace ref="6"/></row></node></trace-query-result>"""
+        <uint64 ref="5"/><text-backtrace id="9"><frame id="10" name="0x1010" addr="0x1010"><binary ref="8"/></frame></text-backtrace></row></node></trace-query-result>"""
         from symbols import SymbolFile
         lines = ("inner (in RemoteCoder) (Parser.swift:10)", "parse (in RemoteCoder) (Parser.swift:20)")
         run = trace.Run(2, "Time limit reached", "iOS", frozenset({"processor-trace-intervals"}), "now")
         with (patch.object(trace.subprocess, "Popen", return_value=Export(xml)),
               patch.object(trace, "symbol_files", return_value={"A": SymbolFile(Path("/matching-dsym"), "arm64")}),
-              patch.object(trace, "atos", return_value=[lines])):
+              patch.object(trace, "atos", return_value=[lines]) as atos):
             result = trace.processor_trace("x.trace", run, 10, [])
         self.assertEqual(result["topAppFunctions"], {"parse (in RemoteCoder)": {
             "callIntervals": 2, "selfMs": 4, "selfCycles": 200, "selfInstructions": 100}})
         self.assertEqual(result["symbolLocations"]["parse (in RemoteCoder)"][0]["inlineFrames"], list(lines))
         self.assertEqual(result["symbolLocations"]["parse (in RemoteCoder)"][0]["selfCycles"], 200)
-
-    def test_processor_export_limit_is_explicitly_unavailable(self):
-        run = trace.Run(7, "Time limit reached", "iOS", frozenset({"processor-trace-intervals"}), "now")
-        with patch.object(trace, "table_rows", side_effect=trace.ExportLimitExceeded("xctrace exceeded 16 GiB")):
-            result = trace.processor_trace("large.trace", run, 10, [])
-        self.assertEqual(result["status"], "exceeds export limit")
-        self.assertIsNone(result["topAppFunctions"])
-        self.assertEqual(result["unavailableReason"], "xctrace exceeded 16 GiB")
+        self.assertEqual(atos.call_args.args[2], [0x1010])
 
     def test_accessibility_snapshot_ancestors_count_as_automation_without_developer_frames(self):
         for name in ("-[NSObject(UIAccessibilityAutomation) _accessibilityUserTestingSnapshotWithOptions:]",
@@ -339,6 +332,64 @@ class PerfTraceTests(unittest.TestCase):
         self.assertEqual(paths["/unknown"]["unavailableByteRows"], 1)
         self.assertEqual(paths["/stat"]["writtenBytes"], 0)
         self.assertEqual(paths["/stat"]["unavailableByteRows"], 0)
+
+    def test_export_limits_leave_other_measurements_and_json_available(self):
+        schemas = {"time-profile", "swiftui-updates", "FsSyscall", "thread-state", "SwiftTaskStateTable",
+                   "metal-gpu-intervals", "hitches-updates", "hitches", "hitches-framewait", "OSSignpostIntervals", "processor-trace-intervals"}
+        boundaries = {"time-profile": "time-profile", "swiftui-updates": "swiftui", "FsSyscall": "fileActivity",
+                      "thread-state": "systemTrace", "SwiftTaskStateTable": "swiftConcurrency",
+                      "metal-gpu-intervals": "metal-gpu-intervals", "hitches-updates": "hitches-updates",
+                      "hitches": "hitches", "hitches-framewait": "presentedFrames", "OSSignpostIntervals": "TranscriptScroll",
+                      "processor-trace-intervals": "processorTrace"}
+        original = trace.table_rows
+        for schema, boundary in boundaries.items():
+            with self.subTest(schema=schema):
+                def rows(path, requested, columns):
+                    if requested == schema:
+                        raise trace.ExportLimitExceeded("fixture export exceeded its budget")
+                    return original(path, requested, columns)
+                with patch.object(trace, "table_rows", side_effect=rows):
+                    result, _ = self.summary(schemas)
+                self.assertEqual(result["exportFailures"][boundary]["status"], "exceeds export limit")
+                self.assertIn("budget", result["exportFailures"][boundary]["unavailableReason"])
+                if schema == "time-profile":
+                    self.assertIsNone(result["app"]["cpuMs"])
+                    self.assertIsNone(result["app"]["automation"]["samples"])
+                    self.assertIsNone(result["appFramesInclusiveMs"])
+                else:
+                    self.assertEqual(result["app"]["cpuMs"], 1)
+                if schema != "swiftui-updates":
+                    self.assertEqual(result["swiftui"]["updates"], 3)
+                if schema == "processor-trace-intervals":
+                    self.assertIsNone(result["processorTrace"]["topAppFunctions"])
+                json.dumps(result)
+
+    def test_parser_detaches_rows_and_stops_at_its_python_memory_budget(self):
+        original = trace.ET.iterparse
+        nodes = []
+        def parse(*args, **kwargs):
+            for event, element in original(*args, **kwargs):
+                if event == "end" and element.tag == "node":
+                    nodes.append(element)
+                yield event, element
+        with patch.object(trace.ET, "iterparse", side_effect=parse), patch.object(trace.subprocess, "Popen", return_value=Export(PROFILE_XML)):
+            rows = list(trace.table_rows("x.trace", "time-profile", {"process", "weight", "stack"}))
+        self.assertEqual(len(rows), 3)
+        self.assertEqual(len(nodes[0].findall("row")), 0)
+        self.assertEqual(trace.process_name(rows[1]["process"]), "RemoteCoder")
+        with (patch.object(trace.subprocess, "Popen", return_value=Export(PROFILE_XML)),
+              patch.object(trace, "resident_bytes", return_value=17 * 2**30),
+              self.assertRaisesRegex(trace.ExportLimitExceeded, "Python reached")):
+            list(trace.table_rows("x.trace", "time-profile", {"process"}))
+
+    def test_python_memory_alone_can_stop_and_reap_the_export(self):
+        child = WaitingExport()
+        with (patch.object(trace.subprocess, "Popen", return_value=child),
+              patch.object(trace, "resident_bytes", side_effect=lambda pid: 17 * 2**30 if pid == trace.os.getpid() else 0),
+              self.assertRaisesRegex(trace.ExportLimitExceeded, "Python reached"),
+              trace.guarded_export(["--input", "ios.trace", "--toc"], "profile")):
+            child.wait()
+        self.assertTrue(child.killed.is_set())
 
     def test_no_app_samples_are_unavailable_and_fail_recording_report(self):
         result, _ = self.summary({"time-profile"}, tables={"time-profile": PROFILE_XML.replace("RemoteCoder", "OtherApp")})

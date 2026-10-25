@@ -22,7 +22,7 @@ accessibility tree on its main thread) are attributed separately, and their CPU 
 1% of app CPU or main-thread CPU, or an observed automation share is unknown.
 
 Every xctrace export loads the whole trace, so exports run one at a time and stop
-at a quarter of the host's memory or after 120 seconds. One recording or summary
+at a quarter of the host's memory for xctrace and Python combined or after 120 seconds. One recording or summary
 runs per host, and a remote run stops when its SSH client disconnects.
 """
 
@@ -33,6 +33,7 @@ import fcntl
 import hashlib
 import json
 import math
+import os
 import re
 import shlex
 import subprocess
@@ -190,7 +191,7 @@ def guarded_export(arguments: list[str], label: str):
                 if export.poll() is not None:
                     return
                 try:
-                    peak = max(peak, resident_bytes(export.pid))
+                    peak = max(peak, resident_bytes(export.pid) + resident_bytes(os.getpid()))
                     if stop.is_set():
                         return
                     available = sysctl_number("kern.memorystatus_level")
@@ -200,7 +201,7 @@ def guarded_export(arguments: list[str], label: str):
                                     "restore host monitoring before tracing again"))
                     return
                 if peak > limit or available < MINIMUM_AVAILABLE_MEMORY_PERCENT:
-                    stop_export(ExportLimitExceeded(f"stopped exporting {label}: xctrace reached {peak / 2**30:.1f} GiB (limit "
+                    stop_export(ExportLimitExceeded(f"stopped exporting {label}: xctrace and Python reached {peak / 2**30:.1f} GiB (limit "
                                 f"{limit / 2**30:.0f} GiB) with {available}% of memory available; record a shorter trace"))
                     return
 
@@ -228,24 +229,57 @@ def guarded_export(arguments: list[str], label: str):
         raise subprocess.CalledProcessError(export.returncode, command)
 
 
+def check_python_memory(label: str, limit: int) -> None:
+    used = resident_bytes(os.getpid())
+    if used > limit:
+        raise ExportLimitExceeded(f"stopped measuring {label}: Python reached {used / 2**30:.1f} GiB "
+                                  f"(limit {limit / 2**30:.0f} GiB); record a shorter trace")
+
+
+def measurement(label: str, operation, failures: dict):
+    try:
+        limit = int(sysctl_number("hw.memsize") * EXPORT_MEMORY_FRACTION)
+        check_python_memory(label, limit)
+        result = operation()
+        check_python_memory(label, limit)
+        return result
+    except ExportLimitExceeded as error:
+        failures[label] = {"status": "exceeds export limit", "unavailableReason": str(error)}
+        return None
+
+
 def table_rows(trace: str, schema: str, columns: set[str]):
     xpath = f'/trace-toc/run[@number="1"]/data/table[@schema="{schema}"]'
     values: dict[str, object] = {}
     mnemonics: list[str] = []
     kinds: set[str] = set()
+    interned_frames = {}
+    parents = []
+    next_memory_check = 0
+    limit = int(sysctl_number("hw.memsize") * EXPORT_MEMORY_FRACTION)
 
     def resolve(element: ET.Element):
         identifier = element.get("ref") or element.get("id")
         return element if identifier is None else values[identifier]
 
     with guarded_export(["--input", trace, "--xpath", xpath], schema) as export:
-        for _, element in ET.iterparse(export.stdout):
+        for index, (event, element) in enumerate(ET.iterparse(export.stdout, events=("start", "end"))):
+            if index % 1024 == 0 and time.monotonic() >= next_memory_check:
+                check_python_memory(schema, limit)
+                next_memory_check = time.monotonic() + 0.5
+            if event == "start":
+                parents.append(element)
+                continue
+            parent = parents[-2] if len(parents) > 1 else None
+            parents.pop()
             if element.tag == "schema":
                 layout = [(column.findtext("mnemonic"), column.findtext("engineering-type")) for column in element.findall("col")]
                 mnemonics = [mnemonic for mnemonic, _ in layout]
                 kinds = {kind for mnemonic, kind in layout if mnemonic in columns}
             elif element.tag == "row":
                 yield {column: resolve(child) for column, child in zip(mnemonics, element) if column in columns}
+                if parent is not None:
+                    parent.remove(element)
                 element.clear()
             elif (identifier := element.get("id")) is None:
                 continue
@@ -256,9 +290,9 @@ def table_rows(trace: str, schema: str, columns: set[str]):
                 )
             elif element.tag == "frame":
                 binary = element.find("binary")
-                values[identifier] = Frame(
-                    int(element.get("addr"), 16), None if binary is None else resolve(binary), element.get("name") or "",
-                )
+                frame = Frame(int(element.get("addr"), 16), None if binary is None else resolve(binary), element.get("name") or "")
+                identity = (frame.binary, frame.address, frame.name if frame.binary is None else "")
+                values[identifier] = interned_frames.setdefault(identity, frame)
             elif element.tag in ("backtrace", "tagged-backtrace", "text-backtrace"):
                 values[identifier] = tuple(resolve(frame) for frame in element.iter("frame"))
             elif element.tag in kinds:
@@ -751,19 +785,11 @@ def frame_statistics(samples: list[Sample], names: dict):
 
 
 def processor_trace(trace: str, run: Run, count: int, apps: list[Path]) -> dict | None:
-    try:
-        return processor_trace_functions(trace, run, count, apps)
-    except ExportLimitExceeded as error:
-        return {"schema": "processor-trace-intervals", "status": "exceeds export limit",
-                "topFunctions": None, "topAppFunctions": None, "unavailableReason": str(error)}
-
-
-def processor_trace_functions(trace: str, run: Run, count: int, apps: list[Path]) -> dict | None:
     if "processor-trace-intervals" not in run.schemas:
         return {"topFunctions": None, "unavailableReason": "no processor-trace-intervals export"} if run.template == "Processor Trace" else None
     profiles = {}
     missing = Counter()
-    frames = set()
+    limit = int(sysctl_number("hw.memsize") * EXPORT_MEMORY_FRACTION)
     columns = {"process", "name", "self-duration", "self-cycles", "self-instructions", "backtrace"}
     for row in table_rows(trace, "processor-trace-intervals", columns):
         if process_name(row.get("process")) != APP:
@@ -776,8 +802,6 @@ def processor_trace_functions(trace: str, run: Run, count: int, apps: list[Path]
             profiles[identity] = {"name": name, "frame": frame, "callIntervals": 0, "selfMs": 0,
                                   "selfCycles": 0, "selfInstructions": 0}
         entry = profiles[identity]
-        if frame is not None:
-            frames.add(frame)
         entry["callIntervals"] += 1
         for column, field in (("self-duration", "selfMs"), ("self-cycles", "selfCycles"),
                               ("self-instructions", "selfInstructions")):
@@ -787,12 +811,17 @@ def processor_trace_functions(trace: str, run: Run, count: int, apps: list[Path]
                 missing[column] += 1
             elif entry[field] is not None:
                 entry[field] += value / 1e6 if field == "selfMs" else int(value)
+    frames = {profile["frame"] for profile in profiles.values() if profile["frame"] is not None}
+    check_python_memory("processorTrace", limit)
     names, locations = symbolicate(frames, apps) if frames else ({}, {})
+    check_python_memory("processorTrace", limit)
     functions = {}
     app_functions = set()
     details = defaultdict(list)
     app_roots = app_bundle_roots(frames)
-    for profile in sorted(profiles.values(), key=lambda item: item["selfCycles"] or 0, reverse=True):
+    for index, profile in enumerate(sorted(profiles.values(), key=lambda item: item["selfCycles"] or 0, reverse=True)):
+        if index % 1024 == 0:
+            check_python_memory("processorTrace", limit)
         frame = profile["frame"]
         label = profile["name"]
         if frame is not None and frame.binary is not None:
@@ -929,19 +958,33 @@ def summarize(trace: str, frames: int, callers: list[str], apps: list[Path]) -> 
     run = recorded_run(trace)
     scroll = scroll_receipt(trace)
     render_server = MAC_RENDER_SERVER if run.platform == "macOS" else IPHONE_RENDER_SERVER
-    cpu_ms, unweighted, samples, automation_samples = (time_profile(trace) if "time-profile" in run.schemas
-                                                        else (Counter(), Counter(), [], Counter()))
+    failures = {}
+
+    def measure(label, operation):
+        return measurement(label, operation, failures)
+
+    cpu_ms, unweighted, samples, automation_samples = (
+        measure("time-profile", lambda: time_profile(trace)) if "time-profile" in run.schemas else None
+    ) or (Counter(), Counter(), [], Counter())
     app_threads = thread_ms(samples)
     app_threads_without_automation = thread_ms(sample for sample in samples if not sample.automation)
-    commits, app_frames, commit_starts = (hitch_updates(trace) if "hitches-updates" in run.schemas
-                                          else (None, set(), None))
-    gpu_ms, unavailable_gpu = gpu_ms_by_process(trace) if "metal-gpu-intervals" in run.schemas else (None, Counter())
-    hitch_rows = app_hitch_rows(trace, run.schemas)
+    commits, app_frames, commit_starts = (
+        measure("hitches-updates", lambda: hitch_updates(trace)) if "hitches-updates" in run.schemas else None
+    ) or (None, set(), None)
+    gpu_ms, unavailable_gpu = (
+        measure("metal-gpu-intervals", lambda: gpu_ms_by_process(trace)) if "metal-gpu-intervals" in run.schemas else None
+    ) or (None, Counter())
+    hitch_rows = measure("hitches", lambda: app_hitch_rows(trace, run.schemas))
     hitches = app_hitches(hitch_rows)
-    cadence = presented_frames(trace, run, scroll, app_frames)
-    swiftui = swiftui_updates(trace, run.seconds) if SWIFTUI_UPDATES in run.schemas else None
-    intervals = operation_intervals(trace, run.schemas, MOTION_SIGNPOST)
-    journey_intervals = operation_intervals(trace, run.schemas, "ReplayJourney")
+    cadence = (measure("presentedFrames", lambda: presented_frames(trace, run, scroll, app_frames))
+               if "hitches-updates" not in failures else None)
+    swiftui = measure("swiftui", lambda: swiftui_updates(trace, run.seconds)) if SWIFTUI_UPDATES in run.schemas else None
+    intervals = measure("TranscriptScroll", lambda: operation_intervals(trace, run.schemas, MOTION_SIGNPOST))
+    journey_intervals = measure("ReplayJourney", lambda: operation_intervals(trace, run.schemas, "ReplayJourney"))
+    file_summary = measure("fileActivity", lambda: file_activity(trace, run.schemas))
+    system_summary = measure("systemTrace", lambda: system_trace(trace, run.schemas))
+    concurrency_summary = measure("swiftConcurrency", lambda: swift_concurrency(trace, run.schemas))
+    processor_summary = measure("processorTrace", lambda: processor_trace(trace, run, frames, apps))
 
     all_frames = {frame for sample in samples for frame in sample.stack}
     names, locations = symbolicate(all_frames, apps) if frames or callers else ({}, {})
@@ -965,7 +1008,8 @@ def summarize(trace: str, frames: int, callers: list[str], apps: list[Path]) -> 
         return round(value / run.seconds, 2)
 
     def cpu_summary(process: str) -> dict:
-        reason = ("trace did not collect time-profile" if "time-profile" not in run.schemas else
+        reason = (failures["time-profile"]["unavailableReason"] if "time-profile" in failures else
+                  "trace did not collect time-profile" if "time-profile" not in run.schemas else
                   f"time-profile has {unweighted[process]} samples without a weight for {process}" if unweighted[process] else
                   f"time-profile has no samples for {process}; keep the app foreground and attach to its process"
                   if process not in cpu_ms else None)
@@ -977,6 +1021,7 @@ def summarize(trace: str, frames: int, callers: list[str], apps: list[Path]) -> 
 
     def gpu_summary(process: str) -> dict:
         reason = (
+            failures["metal-gpu-intervals"]["unavailableReason"] if "metal-gpu-intervals" in failures else
             "trace did not collect metal-gpu-intervals" if gpu_ms is None else
             f"metal-gpu-intervals has {unavailable_gpu[process]} contributing rows with unavailable durations for {process}"
             if unavailable_gpu[process] else None
@@ -1013,30 +1058,32 @@ def summarize(trace: str, frames: int, callers: list[str], apps: list[Path]) -> 
             "cpuMsByThread": None if app_cpu["cpuUnavailableReason"] else {name: round(ms, 1) for name, ms in app_threads.most_common(8)},
             "mainThreadCpuMs": None if app_cpu["cpuUnavailableReason"] else round(app_threads["main"], 1),
             "mainThreadCpuMsExcludingAutomation": None if app_cpu["cpuUnavailableReason"] else round(app_threads_without_automation["main"], 1),
-            "automation": automation_summary(samples, automation_samples, unweighted[APP]) if "time-profile" in run.schemas else {
+            "automation": automation_summary(samples, automation_samples, unweighted[APP]) if "time-profile" in run.schemas and "time-profile" not in failures else {
                 "samples": None, "samplesByThread": None, "cpuMs": None, "cpuMsByThread": None,
-                "unavailableReason": "trace has no time-profile stacks to check for XCTest automation",
+                "unavailableReason": failures.get("time-profile", {}).get("unavailableReason", "trace has no time-profile stacks to check for XCTest automation"),
             },
             "commits": commits[APP] if commits is not None else None,
             "commitsPerSecond": rate(commits[APP]) if commits is not None else None,
-            "commitsUnavailableReason": "trace did not collect hitches-updates" if commits is None else None,
+            "commitsUnavailableReason": failures.get("hitches-updates", {}).get("unavailableReason", "trace did not collect hitches-updates") if commits is None else None,
             **gpu_summary(APP),
             **hitches,
+            "hitchesUnavailableReason": failures.get("hitches", {}).get("unavailableReason"),
             "presentedFrames": cadence,
         },
         "motion": motion_summary(intervals, samples, app_cpu["cpuUnavailableReason"], hitch_rows, commit_starts, names,
                                  frames) if intervals else None,
         "motionUnavailableReason": (
+            failures["TranscriptScroll"]["unavailableReason"] if "TranscriptScroll" in failures else
             "trace has no OSSignpostIntervals table" if intervals is None else
             f"no {MOTION_SIGNPOST} interval completed in {APP}" if not intervals else None
         ),
         "mainTopFunctionsSelfMs": top_functions([sample for sample in samples if sample.thread == "main"], names, frames)
-                                  if frames else None,
-        "appFramesInclusiveMs": heaviest(inclusive["app"], frames),
-        "appFramesInclusiveMsExcludingAutomation": heaviest(clean_inclusive["app"], frames),
-        "systemFramesInclusiveMs": heaviest(inclusive["system"], frames),
-        "appSelfMsByBinary": heaviest(self_by_binary, 10),
-        "nearestAppCallersMs": {
+                                  if frames and "time-profile" not in failures else None,
+        "appFramesInclusiveMs": None if "time-profile" in failures else heaviest(inclusive["app"], frames),
+        "appFramesInclusiveMsExcludingAutomation": None if "time-profile" in failures else heaviest(clean_inclusive["app"], frames),
+        "systemFramesInclusiveMs": None if "time-profile" in failures else heaviest(inclusive["system"], frames),
+        "appSelfMsByBinary": None if "time-profile" in failures else heaviest(self_by_binary, 10),
+        "nearestAppCallersMs": None if "time-profile" in failures else {
             pattern: heaviest(nearest_app_callers(stacks, names, pattern), frames or 10) for pattern in callers
         },
         "renderServer": {
@@ -1044,10 +1091,11 @@ def summarize(trace: str, frames: int, callers: list[str], apps: list[Path]) -> 
             **cpu_summary(render_server),
             **gpu_summary(render_server),
         } if render_server in cpu_ms or unweighted[render_server] else None,
-        "swiftui": swiftui,
-        "fileActivity": file_activity(trace, run.schemas),
-        "systemTrace": system_trace(trace, run.schemas),
-        "swiftConcurrency": swift_concurrency(trace, run.schemas),
+        "swiftui": swiftui if "swiftui" not in failures else {**failures["swiftui"], "updates": None},
+        "fileActivity": file_summary if "fileActivity" not in failures else {**failures["fileActivity"], "paths": None},
+        "systemTrace": system_summary if "systemTrace" not in failures else {**failures["systemTrace"], "blockedMsByThreadAndReason": None},
+        "swiftConcurrency": concurrency_summary if "swiftConcurrency" not in failures else {**failures["swiftConcurrency"], "taskStateMs": None},
+        "exportFailures": failures,
         "exportedSchemas": sorted(run.schemas),
         "symbolLocations": [
             {"binary": frame.binary.name, "uuid": frame.binary.uuid, "address": hex(frame.address),
@@ -1055,8 +1103,10 @@ def summarize(trace: str, frames: int, callers: list[str], apps: list[Path]) -> 
              "inlineFrames": list(locations.get(frame, ())),
              "unavailableReason": None if locations.get(frame) else "no matching debug information for this address"}
             for frame in location_frames if frame.binary is not None
-        ] if frames or callers else None,
-        "processorTrace": processor_trace(trace, run, frames, apps),
+        ] if (frames or callers) and "time-profile" not in failures else None,
+        "processorTrace": processor_summary if "processorTrace" not in failures else {
+            **failures["processorTrace"], "schema": "processor-trace-intervals",
+            "topFunctions": None, "topAppFunctions": None},
         "allocations": {"unavailableReason": "xctrace does not expose allocation events in this trace", "events": None}
                        if run.template == "Allocations" else None,
     }
