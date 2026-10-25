@@ -1,20 +1,37 @@
 import argparse
+import asyncio
 import datetime
 import json
-import os
 import sys
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
 
 from . import app_telemetry_store as store
+from .app_telemetry_analysis import (
+    MIN_MEASURED_MINUTES,
+    aggregate_states,
+    compare,
+    group_diagnostics,
+)
+from .app_telemetry_builds import (
+    Attribution,
+    BuildSelectionError,
+    RunSpan,
+    attribute_window,
+    parse_instant,
+    run_spans,
+    select_build,
+    span_extent,
+)
 from .app_telemetry_summary import (
     ACTIVITY_FIELDS,
     ASSOCIATION_NOTE,
     CONTEXT_FIELDS,
+    GPU_NOTE,
     INTERVAL_KINDS,
     TIMELINE_FIELDS,
     activity,
+    call_stack_tree,
     diagnostic,
     export_costs,
     iso,
@@ -26,10 +43,8 @@ from .app_telemetry_summary import (
     telemetry_runs,
     timeline,
 )
+from .app_telemetry_symbols import Capture, annotate_heaviest, profile, symbolicate
 from .diagnostics import _parse_since
-
-sys.path.insert(0, str(store.ROOT / "scripts"))
-from symbols import DEVICE_SUPPORT_ROOT, atos, symbol_files  # noqa: E402
 
 SEGMENT_SLACK_MS = 3_600_000
 METRICKIT_REPORT_DUE = datetime.timedelta(hours=36)
@@ -65,9 +80,20 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
     child = command("metrickit", "MetricKit daily reports: totals, normalized rates, signposts, flags", "14d")
     child.add_argument("--full", action="store_true", help="include subintervals, states and state entries")
     child.set_defaults(func=cmd_metrickit)
+    command("states", "MetricKit state entries per domain, label, attributed build and device model, with "
+            "diagnostics grouped by the states active before them", "14d").set_defaults(func=cmd_states)
+    child = command("compare", "what changed between two builds, per device model and app state", "14d")
+    child.add_argument("--before", required=True, help="build number, version or source commit prefix")
+    child.add_argument("--after", required=True, help="build number, version or source commit prefix")
+    child.add_argument("--by", action="append", choices=CONTEXT_FIELDS,
+                       help=f"state fields to compare by (repeatable; default: {' '.join(ACTIVITY_FIELDS)})")
+    child.add_argument("--min-minutes", type=float, default=MIN_MEASURED_MINUTES,
+                       help=f"measured minutes each side needs per device model (default: {MIN_MEASURED_MINUTES:g})")
+    child.set_defaults(func=cmd_compare)
     child = command("diagnostics", "MetricKit crash, hang, CPU, memory and disk-write diagnostics", "14d")
     child.add_argument("--symbolicate", action="store_true",
-                       help="name frames with atos from retained dSYMs that match the binary UUID")
+                       help="name every frame of every call stack tree with atos from retained dSYMs and "
+                            "DeviceSupport symbols that match the binary UUID")
     child.set_defaults(func=cmd_diagnostics)
     child = command("counts", "log record counts per minute or hour by subsystem, category or level", "24h")
     child.add_argument("--by", choices=["subsystem", "category", "level"], default="subsystem")
@@ -132,9 +158,10 @@ def _wanted(segment: store.Segment, since: float, until: float) -> bool:
     return stamp is not None and since * 1000 <= stamp <= until * 1000 + SEGMENT_SLACK_MS
 
 
-def _select(args: argparse.Namespace, kind: str) -> tuple[list[tuple[store.Segment, dict]], dict]:
-    since, until = _window(args)
-    listings = _listings(args)
+def _select(args: argparse.Namespace, kind: str, listings: list[store.StoreListing] | None = None,
+            window: tuple[float, float] | None = None) -> tuple[list[tuple[store.Segment, dict]], dict]:
+    since, until = window or _window(args)
+    listings = _listings(args) if listings is None else listings
     wanted = [
         segment
         for listing in listings for segment in listing.segments or ()
@@ -152,10 +179,10 @@ def _select(args: argparse.Namespace, kind: str) -> tuple[list[tuple[store.Segme
     return entries, coverage
 
 
-def _emit(value: dict) -> int:
+def _emit(value: dict, code: int = 0) -> int:
     json.dump(value, sys.stdout, indent=1)
     sys.stdout.write("\n")
-    return 0
+    return code
 
 
 async def cmd_stores(args: argparse.Namespace) -> int:
@@ -191,10 +218,13 @@ def _overlaps(report: dict, since: str, until: str) -> bool:
     return since <= str(report.get("receivedAt") or "") <= until
 
 
+def _iso_window(window: tuple[float, float]) -> tuple[str, str]:
+    return (iso(datetime.datetime.fromtimestamp(window[0], datetime.UTC)),
+            iso(datetime.datetime.fromtimestamp(window[1], datetime.UTC)))
+
+
 def _window_iso(args: argparse.Namespace) -> tuple[str, str]:
-    since, until = _window(args)
-    return (iso(datetime.datetime.fromtimestamp(since, datetime.UTC)),
-            iso(datetime.datetime.fromtimestamp(until, datetime.UTC)))
+    return _iso_window(_window(args))
 
 
 def _metrickit_records(entries: list[tuple[store.Segment, dict]], kind: str) -> list[tuple[store.Segment, dict]]:
@@ -208,18 +238,63 @@ def _metrickit_records(entries: list[tuple[store.Segment, dict]], kind: str) -> 
     return records
 
 
-async def cmd_metrickit(args: argparse.Namespace) -> int:
-    entries, coverage = _select(args, "metrickit")
+def _attributed_runs(args: argparse.Namespace, listings: list[store.StoreListing],
+                     windows: list[tuple[str | None, object]]) -> tuple[list[dict], list[RunSpan], dict]:
+    since, until = _window(args)
+    for start, seconds in windows:
+        if isinstance(start, str) and isinstance(seconds, (int, float)):
+            begin = parse_instant(start)
+            since = min(since, begin.timestamp())
+            until = max(until, (begin + datetime.timedelta(seconds=seconds)).timestamp())
+    runs, coverage = _telemetry(args, listings, (since, until))
+    spans = run_spans(runs)
+    return runs, spans, {
+        "note": "Builds come from the run headers of this device: a run lasts from its startedAt to its last record.",
+        "window": coverage["window"], **span_extent(spans), "losses": coverage["losses"],
+        **({"unreadableSegments": coverage["unreadableSegments"]} if "unreadableSegments" in coverage else {}),
+    }
+
+
+def _metrickit_window(args: argparse.Namespace, listings: list[store.StoreListing]
+                      ) -> tuple[dict, list[tuple[dict, dict]], list[tuple[dict, dict]]]:
+    entries, coverage = _select(args, "metrickit", listings)
     since, until = _window_iso(args)
-    reports = [report for segment, record in _metrickit_records(entries, "metrics")
-               if _overlaps(report := metrickit_report(record, segment.host, segment.device), since, until)]
+    metrics = [(summary, record["report"]) for segment, record in _metrickit_records(entries, "metrics")
+               if _overlaps(summary := metrickit_report(record, segment.host, segment.device), since, until)]
+    diagnostics = [(item, record) for segment, record in _metrickit_records(entries, "diagnostic")
+                   if _overlaps(item := diagnostic(record, segment.host, segment.device), since, until)]
+    diagnostics.sort(key=lambda pair: pair[0].get("coverageStart") or pair[0].get("receivedAt") or "")
+    return coverage, metrics, diagnostics
+
+
+def _coverages(pairs: list[tuple[dict, dict]]) -> list[tuple[str | None, object]]:
+    return [(summary.get("coverageStart"), summary.get("coverageSeconds")) for summary, _ in pairs]
+
+
+def _attributed(spans: list[RunSpan], report: dict) -> Attribution:
+    return attribute_window(spans, report.get("coverageStart"), report.get("coverageSeconds"))
+
+
+async def cmd_metrickit(args: argparse.Namespace) -> int:
+    listings = _listings(args)
+    coverage, metrics, _ = _metrickit_window(args, listings)
+    _, spans, builds = _attributed_runs(args, listings, _coverages(metrics))
+    reports = [summary for summary, _ in metrics]
+    for report in reports:
+        attribution = _attributed(spans, report)
+        report["attributedBuild"] = attribution.as_json()
+        if "subintervals" in report:
+            report["subintervals"]["attributedBuild"] = attribution.status
+            report["subintervals"]["buildNote"] = ("Entries carry no start time, so each one has the build status of "
+                                                   "the whole report coverage.")
     if not args.full:
         for report in reports:
             report.pop("subintervals", None)
             report.pop("stateEntries", None)
             report.pop("states", None)
+    since, until = _window_iso(args)
     reports.sort(key=lambda report: (report.get("coverageStart") or "", report.get("coverageSeconds") or 0))
-    return _emit({"coverage": coverage, "reports": reports,
+    return _emit({"coverage": coverage, "builds": builds, "reports": reports,
                   "uncovered": _uncovered(reports, since, until, datetime.datetime.now(datetime.UTC))})
 
 
@@ -252,42 +327,55 @@ def _uncovered(reports: list[dict], since: str, until: str, now: datetime.dateti
             "note": "Spans of the window no MetricKit report covers; a report normally arrives within a day."}
 
 
-def _system_symbol_candidates(diagnostics: list[dict]) -> list[Path]:
-    names = {frame["binary"] for item in diagnostics for frame in item["heaviestStack"] if frame.get("binary")}
-    sources = {tuple(item["symbolSource"].values()) for item in diagnostics}
-    candidates = []
-    for device_type, version, build in sources:
-        for root in (Path.home() / DEVICE_SUPPORT_ROOT).glob(f"{device_type} {version} ({build})/*/Symbols"):
-            candidates += [Path(directory) / name for directory, _, files in os.walk(root)
-                           for name in files if name in names]
-    return candidates
-
-
-def _symbolicate(diagnostics: list[dict]) -> dict:
-    frames = [frame for item in diagnostics for frame in item["heaviestStack"]
-              if isinstance(frame.get("address"), int) and isinstance(frame.get("offset"), int)]
-    uuids = {frame["uuid"] for frame in frames}
-    files = symbol_files([], _system_symbol_candidates(diagnostics))
-    for uuid in uuids & files.keys():
-        binary_frames = [frame for frame in frames if frame["uuid"] == uuid]
-        base = Counter(frame["address"] - frame["offset"] for frame in binary_frames).most_common(1)[0][0]
-        names = atos(files[uuid], base, [base + frame["offset"] for frame in binary_frames])
-        for frame, symbols in zip(binary_frames, names, strict=True):
-            frame["symbols"] = list(symbols)
-    missing = sorted({frame["binary"] or frame["uuid"] for frame in frames if frame["uuid"] not in files})
-    return {"symbolicatedBinaries": len(uuids & files.keys()), "binariesWithoutSymbols": missing}
-
-
 async def cmd_diagnostics(args: argparse.Namespace) -> int:
-    entries, coverage = _select(args, "metrickit")
-    since, until = _window_iso(args)
-    items = [item for segment, record in _metrickit_records(entries, "diagnostic")
-             if _overlaps(item := diagnostic(record, segment.host, segment.device), since, until)]
-    items.sort(key=lambda item: item.get("coverageStart") or item.get("receivedAt") or "")
-    result: dict = {"coverage": coverage, "diagnostics": items}
+    listings = _listings(args)
+    coverage, _, pairs = _metrickit_window(args, listings)
+    _, spans, builds = _attributed_runs(args, listings, _coverages(pairs))
+    for item, _ in pairs:
+        item["attributedBuild"] = _attributed(spans, item).as_json()
+    items = [item for item, _ in pairs]
+    result: dict = {"coverage": coverage, "builds": builds, "diagnostics": items}
     if args.symbolicate:
-        result["symbolication"] = _symbolicate(items)
+        captures = [Capture(call_stack_tree(record), item["attributedBuild"]["label"], item["symbolSource"])
+                    for item, record in pairs]
+        symbols = await asyncio.to_thread(symbolicate, captures)
+        for (item, _), capture in zip(pairs, captures, strict=True):
+            annotate_heaviest(item["heaviestStack"], capture.tree, symbols)
+            item["profile"] = profile(capture.tree, symbols)
+        result["symbolication"] = symbols.summary()
     return _emit(result)
+
+
+async def cmd_states(args: argparse.Namespace) -> int:
+    listings = _listings(args)
+    coverage, metrics, pairs = _metrickit_window(args, listings)
+    _, spans, builds = _attributed_runs(args, listings, _coverages(metrics) + _coverages(pairs))
+    attributed = [(summary, report, _attributed(spans, summary)) for summary, report in metrics]
+    items = [item for item, _ in pairs]
+    for item in items:
+        item["attributedBuild"] = _attributed(spans, item).as_json()
+    return _emit({"coverage": coverage, "builds": builds, **aggregate_states(attributed),
+                  "diagnostics": {"total": len(items), "byActiveStates": group_diagnostics(items)}})
+
+
+async def cmd_compare(args: argparse.Namespace) -> int:
+    listings = _listings(args)
+    coverage, metrics, _ = _metrickit_window(args, listings)
+    runs, spans, builds = _attributed_runs(args, listings, _coverages(metrics))
+    since, until = _window_iso(args)
+    start, end = parse_instant(since), parse_instant(until)
+    present = [span.build for span in spans if span.end >= start and span.start <= end]
+    try:
+        before, after = select_build(present, args.before), select_build(present, args.after)
+    except BuildSelectionError as error:
+        return _emit({"error": str(error), "builds": [build.label for build in error.candidates]}, 2)
+    if before == after:
+        return _emit({"error": "--before and --after name the same build", "builds": [before.label]}, 2)
+    attributed = [(summary, report, _attributed(spans, summary)) for summary, report in metrics]
+    result = compare(runs, {span.run_id: span for span in spans}, attributed, before, after,
+                     tuple(args.by or ACTIVITY_FIELDS), since, until, args.min_minutes)
+    result["reportsByAttribution"] = dict(Counter(attribution.status for _, _, attribution in attributed))
+    return _emit({"coverage": coverage, "builds": builds, **result}, 3 if result["refused"] else 0)
 
 
 async def cmd_counts(args: argparse.Namespace) -> int:
@@ -321,9 +409,10 @@ async def cmd_persistence(args: argparse.Namespace) -> int:
     })
 
 
-def _telemetry(args: argparse.Namespace) -> tuple[list[dict], dict]:
-    entries, coverage = _select(args, "telemetry")
-    since, until = _window_iso(args)
+def _telemetry(args: argparse.Namespace, listings: list[store.StoreListing] | None = None,
+               window: tuple[float, float] | None = None) -> tuple[list[dict], dict]:
+    entries, coverage = _select(args, "telemetry", listings, window)
+    since, until = _iso_window(window or _window(args))
     records = [record for _, entry in entries for record in entry.get("telemetry", [])
                if record.get("recordType") == "run" or since <= str(record.get("ts", "")) <= until]
     runs = telemetry_runs(records)
@@ -345,7 +434,7 @@ async def cmd_timeline(args: argparse.Namespace) -> int:
     runs, coverage = _telemetry(args)
     fields = args.by or TIMELINE_FIELDS
     return _emit({
-        "coverage": coverage, "note": ASSOCIATION_NOTE, "kinds": INTERVAL_KINDS,
+        "coverage": coverage, "note": ASSOCIATION_NOTE, "gpuNote": GPU_NOTE, "kinds": INTERVAL_KINDS,
         "runs": [{"runID": run["runID"], "stretches": timeline(sample_intervals(run["records"]), fields)}
                  for run in runs if run["records"]],
     })
@@ -354,7 +443,7 @@ async def cmd_timeline(args: argparse.Namespace) -> int:
 async def cmd_activity(args: argparse.Namespace) -> int:
     runs, coverage = _telemetry(args)
     intervals = [interval for run in runs for interval in sample_intervals(run["records"])]
-    return _emit({"coverage": coverage, "note": ASSOCIATION_NOTE, "kinds": INTERVAL_KINDS,
+    return _emit({"coverage": coverage, "note": ASSOCIATION_NOTE, "gpuNote": GPU_NOTE, "kinds": INTERVAL_KINDS,
                   "states": activity(intervals, args.by or ACTIVITY_FIELDS)})
 
 
