@@ -28,7 +28,7 @@ owner.
 | `Turns`, `Questions` | `TurnRegistry`, `ActiveJob`, `TurnDispatcher`, `TurnStops`; `QuestionReplica`, question flow and editor logic |
 | `Accounts`, `Models`, `Usage` | Account models and names; `AgentProvider`, model and reasoning catalogs, `NewChatDefaults`, `ModelPickerPreferences`; usage rows |
 | `Files`, `Directories`, `Images`, `Voice`, `Notifications` | Host file references, uploads and staging; `DirectoryTree`; image preparation; realtime wire, voice history and call values; completion payloads, routing and `DeviceRegistration` |
-| `Feedback`, `Energy`, `Diagnostics`, `Concurrency` | The pure haptic event catalog; `AppEnergyPolicy`; `DiagnosticsOutbox` and performance records; `BoundedFanOut` |
+| `Feedback`, `Energy`, `Diagnostics`, `Concurrency` | The pure haptic event catalog; `AppEnergyPolicy`; `AppLogger`, `DiagnosticsOutbox` and performance records; `BoundedFanOut` |
 
 A type that needs UIKit, SpeechKit, WebRTC or another platform framework stays
 in the app. That includes the SpeechKit recording writer, the platform

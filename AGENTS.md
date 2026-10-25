@@ -359,8 +359,9 @@ measurably beat SwiftUI.
   that state at launch and on every change (category `Energy`), so uploaded
   app logs show which state a period ran in.
 - Known dead end: on iOS, `OSLogStore` ignores `position(date:)` and reverse
-  enumeration, and predicates do not shorten its scan. Those APIs cannot bound
-  the cost of the log export.
+  enumeration (Apple DTS r.87416514, r.87622922), and predicates do not shorten
+  its scan, so every read enumerates the whole process lifetime. App logs reach
+  the host through `AppLogger` at the call instead; never read them back.
 
 ## System invariants
 
@@ -418,8 +419,9 @@ desktop-reconciliation decisions, deployment logs and launchd redirects. Query
 the journal with `just gateway-journal ...`, and use
 `just gateway-desktop-journal ...` to see why the shared-Codex launcher did or
 did not stop and reopen ChatGPT. Never log the gateway bearer token. App
-lifecycle evidence uses persisted `.notice` or higher; `.debug` is for
-high-frequency stream noise the journal already captures.
+lifecycle evidence goes through `AppLogger` at `.notice` or higher; a plain
+`os.Logger` `.debug` is for high-frequency stream noise the journal already
+captures.
 
 ## Documentation map
 

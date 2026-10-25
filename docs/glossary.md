@@ -95,6 +95,7 @@ One line per term, with the type that owns it and the document that holds its co
 | Live Navigation | Agent-driven live-location guidance on the phone | `host-daemon-rs/src/navigation.rs` | [Live navigation](live-navigation.md) |
 | LPSE | The Location Push Service Extension that wakes the app for one-shot location | `RemoteCoderLocationPushService/` | [Live navigation](live-navigation.md) |
 | Energy state | Normal or conserving rendering and prefetch, chosen from Low Power Mode and thermal state | `AppEnergyPolicy` | [Persistence and energy](persistence-energy.md) |
+| App logs | Records the app logs for the host copy: each `AppLogger` call goes to OSLog and a bounded in-memory queue that drains into uploaded segments | `AppLogger`, `AppLogSink`, `DiagnosticsOutbox` | [Host observability](host-observability.md#app-logs) |
 | Field telemetry | Process CPU, wakeups and footprint sampled with the app state that held, uploaded as versioned batches | `ProcessResourceSampler`, `TelemetryContext`, `DiagnosticsOutbox` | [Host observability](host-observability.md#field-telemetry) |
 | Usage context | The app state a telemetry sample was taken in; absent fields are unknown | `TelemetryContext` | [Host observability](host-observability.md#field-telemetry) |
 | Haptic | A named feedback event from the one catalog | `HapticService` | [Haptics](haptics.md) |

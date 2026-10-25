@@ -374,32 +374,36 @@ short session but the records interleave.
 
 OSLog on the phone rotates away within hours, so by the time anyone asks about
 a rendering, reconnect, scenePhase or Live Activity problem the evidence is
-gone. `DiagnosticsOutbox` (`Core/Diagnostics/`) drains
-`OSLogStore(scope: .currentProcessIdentifier)` — every subsystem and every
-category the process logged, not a curated subset — into JSONL segments under
-Application Support, then ships them to the host. Keep it that way: the host
-copy exists so a future session can investigate a reported issue without
-asking for a repro.
+gone. The app therefore keeps its own copy at the call: `AppLogger`
+(`Core/Diagnostics/`) logs each message to OSLog, so Console, Instruments and
+sysdiagnose see it as before, and queues the same record in `AppLogSink`.
+`DiagnosticsOutbox` writes queued records into JSONL segments under
+Application Support and ships them to the host.
 
-**Log levels decide what the host copy can see.** On iOS a `.debug` message is
-memory-only: persisting it needs a logging configuration profile, and both
-mechanisms for that (`log config`, the `OSLogPreferences` Info.plist key) are
-macOS-only. `OSLogStore` therefore never returns a `.debug` record, so
-choosing `.debug` is choosing invisibility — correct only for high-frequency
-stream-path noise the gateway journal already captures better, and wrong for
-anything else. In this app:
+The host copy holds what RemoteCoder logged. Records from system frameworks,
+dependencies such as SpeechKit and code logging without a subsystem stay in the
+device's unified log and leave it only in a sysdiagnose. Reading them back is
+not affordable: `OSLogStore(scope: .currentProcessIdentifier)` on iOS ignores
+start positions and reverse enumeration (Apple DTS r.87416514, r.87622922), so
+every read enumerates everything the process logged since launch. That scan
+took a third of the app's CPU in the field while RemoteCoder's own records were
+3.5% of what it exported. A failure that matters to RemoteCoder reaches its
+own log where the app handles it, for example a thrown SpeechKit error.
+
+**Log levels.** `AppLogger` offers `notice`, `info`, `error` and `fault`, and
+every level reaches the host copy.
 
 - `.notice` is the default and means "I want to read this back later". Use it
   for lifecycle, state transitions, decisions and outcomes.
 - `.error` / `.fault` for failures, as usual.
-- `.debug` only for per-frame or per-item logging on a streaming path, and
-  only where the journal holds the same information. The existing exceptions
-  are `GatewayClient.logWebSocketFrame`, its two notification-routing
-  lines, and the three gateway-note sites in `ChatTargetModel`; each carries
-  a comment saying why. Adding one is a
-  deliberate decision, not a default.
-- `.info` persists only while a log stream is attached, so it reaches the host
-  copy erratically. Prefer `.notice` for anything you would want to find later.
+- `.info` for detail; Console shows it only while a log stream is attached.
+- `.debug` is not part of `AppLogger`. Per-frame or per-item logging on a
+  streaming path, where the journal holds the same information, uses a plain
+  `os.Logger` with deferred `OSLogMessage` formatting and never reaches the
+  host. The existing exceptions are `GatewayClient.logWebSocketFrame`, its two
+  notification-routing lines, the three gateway-note sites in
+  `ChatTargetModel`, the haptic player's fallbacks and the streaming-motion
+  probe. Adding one is a deliberate decision, not a default.
 
 Gateway frame decode failures record the text/binary opcode, byte count, header
 or envelope decode stage, error kind and bounded coding path before closing the
@@ -420,49 +424,43 @@ transfers that fit those budgets.
 Backgrounding suspends probes; activation and delayed scheduler wakes reset
 the normal grace while preserving an announced frame's original bound.
 
-**Interpolated values need `privacy: .public`.** OSLog redacts dynamic values
-by default, and reading your own process's store does not lift that — an
-unannotated `\(path)` arrives on the host as `<private>`, which leaves the
-message text and drops the one thing that made it worth logging. So every
-interpolation in an app log call carries `privacy: .public`. The exception is
-anything that could be a credential — tokens, API keys, `Authorization` values
-— which stays redacted and is logged as a fingerprint instead, the way the
-gateway does for push tokens. This is not a relaxation of
+**Messages are public text.** `AppLogger` takes a formatted `String` and hands
+it to OSLog as one `.public` value and to the host copy unchanged, so neither
+redacts anything. Anything that could be a credential — tokens, API keys,
+`Authorization` values — is logged as a fingerprint before it reaches the
+logger, the way the gateway does for push tokens. This is not a relaxation of
 privacy: the gateway journal already stores full prompts and payloads on the
 same disk over the same authenticated channel, so redacting paths and error
 detail in the app's own uploads would protect nothing while making the host
 copy useless for its purpose.
 
-- **Cursor.** A drain resumes from the last drained date *plus* the signature
-  of the last record emitted at that date. A date alone loses entries that
-  share a timestamp, and re-emits the boundary entry; `AppLogResume` is a pure
-  value so both behaviours are unit-tested. A drain streams the store and writes
-  a segment every 10,000 kept records or 4 MiB, advancing the cursor and
-  enforcing the queue cap per segment, so neither memory nor disk grows with the
-  backlog.
-- **Cadence.** Every 5 minutes while the scene is active, and on background.
-  The interval counts from the start of the last successful scan, so a
-  foreground soon after a background scan does not restart it; launch and a
-  foreground past an overdue interval wait a full 5 minutes, because a scan
-  costs seconds of CPU and would land exactly when the user returns to the
-  app. An interval or background drain within 60 s of a successful scan's
-  start skips the scan and records `collection: coalesced`; it still writes
-  telemetry and uploads pending segments. A failed or interrupted scan stays
-  due. The Settings export always scans. Drains run at utility priority. The
-  background drain holds a background task until the lifecycle settles; if iOS
-  expires the hold, the scan stops between entries, keeps the segments it
-  wrote, skips the upload and records `collection: cancelled`, and the hold is
-  released at once. `DiagnosticsLifecycle` owns one latest-state worker;
-  superseded background drains cannot stop a reactivated pump, and host
-  changes do not rescan logs. Overlapping outbox drains share one scan/upload
-  pass. Export records report `collection` (`collected`, `coalesced`,
-  `failed`, `cancelled`), `storeOpenMs` and `enumeratorSetupMs`; `scanMs`
-  includes both, and records from older builds lack all three. Each pass rescans the
-  process's whole log store, because iOS `OSLogStore`
-  ignores start positions and reverse enumeration, so its cost grows with
-  process lifetime. The interval trades that CPU against the entries a crash
-  or kill can lose: the store is process-scoped, so undrained entries are gone
-  once the process dies.
+- **Queue.** `AppLogSink.shared` holds records under a 2 MiB budget, counting
+  message and category bytes plus a fixed per-record overhead; that is about
+  three times the busiest five minutes observed. Over budget it drops the
+  oldest records down to three quarters, and a single record above an eighth
+  of the budget is dropped on arrival; every drop becomes a `loss` record
+  (`logRecords`). Crossing half the budget asks the outbox once for an early
+  drain (`highWater`). A failed segment write puts its records back and
+  disarms that request until the next drain, so a full disk retries at the
+  interval instead of on every log call. Records still in memory when the
+  process dies are lost; background, high-water and Mac quit writes bound
+  that window.
+- **Cadence.** Every 5 minutes while the scene is active, on background and at
+  high water; the Mac also writes the queue to disk at quit
+  (`persistPending`). Drains run at utility priority. A drain writes the queue
+  into segments of at most 10,000 records or 4 MiB, flushes telemetry, then
+  uploads. An overlapping drain writes the queue to disk at once and then joins
+  the running upload. The background drain holds a background task until the
+  lifecycle settles; if iOS expires the hold, the upload is skipped and the
+  hold is released at once. `DiagnosticsLifecycle` owns one latest-state
+  worker; superseded background drains cannot stop a reactivated pump.
+  `stopPumping` waits for a running drain, so benchmark teardown can delete
+  storage after it. Export records report `logWrite` (`written` or `failed`,
+  absent when nothing was queued), `kept`, `segments`, `bytes`, `encodeMs`,
+  `writeMs` and the upload costs. Records from builds that scanned OSLog carry
+  `collection`, `scanned`, `scanMs`, `storeOpenMs` and `enumeratorSetupMs`
+  instead. The Settings export persists the queue and joins every pending
+  segment, export-only ones included, into one file.
 - **Bounded.** 50 MB of undelivered segments on device. Over the cap, raw log
   segments go first, then telemetry batches, then MetricKit reports, oldest
   first within each, checked after every segment and telemetry batch written;
