@@ -27,7 +27,7 @@ struct PersistenceMetricsTests {
 
         let context = UsageContext(scene: .active, surface: .chat, turnRunningVisible: true, voiceCall: false,
             thermal: .nominal, lowPower: false)
-        let resources = ProcessResources(cpuUserNanoseconds: 1, cpuSystemNanoseconds: 1,
+        let resources = ProcessResources(cpuUserNanoseconds: 1, cpuSystemNanoseconds: 1, gpuNanoseconds: 0,
             interruptWakeups: 0, idleWakeups: 0, timerWakeups: 0, footprintBytes: 1)
         let line = TelemetryLine(runID: "test", seq: 1, at: .now, monoNs: 1, record: .sample(
             ProcessSample(reason: .interval, resources: resources, readNanoseconds: 1,

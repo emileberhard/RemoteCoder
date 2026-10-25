@@ -24,19 +24,24 @@ final class TelemetryContext {
     }
 
     func start() {
-        guard let sampler, observation == nil else { return }
+        guard sampler != nil, observation == nil else { return }
         device.start()
         network.start()
         observation = Task { [weak self] in
             for await context in Observations({ @MainActor [weak self] in self?.current() }) {
                 guard let context, !Task.isCancelled else { continue }
-                sampler.update(context)
+                self?.publish(context)
             }
         }
     }
 
     func sceneChanged() {
-        sampler?.update(current())
+        publish(current())
+    }
+
+    private func publish(_ context: UsageContext) {
+        sampler?.update(context)
+        AppPerformanceDiagnostics.shared.usageChanged(context, conservesEnergy: energy.policy.conservesEnergy)
     }
 
     func stop() {

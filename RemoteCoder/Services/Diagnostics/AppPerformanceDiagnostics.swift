@@ -2,22 +2,18 @@ import Foundation
 import MetricKit
 import OSLog
 import StateReporting
+import Synchronization
 
-/// Process-lifetime ownership of Apple's report streams and the two foreground
-/// state domains. Apple reports are delayed/sampled; silence is not a health check.
+/// Process-lifetime ownership of Apple's report streams and the StateReporting
+/// domains. Apple reports are delayed/sampled; silence is not a health check.
 actor AppPerformanceDiagnostics {
     static let shared = AppPerformanceDiagnostics()
     nonisolated static let signposter = OSSignposter(logHandle: MetricManager.logHandle(category: "History"))
     nonisolated static let pointsOfInterest = OSSignposter(subsystem: "RemoteCoder", category: .pointsOfInterest)
 
-    enum Provider: String, Sendable { case codex, claude }
-    enum LoadingMode: String, Sendable { case cache, network, mixed }
-    enum HistoryState: String, Sendable { case opening, paging }
-
     @ReportableMetadata
     fileprivate struct StableMetadata: Sendable {
         let provider: String
-        let loadingMode: String
     }
 
     @ReportableMetadata
@@ -27,25 +23,37 @@ actor AppPerformanceDiagnostics {
 
     private static let historyDomain = "emileberhard.RemoteCoder.history"
     private static let connectionDomain = "emileberhard.RemoteCoder.connection"
+    private static let surfaceDomain = "emileberhard.RemoteCoder.surface"
+    private static let turnDomain = "emileberhard.RemoteCoder.turn"
+    private static let voiceDomain = "emileberhard.RemoteCoder.voice"
+    private static let energyDomain = "emileberhard.RemoteCoder.energy"
     private let manager: MetricManager
     private let historyReporter: StateReporter<StableMetadata, VolatileMetadata>
     private let connectionReporter: StateReporter<StableMetadata, VolatileMetadata>
+    private let surfaceReporter: StateReporter<StableMetadata, VolatileMetadata>
+    private let turnReporter: StateReporter<StableMetadata, VolatileMetadata>
+    private let voiceReporter: StateReporter<StableMetadata, VolatileMetadata>
+    private let energyReporter: StateReporter<StableMetadata, VolatileMetadata>
+    private let history = Mutex(HistoryOperations())
     private let logger = Logger(subsystem: "RemoteCoder", category: "PerformanceDiagnostics")
     private var metricsConsumer: Task<Void, Never>?
     private var diagnosticsConsumer: Task<Void, Never>?
-    private var operationID: UUID?
 
     private init() {
-        manager = MetricManager(enabledStateReportingDomains: [
-            StateReportingDomain(rawValue: Self.historyDomain),
-            StateReportingDomain(rawValue: Self.connectionDomain)
-        ])
-        historyReporter = StateReporter.reporter(
-            for: Self.historyDomain, stableMetadata: StableMetadata.self, volatileMetadata: VolatileMetadata.self
-        )
-        connectionReporter = StateReporter.reporter(
-            for: Self.connectionDomain, stableMetadata: StableMetadata.self, volatileMetadata: VolatileMetadata.self
-        )
+        let domains = [
+            Self.historyDomain, Self.connectionDomain, Self.surfaceDomain, Self.turnDomain, Self.voiceDomain,
+            Self.energyDomain
+        ]
+        manager = MetricManager(enabledStateReportingDomains: Set(domains.map(StateReportingDomain.init(rawValue:))))
+        func reporter(_ domain: String) -> StateReporter<StableMetadata, VolatileMetadata> {
+            StateReporter.reporter(for: domain, stableMetadata: StableMetadata.self, volatileMetadata: VolatileMetadata.self)
+        }
+        historyReporter = reporter(Self.historyDomain)
+        connectionReporter = reporter(Self.connectionDomain)
+        surfaceReporter = reporter(Self.surfaceDomain)
+        turnReporter = reporter(Self.turnDomain)
+        voiceReporter = reporter(Self.voiceDomain)
+        energyReporter = reporter(Self.energyDomain)
     }
 
     func start() {
@@ -82,35 +90,47 @@ actor AppPerformanceDiagnostics {
     }
 
     /// Only foreground operations enter this domain; prefetch uses request logs.
-    func beginHistory(_ state: HistoryState, provider: Provider, mode: LoadingMode) -> UUID {
-        let id = UUID()
-        operationID = id
+    nonisolated func beginHistory(_ activity: HistoryActivity, threadID: String) -> UUID {
+        history.withLock { operations in
+            let id = operations.begin(activity, provider: AgentProvider.provider(forThreadID: threadID))
+            reportHistory(operations)
+            return id
+        }
+    }
+
+    nonisolated func finishHistory(operationID id: UUID) {
+        history.withLock { operations in
+            operations.finish(id)
+            reportHistory(operations)
+        }
+    }
+
+    nonisolated func clearHistory() {
+        history.withLock { operations in
+            operations.clear()
+            reportHistory(operations)
+        }
+    }
+
+    nonisolated func usageChanged(_ context: UsageContext, conservesEnergy: Bool) {
+        let labels = UsageStateLabels(context, conservesEnergy: conservesEnergy)
+        surfaceReporter.reportTransition(to: labels.surface)
+        turnReporter.reportTransition(to: labels.turn)
+        connectionReporter.reportTransition(to: labels.connection)
+        voiceReporter.reportTransition(to: labels.voice)
+        energyReporter.reportTransition(to: labels.energy)
+        history.withLock { operations in
+            operations.sceneChanged(active: context.scene == .active)
+            reportHistory(operations)
+        }
+    }
+
+    private nonisolated func reportHistory(_ operations: HistoryOperations) {
+        guard let current = operations.current else { return historyReporter.reportTransition(to: nil) }
         historyReporter.reportTransition(
-            to: state.rawValue, stableMetadata: StableMetadata(provider: provider.rawValue, loadingMode: mode.rawValue),
-            volatileMetadata: VolatileMetadata(operationID: id.uuidString)
+            to: current.activity.rawValue, stableMetadata: StableMetadata(provider: current.provider.rawValue),
+            volatileMetadata: VolatileMetadata(operationID: current.id.uuidString)
         )
-        return id
-    }
-
-    func finishHistory(operationID id: UUID) {
-        guard operationID == id else { return }
-        clearHistory()
-    }
-
-    func clearHistory() {
-        operationID = nil
-        historyReporter.reportTransition(to: nil)
-    }
-
-    func connectionChanged(_ state: GatewayEventPump.Link, provider: Provider) {
-        connectionReporter.reportTransition(
-            to: state.rawValue,
-            stableMetadata: StableMetadata(provider: provider.rawValue, loadingMode: "network")
-        )
-    }
-
-    func clearConnection() {
-        connectionReporter.reportTransition(to: nil)
     }
 }
 
