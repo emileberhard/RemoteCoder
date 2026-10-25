@@ -491,6 +491,9 @@ gateway-e2e-conversation-agents-isolated candidate configs:
 gateway-e2e-query-admission-isolated $candidate:
     bun dev-tools/probes/query-admission.mjs "$candidate"
 
+gateway-e2e-provider-fallback-isolated $candidate:
+    bun dev-tools/probes/provider-fallback.mjs "$candidate"
+
 # Configure the Tailscale-independent relay server from relay/ (docs/relay-route.md; run on the Mac mini).
 relay-provision:
     python3 scripts/relay.py provision
