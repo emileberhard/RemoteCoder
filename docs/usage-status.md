@@ -84,6 +84,10 @@ Replayed notifications never change it, because every connection's
   provider, and the stored preference stays unchanged.
 - A native request refused with `providerUnavailable` reads as its reason,
   including as a send error.
+- History reads treat a Codex `providerUnavailable` like a gateway restart
+  (`GatewayHistoryService.defersRead`): the conversation list keeps its cached
+  rows without an error and refreshes on the next connection, and an open
+  chat shows no alert; its failed history edge retries on reconnect.
 
 ## Ownership and recovery
 

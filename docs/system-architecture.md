@@ -634,7 +634,9 @@ host and the gateway's close reason ("<host> closed the connection: …"); only
 a 4012 inside the window reads as restarting. Failed attempts
 inside the window blame no route, so the LAN route is not suspended for the
 host's downtime, and surface `ClientError.gatewayRestarting`, which the drawer's
-automatic list refresh defers instead of recording as an error. `GatewayClient` announces
+automatic list refresh defers instead of recording as an error, as it does a
+Codex `providerUnavailable` while the new gateway's Codex starts. Open chats
+raise no alert for either. `GatewayClient` announces
 `.restarting` and `.disconnected` on its connection events, and the pump hands
 them to the chat model's `GatewayConnectivity`: `.restarting` turns the edge
 glow gray and the drawer's host line into "Updating <host>…" in place of the

@@ -29,10 +29,10 @@ final class ConversationList {
     private(set) var settlementEdits: [String: Int] = [:]
 
     var marks: ConversationMarks { marksReplica.effective }
-    var needsReconnectRefresh: Bool { errorMessage != nil || refreshDeferredByRestart }
+    var needsReconnectRefresh: Bool { errorMessage != nil || refreshDeferred }
 
     @ObservationIgnored var lastSuccessfulRefreshAt: Date?
-    @ObservationIgnored private var refreshDeferredByRestart = false
+    @ObservationIgnored private var refreshDeferred = false
 
     @ObservationIgnored private var hasLoadedPersistedThreads = false
     @ObservationIgnored private var persistedSnapshotLoadTask: Task<ConversationHeaderStore.Snapshot, Never>?
@@ -419,7 +419,7 @@ final class ConversationList {
         locallyChangedDuringRefresh.removeAll()
         activeRefreshRequest = request
         if errorMessage != nil { errorMessage = nil }
-        refreshDeferredByRestart = false
+        refreshDeferred = false
         logger.info("refresh start (reason=\(reason, privacy: .public), limit=\(limit, privacy: .public), knownThreads=\(self.threads.count, privacy: .public))")
 
         var persisted: ConversationHeaderStore.Snapshot?
@@ -439,8 +439,9 @@ final class ConversationList {
                 }
                 return header
             }
+            let complete = result.failures.isEmpty && !result.isDeferred
             // A local create/remove/completion after this request began is newer evidence.
-            let merged = result.failures.isEmpty ? ConversationHeaderStore.refreshing(
+            let merged = complete ? ConversationHeaderStore.refreshing(
                 current: threads, recent: fetched, continuation: result.continuation,
                 retaining: priorityThreadIDs, preserving: locallyChangedDuringRefresh
             ) : ConversationHeaderStore.merging(
@@ -455,7 +456,7 @@ final class ConversationList {
                 current: classified.filter { !locallyChangedDuringRefresh.contains($0.id) },
                 fetched: threads.filter { locallyChangedDuringRefresh.contains($0.id) }
             )
-            let refreshDate = result.failures.isEmpty ? Date() : lastSuccessfulRefreshAt
+            let refreshDate = complete ? Date() : lastSuccessfulRefreshAt
             listReadGeneration &+= 1
             let reopensCodex = continuation.codex == .end && result.continuation.codex.canLoad
             let reopensClaude = continuation.claude == .end && result.continuation.claude.canLoad
@@ -470,7 +471,7 @@ final class ConversationList {
             }
             if reopensCodex, searchContinuation.codex == .end { searchContinuation.codex = .notLoaded }
             if reopensClaude, searchContinuation.claude == .end { searchContinuation.claude = .notLoaded }
-            if result.failures.isEmpty, !result.continuation.canLoad { hasDiscardedHeaders = false }
+            if complete, !result.continuation.canLoad { hasDiscardedHeaders = false }
             applyRetained(committed, promoting: intent == .replaceCoverage || browsedThreadIDs.isEmpty ? Set(fetched.map(\.id)) : [])
             let admitted = Set(threads.map(\.id)).union(locallyChangedDuringRefresh)
             if initializesCodex {
@@ -482,6 +483,7 @@ final class ConversationList {
                     .allSatisfy { admitted.contains($0.id) } ? result.continuation.claude : .notLoaded
             }
             lastSuccessfulRefreshAt = refreshDate
+            refreshDeferred = result.isDeferred
             let failure = result.failures.isEmpty ? nil : result.failures.joined(separator: "\n")
             if errorMessage != failure { errorMessage = failure }
             for warning in Set(result.agentWarnings + retained.warnings) {
@@ -493,9 +495,9 @@ final class ConversationList {
             // SwiftUI cancels refresh tasks opportunistically (e.g. gesture conflicts).
             // Treat cancellations as a no-op rather than surfacing them as user-facing errors.
             logger.info("refresh cancelled (reason=\(reason, privacy: .public), limit=\(limit, privacy: .public))")
-        } catch GatewayClient.ClientError.gatewayRestarting {
-            refreshDeferredByRestart = true
-            logger.notice("refresh deferred until the gateway restart completes (reason=\(reason, privacy: .public))")
+        } catch where GatewayHistoryService.defersRead(error) {
+            refreshDeferred = true
+            logger.notice("refresh deferred until the gateway and Codex are ready (reason=\(reason, privacy: .public))")
         } catch {
             guard !headerReadsRetired else { return }
             errorMessage = error.localizedDescription

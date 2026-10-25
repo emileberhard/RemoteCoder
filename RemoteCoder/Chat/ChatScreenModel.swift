@@ -1013,7 +1013,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
             await target.sessionIndex.record(sessionID: thread.id, conversationID: session.conversationID)
         } catch {
             if isCurrentResumeLoad(loadID, threadID: thread.id) {
-                present(.conversation(error.localizedDescription))
+                if !GatewayHistoryService.defersRead(error) { present(.conversation(error.localizedDescription)) }
                 failure = error
             }
         }

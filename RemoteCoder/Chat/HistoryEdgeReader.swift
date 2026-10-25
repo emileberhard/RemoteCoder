@@ -159,6 +159,7 @@ final class HistoryEdgeReader {
                 provider: AgentProvider.provider(forThreadID: thread.id) == .claude ? .claude : .codex, mode: .mixed)
             var outcome: HistoryEdge.Status?
             var failureMessage: String?
+            var defersFailure = false
             var loadedTail = false
             do {
                 let session = await self.conversations.session(conversationID: conversationID, threadID: thread.id)
@@ -187,6 +188,7 @@ final class HistoryEdgeReader {
                     self.logger.notice("History page failed: \(error.localizedDescription, privacy: .public)")
                     outcome = failure
                     failureMessage = error.localizedDescription
+                    defersFailure = GatewayHistoryService.defersRead(error)
                 }
             }
             await AppPerformanceDiagnostics.shared.finishHistory(operationID: operation)
@@ -199,7 +201,7 @@ final class HistoryEdgeReader {
                 return
             }
             self.status[kind] = nil
-            if let failureMessage { self.host?.historyReadFailed(failureMessage) }
+            if let failureMessage, !defersFailure { self.host?.historyReadFailed(failureMessage) }
         }
         reads[kind] = Read(request: request, task: task)
         return task
