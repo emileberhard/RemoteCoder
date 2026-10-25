@@ -273,7 +273,7 @@ enum ConversationSidebarProjection {
     ) -> [ConversationSidebarItem] {
         let showsHostLabel = showsHostLabels(targetCount: hosts.count)
         let terms = arrangement.query.split(whereSeparator: \.isWhitespace).map(String.init)
-        let dateLabel = dateLabels.labeler(now: now, calendar: .autoupdatingCurrent, locale: .autoupdatingCurrent)
+        let dateLabel = dateLabels.labeler(now: now, calendar: .current, locale: .current)
         var slots: [Slot] = []
         slots.reserveCapacity(hosts.reduce(0) { $0 + $1.threads.count })
         for host in hosts {
