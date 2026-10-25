@@ -1214,7 +1214,7 @@ async fn historical_id_capacity_rejects_owned_identifiers_before_projection_and_
     server.abort();
 }
 
-async fn gateway_with_unreachable_codex() -> (tempfile::TempDir, std::path::PathBuf, Arc<Gateway>) {
+async fn gateway_with_unreachable_codex() -> (tempfile::TempDir, std::path::PathBuf, TestGateway) {
     use crate::providers::codex::daemon::CodexAppServer;
 
     let home = tempfile::tempdir().unwrap();
@@ -1261,7 +1261,7 @@ async fn a_connection_that_could_not_reach_codex_reconnects_once_it_can() {
     server.abort();
     upstream.abort();
     assert_eq!(u16::from(close.code), RESTARTING_CLOSE_CODE);
-    assert_eq!(close.reason.as_str(), "Codex is available; reconnect");
+    assert_eq!(&*close.reason, "Codex is available; reconnect");
     assert!(!gateway.is_degraded(client_id));
 }
 
