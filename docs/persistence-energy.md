@@ -221,3 +221,20 @@ Checkpoint phase and input/changed-payload aggregates use the existing bounded
 `PersistenceMetrics` owner and JSONL samples. See
 [Checkpoint save phases](host-observability.md#checkpoint-save-phases) for fields
 and interpretation.
+
+## Exhausted checkpoint history
+
+Over-budget saves can revisit preserved conversations even when all rebuildable
+history has already been removed. `DiskRecord.historyExhausted` remembers that
+proof at the checkpoint owner, so later saves skip inspection and decoding.
+Successful loads replace the disk record; writes and invalidation clear the proof
+through `sourceChanged`. Recovery-only protection can also prove exhaustion.
+Failed inspections remain unknown and retryable. No storage format or retention
+policy changes, and unique local records, pending sends and recovery bytes stay
+protected. Inspection already reuses an owned database connection when available.
+
+Decision (2026-10-25): keep one transient bit with the existing disk accounting,
+rather than retaining decoded checkpoints or adding a connection/cache owner.
+The bit lasts only until an owner-observed source change or load. Repeated failed
+reads are deliberately not cached; any later identity-based backoff must preserve
+retry after the source changes.

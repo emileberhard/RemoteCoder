@@ -63,6 +63,7 @@ actor ConversationCheckpointStore {
         var invalidation: Invalidation?
         var recoveryBytes = 0
         var importedSource: ImportedSource?
+        var historyExhausted = false
     }
     private let allowsLegacyMigration: Bool
     private let directory: URL
@@ -195,6 +196,7 @@ actor ConversationCheckpointStore {
 
     private func sourceChanged(_ id: UUID) {
         fences[id]?.sourceRevision += 1
+        records[id]?.historyExhausted = false
     }
 
     private func replaceDatabase(_ values: [CheckpointDatabase.Record], retaining keys: Set<String>, id: UUID) throws -> CheckpointDatabase.Replacement {
@@ -654,28 +656,33 @@ actor ConversationCheckpointStore {
     }
 
     private func shedHistory(_ id: UUID) throws -> Bool {
-        guard (fences[id]?.operations ?? 0) == 0, records[id]?.invalidation == nil else { return false }
+        guard (fences[id]?.operations ?? 0) == 0, records[id]?.invalidation == nil,
+              records[id]?.historyExhausted != true else { return false }
         let started = ContinuousClock.now
         let stored: (checkpoint: ConversationState.Checkpoint?, source: URL)?
         do {
             defer { metrics.recordCheckpointPhase(.historyShedRead, elapsed: started.duration(to: .now)) }
             stored = try storedCheckpoint(id)
         } catch { return false }
-        guard let checkpoint = stored?.checkpoint else {
+        guard let checkpoint = stored?.checkpoint, checkpoint.containsLocalRecords else {
+            records[id]?.historyExhausted = true
             return false
         }
-        guard checkpoint.containsLocalRecords else { return false }
         let local = checkpoint.localRecords
         let hasHistory = checkpoint.historyWindow != nil || checkpoint.turns.contains { key, turn in
             turn.items.count != local.turns[key]?.items.count || turn.items.contains { $0.value.localMessage != nil && !$0.value.isLocal && $0.value.detailed }
         }
-        guard hasHistory else { return false }
+        guard hasHistory else {
+            records[id]?.historyExhausted = true
+            return false
+        }
         let values = try Self.encodeDatabaseRecords(local, previous: nil)
         _ = try replaceDatabase(values, retaining: Self.recordKeys(local), id: id)
         try database(for: id).compact()
         encodingStamps.removeValue(forKey: id)
         try refreshLoadedRecord(id, checkpoint: local, source: directory.appending(path: "\(id).sqlite"))
         try finishCommit(id, revision: local.durableRevision)
+        records[id]?.historyExhausted = true
         return true
     }
 

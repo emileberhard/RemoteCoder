@@ -4,8 +4,126 @@ import Testing
 @testable import RemoteCoderCore
 
 struct ConversationCheckpointStoreTests: ConversationHistoryFixtures {
-    @Test(arguments: ["bytes", "format", "dimensions"])
-    func rollbackSettledImagesRequireDurableContentAbsorption(change: String) async throws {
+    enum ImageChange: CaseIterable { case bytes, format, dimensions }
+
+    @Test(arguments: [false, true])
+    func overBudgetSavesDoNotRereadExhaustedHistoryUntilItsSourceChanges(cold: Bool) async throws {
+        let directory = URL.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let host = UUID()
+        let metrics = PersistenceMetrics()
+        let writer = ConversationCheckpointStore(hostID: host, directory: directory, budgetBytes: 1,
+            primaryBudgetBytes: 512 * 1_024 * 1_024, metrics: metrics)
+        var preserved: [ConversationState] = []
+        for index in 0..<4 {
+            var state = ConversationState(conversationID: UUID(), threadID: "preserved-\(index)")
+            state.submit(ChatMessage(role: .user, text: String(repeating: "Durable local \(index). ", count: 2_048)))
+            state.merge(history(items: [.agentMessage(id: "answer", text: String(repeating: "Remote history \(index). ", count: 2_048))],
+                threadID: "preserved-\(index)"))
+            try await writer.save(state.checkpoint, conversationID: state.conversationID)
+            preserved.append(state)
+        }
+        var active = ConversationState(conversationID: UUID(), threadID: "active")
+        active.merge(history(items: [.agentMessage(id: "active-answer", text: "Still working")], threadID: "active"))
+        try await writer.save(active.checkpoint, conversationID: active.conversationID)
+        let store = cold ? ConversationCheckpointStore(hostID: host, directory: directory, budgetBytes: 1,
+            primaryBudgetBytes: 512 * 1_024 * 1_024, metrics: metrics) : writer
+        active.markPersistedChange()
+        try await store.save(active.checkpoint, conversationID: active.conversationID)
+        let firstReads = metrics.snapshot()[.checkpoints]?.checkpoint?.phases["historyShedRead"]?.count ?? 0
+        active.markPersistedChange()
+        try await store.save(active.checkpoint, conversationID: active.conversationID)
+        let secondReads = metrics.snapshot()[.checkpoints]?.checkpoint?.phases["historyShedRead"]?.count ?? 0
+        #expect(secondReads == firstReads, "History inspections \(firstReads) → \(secondReads)")
+
+        let first = try #require(preserved.first)
+        #expect(try await store.load(first.conversationID)?.containsLocalRecords == true)
+        active.markPersistedChange()
+        try await store.save(active.checkpoint, conversationID: active.conversationID)
+        let reloadedReads = metrics.snapshot()[.checkpoints]?.checkpoint?.phases["historyShedRead"]?.count ?? 0
+        #expect(reloadedReads == secondReads + 1)
+
+        var renewed = first
+        renewed.markPersistedChange()
+        try await store.save(renewed.checkpoint, conversationID: renewed.conversationID)
+        active.markPersistedChange()
+        try await store.save(active.checkpoint, conversationID: active.conversationID)
+        let rewrittenReads = metrics.snapshot()[.checkpoints]?.checkpoint?.phases["historyShedRead"]?.count ?? 0
+        #expect(rewrittenReads == reloadedReads + 1)
+        for state in preserved {
+            let saved = try #require(try await store.load(state.conversationID))
+            #expect(saved.submissions.mapValues(\.message) == state.checkpoint.submissions.mapValues(\.message))
+            #expect(saved.turns.values.allSatisfy { $0.items["answer"] == nil })
+        }
+    }
+
+    @Test func overBudgetSavesDoNotReinspectCheckpointsProtectedOnlyByRecoveryBytes() async throws {
+        let directory = URL.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let host = UUID()
+        var remote = ConversationState(conversationID: UUID(), threadID: "remote")
+        remote.merge(history(items: [.agentMessage(id: "answer", text: "Rebuildable remote history")], threadID: "remote"))
+        #expect(!remote.checkpoint.containsLocalRecords)
+        let writer = ConversationCheckpointStore(hostID: host, directory: directory, primaryBudgetBytes: 512 * 1_024 * 1_024)
+        try await writer.save(remote.checkpoint, conversationID: remote.conversationID)
+        let recovery = directory.appending(path: "recovery/\(remote.conversationID)/incident/original")
+        try FileManager.default.createDirectory(at: recovery.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let durable = Data("Unique recovery bytes".utf8)
+        try durable.write(to: recovery)
+        let metrics = PersistenceMetrics()
+        let store = ConversationCheckpointStore(hostID: host, directory: directory, budgetBytes: 1,
+            primaryBudgetBytes: 512 * 1_024 * 1_024, metrics: metrics)
+        var active = ConversationState(conversationID: UUID(), threadID: "active")
+        active.merge(history(items: [.agentMessage(id: "active-answer", text: "Still working")], threadID: "active"))
+        try await store.save(active.checkpoint, conversationID: active.conversationID)
+        let firstReads = metrics.snapshot()[.checkpoints]?.checkpoint?.phases["historyShedRead"]?.count
+        #expect(firstReads == 1)
+        active.markPersistedChange()
+        try await store.save(active.checkpoint, conversationID: active.conversationID)
+        #expect(metrics.snapshot()[.checkpoints]?.checkpoint?.phases["historyShedRead"]?.count == firstReads)
+        #expect(try Data(contentsOf: recovery) == durable)
+        let retained = try #require(try await store.load(remote.conversationID))
+        #expect(retained.turns.values.contains { $0.items["answer"] != nil })
+    }
+
+    @Test func failedHistoryInspectionIsRetriedUntilAReadableCheckpointProvesExhaustion() async throws {
+        let directory = URL.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let id = UUID()
+        let recovery = directory.appending(path: "recovery/\(id)/incident/original")
+        try FileManager.default.createDirectory(at: recovery.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let durable = Data("Unique recovery bytes".utf8)
+        try durable.write(to: recovery)
+        let source = directory.appending(path: "\(id).json")
+        let unreadable = Data("Temporarily unreadable checkpoint".utf8)
+        try unreadable.write(to: source)
+        let metrics = PersistenceMetrics()
+        let store = ConversationCheckpointStore(hostID: UUID(), directory: directory, budgetBytes: 1,
+            primaryBudgetBytes: 512 * 1_024 * 1_024, metrics: metrics)
+        var active = ConversationState(conversationID: UUID(), threadID: "active")
+        active.merge(history(items: [.agentMessage(id: "active-answer", text: "Still working")], threadID: "active"))
+        try await store.save(active.checkpoint, conversationID: active.conversationID)
+        #expect(metrics.snapshot()[.checkpoints]?.checkpoint?.phases["historyShedRead"]?.count == 1)
+        #expect(try Data(contentsOf: source) == unreadable)
+        var repaired = ConversationState(conversationID: id, threadID: "repaired")
+        let pending = ChatMessage(role: .user, text: "Unique pending send")
+        repaired.submit(pending)
+        repaired.merge(history(items: [.agentMessage(id: "answer", text: "Rebuildable remote history")], threadID: "repaired"))
+        try JSONEncoder().encode(CheckpointTestEnvelope(containsLocalRecords: true, checkpoint: repaired.checkpoint)).write(to: source)
+        active.markPersistedChange()
+        try await store.save(active.checkpoint, conversationID: active.conversationID)
+        #expect(metrics.snapshot()[.checkpoints]?.checkpoint?.phases["historyShedRead"]?.count == 2)
+        active.markPersistedChange()
+        try await store.save(active.checkpoint, conversationID: active.conversationID)
+        #expect(metrics.snapshot()[.checkpoints]?.checkpoint?.phases["historyShedRead"]?.count == 2)
+        let retained = try #require(try await store.load(id))
+        #expect(retained.submissions[pending.id]?.message == pending)
+        #expect(retained.turns.values.allSatisfy { $0.items["answer"] == nil })
+        #expect(try Data(contentsOf: recovery) == durable)
+    }
+
+    @Test(arguments: ImageChange.allCases)
+    func rollbackSettledImagesRequireDurableContentAbsorption(change: ImageChange) async throws {
         let directory = URL.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let host = UUID()
@@ -13,9 +131,9 @@ struct ConversationCheckpointStoreTests: ConversationHistoryFixtures {
         let image = CodexImageAttachment(id: ChatMessage.deterministicID(for: "rollback-settled-image"),
             data: Data(repeating: 41, count: 8_192), format: .jpeg, pixelSize: .init(width: 100, height: 100))
         let changed = CodexImageAttachment(id: image.id,
-            data: change == "bytes" ? Data(repeating: 42, count: 8_192) : image.data,
-            format: change == "format" ? .png : image.format,
-            pixelSize: change == "dimensions" ? .init(width: 200, height: 100) : image.pixelSize)
+            data: change == .bytes ? Data(repeating: 42, count: 8_192) : image.data,
+            format: change == .format ? .png : image.format,
+            pixelSize: change == .dimensions ? .init(width: 200, height: 100) : image.pixelSize)
         let message = ChatMessage(id: ChatMessage.deterministicID(for: "rollback-settled-message"), role: .user,
             text: "Retained local image", attachments: [.inline(image)], date: Date(timeIntervalSince1970: 1))
         var state = ConversationState(conversationID: id, threadID: "thread")
@@ -61,8 +179,8 @@ struct ConversationCheckpointStoreTests: ConversationHistoryFixtures {
         withExtendedLifetime(writer) {}
     }
 
-    @Test(arguments: ["bytes", "format", "dimensions"])
-    func canonicalEchoPreservesConflictingInitialSidecarImages(change: String) async throws {
+    @Test(arguments: ImageChange.allCases)
+    func canonicalEchoPreservesConflictingInitialSidecarImages(change: ImageChange) async throws {
         let directory = URL.temporaryDirectory.appending(path: UUID().uuidString)
         let controlDirectory = URL.temporaryDirectory.appending(path: UUID().uuidString)
         defer {
@@ -74,9 +192,9 @@ struct ConversationCheckpointStoreTests: ConversationHistoryFixtures {
         let image = CodexImageAttachment(id: ChatMessage.deterministicID(for: "canonical-conflicting-image"),
             data: Data(repeating: 41, count: 8_192), format: .jpeg, pixelSize: .init(width: 100, height: 100))
         let changed = CodexImageAttachment(id: image.id,
-            data: change == "bytes" ? Data(repeating: 42, count: 8_192) : image.data,
-            format: change == "format" ? .png : image.format,
-            pixelSize: change == "dimensions" ? .init(width: 200, height: 100) : image.pixelSize)
+            data: change == .bytes ? Data(repeating: 42, count: 8_192) : image.data,
+            format: change == .format ? .png : image.format,
+            pixelSize: change == .dimensions ? .init(width: 200, height: 100) : image.pixelSize)
         let message = ChatMessage(id: ChatMessage.deterministicID(for: "canonical-conflicting-message"), role: .user,
             text: "Retained local image", attachments: [.inline(image)], date: Date(timeIntervalSince1970: 1))
         var state = ConversationState(conversationID: id, threadID: "thread")

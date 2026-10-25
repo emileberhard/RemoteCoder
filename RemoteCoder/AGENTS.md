@@ -641,6 +641,9 @@ entrypoint linked above.
   generation guards. Derived timelines are not persisted. The legacy timeline
   reader keeps old local activity for migration and rollback, but all new
   writes go to the checkpoint store.
+  `DiskRecord` remembers proven exhausted history shedding until that source is
+  written, loaded or invalidated. Failed/unknown reads never prove exhaustion.
+  Inspection reuses an owned database connection when one exists.
 - **Transcript.** `docs/system-architecture.md`, *History and live state*, owns
   the mechanism: identity, mounting window, scroll intent, follow mode, edge rows
   and rendering. Read it before changing layout or scrolling. This file keeps only
