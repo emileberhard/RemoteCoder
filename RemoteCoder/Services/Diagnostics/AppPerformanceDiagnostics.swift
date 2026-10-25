@@ -24,14 +24,14 @@ actor AppPerformanceDiagnostics {
     }
 
     private static let historyDomain = "emileberhard.RemoteCoder.history"
-    private static let connectionDomain = "emileberhard.RemoteCoder.connection"
+    private static let routeDomain = "emileberhard.RemoteCoder.route"
     private static let surfaceDomain = "emileberhard.RemoteCoder.surface"
     private static let turnDomain = "emileberhard.RemoteCoder.turn"
     private static let voiceDomain = "emileberhard.RemoteCoder.voice"
     private static let energyDomain = "emileberhard.RemoteCoder.energy"
     private let manager: MetricManager
     private let historyReporter: StateReporter<StableMetadata, VolatileMetadata>
-    private let connectionReporter: StateReporter<StableMetadata, VolatileMetadata>
+    private let routeReporter: StateReporter<StableMetadata, VolatileMetadata>
     private let surfaceReporter: StateReporter<StableMetadata, VolatileMetadata>
     private let turnReporter: StateReporter<StableMetadata, VolatileMetadata>
     private let voiceReporter: StateReporter<StableMetadata, VolatileMetadata>
@@ -43,7 +43,7 @@ actor AppPerformanceDiagnostics {
 
     private init() {
         let domains = [
-            Self.historyDomain, Self.connectionDomain, Self.surfaceDomain, Self.turnDomain, Self.voiceDomain,
+            Self.historyDomain, Self.routeDomain, Self.surfaceDomain, Self.turnDomain, Self.voiceDomain,
             Self.energyDomain
         ]
         manager = MetricManager(enabledStateReportingDomains: Set(domains.map(StateReportingDomain.init(rawValue:))))
@@ -51,7 +51,7 @@ actor AppPerformanceDiagnostics {
             StateReporter.reporter(for: domain, stableMetadata: StableMetadata.self, volatileMetadata: VolatileMetadata.self)
         }
         historyReporter = reporter(Self.historyDomain)
-        connectionReporter = reporter(Self.connectionDomain)
+        routeReporter = reporter(Self.routeDomain)
         surfaceReporter = reporter(Self.surfaceDomain)
         turnReporter = reporter(Self.turnDomain)
         voiceReporter = reporter(Self.voiceDomain)
@@ -95,7 +95,7 @@ actor AppPerformanceDiagnostics {
     nonisolated func beginHistory(_ activity: HistoryActivity, threadID: String) -> UUID {
         history.withLock { operations in
             let id = operations.begin(activity, provider: AgentProvider.provider(forThreadID: threadID))
-            reportHistory(operations)
+            reportHistory(&operations)
             return id
         }
     }
@@ -103,14 +103,7 @@ actor AppPerformanceDiagnostics {
     nonisolated func finishHistory(operationID id: UUID) {
         history.withLock { operations in
             operations.finish(id)
-            reportHistory(operations)
-        }
-    }
-
-    nonisolated func clearHistory() {
-        history.withLock { operations in
-            operations.clear()
-            reportHistory(operations)
+            reportHistory(&operations)
         }
     }
 
@@ -118,21 +111,29 @@ actor AppPerformanceDiagnostics {
         let labels = UsageStateLabels(context, conservesEnergy: conservesEnergy)
         surfaceReporter.reportTransition(to: labels.surface)
         turnReporter.reportTransition(to: labels.turn)
-        connectionReporter.reportTransition(to: labels.connection)
+        routeReporter.reportTransition(to: labels.route)
         voiceReporter.reportTransition(to: labels.voice)
         energyReporter.reportTransition(to: labels.energy)
         history.withLock { operations in
-            operations.sceneChanged(active: context.scene == .active)
-            reportHistory(operations)
+            operations.sceneChanged(background: context.scene == .background)
+            reportHistory(&operations)
         }
     }
 
-    private nonisolated func reportHistory(_ operations: HistoryOperations) {
-        guard let current = operations.current else { return historyReporter.reportTransition(to: nil) }
-        historyReporter.reportTransition(
-            to: current.activity.rawValue, stableMetadata: StableMetadata(provider: current.provider.rawValue),
-            volatileMetadata: VolatileMetadata(operationID: current.id.uuidString)
-        )
+    private nonisolated func reportHistory(_ operations: inout HistoryOperations) {
+        switch operations.report() {
+        case nil:
+            return
+        case .transition(nil):
+            historyReporter.reportTransition(to: nil)
+        case .transition(let current?):
+            historyReporter.reportTransition(
+                to: current.activity.rawValue, stableMetadata: StableMetadata(provider: current.provider.rawValue),
+                volatileMetadata: VolatileMetadata(operationID: current.id.uuidString)
+            )
+        case .operationChanged(let id):
+            historyReporter.reportVolatileMetadataUpdate(VolatileMetadata(operationID: id.uuidString))
+        }
     }
 }
 

@@ -909,7 +909,6 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
         let running = preparation.retire() + dispatcher.cancelAll() + separatelyOwned
             + [preferenceExchange].compactMap { $0 }
         drafts.requestFlush()
-        let ownsDiagnosticsState = isVisible
         _ = lifecycle.handle(.retire)
         fileOpener.leaveScreen()
         reconcileObservation()
@@ -950,9 +949,6 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
             await conversations.flush()
             await conversationList.flushMarks()
             await historyService.invalidateAll()
-            if ownsDiagnosticsState {
-                AppPerformanceDiagnostics.shared.clearHistory()
-            }
             #if os(iOS)
             await liveActivityService.end()
             #endif

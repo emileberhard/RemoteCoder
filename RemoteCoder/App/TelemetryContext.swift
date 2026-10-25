@@ -24,7 +24,7 @@ final class TelemetryContext {
     }
 
     func start() {
-        guard sampler != nil, observation == nil else { return }
+        guard observation == nil else { return }
         device.start()
         network.start()
         observation = Task { [weak self] in

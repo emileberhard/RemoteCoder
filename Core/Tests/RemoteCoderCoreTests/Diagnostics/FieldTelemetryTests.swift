@@ -71,35 +71,41 @@ struct FieldTelemetryTests {
         #expect(Set(batches.map { $0[0]["runID"] as? String }).count == 1)
     }
 
-    @Test func stateLabelsFollowTheProjectionAndClearOutsideTheActiveScene() {
+    @Test func stateLabelsFollowTheProjectionAndClearInTheBackground() {
         var running = context
         running.turnRunningVisible = true
         #expect(UsageStateLabels(running, conservesEnergy: false)
-            == UsageStateLabels(surface: "chat", turn: "running", connection: "lan", voice: nil, energy: nil))
+            == UsageStateLabels(surface: "chat", turn: "running", route: "lan", voice: nil, energy: nil))
 
         var drawer = running
         drawer.surface = .drawer
         drawer.voiceCall = true
         drawer.route = .relay
         #expect(UsageStateLabels(drawer, conservesEnergy: true)
-            == UsageStateLabels(surface: "drawer", turn: "running", connection: "relay", voice: "call", energy: "conserving"))
+            == UsageStateLabels(surface: "drawer", turn: "running", route: "relay", voice: "call", energy: "conserving"))
+
+        var inactive = drawer
+        inactive.scene = .inactive
+        #expect(UsageStateLabels(inactive, conservesEnergy: true) == UsageStateLabels(drawer, conservesEnergy: true))
 
         var background = drawer
         background.scene = .background
         #expect(UsageStateLabels(background, conservesEnergy: false)
-            == UsageStateLabels(surface: nil, turn: nil, connection: nil, voice: "call", energy: nil))
+            == UsageStateLabels(surface: nil, turn: nil, route: nil, voice: "call", energy: nil))
 
         var unknown = context
         unknown.turnRunningVisible = nil
         unknown.route = nil
         let labels = UsageStateLabels(unknown, conservesEnergy: false)
-        #expect(labels.turn == nil && labels.connection == nil)
+        #expect(labels.turn == nil && labels.route == nil)
     }
 
-    @Test func historyStateShowsAnyOpenBeforePagingAndClearsOnBackground() {
+    @Test func historyStateShowsAnyOpenBeforePagingAndClearsOnEnteringTheBackground() {
         var operations = HistoryOperations()
+        operations.sceneChanged(background: true)
         let paging = operations.begin(.paging, provider: .codex)
         let opening = operations.begin(.opening, provider: .claude)
+        operations.sceneChanged(background: false)
         let laterPaging = operations.begin(.paging, provider: .codex)
         #expect(operations.current?.id == opening)
         operations.finish(opening)
@@ -108,15 +114,27 @@ struct FieldTelemetryTests {
         operations.finish(laterPaging)
         #expect(operations.current?.id == paging)
 
-        operations.sceneChanged(active: false)
+        operations.sceneChanged(background: true)
         #expect(operations.current == nil)
-        _ = operations.begin(.opening, provider: .codex)
-        #expect(operations.current == nil)
-        operations.sceneChanged(active: true)
         let reopened = operations.begin(.opening, provider: .codex)
         #expect(operations.current?.id == reopened)
-        operations.clear()
-        #expect(operations.current == nil)
+    }
+
+    @Test func historyReportsTransitionsOnlyWhenTheStateChangesAndOtherwiseTheOperation() {
+        var operations = HistoryOperations()
+        #expect(operations.report() == nil)
+        let first = operations.begin(.opening, provider: .codex)
+        #expect(operations.report() == .transition(operations.current))
+        let second = operations.begin(.opening, provider: .codex)
+        #expect(operations.report() == .operationChanged(second))
+        operations.finish(second)
+        #expect(operations.report() == .operationChanged(first))
+        let claude = operations.begin(.opening, provider: .claude)
+        #expect(operations.report() == .transition(operations.current))
+        #expect(operations.report() == nil)
+        operations.finish(claude)
+        operations.finish(first)
+        #expect(operations.report() == .transition(nil))
     }
 
     @Test func aFullBufferKeepsTheNewestRecordsAndReportsTheLoss() async throws {

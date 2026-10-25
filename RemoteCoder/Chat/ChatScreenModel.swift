@@ -1126,7 +1126,6 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         resumeStagedUploads()
         historyEdges.reset()
         historyOpenSignpost.abandon(.cancelled)
-        AppPerformanceDiagnostics.shared.clearHistory()
 
         logger.info("clear chat start summary=\(self.debugChatStateSummary(), privacy: .public)")
         cancelResumeConversationLoad()

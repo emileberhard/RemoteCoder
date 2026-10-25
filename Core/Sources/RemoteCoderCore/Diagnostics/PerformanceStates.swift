@@ -3,17 +3,17 @@ import Foundation
 struct UsageStateLabels: Equatable, Sendable {
     let surface: String?
     let turn: String?
-    let connection: String?
+    let route: String?
     let voice: String?
     let energy: String?
 }
 
 extension UsageStateLabels {
     init(_ context: UsageContext, conservesEnergy: Bool) {
-        let active = context.scene == .active
-        surface = active ? context.surface?.rawValue : nil
-        turn = active && context.turnRunningVisible == true ? "running" : nil
-        connection = active ? context.route?.rawValue : nil
+        let foreground = context.scene != .background
+        surface = foreground ? context.surface?.rawValue : nil
+        turn = foreground && context.turnRunningVisible == true ? "running" : nil
+        route = foreground ? context.route?.rawValue : nil
         voice = context.voiceCall ? "call" : nil
         energy = conservesEnergy ? "conserving" : nil
     }
@@ -30,8 +30,14 @@ struct HistoryOperations: Sendable {
         let provider: AgentProvider
     }
 
+    enum Report: Equatable, Sendable {
+        case transition(Operation?)
+        case operationChanged(UUID)
+    }
+
     private var operations: [Operation] = []
-    private var sceneActive = true
+    private var inBackground: Bool?
+    private var reported: Operation?
 
     var current: Operation? {
         operations.last { $0.activity == .opening } ?? operations.last
@@ -39,7 +45,7 @@ struct HistoryOperations: Sendable {
 
     mutating func begin(_ activity: HistoryActivity, provider: AgentProvider) -> UUID {
         let id = UUID()
-        if sceneActive { operations.append(Operation(id: id, activity: activity, provider: provider)) }
+        operations.append(Operation(id: id, activity: activity, provider: provider))
         return id
     }
 
@@ -47,12 +53,18 @@ struct HistoryOperations: Sendable {
         operations.removeAll { $0.id == id }
     }
 
-    mutating func clear() {
-        operations.removeAll()
+    mutating func sceneChanged(background: Bool) {
+        if background, inBackground == false { operations.removeAll() }
+        inBackground = background
     }
 
-    mutating func sceneChanged(active: Bool) {
-        sceneActive = active
-        if !active { operations.removeAll() }
+    mutating func report() -> Report? {
+        let current = current
+        defer { reported = current }
+        guard current != reported else { return nil }
+        if let current, let reported, current.activity == reported.activity, current.provider == reported.provider {
+            return .operationChanged(current.id)
+        }
+        return .transition(current)
     }
 }
