@@ -4,7 +4,7 @@ use super::{
 };
 use crate::config::HostPaths;
 use crate::providers::codex::daemon::CodexAppServer;
-use crate::runtime::bootstrap::{RuntimeLease, enable_remote_control, ensure_normal_daemon};
+use crate::runtime::bootstrap::{RuntimeLease, disable_remote_control, ensure_normal_daemon};
 use crate::runtime::desktop::{reconcile_desktop, stop_desktop};
 use crate::runtime::install::claude_state::ClaudeStateBackup;
 use crate::runtime::install::package::{RuntimePaths, restore_previous_runtime};
@@ -565,7 +565,7 @@ impl<'a> RecoveryTransaction<'a> {
         }
         self.complete_native_finalization(generation_id).await?;
         if !account_recovery {
-            enable_remote_control(self.app_server).await;
+            disable_remote_control(self.app_server).await;
             if let Err(error) = reconcile_desktop(self.app_server, "recovery-complete").await {
                 warn!(%error, "ChatGPT shared-daemon reconciliation was deferred");
             }

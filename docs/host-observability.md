@@ -25,9 +25,8 @@ actually submitted, including its frozen title and any middle truncation;
 a later transcript cannot reconstruct that exact request reliably.
 
 The official ChatGPT clients are not gateway clients. ChatGPT on macOS talks
-directly to the managed Unix socket, and the official iOS remote-control UI is
-a cloud client of that same app-server thread. Their frames therefore do not
-appear in the gateway journal. For macOS UI evidence use the Desktop helper
+directly to the managed Unix socket, so its frames do not appear in the
+gateway journal. The gateway keeps Codex remote control disabled. For macOS UI evidence use the Desktop helper
 logs above and Apple's unified log (`log show --predicate 'process ==
 "ChatGPT"'`). For an iOS display problem, reproduce the authoritative server
 view with `thread/read` and compare it with the rollout before treating it as a

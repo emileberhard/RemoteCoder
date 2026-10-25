@@ -40,9 +40,9 @@ own request ids, subscriptions, notifications, and server-request ownership.
 
 ChatGPT macOS receives the managed socket through its official external
 app-server launch environment. Its app bundle remains unmodified and no private
-fallback app-server may remain. Official ChatGPT remote-control clients stay on
-OpenAI's client path; RemoteCoder observes their host-side threads through the
-same app-server rather than emulating that upstream transport. A host listed
+fallback app-server may remain. The gateway keeps Codex remote control disabled,
+so the app-server holds no connection of its own to chatgpt.com; its ChatGPT
+traffic goes through llm-router, which forwards it without device identifiers. A host listed
 in the private `~/.remote-coder/host-profiles.json` has automatic Desktop management
 disabled when configured. RemoteCoder never opens the app there and removes
 the periodic helper, while gateway startup still publishes the managed socket
@@ -573,7 +573,7 @@ network.
 | Codex | Managed `codex app-server` | Native app-server thread id | App-server v2 requests and notifications |
 | Claude | Warm `claude` stream process per active session, with native login or configured router auth | `claude_`-prefixed id | Gateway translates stream events into the same timeline/turn DTOs |
 
-Codex is the native persistence and remote-control substrate. Claude is a
+Codex is the native persistence substrate. Claude is a
 second provider owned by the gateway: it keeps Claude's resumable JSONL session
 as canonical state and projects output into the same RemoteCoder UI contract.
 All Claude sessions use the host-default profile. Native mode uses the user's

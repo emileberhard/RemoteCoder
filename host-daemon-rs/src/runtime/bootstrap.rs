@@ -157,13 +157,13 @@ pub(super) async fn ensure_normal_daemon(app_server: &CodexAppServer) -> Result<
     // A runtime owner can die after closing admission but before creating its
     // journal. Reopening an unfenced daemon is idempotent and closes that gap.
     app_server.run_lifecycle("cancel-restart").await?;
-    enable_remote_control(app_server).await;
+    disable_remote_control(app_server).await;
     Ok(())
 }
 
-pub(super) async fn enable_remote_control(app_server: &CodexAppServer) {
-    if let Err(error) = app_server.set_remote_control_enabled(true).await {
-        warn!(%error, "Codex remote control remains degraded and will retry independently");
+pub(super) async fn disable_remote_control(app_server: &CodexAppServer) {
+    if let Err(error) = app_server.set_remote_control_enabled(false).await {
+        warn!(%error, "Codex remote control could not be disabled");
     }
 }
 
