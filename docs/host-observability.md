@@ -464,7 +464,11 @@ copy useless for its purpose.
   record of whatever size MetricKit delivered, up to the queue cap, so its
   upload compresses it whole.
   A segment is deleted locally only after a 2xx, so a broken upload path
-  retries rather than losing data.
+  retries rather than losing data. The gateway's segment-specific refusals,
+  400 (not gzip, bad name) and 413 (over its body limit), move that segment to
+  export-only with a `loss` record and the pass continues; any other refusal
+  or a network failure ends the pass and keeps everything queued, so a wrong
+  destination cannot quarantine the queue.
 - **Transport.** `POST /app-logs` on the gateway, bearer-authed like `/health`,
   body is gzipped JSONL, `X-RemoteCoder-Device` and `X-RemoteCoder-Segment`
   headers name the file. Foundation has no gzip writer, so `GzipEncoding`
@@ -519,7 +523,9 @@ only, never WebKit's processes, and it cannot apportion battery to a feature.
 
 - **Sampling.** `ProcessResourceSampler` (Core) reads `TASK_POWER_INFO_V2` and
   `TASK_VM_INFO`: user and system CPU in nanoseconds (converted from Mach time),
-  interrupt, idle and timer wakeups, and the physical footprint. It samples on
+  interrupt, idle and timer wakeups, the physical footprint, and the kernel's
+  cumulative task GPU time (`gpuNs`, from `gpu_energy.task_gpu_utilisation`).
+  It samples on
   launch, every 30 s while a scene is active, on each state change (at least
   1 s apart), once on backgrounding and once on return. A change it could not
   sample at once marks the next sample `mixed`. It runs on the main actor, where
@@ -527,15 +533,20 @@ only, never WebKit's processes, and it cannot apportion battery to a feature.
   `TelemetryBuffer` without waiting for the exporter, so samples carry the time
   of their read and lifecycle work never waits behind a log scan. It stops in
   the background, so nothing runs or wakes while suspended.
-  P-core time, CPU energy and GPU time stay out until a device run validates them.
+  `gpuNs` is recorded raw; its unit is unverified until a day of it agrees in
+  scale with MetricKit's `gpuTimeMetric`. P-core time and CPU energy stay out
+  until a device run validates them.
 - **State.** `TelemetryContext` (app) projects the scene, the visible surface
   (chat or drawer), whether the shown conversation has a running turn, a voice
   call, thermal state and Low Power Mode, battery level, charging and
   brightness in 10 % steps (iOS), the network interface and the shown host's
-  route. Each sample carries the whole state; an absent field is unknown.
+  route. Each sample carries the whole state; an absent field is unknown. The
+  same projection drives the MetricKit state domains (see *iOS 27 performance
+  reports*); `TelemetryContext.publish` feeds both, including scene changes,
+  which are not observable.
 - **Records.** `TelemetryRecord` lines go into `<stamp>-<id>-telemetry.jsonl`
-  batches: a `run` header (`runID`, installation ID, model, app version and
-  build, OS build, wall and monotonic anchors, `flushedThroughSeq`), then
+  batches: a `run` header (`runID`, installation ID, model, app version,
+  build and source commit, OS build, wall and monotonic anchors, `flushedThroughSeq`), then
   `sample`, `export` and `loss` lines with `schemaVersion`, `runID`, a per-run
   `seq`, `ts` and `monoNs`. Samples hold cumulative counters and the
   `PersistenceMetrics` snapshot; the reader takes the deltas. `export` records
@@ -577,11 +588,24 @@ tracked surface because its presentation is view-local, the network interface
 comes from one path monitor in `TelemetryContext`, and on-device segments stay
 uncompressed with their size bounded by the record cap. Costly to change later:
 the record schema and identity fields, hence `schemaVersion` from the first
-record. Next, once two days of `export-cost` exist: the log diet (raw
-RemoteCoder, error and selected Apple records, per-minute counts for the rest),
-then MetricKit activity states, operation signposts, per-purpose network
-counters and gateway connection correlation, as far as the data still shows
-gaps.
+record.
+
+Decision summary (2026-10-25, field observability). Goal: find the next
+performance target from ordinary use alone, by state, exact build and device,
+with symbolicated stacks, keeping 7 rolling days. The projection gained a
+second sink (MetricKit states) instead of features reporting state; scroll is
+an animation interval rather than a state because its phase is view-local;
+GPU time, not battery (iOS reports 5 % steps), is the field signal for render
+work such as the composer spinner. Rejected: a log diet (it discards data and
+volume is about 65 MiB a day), signposts for checkpoints and cache writes
+(`PersistenceMetrics` covers them), `trackLaunchTask` (bootstrap waits on
+gateways while cached content is already visible), kind-ordered host eviction
+(the 1 GiB cap does not bind at 7 days) and trusting MetricKit's build label.
+Follow-ups, tracked here while Linear is at its free cap: validate `gpuNs`
+against MetricKit and A/B the composer spinner; mirror Mac dev-build dSYMs
+built on the MacBook to the Mini; background sampling during voice calls; a
+byte cap for the gateway journal (age-bounded, up to 1.2 GB a day); per-purpose
+network counters and gateway connection correlation.
 
 ### Checkpoint save phases
 
@@ -641,12 +665,37 @@ preflight, predecessor waits and finalization that the old write duration exclud
 ### iOS 27 performance reports and history timing
 
 `AppPerformanceDiagnostics` owns one `MetricManager`, one consumer for each
-report stream, and StateReporting domains
-`emileberhard.RemoteCoder.history` and `emileberhard.RemoteCoder.connection`.
-History states cover a foreground open or page load and clear when it finishes;
-connection states describe the selected host. Stable metadata contains only provider and
-cache/network mode. Volatile fields carry a local operation UUID and byte/read
-counters; prompts, paths, credentials and conversation IDs are excluded.
+report stream, and the StateReporting domains under `emileberhard.RemoteCoder.`:
+
+| Domain | Labels | Source |
+|---|---|---|
+| `surface` | `chat`, `drawer` | `TelemetryContext` projection, active scene only |
+| `turn` | `running` | the shown conversation has a running turn, active scene only |
+| `connection` | `lan`, `configured`, `relay`, `restarting`, `disconnected` | the shown host's route, active scene only |
+| `voice` | `call` | a voice call, also in the background |
+| `energy` | `conserving` | `AppEnergyPolicy.conservesEnergy` |
+| `history` | `opening`, `paging` | foreground history operations, stable metadata `provider` |
+
+`UsageStateLabels` (Core) maps the projection to labels and
+`HistoryOperations` (Core) holds in-flight history operations: `opening` while
+any open runs, otherwise `paging`, cleared when the scene leaves the active
+state. All reporting is synchronous under one lock, so a late clear cannot
+overwrite a newer state. StateReporting ignores a repeated label, and a
+diagnostic's `activeStates` lists the states held before it. Volatile fields
+carry a local operation UUID; prompts, paths, credentials and conversation IDs
+are excluded. Before 3.69.0, one shared operation ID let `history` states leak
+for hours and `connection` came from per-target calls, so older reports'
+history and connection entries are not comparable.
+
+`TranscriptScroll` (iOS) is both a Points of Interest interval, which
+`perf-trace` reads, and a MetricKit animation interval in category
+`Transcript`, which gives scroll hitch ratio, hitch and animation time.
+`HistorySelectionToFirstContent` uses `mxSignpost`, so MetricKit measures CPU,
+memory and logical writes for it; `OSSignposter` intervals report those as 0.
+Signpost CPU is whole-process during the interval, so it is association, not
+the operation's own cost. A metrics report's own application build is the build
+at delivery, not the build that ran during its coverage; the reader attributes
+entries to builds through the telemetry `run` headers.
 
 Full Codable metrics/diagnostics are versioned JSONL envelopes from
 `AppPerformanceReportRecord`, retaining receipt time, coverage and content hash.
