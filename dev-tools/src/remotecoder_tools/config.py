@@ -156,7 +156,7 @@ def _gateway_read_host(args: argparse.Namespace) -> str | None:
 
 
 def _ssh_read_env(ssh_host: str, env_path: str) -> str:
-    cmd = ["ssh", "-o", "BatchMode=yes", ssh_host, "cat", env_path]
+    cmd = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=none", ssh_host, "cat", env_path]
     try:
         res = subprocess.run(cmd, stdin=subprocess.DEVNULL, check=True, capture_output=True, text=True, timeout=10)
     except subprocess.TimeoutExpired as exc:
@@ -203,7 +203,7 @@ print(json.dumps(json.loads(data)['lanEndpoint']))
     command = ["python3", "-c", script]
     location = "on this host" if ssh_host is None else f"through SSH to {ssh_host}"
     if ssh_host is not None:
-        command = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", ssh_host, shlex.join(command)]
+        command = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=none", ssh_host, shlex.join(command)]
     try:
         result = subprocess.run(command, input=json.dumps({"token": token, "port": health_port}), capture_output=True,
                                 text=True, check=True, timeout=10)

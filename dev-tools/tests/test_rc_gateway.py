@@ -640,6 +640,35 @@ class FileProbeTransportTests(unittest.IsolatedAsyncioTestCase):
 
 
 class FileProbeResumeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_claude_fallback_cannot_discard_explicit_codex_restrictions(self) -> None:
+        for overrides in ({"sandbox": "readOnly"}, {"network_access": False}, {"approval_policy": "on-request"}):
+            with self.subTest(overrides=overrides):
+                rpc = AsyncMock(return_value=({"thread": {"id": "claude_admitted"}, "model": "opus"}, 0, 0))
+                policy = {"sandbox": "dangerFullAccess", "network_access": True, "approval_policy": "never", **overrides}
+                with patch.object(turns, "_timed_rpc", rpc), self.assertRaisesRegex(RuntimeError, "cannot preserve"):
+                    await turns._run_gateway_turn(
+                        object(), next_id=lambda: 1, prompt="run", resume=None, model="gpt-6.1-sol",
+                        cwd="/tmp", timeout_s=1, **policy,
+                    )
+                self.assertEqual([call.kwargs["method"] for call in rpc.call_args_list], ["thread/start"])
+
+    async def test_provider_probe_refuses_another_harness_before_executing(self) -> None:
+        config = gateway_config.GatewayConfig("gateway.test", 8787, "synthetic", "ws")
+        args = gateway_cli.build_parser().parse_args(["e2e-files-live"])
+        socket = AsyncMock()
+        socket.__aenter__.return_value = socket
+        rpc = AsyncMock(side_effect=[
+            ({"thread": {"id": "codex_admitted"}, "model": "gpt-6.1-sol"}, 0, 0),
+            ({}, 0, 0),
+        ])
+        with patch.object(turns, "_ws_connect", AsyncMock(return_value=socket)), \
+             patch.object(turns, "_drain_ready", AsyncMock()), \
+             patch.object(turns, "_initialize", AsyncMock()), \
+             patch.object(turns, "_timed_rpc", rpc), \
+             self.assertRaisesRegex(RuntimeError, "Probe requested claude but gateway admitted codex"):
+            await turns._probe_turn(args, config, "claude", "run")
+        self.assertEqual([call.kwargs["method"] for call in rpc.call_args_list], ["thread/start", "conversation/marks/update"])
+
     async def test_claude_resume_uses_exact_thread_and_releases_its_runtime(self) -> None:
         from unittest.mock import AsyncMock, patch
 
@@ -1028,6 +1057,64 @@ class TurnSetupReceiptTests(unittest.IsolatedAsyncioTestCase):
                     rows = [json.loads(line) for line in event_log.read_text().splitlines()]
                     self.assertEqual([row for row in rows if row.get("type") == "dispatch.not_started"], expected)
 
+    async def test_fresh_commands_follow_the_admitted_provider_model_and_effort(self) -> None:
+        import tempfile
+        from websockets.asyncio.server import serve
+
+        for command, actual_thread, actual_model, actual_provider in (
+            ("turn", "claude_admitted", "opus", "claude"),
+            ("claude-turn", "codex_admitted", "gpt-6.1-sol", "openai"),
+            ("turn", "codex_admitted", "gpt-5.4", "copilot"),
+            ("claude-turn", "codex_admitted", "gpt-5.4", "copilot"),
+            ("claude-turn", "claude_admitted", "opus", "claude"),
+        ):
+            with self.subTest(command=command, provider=actual_provider), tempfile.TemporaryDirectory() as directory:
+                requests = []
+
+                async def respond(connection) -> None:
+                    await connection.send(json.dumps({"method": "ready", "params": {}}))
+                    async for raw in connection:
+                        request = json.loads(raw)
+                        if "id" not in request:
+                            continue
+                        requests.append(request)
+                        result = {"thread": {"id": actual_thread}, "model": actual_model,
+                                  "modelProvider": actual_provider, "reasoningEffort": None if command == "claude-turn" and actual_provider == "claude" else "high"}
+                        if request["method"] == "turn/start":
+                            result = {"turn": {"id": "actual_turn"}}
+                        await connection.send(json.dumps({"id": request["id"], "result": result}))
+                        if request["method"] == "turn/start":
+                            for thread_id in ("unrelated_thread", actual_thread):
+                                await connection.send(json.dumps({"method": "turn/completed", "params": {
+                                    "threadId": thread_id, "turn": {"id": "actual_turn", "status": "completed"},
+                                }}))
+
+                path = Path(directory) / "gateway.jsonl"
+                flags = [command, "--prompt", "run", "--service-tier", "fast"] if command == "turn" else [command, "run"]
+                args = gateway_cli.build_parser().parse_args([
+                    *flags, "--model", "original-model", "--effort", "xhigh", "--event-log", str(path), "--timeout", "1",
+                ])
+                async with serve(respond, "127.0.0.1", 0) as server:
+                    port = server.sockets[0].getsockname()[1]
+                    configuration = gateway_config.GatewayConfig("127.0.0.1", port, "synthetic", "ws")
+                    with patch.object(gateway_cli, "_resolve_config", return_value=configuration), redirect_stdout(io.StringIO()):
+                        self.assertEqual(await args.func(args), 0)
+                start, turn = [request["params"] for request in requests if request["method"] in {"thread/start", "turn/start"}]
+                self.assertTrue(start["acceptProviderFallback"])
+                self.assertEqual(start["config"]["model_reasoning_effort"], "xhigh")
+                self.assertEqual(turn["threadId"], actual_thread)
+                self.assertEqual(turn["model"], actual_model)
+                self.assertEqual(turn["effort"], "xhigh" if command == "claude-turn" and actual_provider == "claude" else "high")
+                if actual_provider == "claude":
+                    self.assertNotIn("serviceTier", turn)
+                    self.assertNotIn("sandboxPolicy", turn)
+                else:
+                    self.assertEqual(turn["modelProvider"], actual_provider)
+                    self.assertIsNone(turn["serviceTier"])
+                    self.assertEqual(turn["sandboxPolicy"], {"type": "dangerFullAccess", "networkAccess": True})
+                rows = [json.loads(line) for line in path.read_text().splitlines()]
+                self.assertIn({"type": "turn.started", "thread_id": actual_thread, "turn_id": "actual_turn"}, rows)
+
     async def test_codex_dispatch_tier_and_exact_lifecycle(self) -> None:
         import tempfile
         from websockets.asyncio.server import serve
@@ -1041,7 +1128,7 @@ class TurnSetupReceiptTests(unittest.IsolatedAsyncioTestCase):
                 if "id" not in request:
                     continue
                 requests.append(request)
-                results = {"thread/start": {"thread": {"id": "codex_exact"}},
+                results = {"thread/start": {"thread": {"id": "codex_exact"}, "model": "default-model", "reasoningEffort": "high"},
                            "thread/resume": {"thread": {"id": "codex_exact"}},
                            "turn/start": {"turn": {"id": "turn_exact"}}}
                 await connection.send(json.dumps({"id": request["id"], "result": results.get(request["method"], {})}))
@@ -1059,7 +1146,7 @@ class TurnSetupReceiptTests(unittest.IsolatedAsyncioTestCase):
                         port = server.sockets[0].getsockname()[1]
                         config = gateway_config.GatewayConfig("127.0.0.1", port, "synthetic", "ws")
                         event_log = Path(directory) / "gateway.jsonl"
-                        flags = ["turn", "--prompt", "run", "--purpose", "automation", "--timeout", "1", "--event-log", str(event_log)]
+                        flags = ["turn", "--prompt", "run", "--model", "default-model", "--purpose", "automation", "--timeout", "1", "--event-log", str(event_log)]
                         if resume:
                             flags += ["--resume", "codex_exact"]
                         if tier:
@@ -1069,6 +1156,9 @@ class TurnSetupReceiptTests(unittest.IsolatedAsyncioTestCase):
                             self.assertEqual(await gateway_cli.cmd_turn(args), 0)
                     dispatches = [r for r in requests if r["method"] in {"thread/start", "thread/resume", "turn/start"}]
                     self.assertEqual(len(dispatches), 2)
+                    self.assertNotIn("effort", dispatches[-1]["params"])
+                    self.assertEqual(dispatches[0]["params"].get("acceptProviderFallback"), None if resume else True)
+                    self.assertNotIn("acceptProviderFallback", dispatches[-1]["params"])
                     for request in dispatches:
                         # Missing differs from null: omission inherits the user's Fast setting.
                         self.assertIn("serviceTier", request["params"])

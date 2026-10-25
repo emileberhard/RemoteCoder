@@ -211,6 +211,14 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         activeModelProvider = provider
     }
 
+    func adoptAdmission(_ settings: TurnDispatcher.Settings, threadID: String) {
+        guard activeSessionID == threadID else { return }
+        let changedRoute = selectedModel?.provider != settings.model.provider ||
+            selectedModel?.modelProvider?.id != settings.model.modelProvider?.id
+        guard changedRoute || selectionIsCurrent(revision: settings.selectionRevision, threadID: threadID) else { return }
+        pickerSelection.adopt(model: settings.model, reasoning: settings.reasoning, fastMode: settings.fastModeState)
+    }
+
     func adoptReportedModel(_ modelID: String?, threadID: String, selectionRevision: UInt64) {
         guard activeModelProvider?.externalID != nil, let modelID, modelID != selectedModel?.id,
               selectionIsCurrent(revision: selectionRevision, threadID: threadID),

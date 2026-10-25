@@ -614,9 +614,32 @@ impl Gateway {
             bytes = raw.len(),
             "rpc client->gateway received"
         );
-        let Some(owned) = request.owned else {
+        let Some(owned) = request.owned.filter(|_| request.method != "thread/start") else {
+            let start_permit = if request.method == "thread/start" {
+                let Some(permit) = self.request_budgets.command.try_acquire(raw.len()) else {
+                    self.journal.transport(
+                        "request_capacity",
+                        serde_json::json!({
+                            "clientId": client_id, "method": request.method,
+                            "resource": "host commands", "queueDepth": queries.queue_depth(),
+                        }),
+                    );
+                    let _ = self
+                        .send_error_to(
+                            out_tx,
+                            id.as_ref(),
+                            &queries::capacity_error("host commands"),
+                        )
+                        .await;
+                    return Ok(());
+                };
+                Some(permit)
+            } else {
+                None
+            };
             return lane_tx
                 .send(UpstreamFrame::Request(NativeRequest {
+                    _start_permit: start_permit,
                     raw,
                     request,
                     _admission: admission,
@@ -747,21 +770,43 @@ impl Gateway {
                         .await
                         .context("forward Codex response failed")
                 }
-                (UpstreamFrame::Request(request), Some(upstream_tx)) => {
+                (UpstreamFrame::Request(request), upstream_tx)
+                    if request.request.method == "thread/start" =>
+                {
+                    let id = request.request.object.get("id").cloned();
+                    let gateway = Arc::clone(self);
+                    let out = out_tx.clone();
+                    let pending = Arc::clone(&pending_requests);
+                    let upstream = upstream_tx.clone();
+                    if !self
+                        .command_tasks
+                        .spawn("conversation admission", async move {
+                            gateway
+                                .forward_native_request(
+                                    client_id,
+                                    &out,
+                                    request,
+                                    upstream.as_ref(),
+                                    &pending,
+                                )
+                                .await
+                        })
+                    {
+                        let _ = self.reject_draining(&out_tx, id.as_ref()).await;
+                    }
+                    Ok(())
+                }
+                (UpstreamFrame::Request(request), upstream_tx) => {
                     self.forward_native_request(
                         client_id,
                         &out_tx,
                         request,
-                        upstream_tx,
+                        upstream_tx.as_ref(),
                         &pending_requests,
                     )
                     .await
                 }
                 (UpstreamFrame::Response(_), None) => Ok(()),
-                (UpstreamFrame::Request(request), None) => {
-                    self.answer_without_codex(&out_tx, &request.request).await;
-                    Ok(())
-                }
             };
             if let Err(error) = forwarded {
                 warn!(client_id, "client upstream lane stopped: {error:#}");
@@ -785,14 +830,15 @@ impl Gateway {
     }
 
     async fn forward_native_request(
-        &self,
+        self: &Arc<Self>,
         client_id: u64,
         out_tx: &ClientTx,
         request: NativeRequest,
-        upstream_tx: &mpsc::Sender<UpstreamMessage>,
+        upstream_tx: Option<&mpsc::Sender<UpstreamMessage>>,
         pending_requests: &PendingRequests,
     ) -> Result<()> {
         let NativeRequest {
+            _start_permit,
             raw,
             request:
                 ClientRequest {
@@ -804,26 +850,69 @@ impl Gateway {
             _admission,
         } = request;
         let id = object.get("id").cloned();
-        match self.validate_dispatch(&method, &object).await {
-            Ok(()) => (),
-            Err(error) => {
-                let _ = self.send_error_to(out_tx, id.as_ref(), &error).await;
-                return Ok(());
-            }
-        };
+        let mut object = object;
+        let mut params = object.remove("params").unwrap_or(Value::Null);
+        let mut selected = false;
         if starts_new_work && self.is_draining() {
             let _ = self.reject_draining(out_tx, id.as_ref()).await;
             return Ok(());
         }
-        let mut object = object;
-        let mut params = object.remove("params").unwrap_or(Value::Null);
-        let admitted = async {
-            if method == "thread/start" {
-                self.start_on_fallback(&mut params).await?;
+        if method == "thread/start" {
+            match self.admit_new_conversation(&mut params).await {
+                Ok(changed) => {
+                    selected = changed;
+                    if let Some(fields) = params.as_object_mut() {
+                        selected |= fields.remove("acceptProviderFallback").is_some();
+                    }
+                }
+                Err(error) => {
+                    let _ = self.send_error_to(out_tx, id.as_ref(), &error).await;
+                    return Ok(());
+                }
             }
-            self.admit_native(&method, &mut params).await
         }
-        .await;
+        if !params.is_null() {
+            object.insert("params".into(), params.clone());
+        }
+        if starts_new_work && self.is_draining() {
+            let _ = self.reject_draining(out_tx, id.as_ref()).await;
+            return Ok(());
+        }
+        if method == "thread/start" && crate::rpc::dispatch::claude_route(&method, &object) {
+            return self
+                .handle_owned_rpc(
+                    client_id,
+                    out_tx,
+                    &method,
+                    crate::rpc::dispatch::OwnedTarget::Claude(
+                        crate::rpc::dispatch::ClaudeMethod::ThreadStart,
+                    ),
+                    &object,
+                )
+                .await;
+        }
+        let Some(upstream_tx) = upstream_tx else {
+            let request = ClientRequest {
+                object,
+                method,
+                starts_new_work,
+                owned: None,
+            };
+            self.answer_without_codex(out_tx, &request).await;
+            return Ok(());
+        };
+        if let Err(error) = self.validate_dispatch(&method, &object).await {
+            let _ = self.send_error_to(out_tx, id.as_ref(), &error).await;
+            return Ok(());
+        }
+        if starts_new_work && self.is_draining() {
+            let _ = self.reject_draining(out_tx, id.as_ref()).await;
+            return Ok(());
+        }
+        let admitted = self
+            .admit_native(&method, &mut params)
+            .await
+            .map(|rewritten| rewritten || selected);
         if !params.is_null() {
             object.insert("params".into(), params);
         }

@@ -199,7 +199,7 @@ impl ExternalProviders {
             return Ok(());
         }
         let models = self.fallback_catalog(provider).await?;
-        self.map_onto_fallback(fields, &models);
+        self.map_onto_fallback(fields, &models, None);
         if let Some(default) = models.first() {
             if fields.get("model").is_none_or(Value::is_null) {
                 fields.insert("model".into(), default["slug"].clone());
@@ -214,6 +214,7 @@ impl ExternalProviders {
                 *model = default["slug"].clone();
             }
         }
+        adapt_fallback_effort(fields, &models, None);
         fields.insert("modelProvider".into(), json!(provider.id));
         info!(provider = %provider.id, model = %fields["model"], "starting a new Codex conversation on the fallback provider");
         Ok(())
@@ -223,17 +224,23 @@ impl ExternalProviders {
         &self,
         fields: &mut Map<String, Value>,
         source: &str,
+        current_model: Option<&str>,
     ) -> std::result::Result<bool, RpcError> {
         match self.providers.first().filter(|first| first.id == source) {
             Some(fallback) => {
                 let models = self.fallback_catalog(fallback).await?;
-                Ok(self.map_onto_fallback(fields, &models))
+                Ok(self.map_onto_fallback(fields, &models, current_model))
             }
             None => Ok(false),
         }
     }
 
-    fn map_onto_fallback(&self, fields: &mut Map<String, Value>, models: &[Value]) -> bool {
+    fn map_onto_fallback(
+        &self,
+        fields: &mut Map<String, Value>,
+        models: &[Value],
+        current_model: Option<&str>,
+    ) -> bool {
         let native = |model: &Value| {
             model
                 .as_str()
@@ -267,6 +274,7 @@ impl ExternalProviders {
             *model = slug;
             mapped = true;
         }
+        mapped |= adapt_fallback_effort(fields, models, current_model);
         mapped
     }
 
@@ -322,7 +330,9 @@ impl ExternalProviders {
             return None;
         }
         let selects = |fields: &Map<String, Value>| {
-            selected_models(fields).next().is_some() || selects_tier(fields)
+            selected_models(fields).next().is_some()
+                || selects_tier(fields)
+                || fields.get("effort").is_some_and(|value| !value.is_null())
         };
         match method {
             "thread/resume" | "thread/fork" | "thread/restart/recover" => Some(thread.to_owned()),
@@ -340,6 +350,7 @@ impl ExternalProviders {
         method: &str,
         params: &mut Value,
         source_provider: Option<&str>,
+        current_model: Option<&str>,
     ) -> std::result::Result<bool, RpcError> {
         let Some(fields) = params.as_object_mut() else {
             return Ok(false);
@@ -372,7 +383,16 @@ impl ExternalProviders {
                 if requested.is_none() && provider != NATIVE_PROVIDER {
                     fields.insert("modelProvider".into(), json!(provider));
                 }
-                self.admit_thread(fields, &provider, true, true).await
+                let configured = self.admit_thread(fields, &provider, true, true).await?;
+                if let Some(fallback) = self
+                    .providers
+                    .first()
+                    .filter(|fallback| fallback.id == provider)
+                {
+                    let models = self.fallback_catalog(fallback).await?;
+                    adapt_fallback_effort(fields, &models, current_model);
+                }
+                Ok(configured)
             }
             "thread/resume" | "thread/fork" | "thread/restart/recover" => {
                 let source = source_provider.ok_or_else(|| {
@@ -397,7 +417,9 @@ impl ExternalProviders {
                 }
                 let inherits = method == "thread/fork"
                     && fields.get("experimentalPredictionMode") == Some(&json!(true));
-                let mapped = self.map_onto_fallback_thread(fields, source).await?;
+                let mapped = self
+                    .map_onto_fallback_thread(fields, source, current_model)
+                    .await?;
                 let configured = self.admit_thread(fields, source, false, !inherits).await?;
                 Ok(mapped || configured)
             }
@@ -405,7 +427,9 @@ impl ExternalProviders {
                 let Some(source) = source_provider else {
                     return Ok(false);
                 };
-                let mapped = self.map_onto_fallback_thread(fields, source).await?;
+                let mapped = self
+                    .map_onto_fallback_thread(fields, source, current_model)
+                    .await?;
                 self.check_selection(fields, source).await.map(|_| mapped)
             }
             _ => Ok(false),
@@ -492,7 +516,7 @@ impl ExternalProviders {
         Ok(Some(provider))
     }
 
-    fn owner(&self, model: &str) -> Option<&ExternalProvider> {
+    pub(crate) fn owner(&self, model: &str) -> Option<&ExternalProvider> {
         self.providers
             .iter()
             .find(|provider| provider.models.iter().any(|id| id == model))
@@ -561,6 +585,64 @@ impl ExternalProviders {
             .insert(provider.id.clone(), Arc::new(models));
         Ok(())
     }
+}
+
+fn adapt_fallback_effort(
+    fields: &mut Map<String, Value>,
+    models: &[Value],
+    current_model: Option<&str>,
+) -> bool {
+    let model = fields
+        .get("model")
+        .and_then(Value::as_str)
+        .or(current_model);
+    let selected = models.iter().find(|row| row["slug"].as_str() == model);
+    let collaboration = fields
+        .get("collaborationMode")
+        .and_then(|mode| mode.pointer("/settings/model"))
+        .and_then(Value::as_str)
+        .and_then(|model| models.iter().find(|row| row["slug"] == model));
+    let normalize = |value: &mut Value, model: Option<&Value>| {
+        let Some(requested) = value.as_str() else {
+            return false;
+        };
+        let Some(model) = model else {
+            return false;
+        };
+        let levels = model["supported_reasoning_levels"]
+            .as_array()
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        if levels.iter().any(|level| level["effort"] == requested) {
+            return false;
+        }
+        let replacement = crate::rpc::supported_reasoning_effort(
+            requested,
+            levels.iter().filter_map(|level| level["effort"].as_str()),
+        );
+        debug!(%requested, ?replacement, "adapted reasoning effort for the Codex fallback model");
+        *value = replacement.map_or(Value::Null, |effort| json!(effort));
+        true
+    };
+    let mut changed = false;
+    if let Some(value) = fields.get_mut("effort") {
+        changed |= normalize(value, collaboration.or(selected));
+    }
+    if let Some(config) = fields.get_mut("config").and_then(Value::as_object_mut)
+        && let Some(value) = config.get_mut("model_reasoning_effort")
+    {
+        changed |= normalize(value, selected);
+        if value.is_null() {
+            changed |= config.remove("model_reasoning_effort").is_some();
+        }
+    }
+    if let Some(value) = fields
+        .get_mut("collaborationMode")
+        .and_then(|mode| mode.pointer_mut("/settings/reasoning_effort"))
+    {
+        changed |= normalize(value, collaboration);
+    }
+    changed
 }
 
 fn catalog_path(directory: &Path, provider: &ExternalProvider) -> PathBuf {

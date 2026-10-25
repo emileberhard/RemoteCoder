@@ -6,6 +6,7 @@ import {
 } from "../execution-context";
 import { RpcError } from "../gateway";
 import { canonicalModelID } from "../preferences";
+import { providerForThread } from "../protocol/agent-provider";
 import {
   type Address,
   addressKey,
@@ -150,7 +151,13 @@ export class TurnDispatcher {
     if (!this.hosts.present(host))
       throw new Error("The captured execution context was retired before dispatch");
   }
-  private async startConversation(host: HostState, draft: Draft, draftKey: string, fence: number) {
+  private async startConversation(
+    host: HostState,
+    draft: Draft,
+    draftKey: string,
+    fence: number,
+    serviceName: "RemoteCoder" | "RemoteCoder Voice",
+  ) {
     if (!draft.cwd) throw new Error("Choose a host working directory first");
     const modelID = draft.provider === "claude" ? canonicalModelID(draft.model) : draft.model;
     const choice = (host.choices.status === "ready" ? host.choices.value : []).find(
@@ -169,9 +176,11 @@ export class TurnDispatcher {
             cwd: draft.cwd,
             approvalPolicy: "never",
             sandbox: "danger-full-access",
-            serviceName: "RemoteCoder",
+            serviceName,
+            ...(serviceName === "RemoteCoder" ? { acceptProviderFallback: true } : {}),
             serviceTier: draft.fast && choice.fast ? "fast" : null,
             provider: draft.provider,
+            ...(draft.effort ? { config: { model_reasoning_effort: draft.effort } } : {}),
           },
           { timeout: 150000, signal: host.controller.signal },
         ),
@@ -180,7 +189,33 @@ export class TurnDispatcher {
     } finally {
       release();
     }
-    const header = conversationHeader(response.thread, draft.provider);
+    const rawThread = object(response.thread);
+    const header = conversationHeader(
+      {
+        ...rawThread,
+        model: rawThread.model ?? response.model,
+        reasoningEffort: rawThread.reasoningEffort ?? response.reasoningEffort,
+      },
+      providerForThread(identifier(rawThread.id)),
+    );
+    const changedRoute =
+      header.provider !== draft.provider ||
+      (header.model != null && header.model !== modelID) ||
+      (typeof rawThread.modelProvider === "string" &&
+        rawThread.modelProvider !== (choice.modelProvider ?? "openai") &&
+        header.provider === "codex");
+    const settings = {
+      provider: header.provider,
+      model: header.model ?? draft.model,
+      effort:
+        !changedRoute && draft.effort === ""
+          ? ""
+          : (header.reasoningEffort ?? (changedRoute ? "" : draft.effort)),
+      fast:
+        header.extra && Object.hasOwn(header.extra, "serviceTier")
+          ? header.extra.serviceTier === "priority" || header.extra.serviceTier === "fast"
+          : !changedRoute && draft.fast && choice.fast,
+    };
     const address = conversationAddress(host.target, header.id);
     const destinationKey = addressKey(address);
     const session = this.sessions.admitStarted(host, address, header);
@@ -188,7 +223,30 @@ export class TurnDispatcher {
     this.hosts.recordThread(host, header);
     this.actions.selectStarted(address, fence);
     const latest = this.drafts.snapshot.get(draftKey) ?? draft;
-    this.drafts.update(latest, destinationKey);
+    const settingsUnchanged =
+      latest.provider === draft.provider &&
+      latest.model === draft.model &&
+      latest.effort === draft.effort &&
+      latest.fast === draft.fast;
+    const latestChoice = (host.choices.status === "ready" ? host.choices.value : []).find(
+      (choice) =>
+        choice.provider === latest.provider &&
+        choice.id === (latest.provider === "claude" ? canonicalModelID(latest.model) : latest.model),
+    );
+    const latestRouteCompatible =
+      latest.provider === header.provider &&
+      latestChoice !== undefined &&
+      (header.provider !== "codex" ||
+        (latestChoice.modelProvider ?? "openai") === (rawThread.modelProvider ?? "openai"));
+    this.drafts.update(
+      {
+        ...latest,
+        ...(!latestRouteCompatible || settingsUnchanged
+          ? { ...settings, fast: latestRouteCompatible ? latest.fast : settings.fast }
+          : {}),
+      },
+      destinationKey,
+    );
     const destinationRevision =
       latest.revision === draft.revision
         ? (this.drafts.snapshot.get(destinationKey)?.revision ?? draft.revision)
@@ -205,9 +263,9 @@ export class TurnDispatcher {
       }
       await this.validateExecution(host);
     }
-    return { conversation, destinationRevision };
+    return { conversation, destinationRevision, settings };
   }
-  prepareConversation(): Promise<Conversation> {
+  prepareVoiceConversation(): Promise<Conversation> {
     const key = this.current().draftKey;
     const pending = this.preparations.get(key);
     if (pending) return pending;
@@ -227,7 +285,7 @@ export class TurnDispatcher {
     const fence = this.current().selection;
     this.admissions.add(key);
     this.publish();
-    const operation = this.startConversation(host, draft, key, fence)
+    const operation = this.startConversation(host, draft, key, fence, "RemoteCoder Voice")
       .then(({ conversation }) => conversation)
       .finally(() => {
         this.preparations.delete(key);
@@ -267,6 +325,7 @@ export class TurnDispatcher {
       .choices()
       .find((choice) => choice.id === draft.model && choice.provider === draft.provider);
     if (!choice) throw new Error("Choose a model from the host catalog before sending");
+    let settings = { model: draft.model, effort: draft.effort, fast: draft.fast && choice.fast };
     let conversation = this.current().conversation;
     if (this.current().selected && !conversation)
       throw new Error("Wait for the selected conversation header to load");
@@ -283,7 +342,13 @@ export class TurnDispatcher {
     const clientId = crypto.randomUUID();
     let destinationRevision = draft.revision;
     if (!conversation) {
-      ({ conversation, destinationRevision } = await this.startConversation(host, draft, draftKey, fence));
+      ({ conversation, destinationRevision, settings } = await this.startConversation(
+        host,
+        draft,
+        draftKey,
+        fence,
+        "RemoteCoder",
+      ));
     }
     const current = conversation;
     const destinationKey = addressKey(current.address);
@@ -367,12 +432,12 @@ export class TurnDispatcher {
             threadId: current.address.threadId,
             input,
             clientUserMessageId: clientId,
-            model: draft.model,
-            effort: draft.effort || null,
+            model: settings.model,
+            effort: settings.effort || null,
             cwd: current.header.cwd,
             approvalPolicy: "never",
             sandboxPolicy: { type: "dangerFullAccess" },
-            serviceTier: draft.fast && choice.fast ? "fast" : null,
+            serviceTier: settings.fast ? "fast" : null,
           }),
         );
       if (mode !== "queue") {

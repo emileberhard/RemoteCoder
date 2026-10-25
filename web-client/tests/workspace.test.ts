@@ -69,7 +69,7 @@ test("a pending exact header cannot create a replacement conversation through se
   const loading = workspace.selectConversation({ hostId: "mini", threadId: "outside-first-page" });
   workspace.updateDraft({ model: "test-model", text: "Wait for the exact thread" });
   await expect(workspace.send()).rejects.toThrow("header to load");
-  await expect(workspace.prepareConversation()).rejects.toThrow("header to load");
+  await expect(workspace.prepareVoiceConversation()).rejects.toThrow("header to load");
   expect(harness.calls.some((call) => call.method === "thread/start")).toBe(false);
   pending.resolve({ thread: header("outside-first-page") });
   await loading;

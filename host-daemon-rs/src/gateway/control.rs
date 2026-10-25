@@ -269,6 +269,7 @@ impl Gateway {
                                 self.close_degraded_clients();
                                 backoff = 0.1;
                                 self.spawn_external_renewal(&generation);
+                                self.spawn_native_readiness_refresh(&generation);
                                 info!("Codex control connection initialized");
                                 self.spawn_persisted_observers().await;
                                 let gateway = Arc::clone(&self);

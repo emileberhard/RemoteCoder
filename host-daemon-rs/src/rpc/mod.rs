@@ -236,3 +236,19 @@ mod tests {
         assert!(budget.try_acquire(10).is_some());
     }
 }
+
+pub(crate) fn supported_reasoning_effort<'a>(
+    requested: &'a str,
+    supported: impl Iterator<Item = &'a str>,
+) -> Option<&'a str> {
+    let supported = supported.collect::<Vec<_>>();
+    if supported.contains(&requested) {
+        return Some(requested);
+    }
+    [
+        "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra",
+    ]
+    .into_iter()
+    .rev()
+    .find(|effort| supported.contains(effort))
+}

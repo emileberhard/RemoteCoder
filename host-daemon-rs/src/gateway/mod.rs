@@ -245,6 +245,7 @@ pub(crate) mod admission;
 mod claude_fork;
 mod external_auth;
 mod external_providers;
+mod provider_fallback;
 mod provider_health;
 pub(crate) use external_auth::ExternalAuth;
 mod lifecycle;
@@ -906,6 +907,7 @@ enum UpstreamFrame {
 }
 
 struct NativeRequest {
+    _start_permit: Option<crate::rpc::RequestPermit>,
     raw: String,
     request: ClientRequest,
     _admission: Option<crate::gateway::admission::Admission>,

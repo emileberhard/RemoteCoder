@@ -57,6 +57,13 @@ evidence. It never connects to an installed gateway or starts an agent turn.
   `data.kind` ending in `Uncertain`/`Unknown`; `data.retryable` wins, else the
   -3200x codes are retryable. Any other failure after handoff, including -32603
   (Claude can fail after writing the prompt), stays uncertain.
+- **Fresh admission:** `thread/start` owns the selected harness, model provider,
+  model and effort. Turn commands use its returned thread identity and settings
+  for `turn/start`, including fallback across harnesses. Exact resumes retain
+  their explicitly selected settings and provider. Restricted Codex requests
+  cannot execute through unrestricted Claude. Provider acceptance probes refuse
+  admission to another harness before submitting a turn; their resumed turns
+  inherit the admitted thread model.
 - **Streams:** `turn` filters events to its own thread (`_event_thread_id` in
   `src/remotecoder_tools/rpc.py` is the one place that finds a notification's
   thread) and `listen` takes `--thread-id`. Stored notifications carry

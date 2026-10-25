@@ -197,7 +197,7 @@ export function ChatRoot() {
             conversation={conversation}
             openVoice={() =>
               run(async () => {
-                const prepared = await workspace.prepareConversation();
+                const prepared = await workspace.prepareVoiceConversation();
                 if (workspace.selectedConversation === prepared) setModal({ kind: "voice" });
               })
             }

@@ -545,8 +545,8 @@ async def cmd_claude_turn(args: argparse.Namespace) -> int:
 
             run = await _run_gateway_turn(
                 ws, next_id=ids.__next__, prompt=args.prompt, resume=args.resume,
-                model=args.model, cwd=args.cwd, approval_policy="never", sandbox="readOnly",
-                network_access=False, timeout_s=args.timeout, provider="claude",
+                model=args.model, cwd=args.cwd, approval_policy="never", sandbox="dangerFullAccess",
+                network_access=True, timeout_s=args.timeout, provider="claude",
                 input_items=input_items, effort=args.effort, resume_rpc=False, purpose=args.purpose,
                 on_thread=set_thread, on_turn=turn_started, on_event=show,
             )

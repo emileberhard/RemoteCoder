@@ -1793,11 +1793,15 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
     // MARK: - Internals: Gateway Turn
 
     func threadStarted(_ thread: CodexAppServerV2.Thread, session: ConversationSession, settingsRevision: UInt64,
-                       requestedServiceTier: CodexAppServerV2.ServiceTierOverride?) async {
+                       requestedServiceTier: CodexAppServerV2.ServiceTierOverride?, admittedSettings: TurnDispatcher.Settings? = nil) async {
         if let owner = screens.first(where: { $0.selectedConversation === session }) {
             if owner.activeSessionID == nil { owner.setActiveSessionID(thread.id) }
             owner.adoptModelProvider(thread.modelProvider, threadID: thread.id)
-            owner.adoptReportedModel(thread.model, threadID: thread.id, selectionRevision: settingsRevision)
+            if let admittedSettings {
+                owner.adoptAdmission(admittedSettings, threadID: thread.id)
+            } else {
+                owner.adoptReportedModel(thread.model, threadID: thread.id, selectionRevision: settingsRevision)
+            }
             if requestedServiceTier == nil {
                 owner.acceptThreadTierReadback(thread.extra, threadID: thread.id, selectionRevision: settingsRevision)
             }

@@ -799,6 +799,7 @@ impl Gateway {
             "preview": "",
             "modelProvider": "claude",
             "model": model,
+            "reasoningEffort": params.pointer("/config/model_reasoning_effort").and_then(Value::as_str).map(claude_effort_wire_value),
             "createdAt": now,
             "updatedAt": now,
             "path": crate::providers::claude::timeline::session_path_for_cwd(
@@ -819,7 +820,7 @@ impl Gateway {
             "cwd": cwd,
             "approvalPolicy": "never",
             "sandbox": { "type": "dangerFullAccess" },
-            "reasoningEffort": Value::Null,
+            "reasoningEffort": params.pointer("/config/model_reasoning_effort").and_then(Value::as_str).map(claude_effort_wire_value),
         }))
     }
 

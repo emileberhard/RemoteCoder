@@ -449,10 +449,26 @@ async fn a_client_without_codex_is_served_and_moved_to_codex_once_it_is_ready() 
     assert_eq!(info["id"], 3);
     assert!(info["result"]["homeDirectory"].is_string(), "{info}");
 
-    let (control, _control_requests) = mpsc::channel(8);
+    let (control, mut control_requests) = mpsc::channel(8);
     gateway.attach_fake_control(control).await;
     *gateway.control_init_result.lock().await = Some(json!({}));
-    gateway.refresh_provider_health().await;
+    let reply = async {
+        let raw = tokio::time::timeout(Duration::from_secs(3), control_requests.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        let request: Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(request["method"], "account/read");
+        gateway
+            .handle_control_text(
+                json!({"id":request["id"], "result":{"requiresOpenaiAuth":false,"account":null}})
+                    .to_string(),
+                crate::notifications::history::NotificationOrigin::Control { opened_after: 0 },
+            )
+            .await;
+    };
+    let (available, ()) = tokio::join!(gateway.codex_first_party_available(), reply);
+    assert!(available.unwrap());
     gateway.close_degraded_clients();
     let health = next_json(&mut socket).await;
     assert_eq!(health["method"], "gateway/providerHealth");
@@ -609,11 +625,12 @@ async fn refused_native_starts_leave_no_durable_pending_turns() {
                 1,
                 &out,
                 NativeRequest {
+                    _start_permit: None,
                     raw,
                     request,
                     _admission: None,
                 },
-                &upstream,
+                Some(&upstream),
                 &pending,
             )
             .await
@@ -1290,4 +1307,177 @@ async fn a_degraded_connection_that_closes_first_leaves_no_reconnect_probe() {
         probed.is_err(),
         "a closed connection must not keep probing Codex"
     );
+}
+
+#[tokio::test]
+async fn new_conversations_share_the_host_command_budget() {
+    let gateway = TestGateway::new();
+    let (tx, mut responses) = mpsc::channel(4);
+    let out = super::super::tests::test_client(1, tx);
+    let (lane_tx, mut lane_rx) = mpsc::channel(32);
+    let (voice_tx, _voice_rx) = mpsc::channel(1);
+    let tasks = Arc::default();
+    let requests = ClientRequests {
+        out_tx: out.clone(),
+        lane_tx,
+        voice_tx,
+        queries: Arc::clone(&tasks),
+    };
+    let mut queries = ConnectionQueries::new(Arc::clone(&gateway), out, tasks);
+    for id in 0..17 {
+        let raw = json!({"id":id,"method":"thread/start","params":{
+            "provider":if id % 2 == 0 {"claude"} else {"codex"},
+            "model":"opus","cwd":"/tmp"
+        }})
+        .to_string();
+        let DispatchPlan::Request(request) = DispatchPlan::parse(&raw) else {
+            panic!("request")
+        };
+        gateway
+            .route_request(
+                id,
+                request,
+                raw,
+                &requests,
+                &mut queries,
+                tokio::time::Instant::now(),
+            )
+            .await
+            .unwrap();
+    }
+    let Ok(ClientCommand::Text(raw)) = responses.try_recv() else {
+        panic!("capacity response")
+    };
+    let response: Value = serde_json::from_str(&raw).unwrap();
+    assert_eq!(response["id"], 16);
+    assert_eq!(
+        response["error"]["data"],
+        json!({
+            "kind":"capacity","retryable":true,"resource":"host commands"
+        })
+    );
+    let mut admitted = Vec::new();
+    while let Ok(request) = lane_rx.try_recv() {
+        admitted.push(request);
+    }
+    assert_eq!(admitted.len(), 16);
+    assert!(gateway.request_budgets.command.try_acquire(1).is_none());
+    drop(admitted);
+    assert!(gateway.request_budgets.command.try_acquire(1).is_some());
+}
+
+#[tokio::test]
+async fn conversation_admission_does_not_block_upstream_answers() {
+    let gateway = TestGateway::new();
+    let mut control = crate::test_support::FakeControl::attach(&gateway, 4).await;
+    *gateway.control_init_result.lock().await = Some(json!({}));
+    let (tx, _responses) = mpsc::channel(4);
+    let out = super::super::tests::test_client(1, tx);
+    let (frames, incoming) = mpsc::channel(4);
+    let (upstream, mut forwarded) = mpsc::channel(4);
+    let raw = json!({"id":1,"method":"thread/start","params":{"model":"gpt-6.1-sol"}}).to_string();
+    let DispatchPlan::Request(request) = DispatchPlan::parse(&raw) else {
+        panic!("request")
+    };
+    frames
+        .send(UpstreamFrame::Request(NativeRequest {
+            raw,
+            request,
+            _admission: None,
+            _start_permit: gateway.request_budgets.command.try_acquire(1),
+        }))
+        .await
+        .unwrap();
+    let lane = {
+        let gateway = Arc::clone(&gateway);
+        tokio::spawn(async move {
+            gateway
+                .client_upstream_lane(1, out, incoming, Some(upstream), Arc::default())
+                .await;
+        })
+    };
+    let pending = tokio::time::timeout(Duration::from_secs(3), control.requests.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let pending: Value = serde_json::from_str(&pending).unwrap();
+    assert_eq!(pending["method"], "account/read");
+    let answer = json!({"id":"approval","result":{"decision":"accept"}}).to_string();
+    frames
+        .send(UpstreamFrame::Response(answer.clone()))
+        .await
+        .unwrap();
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(3), forwarded.recv())
+            .await
+            .unwrap()
+            .unwrap(),
+        UpstreamMessage::Text(answer)
+    );
+    drop(frames);
+    lane.await.unwrap();
+    gateway.command_tasks.stop().await;
+}
+
+#[tokio::test]
+async fn explicit_claude_start_works_without_codex_connection() {
+    use crate::providers::claude::{ClaudeSupervisor, settings::ClaudeSettings};
+    use crate::providers::codex::daemon::CodexAppServer;
+    let mut home = ClaudeSettings::isolated_for_test();
+    home.settings.enabled = true;
+    home.settings.claude_path = "/usr/bin/true".into();
+    let gateway = TestGateway::with_settings(
+        Arc::new(CodexAppServer::new(
+            "/usr/bin/true".into(),
+            Default::default(),
+        )),
+        home.settings.clone(),
+        Arc::new(home),
+    );
+    let (notifications, _rx) = mpsc::channel(1);
+    gateway.set_claude_agent(ClaudeSupervisor::new(
+        gateway.claude_settings.clone(),
+        notifications,
+        gateway.journal.clone(),
+        gateway.mcp_tokens.clone(),
+    ));
+    gateway.claude_auth.refresh().await;
+    let (tx, mut responses) = mpsc::channel(4);
+    let out = super::super::tests::test_client(1, tx);
+    let raw = json!({"id":1,"method":"thread/start","params":{
+        "provider":"claude","model":"opus","cwd":"/tmp","acceptProviderFallback":true,
+        "config":{"model_reasoning_effort":"xhigh"}
+    }})
+    .to_string();
+    let DispatchPlan::Request(request) = DispatchPlan::parse(&raw) else {
+        panic!("request")
+    };
+    gateway
+        .forward_native_request(
+            1,
+            &out,
+            NativeRequest {
+                raw,
+                request,
+                _admission: None,
+                _start_permit: gateway.request_budgets.command.try_acquire(1),
+            },
+            None,
+            &Arc::default(),
+        )
+        .await
+        .unwrap();
+    let Ok(ClientCommand::Text(raw)) = responses.try_recv() else {
+        panic!("start response")
+    };
+    let response: Value = serde_json::from_str(&raw).unwrap();
+    assert!(
+        response["result"]["thread"]["id"]
+            .as_str()
+            .unwrap()
+            .starts_with("claude_")
+    );
+    assert_eq!(response["result"]["model"], "opus");
+    assert_eq!(response["result"]["reasoningEffort"], "xhigh");
+    assert!(gateway.request_budgets.command.try_acquire(1).is_some());
 }

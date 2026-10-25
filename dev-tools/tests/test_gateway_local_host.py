@@ -189,7 +189,7 @@ async def test_configuration_and_tls_identity_follow_the_selected_read_host(
         assert not host_fixture.connections.exists()
     else:
         arguments = json.loads(host_fixture.connections.read_text())[-1]
-        assert arguments[:5] == ["-o", "BatchMode=yes", "-o", "ConnectTimeout=5", read_host]
+        assert arguments[:5] == ["-o", "BatchMode=yes", "-o", "ConnectTimeout=none", read_host]
         assert "fixture-bearer" not in arguments[5]
 
 

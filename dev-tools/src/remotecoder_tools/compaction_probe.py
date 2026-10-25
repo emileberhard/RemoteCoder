@@ -110,7 +110,7 @@ async def _provider_probe(args, cfg, provider: str) -> dict:
             }
             busy, _, _ = await _timed_rpc(
                 ws, req_id=next_id(), method="turn/start", timeout_s=args.timeout,
-                params={"threadId": thread_id, "model": model, "cwd": args.cwd, **policy,
+                params={"threadId": thread_id, "cwd": args.cwd, **policy,
                         "input": [{"type": "text", "text": "RemoteCoder active-turn compaction safety probe. Run exactly sleep 30 using your shell tool, then reply ACK. Do not read or write files and do not run any other command."}]},
             )
             busy_turn_id = busy.get("turn", {}).get("id")

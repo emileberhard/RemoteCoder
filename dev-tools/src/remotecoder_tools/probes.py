@@ -141,7 +141,7 @@ async def cmd_e2e_fork_live(args: argparse.Namespace) -> int:
             ),
             resume=first.thread_id,
             provider=args.provider,
-            model=args.model,
+            model=None,
             cwd=args.cwd,
             approval_policy=args.approval_policy,
             sandbox=args.sandbox,
@@ -267,7 +267,7 @@ async def cmd_e2e_questions_live(args: argparse.Namespace) -> int:
                   "question": record["questions"][0]["title"], "answer": "External"}]
         envelope = "<send_user_message_question_reply>" + _json(reply) + "</send_user_message_question_reply>"
         second = await _run_probe_turn(ws, next_id=next_id, prompt=envelope,
-            resume=first.thread_id, model=args.model, cwd=args.cwd, approval_policy="never", sandbox="readOnly",
+            resume=first.thread_id, model=None, cwd=args.cwd, approval_policy="never", sandbox="readOnly",
             network_access=False, timeout_s=args.timeout)
         _assert_e2e(second.status == "completed", f"answer turn ended as {second.status}: {second.error}")
         snapshot = await questions(ws, first.thread_id, item)

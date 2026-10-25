@@ -14,24 +14,25 @@ and tells the client which provider is broken and why.
 ```json
 {"providers": {
   "codex":  {"state": "ready" | "fallback" | "unavailable", "reason": "…", "fallback": "copilot"},
-  "claude": {"state": "ready" | "unavailable", "reason": "…"}
+  "claude": {"state": "ready" | "fallback" | "unavailable", "reason": "…", "fallback": "codex"}
 }}
 ```
 
 - `reason` names the cause in one short sentence and is present unless the
   state is `ready`. It never describes the remedy; the app words that itself.
-- `fallback` is the external provider id and appears only with `fallback`.
-- Codex is `unavailable` while the app-server is not running (`Codex
-  app-server is not running`) and from its connection until restart recovery
-  finishes (`Codex is starting`, or `Codex is waiting for its subscription
-  sign-in to resume interrupted work` while recovery waits for sign-in). Once
-  ready it is `fallback` while the subscription token is missing or expired
-  and an external provider is configured, `unavailable` with the same reason
-  without one, and `ready` otherwise.
-- Claude is `unavailable` when it is turned off on the gateway or its last
-  preflight failed. It is absent until the first preflight, and a gateway that
-  sends no `providers` at all is an older one. Absence means unknown, never
-  ready.
+- `fallback` names the other first-party harness or an external provider and
+  appears only with `fallback`. It describes admission for capable clients;
+  older clients and restricted requests keep their applicable eligibility rules.
+- Codex is `unavailable` while control is disconnected, starting or awaiting
+  recovery sign-in, retaining the state-specific reason. Unknown authentication
+  evidence is unavailable and never authorizes fallback. Router-backed auth
+  reads the installed token; native auth reads generation-fenced `account/read`
+  evidence refreshed in the background. A definitive sign-out advertises an
+  eligible fallback, or remains unavailable when none exists.
+- Claude requires its executable, supervisor and cached authentication preflight.
+  Disabled or definitively unavailable Claude advertises an eligible fallback.
+  Unchecked readiness is unavailable with an unknown reason. A gateway sending
+  no `providers` is older; absence means unknown, never ready.
 - The notification is not stored in replay history; `daemon/ready` carries the
   current value, and the ready frame and later changes are ordered under the
   same lock, so a client never misses or reorders a change.
@@ -62,51 +63,64 @@ and tells the client which provider is broken and why.
   `providerUnavailable` error. Gateway-owned handlers that need the control
   connection while none exists fail the same way instead of hanging.
 
-## Copilot fallback
+## Conversation admission and fallback
 
-- While the recovery journal has pending tasks, Codex readiness waits up to
-  2 minutes for sign-in, retrying every 5 s, so interrupted turns resume
-  signed in rather than into a certain auth failure. After that, recovery runs
-  anyway: interrupted native turns fail visibly with Codex's sign-in error and
-  Codex becomes ready with the fallback, so pending work on fallback threads
-  waits at most that long. With nothing pending, a failed router token
-  issue is recorded in the generation's auth state, Codex becomes ready, and
-  the renewal loop retries every 30 seconds until a token is installed.
-- The first provider in the operator's external providers file is the
-  fallback, and its first listed model is the default fallback model.
-- `ExternalProviders::map_onto_fallback` is the one owner of the
-  native-to-fallback mapping. A native model is one no external provider
-  lists. It becomes the fallback model whose slug ends in `/<model>`, and
-  service tiers are always dropped.
-- While the subscription is failing, a client-originated `thread/start` on the
-  native provider moves to the fallback: `modelProvider` becomes the fallback
-  id and an unmatched native model becomes the default fallback model. The
-  external provider admission then injects its provider definition and
-  catalog as for any external start.
-- Clients keep sending the model and tier they selected on every send. On a
-  thread of the fallback provider, `thread/resume`, `thread/fork`,
-  `turn/start` and settings updates apply the same mapping; an unmatched
-  native `model` is dropped, so the thread keeps its stored model. An
-  unmatched native `collaborationMode.settings.model` cannot be dropped, as
-  that field is required, and still fails. An explicit fallback model, or a
-  model of another external provider, keeps the ordinary external checks.
-  Threads of other external providers keep the strict checks too.
-- **Copilot conversations stay Copilot.** A conversation started on the
-  fallback keeps that provider after the subscription recovers, and existing
-  subscription conversations never move to the fallback. Codex fixes a
-  thread's provider when it starts or resumes it: only `thread/start`,
-  `thread/resume` and `thread/fork` take `modelProvider`, a resume persists
-  it, and a resume override is ignored on a thread that is loaded with
-  subscribers. Switching providers per turn would therefore be unreliable and
-  would rewrite stored state. While the subscription fails, an existing
-  subscription conversation is not refused by the gateway; its turn fails with
-  Codex's own sign-in error and the app shows the health reason.
-- Gateway-internal starts, such as the voice shadow thread, never move to the
-  fallback.
-- Without an external providers file there is no fallback: Codex reports
-  `unavailable`, and the gateway refuses identity-gated Codex work as before.
+New text conversations from clients sending `acceptProviderFallback: true`
+try the selected provider and model first. Older clients retain external-only
+fallback because they do not adopt cross-harness settings. When its
+control/authentication readiness is unavailable, admission chooses the other
+first-party harness: Codex requests use Claude Code's `opus` alias (latest
+Opus), and Claude requests use the newest native Sol from `model/list`.
+Only when both first-party paths are unavailable does admission choose the
+first configured external provider. Native model names map to matching external
+models; otherwise its first model is the default. Explicit external
+selections retain their provider. Voice keeps its signed-in realtime path.
+
+`Gateway::admit_new_conversation` owns this decision before provider dispatch.
+It uses the provider-health owner's control/authentication evidence; unknown
+or transient native readiness fails retryably rather than changing harness. Claude eligibility also requires its
+executable, supervisor and authentication preflight. These checks establish
+local readiness, not provider reachability or available quota. An accepted
+start or prompt is never replayed on another harness after an ambiguous or
+provider-side failure.
+
+The returned thread ID, model, provider and effort are the admitted settings.
+Clients use them for the first turn and persist them for later turns. Existing
+conversations keep their exact harness/provider; no history or prompt transfer
+occurs. Existing native or Claude conversations report unavailability when
+their provider is unavailable. Existing external conversations keep running
+on that provider. This avoids a second conversation identity or duplicated
+side effects; adding transfer later would require an explicit continuation
+contract rather than extending admission.
+
+A cross-harness admission drops provider-specific model/config/tier/cyber
+settings and adapts the requested reasoning effort to the target's advertised
+levels. Unsupported effort uses the highest supported level, as with Copilot. Managed Claude runs with
+full access, so a restricted Codex request cannot move to it; its original
+permissions remain enforceable on Codex/Copilot. A missing working directory
+still fails the Claude contract rather than inventing one.
+
+`ExternalProviders::map_onto_fallback` owns native model selections on external
+fallback threads. A native model is one no external provider lists. It becomes
+the fallback model whose slug ends in `/<model>`, and tiers are dropped. An
+unmatched native selection on an existing fallback thread retains that thread's
+model, read from its authoritative header. External fallback effort is checked
+against the effective model's advertised levels: supported effort stays;
+unsupported effort becomes its highest supported level. A model without
+reasoning support has no config override. Collaboration mode determines the
+effective model when present. Model/provider ownership checks stay strict.
+
+Codex control recovery still waits up to two minutes for subscription sign-in
+before settling interrupted native work and allowing new native/fallback
+admission. A fresh Claude admission does not need Codex control. Existing
+subscription conversations never move into external providers. Gateway-internal
+starts, including voice shadow threads, never use text fallback admission.
 
 ## Known gaps
+
+- Native Claude preflight errors are cached as unavailable until its next check,
+  including transient CLI failures. New opted-in conversations can use Sol during
+  that interval; admitted threads remain pinned.
 
 - Claude `ready` in router mode proves only that the router key file is
   readable (`providers/claude/auth.rs`). A router-side Claude outage still

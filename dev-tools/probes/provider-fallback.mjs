@@ -4,7 +4,7 @@ import { isAbsolute, join, resolve } from "node:path";
 import { IsolatedGateway } from "./isolated-gateway.mjs";
 
 if (process.argv[2] === "--help") {
-    console.log("Usage: bun dev-tools/probes/provider-fallback.mjs CANDIDATE_BINARY\nRuns an owned isolated gateway against the host router with the Codex subscription sign-in failing on purpose. Proves Codex reports the Copilot fallback, a Claude turn completes, and a new Codex conversation that names a native model without a Copilot counterpart starts on the first Copilot model and keeps it through a follow-up Fast turn. Production stays unchanged.");
+    console.log("Usage: bun dev-tools/probes/provider-fallback.mjs CANDIDATE_BINARY\nRuns an owned isolated gateway against the host router with the Codex subscription sign-in failing on purpose. Proves a logged-out Codex xhigh request runs on latest Opus, then makes Claude unavailable in the isolated instance and proves Copilot Argon is the last resort with xhigh clamped to high, including a resumed Fast request. Production stays unchanged.");
     process.exit(0);
 }
 const [binary] = process.argv.slice(2);
@@ -48,7 +48,7 @@ async function turn(label, provider, model, prompt, extra = []) {
     const events = lab.path(`${label}.events.jsonl`);
     const args = [wrapper, "--host", "127.0.0.1", "--port", String(lab.port), "--scheme", "ws", "--no-ssh-env",
         "--local-config", lab.path("no-config.json"), provider === "claude" ? "claude-turn" : "turn",
-        "--model", model, "--effort", "medium", "--cwd", cwd, "--purpose", "probe", "--timeout", "300",
+        "--model", model, "--effort", provider === "claude" ? "medium" : "xhigh", "--cwd", cwd, "--purpose", "probe", "--timeout", "300",
         "--event-log", events, ...extra,
         ...(provider === "claude" ? [prompt] : ["--prompt", prompt, "--print-assistant"])];
     const child = Bun.spawn(args, {
@@ -96,32 +96,55 @@ try {
         const current = await readyProviders();
         return current?.codex?.state === "fallback" ? current : null;
     }, 120);
-    assert.equal(providers.codex.fallback, "copilot");
-    const codexConversation = async () => {
-        const first = await turn("codex-first", "codex", NATIVE_MODEL, "Reply with exactly: copilot ok");
-        if (!first.threadId) return [first];
-        const followUp = await turn("codex-follow-up", "codex", NATIVE_MODEL, "Reply with exactly: still copilot",
-            ["--resume", first.threadId, "--service-tier", "fast"]);
-        return [first, { ...followUp, threadId: followUp.threadId ?? first.threadId }];
-    };
-    const [claude, codexTurns] = await Promise.all([
-        turn("claude", "claude", "claude-sonnet-5-5", "Reply with exactly: claude ok"),
-        codexConversation(),
-    ]);
-    const turns = [claude, ...codexTurns];
-    const client = await lab.connect();
-    const codexThreadId = codexTurns[0].threadId;
-    assert(codexThreadId, "The Codex turn never created a thread");
-    const read = await client.rpc("thread/read", { threadId: codexThreadId, includeTurns: false });
-    if (claude.threadId) await client.rpc("claude/thread/release", { threadId: claude.threadId });
-    const receipt = {
-        providers, turns, codexThread: { modelProvider: read.result?.thread?.modelProvider, model: read.result?.thread?.model },
-    };
-    console.log(JSON.stringify(receipt, null, 2));
-    for (const result of turns) assert.equal(result.exitCode, 0, `${result.label} turn failed: ${result.stderr}`);
-    assert.equal(codexTurns.length, 2, "The follow-up Codex turn never ran");
-    assert.equal(receipt.codexThread.modelProvider, "copilot");
-    assert.equal(receipt.codexThread.model, FALLBACK_MODEL);
+    assert.equal(providers.codex.fallback, "claude");
+    const first = await turn("first-party-fallback", "codex", NATIVE_MODEL, "Reply with exactly: opus fallback ok");
+    assert.equal(first.exitCode, 0, first.stderr);
+    assert(first.threadId?.startsWith("claude_"), "Logged-out Codex must admit a Claude thread");
+    let client = await lab.connect();
+    const firstRead = await client.rpc("thread/read", { threadId: first.threadId, includeTurns: false });
+    const actualModel = firstRead.result?.thread?.model;
+    assert(actualModel === "opus" || /^claude-opus-/.test(actualModel), `Expected latest Opus, got ${actualModel}`);
+    await client.rpc("claude/thread/release", { threadId: first.threadId });
+    client.close();
+    await lab.stop();
+
+    const gatewayEnv = await readFile(lab.path("gateway.env"), "utf8");
+    await lab.write(lab.path("gateway.env"), gatewayEnv.replace(/^RC_CLAUDE_PATH=.*$/m, `RC_CLAUDE_PATH=${lab.path("missing-claude")}`));
+    await lab.start();
+    const lastResortProviders = await lab.waitFor(async () => {
+        const current = await readyProviders();
+        return current?.codex?.state === "fallback" && current.codex.fallback === "copilot" ? current : null;
+    }, 120);
+    const copilotFirst = await turn("copilot-last-resort", "codex", NATIVE_MODEL, "Reply with exactly: copilot ok");
+    assert.equal(copilotFirst.exitCode, 0, copilotFirst.stderr);
+    assert(copilotFirst.threadId && !copilotFirst.threadId.startsWith("claude_"));
+    const copilotFollowUp = await turn("copilot-follow-up", "codex", NATIVE_MODEL, "Reply with exactly: still copilot",
+        ["--resume", copilotFirst.threadId, "--service-tier", "fast"]);
+    assert.equal(copilotFollowUp.exitCode, 0, copilotFollowUp.stderr);
+    client = await lab.connect();
+    const read = await client.rpc("thread/read", { threadId: copilotFirst.threadId, includeTurns: false });
+    assert.equal(read.result?.thread?.modelProvider, "copilot");
+    assert.equal(read.result?.thread?.model, FALLBACK_MODEL);
+    const settings = await client.rpc("thread/resume", { threadId: copilotFirst.threadId, excludeTurns: true });
+    assert.equal(settings.result?.reasoningEffort, "high", "Argon must clamp xhigh to high");
+    const explicit = await client.rpc("turn/start", { threadId: copilotFirst.threadId, model: FALLBACK_MODEL,
+        effort: "xhigh", input: [{ type: "text", text: "Reply with exactly: explicit argon ok" }] });
+    assert(!explicit.error, JSON.stringify(explicit.error));
+    const explicitId = explicit.result?.turn?.id;
+    assert(explicitId, "Explicit Argon request returned no turn");
+    const terminal = await lab.waitFor(async () => {
+        const turns = await client.rpc("thread/turns/list", { threadId: copilotFirst.threadId, limit: 20 });
+        const turn = turns.result?.data?.find(turn => turn.id === explicitId);
+        return turn && ["completed", "failed", "interrupted"].includes(turn.status) ? turn : null;
+    }, 120);
+    assert.equal(terminal.status, "completed", JSON.stringify(terminal.error));
+    await client.rpc("thread/archive", { threadId: copilotFirst.threadId });
+    console.log(JSON.stringify({
+        providers, firstPartyFallback: first, actualModel,
+        lastResortProviders, copilotTurns: [copilotFirst, copilotFollowUp],
+        copilotThread: { modelProvider: read.result?.thread?.modelProvider, model: read.result?.thread?.model, effort: settings.result?.reasoningEffort },
+    }, null, 2));
+
 } catch (error) {
     failure = error;
     console.error(JSON.stringify({ error: String(error.message), isolatedHome: lab.root }));

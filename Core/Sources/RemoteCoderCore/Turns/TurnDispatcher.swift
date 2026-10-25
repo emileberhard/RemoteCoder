@@ -13,7 +13,7 @@ protocol TurnDispatchHost: AnyObject {
     func startActivityRefresh()
     func reconcileInputDelivery(threadID: String) async
     func threadStarted(_ thread: CodexAppServerV2.Thread, session: ConversationSession, settingsRevision: UInt64,
-                       requestedServiceTier: CodexAppServerV2.ServiceTierOverride?) async
+                       requestedServiceTier: CodexAppServerV2.ServiceTierOverride?, admittedSettings: TurnDispatcher.Settings?) async
     func selectionIsCurrent(revision: UInt64, threadID: String) -> Bool
 }
 
@@ -26,6 +26,30 @@ final class TurnDispatcher {
         let fastModeState: FastModeState
         let workingDirectory: String?
         let selectionRevision: UInt64
+
+        func admitted(to thread: CodexAppServerV2.Thread) -> Self {
+            let provider = AgentProvider.provider(forThreadID: thread.id)
+            let modelProvider = ThreadModelProvider(thread.modelProvider, threadID: thread.id)
+            let id = thread.model ?? model.id
+            let changedRoute = provider != model.provider || id != model.id ||
+                modelProvider?.externalID != model.modelProvider?.id
+            let effort = thread.reasoningEffort.flatMap { ReasoningEffort(rawValue: $0.rawValue) }
+            let fastMode = thread.extra?.fastModeSelection
+            let resolved: ModelOption
+            if changedRoute {
+                resolved = (provider == .claude ? ClaudeModelCatalog.model(for: id) : nil)
+                    ?? .unlisted(id: id, modelProvider: modelProvider?.modelProvider,
+                        reportedEffort: effort, reportedFastMode: fastMode == true)
+            } else {
+                resolved = model
+            }
+            return Self(model: resolved,
+                reasoning: !changedRoute && reasoning == .automatic ? .automatic
+                    : effort.map(ReasoningSelection.effort) ?? (changedRoute ? .automatic : reasoning),
+                serviceTier: fastMode.map { $0 ? .set(.fast) : .clear } ?? (changedRoute ? .clear : serviceTier),
+                fastModeState: changedRoute ? .readback(fastMode, remembered: fastMode) : fastModeState.reading(thread.extra),
+                workingDirectory: workingDirectory, selectionRevision: selectionRevision)
+        }
     }
 
     struct Submission {
@@ -323,7 +347,7 @@ final class TurnDispatcher {
                 let thread = try await gateway.startOrResumeThread(threadID: threadID, model: settings.model.id,
                     cwd: settings.workingDirectory, serviceTier: settings.serviceTier, provider: .codex)
                 await host.threadStarted(thread, session: session, settingsRevision: settings.selectionRevision,
-                                         requestedServiceTier: settings.serviceTier)
+                                         requestedServiceTier: settings.serviceTier, admittedSettings: nil)
                 try Task.checkCancellation()
                 guard !isClosed else { return }
                 let turnID = try await gateway.startQueuedMessage(threadID: threadID, queuedSubmissionID: queued.id)
@@ -422,8 +446,10 @@ final class TurnDispatcher {
                     model: settings.model.id,
                     cwd: cwd,
                     serviceTier: settings.serviceTier,
-                    provider: provider
+                    provider: provider,
+                    effort: settings.reasoning.effort?.rawValue
                 )
+                let settings = sessionID == nil ? settings.admitted(to: thread) : settings
                 let threadID = thread.id
                 guard !isClosed else { return }
                 await drafts.bind(submission.draft, to: threadID)
@@ -435,7 +461,7 @@ final class TurnDispatcher {
                     host.turnsChanged(turns.lockThread(threadID))
                 }
                 await host.threadStarted(thread, session: session, settingsRevision: settings.selectionRevision,
-                                         requestedServiceTier: settings.serviceTier)
+                                         requestedServiceTier: settings.serviceTier, admittedSettings: sessionID == nil ? settings : nil)
                 await sessionIndex.record(sessionID: threadID, conversationID: conversationID)
                 guard !isClosed else { return }
                 dispatchAttempted = true

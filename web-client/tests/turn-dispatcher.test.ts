@@ -18,12 +18,109 @@ import {
 
 afterEach(cleanupWorkspaces);
 
+for (const route of [
+  { id: "claude_fallback", model: "opus", modelProvider: "claude", provider: "claude" },
+  { id: "copilot-fallback", model: "copilot/gpt-6.1-sol", modelProvider: "copilot", provider: "codex" },
+  { id: "native-fallback", model: "test-model", modelProvider: "openai", provider: "codex" },
+  { id: "native-unchanged", model: "test-model", modelProvider: "openai", provider: "codex" },
+] as const) {
+  for (const effort of ["", "ultra"]) {
+    test(`new admission adopts ${route.id} with ${effort || "Automatic"} for first dispatch and saved draft`, async () => {
+      const storage = new MemoryStorage();
+      const { workspace, harness } = await setup(["mini"], storage);
+      workspace.updateDraft({
+        model: route.id === "native-fallback" ? "opus" : "test-model",
+        provider: route.id === "native-fallback" ? "claude" : "codex",
+        text: "Hello",
+        effort,
+        fast: true,
+      });
+      harness.handler = (method) =>
+        method === "thread/start"
+          ? {
+              model: route.model,
+              reasoningEffort: "high",
+              thread: {
+                ...header(route.id),
+                model: route.id === "native-fallback" ? null : route.model,
+                modelProvider: route.modelProvider,
+                reasoningEffort: route.id === "native-fallback" ? null : "high",
+                extra: { serviceTier: null },
+              },
+            }
+          : undefined;
+      await workspace.send();
+      const start = harness.calls.find((call) => call.method === "thread/start")?.params;
+      expect(start?.acceptProviderFallback).toBe(true);
+      expect(start?.config).toEqual(effort ? { model_reasoning_effort: effort } : undefined);
+      const effectiveEffort = route.id === "native-unchanged" && effort === "" ? "" : "high";
+      const turn = harness.calls.find((call) => call.method === "turn/start")?.params;
+      expect(turn).toMatchObject({
+        threadId: route.id,
+        model: route.model,
+        effort: effectiveEffort || null,
+        serviceTier: null,
+      });
+      expect(workspace.selectedConversation?.header.provider).toBe(route.provider);
+      expect(workspace.draft).toMatchObject({
+        provider: route.provider,
+        model: route.model,
+        effort: effectiveEffort,
+        fast: route.id === "native-unchanged",
+      });
+      expect(storage.getItem("remotecoder.web.drafts.v1")).toContain(route.model);
+    });
+  }
+}
+
+test("a newer provider choice cannot rebind the admitted thread", async () => {
+  const { workspace, harness } = await setup();
+  workspace.updateDraft({ model: "test-model", text: "Hello" });
+  const pending = deferred<unknown>();
+  harness.handler = (method) => (method === "thread/start" ? pending.promise : undefined);
+  const sending = workspace.send();
+  workspace.updateDraft({ provider: "claude", model: "opus" });
+  pending.resolve({ thread: { ...header("fresh"), modelProvider: "openai" } });
+  await sending;
+  expect(workspace.draft).toMatchObject({ provider: "codex", model: "test-model" });
+});
+
+test("unchanged admission preserves the Fast preference for a model without Fast", async () => {
+  const { workspace, harness } = await setup();
+  workspace.updateDraft({ model: "test-model", text: "Hello", fast: true });
+  harness.handler = (method) =>
+    method === "thread/start"
+      ? {
+          thread: { ...header("fresh"), extra: { serviceTier: null } },
+        }
+      : undefined;
+  await workspace.send();
+  expect(workspace.draft.fast).toBe(true);
+  expect(harness.calls.find((call) => call.method === "turn/start")?.params.serviceTier).toBeNull();
+});
+
+test("a newer picker choice during unchanged admission survives while first dispatch keeps captured settings", async () => {
+  const { workspace, harness } = await setup();
+  workspace.updateDraft({ model: "test-model", text: "Hello", effort: "high" });
+  const pending = deferred<unknown>();
+  harness.handler = (method) => (method === "thread/start" ? pending.promise : undefined);
+  const sending = workspace.send();
+  workspace.updateDraft({ effort: "low", fast: true });
+  pending.resolve({ thread: header("fresh") });
+  await sending;
+  expect(harness.calls.find((call) => call.method === "turn/start")?.params.effort).toBe("high");
+  expect(workspace.draft).toMatchObject({ effort: "low", fast: true });
+});
+
 test("a locally prepared thread gains its first submitted preview without changing it on follow-ups", async () => {
   const { workspace, harness } = await setup();
   harness.handler = (method) =>
     method === "thread/start" ? { thread: { ...header("fresh"), name: null, preview: "" } } : undefined;
   workspace.updateDraft({ model: "test-model", text: "First submitted message" });
-  await workspace.prepareConversation();
+  await workspace.prepareVoiceConversation();
+  expect(harness.calls.find((call) => call.method === "thread/start")?.params.serviceName).toBe(
+    "RemoteCoder Voice",
+  );
   expect(workspace.selectedConversation?.header.preview).toBe("");
   expect(workspace.selectedHost?.threads.find((thread) => thread.id === "fresh")?.preview).toBe("");
   await workspace.send();
@@ -254,8 +351,8 @@ test("fresh voice preparation coalesces admission and preserves the latest draft
   workspace.newConversation();
   workspace.updateDraft({ model: "test-model", text: "Keep this draft" });
   const key = workspace.draftKey;
-  const first = workspace.prepareConversation();
-  const second = workspace.prepareConversation();
+  const first = workspace.prepareVoiceConversation();
+  const second = workspace.prepareVoiceConversation();
   expect(second).toBe(first);
   expect(workspace.isSubmitting).toBe(true);
   await expect(workspace.send()).rejects.toThrow("already");
@@ -281,7 +378,7 @@ test("fresh voice preparation coalesces admission and preserves the latest draft
   expect(
     harness.calls.some((call) => ["thread/resume", "thread/items/list", "turn/start"].includes(call.method)),
   ).toBe(false);
-  expect(await workspace.prepareConversation()).toBe(conversation);
+  expect(await workspace.prepareVoiceConversation()).toBe(conversation);
   expect(harness.calls.filter((call) => call.method === "thread/start")).toHaveLength(1);
 });
 
@@ -294,7 +391,7 @@ test("voice preparation stays on its captured enrollment while navigation retain
   if (!harness) throw new Error("The enrolled harness is unavailable");
   const pending = deferred<unknown>();
   harness.handler = (method) => (method === "thread/start" ? pending.promise : undefined);
-  const preparing = workspace.prepareConversation();
+  const preparing = workspace.prepareVoiceConversation();
   for (let index = 0; index < 6; index++) await Promise.resolve();
   await workspace.selectTarget({ hostId: "mini" });
   workspace.updateDraft({ text: "Current default draft" });
@@ -321,7 +418,7 @@ test("a generation retired during voice preparation cannot admit the returned th
   const pending = deferred<unknown>();
   harness.handler = (method) => (method === "thread/start" ? pending.promise : undefined);
   const key = workspace.draftKey;
-  const preparing = workspace.prepareConversation();
+  const preparing = workspace.prepareVoiceConversation();
   for (let index = 0; index < 6; index++) await Promise.resolve();
   replaceGeneration();
   await workspace.refreshAccounts("mini");

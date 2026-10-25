@@ -24,7 +24,7 @@ surface:
 |---|---|
 | History reads, native pages, `daemon/activeTurns` (read-only) | `just gateway-e2e-reads`, optionally `e2e_thread=<id>` |
 | Owned read burst, exact query cancellation and ready capability (isolated gateway) | `just gateway-e2e-query-admission-isolated /absolute/gateway/binary` |
-| Provider health and the Copilot fallback with Codex sign-in failing (isolated gateway, host router, Argon-only catalog; one Claude turn and a two-turn Codex conversation naming a native model, the second with Fast) | `just gateway-e2e-provider-fallback-isolated /absolute/gateway/binary` |
+| First-party-first new conversation admission and last-resort effort clamping (isolated gateway, host router; logged-out Codex xhigh runs on Opus, then unavailable Claude forces Argon high, including a resumed Fast request) | `just gateway-e2e-provider-fallback-isolated /absolute/gateway/binary` |
 | `thread/fork(lastTurnId:)` boundaries (creates threads) | `just gateway-e2e-fork-live`, `just gateway-e2e-claude-fork-live` |
 | Claude steering folds into one completion (router-backed Sonnet; one completion plus an empty active-turn snapshot) | `just gateway-e2e-claude-steer-live` |
 | Claude agent-initiated turns | `just gateway-e2e-claude-wake-live` |
@@ -1875,3 +1875,14 @@ The iOS side is in `RemoteCoder/AGENTS.md`; both paths are in
   and failed, with text and latency), turn boundaries and a closing summary.
   Evaluate past calls from this file first. The newest 100 sessions are
   retained.
+
+## Text-provider fallback admission
+
+`gateway::provider_fallback` owns new client text conversation selection before
+provider dispatch: selected first-party provider/model, other first-party
+harness (latest Opus or native Sol), then configured external provider. Clients
+must use the returned exact thread and admitted model/effort for first dispatch.
+Existing threads never migrate. Managed Claude is ineligible for restricted
+Codex requests. Voice and internal starts keep their realtime/native contract.
+`docs/provider-health.md` owns readiness evidence, effort adaptation and the
+no-replay boundary. Keep this policy in the gateway rather than client retries.

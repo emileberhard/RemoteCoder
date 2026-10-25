@@ -7,17 +7,25 @@ extension GatewayClient {
         let thread: CodexAppServerV2.Thread
     }
 
+    private struct ThreadStartResponse: Decodable, Sendable {
+        let thread: CodexAppServerV2.Thread
+        let model: String?
+        let reasoningEffort: CodexAppServerV2.ReasoningEffort?
+    }
+
     func startOrResumeThread(
         threadID: String?,
         model: String,
         cwd: String?,
         serviceTier: CodexAppServerV2.ServiceTierOverride?,
         provider: AgentProvider = .codex,
-        serviceName: String = "RemoteCoder"
+        serviceName: String = "RemoteCoder",
+        effort: String? = nil
     ) async throws -> CodexAppServerV2.Thread {
         guard let threadID else {
             return try await startThread(model: model, cwd: cwd, serviceTier: serviceTier, provider: provider,
-                                         serviceName: serviceName, config: nil)
+                                         serviceName: serviceName, config: effort.flatMap(CodexAppServerV2.ReasoningEffort.init(rawValue:))
+                    .map { .init(modelReasoningEffort: $0) })
         }
         let params = CodexAppServerV2.ThreadResumeParams(
             threadId: threadID,
@@ -52,22 +60,23 @@ extension GatewayClient {
             serviceTier: serviceTier,
             config: config
         )
-        let response: ThreadResponse = try await callDecodable(
+        let response: ThreadStartResponse = try await callDecodable(
             method: "thread/start",
-            params: try withProvider(provider, encodeToJSONValue(params)),
+            params: try threadStartPayload(provider: provider, serviceName: serviceName, params: encodeToJSONValue(params)),
             timeout: timeouts.threadSetup
         )
-        return response.thread
+        var thread = response.thread
+        if thread.model == nil { thread.model = response.model }
+        if thread.reasoningEffort == nil { thread.reasoningEffort = response.reasoningEffort }
+        return thread
     }
 
-    /// Tags a request with the gateway's provider routing key.
-    ///
-    /// `provider` is a gateway concept, not part of the Codex app-server
-    /// protocol, so it is injected here instead of on the wire-accurate models.
-    /// Only a new thread needs it: afterwards the gateway routes by thread id.
-    private func withProvider(_ provider: AgentProvider, _ params: JSONValue) -> JSONValue {
-        guard provider != .codex, case .object(var fields) = params else { return params }
-        fields["provider"] = .string(provider.rawValue)
+    /// Gateway routing fields are injected outside the upstream wire models.
+    /// Only a new thread needs them: afterwards the gateway routes by thread id.
+    private func threadStartPayload(provider: AgentProvider, serviceName: String, params: JSONValue) -> JSONValue {
+        guard case .object(var fields) = params else { return params }
+        if provider != .codex { fields["provider"] = .string(provider.rawValue) }
+        if serviceName != "RemoteCoder Voice" { fields["acceptProviderFallback"] = .bool(true) }
         return .object(fields)
     }
 

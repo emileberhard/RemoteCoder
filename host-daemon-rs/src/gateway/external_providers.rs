@@ -20,10 +20,17 @@ impl Gateway {
             return Ok(false);
         };
         let source = match ExternalProviders::thread_to_inspect(method, params) {
-            Some(thread) => Some(self.thread_model_provider(&thread).await?),
+            Some(thread) => Some(self.thread_model_selection(&thread).await?),
             None => None,
         };
-        external.admit(method, params, source.as_deref()).await
+        external
+            .admit(
+                method,
+                params,
+                source.as_ref().map(|(provider, _)| provider.as_str()),
+                source.as_ref().and_then(|(_, model)| model.as_deref()),
+            )
+            .await
     }
 
     pub(super) async fn start_on_fallback(
@@ -31,14 +38,15 @@ impl Gateway {
         params: &mut Value,
     ) -> std::result::Result<(), RpcError> {
         match self.external_providers.as_deref() {
-            Some(external) if self.codex_subscription_failing().await => {
-                external.start_on_fallback(params).await
-            }
+            Some(external) => external.start_on_fallback(params).await,
             _ => Ok(()),
         }
     }
 
-    async fn thread_model_provider(&self, thread: &str) -> std::result::Result<String, RpcError> {
+    async fn thread_model_selection(
+        &self,
+        thread: &str,
+    ) -> std::result::Result<(String, Option<String>), RpcError> {
         let response = self
             .call_control_unadmitted(
                 "thread/read",
@@ -46,7 +54,7 @@ impl Gateway {
             )
             .await
             .map_err(|error| native_error(&error))?;
-        response
+        let provider = response
             .pointer("/thread/modelProvider")
             .and_then(Value::as_str)
             .filter(|provider| !provider.is_empty())
@@ -56,7 +64,12 @@ impl Gateway {
                     RpcCode::Unavailable,
                     "Codex reported no model provider for this conversation",
                 )
-            })
+            })?;
+        let model = response
+            .pointer("/thread/model")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        Ok((provider, model))
     }
 
     pub(super) async fn model_list(&self, params: Value) -> RpcResult {

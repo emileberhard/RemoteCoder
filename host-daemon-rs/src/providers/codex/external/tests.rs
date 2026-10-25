@@ -114,14 +114,14 @@ async fn nested_and_per_turn_selections_get_the_same_checks() {
         let mut params = json!({"threadId": "t", "collaborationMode": foreign});
         assert!(ExternalProviders::thread_to_inspect(method, &params).is_some());
         let error = external
-            .admit(method, &mut params, Some("relay"))
+            .admit(method, &mut params, Some("relay"), None)
             .await
             .unwrap_err();
         assert!(error.message.contains("stays on Relay"), "{method}");
 
         let mut params = json!({"threadId": "t", "collaborationMode": ours});
         let error = external
-            .admit(method, &mut params, Some("openai"))
+            .admit(method, &mut params, Some("openai"), None)
             .await
             .unwrap_err();
         assert!(error.message.contains("runs on Relay"), "{method}");
@@ -129,7 +129,7 @@ async fn nested_and_per_turn_selections_get_the_same_checks() {
         let mut params = json!({"threadId": "t", "model": MODEL, "collaborationMode": ours});
         assert!(
             !external
-                .admit(method, &mut params, Some("relay"))
+                .admit(method, &mut params, Some("relay"), None)
                 .await
                 .unwrap()
         );
@@ -138,7 +138,7 @@ async fn nested_and_per_turn_selections_get_the_same_checks() {
     let mut params = json!({"threadId": "t", "serviceTierForTurn": "priority"});
     assert!(ExternalProviders::thread_to_inspect("turn/start", &params).is_some());
     let error = external
-        .admit("turn/start", &mut params, Some("relay"))
+        .admit("turn/start", &mut params, Some("relay"), None)
         .await
         .unwrap_err();
     assert!(error.message.contains("no service tiers"));
@@ -147,7 +147,7 @@ async fn nested_and_per_turn_selections_get_the_same_checks() {
         let mut standard = json!({"threadId": "t", "model": MODEL, key: "default"});
         assert!(
             !external
-                .admit("turn/start", &mut standard, Some("relay"))
+                .admit("turn/start", &mut standard, Some("relay"), None)
                 .await
                 .unwrap(),
             "{key}"
@@ -163,7 +163,7 @@ async fn a_new_conversation_on_the_provider_gets_its_definition_and_catalog() {
 
     assert!(
         external
-            .admit("thread/start", &mut params, None)
+            .admit("thread/start", &mut params, None, None)
             .await
             .unwrap()
     );
@@ -186,7 +186,7 @@ async fn a_new_conversation_on_the_provider_gets_its_definition_and_catalog() {
     let mut by_model = json!({"model": MODEL});
     assert!(
         external
-            .admit("thread/start", &mut by_model, None)
+            .admit("thread/start", &mut by_model, None, None)
             .await
             .unwrap()
     );
@@ -197,7 +197,7 @@ async fn a_new_conversation_on_the_provider_gets_its_definition_and_catalog() {
     let mut native = json!({"model": "gpt-x"});
     assert!(
         !external
-            .admit("thread/start", &mut native, None)
+            .admit("thread/start", &mut native, None, None)
             .await
             .unwrap()
     );
@@ -212,7 +212,7 @@ async fn unsupported_selections_fail_instead_of_changing_provider() {
         let external = Arc::clone(&external);
         async move {
             external
-                .admit(method, &mut params, source)
+                .admit(method, &mut params, source, None)
                 .await
                 .unwrap_err()
                 .message
@@ -311,7 +311,7 @@ async fn config_overrides_cannot_choose_the_provider_model_or_tier() {
         ] {
             let mut params = json!({"threadId": "t", "model": MODEL, "config": config});
             let error = external
-                .admit(method, &mut params, source)
+                .admit(method, &mut params, source, None)
                 .await
                 .unwrap_err();
             assert!(
@@ -324,7 +324,7 @@ async fn config_overrides_cannot_choose_the_provider_model_or_tier() {
     let mut effort = json!({"threadId": "t", "config": {"model_reasoning_effort": "low"}});
     assert!(
         external
-            .admit("thread/fork", &mut effort, Some("relay"))
+            .admit("thread/fork", &mut effort, Some("relay"), None)
             .await
             .unwrap()
     );
@@ -338,7 +338,7 @@ async fn resumes_and_forks_keep_the_source_provider() {
     let mut resume = json!({"threadId": "t", "model": MODEL});
     assert!(
         external
-            .admit("thread/resume", &mut resume, Some("relay"))
+            .admit("thread/resume", &mut resume, Some("relay"), None)
             .await
             .unwrap()
     );
@@ -347,21 +347,21 @@ async fn resumes_and_forks_keep_the_source_provider() {
 
     let mut unset = json!({"threadId": "t", "model": MODEL, "modelProvider": null});
     external
-        .admit("thread/resume", &mut unset, Some("relay"))
+        .admit("thread/resume", &mut unset, Some("relay"), None)
         .await
         .unwrap();
     assert_eq!(unset["modelProvider"], "relay");
 
     let mut conflicting = json!({"threadId": "t", "model": MODEL, "modelProvider": "openai"});
     let refusal = external
-        .admit("thread/resume", &mut conflicting, Some("relay"))
+        .admit("thread/resume", &mut conflicting, Some("relay"), None)
         .await
         .unwrap_err();
     assert!(refusal.message.contains("runs on Relay"));
 
     let mut native = json!({"threadId": "t", "model": "gpt-native"});
     external
-        .admit("thread/resume", &mut native, Some(NATIVE_PROVIDER))
+        .admit("thread/resume", &mut native, Some(NATIVE_PROVIDER), None)
         .await
         .unwrap();
     assert!(native.get("modelProvider").is_none());
@@ -369,7 +369,7 @@ async fn resumes_and_forks_keep_the_source_provider() {
     let mut fork = json!({"threadId": "t", "model": MODEL});
     assert!(
         external
-            .admit("thread/fork", &mut fork, Some("relay"))
+            .admit("thread/fork", &mut fork, Some("relay"), None)
             .await
             .unwrap()
     );
@@ -378,7 +378,7 @@ async fn resumes_and_forks_keep_the_source_provider() {
     let mut recover = json!({"threadId": "t", "turnId": "u", "capability": "c"});
     assert!(
         external
-            .admit("thread/restart/recover", &mut recover, Some("relay"))
+            .admit("thread/restart/recover", &mut recover, Some("relay"), None)
             .await
             .unwrap()
     );
@@ -390,7 +390,7 @@ async fn resumes_and_forks_keep_the_source_provider() {
         json!({"threadId": "t", "ephemeral": true, "experimentalPredictionMode": true});
     assert!(
         !external
-            .admit("thread/fork", &mut inheriting, Some("relay"))
+            .admit("thread/fork", &mut inheriting, Some("relay"), None)
             .await
             .unwrap()
     );
@@ -399,7 +399,7 @@ async fn resumes_and_forks_keep_the_source_provider() {
     let mut native = json!({"threadId": "t", "model": "gpt-x"});
     assert!(
         !external
-            .admit("thread/fork", &mut native, Some("openai"))
+            .admit("thread/fork", &mut native, Some("openai"), None)
             .await
             .unwrap()
     );
@@ -411,7 +411,8 @@ async fn resumes_and_forks_keep_the_source_provider() {
             .admit(
                 "thread/restart/recover",
                 &mut native_recover,
-                Some("openai")
+                Some("openai"),
+                None
             )
             .await
             .unwrap()
@@ -452,7 +453,7 @@ async fn history_lists_include_the_configured_providers_unless_a_filter_is_given
     let mut list = json!({"limit": 5});
     assert!(
         external
-            .admit("thread/list", &mut list, None)
+            .admit("thread/list", &mut list, None, None)
             .await
             .unwrap()
     );
@@ -461,7 +462,7 @@ async fn history_lists_include_the_configured_providers_unless_a_filter_is_given
     let mut filtered = json!({"modelProviders": ["openai"]});
     assert!(
         !external
-            .admit("thread/list", &mut filtered, None)
+            .admit("thread/list", &mut filtered, None, None)
             .await
             .unwrap()
     );
@@ -526,7 +527,7 @@ async fn native_selections_on_a_fallback_thread_move_to_its_matching_model() {
             "serviceTier": "fast", "collaborationMode": {"settings": {"model": "model-a"}}});
         assert!(
             external
-                .admit(method, &mut params, Some("relay"))
+                .admit(method, &mut params, Some("relay"), None)
                 .await
                 .unwrap()
         );
@@ -540,7 +541,7 @@ async fn native_selections_on_a_fallback_thread_move_to_its_matching_model() {
 
     let mut resume = json!({"threadId": "thr_fallback", "model": "model-a", "serviceTier": "fast"});
     external
-        .admit("thread/resume", &mut resume, Some("relay"))
+        .admit("thread/resume", &mut resume, Some("relay"), None)
         .await
         .unwrap();
     assert_eq!(resume["model"], MODEL);
@@ -562,7 +563,7 @@ async fn a_native_model_without_a_fallback_counterpart_keeps_the_threads_model()
             json!({"threadId": "thr_fallback", "model": "gpt-9", "serviceTierForTurn": "fast"});
         assert!(
             external
-                .admit(method, &mut params, Some("relay"))
+                .admit(method, &mut params, Some("relay"), None)
                 .await
                 .unwrap(),
             "{method}"
@@ -574,7 +575,7 @@ async fn a_native_model_without_a_fallback_counterpart_keeps_the_threads_model()
     let mut tier_only = json!({"threadId": "thr_fallback", "serviceTier": "default"});
     assert!(
         external
-            .admit("turn/start", &mut tier_only, Some("relay"))
+            .admit("turn/start", &mut tier_only, Some("relay"), None)
             .await
             .unwrap()
     );
@@ -583,7 +584,7 @@ async fn a_native_model_without_a_fallback_counterpart_keeps_the_threads_model()
     let mut nested =
         json!({"threadId": "thr_fallback", "collaborationMode": {"settings": {"model": "gpt-9"}}});
     let refusal = external
-        .admit("turn/start", &mut nested, Some("relay"))
+        .admit("turn/start", &mut nested, Some("relay"), None)
         .await
         .unwrap_err();
     assert!(refusal.message.contains("stays on Relay"));
@@ -609,4 +610,92 @@ async fn a_new_fallback_conversation_takes_the_matching_or_first_model() {
     let mut chosen = json!({"model": "gpt-9", "modelProvider": "openai-compatible"});
     external.start_on_fallback(&mut chosen).await.unwrap();
     assert_eq!(chosen["model"], "gpt-9");
+}
+
+#[tokio::test]
+async fn native_fallback_effort_follows_the_effective_models_capabilities() {
+    let state = tempfile::tempdir().unwrap();
+    let external = providers(state.path());
+    let mut start = json!({"model": "gpt-9", "config": {"model_reasoning_effort": "xhigh"}});
+    external.start_on_fallback(&mut start).await.unwrap();
+    assert_eq!(start["config"]["model_reasoning_effort"], "high");
+
+    for requested_model in ["model-a", "gpt-9"] {
+        let mut turn = json!({"threadId": "t", "model": requested_model, "effort": "xhigh"});
+        external
+            .admit("turn/start", &mut turn, Some("relay"), Some(MODEL))
+            .await
+            .unwrap();
+        assert_eq!(turn["effort"], "high");
+    }
+    let mut supported = json!({"threadId": "t", "model": "model-a", "effort": "low"});
+    external
+        .admit("turn/start", &mut supported, Some("relay"), Some(MODEL))
+        .await
+        .unwrap();
+    assert_eq!(supported["effort"], "low");
+
+    let mut explicit = json!({"threadId": "t", "model": MODEL, "effort": "xhigh"});
+    assert!(
+        external
+            .admit("turn/start", &mut explicit, Some("relay"), Some(MODEL))
+            .await
+            .unwrap()
+    );
+    assert_eq!(explicit["effort"], "high");
+
+    let mut collaboration = json!({"threadId": "t", "collaborationMode": {"settings": {
+        "model": "model-a", "reasoning_effort": "xhigh"
+    }}});
+    external
+        .admit("turn/start", &mut collaboration, Some("relay"), Some(MODEL))
+        .await
+        .unwrap();
+    assert_eq!(
+        collaboration["collaborationMode"]["settings"]["reasoning_effort"],
+        "high"
+    );
+}
+
+#[tokio::test]
+async fn a_fallback_without_reasoning_removes_the_config_override() {
+    let state = tempfile::tempdir().unwrap();
+    let external = providers(state.path());
+    let mut models = project(&provider(), &listing()).unwrap();
+    models[0]["supported_reasoning_levels"] = json!([]);
+    external.publish(&provider(), models).unwrap();
+    let mut start =
+        json!({"model": "gpt-9", "config": {"model_reasoning_effort": "xhigh", "other": true}});
+    external.start_on_fallback(&mut start).await.unwrap();
+    assert_eq!(start["config"], json!({"other": true}));
+}
+
+#[tokio::test]
+async fn explicit_fallback_starts_and_effort_only_updates_are_adapted() {
+    let state = tempfile::tempdir().unwrap();
+    let external = providers(state.path());
+    let mut start = json!({"model": MODEL, "config": {"model_reasoning_effort": "xhigh"}});
+    external
+        .admit("thread/start", &mut start, None, None)
+        .await
+        .unwrap();
+    assert_eq!(start["config"]["model_reasoning_effort"], "high");
+    for method in [
+        "turn/start",
+        "thread/settings/update",
+        "turn/settings/update",
+    ] {
+        let mut update = json!({"threadId": "t", "effort": "xhigh"});
+        assert_eq!(
+            ExternalProviders::thread_to_inspect(method, &update).as_deref(),
+            Some("t")
+        );
+        assert!(
+            external
+                .admit(method, &mut update, Some("relay"), Some(MODEL))
+                .await
+                .unwrap()
+        );
+        assert_eq!(update["effort"], "high");
+    }
 }

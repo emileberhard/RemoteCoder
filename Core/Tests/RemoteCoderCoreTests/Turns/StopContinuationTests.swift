@@ -7,6 +7,80 @@ import Testing
 @MainActor
 @Suite(.timeLimit(.minutes(1)))
 struct StopContinuationTests {
+    @Test func unchangedAdmissionPreservesRememberedFastPreferenceWhenTheModelRunsStandard() throws {
+        let model = ModelOption.unlisted(id: "standard-model", modelProvider: nil,
+            reportedEffort: .high, reportedFastMode: false)
+        let requested = TurnDispatcher.Settings(model: model, reasoning: .effort(.high),
+            serviceTier: .clear, fastModeState: .selection(true), workingDirectory: "/tmp", selectionRevision: 1)
+        let thread = try ThreadFixture.wire("native", updatedAt: 1, fields: [
+            "model": "standard-model", "extra": ["serviceTier": NSNull()]
+        ])
+        let admitted = requested.admitted(to: thread)
+        #expect(admitted.fastModeState.selection == false)
+        #expect(admitted.fastModeState.remembered == true)
+        let opus = try #require(ClaudeModelCatalog.model(for: "opus"))
+        #expect(admitted.fastModeState.changingModel(from: model, to: opus).selection == true)
+    }
+
+    @Test func voiceThreadStartDoesNotOptIntoProviderFallback() async throws {
+        let fixture = try await StopFixture.open()
+        await fixture.socket.setStartedThread(try ThreadFixture.wire("voice", updatedAt: 1), model: nil, effort: nil)
+        _ = try await fixture.gateway.startThread(model: "gpt-6.1-sol", cwd: "/tmp", serviceTier: nil,
+            provider: .codex, serviceName: "RemoteCoder Voice", config: nil)
+        let start = try await fixture.socket.request("thread/start")
+        #expect(start.params?.objectValue?["acceptProviderFallback"] == nil)
+        await fixture.close()
+    }
+
+    @Test(arguments: ["claude_fallback", "copilot-fallback", "native-fresh", "native-fallback"],
+          [ReasoningSelection.automatic, .effort(.ultra)])
+    func newAdmissionDispatchesAndPersistsEffectiveSettings(threadID: String, reasoning: ReasoningSelection) async throws {
+        let fixture = try await StopFixture.open()
+        let fallback = threadID != "native-fresh"
+        let model = threadID == "claude_fallback" ? "opus" : threadID == "copilot-fallback" ? "copilot/gpt-6.1-sol" : "gpt-6.1-sol"
+        var admitted = try ThreadFixture.wire(threadID, updatedAt: 1, fields: [
+            "model": model, "modelProvider": threadID == "claude_fallback" ? "claude" : threadID == "copilot-fallback" ? "copilot" : "openai",
+            "reasoningEffort": "high", "extra": ["serviceTier": NSNull()]
+        ])
+        if !fallback { admitted.extra = nil }
+        if threadID == "native-fallback" { admitted.model = nil; admitted.reasoningEffort = nil }
+        await fixture.socket.setStartedThread(admitted, model: threadID == "native-fallback" ? model : nil,
+            effort: threadID == "native-fallback" ? .high : nil)
+        fixture.selectionCurrent = true
+        let nativeModel = ModelOption(id: "gpt-6.1-sol", displayName: "Sol",
+            reasoningEfforts: [.ultra], supportsFastMode: true, supportsDaybreakBlue: true,
+            acceptsImages: true, provider: .codex, modelProvider: nil, isListed: true)
+        let requestedModel = threadID == "native-fallback" ? try #require(ClaudeModelCatalog.model(for: "opus")) : nativeModel
+        let settings = TurnDispatcher.Settings(model: requestedModel,
+            reasoning: reasoning, serviceTier: .set(.fast), fastModeState: .selection(true),
+            workingDirectory: "/tmp", selectionRevision: 0)
+        let conversationID = UUID()
+        let draft = try #require(await fixture.drafts.draft(for: .newChat(conversationID)))
+        let session = await fixture.conversations.session(conversationID: conversationID, threadID: nil)
+        try await session.restore()
+        let message = ChatMessage(role: .user, text: "Hello")
+        _ = try await session.submitDurably(message, input: "Hello")
+        fixture.dispatcher.startTurn(.init(draft: draft, conversationID: conversationID,
+            userMessageID: message.id, input: "Hello", interactionMode: .text, settings: settings), sessionID: nil)
+        await fixture.dispatcher.drain()
+        let start = try await fixture.socket.request("thread/start")
+        #expect(start.params?.objectValue?["acceptProviderFallback"] == .bool(true))
+        #expect(start.params?.objectValue?["config"]?.objectValue?["model_reasoning_effort"]?.stringValue == reasoning.effort?.rawValue)
+        let turn = try await fixture.socket.request("turn/start")
+        #expect(turn.params?.objectValue?["threadId"]?.stringValue == threadID)
+        #expect(turn.params?.objectValue?["model"]?.stringValue == model)
+        let effectiveEffort: String? = fallback || reasoning != .automatic ? "high" : nil
+        #expect(turn.params?.objectValue?["effort"]?.stringValue == effectiveEffort)
+        #expect(turn.params?.objectValue?["serviceTier"]?.stringValue == (fallback ? nil : "fast"))
+        #expect(turn.params?.objectValue?["cyberAccessProgram"]?.stringValue == (fallback ? nil : "daybreakBlue"))
+        let saved = await fixture.metadata.metadata(for: threadID)
+        #expect(saved?.modelID == model)
+        #expect(saved?.reasoningSelectionID == (effectiveEffort == nil ? "automatic" : "effort-high"))
+        #expect(saved?.fastModeEnabled == !fallback)
+        #expect(fixture.admittedSettings?.model.id == model)
+        await fixture.close()
+    }
+
     @Test(arguments: [false, true])
     func successorWaitsForMatchingCompletionAndFullStopResponse(responseFirst: Bool) async throws {
         let fixture = try await StopFixture.open()
@@ -242,6 +316,8 @@ private final class StopFixture: TurnDispatchHost {
     let drafts: ComposerDraftStore
     let settings = TurnDispatcher.Settings(model: .unlisted(id: "gpt-6.1-sol", modelProvider: nil, reportedEffort: .medium, reportedFastMode: false),
         reasoning: .automatic, serviceTier: nil, fastModeState: .selection(false), workingDirectory: "/tmp", selectionRevision: 0)
+    var selectionCurrent = false
+    var admittedSettings: TurnDispatcher.Settings?
     var isRetired = false
     var refreshed = false
     var refreshWaiter: CheckedContinuation<Void, Never>?
@@ -315,6 +391,7 @@ private final class StopFixture: TurnDispatchHost {
     func close() async {
         isRetired = true
         let tasks = dispatcher.cancelAll()
+        await metadata.retire()
         await socket.stop()
         await gateway.disconnect()
         for task in tasks { await task.value }
@@ -334,13 +411,21 @@ private final class StopFixture: TurnDispatchHost {
     func startActivityRefresh() { refreshed = true; refreshWaiter?.resume(); refreshWaiter = nil }
     func reconcileInputDelivery(threadID: String) async {}
     func threadStarted(_ thread: CodexAppServerV2.Thread, session: ConversationSession, settingsRevision: UInt64,
-                       requestedServiceTier: CodexAppServerV2.ServiceTierOverride?) async {}
-    func selectionIsCurrent(revision: UInt64, threadID: String) -> Bool { false }
+                       requestedServiceTier: CodexAppServerV2.ServiceTierOverride?, admittedSettings: TurnDispatcher.Settings?) async { self.admittedSettings = admittedSettings }
+    func selectionIsCurrent(revision: UInt64, threadID: String) -> Bool { selectionCurrent }
 }
 
 private actor StopSocket {
     private let listener: NWListener
     private let queue = DispatchQueue(label: "StopSocket")
+    private var startedThread: CodexAppServerV2.Thread?
+    private var startModel: String?
+    private var startEffort: CodexAppServerV2.ReasoningEffort?
+    func setStartedThread(_ thread: CodexAppServerV2.Thread, model: String?, effort: CodexAppServerV2.ReasoningEffort?) {
+        startedThread = thread
+        startModel = model
+        startEffort = effort
+    }
     private var stopped = false
     private var connection: NWConnection?
     private var ready: CheckedContinuation<UInt16, Error>?
@@ -409,6 +494,11 @@ private actor StopSocket {
                         "externalActivity": .object(["sessions": .array([]), "claudeAvailable": .bool(true), "codexAvailable": .bool(true)]),
                         "agentOwners": .object([:]),
                     ]))
+                case "thread/start":
+                    var result: [String: JSONValue] = ["thread": try json(#require(startedThread))]
+                    if let startModel { result["model"] = .string(startModel) }
+                    if let startEffort { result["reasoningEffort"] = .string(startEffort.rawValue) }
+                    try await reply(request, result: .object(result))
                 case "thread/resume":
                     try await reply(request, result: .object(["thread": try json(CodexAppServerV2.Thread.historyFixture())]))
                 case "thread/queue/list":

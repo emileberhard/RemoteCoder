@@ -124,6 +124,9 @@ async def _run_probe_turn(
         started["thread"] = thread_id
         if on_thread is not None:
             on_thread(thread_id)
+        actual_provider = "claude" if thread_id.startswith("claude_") else "codex"
+        if actual_provider != turn.get("provider", "codex"):
+            raise RuntimeError(f"Probe requested {turn.get('provider', 'codex')} but gateway admitted {actual_provider}")
 
     def record_turn(turn_id: str) -> None:
         started["turn"] = turn_id
@@ -147,7 +150,7 @@ async def _run_gateway_turn(
     next_id,
     prompt: str,
     resume: str | None,
-    model: str,
+    model: str | None,
     cwd: str,
     approval_policy: str,
     sandbox: str,
@@ -173,7 +176,9 @@ async def _run_gateway_turn(
         }
         if provider == "codex" else {}
     )
-    thread_params = {"model": model, "cwd": cwd, **policy}
+    thread_params = {"cwd": cwd, **policy}
+    if model is not None:
+        thread_params["model"] = model
     if provider == "codex":
         # Explicit null clears a saved/configured Fast tier for this dispatch.
         thread_params["serviceTier"] = service_tier
@@ -198,7 +203,9 @@ async def _run_gateway_turn(
     elif resume:
         thread_id = resume
     else:
-        start_params = dict(thread_params)
+        start_params = {**thread_params, "acceptProviderFallback": True}
+        if effort:
+            start_params["config"] = {"model_reasoning_effort": effort}
         if provider != "codex":
             start_params["provider"] = provider
         result, _elapsed, _byte_count = await _timed_rpc(
@@ -212,6 +219,32 @@ async def _run_gateway_turn(
         if not isinstance(thread, dict):
             raise RuntimeError("thread/start returned no thread")
         thread_id = str(thread.get("id") or "")
+        actual_provider = "claude" if thread_id.startswith("claude_") else "codex"
+        if actual_provider == "claude" and provider == "codex" and (
+            sandbox != "dangerFullAccess" or not network_access or approval_policy != "never"
+        ):
+            raise RuntimeError("Admitted Claude thread cannot preserve the requested execution restrictions; no turn was submitted")
+        thread_params = {"cwd": cwd}
+        actual_model = result.get("model", thread.get("model"))
+        if isinstance(actual_model, str):
+            thread_params["model"] = actual_model
+        if actual_provider == "codex":
+            thread_params.update(
+                approvalPolicy=approval_policy,
+                sandboxPolicy=_sandbox_policy(sandbox_type=sandbox, network_access=network_access),
+                serviceTier=service_tier,
+            )
+            actual_model_provider = result.get("modelProvider", thread.get("modelProvider"))
+            if isinstance(actual_model_provider, str):
+                thread_params["modelProvider"] = actual_model_provider
+                if actual_model_provider != "openai":
+                    thread_params["serviceTier"] = None
+        changed_route = actual_provider != provider or (isinstance(actual_model, str) and model is not None and actual_model != model)
+        actual_effort = result.get("reasoningEffort")
+        if isinstance(actual_effort, str) and (effort is not None or changed_route):
+            effort = actual_effort
+        elif actual_provider != provider:
+            effort = None
         if thread_id and purpose:
             await mark_purpose(ws, next_id=next_id, thread_id=thread_id, purpose=purpose, timeout_s=timeout_s)
 
@@ -313,13 +346,13 @@ async def _probe_turn(
         await _initialize(ws, timeout_s=args.timeout)
 
         async def release() -> None:
-            if provider == "claude" and thread_id is not None:
+            if thread_id is not None and thread_id.startswith("claude_"):
                 await release_claude_runtime(ws, next_id=next_id, thread_id=thread_id, timeout_s=args.timeout)
 
         async with cleanup_after("release Claude runtime", release):
             run = await _run_probe_turn(
                 ws, next_id=next_id, prompt=prompt, resume=resume,
-                model=args.codex_model if provider == "codex" else args.claude_model,
+                model=None if resume else (args.codex_model if provider == "codex" else args.claude_model),
                 cwd=args.cwd, approval_policy="never", sandbox="readOnly",
                 network_access=False, timeout_s=args.timeout, provider=provider,
                 purpose=purpose, on_thread=set_thread,

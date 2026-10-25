@@ -41,6 +41,7 @@ one launch on the phone has logged that each condition below holds.
 
 | Path | Owner | Reason | Removal condition |
 |---|---|---|---|
+| `thread/start.acceptProviderFallback: true` opts into cross-harness admission; absence keeps the selected harness | Gateway new-thread admission; `GatewayClient.startThread`, web `TurnDispatcher`, shared CLI `turns.py` | Older clients cannot dispatch or persist a returned thread from another harness. Opted-in clients adopt its actual identity and settings; existing threads and Voice never opt in | Every supported client and rollback handles cross-harness admission, including actual model/effort readback; then the gateway may remove the compatibility gate and clients remove the field together. Voice remains excluded |
 | `POST /uploads?name=` stores one whole body as a single attempt at a fresh resumable upload, discarded unless stored | `legacy_upload` (`http/server/files.rs`) | Apps before resumable uploads attach files this way, and the gateway deploys before the iPhone, the Mac apps and TestFlight builds update | The iPhone, the iPad and both Mac apps run a build with resumable uploads and no supported rollback build predates it |
 
 ## APNs broker rollout

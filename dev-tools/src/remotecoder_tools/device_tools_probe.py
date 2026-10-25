@@ -157,7 +157,7 @@ async def _device_turn(args: argparse.Namespace, cfg: GatewayConfig, provider: s
         thread_id = thread
 
     async def release() -> None:
-        if provider == "claude" and thread_id is not None:
+        if thread_id is not None and thread_id.startswith("claude_"):
             await release_claude_runtime(
                 ws, next_id=next_id, thread_id=thread_id, timeout_s=args.timeout
             )

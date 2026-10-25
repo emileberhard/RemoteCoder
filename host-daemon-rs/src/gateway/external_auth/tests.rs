@@ -927,7 +927,12 @@ async fn a_router_token_failure_leaves_codex_ready_and_starts_new_chats_on_the_f
         let mut follow_up =
             json!({"threadId": "thr_copilot", "model": "gpt-6.1-sol", "serviceTier": "fast"});
         external
-            .admit(method, &mut follow_up, Some("copilot"))
+            .admit(
+                method,
+                &mut follow_up,
+                Some("copilot"),
+                Some("copilot/gemini-4-argon"),
+            )
             .await
             .unwrap();
         assert!(follow_up.get("model").is_none(), "{method}");

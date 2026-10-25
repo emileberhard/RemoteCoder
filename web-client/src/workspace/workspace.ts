@@ -588,8 +588,8 @@ export class Workspace {
   chooseFastMode(enabled: boolean) {
     return this.settings.chooseFastMode(enabled);
   }
-  prepareConversation(): Promise<Conversation> {
-    return this.dispatcher.prepareConversation();
+  prepareVoiceConversation(): Promise<Conversation> {
+    return this.dispatcher.prepareVoiceConversation();
   }
   send(mode: "send" | "queue" = "send", override?: string) {
     return this.dispatcher.send(mode, override);
