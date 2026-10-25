@@ -114,18 +114,24 @@ struct ModelOption: Identifiable, Hashable, Sendable {
         supportsDaybreakBlue ? .daybreakBlue : nil
     }
 
-    static func unlisted(id: String, reportedEffort: ReasoningEffort?, reportedFastMode: Bool) -> ModelOption {
+    static func unlisted(id: String, modelProvider: CodexAppServerV2.ModelProvider?, reportedEffort: ReasoningEffort?,
+                         reportedFastMode: Bool) -> ModelOption {
         ModelOption(
             id: id,
-            displayName: id,
+            displayName: modelProvider == nil ? id : readableName(of: id),
             reasoningEfforts: reportedEffort.map { [$0] } ?? [],
             supportsFastMode: reportedFastMode,
             supportsDaybreakBlue: false,
             acceptsImages: true,
             provider: .codex,
-            modelProvider: nil,
+            modelProvider: modelProvider,
             isListed: false
         )
+    }
+
+    private static func readableName(of id: String) -> String {
+        let name = id.split(separator: "/").last.map(String.init) ?? id
+        return name.split { $0 == "-" || $0 == "_" }.map { $0.prefix(1).uppercased() + $0.dropFirst() }.joined(separator: " ")
     }
 }
 

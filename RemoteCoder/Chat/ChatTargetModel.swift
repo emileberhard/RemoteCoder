@@ -1515,12 +1515,13 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
             await metadataService.observeSettings(notification, observedAt: .now)
             guard !isRetired else { return }
             let reportedFastMode = notification.threadSettings.fastModeSelection
+            let shown = screenShowing(notification.threadId)
             guard screens.allSatisfy({ $0.pendingSettings[notification.threadId] == nil }),
                   let model = modelCatalog.option(id: notification.threadSettings.model, threadID: notification.threadId,
+                                          modelProvider: shown?.activeModelProvider,
                                           effort: notification.threadSettings.effort?.rawValue, fastMode: reportedFastMode == true) else { return }
             let reasoning = notification.threadSettings.effort.flatMap { ReasoningEffort(rawValue: $0.rawValue) }
                 .map(ReasoningSelection.effort) ?? .automatic
-            let shown = screenShowing(notification.threadId)
             if let shown {
                 shown.pickerSelection.observe(model: model, reasoning: reasoning, reportedFastMode: reportedFastMode)
                 shown.refreshReasoningVisibility()
@@ -1815,6 +1816,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
         if let owner = screens.first(where: { $0.selectedConversation === session }) {
             if owner.activeSessionID == nil { owner.setActiveSessionID(thread.id) }
             owner.adoptModelProvider(thread.modelProvider, threadID: thread.id)
+            owner.adoptReportedModel(thread.model, threadID: thread.id, selectionRevision: settingsRevision)
             if requestedServiceTier == nil {
                 owner.acceptThreadTierReadback(thread.extra, threadID: thread.id, selectionRevision: settingsRevision)
             }

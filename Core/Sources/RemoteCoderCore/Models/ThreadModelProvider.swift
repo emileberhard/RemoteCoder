@@ -13,8 +13,12 @@ enum ThreadModelProvider: Sendable, Equatable {
         if case .external(let id) = self { id } else { nil }
     }
 
+    var modelProvider: CodexAppServerV2.ModelProvider? {
+        externalID.map { .init(id: $0, name: Self.displayName(of: $0)) }
+    }
+
     var notice: String? {
-        externalID.map { "Runs on \(Self.displayName(of: $0))" }
+        modelProvider.map { "Runs on \($0.name)" }
     }
 
     static func displayName(of id: String) -> String {

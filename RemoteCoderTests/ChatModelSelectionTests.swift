@@ -98,6 +98,31 @@ struct ChatModelSelectionTests {
         #expect(model.areConversationSettingsReady)
     }
 
+    @Test func aConversationOnAnExternalProviderShowsTheModelItRunsOn() async throws {
+        let fixture = await WorkspaceFixture()
+        await fixture.restoreCachedModels()
+        defer { fixture.workspace.teardown(); await fixture.cleanUp() }
+        let model = try #require(fixture.workspace.selectedScreen)
+
+        var history = try fixture.thread("copilot-thread", updatedAt: 100)
+        history.model = Fixtures.solID
+        history.modelProvider = "copilot"
+        model.resumeConversation(history)
+        #expect(await waitUntil { model.loadingTranscriptID == nil && model.selectedConversation != nil })
+        #expect(model.selectedModel?.id == Fixtures.solID)
+        #expect(model.providerNotice == "Runs on Copilot")
+
+        let started = try ThreadFixture.wire("copilot-thread", updatedAt: 101,
+            fields: ["model": "copilot/gemini-4-argon", "modelProvider": "copilot"])
+        await model.target.threadStarted(started, session: try #require(model.selectedConversation),
+            settingsRevision: model.settingsSelectionRevision, requestedServiceTier: nil)
+
+        let argon = try #require(model.selectedModel)
+        #expect(argon.pickerTitle == "Gemini 4 Argon · Copilot")
+        #expect(model.pickerModelOptions(for: argon).map(\.id) == ["copilot/gemini-4-argon"])
+        #expect(model.providerNotice == "Runs on Copilot")
+    }
+
     @Test func hidingOrFixingTheNewChatModelClampsToAVisibleModel() async throws {
         let fixture = await WorkspaceFixture()
         await fixture.restoreCachedModels()

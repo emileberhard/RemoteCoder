@@ -75,8 +75,11 @@ back to unknown.
 - A Codex conversation records its `modelProvider` from `thread/start`,
   `thread/resume` and history (`ThreadModelProvider`). One whose provider is
   not native (`openai`) reads "Runs on Copilot" (the id, capitalized) whatever
-  the health, and its picker offers that provider's models even when the
-  composer still shows the native model the chat was started with.
+  the health, and its picker offers that provider's models. The picker and
+  composer show the model the thread reports (`Thread.model`) rather than the
+  native model the chat was started with; a model the catalog does not list
+  gets a name from its id (`copilot/gemini-4-argon` reads "Gemini 4 Argon ·
+  Copilot"). Sends carry that id, and the gateway accepts native names too.
 - While the preferred new-chat provider is unavailable, a new chat whose model
   was not chosen starts on a working provider's default model, and the warning
   line shows the unavailable provider's reason. When no working provider has a

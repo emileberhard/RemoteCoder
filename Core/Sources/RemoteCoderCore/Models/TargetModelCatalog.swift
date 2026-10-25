@@ -78,14 +78,15 @@ struct TargetModelCatalog {
         }
     }
 
-    func option(id: String, threadID: String, effort: String?, fastMode: Bool) -> ModelOption? {
+    func option(id: String, threadID: String, modelProvider: ThreadModelProvider?, effort: String?, fastMode: Bool) -> ModelOption? {
         switch AgentProvider.provider(forThreadID: threadID) {
         case .claude:
             return ClaudeModelCatalog.model(for: id)
         case .codex:
             guard !id.isEmpty else { return nil }
             return service.catalog?.entry(for: id)?.option
-                ?? .unlisted(id: id, reportedEffort: effort.flatMap(ReasoningEffort.init(rawValue:)), reportedFastMode: fastMode)
+                ?? .unlisted(id: id, modelProvider: modelProvider?.modelProvider,
+                             reportedEffort: effort.flatMap(ReasoningEffort.init(rawValue:)), reportedFastMode: fastMode)
         }
     }
 }
