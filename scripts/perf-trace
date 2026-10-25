@@ -773,7 +773,7 @@ def processor_trace(trace: str, run: Run, count: int, apps: list[Path]) -> dict 
     app_functions = set()
     details = defaultdict(list)
     app_roots = app_bundle_roots(frames)
-    for profile in profiles.values():
+    for profile in sorted(profiles.values(), key=lambda item: item["selfCycles"] or 0, reverse=True):
         frame = profile["frame"]
         label = profile["name"]
         if frame is not None and frame.binary is not None:
@@ -783,7 +783,8 @@ def processor_trace(trace: str, run: Run, count: int, apps: list[Path]) -> dict 
                 app_functions.add(label)
             if len(details[label]) < 10:
                 details[label].append({"uuid": frame.binary.uuid, "binary": frame.binary.name,
-                    "address": hex(frame.address), "inlineFrames": list(locations.get(frame, ())),
+                    "address": hex(frame.address), "selfCycles": profile["selfCycles"],
+                    "callIntervals": profile["callIntervals"], "inlineFrames": list(locations.get(frame, ())),
                     "unavailableReason": None if locations.get(frame) else
                         "address has no named debug frame in the matching image" if frame in locations else
                         "no UUID-matching symbol file"})

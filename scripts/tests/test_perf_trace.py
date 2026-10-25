@@ -196,6 +196,7 @@ class PerfTraceTests(unittest.TestCase):
         self.assertEqual(result["topAppFunctions"], {"parse (in RemoteCoder)": {
             "callIntervals": 2, "selfMs": 4, "selfCycles": 200, "selfInstructions": 100}})
         self.assertEqual(result["symbolLocations"]["parse (in RemoteCoder)"][0]["inlineFrames"], list(lines))
+        self.assertEqual(result["symbolLocations"]["parse (in RemoteCoder)"][0]["selfCycles"], 200)
 
     def test_accessibility_snapshot_ancestors_count_as_automation_without_developer_frames(self):
         for name in ("-[NSObject(UIAccessibilityAutomation) _accessibilityUserTestingSnapshotWithOptions:]",
