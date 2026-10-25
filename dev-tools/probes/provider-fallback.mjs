@@ -126,8 +126,6 @@ try {
     const read = await client.rpc("thread/read", { threadId: copilotFirst.threadId, includeTurns: false });
     assert.equal(read.result?.thread?.modelProvider, "copilot");
     assert.equal(read.result?.thread?.model, FALLBACK_MODEL);
-    const settings = await client.rpc("thread/resume", { threadId: copilotFirst.threadId, excludeTurns: true });
-    assert.equal(settings.result?.reasoningEffort, "high", "Argon must clamp xhigh to high");
     const explicit = await client.rpc("turn/start", { threadId: copilotFirst.threadId, model: FALLBACK_MODEL,
         effort: "xhigh", input: [{ type: "text", text: "Reply with exactly: explicit argon ok" }] });
     assert(!explicit.error, JSON.stringify(explicit.error));
@@ -139,11 +137,16 @@ try {
         return turn && ["completed", "failed", "interrupted"].includes(turn.status) ? turn : null;
     }, 120);
     assert.equal(terminal.status, "completed", JSON.stringify(terminal.error));
+    const rolloutPath = read.result?.thread?.path;
+    assert(typeof rolloutPath === "string" && resolve(rolloutPath).startsWith(lab.root + "/"), "Probe rollout must belong to its isolated home");
+    const executedEfforts = (await readFile(rolloutPath, "utf8")).split("\n").filter(Boolean)
+        .map(line => JSON.parse(line)).filter(event => event.type === "turn_context").map(event => event.payload.effort);
+    assert.deepEqual(executedEfforts, ["high", "high", "high"], "Each Argon request must execute with high reasoning");
     await client.rpc("thread/archive", { threadId: copilotFirst.threadId });
     console.log(JSON.stringify({
         providers, firstPartyFallback: first, actualModel,
         lastResortProviders, copilotTurns: [copilotFirst, copilotFollowUp],
-        copilotThread: { modelProvider: read.result?.thread?.modelProvider, model: read.result?.thread?.model, effort: settings.result?.reasoningEffort },
+        copilotThread: { modelProvider: read.result?.thread?.modelProvider, model: read.result?.thread?.model, executedEfforts },
     }, null, 2));
 
 } catch (error) {
