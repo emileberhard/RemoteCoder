@@ -319,7 +319,14 @@ def frame_owner(frame: Frame, app_roots: set[str]) -> str:
 
 
 def heaviest(counters: dict[str, Counter], count: int) -> dict[str, dict[str, float]]:
-    return {bucket: {key: round(ms, 1) for key, ms in counter.most_common(count)} for bucket, counter in counters.items()}
+    return {bucket: {key: None if ms is None else round(ms, 1)
+                     for key, ms in sorted(counter.items(), key=lambda item: item[1] or 0, reverse=True)[:count]}
+            for bucket, counter in counters.items()}
+
+
+def add_duration_ms(totals: dict, key: str, duration_ns: float | None) -> None:
+    previous = totals.get(key, 0)
+    totals[key] = None if duration_ns is None or previous is None else previous + duration_ns / 1e6
 
 
 def recorded_run(trace: str) -> Run:
@@ -829,18 +836,28 @@ def file_activity(trace: str, schemas: frozenset[str]) -> dict | None:
         entry = paths[path]
         if descriptor := element_text(row.get("fd")):
             entry["fileDescriptors"][descriptor] += 1
-        entry["operations"][element_text(row.get("syscall")) or "<unavailable operation>"] += 1
+        operation = element_text(row.get("syscall")) or "<unavailable operation>"
+        entry["operations"][operation] += 1
+        call = operation.removeprefix("sys_")
+        kind = element_text(row.get("type"))
+        direction = (kind if kind in ("Read", "Write") else
+                     "Read" if call in {"read", "read_nocancel", "pread", "pread_nocancel", "readv", "preadv", "guarded_pread_np"} else
+                     "Write" if call in {"write", "write_nocancel", "pwrite", "pwrite_nocancel", "writev", "pwritev", "guarded_pwrite_np"} else None)
+        non_byte = call in {"open", "openat", "close", "stat", "stat64", "fstat", "fstat64", "lstat", "lstat64",
+                            "access", "getattrlist", "fgetattrlist", "setattrlist", "fsync", "fcntl", "mkdir", "rmdir",
+                            "rename", "unlink", "ftruncate", "truncate", "getxattr", "setxattr", "listxattr", "removexattr"}
         duration = trace_number(row.get("duration"))
         entry["durationMs"] = None if duration is None or entry["durationMs"] is None else entry["durationMs"] + duration / 1e6
-        for column, field in (("lreads", "readBytes"), ("lwrites", "writtenBytes")):
-            element = row.get(column)
-            if (element is not None and element.tag != "sentinel") or element_text(row.get("type")) == ("Read" if column == "lreads" else "Write"):
-                value = trace_number(element)
-                if value is None:
-                    entry[field] = None
-                    entry["unavailableByteRows"] += 1
-                elif entry[field] is not None:
+        unknown_bytes = False
+        for column, field, expected in (("lreads", "readBytes", "Read"), ("lwrites", "writtenBytes", "Write")):
+            value = trace_number(row.get(column))
+            if value is not None:
+                if entry[field] is not None:
                     entry[field] += int(value)
+            elif direction == expected or (direction is None and not non_byte):
+                entry[field] = None
+                unknown_bytes = True
+        entry["unavailableByteRows"] += int(unknown_bytes)
     return {"schema": "FsSyscall", "paths": dict(sorted(paths.items(), key=lambda item:
             (item[1]["writtenBytes"] or 0) + (item[1]["readBytes"] or 0), reverse=True)[:50]),
             "pathLimit": 50, "pathsObserved": len(paths),
@@ -858,10 +875,9 @@ def system_trace(trace: str, schemas: frozenset[str]) -> dict | None:
         duration = trace_number(row.get("duration"))
         if duration is None:
             missing += 1
-            continue
         thread = element_text(row.get("thread")) or "<unavailable thread>"
         reason = element_text(row.get("note")) or "<blocking reason unavailable>"
-        blocked[thread][reason] += duration / 1e6
+        add_duration_ms(blocked[thread], reason, duration)
     return {"schema": "thread-state", "blockedMsByThreadAndReason": heaviest(blocked, 20),
             "unavailableDurationRows": missing,
             "reasonScope": "exported thread-state note; absence does not identify I/O, lock, or IPC"}
@@ -884,15 +900,14 @@ def swift_concurrency(trace: str, schemas: frozenset[str]) -> dict | None:
         duration = trace_number(row.get("duration"))
         if duration is None:
             missing += 1
-            continue
         state = element_text(row.get("state")) or "<unavailable state>"
-        states[state] += duration / 1e6
+        add_duration_ms(states, state, duration)
         actor = element_text(row.get("enqueued-actor")) or element_text(row.get("actor"))
         if actor:
-            actors[actor][state] += duration / 1e6
+            add_duration_ms(actors[actor], state, duration)
         function = element_text(row.get("resume-function"))
         if function:
-            functions[function] += duration / 1e6
+            add_duration_ms(functions, function, duration)
     queues = {}
     if "SwiftActorQueueSize" in schemas:
         for row in table_rows(trace, "SwiftActorQueueSize", {"process", "actor", "count"}):
@@ -904,7 +919,7 @@ def swift_concurrency(trace: str, schemas: frozenset[str]) -> dict | None:
                 queues[actor] = max(queues.get(actor, 0), int(count))
     return {"schema": "SwiftTaskStateTable", "observedTasks": len(tasks), "taskStateMs": dict(states),
             "taskStateMsByActor": heaviest(actors, 20),
-            "resumeFunctionStateMs": dict(functions.most_common(30)), "actorPeakQueuedTasks": queues or None,
+            "resumeFunctionStateMs": dict(sorted(functions.items(), key=lambda item: item[1] or 0, reverse=True)[:30]), "actorPeakQueuedTasks": queues or None,
             "actorQueueUnavailableReason": None if queues else "no app actor queue counts exported",
             "unavailableDurationRows": missing,
             "scope": "summed task state lifetimes; overlapping tasks are not CPU time"}

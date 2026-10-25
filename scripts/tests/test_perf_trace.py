@@ -299,6 +299,47 @@ class PerfTraceTests(unittest.TestCase):
         self.assertIsNone(result["paths"]["/db-wal"]["writtenBytes"])
         self.assertEqual(result["paths"]["/db-wal"]["durationMs"], 3)
 
+    def test_unknown_blocked_and_task_durations_invalidate_only_affected_buckets(self):
+        import xml.etree.ElementTree as ET
+        def value(tag, text):
+            element = ET.Element(tag)
+            element.text = text
+            return element
+        app = ET.Element("process", fmt="RemoteCoder (12)")
+        rows = [{"process": app, "thread": value("thread", "main"), "state": value("state", state),
+                 "note": value("note", reason), "actor": value("actor", "actor"),
+                 "resume-function": value("function", reason), "duration": value("duration", duration)}
+                for state, reason, duration in [("Blocked", "IPC", "1000000"), ("Blocked", "IPC", ""),
+                                                ("Blocked", "lock", "2000000")]]
+        with patch.object(trace, "table_rows", return_value=iter(rows)):
+            system = trace.system_trace("x.trace", frozenset({"thread-state"}))
+        self.assertEqual(system["blockedMsByThreadAndReason"]["main"], {"IPC": None, "lock": 2})
+        self.assertEqual(system["unavailableDurationRows"], 1)
+        rows[2]["state"] = value("state", "Running")
+        with patch.object(trace, "table_rows", return_value=iter(rows)):
+            tasks = trace.swift_concurrency("x.trace", frozenset({"SwiftTaskStateTable"}))
+        self.assertEqual(tasks["taskStateMs"], {"Blocked": None, "Running": 2})
+        self.assertEqual(tasks["taskStateMsByActor"]["actor"], {"Blocked": None, "Running": 2})
+        self.assertEqual(tasks["resumeFunctionStateMs"], {"IPC": None, "lock": 2})
+
+    def test_file_byte_counts_need_evidence_when_type_is_unavailable(self):
+        import xml.etree.ElementTree as ET
+        app = ET.Element("process", fmt="RemoteCoder (12)")
+        rows = [{"process": app, "path": ET.Element("path", fmt=path),
+                 "syscall": ET.Element("syscall", fmt=operation), "type": ET.Element("sentinel"),
+                 "lwrites": ET.Element("sentinel"), "lreads": ET.Element("sentinel")}
+                for path, operation in [("/write", "pwrite"), ("/unknown", "unknown"), ("/stat", "stat64")]]
+        with patch.object(trace, "table_rows", return_value=iter(rows)):
+            paths = trace.file_activity("x.trace", frozenset({"FsSyscall"}))["paths"]
+        self.assertIsNone(paths["/write"]["writtenBytes"])
+        self.assertEqual(paths["/write"]["readBytes"], 0)
+        self.assertEqual(paths["/write"]["unavailableByteRows"], 1)
+        self.assertIsNone(paths["/unknown"]["readBytes"])
+        self.assertIsNone(paths["/unknown"]["writtenBytes"])
+        self.assertEqual(paths["/unknown"]["unavailableByteRows"], 1)
+        self.assertEqual(paths["/stat"]["writtenBytes"], 0)
+        self.assertEqual(paths["/stat"]["unavailableByteRows"], 0)
+
     def test_no_app_samples_are_unavailable_and_fail_recording_report(self):
         result, _ = self.summary({"time-profile"}, tables={"time-profile": PROFILE_XML.replace("RemoteCoder", "OtherApp")})
         self.assertIsNone(result["app"]["cpuMs"])
