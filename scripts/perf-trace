@@ -1054,7 +1054,7 @@ def recording(trace: Path, seconds: int, target: list[str], instruments: list[st
         raise subprocess.CalledProcessError(recorder.returncode, command)
 
 
-def selected_instruments(template: str, swiftui: bool, extra: list[str]) -> list[str]:
+def selected_instruments(template: str, swiftui: bool, extra: Iterable[str]) -> list[str]:
     instruments = INSTRUMENTS if template == "Time Profiler" else ["Time Profiler"]
     return list(dict.fromkeys([*instruments, *(["SwiftUI"] if swiftui else []), *extra]))
 
@@ -1079,7 +1079,7 @@ def report(summary: dict, remedy: str) -> None:
         sys.exit(summary["app"]["cpuUnavailableReason"])
 
 
-def record_device(device: str, label: str, seconds: int, frames: int, callers: list[str], apps: list[Path], swiftui: bool, template: str = "Time Profiler", instruments: list[str] = ()) -> None:
+def record_device(device: str, label: str, seconds: int, frames: int, callers: list[str], apps: list[Path], swiftui: bool, template: str = "Time Profiler", instruments: Iterable[str] = ()) -> None:
     trace = new_trace(label)
     with recording(trace, seconds, ["--device", device, *(["--attach", APP] if template in ("Allocations", "Processor Trace") else ["--all-processes"])],
                    selected_instruments(template, swiftui, instruments), template):
