@@ -484,7 +484,7 @@ every drain — otherwise uploading a segment generates the next one.
 **Reading it back.** The phone uploads to whichever gateway it can reach, so one
 device's history is split across hosts. `just app-telemetry stores` lists every
 device directory on this host and the configured gateway hosts (read over SSH);
-`metrickit`, `diagnostics --symbolicate`, `counts`, `persistence`, `timeline`,
+`metrickit`, `states`, `compare`, `diagnostics`, `counts`, `persistence`, `timeline`,
 `activity` and `export-cost` take the exact `--device` and print JSON that names
 the stores read and any that failed, when the host cap removed data or is
 unmet, and each segment it could not read (corrupt, or expanding beyond the
@@ -498,9 +498,60 @@ an entry goes when its segment does. MetricKit's daily entry is never added to
 its subintervals, subintervals get no clock times, and per-foreground-minute
 rates are labelled as normalizations because the daily totals include background
 work. Persistence counters are cumulative per run, so the reader splits runs where
-a counter falls. `scripts/symbols.py`, shared with `perf-trace`, matches retained
-dSYMs and Xcode's DeviceSupport symbols by UUID. Raw records remain readable with
+a counter falls. Raw records remain readable with
 `gunzip -c ~/Library/Logs/remote-coder/app-logs/<device>/*.jsonl.gz | jq`.
+
+**Builds.** A MetricKit report's own build label is the build installed when
+Apple delivered it, and its `includesMultipleApplicationVersions` stays false
+while the phone switches builds several times a day, so no MetricKit number
+takes its build from the report. The reader places each report and diagnostic on
+the device's telemetry runs instead (a run lasts from its header's `startedAt`
+to its last record) and prints `attributedBuild` as `single` (exactly one build
+ran in the coverage), `mixed` (several, listed with their seconds) or `unknown`
+(no run covers it); `reportedBuild` keeps the report's own label for reference.
+A build is `appVersion`, `build` and, from 3.69.0, the run header's
+`sourceCommit`; dev builds all report 0.0.0 and differ by build number. MetricKit
+interval entries carry a duration but no start time, so every entry of a report
+gets the report coverage's status, and a mixed day cannot be split.
+`coveredSeconds` against `windowSeconds` shows how much of the coverage had run
+records. History older than the telemetry is `unknown`, never the delivery label.
+
+`states` aggregates a report's state entries per domain, label, attributed build
+and device model: state, foreground and background seconds, hitch time and its
+animation-weighted ratio, the hang histogram, launch histograms and each
+signpost's count with p50 and p95 upper bounds from its duration histogram. A
+signpost whose CPU time, logical writes and average memory are all exactly 0 was
+not measured (OSSignposter) and prints `resources: unknown`. Flags state what
+looks wrong rather than hiding it: `suspectedStuck` (a history state, which
+clears when its load finishes, lasting longer than the report's whole foreground
+time), `stateExceedsCoverage`, and per report `domainForegroundExceedsEntryTotal`
+(a domain's per-state foreground times add up to more than the full-day entry's)
+and `hasExceededStateLimit` (null when the report omits it). It also groups
+diagnostics by the states active before them, counting kinds and builds and
+giving the longest state at the event; `not reported` means the diagnostic
+carried no state list, which differs from an empty one.
+
+`compare --before BUILD --after BUILD` (a build number, version or source commit
+prefix; an ambiguous or unseen one exits 2 and lists the candidates) puts two
+builds side by side per device model and app state (`--by` as for `activity`).
+Sampler numbers come from measured intervals only: CPU, GPU, wakeups and
+persistence writes and bytes per measured minute with their spread across runs,
+and `gpuSeconds` stays null where samples lack `gpuNs` (builds before 3.69.0; the
+unit is assumed nanoseconds and unverified). MetricKit numbers come from the
+full-day entry of reports whose coverage ran exactly one of the two builds,
+labelled per foreground hour because the totals include background work. A model
+whose side has fewer than `--min-minutes` (default 30) measured minutes is
+listed as refused with the reason; when no model remains the command exits 3.
+`timeline` and `activity` also carry `gpuSeconds`.
+
+`diagnostics --symbolicate` names every frame of every call stack tree, one
+`atos` batch per binary UUID and load address, and keeps the heaviest path.
+Each diagnostic adds a `profile` of its attributed thread's functions by
+inclusive and self samples. `missingSymbols` lists each unresolved binary with
+its name, UUID, the builds whose diagnostics used it, its frame count and the
+reason, because every build's app binary is called RemoteCoder.
+`scripts/symbols.py`, shared with `perf-trace`, matches retained dSYMs and
+Xcode's DeviceSupport symbols by UUID.
 A conversation switch leaves one `.notice` trail: `history select` (the tapped
 address, outcome and what was on screen), `window select` (a target change),
 `chat screen presents` and `transcript presents` (what the window actually
