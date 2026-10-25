@@ -35,6 +35,7 @@ actor HistoryPageCache {
         let key: HistoryPageKey
         let fetchedAt: Date
         let data: Data
+        var comparisonFingerprint: Data? = nil
     }
 
     private struct MemoryEntry {
@@ -47,7 +48,7 @@ actor HistoryPageCache {
     private struct DiskEntry {
         let url: URL
         let bytes: Int
-        let fingerprint: SHA256.Digest
+        let fingerprint: Data
         var accessedAt: Date
         var readStartedAt: ContinuousClock.Instant?
     }
@@ -65,6 +66,9 @@ actor HistoryPageCache {
     private var invalidatedKeys: Set<HistoryPageKey> = []
     private var invalidations: [Scope: ContinuousClock.Instant] = [:]
     private var invalidationFloor: ContinuousClock.Instant?
+    private var writeOrder: [HistoryPageKey: ContinuousClock.Instant] = [:]
+    private var writeOrderFloor: ContinuousClock.Instant?
+    private static let writeOrderLimit = 64
     private var loadedDiskIndex = false
     private static let version = 2
 
@@ -111,13 +115,19 @@ actor HistoryPageCache {
     }
 
     /// Call only after a successful response has been decoded and validated.
-    func store(_ data: Data, for key: HistoryPageKey, fetchedAt: Date = Date(), startedAt: ContinuousClock.Instant, readStartedAt: ContinuousClock.Instant, persistence: Persistence = .disk) throws {
+    func store(_ data: Data, for key: HistoryPageKey, fetchedAt: Date = Date(), startedAt: ContinuousClock.Instant, readStartedAt: ContinuousClock.Instant, persistence: Persistence = .disk, comparisonFingerprint: SHA256.Digest? = nil) throws {
         let cutoff = [invalidationFloor, invalidations[.host(key.hostID)],
             invalidations[.thread(hostID: key.hostID, threadID: key.threadID)]].compactMap { $0 }.max()
         guard cutoff.map({ readStartedAt > $0 }) ?? true else { throw HistoryReadFailure.invalidated }
         loadDiskIndexIfNeeded()
-        let latest = [memory[key]?.readStartedAt, disk[key]?.readStartedAt].compactMap { $0 }.max()
+        let latest = [memory[key]?.readStartedAt, disk[key]?.readStartedAt, writeOrder[key], writeOrderFloor].compactMap { $0 }.max()
         guard latest.map({ startedAt >= $0 }) ?? true, !isSuperseded(key) else { return }
+        if writeOrder[key] == nil, writeOrder.count >= Self.writeOrderLimit {
+            writeOrderFloor = [writeOrderFloor, writeOrder.values.max()].compactMap { $0 }.max()
+            writeOrder.removeAll(keepingCapacity: true)
+            guard writeOrderFloor.map({ startedAt >= $0 }) ?? true else { return }
+        }
+        writeOrder[key] = startedAt
         // Huge single items may be displayed, but must not evict the whole cache.
         guard data.count <= memoryBudgetBytes else {
             removeMemory(key)
@@ -129,7 +139,7 @@ actor HistoryPageCache {
             discardDisk(key)
             return
         }
-        let fingerprint = SHA256.hash(data: data)
+        let fingerprint = comparisonFingerprint.map { Data($0) } ?? Data(SHA256.hash(data: data))
         if disk[key]?.fingerprint == fingerprint, !invalidatedKeys.contains(key) {
             disk[key]?.readStartedAt = startedAt
             touchDisk(key, now: fetchedAt)
@@ -140,7 +150,8 @@ actor HistoryPageCache {
         do {
             let encoder = PropertyListEncoder()
             encoder.outputFormat = .binary
-            let envelope = Envelope(version: Self.version, key: key, fetchedAt: fetchedAt, data: data)
+            let envelope = Envelope(version: Self.version, key: key, fetchedAt: fetchedAt, data: data,
+                                    comparisonFingerprint: comparisonFingerprint.map { Data($0) })
             let encoded = try encoder.encode(envelope)
             guard encoded.count <= diskBudgetBytes else { return }
             let url = try fileURL(for: key)
@@ -196,6 +207,7 @@ actor HistoryPageCache {
         }
         invalidations[scope] = cutoff
         loadDiskIndexIfNeeded()
+        for key in Array(writeOrder.keys).filter(predicate) { writeOrder.removeValue(forKey: key) }
         for key in Array(memory.keys).filter(predicate) { removeMemory(key) }
         for key in Array(disk.keys).filter(predicate) { discardDisk(key) }
     }
@@ -223,8 +235,8 @@ actor HistoryPageCache {
     }
 
     private func isSuperseded(_ key: HistoryPageKey) -> Bool {
-        let isNewer = { (retained: HistoryPageKey) in retained.generation > key.generation && retained.lineage == key.lineage }
-        return memory.keys.contains(where: isNewer) || disk.keys.contains(where: isNewer)
+        let isNewer: @Sendable (HistoryPageKey) -> Bool = { retained in retained.generation > key.generation && retained.lineage == key.lineage }
+        return memory.keys.contains(where: isNewer) || disk.keys.contains(where: isNewer) || writeOrder.keys.contains(where: isNewer)
     }
 
     private func discardSuperseded(by newest: [HistoryPageKey: UInt64]) {
@@ -266,7 +278,8 @@ actor HistoryPageCache {
                                      generation: original.key.generation, request: original.key.request)
             let target = try fileURL(for: key, directory: directory)
             if !FileManager.default.fileExists(atPath: target.path) {
-                let migrated = Envelope(version: version, key: key, fetchedAt: original.fetchedAt, data: original.data)
+                let migrated = Envelope(version: version, key: key, fetchedAt: original.fetchedAt, data: original.data,
+                                        comparisonFingerprint: original.comparisonFingerprint)
                 try PropertyListEncoder().encode(migrated).write(to: target, options: .atomic)
             }
             try FileManager.default.removeItem(at: url)
@@ -293,7 +306,7 @@ actor HistoryPageCache {
                         try FileManager.default.removeItem(at: url)
                         continue
                     }
-                    disk[envelope.key] = DiskEntry(url: url, bytes: size, fingerprint: SHA256.hash(data: envelope.data), accessedAt: values.contentModificationDate ?? .distantPast, readStartedAt: nil)
+                    disk[envelope.key] = DiskEntry(url: url, bytes: size, fingerprint: envelope.comparisonFingerprint ?? Data(SHA256.hash(data: envelope.data)), accessedAt: values.contentModificationDate ?? .distantPast, readStartedAt: nil)
                     diskBytes += size
                 } catch {
                     logger.notice("Ignoring invalid history cache file: \(error.localizedDescription, privacy: .public)")

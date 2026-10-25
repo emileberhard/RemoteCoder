@@ -33,7 +33,7 @@ struct HistoryInfrastructureTests {
     @Test func independentReadsPublishPagesAndMaterializedTailsInReadStartOrder() async throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
-        let cache = HistoryPageCache(directory: directory)
+        let cache = HistoryPageCache(directory: directory, memoryBudgetBytes: 4096)
         let gateway = OrderedHistoryGateway()
         let service = GatewayHistoryService(gateway: gateway, cache: cache)
         let header = ConversationHeader.historyFixture()
@@ -44,17 +44,23 @@ struct HistoryInfrastructureTests {
         await gateway.releaseItems(1, text: "newer")
         let newerSnapshot = try await newer.value
         #expect(newerSnapshot.window.turns.flatMap { $0.entries.map(\.item) } == [.agentMessage(id: "reply", text: "newer")])
+        try await cache.store(Data(repeating: 0, count: 4096), for: key("pressure"), startedAt: .now, readStartedAt: .now, persistence: .memory)
+        #expect(await cache.totalMemoryBytes == 4096)
         await gateway.releaseItems(0, text: "older")
         let olderSnapshot = try await older.value
         #expect(olderSnapshot.window.turns.flatMap { $0.entries.map(\.item) } == [.agentMessage(id: "reply", text: "older")])
         let cached = try #require(await service.cachedConversation(header: header))
         #expect(cached.window.turns.flatMap { $0.entries.map(\.item) } == [.agentMessage(id: "reply", text: "newer")])
-        let read = try await service.openTail(header: header, base: nil)
-        #expect(read.source == .cachedPages)
-        #expect(read.window.turns.flatMap { $0.entries.map(\.item) } == [.agentMessage(id: "reply", text: "newer")])
-        #expect(await gateway.itemRequests == 2)
+        let next = Task { try await service.openTail(header: header, base: nil) }
+        defer { await gateway.releaseItems(2, text: "current"); _ = await next.result }
+        try await eventually { await gateway.pendingItems == 1 }
+        await gateway.releaseItems(2, text: "current")
+        let read = try await next.value
+        #expect(read.source == .gateway)
+        #expect(read.window.turns.flatMap { $0.entries.map(\.item) } == [.agentMessage(id: "reply", text: "current")])
+        #expect(await gateway.itemRequests == 3)
         let persisted = try #require(await GatewayHistoryService(gateway: gateway, cache: HistoryPageCache(directory: directory)).cachedConversation(header: header))
-        #expect(persisted.window.turns.flatMap { $0.entries.map(\.item) } == [.agentMessage(id: "reply", text: "newer")])
+        #expect(persisted.window.turns.flatMap { $0.entries.map(\.item) } == [.agentMessage(id: "reply", text: "current")])
     }
 
     @Test func diskIndexRecoversAfterDirectoryBecomesAvailable() async throws {
@@ -113,6 +119,19 @@ struct HistoryInfrastructureTests {
         #expect(await cache.value(for: key, now: first.addingTimeInterval(320))?.isFresh == true)
         // Persisted freshness stays conservative after a cold launch.
         #expect(await HistoryPageCache(directory: directory).value(for: key, now: first.addingTimeInterval(320))?.isFresh == false)
+    }
+
+    @Test func memoryOnlyReadOrderSurvivesStampCompaction() async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let cache = HistoryPageCache(directory: directory, memoryBudgetBytes: 1)
+        let older = ContinuousClock.now
+        try await cache.store(Data([2]), for: key("tail"), startedAt: .now, readStartedAt: .now, persistence: .memory)
+        for index in 0..<65 {
+            try await cache.store(Data([3]), for: key("pressure-\(index)"), startedAt: .now, readStartedAt: .now, persistence: .memory)
+        }
+        try await cache.store(Data([1]), for: key("tail"), startedAt: older, readStartedAt: older, persistence: .memory)
+        #expect(await cache.value(for: key("tail")) == nil)
     }
 
     @Test func memoryOnlyRefreshRemovesAnOlderDurableCopy() async throws {

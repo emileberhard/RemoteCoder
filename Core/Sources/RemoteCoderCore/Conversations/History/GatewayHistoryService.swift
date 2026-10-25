@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import OSLog
 
@@ -616,18 +617,20 @@ actor GatewayHistoryService {
         try JSONDecoder().decode(HistoryWindow.self, from: data)
     }
 
-    @concurrent private static func encodeWindow(_ window: HistoryWindow) async throws -> Data {
+    @concurrent private static func encodeWindow(_ window: HistoryWindow) async throws -> (data: Data, fingerprint: SHA256.Digest) {
         let encoder = JSONEncoder()
         encoder.outputFormatting = .sortedKeys
-        return try encoder.encode(window.persistenceValue)
+        let fingerprint = SHA256.hash(data: try encoder.encode(window.comparisonValue))
+        return (try encoder.encode(window), fingerprint)
     }
 
     private func persist(_ snapshot: ConversationSnapshot, startedAt: ContinuousClock.Instant, readStartedAt: ContinuousClock.Instant, readEpoch: UInt64, generation: UInt64) async throws {
         guard snapshot.window.isLoaded, snapshot.window.newer == nil else { return }
         let key = await pageKey(header: snapshot.header, request: "tail", stable: true)
-        guard let data = try? await Self.encodeWindow(snapshot.window),
+        guard let encoded = try? await Self.encodeWindow(snapshot.window),
               epoch == readEpoch, generations[snapshot.header.id] == generation else { return }
-        try await cache.store(data, for: key, fetchedAt: snapshot.fetchedAt, startedAt: startedAt, readStartedAt: readStartedAt)
+        try await cache.store(encoded.data, for: key, fetchedAt: snapshot.fetchedAt, startedAt: startedAt, readStartedAt: readStartedAt,
+                              comparisonFingerprint: encoded.fingerprint)
     }
 
     private func pageKey(header: ConversationHeader, request: String, stable: Bool) async -> HistoryPageKey {

@@ -85,7 +85,7 @@ struct HistoryRange<Element: Codable & Sendable & Identifiable>: Codable, Sendab
         }
     }
 
-    var persistenceValue: Self {
+    var comparisonValue: Self {
         var value = self
         for index in value.pages.indices { value.pages[index].fetchedAt = .distantPast }
         return value
@@ -167,10 +167,10 @@ struct HistoryWindow: Codable, Sendable {
     private(set) var turns: [Turn] = []
     private var turnIndex: [String: Int] = [:]
 
-    var persistenceValue: Self {
+    var comparisonValue: Self {
         var value = self
-        value.items = items.persistenceValue
-        value.metadata = metadata.persistenceValue
+        value.items = items.comparisonValue
+        value.metadata = metadata.comparisonValue
         return value
     }
 

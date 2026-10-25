@@ -12,10 +12,22 @@ The assembled tail window is the one durable tail representation. Its raw
 cursorless item/turn pages use only the existing bounded memory cache; older
 cursor-addressed pages remain independently durable. Refreshing a cursorless
 page removes its obsolete disk copy, including files from older app versions.
-The window's persisted content uses fixed page freshness timestamps and sorted
-keys, so freshness alone cannot rewrite it. Actual freshness remains in the cache
-envelope and memory; a cold restore is conservative. Failed replacements keep the
-last-good file and retry on the next save. Cache access recency is memory-only.
+Persisted windows keep each page's actual fetchedAt because overlapping pages
+use it to reject older content. A separate comparison fingerprint excludes those
+timestamps; freshness alone does not replace the file. The optional fingerprint
+lives beside the unchanged window data in the cache envelope, so cold comparisons
+still skip unchanged writes and older builds retain the correct ordering values.
+Envelopes without that fingerprint remain readable. Freshness remains conservative
+after relaunch. Failed replacements keep the last-good file and retry on the next
+save. Cache access recency is memory-only.
+
+Write ordering outlives memory eviction and disk removal. The cache retains the
+latest accepted read start for at most 64 page identities. At capacity, a monotonic
+floor replaces those individual stamps; results predating the floor cannot refill
+the cache. This conservatively skips caching unrelated older reads rather than
+admitting stale results. The floor still protects every outstanding older read,
+and later reads naturally start beyond it. Invalidation retains its independent
+scope fence. Payload budgets and eviction remain unchanged.
 
 Page byte budgets use the result bytes already received rather than encoding
 every decoded item and turn again. Pages changed by overlap still remeasure their
@@ -27,19 +39,21 @@ saves. Their encoder no longer sorts JSON keys: equality is determined from the
 snapshot before encoding. A new debounce was rejected because the write counts
 alone do not establish redundant changed snapshots within a burst; it would add
 lifecycle and flush ownership without evidence that it reduces those writes.
-The separate Release header benchmark encoded 1,024 synthetic headers 44 times:
+The separate earlier Mac mini Release header benchmark encoded 1,024 synthetic headers 44 times:
 key sorting used 125.401 ms of process CPU versus 114.610 ms without sorting,
 with the same 7,790,948 total JSON bytes. This reduces encoding work, not write
 count or encoded size.
 
-An optimized macOS Core workload (50 synthetic items, about 480 KB, one initial
+A MacBook Pro M1 Max Release Core workload (50 synthetic items, about 480 KB, one initial
 read and 20 unchanged forced tail refreshes) reduced logical persistence from
-23 writes / 10,709,397 bytes to 1 write / 486,769 bytes. Process CPU fell from
-71.609 ms to 31.267 ms. Both runs used SwiftPM Release on the same machine;
+23 writes / 10,709,394 bytes to 1 write / 486,843 bytes. Process CPU fell from
+150.023 ms to 81.602 ms. Both runs used SwiftPM Release on the same MacBook;
 these measure this path, not device energy or physical flash amplification.
 The regression also verifies changed replies survive a cold read, independent
 older pages keep exact unknown fields and cursors, and invalidation removes
-both memory and disk state.
+both memory and disk state. Restored edited replies reject stale overlapping
+pages. Late reads cannot repopulate evicted pages, including after ordering-stamp
+compaction. Unchanged cold refreshes preserve file identity.
 
 Conversation persistence revisions are separate from presentation revisions.
 Clean flushes skip serialization. One owned task coalesces remote checkpoints

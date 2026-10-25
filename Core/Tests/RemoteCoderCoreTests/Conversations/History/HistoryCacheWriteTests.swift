@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import Synchronization
 import Testing
 @testable import RemoteCoderCore
 
@@ -27,10 +28,12 @@ struct HistoryCacheWriteTests {
         let restored = try #require(await cold.cachedConversation(header: header))
         #expect(restored.window.turns.flatMap { $0.entries.map(\.item) } == snapshot.window.turns.flatMap { $0.entries.map(\.item) })
         #expect(restored.window.older == "older-opaque")
+        _ = try await cold.openTail(header: header, base: restored.window, bypassCache: true)
+        #expect(try identities(directory) == files)
         #expect(snapshot.window.encodedBytes > 400_000)
         let fresh = try await service.openTail(header: header, base: nil)
         #expect(fresh.source == .cachedPages)
-        #expect(await gateway.itemReads == 21)
+        #expect(await gateway.itemReads == 22)
         await gateway.changeReplies()
         let changed = try await service.openTail(header: header, base: snapshot.window, bypassCache: true)
         #expect(changed.window.turns.flatMap { $0.entries.map(\.item) } != snapshot.window.turns.flatMap { $0.entries.map(\.item) })
@@ -65,6 +68,31 @@ struct HistoryCacheWriteTests {
         #expect(await gateway.itemReads == 1)
     }
 
+    @Test func restoredTailRejectsOlderOverlappingCachedReplies() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let gateway = try CacheWriteGateway()
+        let earlier = Date(timeIntervalSince1970: 1000)
+        let later = Date(timeIntervalSince1970: 1100)
+        let date = Mutex(earlier)
+        let cache = HistoryPageCache(directory: directory)
+        let service = GatewayHistoryService(gateway: gateway, cache: cache, now: { date.withLock { $0 } })
+        let header = ConversationHeader.historyFixture(id: "edited-reply")
+        try await gateway.useCurrentRepliesForOlderPage()
+        let original = try await service.openTail(header: header, base: nil, bypassCache: true)
+        _ = try await service.page(header: header, window: original.window, direction: .desc, priority: .foreground)
+        date.withLock { $0 = later }
+        await gateway.changeReplies()
+        let edited = try await service.openTail(header: header, base: nil, bypassCache: true)
+        let cold = GatewayHistoryService(gateway: gateway, cache: HistoryPageCache(directory: directory), now: { later })
+        let restored = try #require(await cold.cachedConversation(header: header))
+        #expect(restored.window.items.pages.first?.fetchedAt == later)
+        let paged = try await cold.page(header: header, window: restored.window, direction: .desc, priority: .foreground)
+        #expect(paged.source == .cachedPages)
+        let preservesEditedReplies = paged.window.turns.flatMap { $0.entries.map(\.item) } == edited.window.turns.flatMap { $0.entries.map(\.item) }
+        #expect(preservesEditedReplies)
+    }
+
     private func identities(_ directory: URL) throws -> [String: FileIdentity] {
         try Dictionary(uniqueKeysWithValues: FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
             .map { ($0.lastPathComponent, try FileIdentity($0)) })
@@ -75,6 +103,7 @@ private actor CacheWriteGateway: CodexHistoryGateway {
     let historyHostID = "cache-write-host"
     private(set) var itemReads = 0
     var payloads: [Data] { [items, turns] }
+    private var olderItems: Data?
     private var items: Data
     private let turns: Data
 
@@ -86,6 +115,14 @@ private actor CacheWriteGateway: CodexHistoryGateway {
         turns = try JSONEncoder().encode(CacheWriteEnvelope(result: CodexAppServerV2.ThreadTurnsListResponse(data: [.init(id: "turn", items: [], startedAt: 1, completedAt: 2, status: .completed, error: nil)], nextCursor: nil, backwardsCursor: nil)))
     }
 
+    func useCurrentRepliesForOlderPage() throws {
+        var envelope = try #require(JSONSerialization.jsonObject(with: items) as? [String: Any])
+        var result = try #require(envelope["result"] as? [String: Any])
+        result["nextCursor"] = NSNull()
+        envelope["result"] = result
+        olderItems = try JSONSerialization.data(withJSONObject: envelope)
+    }
+
     func changeReplies() {
         items = Data(String(decoding: items, as: UTF8.self).replacingOccurrences(of: "abcdefghij", with: "changedxxx").utf8)
     }
@@ -93,6 +130,7 @@ private actor CacheWriteGateway: CodexHistoryGateway {
     func historyPageData(method: String, params: JSONValue) throws -> Data {
         if method == "thread/items/list" {
             if params.objectValue?["cursor"] != nil {
+                if let olderItems { return olderItems }
                 return Data(#"{"metadata":{"result":"ignored \"}[]"},"re\u0073ult":{"data":[],"nextCursor":null,"backwardsCursor":"opaque\\\"}[]é","futureField":{"result":[1e100,{"value":"\\\"}"}]}},"id":999}"#.utf8)
             }
             itemReads += 1
