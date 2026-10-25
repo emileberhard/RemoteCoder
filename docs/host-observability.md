@@ -541,15 +541,13 @@ carried no state list, which differs from an empty one.
 `compare --before BUILD --after BUILD` (a build number, version or source commit
 prefix; an ambiguous or unseen one exits 2 and lists the candidates) puts two
 builds side by side per device model and app state (`--by` as for `activity`).
-Sampler numbers come from measured intervals only: CPU, GPU, wakeups and
-persistence writes and bytes per measured minute with their spread across runs,
-and `gpuSeconds` stays null where samples lack `gpuNs` (builds before 3.69.0; the
-unit is assumed nanoseconds and unverified). MetricKit numbers come from the
+Sampler numbers come from measured intervals only: CPU, wakeups and
+persistence writes and bytes per measured minute with their spread across runs.
+MetricKit numbers, including GPU time, come from the
 full-day entry of reports whose coverage ran exactly one of the two builds,
 labelled per foreground hour because the totals include background work. A model
 whose side has fewer than `--min-minutes` (default 30) measured minutes is
 listed as refused with the reason; when no model remains the command exits 3.
-`timeline` and `activity` also carry `gpuSeconds`.
 
 `diagnostics --symbolicate` names every frame of every call stack tree, one
 `atos` batch per binary UUID and load address, and keeps the heaviest path.
@@ -577,9 +575,7 @@ only, never WebKit's processes, and it cannot apportion battery to a feature.
 
 - **Sampling.** `ProcessResourceSampler` (Core) reads `TASK_POWER_INFO_V2` and
   `TASK_VM_INFO`: user and system CPU in nanoseconds (converted from Mach time),
-  interrupt, idle and timer wakeups, the physical footprint, and the kernel's
-  cumulative task GPU time (`gpuNs`, from `gpu_energy.task_gpu_utilisation`).
-  It samples on
+  interrupt, idle and timer wakeups and the physical footprint. It samples on
   launch, every 30 s while a scene is active, on each state change (at least
   1 s apart), once on backgrounding and once on return. A change it could not
   sample at once marks the next sample `mixed`. It runs on the main actor, where
@@ -587,9 +583,10 @@ only, never WebKit's processes, and it cannot apportion battery to a feature.
   `TelemetryBuffer` without waiting for the exporter, so samples carry the time
   of their read and lifecycle work never waits behind a log scan. It stops in
   the background, so nothing runs or wakes while suspended.
-  `gpuNs` is recorded raw; its unit is unverified until a day of it agrees in
-  scale with MetricKit's `gpuTimeMetric`. P-core time and CPU energy stay out
-  until a device run validates them.
+  The task's GPU counter stays out: the render server draws UIKit and SwiftUI,
+  so it read 0 through launch and active use on the test iPhone; MetricKit's
+  `gpuTimeMetric` is the GPU source. P-core time and CPU energy stay out until a
+  device run validates them.
 - **State.** `TelemetryContext` (app) projects the scene, the visible surface
   (chat or drawer), whether the shown conversation has a running turn, a voice
   call, thermal state and Low Power Mode, battery level, charging and
@@ -649,14 +646,15 @@ performance target from ordinary use alone, by state, exact build and device,
 with symbolicated stacks, keeping 7 rolling days. The projection gained a
 second sink (MetricKit states) instead of features reporting state; scroll is
 an animation interval rather than a state because its phase is view-local;
-GPU time, not battery (iOS reports 5 % steps), is the field signal for render
-work such as the composer spinner. Rejected: a log diet (it discards data and
+MetricKit's GPU time, not battery (iOS reports 5 % steps) and not the task's own
+GPU counter (render server work is invisible to it), is the field signal for
+render work such as the composer spinner. Rejected: a log diet (it discards data and
 volume is about 65 MiB a day), signposts for checkpoints and cache writes
 (`PersistenceMetrics` covers them), `trackLaunchTask` (bootstrap waits on
 gateways while cached content is already visible), kind-ordered host eviction
 (the 1 GiB cap does not bind at 7 days) and trusting MetricKit's build label.
-Follow-ups, tracked here while Linear is at its free cap: validate `gpuNs`
-against MetricKit and A/B the composer spinner; mirror Mac dev-build dSYMs
+Follow-ups, tracked here while Linear is at its free cap: A/B the composer
+spinner through MetricKit's GPU time; mirror Mac dev-build dSYMs
 built on the MacBook to the Mini; background sampling during voice calls; a
 byte cap for the gateway journal (age-bounded, up to 1.2 GB a day); per-purpose
 network counters and gateway connection correlation.

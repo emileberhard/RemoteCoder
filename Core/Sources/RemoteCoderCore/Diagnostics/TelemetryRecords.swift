@@ -127,7 +127,7 @@ struct TelemetryLine: Encodable, Sendable {
 
     private enum Key: String, CodingKey {
         case recordType, schemaVersion, runID, seq, ts, monoNs, reason
-        case cpuUserNs, cpuSystemNs, gpuNs, interruptWakeups, idleWakeups, timerWakeups, footprintBytes, readNs
+        case cpuUserNs, cpuSystemNs, interruptWakeups, idleWakeups, timerWakeups, footprintBytes, readNs
         case persistence, mixed, context
         case scanMs, encodeMs, writeMs, compressMs, uploadMs, totalMs, scanned, kept, segments, bytes
         case flushedRecords, uploadedSegments, uploadedBytes, footprintBefore, footprintSampledMax, footprintAfter
@@ -149,7 +149,6 @@ struct TelemetryLine: Encodable, Sendable {
             let resources = sample.resources
             try container.encode(resources.cpuUserNanoseconds, forKey: .cpuUserNs)
             try container.encode(resources.cpuSystemNanoseconds, forKey: .cpuSystemNs)
-            try container.encode(resources.gpuNanoseconds, forKey: .gpuNs)
             try container.encode(resources.interruptWakeups, forKey: .interruptWakeups)
             try container.encode(resources.idleWakeups, forKey: .idleWakeups)
             try container.encode(resources.timerWakeups, forKey: .timerWakeups)

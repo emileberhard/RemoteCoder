@@ -27,7 +27,6 @@ from .app_telemetry_summary import (
     ACTIVITY_FIELDS,
     ASSOCIATION_NOTE,
     CONTEXT_FIELDS,
-    GPU_NOTE,
     INTERVAL_KINDS,
     TIMELINE_FIELDS,
     activity,
@@ -434,7 +433,7 @@ async def cmd_timeline(args: argparse.Namespace) -> int:
     runs, coverage = _telemetry(args)
     fields = args.by or TIMELINE_FIELDS
     return _emit({
-        "coverage": coverage, "note": ASSOCIATION_NOTE, "gpuNote": GPU_NOTE, "kinds": INTERVAL_KINDS,
+        "coverage": coverage, "note": ASSOCIATION_NOTE, "kinds": INTERVAL_KINDS,
         "runs": [{"runID": run["runID"], "stretches": timeline(sample_intervals(run["records"]), fields)}
                  for run in runs if run["records"]],
     })
@@ -443,7 +442,7 @@ async def cmd_timeline(args: argparse.Namespace) -> int:
 async def cmd_activity(args: argparse.Namespace) -> int:
     runs, coverage = _telemetry(args)
     intervals = [interval for run in runs for interval in sample_intervals(run["records"])]
-    return _emit({"coverage": coverage, "note": ASSOCIATION_NOTE, "gpuNote": GPU_NOTE, "kinds": INTERVAL_KINDS,
+    return _emit({"coverage": coverage, "note": ASSOCIATION_NOTE, "kinds": INTERVAL_KINDS,
                   "states": activity(intervals, args.by or ACTIVITY_FIELDS)})
 
 

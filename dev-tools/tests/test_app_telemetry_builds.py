@@ -47,7 +47,7 @@ def header(run_id: str, started: datetime.datetime, version: str, build: str, co
 
 
 def sampled_run(run_id: str, started: datetime.datetime, minutes: int, version: str, build: str,
-                commit: str | None = None, cpu_ns_per_sample: int = 300_000_000, gpu_ns_per_sample: int | None = None,
+                commit: str | None = None, cpu_ns_per_sample: int = 300_000_000,
                 model: str = "iPhone18,1", scene: str = "active") -> list[dict]:
     records = [header(run_id, started, version, build, commit, model)]
     for seq in range(1, minutes * 2 + 2):
@@ -60,8 +60,6 @@ def sampled_run(run_id: str, started: datetime.datetime, minutes: int, version: 
             "persistence": {"checkpoints": {"writes": 2 * seq, "bytes": 1000 * seq}},
             "context": {"scene": scene, "surface": "chat", "turnRunningVisible": False, "voiceCall": False},
         }
-        if gpu_ns_per_sample is not None:
-            record["gpuNs"] = gpu_ns_per_sample * seq
         records.append(record)
     return records
 
@@ -260,14 +258,14 @@ def test_compare_refuses_a_side_below_the_minimum_exposure():
     ], minimum=10)["refused"] is False
 
 
-def test_compare_reports_rates_per_state_unknown_gpu_and_exposure_per_model():
+def test_compare_reports_rates_per_state_and_exposure_per_model():
     metrics = [metrics_record("day", [])]
     result = run_compare([
         *sampled_run("run-a", DAY, 60, "3.68.2", "3068002", cpu_ns_per_sample=600_000_000),
         *sampled_run("run-b", DAY + datetime.timedelta(hours=26), 40, "3.69.0", "3069000", "abcdef0123456789",
-                     cpu_ns_per_sample=300_000_000, gpu_ns_per_sample=15_000_000),
+                     cpu_ns_per_sample=300_000_000),
         *sampled_run("run-c", DAY + datetime.timedelta(hours=28), 40, "3.69.0", "3069000", "abcdef0123456789",
-                     cpu_ns_per_sample=300_000_000, gpu_ns_per_sample=15_000_000),
+                     cpu_ns_per_sample=300_000_000),
         *sampled_run("run-d", DAY, 60, "3.68.2", "3068002", model="iPhone17,1"),
     ], metrics=metrics)
 
@@ -280,14 +278,11 @@ def test_compare_reports_rates_per_state_unknown_gpu_and_exposure_per_model():
     [row] = stratum["states"]
     assert row["state"] == {"scene": "active", "surface": "chat"}
     assert row["before"]["perMinute"]["cpuSeconds"] == 1.2
-    assert row["before"]["perMinute"]["gpuSeconds"] is None
     assert row["after"]["perMinute"]["cpuSeconds"] == 0.6
-    assert row["after"]["perMinute"]["gpuSeconds"] == 0.03
     assert row["after"]["perMinute"]["persistenceWrites"] == 4.0
     assert row["after"]["persistenceOwners"]["checkpoints"]["bytesPerMinute"] == 2000.0
     assert row["after"]["spreadAcrossRuns"]["cpuSeconds"] == {"runs": 2, "min": 0.6, "p50": 0.6, "max": 0.6}
     assert row["change"]["cpuSeconds"] == {"difference": -0.6, "relative": -0.5}
-    assert row["change"]["gpuSeconds"] is None
 
 
 def test_compare_uses_metrickit_days_with_one_build_only():
@@ -300,20 +295,6 @@ def test_compare_uses_metrickit_days_with_one_build_only():
 
     mixed = [*records, *sampled_run("run-c", REPORT_START + datetime.timedelta(hours=3), 10, "3.69.0", "3069000")]
     assert run_compare(mixed, minimum=10, metrics=[day])["strata"][0]["metrickit"] == {"before": None, "after": None}
-
-
-def test_intervals_carry_gpu_deltas_only_where_samples_have_them():
-    [with_gpu] = telemetry_runs(sampled_run("run-a", DAY, 5, "3.69.0", "3069000", gpu_ns_per_sample=3_000_000))
-    [without] = telemetry_runs(sampled_run("run-b", DAY, 5, "3.68.2", "3068002"))
-    assert sample_intervals(with_gpu["records"])[0]["gpuSeconds"] == 0.003
-    assert sample_intervals(without["records"])[0]["gpuSeconds"] is None
-    [row] = activity(sample_intervals(with_gpu["records"]))
-    assert row["gpuSeconds"] == 0.03 and "gpuKnownSeconds" not in row
-    [row] = activity(sample_intervals(without["records"]))
-    assert row["gpuSeconds"] is None
-    half = [*with_gpu["records"][:6], *without["records"][6:]]
-    [row] = activity(sample_intervals(half))
-    assert row["gpuSeconds"] is not None and row["gpuKnownSeconds"] == 150.0
 
 
 def tree(binaries: dict[str, str], roots: list[dict]) -> dict:

@@ -312,10 +312,6 @@ INTERVAL_KINDS = {
     "gap": f"no sample for more than {SAMPLE_GAP_SECONDS:.0f} s while not backgrounded",
     "incomplete": "records between the two samples are missing, so a state change inside may be unseen",
 }
-GPU_NOTE = (
-    "gpuSeconds is the delta of the sampler's cumulative gpuNs, assumed to be nanoseconds (unverified). It is null "
-    "where a sample lacks gpuNs, as in builds before 3.69.0; gpuKnownSeconds then says how much of the time had it."
-)
 ASSOCIATION_NOTE = (
     "Process use is attributed to the state that held while it was measured: association, not causation. Work "
     "started in one state and finished in the next counts toward the next. Battery levels cover the whole device."
@@ -351,10 +347,6 @@ def _counter(record: dict, *names: str) -> int:
     return sum(int(record.get(name) or 0) for name in names)
 
 
-def _counter_present(start: dict, end: dict, name: str) -> bool:
-    return all(isinstance(record.get(name), int) and not isinstance(record.get(name), bool) for record in (start, end))
-
-
 def sample_intervals(records: list[dict]) -> list[dict]:
     samples = [record for record in records
                if record.get("recordType") == "sample" and isinstance(record.get("context"), dict)]
@@ -375,14 +367,12 @@ def sample_intervals(records: list[dict]) -> list[dict]:
         else:
             kind = "measured"
         start_persistence, end_persistence = start.get("persistence") or {}, end.get("persistence") or {}
-        gpu = (end["gpuNs"] - start["gpuNs"]) / 1e9 if _counter_present(start, end, "gpuNs") else None
         intervals.append({
             "start": start["ts"], "end": end["ts"], "seconds": seconds, "kind": kind,
             "context": start["context"], "endContext": end["context"],
             "cpuSeconds": (_counter(end, "cpuUserNs", "cpuSystemNs") - _counter(start, "cpuUserNs", "cpuSystemNs")) / 1e9,
             **{name: _counter(end, name) - _counter(start, name) for name in WAKEUPS},
             "footprintBytes": max(_counter(start, "footprintBytes"), _counter(end, "footprintBytes")),
-            "gpuSeconds": gpu,
             "persistenceBytes": {owner: int(counters.get("bytes", 0)) - int(start_persistence.get(owner, {}).get("bytes", 0))
                                  for owner, counters in end_persistence.items()},
             "persistenceWrites": {owner: int(counters.get("writes", 0)) - int(start_persistence.get(owner, {}).get("writes", 0))
@@ -397,15 +387,10 @@ def _totals(intervals: list[dict]) -> dict:
     persistence: Counter = Counter()
     for interval in intervals:
         persistence.update(interval["persistenceBytes"])
-    gpu_known = [interval for interval in intervals if interval["gpuSeconds"] is not None]
-    gpu = {"gpuSeconds": round(sum(interval["gpuSeconds"] for interval in gpu_known), 3) if gpu_known else None}
-    if gpu_known and len(gpu_known) < len(intervals):
-        gpu["gpuKnownSeconds"] = round(sum(interval["seconds"] for interval in gpu_known), 3)
     return {
         "seconds": round(seconds, 3),
         "cpuSeconds": round(cpu, 3),
         "cpuPercent": round(cpu / seconds * 100, 2) if seconds else None,
-        **gpu,
         "wakeupsPerSecond": {name: round(sum(interval[name] for interval in intervals) / seconds, 2) if seconds else None
                              for name in WAKEUPS},
         "peakSampledFootprintBytes": max((interval["footprintBytes"] for interval in intervals), default=None),

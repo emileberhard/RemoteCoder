@@ -26,7 +26,7 @@ struct FieldTelemetryTests {
     }
 
     private func sample(_ reason: ProcessSample.Reason = .interval) -> TelemetryRecord {
-        .sample(ProcessSample(reason: reason, resources: ProcessResources(cpuUserNanoseconds: 2, cpuSystemNanoseconds: 1, gpuNanoseconds: 8,
+        .sample(ProcessSample(reason: reason, resources: ProcessResources(cpuUserNanoseconds: 2, cpuSystemNanoseconds: 1,
             interruptWakeups: 3, idleWakeups: 4, timerWakeups: 5, footprintBytes: 6), readNanoseconds: 7,
             persistence: [.checkpoints: PersistenceMetrics.Counters(writes: 1, bytes: 10)], mixed: false, context: context))
     }
@@ -62,7 +62,6 @@ struct FieldTelemetryTests {
         #expect(first[0]["flushedThroughSeq"] as? Int == 2)
         #expect(first.dropFirst().map { $0["seq"] as? Int } == [1, 2])
         #expect((first[1]["persistence"] as? [String: Any])?["checkpoints"] != nil)
-        #expect(first[1]["gpuNs"] as? Int == 8)
         #expect((first[1]["context"] as? [String: Any])?["batteryPercent"] == nil)
         let second = batches[1]
         #expect(second.map { $0["recordType"] as? String } == ["run", "export"])
@@ -159,7 +158,7 @@ struct FieldTelemetryTests {
 
     @MainActor @Test func aChangeCutShortByBackgroundingMarksItsIntervalMixed() {
         let buffer = TelemetryBuffer(runID: "test")
-        let resources = ProcessResources(cpuUserNanoseconds: 1, cpuSystemNanoseconds: 1, gpuNanoseconds: 0, interruptWakeups: 0,
+        let resources = ProcessResources(cpuUserNanoseconds: 1, cpuSystemNanoseconds: 1, interruptWakeups: 0,
                                          idleWakeups: 0, timerWakeups: 0, footprintBytes: 1)
         let sampler = ProcessResourceSampler(recorder: buffer, read: { resources })
         sampler.update(context)
@@ -184,7 +183,7 @@ struct FieldTelemetryTests {
 
     @MainActor @Test func aTransitionWhoseReadFailedMarksTheNextIntervalMixed() {
         let buffer = TelemetryBuffer(runID: "test")
-        let resources = ProcessResources(cpuUserNanoseconds: 1, cpuSystemNanoseconds: 1, gpuNanoseconds: 0, interruptWakeups: 0,
+        let resources = ProcessResources(cpuUserNanoseconds: 1, cpuSystemNanoseconds: 1, interruptWakeups: 0,
                                          idleWakeups: 0, timerWakeups: 0, footprintBytes: 1)
         var reads = 0
         let sampler = ProcessResourceSampler(recorder: buffer, read: {

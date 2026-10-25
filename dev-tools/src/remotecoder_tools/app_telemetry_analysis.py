@@ -10,7 +10,7 @@ FOREGROUND_ONLY_DOMAINS = frozenset({"history", "surface", "turn", "connection"}
 MIN_MEASURED_MINUTES = 30.0
 MIN_SPREAD_MINUTES = 1.0
 LAUNCH_METRICS = ("timeToFirstDraw", "optimizedTimeToFirstDraw", "applicationResume", "extendedLaunch")
-RATE_METRICS = ("cpuSeconds", "gpuSeconds", *WAKEUPS, "persistenceWrites", "persistenceBytes")
+RATE_METRICS = ("cpuSeconds", *WAKEUPS, "persistenceWrites", "persistenceBytes")
 UNMEASURED_RESOURCES = "not measured: cpuTime, logicalWrites and averageMemory are all exactly 0"
 STATES_NOTE = (
     "suspectedStuck: a history state lasting longer than the report's whole foreground time; history states clear "
@@ -295,7 +295,6 @@ def group_diagnostics(items: list[dict]) -> list[dict]:
 class Acc:
     seconds: float = 0.0
     sums: Counter = field(default_factory=Counter)
-    gpu_seconds_known: float = 0.0
     writes: Counter = field(default_factory=Counter)
     bytes: Counter = field(default_factory=Counter)
     per_run: dict = field(default_factory=dict)
@@ -309,9 +308,6 @@ class Acc:
         self.sums["cpuSeconds"] += interval["cpuSeconds"]
         for name in WAKEUPS:
             self.sums[name] += interval[name]
-        if interval["gpuSeconds"] is not None:
-            self.sums["gpuSeconds"] += interval["gpuSeconds"]
-            self.gpu_seconds_known += interval["seconds"]
         self.writes.update(interval["persistenceWrites"])
         self.bytes.update(interval["persistenceBytes"])
         self.sums["persistenceWrites"] += sum(interval["persistenceWrites"].values())
@@ -319,10 +315,7 @@ class Acc:
 
     def rates(self) -> dict:
         minutes = self.seconds / 60
-        gpu_minutes = self.gpu_seconds_known / 60
-        return {name: (round(self.sums[name] / gpu_minutes, 4) if gpu_minutes else None) if name == "gpuSeconds"
-                else (round(self.sums[name] / minutes, 4) if minutes else None)
-                for name in RATE_METRICS}
+        return {name: round(self.sums[name] / minutes, 4) if minutes else None for name in RATE_METRICS}
 
 
 def _spread(accs: list[Acc], name: str) -> dict:
@@ -340,7 +333,6 @@ def _side(acc: Acc | None) -> dict | None:
     minutes = acc.seconds / 60
     return {
         "minutes": round(minutes, 2), "runs": len(acc.per_run),
-        "gpuKnownMinutes": round(acc.gpu_seconds_known / 60, 2),
         "perMinute": acc.rates(),
         "persistenceOwners": {owner: {"writesPerMinute": round(acc.writes[owner] / minutes, 4),
                                       "bytesPerMinute": round(acc.bytes[owner] / minutes, 2)}
