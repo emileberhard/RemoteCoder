@@ -106,7 +106,7 @@ try {
     const actualModel = firstRead.result?.thread?.model;
     assert(actualModel === "opus" || /^claude-opus-/.test(actualModel), `Expected latest Opus, got ${actualModel}`);
     await client.rpc("claude/thread/release", { threadId: first.threadId });
-    client.close();
+    client.ws.close();
     await lab.stop();
 
     const gatewayEnv = await readFile(lab.path("gateway.env"), "utf8");
