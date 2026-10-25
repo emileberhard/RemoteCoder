@@ -64,7 +64,10 @@ Conversation persistence revisions are separate from presentation revisions.
 Clean flushes skip serialization. One owned task coalesces remote checkpoints
 over five seconds during an active turn and one second while idle; terminal
 events and local submission/receipt changes
-commit immediately. Submissions remain durable before dispatch. Generation checks,
+commit immediately. Remote changes to a session nobody observes wait until a
+snapshot observer attaches; completion, eviction and backgrounding still flush.
+Prefetched history pages commit their cached tail once a 2 s burst settles,
+while any other read commits at once. Submissions remain durable before dispatch. Generation checks,
 local-only records, unreadable-file preservation and cold restore remain intact.
 
 Checkpoint generations come from one monotonic store counter. The session registry
@@ -96,6 +99,14 @@ images remain protected. A matching canonical image releases the duplicate
 local bytes. Settled images missing from canonical history are shed oldest-first
 by message date before capacity refusal, retaining their attachment identity
 and an explicit unavailable-image state.
+
+The cache budget counts only rebuildable bytes (`DiskRecord.cacheBytes`, the
+record total minus its protected payload). Shedding or evicting a conversation's
+history marks it omitted, up to 64 marks. Later saves of an omitted
+conversation that is not presented write only its local records, and readmit
+history only when it fits the budget; a presented save always readmits it.
+Those history-less saves never shed other conversations, so two hidden
+sessions cannot keep compacting each other.
 
 The store requires that policy explicitly. Admission checks the projected total
 on its actor immediately before publication, with no intervening await. A typed

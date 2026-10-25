@@ -466,7 +466,9 @@ repeated over another route.
   error is the gateway's answer, so neither reorders routes by itself; when a
   later route connects in the same attempt, every route that failed before it
   is demoted whatever its error. A failure from an attempt that started before
-  the latest network path change is ignored.
+  the latest network path change is ignored. An attempt in which no route
+  connects demotes none: when the gateway itself is down, the client's
+  reconnect schedule backs off instead.
 - A failed fallback goes behind the other one while it backs off, exponentially
   from 60 s to ten minutes; it is never dropped. A connection or exchange
   success, a new relay or a new network path clears the backoff.
@@ -1224,7 +1226,10 @@ an estimate is never emitted as visible message content. Older pages keep the
 stable older-edge identity. A reader inside the runway may prefetch one batch
 while the history window is at most half full (`HistoryWindow.hasRoomToPrefetch`);
 after that only a visible edge pages. Speculative pages cannot evict the latest
-history. Native host admission itself never fetches history.
+history. While the drawer covers the transcript (`TargetPresentation.coversTranscript`;
+an iPad or Mac sidebar beside it does not), `HistoryEdgeReader` cancels
+speculative pages and starts none; an explicit read that joined one keeps it.
+Prefetch resumes once the transcript stays uncovered for 1 s. Native host admission itself never fetches history.
 
 Only user-owned geometry movement leaves following. Tracking without displacement
 keeps it; layout changes do not change follow mode. No single automatic update
