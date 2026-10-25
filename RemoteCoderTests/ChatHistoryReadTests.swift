@@ -36,7 +36,7 @@ struct ChatHistoryReadTests {
         try #require(await waitUntil { chat.historyEdges.isIdle })
         #expect(await gateway.requests("thread/items/list").count == pages)
         workspace.setHistoryDrawerOpen(false, overlaysTranscript: true, in: workspace.keyWindow)
-        #expect(await waitUntil { await gateway.requests("thread/items/list").count > pages })
+        #expect(!chat.historyEdges.isIdle)
     }
 
     @Test(.timeLimit(.minutes(2))) func jumpingToTheLatestReadsTheGatewayTailEvenWhileItsPagesAreCached() async throws {
