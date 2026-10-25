@@ -805,12 +805,24 @@ hold: frame-wait durations and the intervals between observed wait ends, per
 display, for the whole trace and for the scripted scroll. They are a subset of
 frames, not the frame rate.
 
+Release symbols live in `~/Library/Logs/remote-coder/deployments/testflight-<platform>-<version>-<build>/symbols`.
+The release lane writes them on the primary service host and the GUI test host
+catch-up mirrors them (`rsync -a` keeps the directory's modification time, which
+is the age used for retention). They are not Spotlight-indexed. `app-telemetry
+diagnostics --symbolicate` and `perf-trace` both read them, and MetricKit
+diagnostics arrive a day or more after the event, so retention is by age, not
+by count. `release-cache.py prune_symbols` keeps every release version whose
+symbols were retained within the last seven days, the newest older version (the
+build that was current when the window began) and the published version; a
+version's iOS and Mac directories are kept or removed together. A total cap of
+5 GiB over all retained release symbols then removes the oldest unpublished
+versions first. When the published version alone exceeds the cap, the command
+warns on stderr and reports `overCapBytes` in its JSON result.
+
 The summary symbolicates frames itself and never rewrites the trace. It matches
 each image's UUID in the trace to the retained dSYMs under
 `~/Library/Logs/remote-coder/deployments/` (device and Mac installs from the last
-seven days and the newest of each kind, plus the newest ten TestFlight archives
-as `testflight-<platform>-<version>-<build>`, which the release lane keeps on the
-primary service host and the GUI test host catch-up mirrors onto the GUI test host) and to the shared-cache symbols Xcode
+seven days and the newest of each kind, plus the release symbols above) and to the shared-cache symbols Xcode
 extracts into `~/Library/Developer/Xcode/iOS DeviceSupport/` when the phone first
 connects to it, then resolves addresses with `atos`, including inlined frames.
 A build without retained dSYMs, such as a `dev-tools/perf-sim` build, is
