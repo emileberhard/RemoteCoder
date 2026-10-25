@@ -46,6 +46,7 @@ enum ServerNotification: Sendable {
         let epoch: String
         let sequence: UInt64
         let cancelRequest: Bool
+        let providerHealth: ProviderHealth?
     }
 
     struct CallChanged: Decodable, Sendable, Equatable {
@@ -84,6 +85,7 @@ enum ServerNotification: Sendable {
     case daemonReady(DaemonReady)
     case callChanged(CallChanged)
     case gatewayWarning(GatewayWarning)
+    case providerHealthChanged(ProviderHealth)
     case activeTurnsChanged(CodexGatewayDaemon.ActiveTurnsResponse)
     case liveActivityChanged(ActiveTasksLiveActivitySnapshot?)
     case transportError(TransportError)
@@ -102,7 +104,7 @@ extension ServerNotification {
         case .turnPlanUpdated(let text), .turnDiffUpdated(let text): text.address
         case .threadTokenUsageUpdated(let usage): TurnAddress(threadID: usage.threadId, turnID: usage.turnId)
         case .threadSettingsUpdated, .threadNameUpdated, .threadHistoryInvalidated, .threadArchived, .threadClosed,
-             .threadQueueChanged, .conversationMarksChanged, .directoryFavoritesChanged, .preferencesChanged, .questionsChanged, .daemonReady, .callChanged, .gatewayWarning, .activeTurnsChanged, .liveActivityChanged, .transportError, .unknown,
+             .threadQueueChanged, .conversationMarksChanged, .directoryFavoritesChanged, .preferencesChanged, .questionsChanged, .daemonReady, .callChanged, .gatewayWarning, .providerHealthChanged, .activeTurnsChanged, .liveActivityChanged, .transportError, .unknown,
              .malformed: nil
         }
     }
@@ -173,7 +175,12 @@ extension ServerNotification {
         let notificationEpoch: String
         let notificationSequence: UInt64
         let capabilities: Capabilities?
+        let providers: ProviderHealth?
         struct Capabilities: Decodable { let cancelRequest: Bool? }
+    }
+
+    private struct ProviderHealthPayload: Decodable {
+        let providers: ProviderHealth
     }
 
     private struct TransportPayload: Decodable {
@@ -206,6 +213,8 @@ extension ServerNotification {
         switch method {
         case "gateway/warning":
             return .gatewayWarning(try params(GatewayWarning.self, in: frame))
+        case "gateway/providerHealth":
+            return .providerHealthChanged(try params(ProviderHealthPayload.self, in: frame).providers)
         case "daemon/activeTurns/changed":
             return .activeTurnsChanged(try params(CodexGatewayDaemon.ActiveTurnsResponse.self, in: frame))
         case "daemon/liveActivity/changed":
@@ -245,7 +254,7 @@ extension ServerNotification {
         case "daemon/ready":
             let payload = try params(ReadyPayload.self, in: frame)
             return .daemonReady(DaemonReady(epoch: payload.notificationEpoch, sequence: payload.notificationSequence,
-                cancelRequest: payload.capabilities?.cancelRequest == true))
+                cancelRequest: payload.capabilities?.cancelRequest == true, providerHealth: payload.providers))
         case "calls/changed":
             return .callChanged(try params(CallChanged.self, in: frame))
         case "daemon/transportError":

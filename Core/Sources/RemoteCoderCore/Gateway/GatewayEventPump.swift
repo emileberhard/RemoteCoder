@@ -344,10 +344,11 @@ final class GatewayEventPump {
                 if case .daemonReady(let ready) = note.server {
                     await conversations.adoptNotificationEpoch(ready.epoch)
                     cursor.adoptConnection(epoch: ready.epoch, deliveredThrough: ready.sequence)
+                    await target.value?.apply(.providerHealth(ready.providerHealth), replay: false, generation: generation)
                     continue
                 }
                 let isControl = switch note.server {
-                case .threadClosed, .questionsChanged: true
+                case .threadClosed, .questionsChanged, .providerHealthChanged: true
                 default: false
                 }
                 if let replayed, let sequence = note.sequence, replayed.applied(sequence), !isControl { continue }

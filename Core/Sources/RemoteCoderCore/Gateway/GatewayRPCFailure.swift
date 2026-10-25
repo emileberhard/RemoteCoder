@@ -12,6 +12,7 @@ struct GatewayRPCFailure: LocalizedError, Sendable {
         case turnNotRunning(threadID: String, turnID: String?)
         case conversationBusy(retryAfterMs: Int)
         case providerUnresponsive, inputDeliveryUncertain
+        case providerUnavailable(provider: AgentProvider, reason: String)
         case unknown(String)
     }
     struct Details: Decodable, Sendable {
@@ -20,7 +21,7 @@ struct GatewayRPCFailure: LocalizedError, Sendable {
         let current: ConversationMetadataRecord?
 
         private enum CodingKeys: String, CodingKey {
-            case kind, retryable, current, actualBytes, limitBytes, threadId, turnId, retryAfterMs
+            case kind, retryable, current, actualBytes, limitBytes, threadId, turnId, retryAfterMs, provider, reason
         }
 
         init(from decoder: Decoder) throws {
@@ -45,6 +46,9 @@ struct GatewayRPCFailure: LocalizedError, Sendable {
                 kind = .conversationBusy(retryAfterMs: try values.decode(Int.self, forKey: .retryAfterMs))
             case "providerUnresponsive": kind = .providerUnresponsive
             case "inputDeliveryUncertain": kind = .inputDeliveryUncertain
+            case "providerUnavailable":
+                kind = .providerUnavailable(provider: try values.decode(AgentProvider.self, forKey: .provider),
+                                            reason: try values.decode(String.self, forKey: .reason))
             default: kind = .unknown(name)
             }
             retryable = try values.decode(Bool.self, forKey: .retryable)
@@ -62,7 +66,9 @@ struct GatewayRPCFailure: LocalizedError, Sendable {
         guard case .historyPageTooLarge(let actualBytes, let limitBytes) = kind else { return nil }
         return (actualBytes, limitBytes)
     }
-    var errorDescription: String? { message }
+    var errorDescription: String? {
+        if case .providerUnavailable(_, let reason) = kind { reason } else { message }
+    }
 
     init?(code: Int, message: String, data: JSONValue?) {
         guard let data, let bytes = try? JSONEncoder().encode(data) else { return nil }

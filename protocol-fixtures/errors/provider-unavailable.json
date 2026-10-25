@@ -1,0 +1,13 @@
+{
+  "id": 41,
+  "error": {
+    "code": -32003,
+    "message": "Codex is unavailable: Codex sign-in needed on mac-mini",
+    "data": {
+      "kind": "providerUnavailable",
+      "retryable": false,
+      "provider": "codex",
+      "reason": "Codex sign-in needed on mac-mini"
+    }
+  }
+}

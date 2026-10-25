@@ -76,6 +76,11 @@
       "consumers": ["host-daemon-rs/src/rpc/error.rs", "Core/Tests/RemoteCoderCoreTests/Gateway/GatewayOwnedContractTests.swift"]
     },
     {
+      "path": "errors/provider-unavailable.json",
+      "contract": "A native request while its provider is unavailable fails with the provider and the health reason, which the client shows inline.",
+      "consumers": ["Core/Tests/RemoteCoderCoreTests/Gateway/GatewayOwnedContractTests.swift"]
+    },
+    {
       "path": "errors/turn-not-running.json",
       "contract": "A steer or Stop that names a turn that is not running.",
       "consumers": ["host-daemon-rs/src/rpc/error.rs", "host-daemon-rs/src/rpc/error.rs", "Core/Tests/RemoteCoderCoreTests/Gateway/GatewayOwnedContractTests.swift"]
@@ -94,6 +99,11 @@
       "path": "metadata-update.json",
       "contract": "A conversation metadata mutation round-trips without renaming or dropping fields.",
       "consumers": ["host-daemon-rs/src/conversations.rs", "host-daemon-rs/src/gateway/tests.rs", "Core/Tests/RemoteCoderCoreTests/Gateway/GatewayOwnedContractTests.swift"]
+    },
+    {
+      "path": "providers/provider-health.json",
+      "contract": "Provider health as sent in daemon/ready params and gateway/providerHealth: reason unless ready, fallback only with state fallback; absent providers means unknown.",
+      "consumers": ["Core/Tests/RemoteCoderCoreTests/Gateway/GatewayOwnedContractTests.swift"]
     },
     {
       "path": "questions/answered-outside-viewport.json",

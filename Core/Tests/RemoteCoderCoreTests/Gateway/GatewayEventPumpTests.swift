@@ -98,6 +98,36 @@ struct GatewayEventPumpTests {
         }
     }
 
+    @Test func aDegradedGatewayConnectsWithItsHealthAndReconnectsFullyAfterItsRestartClose() async throws {
+        let codexDown = ProviderHealth([.codex: .unavailable(reason: "Codex sign-in needed"), .claude: .ready])
+        try await withRecordingPump(timeouts: GatewayClient.Timeouts()) { client, socket, sink in
+            #expect(await waitUntil { sink.connectivity.last == .connected(.configured) })
+            #expect(sink.healths == [nil])
+
+            await socket.advertiseProviders(.object([
+                "codex": .object(["state": .string("unavailable"), "reason": .string("Codex sign-in needed")]),
+                "claude": .object(["state": .string("ready")])]))
+            await socket.fail("model/list", with: .init(code: -32003, data: .object([
+                "kind": .string("providerUnavailable"), "retryable": .bool(false),
+                "provider": .string("codex"), "reason": .string("Codex sign-in needed")]), message: "Codex is unavailable"))
+            await socket.closeConnections(code: .privateCode(4012))
+            #expect(await waitUntil(timeout: .seconds(10)) { sink.healths.last == codexDown })
+            #expect(sink.connectivity.last == .connected(.configured))
+            let failure = await #expect(throws: GatewayRPCFailure.self) { try await client.listModels(cursor: nil) }
+            #expect(failure?.kind == .providerUnavailable(provider: .codex, reason: "Codex sign-in needed"))
+            #expect(failure?.localizedDescription == "Codex sign-in needed")
+
+            await socket.advertiseProviders(.object(["codex": .object(["state": .string("ready")]),
+                                                     "claude": .object(["state": .string("ready")])]))
+            await socket.fail("model/list", with: nil)
+            await socket.setResult(.object(["data": .array([]), "nextCursor": .null]), method: "model/list")
+            await socket.closeConnections(code: .privateCode(4012))
+            #expect(await waitUntil(timeout: .seconds(10)) { sink.healths.last == ProviderHealth([.codex: .ready, .claude: .ready]) })
+            #expect(sink.connectivity.last == .connected(.configured))
+            _ = try await client.listModels(cursor: nil)
+        }
+    }
+
     @Test func aRestartThatOutlastsItsWindowReadsAsDisconnectedWhileTheGatewayStillRefuses() async throws {
         var timeouts = GatewayClient.Timeouts()
         timeouts.restartWindow = .seconds(1)
@@ -150,6 +180,7 @@ private final class LinkRecordingSink: GatewayEventSink {
     private(set) var links: [GatewayEventPump.Link] = []
     private(set) var connectivity: [GatewayConnectivity] = []
     private(set) var replayedEvents = 0
+    private(set) var healths: [ProviderHealth?] = []
 
     func gatewayConnectionChanged(_ link: GatewayEventPump.Link, connection: UUID?) { links.append(link) }
     func gatewayConnectivityChanged(_ connectivity: GatewayConnectivity) {
@@ -157,7 +188,10 @@ private final class LinkRecordingSink: GatewayEventSink {
     }
     func gatewayNetworkPathChanged() {}
     func gatewayActivityRefreshRequested() {}
-    func apply(gatewayEvent event: RoutedGatewayEvent, replay: Bool) async { if replay { replayedEvents += 1 } }
+    func apply(gatewayEvent event: RoutedGatewayEvent, replay: Bool) async {
+        if replay { replayedEvents += 1 }
+        if case .providerHealth(let health) = event, !replay { healths.append(health) }
+    }
     func gatewayThreadClosed(_ threadID: String, receipt: GatewayWireReceipt?) {}
     func gatewayQuestionsChanged(_ change: ServerNotification.QuestionsChanged) {}
     func defersReplay(_ event: RoutedGatewayEvent) -> Bool { false }
@@ -184,6 +218,7 @@ private final class PausedReplaySink: GatewayEventSink {
     }
 
     func apply(gatewayEvent event: RoutedGatewayEvent, replay: Bool) async {
+        if case .providerHealth = event { return }
         #expect(replay)
         if paused { await withCheckedContinuation { continuation = $0 } }
         guard GatewayEventPump.delivery?.isCurrent == true else { return }
