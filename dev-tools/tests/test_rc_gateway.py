@@ -927,13 +927,17 @@ class TurnSetupReceiptTests(unittest.IsolatedAsyncioTestCase):
         import tempfile
 
         for command, handler in (("turn", gateway_cli.cmd_turn), ("claude-turn", gateway_cli.cmd_claude_turn)):
-            for timeout in (True, False):
-                with self.subTest(command=command, timeout=timeout), tempfile.TemporaryDirectory() as directory:
+            for failure in ("environment_timeout", "hostname_timeout", "unavailable"):
+                timeout = failure != "unavailable"
+                with self.subTest(command=command, failure=failure), tempfile.TemporaryDirectory() as directory:
                     path = Path(directory) / "gateway.jsonl"
-                    arguments = ["--ssh-host", "unreachable", "--local-config", str(Path(directory) / "missing.json"), command]
+                    arguments = ["--ssh-host", "unreachable", "--scheme", "ws", "--local-config", str(Path(directory) / "missing.json"), command]
                     arguments += ["--prompt", "run"] if command == "turn" else ["run"]
                     args = gateway_cli.build_parser().parse_args([*arguments, "--event-log", str(path)])
                     error = gateway_config.subprocess.TimeoutExpired("ssh", 10) if timeout else FileNotFoundError("ssh unavailable")
+                    if failure == "hostname_timeout":
+                        environment = "RC_CODEX_GATEWAY_BIND_HOST=127.0.0.1\nRC_CODEX_GATEWAY_PORT=8787\nRC_CODEX_GATEWAY_AUTH_TOKEN=synthetic\n"
+                        error = [gateway_config.subprocess.CompletedProcess("ssh", 0, stdout=environment), gateway_config.subprocess.TimeoutExpired("ssh -G", 5)]
                     with patch.dict(gateway_config.os.environ, {}, clear=True), \
                          patch.object(gateway_config.subprocess, "run", side_effect=error), \
                          patch.object(gateway_cli, "_ws_connect", AsyncMock()) as connect:

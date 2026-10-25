@@ -156,7 +156,7 @@ def _gateway_read_host(args: argparse.Namespace) -> str | None:
 
 
 def _ssh_read_env(ssh_host: str, env_path: str) -> str:
-    cmd = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", ssh_host, "cat", env_path]
+    cmd = ["ssh", "-o", "BatchMode=yes", ssh_host, "cat", env_path]
     try:
         res = subprocess.run(cmd, stdin=subprocess.DEVNULL, check=True, capture_output=True, text=True, timeout=10)
     except subprocess.TimeoutExpired as exc:
@@ -173,6 +173,8 @@ def _ssh_read_env(ssh_host: str, env_path: str) -> str:
 def _ssh_hostname(ssh_host: str) -> str:
     try:
         result = subprocess.run(["ssh", "-G", ssh_host], capture_output=True, text=True, timeout=5, check=True)
+    except subprocess.TimeoutExpired as exc:
+        raise TimeoutError(f"Resolving SSH host {ssh_host} with ssh -G timed out after 5 seconds") from exc
     except (OSError, subprocess.SubprocessError) as exc:
         raise RuntimeError(f"Resolving SSH host {ssh_host} with ssh -G failed: {exc}") from exc
     for line in result.stdout.splitlines():
