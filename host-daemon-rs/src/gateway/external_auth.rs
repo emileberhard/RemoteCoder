@@ -24,7 +24,8 @@ pub(super) struct InstalledAuth {
     pub(super) holds_recovery: bool,
 }
 
-const RECOVERY_SIGN_IN_RETRY_LIMIT: Duration = Duration::from_secs(30);
+const RECOVERY_SIGN_IN_WAIT: Duration = Duration::from_secs(120);
+const RECOVERY_SIGN_IN_RETRY: Duration = Duration::from_secs(5);
 
 impl Gateway {
     pub(super) fn require_auth_generation(
@@ -90,14 +91,19 @@ impl Gateway {
             .expect("Codex auth state poisoned")
             .holds_recovery = true;
         self.refresh_provider_health().await;
-        let mut retry = Duration::from_secs(1);
+        let deadline = tokio::time::Instant::now() + RECOVERY_SIGN_IN_WAIT;
         loop {
-            tokio::time::sleep(retry).await;
-            retry = (retry * 2).min(RECOVERY_SIGN_IN_RETRY_LIMIT);
+            tokio::time::sleep(RECOVERY_SIGN_IN_RETRY).await;
             if self.authenticate_external(generation).await.is_ok() {
                 break;
             }
             self.require_auth_generation(generation)?;
+            if tokio::time::Instant::now() >= deadline {
+                tracing::warn!(
+                    "Codex subscription sign-in is still failing; resuming interrupted Codex work without it"
+                );
+                break;
+            }
         }
         generation
             .auth

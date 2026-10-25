@@ -322,8 +322,8 @@ owner until the last fixture is dropped.
   - `model/list` is gateway-owned: the native list plus one row per external
     model, with `modelProvider` and `modelProviderName`, on the last page.
   - The first configured provider is the Codex fallback. A failed router token
-    issue gates Codex readiness only while the recovery journal has pending
-    tasks; while no valid subscription token is installed, client
+    issue holds Codex readiness for at most 2 minutes while the recovery
+    journal has pending tasks; while no valid subscription token is installed, client
     `thread/start` on the native provider moves to the fallback's matching or
     first model, and threads never change provider afterwards. On fallback
     threads, every thread-scoped request (`thread/resume`, `thread/fork`,
