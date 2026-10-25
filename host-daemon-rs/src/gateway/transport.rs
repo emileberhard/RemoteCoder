@@ -211,6 +211,16 @@ impl Gateway {
             }));
         }
 
+        if !waiting_for_codex && upstream.is_none() {
+            let gw = Arc::clone(&self);
+            let task_gw = Arc::clone(&gw);
+            tasks.spawn(
+                task_gw.run_task_logged("client_codex_reconnect", async move {
+                    gw.reconnect_once_codex_is_reachable(client_id).await
+                }),
+            );
+        }
+
         let upstream_tx = upstream.map(|upstream| {
             let (upstream_tx, upstream_rx) =
                 mpsc::channel::<UpstreamMessage>(CLIENT_UPSTREAM_QUEUE_SIZE);

@@ -6,6 +6,7 @@ use crate::rpc::error::CodexUnavailable;
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::collections::HashSet;
+use std::time::Duration;
 use tracing::{info, warn};
 
 pub(super) const PROVIDER_HEALTH_METHOD: &str = "gateway/providerHealth";
@@ -16,6 +17,7 @@ const CODEX_AWAITING_SIGN_IN: &str =
 const CODEX_SIGN_IN_FAILED: &str = "Codex subscription sign-in failed";
 const CODEX_CONNECTION_FAILED: &str = "This connection could not reach Codex; reconnect";
 const CODEX_READY_CLOSE_REASON: &str = "Codex is available; reconnect";
+const CODEX_RECONNECT_PROBE_LIMIT: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(tag = "state", rename_all = "camelCase")]
@@ -218,15 +220,33 @@ impl Gateway {
                 .expect("degraded clients poisoned"),
         );
         for client_id in degraded {
-            if let Some((_, client)) = self.clients.remove(&client_id) {
-                let _ = self.deliver_or_drop(
-                    &client,
-                    ClientCommand::Close {
-                        code: RESTARTING_CLOSE_CODE,
-                        reason: CODEX_READY_CLOSE_REASON.into(),
-                    },
-                );
+            self.close_for_codex(client_id);
+        }
+    }
+
+    pub(super) async fn reconnect_once_codex_is_reachable(&self, client_id: u64) {
+        let mut retry = Duration::from_secs(1);
+        loop {
+            tokio::time::sleep(retry).await;
+            retry = (retry * 2).min(CODEX_RECONNECT_PROBE_LIMIT);
+            if self.codex.connect_ws().await.is_ok() {
+                break;
             }
+        }
+        self.forget_degraded_client(client_id);
+        self.close_for_codex(client_id);
+        std::future::pending::<()>().await;
+    }
+
+    fn close_for_codex(&self, client_id: u64) {
+        if let Some((_, client)) = self.clients.remove(&client_id) {
+            let _ = self.deliver_or_drop(
+                &client,
+                ClientCommand::Close {
+                    code: RESTARTING_CLOSE_CODE,
+                    reason: CODEX_READY_CLOSE_REASON.into(),
+                },
+            );
         }
     }
 }
