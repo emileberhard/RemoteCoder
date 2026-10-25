@@ -1382,6 +1382,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
         }
         else {
             markActivityUnavailable()
+            adoptProviderHealth(nil)
             if link == .disconnected {
                 recoverDispatchedTurnsAfterConnectionLoss()
                 observation.disconnected()
@@ -1390,6 +1391,12 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
             }
         }
         await recordConnectionState(link)
+    }
+
+    private func adoptProviderHealth(_ health: ProviderHealth?) {
+        guard health != providerHealth else { return }
+        providerHealth = health
+        for screen in screens { screen.providerHealthChanged() }
     }
 
     func gatewayConnectivityChanged(_ connectivity: GatewayConnectivity) async {
@@ -1502,9 +1509,8 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
             gatewayWarning = warning
             logger.error("\(warning.message, privacy: .public)")
         case .providerHealth(let health):
-            guard !replay, health != providerHealth else { return }
-            providerHealth = health
-            for screen in screens { screen.providerHealthChanged() }
+            guard !replay else { return }
+            adoptProviderHealth(health)
         case .settings(let notification, _):
             await metadataService.observeSettings(notification, observedAt: .now)
             guard !isRetired else { return }

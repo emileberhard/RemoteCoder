@@ -57,7 +57,8 @@ or `unavailable`, with a one-line reason unless ready, in `daemon/ready` and in
 holds the latest value for its host and the rings read the selected host's. A
 gateway that reports nothing leaves health unknown, and the app shows nothing.
 Replayed notifications never change it, because every connection's
-`daemon/ready` carries the current value.
+`daemon/ready` carries the current value, and losing the connection clears it
+back to unknown.
 
 - A broken (`fallback` or `unavailable`) provider's ring dims its logo and adds
   a small warning badge. Its popover states the reason in one line, and
