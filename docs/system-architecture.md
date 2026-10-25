@@ -1227,9 +1227,9 @@ stable older-edge identity. A reader inside the runway may prefetch one batch
 while the history window is at most half full (`HistoryWindow.hasRoomToPrefetch`);
 after that only a visible edge pages. Speculative pages cannot evict the latest
 history. While the drawer covers the transcript (`TargetPresentation.coversTranscript`;
-an iPad or Mac sidebar beside it does not), `HistoryEdgeReader` cancels
-speculative pages and starts none; an explicit read that joined one keeps it.
-Prefetch resumes once the transcript stays uncovered for 1 s. Native host admission itself never fetches history.
+an iPad or Mac sidebar beside it does not), `HistoryEdgeReader` starts no
+page: an in-flight page finishes, and edge reads the transcript asks for wait
+until it is uncovered. Prefetch resumes once the transcript stays uncovered for 1 s. Native host admission itself never fetches history.
 
 Only user-owned geometry movement leaves following. Tracking without displacement
 keeps it; layout changes do not change follow mode. No single automatic update

@@ -21,7 +21,7 @@ struct ChatHistoryReadTests {
         #expect(await replacement.beginHistoryRead().base?.turn("t0") == nil)
     }
 
-    @Test(.timeLimit(.minutes(1))) func coveringTheTranscriptCancelsSpeculativePagingUntilItIsUncovered() async throws {
+    @Test(.timeLimit(.minutes(1))) func coveringTheTranscriptDefersPagingUntilItIsUncovered() async throws {
         let gateway = try await serving(entries: 60)
         await gateway.holdCursorPages()
         let fixture = await WorkspaceFixture(miniGatewayPort: try await gateway.start())
@@ -29,27 +29,14 @@ struct ChatHistoryReadTests {
         let workspace = fixture.workspace
         let chat = try await openPrefetching(fixture)
         workspace.setHistoryDrawerOpen(true, overlaysTranscript: true, in: workspace.keyWindow)
-        #expect(chat.historyEdges.isIdle)
+        #expect(chat.historyEdges.load(.older) == nil)
+        await gateway.waitForHeldPage()
         let pages = await gateway.requests("thread/items/list").count
         await gateway.releaseHeldPage()
+        try #require(await waitUntil { chat.historyEdges.isIdle })
+        #expect(await gateway.requests("thread/items/list").count == pages)
         workspace.setHistoryDrawerOpen(false, overlaysTranscript: true, in: workspace.keyWindow)
         #expect(await waitUntil { await gateway.requests("thread/items/list").count > pages })
-    }
-
-    @Test(.timeLimit(.minutes(1))) func anExplicitReadJoiningSpeculativePagingSurvivesCoveringTheTranscript() async throws {
-        let gateway = try await serving(entries: 60)
-        await gateway.holdCursorPages()
-        let fixture = await WorkspaceFixture(miniGatewayPort: try await gateway.start())
-        defer { await fixture.cleanUp(); await gateway.stop() }
-        let workspace = fixture.workspace
-        let chat = try await openPrefetching(fixture)
-        let read = try #require(chat.historyEdges.load(.older))
-        workspace.setHistoryDrawerOpen(true, overlaysTranscript: true, in: workspace.keyWindow)
-        #expect(!chat.historyEdges.isIdle)
-        await gateway.releaseHeldPage()
-        await read.value
-        #expect(chat.historyEdgeStatus[.older] == nil)
-        #expect(chat.historyEdges.isIdle)
     }
 
     @Test(.timeLimit(.minutes(2))) func jumpingToTheLatestReadsTheGatewayTailEvenWhileItsPagesAreCached() async throws {

@@ -34,7 +34,6 @@ final class HistoryEdgeReader {
     private struct Read {
         let request: Request
         let task: Task<Void, Never>
-        var speculative: Bool
     }
 
     nonisolated static let turnBatch = 25
@@ -46,6 +45,7 @@ final class HistoryEdgeReader {
     @ObservationIgnored private var reads: [HistoryEdge.Kind: Read] = [:]
     @ObservationIgnored private var prefetchPagesLeft = 0
     @ObservationIgnored private var transcriptCovered = false
+    @ObservationIgnored private var deferredLoads: Set<HistoryEdge.Kind> = []
     @ObservationIgnored private var prefetchResume: Task<Void, Never>?
     @ObservationIgnored private var tailRecovery = HistoryTailRecovery()
     @ObservationIgnored private weak var host: (any HistoryEdgeHost)?
@@ -67,6 +67,10 @@ final class HistoryEdgeReader {
 
     @discardableResult
     func load(_ kind: HistoryEdge.Kind) -> Task<Void, Never>? {
+        guard !transcriptCovered else {
+            deferredLoads.insert(kind)
+            return nil
+        }
         let request: Request = switch kind {
         case .older: .page(.desc)
         case .newer: .page(.asc)
@@ -101,19 +105,14 @@ final class HistoryEdgeReader {
         transcriptCovered = covered
         prefetchResume?.cancel()
         prefetchResume = nil
-        guard covered else {
-            guard prefetchPagesLeft > 0 else { return }
-            prefetchResume = Task { [weak self] in
-                guard (try? await Task.sleep(for: Self.prefetchDwell)) != nil else { return }
-                self?.continuePrefetch()
-            }
-            return
-        }
-        for (kind, read) in reads where read.speculative {
-            read.task.cancel()
-            reads[kind] = nil
-            status[kind] = nil
-            prefetchPagesLeft += 1
+        guard !covered else { return }
+        let deferred = deferredLoads
+        deferredLoads.removeAll()
+        for kind in deferred { load(kind) }
+        guard prefetchPagesLeft > 0 else { return }
+        prefetchResume = Task { [weak self] in
+            guard (try? await Task.sleep(for: Self.prefetchDwell)) != nil else { return }
+            self?.continuePrefetch()
         }
     }
 
@@ -143,6 +142,7 @@ final class HistoryEdgeReader {
     @discardableResult
     func cancelReads() -> [Task<Void, Never>] {
         prefetchPagesLeft = 0
+        deferredLoads.removeAll()
         prefetchResume?.cancel()
         prefetchResume = nil
         let tasks = reads.values.map(\.task)
@@ -171,10 +171,7 @@ final class HistoryEdgeReader {
     private func read(_ kind: HistoryEdge.Kind, request: Request, priority: HistoryReadScheduler.Priority,
                       failure: HistoryEdge.Status?) -> Task<Void, Never>? {
         if let running = reads[kind] {
-            guard request == .latest || request == .reload, running.request != request else {
-                if priority != .prefetch { reads[kind]?.speculative = false }
-                return running.task
-            }
+            guard request == .latest || request == .reload, running.request != request else { return running.task }
             running.task.cancel()
             reads[kind] = nil
         }
@@ -233,7 +230,7 @@ final class HistoryEdgeReader {
             self.status[kind] = nil
             if let failureMessage, !defersFailure { self.host?.historyReadFailed(failureMessage) }
         }
-        reads[kind] = Read(request: request, task: task, speculative: priority == .prefetch)
+        reads[kind] = Read(request: request, task: task)
         return task
     }
 }
