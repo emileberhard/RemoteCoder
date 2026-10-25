@@ -220,7 +220,7 @@ final class RemoteCoderAppModel {
                            phase: .background)
         let execution = makeBackgroundExecution()
         execution.hold(named: "RemoteCoder.DiagnosticsDrain") { execution.release() }
-        Task { [diagnostics] in
+        Task(priority: .utility) { [diagnostics] in
             await diagnostics.flush()
             execution.release()
         }
