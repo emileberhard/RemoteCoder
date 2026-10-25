@@ -475,6 +475,19 @@ mod tests {
             segment
         );
 
+        for (device, body, expected) in [("phone", &b"plain"[..], 422), ("..", &segment[..], 400)] {
+            let (status, _) = exchange(
+                &mut stream,
+                &format!(
+                    "POST /app-logs HTTP/1.1\r\nHost: {HOST}\r\nAuthorization: Bearer {OPERATOR}\r\n{DEVICE_HEADER}: {device}\r\n{SEGMENT_HEADER}: lan-2\r\nContent-Length: {}\r\n\r\n",
+                    body.len()
+                ),
+                body,
+            )
+            .await;
+            assert_eq!(status, expected, "{device}");
+        }
+
         lan.stop().await;
     }
 

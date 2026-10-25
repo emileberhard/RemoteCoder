@@ -199,7 +199,7 @@ struct AppPerformanceReportTests {
         #expect(requests[0].authorization == "Bearer fixture-token")
     }
 
-    @Test(arguments: [(400, true), (413, true), (404, false), (503, false)])
+    @Test(arguments: [(422, true), (400, false), (413, false), (503, false)])
     func hostRejectionQuarantinesOnlySegmentSpecificRefusals(status: Int, quarantines: Bool) async throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

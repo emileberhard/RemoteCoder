@@ -601,7 +601,7 @@ actor DiagnosticsOutbox: DiagnosticsExporting {
     }
 
     static func hostRejectsSegment(_ status: Int) -> Bool {
-        status == 400 || status == 413
+        status == 422
     }
 
     private func quarantine(_ segment: URL, reason: String) {
@@ -611,7 +611,7 @@ actor DiagnosticsOutbox: DiagnosticsExporting {
         )))
         do {
             try FileManager.default.moveItem(at: segment, to: segment.appendingPathExtension("export-only"))
-            logger.error("Log segment retained for export under queue cap: \(reason, privacy: .public)")
+            logger.error("Log segment retained for export only: \(reason, privacy: .public)")
         } catch {
             logger.error("Could not quarantine log segment; skipped until relaunch: \(error.localizedDescription, privacy: .public)")
         }

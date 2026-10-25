@@ -25,8 +25,10 @@ use crate::storage::private_state;
 /// A rejected upload, and the reason to hand back to the client.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum AppLogError {
-    /// The device or segment header was missing, empty, or entirely unsafe.
-    InvalidName(&'static str),
+    /// The device header was missing, empty, or entirely unsafe.
+    InvalidDevice,
+    /// The segment header was missing, empty, or entirely unsafe.
+    InvalidSegment,
     /// The body is not gzip. Segments are stored as-is, so this is the only
     /// chance to notice a client sending something else.
     NotGzip,
@@ -37,7 +39,8 @@ pub(crate) enum AppLogError {
 impl AppLogError {
     pub(crate) fn message(&self) -> String {
         match self {
-            AppLogError::InvalidName(field) => format!("{field} is missing or unusable"),
+            AppLogError::InvalidDevice => "device is missing or unusable".to_string(),
+            AppLogError::InvalidSegment => "segment is missing or unusable".to_string(),
             AppLogError::NotGzip => "body must be gzip-compressed JSONL".to_string(),
             AppLogError::Io(error) => format!("failed storing segment: {error}"),
         }
@@ -175,8 +178,8 @@ impl AppLogStore {
         segment: &str,
         body: &[u8],
     ) -> Result<StoredSegment, AppLogError> {
-        let device = sanitize_component(device).ok_or(AppLogError::InvalidName("device"))?;
-        let segment = sanitize_component(segment).ok_or(AppLogError::InvalidName("segment"))?;
+        let device = sanitize_component(device).ok_or(AppLogError::InvalidDevice)?;
+        let segment = sanitize_component(segment).ok_or(AppLogError::InvalidSegment)?;
         if body.len() < 2 || body[0] != 0x1f || body[1] != 0x8b {
             return Err(AppLogError::NotGzip);
         }
@@ -430,7 +433,7 @@ mod tests {
 
         for hostile in ["../../etc", "..", "/", "....//", "."] {
             match store.store(hostile, "seg", &gzip_body()) {
-                Err(AppLogError::InvalidName("device")) => {}
+                Err(AppLogError::InvalidDevice) => {}
                 Ok(StoredSegment { path, .. }) => {
                     let canonical = path.canonicalize().expect("canonical path");
                     let root = dir.canonicalize().expect("canonical root");
