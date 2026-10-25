@@ -626,6 +626,8 @@ includes that suspension: these are continuous elapsed times, not CPU time.
 
 The existing JSONL telemetry samples carry these aggregates. No additional
 OSLog lines, per-save records, identities, content, files or timers are added.
+Only existing write, skip and failure counters make an OSLog report due; phase
+samples do not change its cadence.
 Read the uploaded samples with
 `jq 'select(.recordType == "sample") | {ts, checkpoint: .persistence.checkpoints.checkpoint}'`;
 `app-telemetry persistence` continues to summarize the existing owner counters.

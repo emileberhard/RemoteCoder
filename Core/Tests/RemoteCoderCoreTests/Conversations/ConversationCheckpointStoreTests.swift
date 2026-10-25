@@ -86,6 +86,58 @@ struct ConversationCheckpointStoreTests: ConversationHistoryFixtures {
         #expect(retained.turns.values.contains { $0.items["answer"] != nil })
     }
 
+    @Test func admissionLimitedRollbackRestoreResetsExhaustionBeforeLaterHistoryShedding() async throws {
+        let directory = URL.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let host = UUID()
+        let id = UUID()
+        var remote = ConversationState(conversationID: id, threadID: "remote")
+        remote.merge(history(items: [.agentMessage(id: "answer", text: String(repeating: "Rebuildable remote history. ", count: 4_096))],
+            threadID: "remote"))
+        #expect(!remote.checkpoint.containsLocalRecords)
+        let writer = ConversationCheckpointStore(hostID: host, directory: directory, primaryBudgetBytes: 512 * 1_024 * 1_024)
+        try await writer.save(remote.checkpoint, conversationID: id)
+        let recovery = directory.appending(path: "recovery/\(id)/incident/original")
+        try FileManager.default.createDirectory(at: recovery.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let durable = Data("Unique recovery bytes".utf8)
+        try durable.write(to: recovery)
+        let metrics = PersistenceMetrics()
+        let primaryBudget = 32 * 1_024
+        let store = ConversationCheckpointStore(hostID: host, directory: directory, budgetBytes: 1,
+            primaryBudgetBytes: primaryBudget, metrics: metrics)
+        var active = ConversationState(conversationID: UUID(), threadID: "active")
+        active.merge(history(items: [.agentMessage(id: "active-answer", text: "Still working")], threadID: "active"))
+        try await store.save(active.checkpoint, conversationID: active.conversationID)
+        #expect(metrics.snapshot()[.checkpoints]?.checkpoint?.phases["historyShedRead"]?.count == 1)
+        active.markPersistedChange()
+        try await store.save(active.checkpoint, conversationID: active.conversationID)
+        #expect(metrics.snapshot()[.checkpoints]?.checkpoint?.phases["historyShedRead"]?.count == 1)
+
+        let pending = ChatMessage(role: .user, text: "Unique local work from a rollback build")
+        remote.submit(pending)
+        let source = directory.appending(path: "\(id).json")
+        let rollback = try JSONEncoder().encode(CheckpointTestEnvelope(containsLocalRecords: true, checkpoint: remote.checkpoint))
+        #expect(rollback.count > primaryBudget)
+        try rollback.write(to: source)
+        guard case .invalidated(let fallback) = try await store.restore(id, threadID: "remote", generation: nil) else {
+            Issue.record("The combined rollback save must return its local fallback when admission fails")
+            return
+        }
+        #expect(fallback?.submissions[pending.id]?.message == pending)
+        #expect(metrics.snapshot()[.checkpoints]?.failures == 1)
+        #expect(try Data(contentsOf: source) == rollback)
+        let reads = try #require(metrics.snapshot()[.checkpoints]?.checkpoint?.phases["historyShedRead"]?.count)
+        active.markPersistedChange()
+        try await store.save(active.checkpoint, conversationID: active.conversationID)
+        #expect(metrics.snapshot()[.checkpoints]?.checkpoint?.phases["historyShedRead"]?.count == reads + 1)
+
+        let cold = ConversationCheckpointStore(hostID: host, directory: directory, primaryBudgetBytes: 512 * 1_024 * 1_024)
+        let retained = try #require(try await cold.load(id))
+        #expect(retained.submissions[pending.id]?.message == pending)
+        #expect(retained.turns.values.allSatisfy { $0.items["answer"] == nil })
+        #expect(try Data(contentsOf: recovery) == durable)
+    }
+
     @Test func failedHistoryInspectionIsRetriedUntilAReadableCheckpointProvesExhaustion() async throws {
         let directory = URL.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
