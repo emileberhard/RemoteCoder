@@ -101,8 +101,7 @@ struct GatewayEventPumpTests {
     @Test func aDegradedGatewayConnectsWithItsHealthAndReconnectsFullyAfterItsRestartClose() async throws {
         let codexDown = ProviderHealth([.codex: .unavailable(reason: "Codex sign-in needed"), .claude: .ready])
         try await withRecordingPump(timeouts: GatewayClient.Timeouts()) { client, socket, sink in
-            #expect(await waitUntil { sink.connectivity.last == .connected(.configured) })
-            #expect(sink.healths == [nil])
+            #expect(await waitUntil { sink.connectivity.last == .connected(.configured) && sink.healths == [nil] })
 
             await socket.advertiseProviders(.object([
                 "codex": .object(["state": .string("unavailable"), "reason": .string("Codex sign-in needed")]),
