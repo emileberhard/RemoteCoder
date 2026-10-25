@@ -47,10 +47,20 @@ struct ServerNotificationTests {
         guard case .daemonReady(let ready) = try decode(#"{"method":"daemon/ready","params":{"notificationEpoch":"e1","notificationSequence":41}}"#) else {
             Issue.record("Expected daemon/ready"); return
         }
-        #expect(ready == .init(epoch: "e1", sequence: 41, cancelRequest: false))
+        #expect(ready == .init(epoch: "e1", sequence: 41, cancelRequest: false, providerHealth: nil))
         guard case .malformed("daemon/ready", .none, _) = try decode(#"{"method":"daemon/ready","params":{"notificationEpoch":"e1"}}"#) else {
             Issue.record("Expected a ready notification without a sequence to be malformed"); return
         }
+    }
+
+    @Test func aReadyNotificationCarriesProviderHealth() throws {
+        guard case .daemonReady(let ready) = try decode(#"""
+        {"method":"daemon/ready","params":{"notificationEpoch":"e1","notificationSequence":3,
+         "providers":{"codex":{"state":"unavailable","reason":"Codex sign-in needed"},"claude":{"state":"ready"}}}}
+        """#) else {
+            Issue.record("Expected daemon/ready"); return
+        }
+        #expect(ready.providerHealth == ProviderHealth([.codex: .unavailable(reason: "Codex sign-in needed"), .claude: .ready]))
     }
 
     @Test func aCallChangeCarriesTheCallAndItsState() throws {

@@ -11,7 +11,7 @@ struct TargetModelCatalogTests {
         let service = CodexModelCatalogService(directory: .temporaryDirectory) { _ in throw URLError(.notConnectedToInternet) }
         let catalog = TargetModelCatalog(service: service, preferences: preferences, defaults: defaults)
 
-        #expect(catalog.newChatDefault(for: .codex) == .listNotLoaded)
+        #expect(catalog.newChatDefault(for: .codex, health: nil) == .listNotLoaded)
         #expect(catalog.newChatUnavailableReason(for: .codex) == "Codex models haven't loaded yet.")
         #expect(!catalog.options(for: .claude).isEmpty)
     }
@@ -46,11 +46,11 @@ struct TargetModelCatalogTests {
         let catalog = TargetModelCatalog(service: CodexModelCatalogService(directory: .temporaryDirectory) { _ in throw URLError(.notConnectedToInternet) }, preferences: preferences, defaults: defaults)
         let opus = try #require(ClaudeModelCatalog.model(for: "opus"))
         NewChatDefaults.recordModelSelection("claude-opus-5", defaults: defaults)
-        #expect(catalog.newChatDefault().model == opus)
+        #expect(catalog.newChatDefault(for: nil, health: nil).model == opus)
 
         preferences.setClaudeModelVisible(false, id: opus.id)
         #expect(catalog.options(for: .claude).map(\.id) == ["fable", "sonnet", "haiku"])
-        #expect(catalog.newChatDefault().model?.id == "fable")
+        #expect(catalog.newChatDefault(for: nil, health: nil).model?.id == "fable")
         #expect(catalog.configured(id: "claude-opus-5").model == opus)
         #expect(catalog.option(id: "claude-opus-5", threadID: "claude_existing", effort: nil, fastMode: false) == opus)
         #expect(catalog.pickerOptions(including: opus).map(\.id) == ["fable", "sonnet", "haiku", "opus"])
@@ -62,12 +62,38 @@ struct TargetModelCatalogTests {
         preferences.setClaudeModelVisible(false, id: "claude-haiku-5-5")
         #expect(catalog.options(for: .claude).isEmpty)
         #expect(catalog.defaultModel(for: .claude) == nil)
-        #expect(catalog.newChatDefault() == .notOffered)
+        #expect(catalog.newChatDefault(for: nil, health: nil) == .notOffered)
         #expect(catalog.newChatUnavailableReason(for: nil).contains("Claude Code"))
         #expect(catalog.configured(id: "opus").model == opus)
         #expect(NewChatDefaults.preferredModelID(defaults: defaults) == "claude-opus-5")
 
         preferences.setClaudeModelVisible(true, id: "opus")
-        #expect(catalog.newChatDefault().model == opus)
+        #expect(catalog.newChatDefault(for: nil, health: nil).model == opus)
+    }
+
+    @Test func aNewChatStartsOnAWorkingProviderWhileTheDefaultOneIsUnavailable() async throws {
+        let defaults = try #require(UserDefaults(suiteName: "TargetModelCatalogTests.\(UUID())"))
+        let models = try CodexModelFixtures.models()
+        let service = CodexModelCatalogService(directory: .temporaryDirectory.appending(path: UUID().uuidString)) { _ in
+            CodexAppServerV2.ModelListResponse(data: models, nextCursor: nil)
+        }
+        await service.refresh()
+        let catalog = TargetModelCatalog(service: service, preferences: ModelPickerPreferences(defaults: defaults), defaults: defaults)
+        let codexDown = ProviderHealth([.codex: .unavailable(reason: "Codex sign-in needed"), .claude: .ready])
+        let bothDown = ProviderHealth([.codex: .unavailable(reason: "Codex sign-in needed"), .claude: .unavailable(reason: "Claude signed out")])
+        let fallback = ProviderHealth([.codex: .fallback(route: "copilot", reason: "Codex subscription sign-in failed")])
+
+        #expect(catalog.newChatDefault(for: nil, health: nil).model?.provider == .codex)
+        #expect(catalog.newChatDefault(for: nil, health: codexDown).model?.provider == .claude)
+        #expect(catalog.newChatDefault(for: nil, health: fallback).model?.provider == .codex)
+        #expect(catalog.newChatDefault(for: nil, health: bothDown).model?.provider == .codex)
+        #expect(catalog.newChatDefault(for: .codex, health: codexDown).model?.provider == .codex, "an explicit provider stays")
+
+        NewChatDefaults.recordModelSelection("opus", defaults: defaults)
+        let claudeDown = ProviderHealth([.claude: .unavailable(reason: "Claude signed out")])
+        #expect(catalog.newChatDefault(for: nil, health: claudeDown).model?.provider == .codex)
+        NewChatDefaults.recordModelSelection(CodexModelFixtures.solID, defaults: defaults)
+        for id in ["fable", "opus", "sonnet", "haiku"] { catalog.preferences.setClaudeModelVisible(false, id: id) }
+        #expect(catalog.newChatDefault(for: nil, health: codexDown).model?.provider == .codex, "no working model keeps the default")
     }
 }

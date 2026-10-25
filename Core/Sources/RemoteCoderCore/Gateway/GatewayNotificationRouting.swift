@@ -13,6 +13,7 @@ enum RoutedGatewayEvent: Sendable {
     case threadName(CodexAppServerV2.ThreadNameUpdatedNotification)
     case queueChanged(threadID: String)
     case warning(GatewayWarning)
+    case providerHealth(ProviderHealth?)
     case activity(CodexGatewayDaemon.ActiveTurnsResponse)
     case liveActivity(ActiveTasksLiveActivitySnapshot?)
 
@@ -21,7 +22,7 @@ enum RoutedGatewayEvent: Sendable {
         case .tokenUsage(_, let sequence), .historyInvalidated(_, _, let sequence),
              .archive(_, _, let sequence), .settings(_, let sequence): sequence
         case .turnEvent(let event): event.sequence
-        case .threadName, .queueChanged, .marks, .favorites, .preferences, .warning, .activity, .liveActivity: nil
+        case .threadName, .queueChanged, .marks, .favorites, .preferences, .warning, .providerHealth, .activity, .liveActivity: nil
         }
     }
 }
@@ -88,6 +89,8 @@ enum GatewayNotificationRouting {
         switch note.server {
         case .gatewayWarning(let warning):
             return .warning(warning)
+        case .providerHealthChanged(let health):
+            return .providerHealth(health)
         case .activeTurnsChanged(let snapshot):
             return .activity(snapshot)
         case .liveActivityChanged(let snapshot):

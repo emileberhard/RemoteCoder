@@ -528,6 +528,8 @@ actor DeviceToolSocketFixture {
     private var closeBeforeReadyCode: NWProtocolWebSocket.CloseCode?
     private var initializeRejected = false
     private var cancelRequestCapability: Bool?
+    private var providers: JSONValue?
+    private var failures: [String: CodexAppServerV2.JSONRPC.ErrorObject] = [:]
     private(set) var recordedNotifications: [CodexAppServerV2.JSONRPC.Notification] = []
     private var heldMethods: Set<String> = []
     private var heldRequests: [(CodexAppServerV2.JSONRPC.Request, NWConnection)] = []
@@ -601,6 +603,7 @@ actor DeviceToolSocketFixture {
         guard sendsReady else { return }
         var ready: [String: JSONValue] = ["notificationEpoch": .string("fixture"), "notificationSequence": .number(0)]
         if let cancelRequestCapability { ready["capabilities"] = .object(["cancelRequest": .bool(cancelRequestCapability)]) }
+        if let providers { ready["providers"] = providers }
         let params = JSONValue.object(ready)
         Task { try? await send(.notification(.init(method: "daemon/ready", params: params)), on: connection) }
     }
@@ -722,6 +725,8 @@ actor DeviceToolSocketFixture {
                     capacityFailures[request.method]?.remaining -= 1
                     response = .error(.init(error: .init(code: -32001, data: .object([
                         "kind": .string("capacity"), "retryable": .bool(failure.retryable)]), message: "Capacity reached"), id: request.id))
+                } else if let failure = failures[request.method] {
+                    response = .error(.init(error: failure, id: request.id))
                 } else if let value = results[request.method] {
                     response = .response(.init(id: request.id, result: value))
                 } else if request.method == "conversation/subscriptions/set", let code = contentSubscriptionRejection {
@@ -774,6 +779,10 @@ actor DeviceToolSocketFixture {
     }
 
     func advertiseCancellation(_ supported: Bool) { cancelRequestCapability = supported }
+
+    func advertiseProviders(_ providers: JSONValue?) { self.providers = providers }
+
+    func fail(_ method: String, with error: CodexAppServerV2.JSONRPC.ErrorObject?) { failures[method] = error }
 
     func holdRequests(_ method: String) { heldMethods.insert(method) }
 

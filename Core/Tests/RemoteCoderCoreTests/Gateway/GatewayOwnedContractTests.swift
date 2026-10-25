@@ -92,6 +92,7 @@ struct GatewayOwnedContractTests {
         ("conversation-busy", .conversationBusy(retryAfterMs: 2000), true),
         ("queue-change-uncertain", .queueChangeUncertain, false),
         ("input-delivery-uncertain", .inputDeliveryUncertain, false),
+        ("provider-unavailable", .providerUnavailable(provider: .codex, reason: "Codex sign-in needed on mac-mini"), false),
     ])
     func gatewayErrorKindsDecodeFromTheSharedFixtures(_ name: String, _ kind: GatewayRPCFailure.Kind, _ retryable: Bool) throws {
         struct Envelope: Decodable { let error: CodexAppServerV2.JSONRPC.ErrorObject }
@@ -100,6 +101,23 @@ struct GatewayOwnedContractTests {
 
         #expect(failure.kind == kind)
         #expect(failure.retryable == retryable)
+    }
+
+    @Test func anUnavailableProviderFailureReadsAsItsHealthReason() throws {
+        struct Envelope: Decodable { let error: CodexAppServerV2.JSONRPC.ErrorObject }
+        let error = try JSONDecoder().decode(Envelope.self, from: fixture("provider-unavailable")).error
+        let failure = try #require(GatewayRPCFailure(code: Int(error.code), message: error.message, data: error.data))
+
+        #expect(failure.localizedDescription == "Codex sign-in needed on mac-mini")
+    }
+
+    @Test func providerHealthDecodesFromTheSharedFixture() throws {
+        let frame = try fixture("provider-health")
+        guard case .providerHealthChanged(let health) = ServerNotification.decode(method: "gateway/providerHealth", frame: frame) else {
+            Issue.record("Expected gateway/providerHealth"); return
+        }
+        #expect(health.status(of: .codex) == .fallback(route: "copilot", reason: "Codex subscription sign-in failed"))
+        #expect(health.status(of: .claude) == .unavailable(reason: "Claude Code is not signed in on mac-mini"))
     }
 
     @Test func theActivitySnapshotDecodesItsEpochCoverageAndStartSequence() throws {

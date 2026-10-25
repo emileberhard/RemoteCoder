@@ -57,7 +57,7 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
         case requestTimedOut(method: String)
         case connectionFailed(host: String, reason: String)
         case gatewayRestarting
-        case gatewayNotReady(reason: String)
+        case gatewayNotReady(host: String, reason: String)
 
         var errorDescription: String? {
             switch self {
@@ -88,8 +88,8 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
                 return "Codex gateway request timed out (\(method))."
             case .connectionFailed(let host, let reason):
                 return "Could not connect to \(host). \(reason)"
-            case .gatewayNotReady(let reason):
-                return "Codex gateway closed the connection before it was ready. \(reason)"
+            case .gatewayNotReady(let host, let reason):
+                return "\(host) closed the connection: \(reason)"
             case .gatewayRestarting:
                 return "Codex gateway is restarting."
             }
@@ -372,10 +372,11 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
         } catch {
             let closedByGateway = task.closeCode != .invalid
             let restarting = observeRestart(closing: task)
-            let reason = task.closeReason.flatMap { String(data: $0, encoding: .utf8) } ?? error.localizedDescription
+            let reason = task.closeReason.flatMap { String(data: $0, encoding: .utf8) }.flatMap { $0.isEmpty ? nil : $0 }
             task.cancel(with: .goingAway, reason: nil)
             guard closedByGateway, !(error is CancellationError) else { throw error }
-            throw restarting ? ClientError.gatewayRestarting : ClientError.gatewayNotReady(reason: reason)
+            throw restarting ? ClientError.gatewayRestarting
+                : ClientError.gatewayNotReady(host: config.hostLabel, reason: reason ?? error.localizedDescription)
         }
     }
 
