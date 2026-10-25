@@ -148,7 +148,6 @@ final class PersistenceMetrics: Sendable {
     func recordCheckpointPhase(_ phase: CheckpointPhase, elapsed: Duration) {
         state.withLock {
             $0.checkpointPhases[phase, default: Timing()].record(elapsed)
-            $0.reportDue = true
         }
     }
 
@@ -159,7 +158,6 @@ final class PersistenceMetrics: Sendable {
             $0.checkpointNewPayloadBytes += newPayloadBytes
             $0.checkpointPhases[.chunking, default: Timing()].record(chunking)
             $0.checkpointPhases[.sqlCommit, default: Timing()].record(sqlCommit)
-            $0.reportDue = true
         }
     }
 
