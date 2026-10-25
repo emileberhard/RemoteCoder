@@ -489,6 +489,33 @@ async fn replacing_the_registered_device_does_not_ring_the_wrong_installation() 
 }
 
 #[tokio::test]
+async fn call_media_starts_after_an_earlier_voice_call_ended() {
+    let gateway = gateway();
+    gateway.voice.seed_ended_call("earlier-voice-call");
+    let (client_tx, _client_rx) = tokio::sync::mpsc::channel(4);
+    gateway
+        .clients
+        .insert(1, crate::gateway::tests::test_client(1, client_tx));
+    let out_rx = crate::test_support::FakeControl::attach(&gateway, 4)
+        .await
+        .requests;
+    let _captured = crate::gateway::tests::spawn_control_responder(&gateway, out_rx);
+    let mut call = record("self");
+    call.state = CallState::Connecting;
+    call.media_client_id = Some(1);
+    gateway.calls.state.lock().await.records.push(call.clone());
+
+    gateway
+        .start_call_media(1, call.clone(), "v=0\r\n".into(), None)
+        .await
+        .expect("an ended voice call does not block a new agent call");
+    assert_eq!(
+        gateway.voice.owner().map(|owner| owner.realtime_session_id),
+        Some(call.call_id)
+    );
+}
+
+#[tokio::test]
 async fn late_call_media_waits_for_a_pending_compaction() {
     let gateway = gateway();
     let _compaction = gateway.admission.admit_compaction("thread-owned").unwrap();

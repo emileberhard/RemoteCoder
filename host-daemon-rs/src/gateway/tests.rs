@@ -2601,7 +2601,7 @@ async fn control_connection_delivers_one_realtime_notification_to_its_owner() {
 }
 
 /// Answers every control request with an empty result and records it.
-fn spawn_control_responder(
+pub(crate) fn spawn_control_responder(
     gateway: &Arc<Gateway>,
     mut out_rx: mpsc::Receiver<String>,
 ) -> Arc<Mutex<Vec<Value>>> {

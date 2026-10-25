@@ -363,6 +363,33 @@ impl VoiceCoordinator {
                 }
             }
         }
+        Ok(Self::admit_start(
+            &mut state,
+            client_id,
+            realtime_session_id,
+            !replace_existing_session,
+        ))
+    }
+
+    pub(crate) fn begin_agent_call_start(
+        &self,
+        _transition: &VoiceTransition<'_>,
+        client_id: u64,
+        call_id: &str,
+    ) -> Result<StartAdmission> {
+        let mut state = self.state();
+        if state.phase.owner().is_some() {
+            return Err(anyhow!("a voice call is already active"));
+        }
+        Ok(Self::admit_start(&mut state, client_id, call_id, false))
+    }
+
+    fn admit_start(
+        state: &mut VoiceState,
+        client_id: u64,
+        realtime_session_id: &str,
+        automatic_reconnect: bool,
+    ) -> StartAdmission {
         let previous = match &state.phase {
             VoicePhase::Draining {
                 transport_closed: true,
@@ -386,7 +413,7 @@ impl VoiceCoordinator {
             Some((owner, realtime_thread_id)) => {
                 let (closed, receiver) = oneshot::channel();
                 let automatic_reclaim =
-                    !replace_existing_session && owner.realtime_session_id == realtime_session_id;
+                    automatic_reconnect && owner.realtime_session_id == realtime_session_id;
                 (
                     Some(VoicePredecessor {
                         owner,
@@ -418,12 +445,12 @@ impl VoiceCoordinator {
         };
         state.reclaim_authority =
             VoiceReclaimAuthority::Reclaimable(realtime_session_id.to_string());
-        Ok(StartAdmission {
+        StartAdmission {
             preempted: previous_owner.filter(|previous| previous.client_id != client_id),
             previous_session,
             predecessor_closed,
             previous_realtime_thread_id,
-        })
+        }
     }
 
     pub(crate) fn install(&self, _transition: &VoiceTransition<'_>, session: VoiceSession) -> bool {
@@ -974,6 +1001,30 @@ mod tests {
                 assert!(voice.install(&transition, session(3, "call-b", "thread-b-recovered")));
             }
         }
+    }
+
+    #[tokio::test]
+    async fn agent_call_starts_after_an_ended_call_but_never_takes_voice_from_its_owner() {
+        let voice = VoiceCoordinator::default();
+        let transition = voice.transition().await;
+        voice.begin_start(&transition, 1, "call-a", true).unwrap();
+        assert!(voice.install(&transition, session(1, "call-a", "thread-a")));
+
+        let busy = voice
+            .begin_agent_call_start(&transition, 2, "agent-call")
+            .err()
+            .expect("an agent call cannot replace the active call");
+        assert!(busy.to_string().contains("already active"));
+        assert!(
+            voice
+                .end_realtime_thread("thread-a", VoiceTransportEnd::ProviderClosed)
+                .is_some()
+        );
+
+        voice
+            .begin_agent_call_start(&transition, 2, "agent-call")
+            .unwrap();
+        assert!(voice.install(&transition, session(2, "agent-call", "thread-call")));
     }
 
     #[tokio::test]

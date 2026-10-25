@@ -218,12 +218,18 @@ impl Gateway {
             return Err(anyhow!("Claude provider is disabled on this host"));
         }
 
-        let admission = self.voice.begin_start(
-            &transition,
-            client_id,
-            &realtime_session_id,
-            replace_existing_session,
-        )?;
+        let admission = match origin {
+            VoiceSessionOrigin::VoiceMode => self.voice.begin_start(
+                &transition,
+                client_id,
+                &realtime_session_id,
+                replace_existing_session,
+            )?,
+            VoiceSessionOrigin::AgentCall => {
+                self.voice
+                    .begin_agent_call_start(&transition, client_id, &realtime_session_id)?
+            }
+        };
         if let Some(previous) = admission.preempted {
             info!(
                 previous_client_id = previous.client_id,
