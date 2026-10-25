@@ -21,6 +21,24 @@ struct ChatHistoryReadTests {
         #expect(await replacement.beginHistoryRead().base?.turn("t0") == nil)
     }
 
+    @Test(.timeLimit(.minutes(1))) func coveringTheTranscriptDefersPagingUntilItIsUncovered() async throws {
+        let gateway = try await serving(entries: 60)
+        await gateway.holdCursorPages()
+        let fixture = await WorkspaceFixture(miniGatewayPort: try await gateway.start())
+        defer { await fixture.cleanUp(); await gateway.stop() }
+        let workspace = fixture.workspace
+        let chat = try await openPrefetching(fixture)
+        workspace.setHistoryDrawerOpen(true, overlaysTranscript: true, in: workspace.keyWindow)
+        #expect(chat.historyEdges.load(.older) == nil)
+        await gateway.waitForHeldPage()
+        let pages = await gateway.requests("thread/items/list").count
+        await gateway.releaseHeldPage()
+        try #require(await waitUntil { chat.historyEdges.isIdle })
+        #expect(await gateway.requests("thread/items/list").count == pages)
+        workspace.setHistoryDrawerOpen(false, overlaysTranscript: true, in: workspace.keyWindow)
+        #expect(!chat.historyEdges.isIdle)
+    }
+
     @Test(.timeLimit(.minutes(2))) func jumpingToTheLatestReadsTheGatewayTailEvenWhileItsPagesAreCached() async throws {
         let gateway = try await serving(entries: 2_100)
         let fixture = await WorkspaceFixture(miniGatewayPort: try await gateway.start())
@@ -144,6 +162,14 @@ struct ChatHistoryReadTests {
         let chat = try await beginOpening(fixture)
         try #require(await waitUntil { chat.loadingTranscriptID == nil && chat.activeSessionID == threadID && !chat.messages.isEmpty },
             "loading=\(chat.loadingTranscriptID ?? "none") messages=\(chat.messages.count) error=\(chat.alert?.message ?? "none")")
+        return chat
+    }
+
+    private func openPrefetching(_ fixture: WorkspaceFixture) async throws -> ChatScreenModel {
+        let chat = try await open(fixture)
+        try #require(await waitUntil { chat.historyEdges.allowsPrefetch })
+        chat.historyEdges.prefetchEarlier()
+        try #require(!chat.historyEdges.isIdle)
         return chat
     }
 

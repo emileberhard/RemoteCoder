@@ -470,6 +470,14 @@ entrypoint linked above.
     event; the pump enqueues the gap and, on its restart, reads the floor from
     the client and replays from just before it. The same event stream reports
     connects and disconnects to the model, so nothing polls the client.
+  - `GatewayClient` owns the reconnect schedule (`GatewayReconnectPolicy`):
+    failed attempts wait jittered (50–100 %) steps of 1, 2, 4 … 60 s, capped at
+    4 s for 45 s after an observed gateway restart, and a connection that lived
+    30 s resets it. A request during the wait joins the scheduled attempt
+    within its own deadline or fails fast with the last attempt's error; the
+    pump waits until cancelled. Foregrounding or a network path change
+    expedites one attempt at most every 5 s. Each attempt logs its trigger,
+    step, routes and outcome.
   - Active turns are inferred from lifecycle notifications and the pushed
     activity snapshot, so history spinners and timelines stay live after a
     force-quit and relaunch.
@@ -484,8 +492,14 @@ entrypoint linked above.
     grace keeps sockets up for quick app switches. An idle model disconnects at
     once, and an active voice call keeps the connection.
   - While `.active`, an incremental refresh loop keeps the history list at most
-    15 s stale.
-  - The same loop warms every unsettled drawer conversation in rank order
+    15 s stale. It runs while any of the target's windows shows the drawer
+    (`TargetPresentation.drawerOpen` aggregates them). Opening it requests only
+    newly added question scopes, and closing it narrows them; the workspace's
+    bounded fan-out then reads each host's activity and stale list before
+    starting its loop. Explicit refresh, reconnect and invalidation keep their full
+    refreshes.
+  - After 1 s of continuous drawer visibility, the same loop warms every
+    unsettled drawer conversation in rank order
     (`ConversationDrawerRank`; delegated agent threads, and probe threads the
     drawer hides while they are not running, excluded) at background
     priority, running turns included, so a visual an agent posts in a

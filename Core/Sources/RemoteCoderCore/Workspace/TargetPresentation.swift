@@ -3,4 +3,6 @@ struct TargetPresentation: Equatable, Sendable {
     var key = false
     var drawerOpen = false
     var drawerOverlaysTranscript = true
+
+    var coversTranscript: Bool { drawerOpen && drawerOverlaysTranscript }
 }

@@ -41,6 +41,8 @@ actor ConversationSession {
     private var persistenceTask: Task<Void, Never>?
     private var persistenceTaskID: UUID?
     private var savedPersistenceRevision: UInt64?
+    private var historyOmitted = false
+    private var deferredRemoteChanges = false
     static let streamingPublicationInterval: Duration = .milliseconds(80)
     private static let minimumPublicationInterval: Duration = .milliseconds(16)
     private var projectionTask: Task<Void, Never>?
@@ -169,6 +171,7 @@ actor ConversationSession {
             observers[id] = continuation
             continuation.onTermination = { @Sendable [weak self] _ in Task { await self?.removeObserver(id) } }
             scheduleProjection()
+            if deferredRemoteChanges || historyOmitted { schedulePersistence() }
         }
     }
 
@@ -202,7 +205,7 @@ actor ConversationSession {
         guard state.persistenceRevision != previousPersistence else { scheduleStreamingProjection(); return }
         scheduleProjection()
         if event.method == "turn/completed" { await persistLocalChanges() }
-        else { schedulePersistence() }
+        else { scheduleRemotePersistence() }
     }
 
     func revokeStreamingPrefixes() async {
@@ -264,7 +267,7 @@ actor ConversationSession {
         }
         observationBuffer = nil
         observationReceipt = receipt
-        schedulePersistence()
+        scheduleRemotePersistence()
     }
 
     private func removeObserver(_ id: UUID) { observers.removeValue(forKey: id) }
@@ -400,7 +403,7 @@ actor ConversationSession {
     func merge(_ observation: GatewayHistoryService.ConversationSnapshot, read: ConversationState.HistoryRead) async -> ConversationSnapshot {
         if let successor { return await successor.merge(observation, read: read) }
         state.merge(observation, read: read)
-        schedulePersistence()
+        scheduleRemotePersistence()
         return await snapshot()
     }
 
@@ -412,7 +415,7 @@ actor ConversationSession {
     func recordTokenUsage(turnID: String, usage: CodexAppServerV2.ThreadTokenUsage) async {
         if let successor { await successor.recordTokenUsage(turnID: turnID, usage: usage); return }
         state.recordTokenUsage(turnID: turnID, usage: usage)
-        schedulePersistence()
+        scheduleRemotePersistence()
     }
 
     func takeDiscardedSteers(of turnID: String) async -> ConversationState.Submission? {
@@ -588,14 +591,18 @@ actor ConversationSession {
         #endif
         guard !awaitingAuthoritativeHistory else { return }
         let checkpoint = state.checkpoint
-        if let savedPersistenceRevision, checkpoint.durableRevision <= savedPersistenceRevision {
+        let presented = !observers.isEmpty
+        if let savedPersistenceRevision, checkpoint.durableRevision <= savedPersistenceRevision, !(historyOmitted && presented) {
             PersistenceMetrics.shared.skipped(.checkpoints)
             return
         }
-        let unavailable = try await checkpoints.save(checkpoint, conversationID: conversationID, generation: checkpointGeneration)
+        let receipt = try await checkpoints.save(checkpoint, conversationID: conversationID, generation: checkpointGeneration,
+                                                 presented: presented)
         guard case .ready = restoration, successor == nil else { return }
-        state.applyUnavailableImages(unavailable)
+        state.applyUnavailableImages(receipt.unavailableImages)
         savedPersistenceRevision = max(savedPersistenceRevision ?? 0, checkpoint.durableRevision)
+        historyOmitted = !receipt.historyAdmitted
+        deferredRemoteChanges = false
     }
 
     private func persistLocalChanges() async {
@@ -612,6 +619,15 @@ actor ConversationSession {
         requiresAuthoritativeHistory && state.window == nil && state.order.isEmpty && !state.checkpoint.containsLocalRecords
     }
 
+    private var needsPersistence: Bool {
+        savedPersistenceRevision != state.persistenceRevision || historyOmitted && !observers.isEmpty
+    }
+
+    private func scheduleRemotePersistence() {
+        guard observers.isEmpty else { schedulePersistence(); return }
+        deferredRemoteChanges = true
+    }
+
     private func schedulePersistence() {
         scheduleProjection()
         guard !awaitingAuthoritativeHistory else { return }
@@ -619,7 +635,7 @@ actor ConversationSession {
         guard perfStreamTurnID == nil else { return }
         #endif
         if case .failed = restoration { return }
-        guard savedPersistenceRevision != state.persistenceRevision, persistenceTask == nil else { return }
+        guard needsPersistence, persistenceTask == nil else { return }
         let id = UUID()
         let delay: Duration = hasActiveTurn ? .seconds(5) : .seconds(1)
         persistenceTaskID = id
@@ -645,7 +661,7 @@ actor ConversationSession {
         persistenceTaskID = nil
         // A change that arrived during the save is coalesced into the next snapshot.
         // Failure stays dirty; a later change or explicit flush can retry it.
-        if succeeded, savedPersistenceRevision != state.persistenceRevision { schedulePersistence() }
+        if succeeded, needsPersistence { schedulePersistence() }
     }
 
 }

@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import OSLog
 import Testing
 @testable import RemoteCoderCore
 
@@ -135,6 +136,47 @@ struct FieldTelemetryTests {
         operations.finish(claude)
         operations.finish(first)
         #expect(operations.report() == .transition(nil))
+    }
+
+    @Test func automaticRequestsWithinAMinuteOfACollectionShareItAndStillFlushTelemetry() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let outbox = DiagnosticsOutbox(directory: directory, deviceLabel: { "test-device" })
+        await outbox.drain(reason: "interval")
+        outbox.telemetry.record(sample(.context))
+        await outbox.drain(reason: "background")
+        let records = try telemetryBatches(in: directory).flatMap { $0 }
+        let exports = records.filter { $0["recordType"] as? String == "export" }
+        #expect(exports.map { $0["collection"] as? String } == ["collected", "coalesced"])
+        #expect(exports.first?["storeOpenMs"] is Double)
+        #expect(exports.last?["scanned"] as? Int == 0)
+        #expect(records.contains { $0["recordType"] as? String == "sample" })
+    }
+
+    @Test func aSettingsExportCountsAsTheLatestCollection() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let outbox = DiagnosticsOutbox(directory: directory, deviceLabel: { "test-device" })
+        let archive = try #require(await outbox.exportArchive())
+        defer { try? FileManager.default.removeItem(at: archive) }
+        await outbox.drain(reason: "background")
+        let exports = try telemetryBatches(in: directory).flatMap { $0 }.filter { $0["recordType"] as? String == "export" }
+        #expect(exports.last?["collection"] as? String == "coalesced")
+    }
+
+    @Test func aCollectionThatCouldNotWriteStaysDueAndKeepsItsCursor() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let outbox = DiagnosticsOutbox(directory: directory, deviceLabel: { "test-device" })
+        Logger(subsystem: "RemoteCoderTests", category: "Collection").notice("A record to collect")
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: directory.path)
+        await outbox.drain(reason: "interval")
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
+        #expect(!FileManager.default.fileExists(atPath: directory.appending(path: "cursor.json").path))
+        await outbox.drain(reason: "background")
+        let exports = try telemetryBatches(in: directory).flatMap { $0 }.filter { $0["recordType"] as? String == "export" }
+        #expect(exports.map { $0["collection"] as? String } == ["failed", "collected"])
+        #expect(FileManager.default.fileExists(atPath: directory.appending(path: "cursor.json").path))
     }
 
     @Test func aFullBufferKeepsTheNewestRecordsAndReportsTheLoss() async throws {

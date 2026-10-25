@@ -187,7 +187,7 @@ def run_records() -> list[dict]:
          "totalMs": 120.0, "scanMs": 80.0, "processCpuNs": 510_000_000, "footprintBefore": 100,
          "footprintSampledMax": 150},
         {"recordType": "export", "runID": "run-1", "seq": 11, "ts": "2026-10-24T10:13:20.000Z", "reason": "interval",
-         "totalMs": 100.0, "processCpuNs": 9_000_000_000},
+         "totalMs": 100.0, "processCpuNs": 9_000_000_000, "collection": "coalesced"},
     ]
 
 
@@ -228,6 +228,7 @@ def test_export_share_counts_only_exports_inside_the_sampled_coverage():
 
     assert cost["reasons"]["interval"]["exports"] == 2
     assert cost["reasons"]["interval"]["stageMs"]["scan"] == 80.0
+    assert cost["reasons"]["interval"]["collections"] == {"coalesced": 1, "unknown": 1}
     assert cost["reasons"]["interval"]["sampledFootprintGrowthBytes"] == 50
     assert cost["sampledProcessCpuSeconds"] == 5.1
     assert cost["exportShareOfSampledCpu"] == 0.1

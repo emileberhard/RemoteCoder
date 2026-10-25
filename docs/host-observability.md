@@ -441,15 +441,23 @@ copy useless for its purpose.
   enforcing the queue cap per segment, so neither memory nor disk grows with the
   backlog.
 - **Cadence.** Every 5 minutes while the scene is active, and on background.
-  Launch and foreground only start the 5-minute pump: a scan costs seconds of
-  CPU and would land exactly when the user returns to the app. Drains run at
-  utility priority. Pending segments upload after every drain. The background
-  drain holds a background task until the lifecycle settles; if iOS expires
-  the hold first, the process is suspended mid-scan and the rest waits for
-  the next drain, or is lost if the process dies before it.
-  `DiagnosticsLifecycle` owns one latest-state worker; superseded background
-  drains cannot stop a reactivated pump, and host changes do not rescan logs.
-  Overlapping outbox drains share one scan/upload pass. Each pass rescans the
+  The interval counts from the start of the last successful scan, so a
+  foreground soon after a background scan does not restart it; launch and a
+  foreground past an overdue interval wait a full 5 minutes, because a scan
+  costs seconds of CPU and would land exactly when the user returns to the
+  app. An interval or background drain within 60 s of a successful scan's
+  start skips the scan and records `collection: coalesced`; it still writes
+  telemetry and uploads pending segments. A failed or interrupted scan stays
+  due. The Settings export always scans. Drains run at utility priority. The
+  background drain holds a background task until the lifecycle settles; if iOS
+  expires the hold, the scan stops between entries, keeps the segments it
+  wrote, skips the upload and records `collection: cancelled`, and the hold is
+  released at once. `DiagnosticsLifecycle` owns one latest-state worker;
+  superseded background drains cannot stop a reactivated pump, and host
+  changes do not rescan logs. Overlapping outbox drains share one scan/upload
+  pass. Export records report `collection` (`collected`, `coalesced`,
+  `failed`, `cancelled`), `storeOpenMs` and `enumeratorSetupMs`; `scanMs`
+  includes both, and records from older builds lack all three. Each pass rescans the
   process's whole log store, because iOS `OSLogStore`
   ignores start positions and reverse enumeration, so its cost grows with
   process lifetime. The interval trades that CPU against the entries a crash

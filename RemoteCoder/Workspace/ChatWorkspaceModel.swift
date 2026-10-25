@@ -47,6 +47,8 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
     /// The foreground fan-out, so backgrounding cancels a pass that has not
     /// finished instead of letting it restart polling after the app is gone.
     @ObservationIgnored private var foregroundFanOutTask: Task<Void, Never>?
+    @ObservationIgnored private var historyDrawerOpening: Task<Void, Never>?
+    @ObservationIgnored private var showsHistoryDrawer = false
     @ObservationIgnored private var scenePhasePass = 0
     let notifications: CompletionNotificationCenter
     let pushTokens: PushTokenSources
@@ -333,8 +335,6 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
     func setWindowVisible(_ window: ChatWindowModel, isVisible: Bool) {
         window.setVisible(isVisible)
         publishPresentation()
-        guard isVisible, window.isHistoryDrawerOpen else { return }
-        for model in models { model.startHistoryAutoRefreshIfNeeded() }
     }
 
     func setWindowOpen(_ window: ChatWindowModel) {
@@ -446,6 +446,14 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         for window in windows {
             window.setPresentation(presenting: window.isAttached || !anyAttached, isKey: window === key)
         }
+        let shows = windows.contains(where: \.showsHistoryDrawer)
+        guard shows != showsHistoryDrawer else { return }
+        showsHistoryDrawer = shows
+        historyDrawerOpening?.cancel()
+        historyDrawerOpening = shows ? Task { [weak self] in
+            guard let self else { return }
+            await self.withHostConcurrency(self.models) { await $0.historyDrawerOpened() }
+        } : nil
     }
 
     // MARK: - Host reconciliation
@@ -693,15 +701,9 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         return scenePhasePass
     }
 
-    /// Every host's rows are in the one drawer, so drawer visibility drives
-    /// every host's activity polling — bounded and concurrent, because opening
-    /// the drawer must not wait out one unreachable gateway.
-    func handleHistoryDrawerVisibilityChanged(_ isOpen: Bool, in window: ChatWindowModel) async {
-        window.setHistoryDrawerOpen(isOpen)
+    func setHistoryDrawerOpen(_ isOpen: Bool, overlaysTranscript: Bool, in window: ChatWindowModel) {
+        window.setHistoryDrawerOpen(isOpen, overlaysTranscript: overlaysTranscript)
         publishPresentation()
-        await withHostConcurrency(models) { model in
-            await model.handleHistoryDrawerVisibilityChanged(isOpen)
-        }
     }
 
     func teardown() {
@@ -714,6 +716,8 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         prepareTasks.removeAll()
         foregroundFanOutTask?.cancel()
         foregroundFanOutTask = nil
+        historyDrawerOpening?.cancel()
+        historyDrawerOpening = nil
         notifications.stop()
         for model in models {
             model.hostServices.beginFileRetirement()

@@ -38,11 +38,15 @@ final class HistoryEdgeReader {
 
     nonisolated static let turnBatch = 25
     private static let prefetchPageLimit = 8
+    private static let prefetchDwell = Duration.seconds(1)
 
     private(set) var status: [HistoryEdge.Kind: HistoryEdge.Status] = [:]
     @ObservationIgnored private let ownedTasks = OwnedTasks<HistoryEdge.Kind>()
     @ObservationIgnored private var reads: [HistoryEdge.Kind: Read] = [:]
     @ObservationIgnored private var prefetchPagesLeft = 0
+    @ObservationIgnored private var transcriptCovered = false
+    @ObservationIgnored private var deferredLoads: Set<HistoryEdge.Kind> = []
+    @ObservationIgnored private var prefetchResume: Task<Void, Never>?
     @ObservationIgnored private var tailRecovery = HistoryTailRecovery()
     @ObservationIgnored private weak var host: (any HistoryEdgeHost)?
     @ObservationIgnored private let historyService: GatewayHistoryService
@@ -63,6 +67,10 @@ final class HistoryEdgeReader {
 
     @discardableResult
     func load(_ kind: HistoryEdge.Kind) -> Task<Void, Never>? {
+        guard !transcriptCovered else {
+            deferredLoads.insert(kind)
+            return nil
+        }
         let request: Request = switch kind {
         case .older: .page(.desc)
         case .newer: .page(.asc)
@@ -93,7 +101,23 @@ final class HistoryEdgeReader {
         continuePrefetch()
     }
 
+    func setTranscriptCovered(_ covered: Bool) {
+        transcriptCovered = covered
+        prefetchResume?.cancel()
+        prefetchResume = nil
+        guard !covered else { return }
+        let deferred = deferredLoads
+        deferredLoads.removeAll()
+        for kind in deferred { load(kind) }
+        guard prefetchPagesLeft > 0 else { return }
+        prefetchResume = Task { [weak self] in
+            guard (try? await Task.sleep(for: Self.prefetchDwell)) != nil else { return }
+            self?.continuePrefetch()
+        }
+    }
+
     private func continuePrefetch() {
+        guard !transcriptCovered else { return }
         guard prefetchPagesLeft > 0, allowsPrefetch, !AppEnergyPolicy.current.conservesEnergy,
               let host, host.canPrefetchOlderHistory, host.loadedTurnCount < Self.turnBatch else {
             prefetchPagesLeft = 0
@@ -118,6 +142,9 @@ final class HistoryEdgeReader {
     @discardableResult
     func cancelReads() -> [Task<Void, Never>] {
         prefetchPagesLeft = 0
+        deferredLoads.removeAll()
+        prefetchResume?.cancel()
+        prefetchResume = nil
         let tasks = reads.values.map(\.task)
         for task in tasks { task.cancel() }
         reads.removeAll()

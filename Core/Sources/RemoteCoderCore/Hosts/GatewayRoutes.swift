@@ -107,6 +107,8 @@ struct GatewayRoutePolicy: Sendable {
         private var count = 0
         private var lastAt: ContinuousClock.Instant?
 
+        var isEmpty: Bool { lastAt == nil }
+
         func isBackingOff(at now: ContinuousClock.Instant) -> Bool {
             guard let lastAt else { return false }
             let delay = min(GatewayRoutePolicy.firstFallbackRetryDelay * (1 << min(count - 1, 4)),
@@ -197,12 +199,23 @@ struct GatewayRoutePolicy: Sendable {
         if case .lan = route { lastConnectedFallback = nil } else { lastConnectedFallback = route }
     }
 
-    mutating func succeeded(_ route: GatewayRoute) {
+    @discardableResult
+    mutating func succeeded(_ route: GatewayRoute) -> Bool {
+        let penalized: Bool
         switch route {
-        case .lan(let endpoint): if endpoint == self.endpoint { state = .verified }
-        case .configured: configuredFailures = PathFailures()
-        case .relay(let relay): if relay == self.relay { relayFailures = PathFailures() }
+        case .lan(let endpoint):
+            guard endpoint == self.endpoint else { return false }
+            penalized = if case .failed = state { true } else { false }
+            state = .verified
+        case .configured:
+            penalized = !configuredFailures.isEmpty
+            configuredFailures = PathFailures()
+        case .relay(let relay):
+            guard relay == self.relay else { return false }
+            penalized = !relayFailures.isEmpty
+            relayFailures = PathFailures()
         }
+        return penalized
     }
 
     mutating func failed(_ route: GatewayRoute, at now: ContinuousClock.Instant) {
@@ -456,14 +469,17 @@ actor GatewayRoutes {
     }
 
     private func networkPathChanged(_ path: GatewayNetworkPath) {
-        guard !isRetired else { return }
-        if policy.networkPathChanged(path) { pathChangedAt = .now }
+        guard !isRetired, policy.networkPathChanged(path) else { return }
+        pathChangedAt = .now
+        logger.notice("Route penalties reset: the network path changed localNetwork=\(path.localNetworkAvailable)")
         for continuation in networkSubscribers.values { continuation.yield() }
     }
 
     private func succeeded(_ route: GatewayRoute) {
         guard !isRetired else { return }
-        policy.succeeded(route)
+        if policy.succeeded(route) {
+            logger.notice("Route penalties reset: \(Self.describe(route), privacy: .public) succeeded")
+        }
     }
 
     private func requestRoutes() -> [GatewayRoute] {
@@ -577,6 +593,7 @@ actor GatewayRoutes {
         let cacheUnread = !relayLoaded
         relayLoaded = true
         let changed = policy.learnRelay(relay)
+        if changed, !cacheUnread { logger.notice("Route penalties reset: the relay route changed") }
         guard changed || relayUnpersisted || cacheUnread else { return }
         do {
             try relayStorage.write(JSONEncoder().encode(CachedRelay(learnedFrom: host.connectionSummary, relay: relay)))

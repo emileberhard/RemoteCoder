@@ -11,6 +11,8 @@ final class ChatWindowModel {
     private(set) var isAttached = false
     private(set) var isVisible = true
     private(set) var isHistoryDrawerOpen = false
+    var showsHistoryDrawer: Bool { isHistoryDrawerOpen && isVisible }
+    @ObservationIgnored private var historyDrawerOverlaysTranscript = true
     var drawerQuery = ""
     private(set) var revealedProjects: Set<String> = []
     private(set) var revealsAllDrafts = false
@@ -96,7 +98,8 @@ final class ChatWindowModel {
         focusTasks.cancel(.composer)
     }
 
-    func setHistoryDrawerOpen(_ isOpen: Bool) {
+    func setHistoryDrawerOpen(_ isOpen: Bool, overlaysTranscript: Bool) {
+        historyDrawerOverlaysTranscript = overlaysTranscript
         if isOpen, !isHistoryDrawerOpen {
             revealedProjects = []
             revealsAllDrafts = false
@@ -125,11 +128,8 @@ final class ChatWindowModel {
     func setPresentation(presenting: Bool, isKey: Bool) {
         for (target, screen) in screens {
             let presented = presenting && target == selectedTarget
-            var presentation = TargetPresentation(presented: presented, key: presented && isKey, drawerOpen: isHistoryDrawerOpen && isVisible)
-            #if os(macOS)
-            presentation.drawerOverlaysTranscript = false
-            #endif
-            screen.setPresentation(presentation)
+            screen.setPresentation(TargetPresentation(presented: presented, key: presented && isKey,
+                drawerOpen: showsHistoryDrawer, drawerOverlaysTranscript: historyDrawerOverlaysTranscript))
         }
     }
 }

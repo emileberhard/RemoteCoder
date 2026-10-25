@@ -1111,10 +1111,10 @@ struct ChatWorkspaceLifecycleTests {
 
         try await finish(book, "book-thread", at: later)
         #expect(try isUnread(book))
-        await workspace.handleHistoryDrawerVisibilityChanged(true, in: workspace.keyWindow)
+        workspace.setHistoryDrawerOpen(true, overlaysTranscript: true, in: workspace.keyWindow)
         workspace.select(hostID: fixture.book.id)
         #expect(try isUnread(book))
-        await workspace.handleHistoryDrawerVisibilityChanged(false, in: workspace.keyWindow)
+        workspace.setHistoryDrawerOpen(false, overlaysTranscript: true, in: workspace.keyWindow)
         #expect(await waitUntil { (try? isUnread(book)) == false })
 
         await workspace.handleScenePhaseBackground()
@@ -1135,9 +1135,7 @@ struct ChatWorkspaceLifecycleTests {
         let thread = try fixture.thread("sidebar-thread", updatedAt: 1)
         await screen.target.conversationList.record(thread)
         screen.resumeConversation(thread)
-        await workspace.handleHistoryDrawerVisibilityChanged(true, in: workspace.keyWindow)
-        screen.setPresentation(TargetPresentation(presented: true, key: true, drawerOpen: true,
-                                                 drawerOverlaysTranscript: overlaysTranscript))
+        workspace.setHistoryDrawerOpen(true, overlaysTranscript: overlaysTranscript, in: workspace.keyWindow)
 
         let completedAt = Int64(Date.now.timeIntervalSince1970) + 1_000
         try await finish(screen, thread.id, at: completedAt)
@@ -1337,6 +1335,7 @@ private final class AdmissionLifecycleSink: GatewayEventSink {
     var acceptsConnectionReports: Bool { true }
 
     func apply(gatewayEvent event: RoutedGatewayEvent, replay: Bool) async {
+        guard case .turnEvent = event else { return await target.apply(gatewayEvent: event, replay: replay) }
         delivering = true
         await target.apply(gatewayEvent: event, replay: replay)
         finished = true

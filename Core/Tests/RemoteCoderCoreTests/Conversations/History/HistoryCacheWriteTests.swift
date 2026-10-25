@@ -45,6 +45,23 @@ struct HistoryCacheWriteTests {
         #expect(try identities(directory).isEmpty)
     }
 
+    @Test func prefetchedPagesCommitTheirTailOnceTheBurstSettles() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let gateway = try CacheWriteGateway()
+        let service = GatewayHistoryService(gateway: gateway, cache: HistoryPageCache(directory: directory))
+        let header = ConversationHeader.historyFixture(id: "prefetch-burst")
+        let tail = try await service.openTail(header: header, base: nil)
+        let prefetched = try await service.page(header: header, window: tail.window, direction: .desc, priority: .prefetch)
+        #expect(prefetched.window.older == nil)
+        let early = GatewayHistoryService(gateway: gateway, cache: HistoryPageCache(directory: directory))
+        #expect(await early.cachedConversation(header: header)?.window.older == tail.window.older)
+        #expect(await waitUntil {
+            let cold = GatewayHistoryService(gateway: gateway, cache: HistoryPageCache(directory: directory))
+            return await cold.cachedConversation(header: header)?.window.older == nil
+        })
+    }
+
     @Test func olderPagesRetainExactResultBytesWithoutTransportMetadata() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

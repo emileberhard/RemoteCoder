@@ -32,6 +32,10 @@ final class PersistenceMetrics: Sendable {
         let inputBytes: Int
         let newPayloadBytes: Int
         let phases: [String: PhaseCounters]
+        var historyReadmittedBytes: Int?
+        var historyDeferredBytes: Int?
+        var historySheds: Int?
+        var compactions: Int?
     }
     struct CheckpointSave {
         private let metrics: PersistenceMetrics
@@ -101,6 +105,10 @@ final class PersistenceMetrics: Sendable {
         var checkpointWrites = 0
         var checkpointInputBytes = 0
         var checkpointNewPayloadBytes = 0
+        var historyReadmittedBytes = 0
+        var historyDeferredBytes = 0
+        var historySheds = 0
+        var compactions = 0
         var reportDue = false
         var reportedAt = ContinuousClock.now
 
@@ -109,7 +117,9 @@ final class PersistenceMetrics: Sendable {
             if !checkpointPhases.isEmpty {
                 result[.checkpoints, default: Counters()].checkpoint = CheckpointCounters(
                     writes: checkpointWrites, inputBytes: checkpointInputBytes, newPayloadBytes: checkpointNewPayloadBytes,
-                    phases: Dictionary(uniqueKeysWithValues: checkpointPhases.map { ($0.key.rawValue, $0.value.counters) }))
+                    phases: Dictionary(uniqueKeysWithValues: checkpointPhases.map { ($0.key.rawValue, $0.value.counters) }),
+                    historyReadmittedBytes: historyReadmittedBytes, historyDeferredBytes: historyDeferredBytes,
+                    historySheds: historySheds, compactions: compactions)
             }
             return result
         }
@@ -159,6 +169,22 @@ final class PersistenceMetrics: Sendable {
             $0.checkpointPhases[.chunking, default: Timing()].record(chunking)
             $0.checkpointPhases[.sqlCommit, default: Timing()].record(sqlCommit)
         }
+    }
+
+    func recordReadmittedHistory(bytes: Int) {
+        state.withLock { $0.historyReadmittedBytes += bytes }
+    }
+
+    func recordDeferredHistory(bytes: Int) {
+        state.withLock { $0.historyDeferredBytes += bytes }
+    }
+
+    func recordHistoryShed() {
+        state.withLock { $0.historySheds += 1 }
+    }
+
+    func recordCheckpointCompaction() {
+        state.withLock { $0.compactions += 1 }
     }
 
     func snapshot() -> [Owner: Counters] { state.withLock { $0.snapshot() } }
