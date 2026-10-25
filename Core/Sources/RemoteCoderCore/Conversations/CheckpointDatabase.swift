@@ -8,6 +8,12 @@ final class CheckpointDatabase {
         let data: Data
     }
 
+    struct Replacement {
+        let bytes: Int
+        let chunking: Duration
+        let sqlCommit: Duration
+    }
+
     struct Failure: LocalizedError {
         let operation: String
         let code: Int32
@@ -149,7 +155,9 @@ final class CheckpointDatabase {
         }
     }
 
-    func replace(_ records: [Record], retaining keys: Set<String>) throws -> Int {
+    func replace(_ records: [Record], retaining keys: Set<String>) throws -> Replacement {
+        let started = ContinuousClock.now
+        var chunking = Duration.zero
         try execute("BEGIN IMMEDIATE")
         do {
             let upsert = try prepare("INSERT INTO records(key, chunk, payload) VALUES(?, ?, ?) ON CONFLICT(key, chunk) DO UPDATE SET payload=excluded.payload WHERE payload != excluded.payload")
@@ -164,7 +172,9 @@ final class CheckpointDatabase {
                     sqlite3_clear_bindings(upsert)
                     try bind(record.key, to: upsert, at: 1)
                     try check(sqlite3_bind_int64(upsert, 2, Int64(index)), operation: "bind chunk")
+                    let chunkStarted = ContinuousClock.now
                     let chunk = record.data.subdata(in: min(index * Self.chunkBytes, record.data.count)..<min((index + 1) * Self.chunkBytes, record.data.count))
+                    chunking += chunkStarted.duration(to: .now)
                     try chunk.withUnsafeBytes { buffer in
                         try check(sqlite3_bind_blob(upsert, 3, buffer.baseAddress, Int32(chunk.count), Self.transient), operation: "bind payload")
                     }
@@ -195,7 +205,7 @@ final class CheckpointDatabase {
                 _ = try step(remove)
             }
             try execute("COMMIT")
-            return bytes
+            return Replacement(bytes: bytes, chunking: chunking, sqlCommit: started.duration(to: .now) - chunking)
         } catch {
             try? execute("ROLLBACK")
             throw error

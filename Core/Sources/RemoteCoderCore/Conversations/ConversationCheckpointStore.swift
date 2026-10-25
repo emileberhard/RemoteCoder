@@ -13,6 +13,7 @@ actor ConversationCheckpointStore {
         var errorDescription: String? { "Local conversation storage has reached its limit. Existing conversation data was preserved." }
     }
 
+    private let metrics: PersistenceMetrics
     private let logger = Logger(subsystem: "RemoteCoder", category: "ConversationCheckpointStore")
     enum LoadResult: Sendable {
         case checkpoint(ConversationState.Checkpoint)
@@ -112,10 +113,14 @@ actor ConversationCheckpointStore {
         let history: UInt64?
     }
     private var encodingStamps: [UUID: EncodingStamp] = [:]
-    private var encodingTask: (id: UUID, task: Task<[CheckpointDatabase.Record], Error>)?
+    private struct EncodedRecords: Sendable {
+        let values: [CheckpointDatabase.Record]
+        let finished: ContinuousClock.Instant
+    }
+    private var encodingTask: (id: UUID, task: Task<EncodedRecords, Error>)?
 
     init(hostID: UUID, directory: URL? = nil, storage: HostStorage = .live,
-         budgetBytes: Int = 64 * 1_024 * 1_024, primaryBudgetBytes: Int) {
+         budgetBytes: Int = 64 * 1_024 * 1_024, primaryBudgetBytes: Int, metrics: PersistenceMetrics = .shared) {
         precondition(primaryBudgetBytes > 0)
         let legacy = storage.directory(for: .device).appending(path: "conversations-v1/\(hostID)")
         self.directory = directory ?? legacy
@@ -123,6 +128,7 @@ actor ConversationCheckpointStore {
         allowsLegacyMigration = directory == nil
         self.budgetBytes = budgetBytes
         self.primaryBudgetBytes = primaryBudgetBytes
+        self.metrics = metrics
     }
 
     var retainedFenceCount: Int { fences.count }
@@ -191,10 +197,10 @@ actor ConversationCheckpointStore {
         fences[id]?.sourceRevision += 1
     }
 
-    private func replaceDatabase(_ values: [CheckpointDatabase.Record], retaining keys: Set<String>, id: UUID) throws -> Int {
-        let bytes = try database(for: id).replace(values, retaining: keys)
+    private func replaceDatabase(_ values: [CheckpointDatabase.Record], retaining keys: Set<String>, id: UUID) throws -> CheckpointDatabase.Replacement {
+        let replacement = try database(for: id).replace(values, retaining: keys)
         sourceChanged(id)
-        return bytes
+        return replacement
     }
 
     private func captureSource(_ id: UUID) throws -> Source? {
@@ -498,7 +504,7 @@ actor ConversationCheckpointStore {
         }
         if (saved.map { record.revision <= $0 } ?? false) || absorbed {
             try clearInvalidationAfterSubmission(conversationID)
-            PersistenceMetrics.shared.skipped(.checkpoints)
+            metrics.skipped(.checkpoints)
             return
         }
         let started = ContinuousClock.now
@@ -521,9 +527,9 @@ actor ConversationCheckpointStore {
                 recoveryBytes: records[conversationID]?.recoveryBytes ?? 0)
             try clearInvalidationAfterSubmission(conversationID)
             records[conversationID]?.protected = true
-            PersistenceMetrics.shared.wrote(.checkpoints, bytes: data.count, elapsed: started.duration(to: .now))
+            metrics.wrote(.checkpoints, bytes: data.count, elapsed: started.duration(to: .now))
         } catch {
-            PersistenceMetrics.shared.failed(.checkpoints)
+            metrics.failed(.checkpoints)
             throw error
         }
     }
@@ -538,6 +544,8 @@ actor ConversationCheckpointStore {
 
     @discardableResult
     func save(_ supplied: ConversationState.Checkpoint, conversationID: UUID, generation: UInt64? = nil) async throws -> [UUID: Set<UUID>] {
+        var timing = metrics.beginCheckpointSave()
+        defer { timing.finish() }
         var checkpoint = supplied
         let generation = try beginOperation(conversationID, generation: generation)
         defer { finishOperation(conversationID) }
@@ -554,36 +562,44 @@ actor ConversationCheckpointStore {
         _ = try submissionRecords(conversationID)
         if let saved = revisions[conversationID], checkpoint.durableRevision <= saved {
             try finishCommit(conversationID, revision: saved)
-            PersistenceMetrics.shared.skipped(.checkpoints)
+            metrics.skipped(.checkpoints)
             return [:]
         }
-        while let predecessor = encodingTask {
-            _ = try? await predecessor.task.value
-            if encodingTask?.id == predecessor.id { encodingTask = nil }
+        if encodingTask != nil {
+            timing.advance(to: .predecessorWait)
+            while let predecessor = encodingTask {
+                _ = try? await predecessor.task.value
+                if encodingTask?.id == predecessor.id { encodingTask = nil }
+            }
         }
         try validate(conversationID, generation: generation)
         if let saved = revisions[conversationID], checkpoint.durableRevision <= saved {
-            PersistenceMetrics.shared.skipped(.checkpoints)
+            metrics.skipped(.checkpoints)
             return [:]
         }
+        timing.advance(to: .encodeWait)
         let started = ContinuousClock.now
         let encodingID = UUID()
         let previous = encodingStamps[conversationID]
-        let task = Task { [checkpoint, previous] in try await Self.encodeRecords(checkpoint, previous: previous) }
+        let task = Task { [checkpoint, previous, metrics] in try await Self.encodeRecords(checkpoint, previous: previous, submitted: started, metrics: metrics) }
         encodingTask = (encodingID, task)
         var encoded: [CheckpointDatabase.Record]
-        do { encoded = try await task.value }
-        catch {
+        do {
+            let result = try await task.value
+            metrics.recordCheckpointPhase(.encodeResume, elapsed: result.finished.duration(to: .now))
+            encoded = result.values
+        } catch {
             if encodingTask?.id == encodingID { encodingTask = nil }
-            PersistenceMetrics.shared.failed(.checkpoints)
+            metrics.failed(.checkpoints)
             throw error
         }
         if encodingTask?.id == encodingID { encodingTask = nil }
         try validate(conversationID, generation: generation)
         if let saved = revisions[conversationID], checkpoint.durableRevision <= saved {
-            PersistenceMetrics.shared.skipped(.checkpoints)
+            metrics.skipped(.checkpoints)
             return [:]
         }
+        timing.advance(to: .admission)
         let writtenBytes: Int
         let payloadBytes: Int
         let retainedFileBytes: Int
@@ -606,14 +622,19 @@ actor ConversationCheckpointStore {
             if checkpoint.unavailableImages != supplied.unavailableImages {
                 encoded = try Self.encodeDatabaseRecords(checkpoint, previous: previous)
             }
-            writtenBytes = try replaceDatabase(encoded, retaining: keys, id: conversationID)
+            timing.advance(to: .database)
+            let replacement = try replaceDatabase(encoded, retaining: keys, id: conversationID)
+            writtenBytes = replacement.bytes
+            metrics.recordCheckpointWrite(inputBytes: encoded.reduce(0) { $0 + $1.data.count },
+                newPayloadBytes: writtenBytes, chunking: replacement.chunking, sqlCommit: replacement.sqlCommit)
         } catch {
-            PersistenceMetrics.shared.failed(.checkpoints)
+            metrics.failed(.checkpoints)
             throw error
         }
+        timing.advance(to: .finalize)
         revisions[conversationID] = checkpoint.durableRevision
         encodingStamps[conversationID] = EncodingStamp(turns: checkpoint.turnStamps, history: checkpoint.historyStamp)
-        PersistenceMetrics.shared.wrote(.checkpoints, bytes: writtenBytes, elapsed: started.duration(to: .now))
+        metrics.wrote(.checkpoints, bytes: writtenBytes, elapsed: started.duration(to: .now))
         fences[conversationID]?.invalidated = false
         fences[conversationID]?.invalidationCommitted = false
         records[conversationID] = DiskRecord(bytes: payloadBytes, payloadBytes: payloadBytes, modified: .now,
@@ -634,8 +655,16 @@ actor ConversationCheckpointStore {
 
     private func shedHistory(_ id: UUID) throws -> Bool {
         guard (fences[id]?.operations ?? 0) == 0, records[id]?.invalidation == nil else { return false }
-        guard let stored = try? storedCheckpoint(id), let checkpoint = stored.checkpoint,
-              checkpoint.containsLocalRecords else { return false }
+        let started = ContinuousClock.now
+        let stored: (checkpoint: ConversationState.Checkpoint?, source: URL)?
+        do {
+            defer { metrics.recordCheckpointPhase(.historyShedRead, elapsed: started.duration(to: .now)) }
+            stored = try storedCheckpoint(id)
+        } catch { return false }
+        guard let checkpoint = stored?.checkpoint else {
+            return false
+        }
+        guard checkpoint.containsLocalRecords else { return false }
         let local = checkpoint.localRecords
         let hasHistory = checkpoint.historyWindow != nil || checkpoint.turns.contains { key, turn in
             turn.items.count != local.turns[key]?.items.count || turn.items.contains { $0.value.localMessage != nil && !$0.value.isLocal && $0.value.detailed }
@@ -1261,8 +1290,12 @@ actor ConversationCheckpointStore {
         return keys
     }
 
-    @concurrent private static func encodeRecords(_ checkpoint: ConversationState.Checkpoint, previous: EncodingStamp?) async throws -> [CheckpointDatabase.Record] {
-        try encodeDatabaseRecords(checkpoint, previous: previous)
+    @concurrent private static func encodeRecords(_ checkpoint: ConversationState.Checkpoint, previous: EncodingStamp?,
+                                                submitted: ContinuousClock.Instant, metrics: PersistenceMetrics) async throws -> EncodedRecords {
+        let started = ContinuousClock.now
+        metrics.recordCheckpointPhase(.encodeQueue, elapsed: submitted.duration(to: started))
+        defer { metrics.recordCheckpointPhase(.encodeRun, elapsed: started.duration(to: .now)) }
+        return try EncodedRecords(values: encodeDatabaseRecords(checkpoint, previous: previous), finished: .now)
     }
 
     private static func encodeDatabaseRecords(_ checkpoint: ConversationState.Checkpoint, previous: EncodingStamp?) throws -> [CheckpointDatabase.Record] {

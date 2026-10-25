@@ -583,6 +583,58 @@ then MetricKit activity states, operation signposts, per-purpose network
 counters and gateway connection correlation, as far as the data still shows
 gaps.
 
+### Checkpoint save phases
+
+`PersistenceMetrics` keeps cumulative checkpoint phase aggregates in the existing
+process snapshot, at `persistence.checkpoints.checkpoint`: successful database
+`writes`, encoded `inputBytes`, changed chunk `newPayloadBytes`, and
+`phases`. The paired byte counters cover only the main database replacement in
+`ConversationCheckpointStore.save`; submission sidecars and ancillary replacements
+remain in the existing owner counters. Input bytes include supplied unchanged
+chunks; new payload bytes exclude SQLite/index updates and WAL amplification.
+
+Each observed phase holds `count`, total `milliseconds`, exact `maxMilliseconds`
+and `p50UpperBoundMilliseconds`. A fixed 64-bucket histogram starts at 0.001 ms
+with square-root-of-two spacing; its overflow bound is the observed maximum.
+The p50 is a cumulative nearest-rank upper bound, not an exact median. Raw samples
+and buckets never enter snapshots. Count and total can be differenced; p50 and
+max describe the whole process run and cannot be subtracted for a time window.
+Absent phases, and the absent `checkpoint` field in older records, are unknown.
+
+| Phase | Measured wall time |
+|---|---|
+| `total` | The whole save call after entering the store actor, including skipped, cancelled and failed calls |
+| `preflight` | Invalidation, indexing, existing-source load/preservation and initial submission/filesystem checks |
+| `predecessorWait` | Waiting for predecessor encodes; emitted only when one existed |
+| `encodeWait` | Encoding-task submission through return to the store actor, including revision validation |
+| `encodeQueue` | Submission until the `@concurrent` encoder starts, including inherited-task scheduling |
+| `encodeRun` | Encoder execution, including thrown attempts |
+| `encodeResume` | Encoder completion until the store actor resumes; available only for returned results |
+| `admission` | Retained-file accounting, preservation, image/capacity policy and any synchronous re-encode |
+| `database` | Main `replaceDatabase`, including connection open/schema creation and committed-write metric collection |
+| `chunking` | Fixed-size chunk extraction in successful main replacements; schema 1 does not hash chunks |
+| `sqlCommit` | Remaining successful replacement time, including bindings, unchanged-chunk comparisons, row deletion and FULL commit; excludes connection open/schema creation |
+| `finalize` | Revision/accounting updates, sidecar/legacy cleanup and budget eviction |
+| `historyShedRead` | Actual stored-checkpoint inspection/decode attempts during history shedding, including failed reads; overlaps admission or finalization |
+
+The outer phases (`preflight`, optional `predecessorWait`, `encodeWait`,
+`admission`, `database`, `finalize`) partition each call; skipped/failed calls
+stop at their current phase. Encoder, database and history-shedding subphases overlap
+those outer phases, so do not add all phase totals. A phase ending during background suspension
+includes that suspension: these are continuous elapsed times, not CPU time.
+
+The existing JSONL telemetry samples carry these aggregates. No additional
+OSLog lines, per-save records, identities, content, files or timers are added.
+Read the uploaded samples with
+`jq 'select(.recordType == "sample") | {ts, checkpoint: .persistence.checkpoints.checkpoint}'`;
+`app-telemetry persistence` continues to summarize the existing owner counters.
+
+Decision summary (2026-10-25): keep timing and bounded quantile state under the
+existing metrics mutex and use the existing sampler, outbox and retention.
+Do not retain per-save events or conversation identifiers. Preserve existing write
+counter timing for comparison with earlier releases; the new `total` includes
+preflight, predecessor waits and finalization that the old write duration excludes.
+
 ### iOS 27 performance reports and history timing
 
 `AppPerformanceDiagnostics` owns one `MetricManager`, one consumer for each

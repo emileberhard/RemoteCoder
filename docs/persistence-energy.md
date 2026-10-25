@@ -216,3 +216,8 @@ cover repeated unloaded reads, expiry and invalidation inside the freshness wind
 Historical deployment receipts, live readbacks and device acceptance remain in
 the private operator archive. Verify current behavior through the focused
 regressions above; old installation evidence is not current acceptance.
+
+Checkpoint phase and input/changed-payload aggregates use the existing bounded
+`PersistenceMetrics` owner and JSONL samples. See
+[Checkpoint save phases](host-observability.md#checkpoint-save-phases) for fields
+and interpretation.

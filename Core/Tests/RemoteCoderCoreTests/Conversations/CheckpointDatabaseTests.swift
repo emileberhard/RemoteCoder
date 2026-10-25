@@ -26,7 +26,7 @@ struct CheckpointDatabaseTests {
         _ = try database.replace([.init(key: "live", data: original)], retaining: ["live"])
         let suffix = Data(repeating: 66, count: 4_096)
         let appended = original + suffix
-        #expect(try database.replace([.init(key: "live", data: appended)], retaining: ["live"]) == suffix.count)
+        #expect(try database.replace([.init(key: "live", data: appended)], retaining: ["live"]).bytes == suffix.count)
         #expect(try database.read().first?.data == appended)
         let shortened = Data(original.prefix(5_000))
         _ = try database.replace([.init(key: "live", data: shortened)], retaining: ["live"])
