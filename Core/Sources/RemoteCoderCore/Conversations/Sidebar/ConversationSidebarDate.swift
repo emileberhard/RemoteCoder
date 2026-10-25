@@ -32,21 +32,27 @@ enum ConversationSidebarDate {
 }
 
 final class ConversationSidebarDateCache {
-    private struct Key: Hashable {
-        let date: Date
+    private struct Context: Equatable {
         let day: Date
         let calendar: Calendar
         let locale: Locale
     }
 
-    private var labels: [Key: String] = [:]
+    private var context: Context?
+    private var labels: [Date: String] = [:]
 
-    func label(for date: Date, now: Date, calendar: Calendar, locale: Locale) -> String {
-        let key = Key(date: date, day: calendar.startOfDay(for: now), calendar: calendar, locale: locale)
-        if let label = labels[key] { return label }
-        let label = ConversationSidebarDate.label(for: date, now: now, calendar: calendar, locale: locale)
-        if labels.count == 2_048 { labels.removeAll(keepingCapacity: true) }
-        labels[key] = label
-        return label
+    func labeler(now: Date, calendar: Calendar, locale: Locale) -> (Date) -> String {
+        let current = Context(day: calendar.startOfDay(for: now), calendar: calendar, locale: locale)
+        if current != context {
+            labels.removeAll(keepingCapacity: true)
+            context = current
+        }
+        return { [self] date in
+            if let label = labels[date] { return label }
+            let label = ConversationSidebarDate.label(for: date, now: now, calendar: calendar, locale: locale)
+            if labels.count == 2_048 { labels.removeAll(keepingCapacity: true) }
+            labels[date] = label
+            return label
+        }
     }
 }

@@ -273,6 +273,7 @@ enum ConversationSidebarProjection {
     ) -> [ConversationSidebarItem] {
         let showsHostLabel = showsHostLabels(targetCount: hosts.count)
         let terms = arrangement.query.split(whereSeparator: \.isWhitespace).map(String.init)
+        let dateLabel = dateLabels.labeler(now: now, calendar: .autoupdatingCurrent, locale: .autoupdatingCurrent)
         var slots: [Slot] = []
         slots.reserveCapacity(hosts.reduce(0) { $0 + $1.threads.count })
         for host in hosts {
@@ -302,8 +303,7 @@ enum ConversationSidebarProjection {
                     title: title(for: thread, pinnedName: pinnedName),
                     preview: thread.preview,
                     sidebarDate: sidebarDate,
-                    dateLabel: dateLabels.label(for: sidebarDate, now: now,
-                                                calendar: .autoupdatingCurrent, locale: .autoupdatingCurrent),
+                    dateLabel: dateLabel(sidebarDate),
                     ageLabel: ConversationSidebarDate.age(of: sidebarDate, now: now),
                     workingDirectory: condensedPaths.condensedPath(thread.cwd, remoteHomePath: host.remoteHomePath),
                     isPinned: pinnedName != nil,
