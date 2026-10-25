@@ -101,7 +101,7 @@ let project = Project(
     packages: [
         .package(
             url: "https://github.com/emileberhard/SpeechKit.git",
-            .exact("0.1.0")
+            .revision("ebec681e9838e2144d577b81527b0dd34827d677")
         ),
         .package(
             url: "https://github.com/stasel/WebRTC.git",

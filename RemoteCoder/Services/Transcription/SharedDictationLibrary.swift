@@ -247,9 +247,8 @@ final class SharedDictationLibrary {
                 profileAccount = account
                 self.profile = snapshot.profile
             } else { self.profile = nil }
-            try await store.publishPending()
-            let pending = try await store.status()
-            unassignedCaptureCount = try await store.heldCaptures().filter { $0.reason == .unverifiedPlan }.count
+            let pending = try await store.publishPending()
+            unassignedCaptureCount = pending.unverifiedCaptureCount
             if let failure = pending.failures.first {
                 status = "\(pending.failures.count) recordings need attention: \(failure.message)"
             } else if pending.heldCaptureCount > 0 {
