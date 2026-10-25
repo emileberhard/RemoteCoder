@@ -448,6 +448,7 @@ Open the focused source before changing that part of the system:
   [`docs/async-questions.md`](docs/async-questions.md),
   [`docs/remote-files.md`](docs/remote-files.md),
   [`docs/provider-accounts.md`](docs/provider-accounts.md),
+  [`docs/provider-health.md`](docs/provider-health.md),
   [`docs/usage-status.md`](docs/usage-status.md),
   [`docs/persistence-energy.md`](docs/persistence-energy.md),
   [`docs/haptics.md`](docs/haptics.md),

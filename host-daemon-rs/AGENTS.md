@@ -24,6 +24,7 @@ surface:
 |---|---|
 | History reads, native pages, `daemon/activeTurns` (read-only) | `just gateway-e2e-reads`, optionally `e2e_thread=<id>` |
 | Owned read burst, exact query cancellation and ready capability (isolated gateway) | `just gateway-e2e-query-admission-isolated /absolute/gateway/binary` |
+| Provider health and the Copilot fallback with Codex sign-in failing (isolated gateway, host router; one Claude and one Codex turn) | `just gateway-e2e-provider-fallback-isolated /absolute/gateway/binary` |
 | `thread/fork(lastTurnId:)` boundaries (creates threads) | `just gateway-e2e-fork-live`, `just gateway-e2e-claude-fork-live` |
 | Claude steering folds into one completion (router-backed Sonnet; one completion plus an empty active-turn snapshot) | `just gateway-e2e-claude-steer-live` |
 | Claude agent-initiated turns | `just gateway-e2e-claude-wake-live` |
@@ -76,7 +77,15 @@ owner until the last fixture is dropped.
 - Every authenticated remote WebSocket starts with a `daemon/ready` frame sent
   before the client speaks. The app's route handshake waits for that first
   frame, so a `/ws` path that sends nothing first never connects. Its
-  `capabilities.cancelRequest: true` advertises connection-scoped query cancellation.
+  `capabilities.cancelRequest: true` advertises connection-scoped query
+  cancellation, and its `providers` carries the gateway-owned provider health
+  ([Provider health](../docs/provider-health.md)).
+- Only draining refuses a client. While Codex control is not ready (including
+  a pending recovery journal) or a connection's own app-server connect fails,
+  the client is served without Codex: gateway-owned requests run, `initialize`
+  is answered locally and native requests fail with `providerUnavailable`.
+  Codex becoming ready closes those connections with 4012. New Codex work on
+  any connection waits for ready control, which follows restart recovery.
 - Every authenticated remote WebSocket gets its own Unix WebSocket. The
   client's own `initialize`/`initialized`, request ids, capabilities,
   subscriptions, notifications and server requests pass through that exact
@@ -310,6 +319,13 @@ owner until the last fixture is dropped.
     which the fenced daemon applies only when it loads the thread from storage.
   - `model/list` is gateway-owned: the native list plus one row per external
     model, with `modelProvider` and `modelProviderName`, on the last page.
+  - The first configured provider is the Codex fallback. A failed router token
+    issue no longer gates Codex readiness; while no valid subscription token is
+    installed, client `thread/start` on the native provider moves to the
+    fallback's matching or first model, and threads never change provider
+    afterwards. On fallback threads, a native model name in a turn or settings
+    selection maps to the matching fallback model and drops its service tier
+    ([Provider health](../docs/provider-health.md)).
 
 - `src/rpc/dispatch.rs` owns request lifetime classification.
   `conversation/subscriptions/set` executes on its connection in socket order,
@@ -419,7 +435,9 @@ owner until the last fixture is dropped.
   compaction or other exclusive command holds the conversation), `queueUnsupported`,
   `queueChangeUncertain` (`threadId`), `providerUnresponsive` and
   `inputDeliveryUncertain` (both `-32003`; Claude stopped reading its stdin or
-  answering controls, see *One warm runtime per active thread*) and
+  answering controls, see *One warm runtime per active thread*),
+  `providerUnavailable` (`-32003`, `provider`, `reason`; Codex is not ready or
+  this connection has no Codex upstream) and
   `requestTimedOut` (`-32003`, `limitMs`, retryable), each with
   `retryable`; the JSON-RPC code is unchanged. Upstream Codex texts are matched only where the response is
   correlated to its request (`src/rpc/upstream_errors.rs`), pinned by a test to
@@ -1049,9 +1067,11 @@ owner until the last fixture is dropped.
 - Clients learn of a planned restart from close code 4012 ("gateway
   restarting"), never from 1012 or 1013, which URLSession hides from the app.
   `Gateway::restart_in_progress` (draining, or an unfinished recovery journal
-  without an error) picks 4012 for every connection a restart ends or refuses,
-  including a retired-ID WebSocket arriving while the gateway is stopping;
-  other ends and refusals stay 1013. The journal's `error` means failure only, so recovery
+  without an error) picks 4012 for every connection a restart ends. Only
+  draining refuses a new connection, with 4012, including a retired-ID
+  WebSocket arriving while the gateway is stopping; a pending journal admits
+  clients without Codex. The planned close of those connections once Codex is
+  ready is also 4012; other ends stay 1013. The journal's `error` means failure only, so recovery
   progress belongs in the log, never in `error`.
 - Every SIGTERM interrupts active work at once, and the replacement resumes it;
   nothing waits for a turn to finish. That covers a deploy, an installer
