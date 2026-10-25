@@ -384,6 +384,62 @@ class CacheAdmissionTests(unittest.TestCase):
                     self.assertGreater(item["allocatedBytes"], 0)
                 self.assertTrue((entry.path / "Build/Intermediates.noindex").exists())
 
+    def test_slow_inventory_leaves_a_fresh_reclamation_budget(self):
+        import build_cache
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            entry = self.entry(root, "derived-idle", time.time() - 86400)
+            clock = [0]
+            allocate = build_cache._allocated_bytes
+
+            def slow_allocation(*arguments):
+                size = allocate(*arguments)
+                clock[0] = 21
+                return size
+
+            with (
+                patch("build_cache.time.monotonic", side_effect=lambda: clock[0]),
+                patch("build_cache._allocated_bytes", side_effect=slow_allocation),
+                patch("build_cache._open_files", return_value=False),
+            ):
+                result = build_cache.compilation_admission(
+                    root, self.policy(), [entry], set(), preview=False
+                )
+            self.assertEqual(len(result["evicted"]), 1)
+            self.assertFalse((entry.path / "Build/Intermediates.noindex").exists())
+            self.assertTrue((entry.path / "Build/Products/RemoteCoder.app/binary").exists())
+
+    def test_reclamation_deadline_preserves_payloads_and_reports_skipped_checks(self):
+        from build_cache import compilation_admission
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            entries = [
+                self.entry(root, "derived-first", time.time() - 86400),
+                self.entry(root, "derived-second", time.time() - 80000, tree="other"),
+            ]
+            clock = [0]
+
+            def slow_open_probe(path):
+                clock[0] = 21
+                return False
+
+            with (
+                patch("build_cache.time.monotonic", side_effect=lambda: clock[0]),
+                patch("build_cache._open_files", side_effect=slow_open_probe),
+            ):
+                result = compilation_admission(
+                    root, self.policy(), entries, set(), preview=False
+                )
+            self.assertEqual(result["evicted"], [])
+            self.assertEqual(
+                [item["reason"] for item in result["protected"]],
+                ["reclamation-deadline", "reclamation-deadline"],
+            )
+            for entry in entries:
+                self.assertTrue((entry.path / "Build/Intermediates.noindex/object.o").exists())
+
     def test_real_open_file_protects_a_cache_without_any_held_lease(self):
         from build_cache import compilation_admission
 

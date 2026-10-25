@@ -577,8 +577,10 @@ lease, then match each payload prefix. Their build locks are stamped on entry
 and exit, including no-op package reuse. Reclaimed physical space is a separate
 before/after observation. Protected or unknown overflow prints a warning and
 never blocks a build. The existing 15 GiB free-space floor remains the only disk
-rejection threshold. Inventory has a deadline; incomplete results preserve
-unknown values. Operators can schedule `cache-maintain` independently of builds.
+rejection threshold. Inventory and reclamation each have a separate 20-second
+budget, so inventory cannot consume reclamation's turn. A skipped reclamation
+check reports `reclamation-deadline`; incomplete inventory preserves unknown
+values. Operators can schedule `cache-maintain` independently of builds.
 The private maintainer schedule invokes it before repository synchronization, so
 a failed sync does not suppress reclamation.
 `RemoteCoder-Build/maintenance.json` is one replaced receipt; scheduled stdout

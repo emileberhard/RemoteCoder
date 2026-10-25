@@ -1116,6 +1116,7 @@ def compilation_admission(
             ]
         }
         projected = result["allocatedBytes"]
+        deadline = time.monotonic() + 20
         for entry, size, completion in sorted(
             ordered,
             key=lambda item: (
@@ -1148,9 +1149,10 @@ def compilation_admission(
                     )
                 ):
                     reason = "leased"
+                if reason is None and time.monotonic() >= deadline:
+                    reason = "reclamation-deadline"
                 if reason is None and (
-                    time.monotonic() >= deadline
-                    or not _real_directory(entry.path)
+                    not _real_directory(entry.path)
                     or (not entry.worktree.startswith("shared:") and _open_files(entry.path))
                 ):
                     reason = "open-or-unknown-files"
@@ -1221,7 +1223,16 @@ def compilation_admission(
                             raise ValueError(
                                 f"Protected product or evidence in payload: {payload}"
                             )
-                    except (OSError, ValueError, TimeoutError):
+                    except TimeoutError:
+                        result["protected"].append(
+                            {
+                                "path": str(payload),
+                                "allocatedBytes": None,
+                                "reason": "reclamation-deadline",
+                            }
+                        )
+                        continue
+                    except (OSError, ValueError):
                         result["protected"].append(
                             {
                                 "path": str(payload),
