@@ -59,7 +59,7 @@ struct AgentIncomingCallTests {
     @Test func callDiagnosticSurvivesWithoutAnOSLogDrain() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let exporter = DiagnosticsOutbox(directory: directory, deviceLabel: { "test-device" })
+        let exporter = DiagnosticsOutbox(directory: directory, logSink: AppLogSink(), deviceLabel: { "test-device" })
         let record = AgentCallDiagnostic(
             ts: now, uptime: 42, processID: 123, callId: callID, hostId: hostID,
             stage: "pushReceived", detail: "mustReport=true", failure: nil

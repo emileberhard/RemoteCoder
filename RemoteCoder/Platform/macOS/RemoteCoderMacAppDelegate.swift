@@ -17,7 +17,7 @@ final class RemoteCoderMacAppDelegate: NSObject, NSApplicationDelegate, UNUserNo
     private var isFinishingTermination = false
     private var quitRequest = QuitRequest.interactive
     private var terminationSignal: (any DispatchSourceSignal)?
-    private static let logger = Logger(subsystem: "RemoteCoder", category: "AppDelegate")
+    private static let logger = AppLogger(category: "AppDelegate")
     private static let interactiveQuitWait = Duration.seconds(5)
     private static let unattendedQuitWait = Duration.seconds(60)
 
@@ -53,7 +53,7 @@ final class RemoteCoderMacAppDelegate: NSObject, NSApplicationDelegate, UNUserNo
             var presentation = await drain.presentation(after: Self.interactiveQuitWait)
             let shownFailures = persistenceFailures(presentation)
             if quitRequest == .interactive, !shownFailures.isEmpty {
-                Self.logger.error("Quit persistence incomplete: \(shownFailures.joined(separator: "; "), privacy: .public)")
+                Self.logger.error("Quit persistence incomplete: \(shownFailures.joined(separator: "; "))")
                 if await askToKeepOpen(shownFailures) == .alertFirstButtonReturn {
                     Self.logger.notice("Quit cancelled; waiting for admitted persistence to drain")
                     terminationTask = nil
@@ -64,15 +64,16 @@ final class RemoteCoderMacAppDelegate: NSObject, NSApplicationDelegate, UNUserNo
             }
             if presentation == .pending, quitRequest == .unattended {
                 presentation = await drain.presentation(after: Self.unattendedQuitWait - Self.interactiveQuitWait)
-                Self.logger.notice("Unattended quit waited \(String(describing: ContinuousClock.now - started), privacy: .public) for persistence")
+                Self.logger.notice("Unattended quit waited \(String(describing: ContinuousClock.now - started)) for persistence")
             }
             let failures = persistenceFailures(presentation)
             if !failures.isEmpty {
                 if quitRequest == .unattended {
-                    Self.logger.error("Quit persistence incomplete: \(failures.joined(separator: "; "), privacy: .public)")
+                    Self.logger.error("Quit persistence incomplete: \(failures.joined(separator: "; "))")
                 }
-                Self.logger.notice("Quit anyway after incomplete persistence (\(String(describing: self.quitRequest), privacy: .public) quit)")
+                Self.logger.notice("Quit anyway after incomplete persistence (\(String(describing: self.quitRequest)) quit)")
             }
+            await DiagnosticsOutbox.shared.persistPending()
             isFinishingTermination = true
             #if RC_PERF_HARNESS
             if case .finished = presentation, AppStorageScope.current.isBenchmark {
@@ -81,7 +82,7 @@ final class RemoteCoderMacAppDelegate: NSObject, NSApplicationDelegate, UNUserNo
                 for model in models { await model.retire() }
                 await DiagnosticsOutbox.shared.stopPumping()
                 do { try await AppStorageScope.current.discardBenchmark() }
-                catch { Self.logger.error("Benchmark storage cleanup failed: \(error.localizedDescription, privacy: .public)") }
+                catch { Self.logger.error("Benchmark storage cleanup failed: \(error.localizedDescription)") }
             }
             #endif
             sender.reply(toApplicationShouldTerminate: true)
@@ -123,7 +124,7 @@ final class RemoteCoderMacAppDelegate: NSObject, NSApplicationDelegate, UNUserNo
             defer { resumeAfterDrainTask = nil }
             guard !isFinishingTermination, terminationTask == nil else { return }
             if !failures.isEmpty {
-                Self.logger.error("Kept-open persistence failed: \(failures.joined(separator: "; "), privacy: .public)")
+                Self.logger.error("Kept-open persistence failed: \(failures.joined(separator: "; "))")
             }
             app.workspace.resumeAfterTermination()
             terminationDrain = nil
@@ -168,7 +169,7 @@ final class RemoteCoderMacAppDelegate: NSObject, NSApplicationDelegate, UNUserNo
     }
 
     func application(_ application: NSApplication, didFailToRegisterForRemoteNotificationsWithError error: any Error) {
-        Self.logger.error("Failed to register for remote notifications: \(error.localizedDescription, privacy: .public)")
+        Self.logger.error("Failed to register for remote notifications: \(error.localizedDescription)")
     }
 
     func userNotificationCenter(
@@ -184,7 +185,7 @@ final class RemoteCoderMacAppDelegate: NSObject, NSApplicationDelegate, UNUserNo
                 containsPayload: payload != nil
             )
             if let field = delivery.decodingFailure {
-                Self.logger.error("notification payload unreadable field=\(field, privacy: .public)")
+                Self.logger.error("notification payload unreadable field=\(field)")
             }
             switch app.workspace.receiveNotification(delivery, applicationIsActive: NSApplication.shared.isActive) {
             case .system, .inApp: completionHandler([.banner, .list, .sound])

@@ -1,6 +1,6 @@
 import Darwin
 import Foundation
-import OSLog
+import Synchronization
 import Testing
 @testable import RemoteCoderCore
 
@@ -51,7 +51,7 @@ struct FieldTelemetryTests {
     @Test func aFlushedBatchStartsWithItsRunAndKeepsSequenceOrder() async throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
-        let outbox = DiagnosticsOutbox(directory: directory, deviceLabel: { "test-device" })
+        let outbox = DiagnosticsOutbox(directory: directory, logSink: AppLogSink(), deviceLabel: { "test-device" })
         outbox.telemetry.record(sample(.launch))
         outbox.telemetry.record(sample(.context))
         await outbox.drain(reason: "test")
@@ -138,51 +138,78 @@ struct FieldTelemetryTests {
         #expect(operations.report() == .transition(nil))
     }
 
-    @Test func automaticRequestsWithinAMinuteOfACollectionShareItAndStillFlushTelemetry() async throws {
+    private func logRecord(_ message: String) -> AppLogRecord {
+        AppLogRecord(ts: Date(timeIntervalSince1970: 1_800_000_000), level: "notice", subsystem: AppLogger.subsystem,
+                     category: "Fixture", message: message, thread: 1)
+    }
+
+    private func logMessages(in directory: URL) throws -> [String] {
+        try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+            .filter { $0.pathExtension == "jsonl" && !$0.lastPathComponent.contains("-telemetry") }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+            .flatMap { try String(contentsOf: $0, encoding: .utf8).split(separator: "\n") }
+            .map { try #require(JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any])["message"] as? String ?? "" }
+    }
+
+    @Test func aDrainWritesQueuedRecordsAsALogSegment() async throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
-        let outbox = DiagnosticsOutbox(directory: directory, deviceLabel: { "test-device" })
+        let sink = AppLogSink()
+        let outbox = DiagnosticsOutbox(directory: directory, logSink: sink, deviceLabel: { "test-device" })
+        sink.append(logRecord("first"))
+        sink.append(logRecord("second"))
         await outbox.drain(reason: "interval")
-        outbox.telemetry.record(sample(.context))
-        await outbox.drain(reason: "background")
-        let records = try telemetryBatches(in: directory).flatMap { $0 }
-        let exports = records.filter { $0["recordType"] as? String == "export" }
-        #expect(exports.map { $0["collection"] as? String } == ["collected", "coalesced"])
-        #expect(exports.first?["storeOpenMs"] is Double)
-        #expect(exports.last?["scanned"] as? Int == 0)
-        #expect(records.contains { $0["recordType"] as? String == "sample" })
+        #expect(try logMessages(in: directory) == ["first", "second"])
+        let export = try #require(try telemetryBatches(in: directory).flatMap { $0 }.last { $0["recordType"] as? String == "export" })
+        #expect(export["logWrite"] as? String == "written")
+        #expect(export["kept"] as? Int == 2)
     }
 
-    @Test func aSettingsExportCountsAsTheLatestCollection() async throws {
+    @Test func aFailedSegmentWriteKeepsTheRecordsForTheNextDrain() async throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
-        let outbox = DiagnosticsOutbox(directory: directory, deviceLabel: { "test-device" })
-        let archive = try #require(await outbox.exportArchive())
-        defer { try? FileManager.default.removeItem(at: archive) }
-        await outbox.drain(reason: "background")
-        let exports = try telemetryBatches(in: directory).flatMap { $0 }.filter { $0["recordType"] as? String == "export" }
-        #expect(exports.last?["collection"] as? String == "coalesced")
-    }
-
-    @Test func aCollectionThatCouldNotWriteStaysDueAndKeepsItsCursor() async throws {
-        let directory = try temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let outbox = DiagnosticsOutbox(directory: directory, deviceLabel: { "test-device" })
-        Logger(subsystem: "RemoteCoderTests", category: "Collection").notice("A record to collect")
+        let sink = AppLogSink()
+        let outbox = DiagnosticsOutbox(directory: directory, logSink: sink, deviceLabel: { "test-device" })
+        sink.append(logRecord("kept"))
         try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: directory.path)
         await outbox.drain(reason: "interval")
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
-        #expect(!FileManager.default.fileExists(atPath: directory.appending(path: "cursor.json").path))
+        #expect(try logMessages(in: directory).isEmpty)
         await outbox.drain(reason: "background")
+        #expect(try logMessages(in: directory).first == "kept")
         let exports = try telemetryBatches(in: directory).flatMap { $0 }.filter { $0["recordType"] as? String == "export" }
-        #expect(exports.map { $0["collection"] as? String } == ["failed", "collected"])
-        #expect(FileManager.default.fileExists(atPath: directory.appending(path: "cursor.json").path))
+        #expect(exports.last?["logWrite"] as? String == "written")
+    }
+
+    @Test func aFullSinkKeepsTheNewestRecordsAndCountsWhatItDropped() {
+        let sink = AppLogSink(byteLimit: 2_000)
+        for index in 0..<40 { sink.append(logRecord("record \(index)")) }
+        sink.append(logRecord(String(repeating: "x", count: 300)))
+        let batch = sink.take()
+        #expect(batch.records.last?.message == "record 39")
+        #expect(batch.dropped == 40 - batch.records.count + 1)
+        #expect(sink.take().records.isEmpty)
+    }
+
+    @Test func crossingHalfTheBudgetSignalsOnceUntilTheNextTake() {
+        let sink = AppLogSink(byteLimit: 2_000)
+        let signals = Mutex(0)
+        sink.setHighWaterHandler { signals.withLock { $0 += 1 } }
+        for index in 0..<12 { sink.append(logRecord("record \(index)")) }
+        #expect(signals.withLock { $0 } == 1)
+        let batch = sink.take()
+        sink.restore(batch.records)
+        sink.append(logRecord("after a failed write"))
+        #expect(signals.withLock { $0 } == 1)
+        _ = sink.take()
+        for index in 0..<12 { sink.append(logRecord("record \(index)")) }
+        #expect(signals.withLock { $0 } == 2)
     }
 
     @Test func aFullBufferKeepsTheNewestRecordsAndReportsTheLoss() async throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
-        let outbox = DiagnosticsOutbox(directory: directory, deviceLabel: { "test-device" })
+        let outbox = DiagnosticsOutbox(directory: directory, logSink: AppLogSink(), deviceLabel: { "test-device" })
         for _ in 0..<300 { outbox.telemetry.record(sample()) }
         await outbox.drain(reason: "test")
         let batch = try #require(try telemetryBatches(in: directory).first)
@@ -204,7 +231,7 @@ struct FieldTelemetryTests {
                                  ("001000000000002-mk-cccc.jsonl", small), ("001000000000003-dddddddd.jsonl", log)] {
             try contents.write(to: directory.appendingPathComponent(name))
         }
-        let outbox = DiagnosticsOutbox(directory: directory, storedByteLimit: 4_000, deviceLabel: { "test-device" })
+        let outbox = DiagnosticsOutbox(directory: directory, storedByteLimit: 4_000, logSink: AppLogSink(), deviceLabel: { "test-device" })
         try await outbox.enqueue(line: Data("{}\n".utf8), kind: "call")
         let remaining = try FileManager.default.contentsOfDirectory(atPath: directory.path).sorted()
         #expect(!remaining.contains("001000000000000-aaaaaaaa.jsonl"))

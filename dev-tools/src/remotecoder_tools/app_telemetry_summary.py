@@ -454,6 +454,11 @@ def _parse(stamp: str) -> datetime.datetime:
     return datetime.datetime.fromisoformat(stamp)
 
 
+def _present_sum(records: list[dict], key: str) -> float | None:
+    values = [float(record[key]) for record in records if key in record]
+    return round(sum(values), 2) if values else None
+
+
 def export_costs(runs: list[dict]) -> dict:
     exports = [record for run in runs for record in run["records"] if record.get("recordType") == "export"]
     samples = [record for run in runs for record in run["records"] if record.get("recordType") == "sample"]
@@ -464,15 +469,17 @@ def export_costs(runs: list[dict]) -> dict:
     for reason, items in sorted(by_reason.items()):
         growth = [record["footprintSampledMax"] - record["footprintBefore"] for record in items
                   if isinstance(record.get("footprintSampledMax"), int) and isinstance(record.get("footprintBefore"), int)]
+        scans = [record for record in items if "scanMs" in record or "collection" in record]
         reasons[reason] = {
             "exports": len(items),
-            "collections": dict(sorted(Counter(str(record.get("collection", "unknown")) for record in items).items())),
+            "collections": dict(sorted(Counter(str(record.get("collection", "unknown")) for record in scans).items())),
+            "logWrites": dict(sorted(Counter(str(record["logWrite"]) for record in items if "logWrite" in record).items())),
             "totalMs": _distribution([float(record.get("totalMs", 0)) for record in items]),
-            "stageMs": {stage: round(sum(float(record.get(f"{stage}Ms", 0)) for record in items), 2)
+            "stageMs": {stage: _present_sum(items, f"{stage}Ms")
                         for stage in ("scan", "encode", "write", "compress", "upload")},
+            "scanned": _present_sum(scans, "scanned"),
             **{name: sum(int(record.get(name, 0)) for record in items)
-               for name in ("scanned", "kept", "segments", "bytes", "flushedRecords", "uploadedSegments",
-                            "uploadedBytes")},
+               for name in ("kept", "segments", "bytes", "flushedRecords", "uploadedSegments", "uploadedBytes")},
             "processCpuSecondsDuringExports": round(sum(int(record.get("processCpuNs") or 0) for record in items) / 1e9, 3),
             "sampledFootprintGrowthBytes": max(growth, default=None),
         }

@@ -3,7 +3,7 @@ import Foundation
 protocol DiagnosticsExporting: Actor {
     func setDestination(_ destination: DiagnosticsDestination?) async
     func startPumping()
-    func stopPumping()
+    func stopPumping() async
     func drain(reason: String) async
 }
 

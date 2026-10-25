@@ -67,18 +67,18 @@ struct AppPerformanceReportTests {
     @Test func offlineReportSurvivesRelaunchAndRedelivery() async throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
-        let first = DiagnosticsOutbox(directory: directory, deviceLabel: { "test-device" })
+        let first = DiagnosticsOutbox(directory: directory, logSink: AppLogSink(), deviceLabel: { "test-device" })
         #expect(try await first.enqueuePerformanceReport(fixture, kind: .diagnostic, timeRange: timeRange))
         #expect(try segments(in: directory).count == 1)
 
-        let restarted = DiagnosticsOutbox(directory: directory, deviceLabel: { "test-device" })
+        let restarted = DiagnosticsOutbox(directory: directory, logSink: AppLogSink(), deviceLabel: { "test-device" })
         #expect(try await !restarted.enqueuePerformanceReport(fixture, kind: .diagnostic, timeRange: timeRange))
         let segment = try #require(segments(in: directory).first)
         #expect(try Data(contentsOf: segment).contains(Data("futureDiagnostic".utf8)))
         // Even after acknowledged delivery removes the segment, the persisted
         // receipt prevents a repeated Apple report from becoming a new upload.
         try FileManager.default.removeItem(at: segment)
-        let delivered = DiagnosticsOutbox(directory: directory, deviceLabel: { "test-device" })
+        let delivered = DiagnosticsOutbox(directory: directory, logSink: AppLogSink(), deviceLabel: { "test-device" })
         #expect(try await !delivered.enqueuePerformanceReport(fixture, kind: .diagnostic, timeRange: timeRange))
         #expect(try segments(in: directory).isEmpty)
     }
@@ -86,10 +86,10 @@ struct AppPerformanceReportTests {
     @Test func interruptedReceiptWriteDoesNotDuplicateQueuedReport() async throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
-        let first = DiagnosticsOutbox(directory: directory, deviceLabel: { "test-device" })
+        let first = DiagnosticsOutbox(directory: directory, logSink: AppLogSink(), deviceLabel: { "test-device" })
         try await first.enqueuePerformanceReport(fixture, kind: .diagnostic, timeRange: timeRange)
         try FileManager.default.removeItem(at: directory.appendingPathComponent("performance-report-receipts.json"))
-        let restarted = DiagnosticsOutbox(directory: directory, deviceLabel: { "test-device" })
+        let restarted = DiagnosticsOutbox(directory: directory, logSink: AppLogSink(), deviceLabel: { "test-device" })
         #expect(try await !restarted.enqueuePerformanceReport(fixture, kind: .diagnostic, timeRange: timeRange))
         #expect(try segments(in: directory).count == 1)
         #expect(FileManager.default.fileExists(atPath: directory.appendingPathComponent("performance-report-receipts.json").path))
@@ -100,7 +100,7 @@ struct AppPerformanceReportTests {
         defer { try? FileManager.default.removeItem(at: directory) }
         let report = try AppPerformanceReportRecord.make(fixture, kind: .diagnostic, timeRange: timeRange)
         let byteLimit = try report.encodedLine().count + 100
-        let exporter = DiagnosticsOutbox(directory: directory, storedByteLimit: byteLimit, deviceLabel: { "test-device" })
+        let exporter = DiagnosticsOutbox(directory: directory, storedByteLimit: byteLimit, logSink: AppLogSink(), deviceLabel: { "test-device" })
         try await exporter.enqueuePerformanceReport(
             fixture, kind: .diagnostic, timeRange: timeRange, receivedAt: Date(timeIntervalSince1970: 1_000)
         )
@@ -118,7 +118,7 @@ struct AppPerformanceReportTests {
     @Test func failedPersistenceCannotCreateReceipt() async throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
-        let exporter = DiagnosticsOutbox(directory: directory, storedByteLimit: 1, deviceLabel: { "test-device" })
+        let exporter = DiagnosticsOutbox(directory: directory, storedByteLimit: 1, logSink: AppLogSink(), deviceLabel: { "test-device" })
         await #expect(throws: DiagnosticsOutbox.PerformanceReportQueueError.self) {
             try await exporter.enqueuePerformanceReport(fixture, kind: .diagnostic, timeRange: timeRange)
         }
@@ -129,7 +129,7 @@ struct AppPerformanceReportTests {
     @Test func pendingReportIsIncludedInSettingsExport() async throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
-        let exporter = DiagnosticsOutbox(directory: directory, deviceLabel: { "test-device" })
+        let exporter = DiagnosticsOutbox(directory: directory, logSink: AppLogSink(), deviceLabel: { "test-device" })
         try await exporter.enqueuePerformanceReport(fixture, kind: .diagnostic, timeRange: timeRange)
         let archive = try #require(await exporter.exportArchive())
         defer { try? FileManager.default.removeItem(at: archive) }
@@ -146,7 +146,7 @@ struct AppPerformanceReportTests {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         try FileManager.default.createDirectory(at: directory.appendingPathComponent("000-bad.jsonl"), withIntermediateDirectories: true)
-        let exporter = DiagnosticsOutbox(directory: directory, deviceLabel: { "test-device" })
+        let exporter = DiagnosticsOutbox(directory: directory, logSink: AppLogSink(), deviceLabel: { "test-device" })
         try await exporter.enqueuePerformanceReport(fixture, kind: .diagnostic, timeRange: timeRange)
         let archive = try #require(await exporter.exportArchive())
         defer { try? FileManager.default.removeItem(at: archive) }
@@ -158,14 +158,14 @@ struct AppPerformanceReportTests {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let host = GatewayHostConfiguration(id: UUID(), name: "Fixture", hostname: "diagnostics.test", port: 8787, authToken: "fixture-token")
-        let exporter = DiagnosticsOutbox(directory: directory, uploadByteLimit: 1, deviceLabel: { "test-device" })
+        let exporter = DiagnosticsOutbox(directory: directory, uploadByteLimit: 1, logSink: AppLogSink(), deviceLabel: { "test-device" })
         await exporter.setDestination(.unreachable(host))
         try await exporter.enqueuePerformanceReport(fixture, kind: .diagnostic, timeRange: timeRange)
         #expect(await exporter.uploadPendingSegments().segments == 0)
         #expect(try segments(in: directory).isEmpty)
         let quarantined = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil).filter { $0.pathExtension == "export-only" }
         #expect(quarantined.count == 1)
-        let restored = DiagnosticsOutbox(directory: directory, uploadByteLimit: 1, deviceLabel: { "test-device" })
+        let restored = DiagnosticsOutbox(directory: directory, uploadByteLimit: 1, logSink: AppLogSink(), deviceLabel: { "test-device" })
         await restored.setDestination(.unreachable(host))
         #expect(await restored.uploadPendingSegments().segments == 0)
         let archive = try #require(await restored.exportArchive())
@@ -180,7 +180,7 @@ struct AppPerformanceReportTests {
         configuration.protocolClasses = [ReportUploadProtocol.self]
         let session = URLSession(configuration: configuration)
         defer { session.invalidateAndCancel() }
-        let exporter = DiagnosticsOutbox(directory: directory, deviceLabel: { "test-device" })
+        let exporter = DiagnosticsOutbox(directory: directory, logSink: AppLogSink(), deviceLabel: { "test-device" })
         let hostname = "\(UUID().uuidString.lowercased()).diagnostics.test"
         await exporter.setDestination(DiagnosticsDestination(host: GatewayHostConfiguration(
             id: UUID(), name: "Fixture", hostname: hostname, port: 8787, authToken: "fixture-token"
@@ -203,7 +203,7 @@ struct AppPerformanceReportTests {
     func hostRejectionQuarantinesOnlySegmentSpecificRefusals(status: Int, quarantines: Bool) async throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
-        let exporter = DiagnosticsOutbox(directory: directory, deviceLabel: { "test-device" })
+        let exporter = DiagnosticsOutbox(directory: directory, logSink: AppLogSink(), deviceLabel: { "test-device" })
         let refused = Mutex<String?>(nil)
         await exporter.setDestination(DiagnosticsDestination(host: GatewayHostConfiguration(
             id: UUID(), name: "Fixture", hostname: "rejecting.diagnostics.test", port: 8787, authToken: "fixture-token"

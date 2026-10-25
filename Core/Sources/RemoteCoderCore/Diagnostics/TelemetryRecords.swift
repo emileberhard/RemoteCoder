@@ -33,19 +33,15 @@ struct ProcessSample: Sendable {
 }
 
 struct ExportCost: Sendable {
-    enum Collection: String, Encodable, Sendable { case collected, coalesced, failed, cancelled }
+    enum LogWrite: String, Encodable, Sendable { case written, failed }
 
     let reason: String
-    var collection: Collection?
-    var storeOpenMilliseconds: Double?
-    var enumeratorSetupMilliseconds: Double?
-    var scanMilliseconds = 0.0
+    var logWrite: LogWrite?
     var encodeMilliseconds = 0.0
     var writeMilliseconds = 0.0
     var compressMilliseconds = 0.0
     var uploadMilliseconds = 0.0
     var totalMilliseconds = 0.0
-    var scanned = 0
     var kept = 0
     var segments = 0
     var bytes = 0
@@ -59,7 +55,7 @@ struct ExportCost: Sendable {
 }
 
 struct TelemetryLoss: Sendable {
-    enum What: String, Encodable, Sendable { case telemetryRecords, logSegment, telemetrySegment, metricKitSegment }
+    enum What: String, Encodable, Sendable { case telemetryRecords, logRecords, logSegment, telemetrySegment, metricKitSegment }
 
     let what: What
     let count: Int
@@ -134,9 +130,9 @@ struct TelemetryLine: Encodable, Sendable {
         case recordType, schemaVersion, runID, seq, ts, monoNs, reason
         case cpuUserNs, cpuSystemNs, interruptWakeups, idleWakeups, timerWakeups, footprintBytes, readNs
         case persistence, mixed, context
-        case scanMs, encodeMs, writeMs, compressMs, uploadMs, totalMs, scanned, kept, segments, bytes
+        case encodeMs, writeMs, compressMs, uploadMs, totalMs, kept, segments, bytes
         case flushedRecords, uploadedSegments, uploadedBytes, footprintBefore, footprintSampledMax, footprintAfter
-        case processCpuNs, collection, storeOpenMs, enumeratorSetupMs
+        case processCpuNs, logWrite
         case what, count
     }
 
@@ -166,13 +162,11 @@ struct TelemetryLine: Encodable, Sendable {
         case .export(let cost):
             try container.encode("export", forKey: .recordType)
             try container.encode(cost.reason, forKey: .reason)
-            try container.encode(cost.scanMilliseconds, forKey: .scanMs)
             try container.encode(cost.encodeMilliseconds, forKey: .encodeMs)
             try container.encode(cost.writeMilliseconds, forKey: .writeMs)
             try container.encode(cost.compressMilliseconds, forKey: .compressMs)
             try container.encode(cost.uploadMilliseconds, forKey: .uploadMs)
             try container.encode(cost.totalMilliseconds, forKey: .totalMs)
-            try container.encode(cost.scanned, forKey: .scanned)
             try container.encode(cost.kept, forKey: .kept)
             try container.encode(cost.segments, forKey: .segments)
             try container.encode(cost.bytes, forKey: .bytes)
@@ -183,9 +177,7 @@ struct TelemetryLine: Encodable, Sendable {
             try container.encodeIfPresent(cost.footprintSampledMax, forKey: .footprintSampledMax)
             try container.encodeIfPresent(cost.footprintAfter, forKey: .footprintAfter)
             try container.encodeIfPresent(cost.processCPUNanoseconds, forKey: .processCpuNs)
-            try container.encodeIfPresent(cost.collection, forKey: .collection)
-            try container.encodeIfPresent(cost.storeOpenMilliseconds, forKey: .storeOpenMs)
-            try container.encodeIfPresent(cost.enumeratorSetupMilliseconds, forKey: .enumeratorSetupMs)
+            try container.encodeIfPresent(cost.logWrite, forKey: .logWrite)
         case .loss(let loss):
             try container.encode("loss", forKey: .recordType)
             try container.encode(loss.what, forKey: .what)

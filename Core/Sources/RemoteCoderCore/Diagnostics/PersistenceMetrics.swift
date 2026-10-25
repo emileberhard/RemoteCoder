@@ -125,7 +125,7 @@ final class PersistenceMetrics: Sendable {
         }
     }
     private let state = Mutex(State())
-    private let logger = Logger(subsystem: "RemoteCoder", category: "PersistenceMetrics")
+    private let logger = AppLogger(category: "PersistenceMetrics")
 
     func wrote(_ owner: Owner, bytes: Int?, elapsed: Duration) {
         let components = elapsed.components
@@ -200,7 +200,7 @@ final class PersistenceMetrics: Sendable {
         guard let values else { return }
         for owner in Owner.allCases {
             guard let value = values[owner] else { continue }
-            logger.notice("persistence owner=\(owner.rawValue, privacy: .public) writes=\(value.writes) bytes=\(value.bytes) skipped=\(value.skipped) failures=\(value.failures) writesWithoutByteCount=\(value.writesWithoutByteCount) milliseconds=\(value.milliseconds)")
+            logger.notice("persistence owner=\(owner.rawValue) writes=\(value.writes) bytes=\(value.bytes) skipped=\(value.skipped) failures=\(value.failures) writesWithoutByteCount=\(value.writesWithoutByteCount) milliseconds=\(value.milliseconds)")
         }
     }
 }

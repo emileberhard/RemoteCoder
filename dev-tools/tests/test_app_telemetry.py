@@ -188,6 +188,8 @@ def run_records() -> list[dict]:
          "footprintSampledMax": 150},
         {"recordType": "export", "runID": "run-1", "seq": 11, "ts": "2026-10-24T10:13:20.000Z", "reason": "interval",
          "totalMs": 100.0, "processCpuNs": 9_000_000_000, "collection": "coalesced"},
+        {"recordType": "export", "runID": "run-1", "seq": 12, "ts": "2026-10-24T10:11:00.000Z", "reason": "highWater",
+         "totalMs": 5.0, "encodeMs": 1.5, "writeMs": 2.0, "kept": 40, "processCpuNs": 0, "logWrite": "written"},
     ]
 
 
@@ -229,6 +231,11 @@ def test_export_share_counts_only_exports_inside_the_sampled_coverage():
     assert cost["reasons"]["interval"]["exports"] == 2
     assert cost["reasons"]["interval"]["stageMs"]["scan"] == 80.0
     assert cost["reasons"]["interval"]["collections"] == {"coalesced": 1, "unknown": 1}
+    assert cost["reasons"]["interval"]["logWrites"] == {}
+    assert cost["reasons"]["highWater"]["logWrites"] == {"written": 1}
+    assert cost["reasons"]["highWater"]["collections"] == {}
+    assert cost["reasons"]["highWater"]["stageMs"]["scan"] is None
+    assert cost["reasons"]["highWater"]["scanned"] is None
     assert cost["reasons"]["interval"]["sampledFootprintGrowthBytes"] == 50
     assert cost["sampledProcessCpuSeconds"] == 5.1
     assert cost["exportShareOfSampledCpu"] == 0.1

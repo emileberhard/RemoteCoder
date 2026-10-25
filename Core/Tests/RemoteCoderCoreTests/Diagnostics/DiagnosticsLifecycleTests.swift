@@ -6,7 +6,7 @@ struct DiagnosticsLifecycleTests {
     @Test @MainActor func constructingTheExporterDoesNotOpenItsDiskStoreOnTheMainActor() async throws {
         let directory = URL.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let exporter = DiagnosticsOutbox(directory: directory, deviceLabel: { "Fixture" })
+        let exporter = DiagnosticsOutbox(directory: directory, logSink: AppLogSink(), deviceLabel: { "Fixture" })
         #expect(!FileManager.default.fileExists(atPath: directory.path))
         try await exporter.enqueue(line: Data("diagnostic\n".utf8), kind: "fixture")
         let files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
@@ -77,7 +77,7 @@ private actor DiagnosticsExporterFixture: DiagnosticsExporting {
 
     func setDestination(_ destination: DiagnosticsDestination?) { host = destination?.host }
     func startPumping() { isPumping = true }
-    func stopPumping() { isPumping = false; stopCount += 1 }
+    func stopPumping() async { isPumping = false; stopCount += 1 }
     func drain(reason: String) async {
         drainReasons.append(reason)
         guard drainReasons.count == 1 else { return }
@@ -104,7 +104,7 @@ private actor ExpiringDrainExporter: DiagnosticsExporting {
 
     func setDestination(_ destination: DiagnosticsDestination?) {}
     func startPumping() { isPumping = true }
-    func stopPumping() { isPumping = false }
+    func stopPumping() async { isPumping = false }
     func drain(reason: String) async {
         drainStarted = true
         try? await Task.sleep(for: .seconds(60))
@@ -131,7 +131,7 @@ private actor HeldDestinationExporter: DiagnosticsExporting {
         host = destination?.host
     }
     func startPumping() {}
-    func stopPumping() { operations.append("stop") }
+    func stopPumping() async { operations.append("stop") }
     func drain(reason: String) { operations.append(reason) }
     func waitForDestination() async {
         guard heldAdmission == nil else { return }
