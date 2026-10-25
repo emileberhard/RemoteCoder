@@ -5,6 +5,7 @@ from pathlib import Path
 
 DSYM_ROOT = "Library/Logs/remote-coder/deployments"
 BUILD_RUN_ROOT = "Library/Caches/RemoteCoder-Build/runs"
+BUILD_WORKTREE_ROOT = "Library/Caches/RemoteCoder-Build/worktrees"
 DEVICE_SUPPORT_ROOT = "Library/Developer/Xcode/iOS DeviceSupport"
 ATOS_SEPARATOR = "\x1e"
 
@@ -21,6 +22,7 @@ def symbol_files(binary_paths: Iterable[str], extra: Iterable[Path]) -> dict[str
     roots = [*device_support.glob("*/Symbols"), *device_support.glob("*/*/Symbols")]
     candidates = [*(home / DSYM_ROOT).glob("*/symbols/*.dSYM/Contents/Resources/DWARF/*")]
     candidates += (home / BUILD_RUN_ROOT).glob("*/symbols/*.dSYM/Contents/Resources/DWARF/*")
+    candidates += (home / BUILD_WORKTREE_ROOT).glob("*/ios/derived*/device-artifacts/*/symbols/*.dSYM/Contents/Resources/DWARF/*")
     candidates += [path for path in extra if path.is_file()]
     for binary_path in binary_paths:
         local = Path(binary_path)

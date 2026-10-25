@@ -16,12 +16,14 @@ class SymbolFileTests(unittest.TestCase):
             dwarf = "symbols/RemoteCoder.app.dSYM/Contents/Resources/DWARF/RemoteCoder"
             old = root / symbols.BUILD_RUN_ROOT / "old" / dwarf
             current = root / symbols.DSYM_ROOT / "testflight-ios-3.66.10-3066010" / dwarf
-            for path in (old, current):
+            local = root / symbols.BUILD_WORKTREE_ROOT / "source/ios/derived-debug/device-artifacts/build" / dwarf
+            for path in (old, current, local):
                 path.parent.mkdir(parents=True)
                 path.write_bytes(b"fixture debug information")
             identities = {
                 old: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA",
                 current: "BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB",
+                local: "CCCCCCCC-CCCC-CCCC-CCCC-CCCCCCCCCCCC",
             }
 
             def dwarfdump(command, **kwargs):
@@ -37,6 +39,7 @@ class SymbolFileTests(unittest.TestCase):
                 found = symbols.symbol_files([str(root / "removed-product/RemoteCoder")], [])
             self.assertEqual(found[identities[old]], symbols.SymbolFile(old, "arm64"))
             self.assertEqual(found[identities[current]], symbols.SymbolFile(current, "arm64"))
+            self.assertEqual(found[identities[local]], symbols.SymbolFile(local, "arm64"))
 
     def test_atos_keeps_inlined_names_and_drops_unknown_addresses(self):
         separator = symbols.ATOS_SEPARATOR
