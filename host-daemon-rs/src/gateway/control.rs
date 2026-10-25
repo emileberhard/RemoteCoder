@@ -9,7 +9,7 @@ use crate::notifications::history::NotificationOrigin;
 use crate::notifications::{notification_thread_id, realtime_notification_method};
 use crate::observability::journal::Source;
 use crate::providers::codex::daemon::CodexWebSocket;
-use crate::rpc::error::RpcCode;
+use crate::rpc::error::{CodexUnavailable, RpcCode};
 use crate::rpc::log_diagnostic_ws_frame;
 use crate::tasks::owned_tasks::OwnedTasks;
 use crate::time::unix_seconds;
@@ -144,7 +144,7 @@ impl Gateway {
         let generation = self
             .control
             .current()
-            .context("Codex control connection is unavailable")?;
+            .ok_or_else(|| CodexUnavailable(self.codex_unavailable_reason()))?;
         send_control_frame(&generation.out_tx, text).await
     }
 
@@ -237,6 +237,7 @@ impl Gateway {
             };
             let (out_tx, mut out_rx) = mpsc::channel::<String>(UPSTREAM_OUTBOUND_QUEUE_SIZE);
             let generation = self.control.publish(out_tx.clone());
+            self.refresh_provider_health().await;
             *self.native_mutation_transport.lock().await = Some(NativeMutationTransport {
                 pid: peer_pid,
                 sender: out_tx,
@@ -246,7 +247,9 @@ impl Gateway {
             let auth_generation = Arc::clone(&generation);
             generation.spawn("restart recovery", async move {
                 let ready = async {
-                    gateway.authenticate_external(&auth_generation).await?;
+                    if let Err(error) = gateway.authenticate_external(&auth_generation).await {
+                        warn!(%error, "Codex subscription sign-in failed; Codex starts without it");
+                    }
                     gateway.recover_restart_tasks().await
                 }
                 .await;
@@ -265,6 +268,8 @@ impl Gateway {
                             Ok(Ok(())) => {
                                 *self.control_init_result.lock().await = Some(init.clone());
                                 control_ready = true;
+                                self.refresh_provider_health().await;
+                                self.close_degraded_clients();
                                 backoff = 0.1;
                                 self.spawn_external_renewal(&generation);
                                 info!("Codex control connection initialized");
@@ -351,6 +356,7 @@ impl Gateway {
             self.questions.disconnected().await;
             self.clear_app_server_turn_inventory().await;
             self.voice.shadows.invalidate();
+            self.refresh_provider_health().await;
             if control_ready {
                 info!("Codex control connection lost after becoming ready");
             }

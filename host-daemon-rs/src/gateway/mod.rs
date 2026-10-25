@@ -245,6 +245,7 @@ pub(crate) mod admission;
 mod claude_fork;
 mod external_auth;
 mod external_providers;
+mod provider_health;
 pub(crate) use external_auth::ExternalAuth;
 mod lifecycle;
 mod takeover;
@@ -271,6 +272,7 @@ pub(crate) struct Gateway {
     native_mutations: native_mutations::PendingNativeMutations,
     control_task: Mutex<Option<JoinHandle<()>>>,
     control_init_result: Mutex<Option<Value>>,
+    provider_health: provider_health::ProviderHealthOwner,
     control_requests: ControlReplies,
     next_control_request_id: AtomicU64,
     observer_tasks: Mutex<HashMap<String, JoinHandle<()>>>,
@@ -507,6 +509,7 @@ impl Gateway {
             native_mutations: native_mutations::PendingNativeMutations::default(),
             control_task: Mutex::new(None),
             control_init_result: Mutex::new(None),
+            provider_health: provider_health::ProviderHealthOwner::default(),
             control_requests: std::sync::Mutex::new(HashMap::new()),
             next_control_request_id: AtomicU64::new(1),
             observer_tasks: Mutex::new(HashMap::new()),
@@ -635,6 +638,7 @@ impl Gateway {
                 .runtime("notificationHookPreflight", hook.clone());
             *self.claude_notification_hook_health.lock().await = Some(hook);
             let snapshot = self.claude_auth.refresh().await;
+            self.refresh_provider_health().await;
             if !snapshot.ok() {
                 warn!(
                     error = snapshot.error.as_deref().unwrap_or("router is unavailable"),

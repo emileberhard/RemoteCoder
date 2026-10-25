@@ -128,6 +128,7 @@ impl Gateway {
         if method_spec(method).identity
             && !(method == "conversation/agents/action" && parameters["action"] == "stop")
             && !crate::rpc::dispatch::claude_route(method, object)
+            && self.external_providers.is_none()
             && let Err(error) = self.check_account_identity().await
         {
             return Some(error.to_string());

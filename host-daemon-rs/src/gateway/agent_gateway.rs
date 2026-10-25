@@ -57,6 +57,9 @@ pub(super) fn parse_native_error(text: &str) -> Option<RpcError> {
 }
 
 pub(super) fn native_error(error: &anyhow::Error) -> RpcError {
+    if let Some(crate::rpc::error::CodexUnavailable(reason)) = error.downcast_ref() {
+        return RpcError::codex_unavailable(reason.as_str());
+    }
     parse_native_error(&error.to_string())
         .unwrap_or_else(|| RpcError::new(RpcCode::Internal, format!("{error:#}")))
 }

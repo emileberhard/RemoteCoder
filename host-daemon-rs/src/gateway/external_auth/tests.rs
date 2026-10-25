@@ -58,6 +58,30 @@ fn token(account: &str, label: &str) -> Value {
         "generation":format!("{:x}", Sha256::digest(access.as_bytes()))})
 }
 
+fn copilot_fallback(
+    state: &std::path::Path,
+) -> Arc<crate::providers::codex::external::ExternalProviders> {
+    use crate::providers::codex::external::{ExternalProvider, ExternalProviders};
+    use crate::storage::private_state;
+    let provider: ExternalProvider = serde_json::from_value(json!({
+        "id": "copilot", "name": "Copilot", "baseUrl": "http://127.0.0.1:9/v1",
+        "keyFile": "/private/copilot.key",
+        "models": ["copilot/gpt-6.1-sol", "copilot/gemini-4-argon"],
+    }))
+    .unwrap();
+    let catalogs = state.join("external-models");
+    std::fs::create_dir_all(state).unwrap();
+    private_state::ensure_private_directory(&catalogs).unwrap();
+    private_state::write_json(
+        &catalogs.join("copilot.json"),
+        &json!({"models": [{"slug": "copilot/gpt-6.1-sol"}, {"slug": "copilot/gemini-4-argon"}]}),
+    )
+    .unwrap();
+    ExternalProviders::new(vec![provider], state)
+        .unwrap()
+        .unwrap()
+}
+
 struct Fixture {
     gateway: Arc<Gateway>,
     backend: Arc<Backend>,
@@ -123,6 +147,14 @@ impl Fixture {
     }
 
     async fn host_default() -> Self {
+        Self::build(false).await
+    }
+
+    async fn with_fallback() -> Self {
+        Self::build(true).await
+    }
+
+    async fn build(fallback: bool) -> Self {
         let directory = tempfile::tempdir().unwrap();
         let (backend, server, config) = Self::serve_router(directory.path()).await;
         let claude = ClaudeSettings::isolated_for_test();
@@ -145,7 +177,7 @@ impl Fixture {
                 crate::providers::codex::router::Router::for_test(config),
                 "workspace-a".into(),
             )),
-            None,
+            fallback.then(|| copilot_fallback(&directory.path().join("state"))),
             None,
         );
         Self {
@@ -775,4 +807,58 @@ async fn answer_reset_account(gateway: &Arc<Gateway>, control: &mut FakeControl)
     .unwrap();
     assert_eq!(request["method"], "account/read");
     gateway.handle_control_text(json!({"id":request["id"],"result":{"account":{"type":"chatgpt","email":"fixture@example.test","planType":"pro"}}}).to_string(), NotificationOrigin::Control { opened_after: 0 }).await;
+}
+
+#[tokio::test]
+async fn a_router_token_failure_leaves_codex_ready_and_starts_new_chats_on_the_fallback() {
+    let fixture = Fixture::with_fallback().await;
+    let _control = FakeControl::attach(&fixture.gateway, 8).await;
+    fixture.server.abort();
+    let generation = fixture.gateway.control.current().unwrap();
+    assert!(
+        fixture
+            .gateway
+            .authenticate_external(&generation)
+            .await
+            .is_err()
+    );
+    assert!(fixture.gateway.external_auth_error().is_some());
+
+    *fixture.gateway.control_init_result.lock().await = Some(json!({}));
+    fixture.gateway.refresh_provider_health().await;
+    assert_eq!(
+        fixture.gateway.published_codex_health(),
+        crate::gateway::provider_health::CodexHealth::Fallback {
+            reason: "Codex subscription sign-in failed".into(),
+            fallback: "copilot".into(),
+        }
+    );
+
+    let turn = json!({"id":1,"method":"turn/start","params":{"threadId":"thr_subscription"}})
+        .as_object()
+        .unwrap()
+        .clone();
+    assert!(
+        fixture
+            .gateway
+            .account_request_error("turn/start", &turn)
+            .await
+            .is_none()
+    );
+
+    let mut start = json!({"model": "gpt-6.1-sol", "serviceTier": "fast",
+        "collaborationMode": {"mode": "default", "settings": {"model": "gpt-6.1-sol"}}});
+    fixture.gateway.start_on_fallback(&mut start).await.unwrap();
+    assert_eq!(
+        start,
+        json!({"model": "copilot/gpt-6.1-sol", "modelProvider": "copilot",
+            "collaborationMode": {"mode": "default", "settings": {"model": "copilot/gpt-6.1-sol"}}})
+    );
+    let mut unknown = json!({"model": "gpt-9"});
+    fixture
+        .gateway
+        .start_on_fallback(&mut unknown)
+        .await
+        .unwrap();
+    assert_eq!(unknown["model"], "copilot/gpt-6.1-sol");
 }

@@ -355,8 +355,118 @@ async fn a_draining_gateway_refuses_clients_as_a_planned_restart() {
     assert_eq!(refusal_code(&gateway).await, RESTARTING_CLOSE_CODE);
 }
 
+type TestSocket =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+async fn connect_client(gateway: &Arc<Gateway>) -> (TestSocket, tokio::task::JoinHandle<()>) {
+    use axum::{Router, extract::ws::WebSocketUpgrade, routing::get};
+
+    let owner = Arc::clone(gateway);
+    let app = Router::new().route(
+        "/ws",
+        get(move |ws: WebSocketUpgrade| {
+            let owner = Arc::clone(&owner);
+            async move {
+                ws.on_upgrade(move |socket| {
+                    owner.handle_ws(
+                        socket,
+                        CancellationToken::new(),
+                        crate::auth::installation_credentials::Grant::Operator,
+                    )
+                })
+            }
+        }),
+    );
+    let (address, server) = crate::test_support::serve(app).await;
+    let (socket, _) = tokio_tungstenite::connect_async(format!("ws://{address}/ws"))
+        .await
+        .unwrap();
+    (socket, server)
+}
+
+async fn next_frame(socket: &mut TestSocket) -> UpstreamMessage {
+    loop {
+        let frame = tokio::time::timeout(Duration::from_secs(5), socket.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        if matches!(frame, UpstreamMessage::Text(_) | UpstreamMessage::Close(_)) {
+            return frame;
+        }
+    }
+}
+
+async fn next_json(socket: &mut TestSocket) -> Value {
+    match next_frame(socket).await {
+        UpstreamMessage::Text(text) => serde_json::from_str(text.as_str()).unwrap(),
+        other => panic!("expected a JSON frame, got {other:?}"),
+    }
+}
+
+async fn send_json(socket: &mut TestSocket, message: Value) {
+    socket
+        .send(UpstreamMessage::Text(message.to_string()))
+        .await
+        .unwrap();
+}
+
 #[tokio::test]
-async fn a_runtime_handoff_refuses_clients_as_a_planned_restart_until_it_fails() {
+async fn a_client_without_codex_is_served_and_moved_to_codex_once_it_is_ready() {
+    let gateway = TestGateway::new();
+    let (mut socket, server) = connect_client(&gateway).await;
+    let not_running = json!({"state": "unavailable", "reason": "Codex app-server is not running"});
+
+    let ready = next_json(&mut socket).await;
+    assert_eq!(ready["method"], "daemon/ready");
+    assert_eq!(ready["params"]["providers"]["codex"], not_running);
+
+    send_json(
+        &mut socket,
+        json!({"id": 1, "method": "initialize", "params": {}}),
+    )
+    .await;
+    assert_eq!(next_json(&mut socket).await, json!({"id": 1, "result": {}}));
+    send_json(&mut socket, json!({"method": "initialized"})).await;
+    send_json(
+        &mut socket,
+        json!({"id": 2, "method": "thread/list", "params": {}}),
+    )
+    .await;
+    let refused = next_json(&mut socket).await;
+    assert_eq!(refused["id"], 2);
+    assert_eq!(
+        refused["error"]["data"],
+        json!({"kind": "providerUnavailable", "retryable": false, "provider": "codex",
+            "reason": "Codex app-server is not running"})
+    );
+    send_json(
+        &mut socket,
+        json!({"id": 3, "method": "host/info", "params": {}}),
+    )
+    .await;
+    let info = next_json(&mut socket).await;
+    assert_eq!(info["id"], 3);
+    assert!(info["result"]["homeDirectory"].is_string(), "{info}");
+
+    *gateway.control_init_result.lock().await = Some(json!({}));
+    gateway.refresh_provider_health().await;
+    gateway.close_degraded_clients();
+    let health = next_json(&mut socket).await;
+    assert_eq!(health["method"], "gateway/providerHealth");
+    assert_eq!(
+        health["params"]["providers"]["codex"],
+        json!({"state": "ready"})
+    );
+    let UpstreamMessage::Close(Some(close)) = next_frame(&mut socket).await else {
+        panic!("expected the planned close");
+    };
+    assert_eq!(u16::from(close.code), RESTARTING_CLOSE_CODE);
+    server.abort();
+}
+
+#[tokio::test]
+async fn a_stuck_recovery_journal_still_admits_clients_without_codex() {
     use crate::runtime::recovery::{RecoveryJournal, RecoveryPhase, RecoveryStore};
 
     let directory = tempfile::tempdir().unwrap();
@@ -373,9 +483,6 @@ async fn a_runtime_handoff_refuses_clients_as_a_planned_restart_until_it_fails()
         Some(recovery.clone()),
         None,
     );
-    assert_eq!(refusal_code(&gateway).await, 1013);
-
-    let store = RecoveryStore::new(recovery);
     let mut journal = RecoveryJournal::new(
         "generation-1".to_string(),
         "0123456789abcdef0123456789abcdef".to_string(),
@@ -383,12 +490,47 @@ async fn a_runtime_handoff_refuses_clients_as_a_planned_restart_until_it_fails()
     )
     .unwrap();
     journal.phase = RecoveryPhase::DaemonStopped;
-    store.write(&journal).unwrap();
-    assert_eq!(refusal_code(&gateway).await, RESTARTING_CLOSE_CODE);
+    RecoveryStore::new(recovery).write(&journal).unwrap();
+    assert!(gateway.restart_in_progress().await);
 
-    journal.error = Some("recovery failed".to_string());
-    store.write(&journal).unwrap();
-    assert_eq!(refusal_code(&gateway).await, 1013);
+    let (mut socket, server) = connect_client(&gateway).await;
+    assert_eq!(next_json(&mut socket).await["method"], "daemon/ready");
+    send_json(
+        &mut socket,
+        json!({"id": 1, "method": "turn/start", "params": {"threadId": "thr_codex"}}),
+    )
+    .await;
+    let refused = next_json(&mut socket).await;
+    assert_eq!(refused["error"]["data"]["kind"], "providerUnavailable");
+    server.abort();
+}
+
+#[tokio::test]
+async fn new_codex_work_waits_for_a_ready_codex_and_claude_work_does_not() {
+    let gateway = TestGateway::new();
+    let request = |thread: &str| {
+        json!({"id": 1, "method": "turn/start", "params": {"threadId": thread}})
+            .as_object()
+            .unwrap()
+            .clone()
+    };
+    let unavailable = RpcError::codex_unavailable("Codex app-server is not running");
+
+    assert_eq!(
+        gateway
+            .validate_dispatch("turn/start", &request("thr_codex"))
+            .await,
+        Err(unavailable.clone())
+    );
+    assert_ne!(
+        gateway
+            .validate_dispatch(
+                "turn/start",
+                &request("claude_0f5c2b8e-6d0e-4c43-9d54-2b1f0d6a7e11")
+            )
+            .await,
+        Err(unavailable)
+    );
 }
 
 #[tokio::test(start_paused = true)]
@@ -436,6 +578,7 @@ async fn refused_native_starts_leave_no_durable_pending_turns() {
     let directory = tempfile::tempdir().unwrap();
     let state_path = directory.path().join("active-codex-turns.json");
     let gateway = TestGateway::with_native_runtime(directory.path());
+    *gateway.control_init_result.lock().await = Some(json!({}));
     gateway.commit_turn_state().await.unwrap();
     let original_state = std::fs::read(&state_path).unwrap();
     let pending: PendingRequests = Arc::default();

@@ -698,6 +698,7 @@ mod tests {
     #[tokio::test]
     async fn queue_sends_wait_for_a_starting_compaction_and_removal_does_not() {
         let gateway = TestGateway::new();
+        *gateway.control_init_result.lock().await = Some(json!({}));
         gateway
             .capture_client_request_locked(
                 4,

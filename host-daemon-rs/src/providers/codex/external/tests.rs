@@ -500,3 +500,30 @@ fn configuration_rejects_ambiguous_providers() {
     native.id = "openai".into();
     assert!(validate(&[native]).is_err());
 }
+
+#[tokio::test]
+async fn native_selections_on_a_fallback_thread_move_to_its_matching_model() {
+    let state = tempfile::tempdir().unwrap();
+    let external = providers(state.path());
+    let mut params = json!({"threadId": "thr_fallback", "model": "model-a",
+        "serviceTier": "fast", "collaborationMode": {"settings": {"model": "model-a"}}});
+
+    assert!(
+        external
+            .admit("turn/start", &mut params, Some("relay"))
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        params,
+        json!({"threadId": "thr_fallback", "model": MODEL,
+            "collaborationMode": {"settings": {"model": MODEL}}})
+    );
+    let mut unknown = json!({"threadId": "thr_fallback", "model": "gpt-9"});
+    assert!(
+        external
+            .admit("turn/start", &mut unknown, Some("relay"))
+            .await
+            .is_err()
+    );
+}

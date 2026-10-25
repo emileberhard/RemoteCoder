@@ -1,0 +1,10 @@
+{
+  "jsonrpc": "2.0",
+  "method": "gateway/providerHealth",
+  "params": {
+    "providers": {
+      "codex": {"state": "fallback", "reason": "Codex subscription sign-in failed", "fallback": "copilot"},
+      "claude": {"state": "unavailable", "reason": "Claude Code is not signed in on mac-mini"}
+    }
+  }
+}

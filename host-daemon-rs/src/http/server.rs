@@ -494,8 +494,8 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::SWITCHING_PROTOCOLS);
         match socket.next().await {
-            Some(Ok(Message::Close(Some(frame)))) => assert_eq!(u16::from(frame.code), 1013),
-            other => panic!("expected the recovering close frame, got {other:?}"),
+            Some(Ok(Message::Text(text))) => assert!(text.contains("daemon/ready"), "{text}"),
+            other => panic!("expected the ready frame, got {other:?}"),
         }
         lan.stop().await;
     }

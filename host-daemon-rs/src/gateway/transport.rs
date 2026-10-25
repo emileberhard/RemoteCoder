@@ -68,25 +68,25 @@ impl Gateway {
         grant: crate::auth::installation_credentials::Grant,
     ) {
         let client_id = self.next_client_id.fetch_add(1, Ordering::Relaxed);
-        if self.is_draining() || self.control_init_result.lock().await.is_none() {
-            let close = self
-                .unavailable_close("Codex app-server is recovering")
+        if self.is_draining() {
+            let _ = socket
+                .send(Message::Close(Some(super::restarting_close())))
                 .await;
-            let _ = socket.send(Message::Close(Some(close))).await;
             return;
         }
-        let upstream_result = tokio::select! {
-            result = self.codex.connect_ws() => result,
-            _ = cancelled.cancelled() => return,
-        };
-        let upstream = match upstream_result {
-            Ok(upstream) => upstream,
-            Err(error) => {
-                warn!(client_id, %error, "Codex client connection failed");
-                let close = self.unavailable_close("Codex app-server unavailable").await;
-                let _ = socket.send(Message::Close(Some(close))).await;
-                return;
-            }
+        let waiting_for_codex = !self.codex_ready().await;
+        let upstream = if waiting_for_codex {
+            None
+        } else {
+            let upstream_result = tokio::select! {
+                result = self.codex.connect_ws() => result,
+                _ = cancelled.cancelled() => return,
+            };
+            upstream_result
+                .inspect_err(|error| {
+                    warn!(client_id, %error, "Codex client connection failed; serving without Codex");
+                })
+                .ok()
         };
         let (notification_epoch, opened_after) = self.notification_position().await;
         let notification_origin = NotificationOrigin::Client {
@@ -94,8 +94,6 @@ impl Gateway {
             opened_after,
         };
         let (tx, out_rx) = mpsc::channel::<ClientCommand>(CLIENT_OUTBOUND_QUEUE_SIZE);
-        let (upstream_tx, upstream_rx) =
-            mpsc::channel::<UpstreamMessage>(CLIENT_UPSTREAM_QUEUE_SIZE);
         let (lane_tx, lane_rx) = mpsc::channel::<UpstreamFrame>(CLIENT_UPSTREAM_QUEUE_SIZE);
         let out_tx = ClientTx {
             query_response: None,
@@ -117,26 +115,26 @@ impl Gateway {
                 .await;
             return;
         }
-        self.clients.insert(client_id, out_tx.clone());
-
-        info!(client_id, count = self.clients.len(), "client connected");
-        self.journal
-            .client_event(client_id, "connect", None, self.clients.len());
-
         let ready = serde_json::json!({
             "notificationEpoch": notification_epoch,
             "notificationSequence": opened_after,
             "capabilities": {"cancelRequest": true}
         });
-        let _ = self
-            .send_json_awaiting_capacity(
-                &out_tx,
-                &serde_json::json!({ "method": "daemon/ready", "params": ready }),
-            )
-            .await;
+        self.admit_client(&out_tx, upstream.is_none(), ready);
+        if waiting_for_codex && self.codex_ready().await {
+            self.close_degraded_clients();
+        }
+
+        info!(
+            client_id,
+            count = self.clients.len(),
+            degraded = upstream.is_none(),
+            "client connected"
+        );
+        self.journal
+            .client_event(client_id, "connect", None, self.clients.len());
 
         let (client_sink, client_stream) = socket.split();
-        let (upstream_sink, upstream_stream) = upstream.split();
 
         let pending_requests: PendingRequests = Arc::default();
         let queries = Arc::new(crate::tasks::owned_tasks::OwnedTasks::default());
@@ -177,6 +175,7 @@ impl Gateway {
             Ok(())
         }) {
             self.device_tools.disconnected(client_id);
+            self.forget_degraded_client(client_id);
             self.clients.remove(&client_id);
             return;
         }
@@ -212,19 +211,10 @@ impl Gateway {
             }));
         }
 
-        {
-            let gw = Arc::clone(&self);
-            let out_tx = out_tx.clone();
-            let upstream_tx = upstream_tx.clone();
-            let pending_requests = Arc::clone(&pending_requests);
-            let task_gw = Arc::clone(&gw);
-            tasks.spawn(task_gw.run_task_logged("client_upstream_lane", async move {
-                gw.client_upstream_lane(client_id, out_tx, lane_rx, upstream_tx, pending_requests)
-                    .await
-            }));
-        }
-
-        {
+        let upstream_tx = upstream.map(|upstream| {
+            let (upstream_tx, upstream_rx) =
+                mpsc::channel::<UpstreamMessage>(CLIENT_UPSTREAM_QUEUE_SIZE);
+            let (upstream_sink, upstream_stream) = upstream.split();
             let gw = Arc::clone(&self);
             let task_gw = Arc::clone(&gw);
             tasks.spawn(
@@ -233,11 +223,10 @@ impl Gateway {
                         .await
                 }),
             );
-        }
-
-        {
             let gw = Arc::clone(&self);
             let out_tx = out_tx.clone();
+            let reader_tx = upstream_tx.clone();
+            let pending_requests = Arc::clone(&pending_requests);
             let task_gw = Arc::clone(&gw);
             tasks.spawn(
                 task_gw.run_task_logged("client_upstream_reader_loop", async move {
@@ -246,12 +235,23 @@ impl Gateway {
                         notification_origin,
                         upstream_stream,
                         out_tx,
-                        upstream_tx,
+                        reader_tx,
                         pending_requests,
                     )
                     .await
                 }),
             );
+            upstream_tx
+        });
+
+        {
+            let gw = Arc::clone(&self);
+            let out_tx = out_tx.clone();
+            let task_gw = Arc::clone(&gw);
+            tasks.spawn(task_gw.run_task_logged("client_upstream_lane", async move {
+                gw.client_upstream_lane(client_id, out_tx, lane_rx, upstream_tx, pending_requests)
+                    .await
+            }));
         }
 
         let writer_finished = tokio::select! {
@@ -282,6 +282,7 @@ impl Gateway {
         // so the disconnect is journalled here unconditionally. Gating it on
         // the remove left exactly the abrupt teardowns unrecorded.
         self.questions.client_closed(client_id).await;
+        self.forget_degraded_client(client_id);
         self.clients.remove(&client_id);
         info!(client_id, count = self.clients.len(), "client disconnected");
         self.journal
@@ -726,23 +727,30 @@ impl Gateway {
         client_id: u64,
         out_tx: ClientTx,
         mut frames: mpsc::Receiver<UpstreamFrame>,
-        upstream_tx: mpsc::Sender<UpstreamMessage>,
+        upstream_tx: Option<mpsc::Sender<UpstreamMessage>>,
         pending_requests: PendingRequests,
     ) {
         while let Some(frame) = frames.recv().await {
-            let forwarded = match frame {
-                UpstreamFrame::Response(raw) => send_client_upstream(&upstream_tx, raw)
-                    .await
-                    .context("forward Codex response failed"),
-                UpstreamFrame::Request(request) => {
+            let forwarded = match (frame, &upstream_tx) {
+                (UpstreamFrame::Response(raw), Some(upstream_tx)) => {
+                    send_client_upstream(upstream_tx, raw)
+                        .await
+                        .context("forward Codex response failed")
+                }
+                (UpstreamFrame::Request(request), Some(upstream_tx)) => {
                     self.forward_native_request(
                         client_id,
                         &out_tx,
                         request,
-                        &upstream_tx,
+                        upstream_tx,
                         &pending_requests,
                     )
                     .await
+                }
+                (UpstreamFrame::Response(_), None) => Ok(()),
+                (UpstreamFrame::Request(request), None) => {
+                    self.answer_without_codex(&out_tx, &request.request).await;
+                    Ok(())
                 }
             };
             if let Err(error) = forwarded {
@@ -750,6 +758,20 @@ impl Gateway {
                 return;
             }
         }
+    }
+
+    async fn answer_without_codex(&self, out_tx: &ClientTx, request: &ClientRequest) {
+        let Some(id) = request.object.get("id") else {
+            return;
+        };
+        if request.method == "initialize" {
+            let _ = self
+                .send_json_awaiting_capacity(out_tx, &serde_json::json!({"id": id, "result": {}}))
+                .await;
+            return;
+        }
+        let error = RpcError::codex_unavailable(self.codex_unavailable_reason());
+        let _ = self.send_error_to(out_tx, Some(id), &error).await;
     }
 
     async fn forward_native_request(
@@ -785,7 +807,13 @@ impl Gateway {
         }
         let mut object = object;
         let mut params = object.remove("params").unwrap_or(Value::Null);
-        let admitted = self.admit_native(&method, &mut params).await;
+        let admitted = async {
+            if method == "thread/start" {
+                self.start_on_fallback(&mut params).await?;
+            }
+            self.admit_native(&method, &mut params).await
+        }
+        .await;
         if !params.is_null() {
             object.insert("params".into(), params);
         }
@@ -849,6 +877,12 @@ impl Gateway {
         let unavailable = |message: String| RpcError::new(RpcCode::Unavailable, message);
         if let Some(message) = self.account_request_error(method, object).await {
             return Err(unavailable(message));
+        }
+        if account_context::requires_admission(method, object.get("params").unwrap_or(&Value::Null))
+            && !crate::rpc::dispatch::claude_route(method, object)
+            && !self.codex_ready().await
+        {
+            return Err(RpcError::codex_unavailable(self.codex_unavailable_reason()));
         }
         // The empty compaction acknowledgment can precede its turn/started
         // notification. Keep ordinary inputs out of that accepted-command gap;

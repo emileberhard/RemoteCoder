@@ -26,6 +26,18 @@ impl Gateway {
         external.admit(method, params, source.as_deref()).await
     }
 
+    pub(super) async fn start_on_fallback(
+        &self,
+        params: &mut Value,
+    ) -> std::result::Result<(), RpcError> {
+        match self.external_providers.as_deref() {
+            Some(external) if self.codex_subscription_failing().await => {
+                external.start_on_fallback(params).await
+            }
+            _ => Ok(()),
+        }
+    }
+
     async fn thread_model_provider(&self, thread: &str) -> std::result::Result<String, RpcError> {
         let response = self
             .call_control_unadmitted(

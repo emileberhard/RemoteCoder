@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tracing::warn;
+use tracing::{info, warn};
 
 pub(crate) const EXTERNAL_PROVIDERS_ENV_KEY: &str = "RC_CODEX_GATEWAY_EXTERNAL_PROVIDERS_FILE";
 pub(crate) const NATIVE_PROVIDER: &str = "openai";
@@ -179,6 +179,56 @@ impl ExternalProviders {
         self.providers.iter().map(|provider| provider.id.as_str())
     }
 
+    pub(crate) fn fallback(&self) -> Option<&str> {
+        self.provider_ids().next()
+    }
+
+    pub(crate) async fn start_on_fallback(
+        &self,
+        params: &mut Value,
+    ) -> std::result::Result<(), RpcError> {
+        let (Some(fields), Some(provider)) = (params.as_object_mut(), self.providers.first())
+        else {
+            return Ok(());
+        };
+        let native = fields
+            .get("modelProvider")
+            .and_then(Value::as_str)
+            .is_none_or(|id| id == NATIVE_PROVIDER);
+        if !native || selected_models(fields).any(|model| self.owner(model).is_some()) {
+            return Ok(());
+        }
+        let models = self.fallback_catalog(provider).await?;
+        if !adopt_native_selection(fields, &models)
+            && let Some(default) = models.first()
+        {
+            fields.insert("model".into(), default["slug"].clone());
+            if let Some(model) = fields
+                .get_mut("collaborationMode")
+                .and_then(|mode| mode.pointer_mut("/settings/model"))
+            {
+                *model = default["slug"].clone();
+            }
+        }
+        fields.remove("serviceTier");
+        fields.remove("serviceTierForTurn");
+        fields.insert("modelProvider".into(), json!(provider.id));
+        info!(provider = %provider.id, model = %fields["model"], "starting a new Codex conversation on the fallback provider");
+        Ok(())
+    }
+
+    async fn fallback_catalog(
+        &self,
+        provider: &ExternalProvider,
+    ) -> std::result::Result<Arc<Vec<Value>>, RpcError> {
+        self.catalog(provider).await.ok_or_else(|| {
+            RpcError::new(
+                RpcCode::Unavailable,
+                format!("{} model metadata is unavailable", provider.name),
+            )
+        })
+    }
+
     fn label<'a>(&'a self, provider_id: &'a str) -> &'a str {
         match self
             .providers
@@ -300,7 +350,15 @@ impl ExternalProviders {
                 let Some(source) = source_provider else {
                     return Ok(false);
                 };
-                self.check_selection(fields, source).await.map(|_| false)
+                let rewritten = match self.providers.first().filter(|first| first.id == source) {
+                    Some(fallback) => {
+                        adopt_native_selection(fields, &self.fallback_catalog(fallback).await?)
+                    }
+                    None => false,
+                };
+                self.check_selection(fields, source)
+                    .await
+                    .map(|_| rewritten)
             }
             _ => Ok(false),
         }
@@ -610,6 +668,41 @@ fn picker_row(provider: &ExternalProvider, model: &Value) -> Value {
         "modelProvider": provider.id,
         "modelProviderName": provider.name,
     })
+}
+
+fn adopt_native_selection(fields: &mut Map<String, Value>, models: &[Value]) -> bool {
+    let fallback = |requested: &Value| {
+        let requested = requested.as_str()?;
+        models
+            .iter()
+            .map(|row| &row["slug"])
+            .find(|slug| {
+                slug.as_str().is_some_and(|slug| {
+                    slug != requested && slug.rsplit('/').next() == Some(requested)
+                })
+            })
+            .cloned()
+    };
+    let mut adopted = false;
+    if let Some(model) = fields.get_mut("model")
+        && let Some(slug) = fallback(model)
+    {
+        *model = slug;
+        adopted = true;
+    }
+    if let Some(model) = fields
+        .get_mut("collaborationMode")
+        .and_then(|mode| mode.pointer_mut("/settings/model"))
+        && let Some(slug) = fallback(model)
+    {
+        *model = slug;
+        adopted = true;
+    }
+    if adopted {
+        fields.remove("serviceTier");
+        fields.remove("serviceTierForTurn");
+    }
+    adopted
 }
 
 fn selected_models(fields: &Map<String, Value>) -> impl Iterator<Item = &str> {

@@ -44,14 +44,28 @@ impl Gateway {
         let Some(auth) = &self.external_auth else {
             return Ok(());
         };
-        let _change = generation.auth_change.lock().await;
-        self.require_auth_generation(generation)?;
-        let token = auth.router.issue(&auth.account_id).await?;
-        self.install_external_token(generation, &token).await?;
-        let mut installed = generation.auth.lock().expect("Codex auth state poisoned");
-        installed.token = Some(token);
-        installed.error = None;
-        Ok(())
+        let result: Result<()> = async {
+            let _change = generation.auth_change.lock().await;
+            self.require_auth_generation(generation)?;
+            let token = auth.router.issue(&auth.account_id).await?;
+            self.install_external_token(generation, &token).await?;
+            let mut installed = generation.auth.lock().expect("Codex auth state poisoned");
+            installed.token = Some(token);
+            installed.error = None;
+            Ok(())
+        }
+        .await;
+        if let Err(error) = &result
+            && self.require_auth_generation(generation).is_ok()
+        {
+            generation
+                .auth
+                .lock()
+                .expect("Codex auth state poisoned")
+                .error = Some(error.to_string());
+        }
+        self.refresh_provider_health().await;
+        result
     }
 
     async fn install_external_token(
@@ -81,29 +95,22 @@ impl Gateway {
             loop {
                 let wait = {
                     let installed = owner.auth.lock().expect("Codex auth state poisoned");
-                    let expiry = installed
-                        .token
-                        .as_ref()
-                        .context("Codex external auth was not installed")?
-                        .expiry()?;
-                    if installed.error.is_some() {
-                        Duration::from_secs(30)
-                    } else {
-                        Duration::from_secs(
-                            (expiry - time::OffsetDateTime::now_utc().unix_timestamp() - 15 * 60)
+                    match (&installed.token, &installed.error) {
+                        (Some(token), None) => Duration::from_secs(
+                            (token.expiry()?
+                                - time::OffsetDateTime::now_utc().unix_timestamp()
+                                - 15 * 60)
                                 .max(1) as u64,
-                        )
+                        ),
+                        _ => Duration::from_secs(30),
                     }
                 };
                 tokio::select! {
                     _ = tokio::time::sleep(wait) => {},
                     _ = owner.auth_changed.notified() => continue,
                 }
-                let result = gateway.authenticate_external(&owner).await;
-                if let Err(error) = result {
+                if let Err(error) = gateway.authenticate_external(&owner).await {
                     gateway.require_auth_generation(&owner)?;
-                    owner.auth.lock().expect("Codex auth state poisoned").error =
-                        Some(error.to_string());
                     tracing::warn!(%error, "Codex proactive router renewal is unavailable");
                 }
             }
@@ -199,8 +206,6 @@ impl Gateway {
         generation.spawn("Codex external re-authentication", async move {
             if let Err(error) = gateway.authenticate_external(&owner).await {
                 gateway.require_auth_generation(&owner)?;
-                owner.auth.lock().expect("Codex auth state poisoned").error =
-                    Some(error.to_string());
                 tracing::warn!(%error, "Codex external re-authentication is unavailable");
             }
             owner.auth_changed.notify_one();
