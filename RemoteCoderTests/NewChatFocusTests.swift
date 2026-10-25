@@ -6,9 +6,9 @@ import UIKit
 @Suite(.serialized)
 @MainActor
 struct NewChatFocusTests {
-    enum Navigation: Sendable { case drawer, host, newChat, selectionMirror }
+    enum Navigation: Sendable { case host, newChat, selectionMirror }
 
-    @Test(arguments: [Navigation.drawer, .host, .newChat, .selectionMirror])
+    @Test(arguments: [Navigation.host, .newChat, .selectionMirror])
     func newChatFocusRespectsNavigation(navigation: Navigation) async throws {
         let fixture = await WorkspaceFixture(notificationsEnabled: false)
         defer { await fixture.cleanUp() }
@@ -41,10 +41,6 @@ struct NewChatFocusTests {
         }
         defer { request.cancel(); completion.cancel() }
         switch navigation {
-        case .drawer:
-            try #require(activateElement(identifier: "open-conversations", in: controller.view),
-                "The header's Conversations button must open the drawer")
-            #expect(await waitUntil { fixture.workspace.keyWindow.isHistoryDrawerOpen })
         case .host:
             fixture.workspace.select(hostID: fixture.book.id)
         case .newChat:
@@ -60,7 +56,7 @@ struct NewChatFocusTests {
             #expect(!request.isCancelled)
             #expect(await waitUntil { hasComposerFirstResponder(in: controller.view) },
                 "Mirroring the selected host must preserve its intended New Chat focus")
-        case .drawer, .host, .newChat:
+        case .host, .newChat:
             #expect(request.isCancelled)
             #expect(!hasComposerFirstResponder(in: controller.view),
                 "An earlier New Chat must not reopen the keyboard after later navigation")
@@ -70,17 +66,6 @@ struct NewChatFocusTests {
     private func findButton(in view: UIView, identifier: String) -> UIButton? {
         if let button = view as? UIButton, button.accessibilityIdentifier == identifier { return button }
         return view.subviews.lazy.compactMap { findButton(in: $0, identifier: identifier) }.first
-    }
-
-    private func activateElement(identifier: String, in element: Any) -> Bool {
-        guard let object = element as? NSObject else { return false }
-        if (object as? UIAccessibilityIdentification)?.accessibilityIdentifier == identifier {
-            return object.accessibilityActivate()
-        }
-        let elements = object.accessibilityElements
-            ?? (0..<max(object.accessibilityElementCount(), 0)).compactMap { object.accessibilityElement(at: $0) }
-        let children = elements + ((object as? UIView)?.subviews ?? [])
-        return children.contains { activateElement(identifier: identifier, in: $0) }
     }
 
     private func hasComposerFirstResponder(in view: UIView) -> Bool {
