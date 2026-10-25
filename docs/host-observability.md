@@ -13,7 +13,7 @@ there is no flag that turns any of this off.
 | Managed app-server stderr | `~/.codex/app-server-daemon/app-server.stderr.log` | Codex/app-server errors, including persistence and tool failures |
 | Desktop decisions | `desktop/desktop-YYYYMMDD.jsonl` | Every ChatGPT reconciliation: what it observed, the reason it chose, and every signal or relaunch that followed |
 | Desktop helper | `chatgpt-shared-codex.log` / `.error.log` | The launcher's stdout/stderr — a bare startup banner, and the final error when a check fails |
-| App logs | `app-logs/<device>/YYYYMMDD-<segment>.jsonl.gz` | The iOS OSLog stream, versioned MetricKit reports and [field telemetry](#field-telemetry), uploaded from the phone (14 days, 1 GiB in total) |
+| App logs | `app-logs/<device>/YYYYMMDD-<segment>.jsonl.gz` | The iOS OSLog stream, versioned MetricKit reports and [field telemetry](#field-telemetry), uploaded from the phone (7 days, 1 GiB in total) |
 | Voice sessions | `voice-sessions/<started>-<thread>.jsonl` | Per-call transcripts, delegation lifecycle, latencies, close summary (newest 100) |
 | Deployments | `deployments/*.log` | Install runs with their git commit (per-run entries kept 7 days, pruned by each app install) |
 | launchd redirect | `codex-gateway.out.log` / `.err.log` | Startup banner and panics only |
@@ -283,9 +283,9 @@ kind-specific fields.
   `rejection` kind for a request refused after authentication. Failed authentication is not
   journalled. Never keys, URLs, query strings, audio or transcripts.
 - `app_logs` — `cap_evicted` when the uploaded app-log store went over its
-  1 GiB cap and lost segments still inside the 14-day window, `cap_unmet` when
+  1 GiB cap and lost segments still inside the 7-day window, `cap_unmet` when
   its total is still over the cap afterwards or unknown because entries could
-  not be read, and `cap_met` on the first upload that finds an unmet cap met
+  not be read, and `cap_met` on the first sweep or upload that finds an unmet cap met
   again: `met`, `files`, `bytes`, `retainedBytes` (null when unknown),
   `capBytes`, `unreadableEntries`, `evictedThroughMs` (the newest removed
   segment's mtime, or null) and `atMs`. Each one also rewrites
@@ -474,8 +474,11 @@ copy useless for its purpose.
   path component each (everything outside `[A-Za-z0-9._-]` becomes `-`), so a
   name arriving from the network can never escape the store. Bodies are stored
   unparsed after a gzip magic-byte check, with a 16 MiB per-request ceiling.
-  Segments age out after 14 days; past 1 GiB for all devices together the oldest
-  go first, which the `app_logs` journal kind and `retention.json` report.
+  A segment's day is its arrival UTC day, and segments are kept for today plus the
+  7 previous UTC days. The store sweeps at gateway start and then hourly, whether
+  or not uploads arrive, and also on every upload; past 1 GiB for all devices
+  together the oldest go first, which the `app_logs` journal kind and
+  `retention.json` report.
 
 Two rules that must not be relaxed: the app never logs the gateway bearer
 token, and the uploader's own category (`AppLogExport`) is filtered out of
@@ -561,7 +564,7 @@ only, never WebKit's processes, and it cannot apportion battery to a feature.
   `RC_PERF_HARNESS` builds for the overhead comparison. There is no user setting.
 
 Decision summary (2026-10-24). The goal is to answer, for any hour in the last
-14 days, which version, state and minute spent CPU, wakeups, memory or disk, and
+7 days, which version, state and minute spent CPU, wakeups, memory or disk, and
 what the telemetry itself cost, with a phone-side cost small enough to measure.
 `DiagnosticsOutbox` owns durable batches, upload and loss records;
 `ProcessResourceSampler` owns the Mach reads; `TelemetryContext` owns only the
