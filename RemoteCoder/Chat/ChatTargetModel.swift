@@ -98,7 +98,6 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
     /// that started it — so the model owns the handles and cancels them when its
     /// host is removed or reconfigured.
     @ObservationIgnored private let ownedTasks = OwnedTasks<OwnedTask>()
-    @ObservationIgnored private var connectionState: GatewayEventPump.Link?
     /// Supersedes pending workspace navigation when another conversation opens.
     @ObservationIgnored var onConversationNavigation: (@MainActor () -> Void)?
     /// Set by the workspace to retire a banner when its conversation is opened.
@@ -553,7 +552,6 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
         reconcileObservation()
         if presented {
             warmConversationsIfIdle()
-            reportConnectionStateOnShow()
             run(effects)
         } else {
             fileOpener.leaveScreen()
@@ -747,9 +745,6 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
             screen.historyEdges.cancelReads()
             screen.historyOpenSignpost.abandon(.cancelled)
         }
-        connectionState = nil
-        await AppPerformanceDiagnostics.shared.clearHistory()
-        await AppPerformanceDiagnostics.shared.clearConnection()
         logger.notice("scenePhase background before branch: \(self.liveActivityDebugSummary(), privacy: .public)")
         await perform(effects)
         logger.notice("scenePhase background completed: \(self.liveActivityDebugSummary(), privacy: .public)")
@@ -956,8 +951,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
             await conversationList.flushMarks()
             await historyService.invalidateAll()
             if ownsDiagnosticsState {
-                await AppPerformanceDiagnostics.shared.clearHistory()
-                await AppPerformanceDiagnostics.shared.clearConnection()
+                AppPerformanceDiagnostics.shared.clearHistory()
             }
             #if os(iOS)
             await liveActivityService.end()
@@ -1390,7 +1384,6 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
                 questions.forgetCounts()
             }
         }
-        await recordConnectionState(link)
     }
 
     private func adoptProviderHealth(_ health: ProviderHealth?) {
@@ -1417,21 +1410,6 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
 
     func gatewayNetworkPathChanged() {
         scheduleRouteMove()
-    }
-
-    private func recordConnectionState(_ state: GatewayEventPump.Link) async {
-        connectionState = state
-        guard isVisible else { return }
-        await AppPerformanceDiagnostics.shared.connectionChanged(state, provider: primaryScreen?.currentAgentProvider == .claude ? .claude : .codex)
-    }
-
-    private func reportConnectionStateOnShow() {
-        let state = connectionState
-        let provider: AppPerformanceDiagnostics.Provider = primaryScreen?.currentAgentProvider == .claude ? .claude : .codex
-        Task {
-            if let state { await AppPerformanceDiagnostics.shared.connectionChanged(state, provider: provider) }
-            else { await AppPerformanceDiagnostics.shared.clearConnection() }
-        }
     }
 
     func reconcile(gap: ReplayProgress.Gap) async {

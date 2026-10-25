@@ -315,7 +315,8 @@ entrypoint linked above.
   - **Logs.** `DiagnosticsOutbox` follows the visible host.
   - **Field telemetry.** `RemoteCoderAppModel` creates the one
     `TelemetryContext`, which projects existing state for
-    `ProcessResourceSampler` and owns only that observation. Features never
+    `ProcessResourceSampler` and the MetricKit state domains in
+    `AppPerformanceDiagnostics`, and owns only that observation. Features never
     report their state to telemetry; extend the projection instead. See
     [field telemetry](../docs/host-observability.md#field-telemetry).
 

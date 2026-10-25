@@ -155,8 +155,7 @@ final class HistoryEdgeReader {
         status[kind] = .loading
         let task = ownedTasks.start(kind) { [weak self] in
             guard let self else { return }
-            let operation = await AppPerformanceDiagnostics.shared.beginHistory(.paging,
-                provider: AgentProvider.provider(forThreadID: thread.id) == .claude ? .claude : .codex, mode: .mixed)
+            let operation = AppPerformanceDiagnostics.shared.beginHistory(.paging, threadID: thread.id)
             var outcome: HistoryEdge.Status?
             var failureMessage: String?
             var defersFailure = false
@@ -191,7 +190,7 @@ final class HistoryEdgeReader {
                     defersFailure = GatewayHistoryService.defersRead(error)
                 }
             }
-            await AppPerformanceDiagnostics.shared.finishHistory(operationID: operation)
+            AppPerformanceDiagnostics.shared.finishHistory(operationID: operation)
             guard !Task.isCancelled, self.host?.presentsTranscript(identity) == true else { return }
             self.reads[kind] = nil
             if loadedTail { self.tailRecovery.loaded() }

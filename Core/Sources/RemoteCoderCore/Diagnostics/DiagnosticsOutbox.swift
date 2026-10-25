@@ -588,8 +588,10 @@ actor DiagnosticsOutbox: DiagnosticsExporting {
                 return result
             }
             guard (200..<300).contains(status) else {
-                logger.error("app log upload rejected with \(status, privacy: .public)")
-                return result
+                logger.error("app log upload rejected with \(status, privacy: .public) segment=\(segment.lastPathComponent, privacy: .public)")
+                guard Self.hostRejectsSegment(status) else { return result }
+                quarantine(segment, reason: "host rejected the segment with \(status)")
+                continue
             }
             try? FileManager.default.removeItem(at: segment)
             result.segments += 1
@@ -598,8 +600,15 @@ actor DiagnosticsOutbox: DiagnosticsExporting {
         return result
     }
 
+    static func hostRejectsSegment(_ status: Int) -> Bool {
+        status == 400 || status == 413
+    }
+
     private func quarantine(_ segment: URL, reason: String) {
         skippedSegments.insert(segment.lastPathComponent)
+        telemetry.record(.loss(TelemetryLoss(
+            what: Self.evictionClass(segment).loss, count: 1, bytes: Self.fileSize(segment), reason: reason
+        )))
         do {
             try FileManager.default.moveItem(at: segment, to: segment.appendingPathExtension("export-only"))
             logger.error("Log segment retained for export under queue cap: \(reason, privacy: .public)")

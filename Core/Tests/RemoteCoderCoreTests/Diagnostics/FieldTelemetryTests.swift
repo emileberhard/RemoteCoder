@@ -26,7 +26,7 @@ struct FieldTelemetryTests {
     }
 
     private func sample(_ reason: ProcessSample.Reason = .interval) -> TelemetryRecord {
-        .sample(ProcessSample(reason: reason, resources: ProcessResources(cpuUserNanoseconds: 2, cpuSystemNanoseconds: 1,
+        .sample(ProcessSample(reason: reason, resources: ProcessResources(cpuUserNanoseconds: 2, cpuSystemNanoseconds: 1, gpuNanoseconds: 8,
             interruptWakeups: 3, idleWakeups: 4, timerWakeups: 5, footprintBytes: 6), readNanoseconds: 7,
             persistence: [.checkpoints: PersistenceMetrics.Counters(writes: 1, bytes: 10)], mixed: false, context: context))
     }
@@ -62,6 +62,7 @@ struct FieldTelemetryTests {
         #expect(first[0]["flushedThroughSeq"] as? Int == 2)
         #expect(first.dropFirst().map { $0["seq"] as? Int } == [1, 2])
         #expect((first[1]["persistence"] as? [String: Any])?["checkpoints"] != nil)
+        #expect(first[1]["gpuNs"] as? Int == 8)
         #expect((first[1]["context"] as? [String: Any])?["batteryPercent"] == nil)
         let second = batches[1]
         #expect(second.map { $0["recordType"] as? String } == ["run", "export"])
@@ -69,6 +70,54 @@ struct FieldTelemetryTests {
         #expect(second[1]["seq"] as? Int == 3)
         #expect(batches[2].dropFirst().map { $0["seq"] as? Int } == [4])
         #expect(Set(batches.map { $0[0]["runID"] as? String }).count == 1)
+    }
+
+    @Test func stateLabelsFollowTheProjectionAndClearOutsideTheActiveScene() {
+        var running = context
+        running.turnRunningVisible = true
+        #expect(UsageStateLabels(running, conservesEnergy: false)
+            == UsageStateLabels(surface: "chat", turn: "running", connection: "lan", voice: nil, energy: nil))
+
+        var drawer = running
+        drawer.surface = .drawer
+        drawer.voiceCall = true
+        drawer.route = .relay
+        #expect(UsageStateLabels(drawer, conservesEnergy: true)
+            == UsageStateLabels(surface: "drawer", turn: "running", connection: "relay", voice: "call", energy: "conserving"))
+
+        var background = drawer
+        background.scene = .background
+        #expect(UsageStateLabels(background, conservesEnergy: false)
+            == UsageStateLabels(surface: nil, turn: nil, connection: nil, voice: "call", energy: nil))
+
+        var unknown = context
+        unknown.turnRunningVisible = nil
+        unknown.route = nil
+        let labels = UsageStateLabels(unknown, conservesEnergy: false)
+        #expect(labels.turn == nil && labels.connection == nil)
+    }
+
+    @Test func historyStateShowsAnyOpenBeforePagingAndClearsOnBackground() {
+        var operations = HistoryOperations()
+        let paging = operations.begin(.paging, provider: .codex)
+        let opening = operations.begin(.opening, provider: .claude)
+        let laterPaging = operations.begin(.paging, provider: .codex)
+        #expect(operations.current?.id == opening)
+        operations.finish(opening)
+        #expect(operations.current?.id == laterPaging)
+        operations.finish(laterPaging)
+        operations.finish(laterPaging)
+        #expect(operations.current?.id == paging)
+
+        operations.sceneChanged(active: false)
+        #expect(operations.current == nil)
+        _ = operations.begin(.opening, provider: .codex)
+        #expect(operations.current == nil)
+        operations.sceneChanged(active: true)
+        let reopened = operations.begin(.opening, provider: .codex)
+        #expect(operations.current?.id == reopened)
+        operations.clear()
+        #expect(operations.current == nil)
     }
 
     @Test func aFullBufferKeepsTheNewestRecordsAndReportsTheLoss() async throws {
@@ -110,7 +159,7 @@ struct FieldTelemetryTests {
 
     @MainActor @Test func aChangeCutShortByBackgroundingMarksItsIntervalMixed() {
         let buffer = TelemetryBuffer(runID: "test")
-        let resources = ProcessResources(cpuUserNanoseconds: 1, cpuSystemNanoseconds: 1, interruptWakeups: 0,
+        let resources = ProcessResources(cpuUserNanoseconds: 1, cpuSystemNanoseconds: 1, gpuNanoseconds: 0, interruptWakeups: 0,
                                          idleWakeups: 0, timerWakeups: 0, footprintBytes: 1)
         let sampler = ProcessResourceSampler(recorder: buffer, read: { resources })
         sampler.update(context)
@@ -135,7 +184,7 @@ struct FieldTelemetryTests {
 
     @MainActor @Test func aTransitionWhoseReadFailedMarksTheNextIntervalMixed() {
         let buffer = TelemetryBuffer(runID: "test")
-        let resources = ProcessResources(cpuUserNanoseconds: 1, cpuSystemNanoseconds: 1, interruptWakeups: 0,
+        let resources = ProcessResources(cpuUserNanoseconds: 1, cpuSystemNanoseconds: 1, gpuNanoseconds: 0, interruptWakeups: 0,
                                          idleWakeups: 0, timerWakeups: 0, footprintBytes: 1)
         var reads = 0
         let sampler = ProcessResourceSampler(recorder: buffer, read: {

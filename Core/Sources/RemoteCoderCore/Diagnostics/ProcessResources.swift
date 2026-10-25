@@ -4,6 +4,7 @@ import Foundation
 struct ProcessResources: Sendable, Equatable {
     var cpuUserNanoseconds: UInt64
     var cpuSystemNanoseconds: UInt64
+    var gpuNanoseconds: UInt64
     var interruptWakeups: UInt64
     var idleWakeups: UInt64
     var timerWakeups: UInt64
@@ -31,6 +32,7 @@ struct ProcessResources: Sendable, Equatable {
         return ProcessResources(
             cpuUserNanoseconds: MachTime.nanoseconds(cpu.total_user),
             cpuSystemNanoseconds: MachTime.nanoseconds(cpu.total_system),
+            gpuNanoseconds: power.gpu_energy.task_gpu_utilisation,
             interruptWakeups: cpu.task_interrupt_wakeups,
             idleWakeups: cpu.task_platform_idle_wakeups,
             timerWakeups: cpu.task_timer_wakeups_bin_1 &+ cpu.task_timer_wakeups_bin_2,
