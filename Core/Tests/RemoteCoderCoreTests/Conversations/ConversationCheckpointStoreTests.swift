@@ -1646,6 +1646,40 @@ struct ConversationCheckpointStoreTests: ConversationHistoryFixtures {
         #expect(try await store.load(local.conversationID)?.submissions.count == 1)
     }
 
+    @Test func hiddenSavesUnderPressureKeepShedHistoryOutUntilItsConversationIsPresented() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let metrics = PersistenceMetrics()
+        let store = ConversationCheckpointStore(hostID: UUID(), directory: directory, budgetBytes: 1,
+            primaryBudgetBytes: 512 * 1_024 * 1_024, metrics: metrics)
+        var first = ConversationState(conversationID: UUID(), threadID: "first")
+        first.merge(history(items: [.agentMessage(id: "a", text: "First answer")], threadID: "first"))
+        first.submit(ChatMessage(role: .user, text: "Keep my first send"))
+        var second = ConversationState(conversationID: UUID(), threadID: "second")
+        second.merge(history(items: [.agentMessage(id: "b", text: "Second answer")], threadID: "second"))
+        second.submit(ChatMessage(role: .user, text: "Keep my second send"))
+        try await store.save(first.checkpoint, conversationID: first.conversationID, presented: false)
+        try await store.save(second.checkpoint, conversationID: second.conversationID, presented: false)
+        #expect(metrics.snapshot()[.checkpoints]?.checkpoint?.compactions == 1)
+
+        for _ in 0..<3 {
+            first.markPersistedChange()
+            let receipt = try await store.save(first.checkpoint, conversationID: first.conversationID, presented: false)
+            #expect(!receipt.historyAdmitted)
+            second.markPersistedChange()
+            try await store.save(second.checkpoint, conversationID: second.conversationID, presented: false)
+        }
+        #expect(metrics.snapshot()[.checkpoints]?.checkpoint?.compactions == 1)
+        let hidden = try #require(try await store.load(first.conversationID))
+        #expect(hidden.submissions.count == 1)
+        #expect(!hidden.turns.values.contains { $0.items["a"] != nil })
+        #expect(try await store.load(second.conversationID)?.turns.values.contains { $0.items["b"] != nil } == true)
+
+        let shown = try await store.save(first.checkpoint, conversationID: first.conversationID, presented: true)
+        #expect(shown.historyAdmitted)
+        #expect(try await store.load(first.conversationID)?.turns.values.contains { $0.items["a"] != nil } == true)
+    }
+
     @Test func aColdStoreEvictsOnlyRebuildableCheckpointsItFindsOnDisk() async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

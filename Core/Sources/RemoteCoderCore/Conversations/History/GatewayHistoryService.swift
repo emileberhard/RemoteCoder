@@ -55,6 +55,8 @@ actor GatewayHistoryService {
     private var epoch: UInt64 = 0
     private var nextPageLimits: [String: Int] = [:]
     private var oversizedPages: [String: any Error] = [:]
+    private var pendingTailCommits: [String: Task<Void, Never>] = [:]
+    private static let prefetchCommitDelay = Duration.seconds(2)
     private struct AgentClassification {
         let ancestry: ConversationAgentClassification
         let warnings: [String]
@@ -490,7 +492,13 @@ actor GatewayHistoryService {
             try Task.checkCancellation()
             guard epoch == readEpoch, generations[header.id] == generation else { throw HistoryReadFailure.invalidated }
             let snapshot = ConversationSnapshot(header: header, window: window, update: update, fetchedAt: page.fetchedAt, source: page.source)
-            try await persist(snapshot, startedAt: min(readStartedAt, page.readStartedAt), readStartedAt: readStartedAt, readEpoch: readEpoch, generation: generation)
+            let startedAt = min(readStartedAt, page.readStartedAt)
+            if priority == .prefetch {
+                deferTailCommit(snapshot, startedAt: startedAt, readStartedAt: readStartedAt, readEpoch: readEpoch, generation: generation)
+            } else {
+                pendingTailCommits.removeValue(forKey: header.id)?.cancel()
+                try await persist(snapshot, startedAt: startedAt, readStartedAt: readStartedAt, readEpoch: readEpoch, generation: generation)
+            }
             try Task.checkCancellation()
             guard epoch == readEpoch, generations[header.id] == generation else { throw HistoryReadFailure.invalidated }
             return snapshot
@@ -652,6 +660,23 @@ actor GatewayHistoryService {
               epoch == readEpoch, generations[snapshot.header.id] == generation else { return }
         try await cache.store(encoded.data, for: key, fetchedAt: snapshot.fetchedAt, startedAt: startedAt, readStartedAt: readStartedAt,
                               comparisonFingerprint: encoded.fingerprint)
+    }
+
+    private func deferTailCommit(_ snapshot: ConversationSnapshot, startedAt: ContinuousClock.Instant,
+                                 readStartedAt: ContinuousClock.Instant, readEpoch: UInt64, generation: UInt64) {
+        let threadID = snapshot.header.id
+        pendingTailCommits[threadID]?.cancel()
+        pendingTailCommits[threadID] = Task { [weak self] in
+            guard (try? await Task.sleep(for: Self.prefetchCommitDelay)) != nil else { return }
+            await self?.commitTail(snapshot, startedAt: startedAt, readStartedAt: readStartedAt, readEpoch: readEpoch, generation: generation)
+        }
+    }
+
+    private func commitTail(_ snapshot: ConversationSnapshot, startedAt: ContinuousClock.Instant,
+                            readStartedAt: ContinuousClock.Instant, readEpoch: UInt64, generation: UInt64) async {
+        guard !Task.isCancelled else { return }
+        pendingTailCommits.removeValue(forKey: snapshot.header.id)
+        try? await persist(snapshot, startedAt: startedAt, readStartedAt: readStartedAt, readEpoch: readEpoch, generation: generation)
     }
 
     private func pageKey(header: ConversationHeader, request: String, stable: Bool) async -> HistoryPageKey {

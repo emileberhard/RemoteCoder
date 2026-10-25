@@ -37,6 +37,11 @@ actor ConversationCheckpointStore {
         case pending, complete
     }
 
+    struct SaveReceipt: Sendable {
+        let unavailableImages: [UUID: Set<UUID>]
+        let historyAdmitted: Bool
+    }
+
     struct SubmissionRecord: Codable, Sendable {
         let revision: UInt64
         let threadID: String?
@@ -64,6 +69,8 @@ actor ConversationCheckpointStore {
         var recoveryBytes = 0
         var importedSource: ImportedSource?
         var historyExhausted = false
+
+        var cacheBytes: Int { max(0, bytes - payloadBytes) }
     }
     private let allowsLegacyMigration: Bool
     private let directory: URL
@@ -119,6 +126,8 @@ actor ConversationCheckpointStore {
         let finished: ContinuousClock.Instant
     }
     private var encodingTask: (id: UUID, task: Task<EncodedRecords, Error>)?
+    private var omittedHistory: [UUID: ContinuousClock.Instant] = [:]
+    private static let omittedHistoryLimit = 64
 
     init(hostID: UUID, directory: URL? = nil, storage: HostStorage = .live,
          budgetBytes: Int = 64 * 1_024 * 1_024, primaryBudgetBytes: Int, metrics: PersistenceMetrics = .shared) {
@@ -546,7 +555,8 @@ actor ConversationCheckpointStore {
     }
 
     @discardableResult
-    func save(_ supplied: ConversationState.Checkpoint, conversationID: UUID, generation: UInt64? = nil) async throws -> [UUID: Set<UUID>] {
+    func save(_ supplied: ConversationState.Checkpoint, conversationID: UUID, generation: UInt64? = nil,
+              presented: Bool = true) async throws -> SaveReceipt {
         var timing = metrics.beginCheckpointSave()
         defer { timing.finish() }
         var checkpoint = supplied
@@ -563,10 +573,10 @@ actor ConversationCheckpointStore {
         }
         try validate(conversationID, generation: generation)
         _ = try submissionRecords(conversationID)
-        if let saved = revisions[conversationID], checkpoint.durableRevision <= saved {
+        if let saved = committedRevision(checkpoint, id: conversationID, presented: presented) {
             try finishCommit(conversationID, revision: saved)
             metrics.skipped(.checkpoints)
-            return [:]
+            return unchangedReceipt(conversationID)
         }
         if encodingTask != nil {
             timing.advance(to: .predecessorWait)
@@ -576,14 +586,24 @@ actor ConversationCheckpointStore {
             }
         }
         try validate(conversationID, generation: generation)
-        if let saved = revisions[conversationID], checkpoint.durableRevision <= saved {
+        if committedRevision(checkpoint, id: conversationID, presented: presented) != nil {
             metrics.skipped(.checkpoints)
-            return [:]
+            return unchangedReceipt(conversationID)
+        }
+        let historyAdmitted = admitsHistory(checkpoint, id: conversationID, presented: presented)
+        if !historyAdmitted {
+            checkpoint = checkpoint.localRecords
+            if !checkpoint.containsLocalRecords, try submissionRecords(conversationID).isEmpty {
+                revisions[conversationID] = checkpoint.durableRevision
+                metrics.skipped(.checkpoints)
+                return SaveReceipt(unavailableImages: [:], historyAdmitted: false)
+            }
         }
         timing.advance(to: .encodeWait)
         let started = ContinuousClock.now
         let encodingID = UUID()
-        let previous = encodingStamps[conversationID]
+        let previous = historyAdmitted && omittedHistory[conversationID] != nil ? nil : encodingStamps[conversationID]
+        let encodedImages = checkpoint.unavailableImages
         let task = Task { [checkpoint, previous, metrics] in try await Self.encodeRecords(checkpoint, previous: previous, submitted: started, metrics: metrics) }
         encodingTask = (encodingID, task)
         var encoded: [CheckpointDatabase.Record]
@@ -598,9 +618,9 @@ actor ConversationCheckpointStore {
         }
         if encodingTask?.id == encodingID { encodingTask = nil }
         try validate(conversationID, generation: generation)
-        if let saved = revisions[conversationID], checkpoint.durableRevision <= saved {
+        if committedRevision(checkpoint, id: conversationID, presented: presented) != nil {
             metrics.skipped(.checkpoints)
-            return [:]
+            return unchangedReceipt(conversationID)
         }
         timing.advance(to: .admission)
         let writtenBytes: Int
@@ -622,7 +642,7 @@ actor ConversationCheckpointStore {
             }
             if case .checkpoint(let admitted, _) = admission { checkpoint = admitted }
             payloadBytes = try admissionBytes(admission, id: conversationID)
-            if checkpoint.unavailableImages != supplied.unavailableImages {
+            if checkpoint.unavailableImages != encodedImages {
                 encoded = try Self.encodeDatabaseRecords(checkpoint, previous: previous)
             }
             timing.advance(to: .database)
@@ -644,16 +664,62 @@ actor ConversationCheckpointStore {
             protected: payloadBytes > 0, invalidation: nil)
         records[conversationID]?.bytes = try diskBytes(conversationID) + retainedFileBytes + recoverySize(conversationID)
         records[conversationID]?.recoveryBytes = try recoverySize(conversationID)
+        records[conversationID]?.historyExhausted = !historyAdmitted
+        if historyAdmitted, omittedHistory.removeValue(forKey: conversationID) != nil {
+            metrics.recordReadmittedHistory(bytes: Self.historyBytes(checkpoint))
+        }
         try finishCommit(conversationID, revision: checkpoint.durableRevision)
         // Unique local records and pending sends are durable user data, never cache victims.
-        var bytes = records.values.reduce(0) { $0 + $1.bytes }
-        for (id, record) in records.sorted(by: { $0.value.modified < $1.value.modified }) {
-            guard bytes > budgetBytes, id != conversationID, (fences[id]?.operations ?? 0) == 0 else { continue }
-            if try requiresPreservation(id) { _ = try shedHistory(id) }
-            else { try evictCheckpoint(id); revisions.removeValue(forKey: id) }
-            bytes -= record.bytes - (records[id]?.bytes ?? 0)
+        guard historyAdmitted else { return SaveReceipt(unavailableImages: checkpoint.unavailableImages, historyAdmitted: false) }
+        var cacheBytes = records.values.reduce(0) { $0 + $1.cacheBytes }
+        for (id, record) in records.sorted(by: { $0.value.modified < $1.value.modified }) where cacheBytes > budgetBytes {
+            guard id != conversationID, (fences[id]?.operations ?? 0) == 0 else { continue }
+            if try requiresPreservation(id) {
+                guard try shedHistory(id) else { continue }
+            } else {
+                try evictCheckpoint(id)
+                revisions.removeValue(forKey: id)
+                omitHistory(id)
+            }
+            cacheBytes -= record.cacheBytes - (records[id]?.cacheBytes ?? 0)
         }
-        return checkpoint.unavailableImages
+        if cacheBytes > budgetBytes {
+            logger.notice("Checkpoint cache stays over its allowance cacheBytes=\(cacheBytes, privacy: .public) limitBytes=\(self.budgetBytes, privacy: .public)")
+        }
+        return SaveReceipt(unavailableImages: checkpoint.unavailableImages, historyAdmitted: true)
+    }
+
+    private func committedRevision(_ checkpoint: ConversationState.Checkpoint, id: UUID, presented: Bool) -> UInt64? {
+        guard let saved = revisions[id], checkpoint.durableRevision <= saved,
+              !(presented && omittedHistory[id] != nil) else { return nil }
+        return saved
+    }
+
+    private func unchangedReceipt(_ id: UUID) -> SaveReceipt {
+        SaveReceipt(unavailableImages: [:], historyAdmitted: omittedHistory[id] == nil)
+    }
+
+    private func admitsHistory(_ checkpoint: ConversationState.Checkpoint, id: UUID, presented: Bool) -> Bool {
+        guard omittedHistory[id] != nil, !presented else { return true }
+        let others = records.reduce(0) { $0 + ($1.key == id ? 0 : $1.value.cacheBytes) }
+        let estimate = Self.historyBytes(checkpoint)
+        guard others + estimate > budgetBytes else { return true }
+        metrics.recordDeferredHistory(bytes: estimate)
+        return false
+    }
+
+    private func omitHistory(_ id: UUID) {
+        omittedHistory[id] = .now
+        metrics.recordHistoryShed()
+        guard omittedHistory.count > Self.omittedHistoryLimit,
+              let oldest = omittedHistory.min(by: { $0.value < $1.value })?.key else { return }
+        omittedHistory.removeValue(forKey: oldest)
+    }
+
+    private static func historyBytes(_ checkpoint: ConversationState.Checkpoint) -> Int {
+        checkpoint.turns.values.reduce(checkpoint.historyWindow?.encodedBytes ?? 0) { total, turn in
+            turn.items.values.reduce(total) { $0 + ($1.isLocal ? 0 : $1.encodedBytes) }
+        }
     }
 
     private func shedHistory(_ id: UUID) throws -> Bool {
@@ -680,10 +746,12 @@ actor ConversationCheckpointStore {
         let values = try Self.encodeDatabaseRecords(local, previous: nil)
         _ = try replaceDatabase(values, retaining: Self.recordKeys(local), id: id)
         try database(for: id).compact()
+        metrics.recordCheckpointCompaction()
         encodingStamps.removeValue(forKey: id)
         try refreshLoadedRecord(id, checkpoint: local, source: directory.appending(path: "\(id).sqlite"))
         try finishCommit(id, revision: local.durableRevision)
         records[id]?.historyExhausted = true
+        omitHistory(id)
         return true
     }
 
@@ -857,6 +925,7 @@ actor ConversationCheckpointStore {
         defer { pruneFence(id) }
         revisions.removeValue(forKey: id)
         encodingStamps.removeValue(forKey: id)
+        omittedHistory.removeValue(forKey: id)
         try writeInvalidation(.pending, id: id)
         try completeInvalidation(id)
     }

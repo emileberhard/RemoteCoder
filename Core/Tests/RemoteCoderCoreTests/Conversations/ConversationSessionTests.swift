@@ -395,6 +395,23 @@ struct ConversationSessionTests: ConversationHistoryFixtures {
         #expect(returned.messages.map(\.text) == ["Initial", "Recovered"])
     }
 
+    @Test(.timeLimit(.minutes(1))) func hiddenSessionsDeferRemoteSavesUntilTheirConversationIsShown() async throws {
+        let directory = URL.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let metrics = PersistenceMetrics()
+        let session = await ConversationSession.make(conversationID: UUID(), threadID: "thread",
+            checkpoints: ConversationCheckpointStore(hostID: UUID(), directory: directory,
+                primaryBudgetBytes: 512 * 1_024 * 1_024, metrics: metrics))
+        await session.ingest(try event("item/started", item: .agentMessage(id: "answer", text: "Hidden"), ordinal: 1), replay: false)
+        try await Task.sleep(for: .milliseconds(1_500))
+        #expect(metrics.snapshot()[.checkpoints]?.writes == nil)
+
+        let stream = await session.snapshots()
+        let observer = Task { for await _ in stream {} }
+        defer { observer.cancel() }
+        #expect(await waitUntil { metrics.snapshot()[.checkpoints]?.writes == 1 })
+    }
+
     @Test func flushPersistsStreamedTextThatNoCompletionHasSaved() async throws {
         let directory = URL.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
