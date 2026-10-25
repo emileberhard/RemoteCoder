@@ -333,8 +333,6 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
     func setWindowVisible(_ window: ChatWindowModel, isVisible: Bool) {
         window.setVisible(isVisible)
         publishPresentation()
-        guard isVisible, window.isHistoryDrawerOpen else { return }
-        for model in models { model.startHistoryAutoRefreshIfNeeded() }
     }
 
     func setWindowOpen(_ window: ChatWindowModel) {
@@ -693,15 +691,9 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         return scenePhasePass
     }
 
-    /// Every host's rows are in the one drawer, so drawer visibility drives
-    /// every host's activity polling — bounded and concurrent, because opening
-    /// the drawer must not wait out one unreachable gateway.
-    func handleHistoryDrawerVisibilityChanged(_ isOpen: Bool, in window: ChatWindowModel) async {
-        window.setHistoryDrawerOpen(isOpen)
+    func setHistoryDrawerOpen(_ isOpen: Bool, overlaysTranscript: Bool, in window: ChatWindowModel) {
+        window.setHistoryDrawerOpen(isOpen, overlaysTranscript: overlaysTranscript)
         publishPresentation()
-        await withHostConcurrency(models) { model in
-            await model.handleHistoryDrawerVisibilityChanged(isOpen)
-        }
     }
 
     func teardown() {

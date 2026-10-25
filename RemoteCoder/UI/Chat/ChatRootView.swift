@@ -274,6 +274,11 @@ private struct ChatScreen: View {
     @State private var fileImportRequest = 0
     private let logger = Logger(subsystem: "RemoteCoder", category: "ChatScreen")
 
+    private struct HistoryDrawerState: Equatable {
+        let isOpen: Bool
+        let overlaysTranscript: Bool
+    }
+
     var body: some View {
         eventPresenter?.install(for: screen, perform: perform)
         return ChatSidebarContainer(
@@ -366,9 +371,9 @@ private struct ChatScreen: View {
             if open {
                 dismissComposerFocus()
             }
-            Task { @MainActor in
-                await workspace.handleHistoryDrawerVisibilityChanged(open, in: window)
-            }
+        }
+        .task(id: HistoryDrawerState(isOpen: isHistoryOpen, overlaysTranscript: !usesPersistentSidebar)) {
+            workspace.setHistoryDrawerOpen(isHistoryOpen, overlaysTranscript: !usesPersistentSidebar, in: window)
         }
         .background {
             ConversationAgentsProbe(screen: screen, isPaused: scenePhase != .active)

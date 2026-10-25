@@ -21,6 +21,37 @@ struct ChatHistoryReadTests {
         #expect(await replacement.beginHistoryRead().base?.turn("t0") == nil)
     }
 
+    @Test(.timeLimit(.minutes(1))) func coveringTheTranscriptCancelsSpeculativePagingUntilItIsUncovered() async throws {
+        let gateway = try await serving(entries: 60)
+        await gateway.holdCursorPages()
+        let fixture = await WorkspaceFixture(miniGatewayPort: try await gateway.start())
+        defer { await fixture.cleanUp(); await gateway.stop() }
+        let workspace = fixture.workspace
+        let chat = try await openPrefetching(fixture)
+        workspace.setHistoryDrawerOpen(true, overlaysTranscript: true, in: workspace.keyWindow)
+        #expect(chat.historyEdges.isIdle)
+        let pages = await gateway.requests("thread/items/list").count
+        await gateway.releaseHeldPage()
+        workspace.setHistoryDrawerOpen(false, overlaysTranscript: true, in: workspace.keyWindow)
+        #expect(await waitUntil { await gateway.requests("thread/items/list").count > pages })
+    }
+
+    @Test(.timeLimit(.minutes(1))) func anExplicitReadJoiningSpeculativePagingSurvivesCoveringTheTranscript() async throws {
+        let gateway = try await serving(entries: 60)
+        await gateway.holdCursorPages()
+        let fixture = await WorkspaceFixture(miniGatewayPort: try await gateway.start())
+        defer { await fixture.cleanUp(); await gateway.stop() }
+        let workspace = fixture.workspace
+        let chat = try await openPrefetching(fixture)
+        let read = try #require(chat.historyEdges.load(.older))
+        workspace.setHistoryDrawerOpen(true, overlaysTranscript: true, in: workspace.keyWindow)
+        #expect(!chat.historyEdges.isIdle)
+        await gateway.releaseHeldPage()
+        await read.value
+        #expect(chat.historyEdgeStatus[.older] == nil)
+        #expect(chat.historyEdges.isIdle)
+    }
+
     @Test(.timeLimit(.minutes(2))) func jumpingToTheLatestReadsTheGatewayTailEvenWhileItsPagesAreCached() async throws {
         let gateway = try await serving(entries: 2_100)
         let fixture = await WorkspaceFixture(miniGatewayPort: try await gateway.start())
@@ -144,6 +175,14 @@ struct ChatHistoryReadTests {
         let chat = try await beginOpening(fixture)
         try #require(await waitUntil { chat.loadingTranscriptID == nil && chat.activeSessionID == threadID && !chat.messages.isEmpty },
             "loading=\(chat.loadingTranscriptID ?? "none") messages=\(chat.messages.count) error=\(chat.alert?.message ?? "none")")
+        return chat
+    }
+
+    private func openPrefetching(_ fixture: WorkspaceFixture) async throws -> ChatScreenModel {
+        let chat = try await open(fixture)
+        try #require(await waitUntil { chat.historyEdges.allowsPrefetch })
+        chat.historyEdges.prefetchEarlier()
+        try #require(!chat.historyEdges.isIdle)
         return chat
     }
 

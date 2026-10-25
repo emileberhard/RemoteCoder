@@ -370,6 +370,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
             presentedChanged(next.presented)
         }
         if next.drawerOpen != previous.drawerOpen { publishSeenCompletion() }
+        if next.coversTranscript != previous.coversTranscript { historyEdges.setTranscriptCovered(next.coversTranscript) }
         target.screenPresentationChanged()
     }
 
@@ -384,8 +385,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
     }
 
     func publishSeenCompletion() {
-        let transcriptCovered = presentation.drawerOpen && presentation.drawerOverlaysTranscript
-        guard isOnScreen, !transcriptCovered, let threadID = activeSessionID, let presentedCompletionAt else { return }
+        guard isOnScreen, !presentation.coversTranscript, let threadID = activeSessionID, let presentedCompletionAt else { return }
         let completion = SeenCompletion(threadID: threadID, completedAt: presentedCompletionAt)
         guard completion != markedCompletion else { return }
         markedCompletion = completion

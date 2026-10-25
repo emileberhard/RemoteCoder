@@ -15,6 +15,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
     static let presentingScreenCapacity = 8
     private static let routeMoveInterval = Duration.seconds(30)
     private static let deferredRouteMoveDelay = Duration.seconds(1)
+    private static let warmingDwell = Duration.seconds(1)
     @ObservationIgnored lazy var conversationWarmer = ConversationWarmer(host: self, conversations: conversations, history: historyService)
     @ObservationIgnored var recentConversations = RecentConversationCache(capacity: 8)
     #if os(macOS) && RC_PERF_HARNESS
@@ -686,7 +687,17 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
         let previous = lifecycle.presentation
         let effects = lifecycle.handle(.presentation(next))
         if next.presented != previous.presented { presentedChanged(next.presented, effects: effects) } else { reconcileObservation() }
-        if next.drawerOpen != previous.drawerOpen { for screen in screens { screen.publishSeenCompletion() } }
+        if next.drawerOpen != previous.drawerOpen {
+            historyDrawerVisibilityChanged()
+            for screen in screens { screen.publishSeenCompletion() }
+        }
+    }
+
+    private func historyDrawerVisibilityChanged() {
+        requestAddedQuestionScopes()
+        guard isHistoryDrawerOpen else { stopHistoryAutoRefresh(); return }
+        startActivityRefresh()
+        startHistoryAutoRefreshIfNeeded()
     }
 
     // MARK: - VoiceCallHost
@@ -1015,14 +1026,17 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
         logger.notice("disconnectForBackground completed")
     }
 
-    func startHistoryAutoRefreshIfNeeded() {
+    private func startHistoryAutoRefreshIfNeeded() {
         guard acceptsWork, isSceneActive, isHistoryDrawerOpen, !ownedTasks.isRunning(.historyAutoRefresh) else { return }
 
         ownedTasks.start(.historyAutoRefresh) { [weak self] in
+            let warmsAfter = ContinuousClock.now + Self.warmingDwell
             while !Task.isCancelled {
                 guard let self, self.acceptsWork, self.isSceneActive, self.isHistoryDrawerOpen else { return }
                 await self.conversationList.refreshIfStale()
-                guard !Task.isCancelled, self.acceptsWork, self.isSceneActive, self.isHistoryDrawerOpen else { return }
+                do { try await Task.sleep(until: warmsAfter, clock: .continuous) }
+                catch { return }
+                guard self.acceptsWork, self.isSceneActive, self.isHistoryDrawerOpen else { return }
                 self.warmConversationsIfIdle()
                 do { try await Task.sleep(for: self.conversationList.automaticRefreshDelay()) }
                 catch { return }
@@ -1227,19 +1241,6 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
 
     private static func retryDelay(afterFailures failures: Int) -> TimeInterval {
         min(TimeInterval(1 << min(failures, 5)), 30)
-    }
-
-    func handleHistoryDrawerVisibilityChanged(_ isOpen: Bool) async {
-        guard isOpen else { stopHistoryAutoRefresh(); return }
-        await fetchActiveTurnsOnce()
-        guard isHistoryDrawerOpen, isSceneActive, acceptsWork, !Task.isCancelled else { return }
-        refreshQuestionScopes()
-        if historyBusySessionIDs.isEmpty {
-            await conversationList.refreshIfStale()
-        } else {
-            await conversationList.refresh(reason: "history-open-active-turns")
-        }
-        startHistoryAutoRefreshIfNeeded()
     }
 
     /// Applies the daemon's authoritative active-turn snapshot. Internal because
