@@ -819,20 +819,21 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
     }
 
     private func sidebarInput(for model: ChatTargetModel, in window: ChatWindowModel) -> ConversationSidebarHostInput {
-        ConversationSidebarHostInput(
+        let activity = model.historyActivityStates
+        return ConversationSidebarHostInput(
             hostID: model.hostID,
             hostName: targetName(of: model),
             threads: model.conversationList.threads,
             marks: model.conversationList.marks,
             remoteHomePath: model.remoteHomePath,
-            activityByThreadID: model.historyActivityStates,
+            activityByThreadID: activity,
             activeThreadID: window.screen(for: model.target)?.openThreadID,
             loadingThreadID: window.screen(for: model.target)?.loadingTranscriptID,
             isLoading: model.conversationList.isLoading || model.conversationList.isLoadingOlder,
             errorMessage: model.conversationList.errorMessage,
             isGatewayRestarting: model.gatewayConnectivity == .restarting,
             questionAskTimesByThreadID: model.questionAskTimesByThreadID,
-            waitingSinceByThreadID: model.waitingSinceByThreadID,
+            waitingSinceByThreadID: model.waitingSinceByThreadID(in: activity),
             projects: model.conversationList.projects,
             settlementEdits: model.conversationList.settlementEdits,
             canLoadMore: model.conversationList.canLoadOlder(query: window.drawerQuery),
@@ -843,13 +844,14 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
 
     func attentionInputs() -> [ConversationSidebarHostInput] {
         models.map { model in
-            ConversationSidebarHostInput(
+            let activity = model.historyActivityStates
+            return ConversationSidebarHostInput(
                 hostID: model.hostID, hostName: targetName(of: model),
                 threads: model.conversationList.threads, marks: model.conversationList.marks,
-                remoteHomePath: nil, activityByThreadID: model.historyActivityStates,
+                remoteHomePath: nil, activityByThreadID: activity,
                 activeThreadID: nil, loadingThreadID: nil, isLoading: false, errorMessage: nil,
                 questionAskTimesByThreadID: model.questionAskTimesByThreadID,
-                waitingSinceByThreadID: model.waitingSinceByThreadID
+                waitingSinceByThreadID: model.waitingSinceByThreadID(in: activity)
             )
         }
     }
@@ -1059,9 +1061,9 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         guard let owner = model(for: address.hostID),
               let thread = owner.conversationList.header(id: address.threadID) else { return .unavailable }
         return ConversationSidebarProjection.settlement(
-            of: thread, marks: owner.conversationList.marks, activity: owner.historyActivityStates[thread.id],
-            questionAskTimes: owner.questionAskTimesByThreadID[thread.id] ?? [],
-            waitingSince: owner.waitingSinceByThreadID[thread.id],
+            of: thread, marks: owner.conversationList.marks, activity: owner.historyActivityState(of: thread.id),
+            questionAskTimes: owner.questionAskTimes(of: thread.id),
+            waitingSince: owner.waitingSince(of: thread.id),
             settlementEdit: owner.conversationList.settlementEdits[thread.id] ?? 0,
             captured: layout?.ranks(on: address.target)[thread.id],
             at: layout?.capturedAt ?? Int64(Date.now.timeIntervalSince1970))
@@ -1072,7 +1074,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
     }
 
     private func isRunning(_ threadID: String, on owner: ChatTargetModel) -> Bool {
-        owner.historyActivityStates[threadID] == .working
+        owner.historyActivityState(of: threadID) == .working
     }
 
     private func grouped(_ addresses: [ConversationAddress]) -> [ExecutionTarget: [String]] {

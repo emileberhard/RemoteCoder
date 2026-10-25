@@ -133,6 +133,10 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
         return states
     }
 
+    func historyActivityState(of threadID: String) -> CodexGatewayDaemon.ActivityState {
+        conversationActivity.state(for: threadID, hasManagedTurn: historyBusySessionIDs.contains(threadID))
+    }
+
     var conversationActivity = ConversationActivity()
 
     private func markActivityUnavailable() {
@@ -208,18 +212,26 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
     }
 
     var questionAskTimesByThreadID: [String: [Int64]] {
-        let marks = conversationList.marks
-        return questions.pendingAskTimesByThreadID.reduce(into: [:]) { times, pending in
-            times[pending.key] = pending.value.filter { marks.isUnseenQuestion(askedAtMs: $0, in: pending.key) }.map { $0 / 1000 }
+        questions.pendingAskTimesByThreadID.keys.reduce(into: [:]) { times, threadID in
+            times[threadID] = questionAskTimes(of: threadID)
         }
     }
-    var waitingSinceByThreadID: [String: Int64] {
-        historyActivityStates.reduce(into: [:]) { times, entry in
+    func questionAskTimes(of threadID: String) -> [Int64] {
+        let marks = conversationList.marks
+        return (questions.pendingAskTimesByThreadID[threadID] ?? [])
+            .filter { marks.isUnseenQuestion(askedAtMs: $0, in: threadID) }.map { $0 / 1000 }
+    }
+    func waitingSinceByThreadID(in states: [String: CodexGatewayDaemon.ActivityState]) -> [String: Int64] {
+        states.reduce(into: [:]) { times, entry in
             if entry.value == .waiting, let since = conversationActivity.waitingSince(for: entry.key) { times[entry.key] = since }
         }
     }
+    func waitingSince(of threadID: String) -> Int64? {
+        historyActivityState(of: threadID) == .waiting ? conversationActivity.waitingSince(for: threadID) : nil
+    }
     var newestRequestTimesByThreadID: [String: Int64] {
-        questionAskTimesByThreadID.compactMapValues { $0.max() }.merging(waitingSinceByThreadID, uniquingKeysWith: max)
+        questionAskTimesByThreadID.compactMapValues { $0.max() }
+            .merging(waitingSinceByThreadID(in: historyActivityStates), uniquingKeysWith: max)
     }
     @ObservationIgnored lazy var questions = QuestionReplica(
         hostID: hostID, remote: gateway, sessions: conversations,
@@ -1052,7 +1064,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
         let marks = conversationList.marks
         let activity = historyActivityStates
         let questionAskTimes = questionAskTimesByThreadID
-        let waitingSince = waitingSinceByThreadID
+        let waitingSince = waitingSinceByThreadID(in: activity)
         let settlementEdits = conversationList.settlementEdits
         let now = Int64(Date.now.timeIntervalSince1970)
         return conversationList.threads.compactMap { thread -> (thread: ConversationHeader, rank: ConversationDrawerRank)? in
