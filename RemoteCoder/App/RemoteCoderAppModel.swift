@@ -219,9 +219,12 @@ final class RemoteCoderAppModel {
         diagnostics.update(destination: diagnosticsDestination(for: workspace.settings.activeHost?.configuration),
                            phase: .background)
         let execution = makeBackgroundExecution()
-        execution.hold(named: "RemoteCoder.DiagnosticsDrain") { execution.release() }
-        Task(priority: .utility) { [diagnostics] in
+        let drain = Task(priority: .utility) { [diagnostics] in
             await diagnostics.flush()
+            execution.release()
+        }
+        execution.hold(named: "RemoteCoder.DiagnosticsDrain") {
+            drain.cancel()
             execution.release()
         }
     }

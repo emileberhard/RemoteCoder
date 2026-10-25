@@ -466,6 +466,7 @@ def export_costs(runs: list[dict]) -> dict:
                   if isinstance(record.get("footprintSampledMax"), int) and isinstance(record.get("footprintBefore"), int)]
         reasons[reason] = {
             "exports": len(items),
+            "collections": dict(sorted(Counter(str(record.get("collection", "unknown")) for record in items).items())),
             "totalMs": _distribution([float(record.get("totalMs", 0)) for record in items]),
             "stageMs": {stage: round(sum(float(record.get(f"{stage}Ms", 0)) for record in items), 2)
                         for stage in ("scan", "encode", "write", "compress", "upload")},

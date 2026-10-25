@@ -27,6 +27,20 @@ struct DiagnosticsLifecycleTests {
         #expect(await exporter.operations == ["background", "stop"])
     }
 
+    @Test @MainActor func cancellingAnExpiredBackgroundFlushStopsItsDrainAndLaterPhasesStillApply() async {
+        let exporter = ExpiringDrainExporter()
+        let lifecycle = DiagnosticsLifecycle(exporter: exporter)
+        lifecycle.update(destination: nil, phase: .background)
+        let flush = Task { await lifecycle.flush() }
+        #expect(await waitUntil { await exporter.drainStarted })
+        flush.cancel()
+        await flush.value
+        #expect(await exporter.drainWasCancelled)
+        lifecycle.update(destination: nil, phase: .foreground)
+        await lifecycle.flush()
+        #expect(await exporter.isPumping)
+    }
+
     @Test @MainActor func reactivationAndHostChangesSupersedeAnAwaitingBackgroundStop() async {
         let exporter = DiagnosticsExporterFixture()
         let lifecycle = DiagnosticsLifecycle(exporter: exporter)
@@ -80,6 +94,21 @@ private actor DiagnosticsExporterFixture: DiagnosticsExporting {
     func releaseDrain() {
         heldDrain?.resume()
         heldDrain = nil
+    }
+}
+
+private actor ExpiringDrainExporter: DiagnosticsExporting {
+    private(set) var drainStarted = false
+    private(set) var drainWasCancelled = false
+    private(set) var isPumping = false
+
+    func setDestination(_ destination: DiagnosticsDestination?) {}
+    func startPumping() { isPumping = true }
+    func stopPumping() { isPumping = false }
+    func drain(reason: String) async {
+        drainStarted = true
+        try? await Task.sleep(for: .seconds(60))
+        drainWasCancelled = Task.isCancelled
     }
 }
 

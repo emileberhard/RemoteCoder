@@ -106,6 +106,7 @@ actor DiagnosticsOutbox: DiagnosticsExporting {
     private static let maximumRememberedReports = 1_024
     private static let maximumUploadBytes = 16 * 1024 * 1024
     private static let drainInterval: Duration = .seconds(300)
+    private static let collectionCoalescing: Duration = .seconds(60)
     private static let maximumSegmentRecords = 10_000
     private static let maximumSegmentBytes = 4 * 1024 * 1024
 
@@ -125,6 +126,7 @@ actor DiagnosticsOutbox: DiagnosticsExporting {
     private var cachedDeviceName: String?
     private var isUploading = false
     private var drainTask: Task<Void, Never>?
+    private var lastCollection: ContinuousClock.Instant?
     private var run: TelemetryRun
     nonisolated let telemetry: TelemetryBuffer
     private let clock = ContinuousClock()
@@ -262,12 +264,18 @@ actor DiagnosticsOutbox: DiagnosticsExporting {
     func startPumping() {
         guard pump == nil else { return }
         pump = Task { [weak self] in
-            while !Task.isCancelled {
-                do { try await Task.sleep(for: Self.drainInterval, tolerance: .seconds(30)) }
+            while !Task.isCancelled, let due = await self?.nextIntervalCollection() {
+                do { try await Task.sleep(until: due, tolerance: .seconds(30), clock: .continuous) }
                 catch { return }
                 await self?.drain(reason: "interval")
             }
         }
+    }
+
+    private func nextIntervalCollection() -> ContinuousClock.Instant {
+        let now = clock.now
+        guard let lastCollection, lastCollection + Self.drainInterval > now else { return now + Self.drainInterval }
+        return lastCollection + Self.drainInterval
     }
 
     func stopPumping() {
@@ -280,13 +288,13 @@ actor DiagnosticsOutbox: DiagnosticsExporting {
     /// failed upload is retried on the next pass.
     func drain(reason: String) async {
         if let drainTask {
-            await drainTask.value
+            await withTaskCancellationHandler { await drainTask.value } onCancel: { drainTask.cancel() }
             _ = flushTelemetry()
             return
         }
         let task = Task { await performDrain(reason: reason) }
         drainTask = task
-        await task.value
+        await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
         drainTask = nil
     }
 
@@ -296,9 +304,14 @@ actor DiagnosticsOutbox: DiagnosticsExporting {
         var cost = ExportCost(reason: reason)
         PersistenceMetrics.shared.reportIfDue()
         cost.flushedRecords = flushTelemetry()
-        drainToSegments(&cost)
+        if let lastCollection, lastCollection.duration(to: started) < Self.collectionCoalescing {
+            cost.collection = .coalesced
+        } else {
+            drainToSegments(&cost)
+            if cost.collection == .collected { lastCollection = started }
+        }
         let afterScan = ProcessResources.current()
-        let upload = await uploadPendingSegments()
+        let upload = Task.isCancelled ? DiagnosticsUpload() : await uploadPendingSegments()
         let after = ProcessResources.current()
         cost.uploadedSegments = upload.segments
         cost.uploadedBytes = upload.bytes
@@ -407,11 +420,21 @@ actor DiagnosticsOutbox: DiagnosticsExporting {
         }
 
         do {
+            let opening = clock.now
             let store = try OSLogStore(scope: .currentProcessIdentifier)
+            cost.storeOpenMilliseconds = opening.duration(to: clock.now).milliseconds
             let since = cursor.date
-            for entry in try store.getEntries(at: store.position(date: since)) {
-                cost.scanned += 1
+            let setup = clock.now
+            let entries = try store.getEntries(at: store.position(date: since))
+            cost.enumeratorSetupMilliseconds = setup.duration(to: clock.now).milliseconds
+            cost.collection = .collected
+            for entry in entries {
                 guard !failed else { break }
+                guard !Task.isCancelled else {
+                    cost.collection = .cancelled
+                    break
+                }
+                cost.scanned += 1
                 guard entry.date >= since else { continue }
                 let log = entry as? OSLogEntryLog
                 let category = log?.category ?? ""
@@ -428,11 +451,13 @@ actor DiagnosticsOutbox: DiagnosticsExporting {
                 )
                 for ready in resume.accept(record) { emit(ready) }
             }
-            for ready in resume.finish() { emit(ready) }
+            if cost.collection == .collected { for ready in resume.finish() { emit(ready) } }
         } catch {
+            cost.collection = .failed
             logger.error("OSLogStore drain failed: \(error.localizedDescription, privacy: .public)")
         }
         writeSegment()
+        if failed { cost.collection = .failed }
         cost.encodeMilliseconds = encoding.milliseconds
         cost.writeMilliseconds = writing.milliseconds
         cost.scanMilliseconds = max(0, started.duration(to: clock.now).milliseconds - cost.encodeMilliseconds - cost.writeMilliseconds)

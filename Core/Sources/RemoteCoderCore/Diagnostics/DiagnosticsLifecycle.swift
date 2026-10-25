@@ -50,12 +50,12 @@ final class DiagnosticsLifecycle {
     }
 
     func flush() async {
-        await worker?.value
+        guard let worker else { return }
+        await withTaskCancellationHandler { await worker.value } onCancel: { worker.cancel() }
     }
 
     private func applyPending() async {
-        defer { worker = nil }
-        while let request = pending {
+        while !Task.isCancelled, let request = pending {
             pending = nil
             await exporter.setDestination(request.destination)
             guard request.generation == generation else { continue }
@@ -73,5 +73,7 @@ final class DiagnosticsLifecycle {
                 await exporter.stopPumping()
             }
         }
+        worker = nil
+        if pending != nil { worker = Task(priority: .utility) { await applyPending() } }
     }
 }
