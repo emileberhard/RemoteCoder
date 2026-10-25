@@ -493,9 +493,10 @@ entrypoint linked above.
     once, and an active voice call keeps the connection.
   - While `.active`, an incremental refresh loop keeps the history list at most
     15 s stale. It runs while any of the target's windows shows the drawer
-    (`TargetPresentation.drawerOpen` aggregates them); opening it also reads
-    activity and requests only newly added question scopes, and closing it
-    narrows them. Explicit refresh, reconnect and invalidation keep their full
+    (`TargetPresentation.drawerOpen` aggregates them). Opening it requests only
+    newly added question scopes, and closing it narrows them; the workspace's
+    bounded fan-out then reads each host's activity and stale list before
+    starting its loop. Explicit refresh, reconnect and invalidation keep their full
     refreshes.
   - After 1 s of continuous drawer visibility, the same loop warms every
     unsettled drawer conversation in rank order

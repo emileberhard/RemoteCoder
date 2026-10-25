@@ -695,8 +695,14 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
 
     private func historyDrawerVisibilityChanged() {
         requestAddedQuestionScopes()
-        guard isHistoryDrawerOpen else { stopHistoryAutoRefresh(); return }
-        startActivityRefresh()
+        if !isHistoryDrawerOpen { stopHistoryAutoRefresh() }
+    }
+
+    func historyDrawerOpened() async {
+        guard acceptsWork, isSceneActive, isHistoryDrawerOpen else { return }
+        await fetchActiveTurnsOnce()
+        guard acceptsWork, isSceneActive, isHistoryDrawerOpen, !Task.isCancelled else { return }
+        await conversationList.refreshIfStale()
         startHistoryAutoRefreshIfNeeded()
     }
 

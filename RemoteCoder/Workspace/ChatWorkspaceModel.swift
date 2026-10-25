@@ -47,6 +47,8 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
     /// The foreground fan-out, so backgrounding cancels a pass that has not
     /// finished instead of letting it restart polling after the app is gone.
     @ObservationIgnored private var foregroundFanOutTask: Task<Void, Never>?
+    @ObservationIgnored private var historyDrawerOpening: Task<Void, Never>?
+    @ObservationIgnored private var showsHistoryDrawer = false
     @ObservationIgnored private var scenePhasePass = 0
     let notifications: CompletionNotificationCenter
     let pushTokens: PushTokenSources
@@ -444,6 +446,14 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         for window in windows {
             window.setPresentation(presenting: window.isAttached || !anyAttached, isKey: window === key)
         }
+        let shows = windows.contains(where: \.showsHistoryDrawer)
+        guard shows != showsHistoryDrawer else { return }
+        showsHistoryDrawer = shows
+        historyDrawerOpening?.cancel()
+        historyDrawerOpening = shows ? Task { [weak self] in
+            guard let self else { return }
+            await self.withHostConcurrency(self.models) { await $0.historyDrawerOpened() }
+        } : nil
     }
 
     // MARK: - Host reconciliation
@@ -706,6 +716,8 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         prepareTasks.removeAll()
         foregroundFanOutTask?.cancel()
         foregroundFanOutTask = nil
+        historyDrawerOpening?.cancel()
+        historyDrawerOpening = nil
         notifications.stop()
         for model in models {
             model.hostServices.beginFileRetirement()

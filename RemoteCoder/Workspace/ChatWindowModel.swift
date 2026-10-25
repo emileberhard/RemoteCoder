@@ -11,6 +11,7 @@ final class ChatWindowModel {
     private(set) var isAttached = false
     private(set) var isVisible = true
     private(set) var isHistoryDrawerOpen = false
+    var showsHistoryDrawer: Bool { isHistoryDrawerOpen && isVisible }
     @ObservationIgnored private var historyDrawerOverlaysTranscript = true
     var drawerQuery = ""
     private(set) var revealedProjects: Set<String> = []
@@ -128,7 +129,7 @@ final class ChatWindowModel {
         for (target, screen) in screens {
             let presented = presenting && target == selectedTarget
             screen.setPresentation(TargetPresentation(presented: presented, key: presented && isKey,
-                drawerOpen: isHistoryDrawerOpen && isVisible, drawerOverlaysTranscript: historyDrawerOverlaysTranscript))
+                drawerOpen: showsHistoryDrawer, drawerOverlaysTranscript: historyDrawerOverlaysTranscript))
         }
     }
 }
