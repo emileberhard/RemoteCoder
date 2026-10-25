@@ -139,6 +139,7 @@ def profile(tree: dict, symbols: Symbols) -> dict:
     inclusive: Counter = Counter()
     own: Counter = Counter()
     where: dict[str, str | None] = {}
+    innermost_first = bool(tree.get("callStackPerThread"))
     stack = [(frame, frozenset()) for frame in tree_roots(tree)]
     while stack:
         frame, path = stack.pop()
@@ -150,7 +151,10 @@ def profile(tree: dict, symbols: Symbols) -> dict:
         where.setdefault(name, binaries.get(uuid))
         if name not in path:
             inclusive[name] += count
-        own[name] += max(0, count - sum(int(child.get("sampleCount") or 0) for child in children))
+        if not innermost_first:
+            own[name] += max(0, count - sum(int(child.get("sampleCount") or 0) for child in children))
+        elif not path:
+            own[name] += count
         stack.extend((child, path | {name}) for child in children)
 
     def rows(counter: Counter) -> list[dict]:

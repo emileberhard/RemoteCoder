@@ -464,11 +464,12 @@ copy useless for its purpose.
   record of whatever size MetricKit delivered, up to the queue cap, so its
   upload compresses it whole.
   A segment is deleted locally only after a 2xx, so a broken upload path
-  retries rather than losing data. The gateway's segment-specific refusals,
-  400 (not gzip, bad name) and 413 (over its body limit), move that segment to
-  export-only with a `loss` record and the pass continues; any other refusal
-  or a network failure ends the pass and keeps everything queued, so a wrong
-  destination cannot quarantine the queue.
+  retries rather than losing data. The gateway answers a refusal of one
+  segment (not gzip, unusable segment name) with 422, which moves that segment
+  to export-only with a `loss` record while the pass continues. Any other
+  refusal, including a bad device name (400) or a proxy's 413, or a network
+  failure ends the pass and keeps everything queued, so a wrong destination or
+  an older gateway cannot quarantine the queue.
 - **Transport.** `POST /app-logs` on the gateway, bearer-authed like `/health`,
   body is gzipped JSONL, `X-RemoteCoder-Device` and `X-RemoteCoder-Segment`
   headers name the file. Foundation has no gzip writer, so `GzipEncoding`
@@ -523,15 +524,15 @@ gets the report coverage's status, and a mixed day cannot be split.
 `coveredSeconds` against `windowSeconds` shows how much of the coverage had run
 records. History older than the telemetry is `unknown`, never the delivery label.
 
-`states` aggregates a report's state entries per domain, label, attributed build
-and device model: state, foreground and background seconds, hitch time and its
+`states` aggregates a report's state entries per domain, label, stable
+metadata, attributed build and device model: state, foreground and background seconds, hitch time and its
 animation-weighted ratio, the hang histogram, launch histograms and each
 signpost's count with p50 and p95 upper bounds from its duration histogram. A
 signpost whose CPU time, logical writes and average memory are all exactly 0 was
 not measured (OSSignposter) and prints `resources: unknown`. Flags state what
 looks wrong rather than hiding it: `suspectedStuck` (a history, surface, turn or
-connection state, which the app clears outside the active scene, lasting longer
-than the report's whole foreground time), `stateExceedsCoverage`, and per report `domainForegroundExceedsEntryTotal`
+route state, which the app clears in the background, lasting longer than the
+report's whole foreground time), `stateExceedsCoverage`, and per report `domainForegroundExceedsEntryTotal`
 (a domain's per-state foreground times add up to more than the full-day entry's)
 and `hasExceededStateLimit` (null when the report omits it). It also groups
 diagnostics by the states active before them, counting kinds and builds and
@@ -548,6 +549,8 @@ full-day entry of reports whose coverage ran exactly one of the two builds,
 labelled per foreground hour because the totals include background work. A model
 whose side has fewer than `--min-minutes` (default 30) measured minutes is
 listed as refused with the reason; when no model remains the command exits 3.
+A state measured for under a minute on either side keeps its rates but gets no
+`change`; `changeRefused` says which side was too thin.
 
 `diagnostics --symbolicate` names every frame of every call stack tree, one
 `atos` batch per binary UUID and load address, and keeps the heaviest path.
@@ -721,23 +724,25 @@ report stream, and the StateReporting domains under `emileberhard.RemoteCoder.`:
 
 | Domain | Labels | Source |
 |---|---|---|
-| `surface` | `chat`, `drawer` | `TelemetryContext` projection, active scene only |
-| `turn` | `running` | the shown conversation has a running turn, active scene only |
-| `connection` | `lan`, `configured`, `relay`, `restarting`, `disconnected` | the shown host's route, active scene only |
+| `surface` | `chat`, `drawer` | `TelemetryContext` projection, foreground only |
+| `turn` | `running` | the shown conversation has a running turn, foreground only |
+| `route` | `lan`, `configured`, `relay`, `restarting`, `disconnected` | the shown host's route, foreground only |
 | `voice` | `call` | a voice call, also in the background |
 | `energy` | `conserving` | `AppEnergyPolicy.conservesEnergy` |
-| `history` | `opening`, `paging` | foreground history operations, stable metadata `provider` |
+| `history` | `opening`, `paging` | history opens and user-requested pages (not prefetch), stable metadata `provider` |
 
 `UsageStateLabels` (Core) maps the projection to labels and
 `HistoryOperations` (Core) holds in-flight history operations: `opening` while
-any open runs, otherwise `paging`, cleared when the scene leaves the active
-state. All reporting is synchronous under one lock, so a late clear cannot
-overwrite a newer state. StateReporting ignores a repeated label, and a
-diagnostic's `activeStates` lists the states held before it. Volatile fields
-carry a local operation UUID; prompts, paths, credentials and conversation IDs
-are excluded. Before 3.69.0, one shared operation ID let `history` states leak
-for hours and `connection` came from per-target calls, so older reports'
-history and connection entries are not comparable.
+any open runs, otherwise `paging`; entering the background clears them, and
+each operation finishes its own ID on every path. All reporting is synchronous
+under one lock, so a late finish cannot overwrite a newer state. StateReporting
+ignores a repeated label with the same stable metadata, so a change of the
+current operation alone is a volatile metadata update, and a diagnostic's
+`activeStates` lists the states held before it. Volatile fields carry a local
+operation UUID; prompts, paths, credentials and conversation IDs are excluded.
+Before 3.69.0, one shared operation ID let `history` states leak for hours and a
+`connection` domain came from per-target calls; `route` replaces it, and older
+reports' history entries are not comparable.
 
 `TranscriptScroll` (iOS) is both a Points of Interest interval, which
 `perf-trace` reads, and a MetricKit animation interval in category

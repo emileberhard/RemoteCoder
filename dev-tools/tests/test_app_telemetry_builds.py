@@ -162,6 +162,7 @@ def test_state_time_beyond_the_entry_total_and_stuck_foreground_states_are_flagg
     record = metrics_record("r1", [
         state_entry("connection", "connected", 50_000, 700),
         state_entry("connection", "connecting", 100, 400),
+        state_entry("route", "lan", 50_000, 700),
         state_entry("history", "opening", 86_417, 600),
         state_entry("history", "paging", 4.65, 2),
     ])
@@ -175,7 +176,8 @@ def test_state_time_beyond_the_entry_total_and_stuck_foreground_states_are_flagg
         {"domain": "emileberhard.RemoteCoder.connection", "stateForegroundSeconds": 1100.0, "entryForegroundSeconds": 1000.0}]
     assert rows[("history", "opening")]["flags"] == ["stateExceedsCoverage", "suspectedStuck"]
     assert rows[("history", "paging")]["flags"] == []
-    assert rows[("connection", "connected")]["flags"] == ["suspectedStuck"]
+    assert rows[("connection", "connected")]["flags"] == []
+    assert rows[("route", "lan")]["flags"] == ["suspectedStuck"]
     assert rows[("history", "opening")]["longestEntrySeconds"] == 86_417
     assert aggregated(metrics_record("r2", [], exceeded=None))["reports"][0]["hasExceededStateLimit"] is None
     assert aggregated(metrics_record("r3", [], exceeded=True))["reports"][0]["hasExceededStateLimit"] is True
@@ -285,6 +287,27 @@ def test_compare_reports_rates_per_state_and_exposure_per_model():
     assert row["change"]["cpuSeconds"] == {"difference": -0.6, "relative": -0.5}
 
 
+def test_compare_withholds_the_change_of_a_state_measured_for_less_than_a_minute():
+    result = run_compare([
+        *sampled_run("run-a", DAY, 60, "3.68.2", "3068002"),
+        *sampled_run("run-b", DAY + datetime.timedelta(hours=2), 1, "3.68.2", "3068002", scene="inactive")[:-1],
+        *sampled_run("run-c", DAY + datetime.timedelta(hours=26), 60, "3.69.0", "3069000"),
+        *sampled_run("run-d", DAY + datetime.timedelta(hours=28), 1, "3.69.0", "3069000", scene="inactive"),
+    ])
+    rows = {row["state"]["scene"]: row for row in result["strata"][0]["states"]}
+    assert rows["active"]["change"] is not None and "changeRefused" not in rows["active"]
+    assert rows["inactive"]["change"] is None
+    assert rows["inactive"]["changeRefused"] == "before has 0.5 measured minutes, below 1"
+
+
+def test_state_rows_keep_stable_metadata_apart():
+    opening = state_entry("history", "opening", 10, 10)
+    claude = {**opening, "state": {**opening["state"], "stableMetadata": {"provider": "claude"}}}
+    codex = {**opening, "state": {**opening["state"], "stableMetadata": {"provider": "codex"}}}
+    rows = aggregated(metrics_record("r1", [claude, codex]))["states"]
+    assert sorted(row["stableMetadata"]["provider"] for row in rows) == ["claude", "codex"]
+
+
 def test_compare_uses_metrickit_days_with_one_build_only():
     day = metrics_record("day", [])
     records = [*sampled_run("run-a", REPORT_START, 60, "3.68.2", "3068002"),
@@ -354,6 +377,16 @@ def test_every_frame_is_symbolicated_in_one_batch_per_binary_and_missing_binarie
     profile = app_telemetry_symbols.profile(first, symbols)
     assert {"symbol": "Foundation@180000010", "binary": "Foundation", "inclusiveSamples": 3, "selfSamples": 2} in profile[
         "bySelfSamples"]
+
+
+def test_a_crash_stack_gives_its_self_samples_to_the_innermost_frame():
+    crash = {**tree({"CORE": "libswiftCore", "APP": "RemoteCoder", "DYLD": "dyld"}, [
+        frame("CORE", 0x190000100, 0x100, 1, frame("APP", 0x100002000, 0x2000, 1, frame("DYLD", 0x1a0000050, 0x50, 1))),
+    ]), "callStackPerThread": True}
+    profile = app_telemetry_symbols.profile(crash, app_telemetry_symbols.Symbols())
+    assert [row["symbol"] for row in profile["bySelfSamples"]] == ["libswiftCore+0x100"]
+    assert {row["symbol"]: row["inclusiveSamples"] for row in profile["byInclusiveSamples"]} == {
+        "libswiftCore+0x100": 1, "RemoteCoder+0x2000": 1, "dyld+0x50": 1}
 
 
 def test_a_frame_whose_address_is_off_by_one_keeps_the_binarys_shared_load_address():

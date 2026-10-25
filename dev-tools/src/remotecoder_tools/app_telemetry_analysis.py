@@ -1,3 +1,4 @@
+import json
 from collections import Counter, defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass, field
@@ -6,9 +7,9 @@ from .app_telemetry_builds import Attribution, Build
 from .app_telemetry_summary import WAKEUPS, sample_intervals, scalar
 
 FOREGROUND_TOLERANCE_SECONDS = 1.0
-FOREGROUND_ONLY_DOMAINS = frozenset({"history", "surface", "turn", "connection"})
+FOREGROUND_ONLY_DOMAINS = frozenset({"history", "surface", "turn", "route"})
 MIN_MEASURED_MINUTES = 30.0
-MIN_SPREAD_MINUTES = 1.0
+MIN_RATE_MINUTES = 1.0
 LAUNCH_METRICS = ("timeToFirstDraw", "optimizedTimeToFirstDraw", "applicationResume", "extendedLaunch")
 RATE_METRICS = ("cpuSeconds", *WAKEUPS, "persistenceWrites", "persistenceBytes")
 UNMEASURED_RESOURCES = "not measured: cpuTime, logicalWrites and averageMemory are all exactly 0"
@@ -135,7 +136,8 @@ class StateGroup:
     longest_entry_seconds: float = 0.0
     flags: set = field(default_factory=set)
 
-    def summary(self, domain: str, label: str, build: str, model: str | None, candidates: list[str]) -> dict:
+    def summary(self, domain: str, label: str, metadata: dict, build: str, model: str | None,
+                candidates: list[str]) -> dict:
         animation = self.animation_ms.known
         hitch: dict = {"totalHitchMs": None, "totalAnimationMs": None, "hitchTimeRatio": None}
         if self.hitch_ms.count:
@@ -143,7 +145,8 @@ class StateGroup:
                      "hitchTimeRatio": round(self.ratio_weighted / self.ratio_weight, 3) if self.ratio_weight else None,
                      "unit": "ms per s, weighted by animation time"}
         row = {
-            "domain": domain, "label": label, "build": build, "model": model, "reports": len(self.reports),
+            "domain": domain, "label": label, "stableMetadata": metadata, "build": build, "model": model,
+            "reports": len(self.reports),
             "entries": self.entries,
             "stateSeconds": _round(self.state_seconds.known), "longestEntrySeconds": round(self.longest_entry_seconds, 1),
             "foregroundSeconds": _round(self.foreground.known), "backgroundSeconds": _round(self.background.known),
@@ -258,13 +261,15 @@ def aggregate_states(reports: list[tuple[dict, dict, Attribution]]) -> dict:
         })
         for entry in report.get("stateEntries") or []:
             state = entry.get("state") or {}
-            key = (state.get("domain"), state.get("label"), attribution.label, model)
+            metadata = json.dumps(state.get("stableMetadata") or {}, sort_keys=True)
+            key = (state.get("domain"), state.get("label"), metadata, attribution.label, model)
             _add_state_entry(groups[key], entry, coverage_seconds, flags["entryForegroundSeconds"],
                              summary["reportID"])
             if attribution.status == "mixed":
                 candidates[key].update(build.label for build, _ in attribution.builds)
-    rows = [group.summary(domain, label, build, model, sorted(candidates.get((domain, label, build, model), ())))
-            for (domain, label, build, model), group in
+    rows = [group.summary(domain, label, json.loads(metadata), build, model,
+                          sorted(candidates.get((domain, label, metadata, build, model), ())))
+            for (domain, label, metadata, build, model), group in
             sorted(groups.items(), key=lambda item: tuple(str(part) for part in item[0]))]
     return {"note": STATES_NOTE, "reports": summaries, "states": rows}
 
@@ -319,7 +324,7 @@ class Acc:
 
 
 def _spread(accs: list[Acc], name: str) -> dict:
-    values = sorted(rate for acc in accs if acc.seconds >= MIN_SPREAD_MINUTES * 60
+    values = sorted(rate for acc in accs if acc.seconds >= MIN_RATE_MINUTES * 60
                     and (rate := acc.rates()[name]) is not None)
     if not values:
         return {"runs": 0}
@@ -442,8 +447,14 @@ def compare(runs: list[dict], spans_by_run: dict, reports: list[tuple[dict, dict
         rows = []
         for key in state_keys:
             old, new = (_side(exposures[name].states.get(key)) for name in ("before", "after"))
-            rows.append({"state": dict(zip(fields, key, strict=True)), "before": old, "after": new,
-                         "change": _change(old and old["perMinute"], new and new["perMinute"])})
+            row = {"state": dict(zip(fields, key, strict=True)), "before": old, "after": new,
+                   "change": _change(old and old["perMinute"], new and new["perMinute"])}
+            thin = [f"{name} has {side['minutes']} measured minutes" for name, side in (("before", old), ("after", new))
+                    if side is not None and side["minutes"] < MIN_RATE_MINUTES]
+            if row["change"] is not None and thin:
+                row["change"] = None
+                row["changeRefused"] = "; ".join(thin) + f", below {MIN_RATE_MINUTES:g}"
+            rows.append(row)
         strata.append({
             "model": model, "measuredMinutes": minutes,
             "exposure": {name: {"runs": len(exposure.runs), "installations": len(exposure.installations - {None})}
