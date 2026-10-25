@@ -1335,6 +1335,7 @@ private final class AdmissionLifecycleSink: GatewayEventSink {
     var acceptsConnectionReports: Bool { true }
 
     func apply(gatewayEvent event: RoutedGatewayEvent, replay: Bool) async {
+        guard case .turnEvent = event else { return await target.apply(gatewayEvent: event, replay: replay) }
         delivering = true
         await target.apply(gatewayEvent: event, replay: replay)
         finished = true
