@@ -55,7 +55,7 @@ struct VoiceCallSettingsBar: View {
 
     private func controls(_ selectedModel: ModelOption) -> some View {
         ConversationSettingsControls(
-            models: screen.target.pickerModelOptions(for: selectedModel),
+            models: screen.pickerModelOptions(for: selectedModel),
             model: Binding(get: { selectedModel }, set: { option in
                 guard let bound else { return }
                 screen.selectModel(option, for: bound.threadId)

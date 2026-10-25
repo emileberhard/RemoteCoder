@@ -23,6 +23,7 @@ struct ConversationHeader: Codable, Identifiable, Equatable, Sendable {
     let preview: String
     var name: String?
     var model: String?
+    var modelProvider: String?
     var reasoningEffort: CodexAppServerV2.ReasoningEffort?
     var extra: CodexAppServerV2.ThreadExtra?
     let createdAt: Int64
@@ -48,6 +49,7 @@ struct ConversationHeader: Codable, Identifiable, Equatable, Sendable {
         preview = String(thread.previewContent.displayText.prefix(Self.previewCharacterLimit))
         name = thread.name
         model = thread.model
+        modelProvider = thread.modelProvider
         reasoningEffort = thread.reasoningEffort
         extra = thread.extra
         createdAt = thread.createdAt
@@ -64,7 +66,7 @@ struct ConversationHeader: Codable, Identifiable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, preview, name, model, reasoningEffort, extra, createdAt, updatedAt, lastTurnCompletedAt, recencyAt
+        case id, preview, name, model, modelProvider, reasoningEffort, extra, createdAt, updatedAt, lastTurnCompletedAt, recencyAt
         case path, cwd, status, spawnedAsSubAgent, nativeParentThreadID, canAcceptDirectInput, agentRelation
         case agentClassification, pendingHistorySince
     }
@@ -75,6 +77,7 @@ struct ConversationHeader: Codable, Identifiable, Equatable, Sendable {
         preview = String(try values.decode(String.self, forKey: .preview).prefix(Self.previewCharacterLimit))
         name = try values.decodeIfPresent(String.self, forKey: .name)
         model = try values.decodeIfPresent(String.self, forKey: .model)
+        modelProvider = try values.decodeIfPresent(String.self, forKey: .modelProvider)
         reasoningEffort = try values.decodeIfPresent(CodexAppServerV2.ReasoningEffort.self, forKey: .reasoningEffort)
         extra = try values.decodeIfPresent(CodexAppServerV2.ThreadExtra.self, forKey: .extra)
         createdAt = try values.decode(Int64.self, forKey: .createdAt)
@@ -99,6 +102,7 @@ struct ConversationHeader: Codable, Identifiable, Equatable, Sendable {
         try values.encode(preview, forKey: .preview)
         try values.encodeIfPresent(name, forKey: .name)
         try values.encodeIfPresent(model, forKey: .model)
+        try values.encodeIfPresent(modelProvider, forKey: .modelProvider)
         try values.encodeIfPresent(reasoningEffort, forKey: .reasoningEffort)
         try values.encodeIfPresent(extra, forKey: .extra)
         try values.encode(createdAt, forKey: .createdAt)

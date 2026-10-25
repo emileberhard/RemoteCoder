@@ -26,6 +26,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
     @ObservationIgnored let transcriptSurfaceID = UUID()
     private(set) var presentation = TargetPresentation()
     private(set) var activeSessionID: String?
+    private(set) var activeModelProvider: ThreadModelProvider?
     var activeConversation: ConversationHeader?
     private(set) var loadingTranscriptID: String?
     private(set) var alert: ScreenAlert?
@@ -198,9 +199,16 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
             conversationAgents = normalized.map(target.agents(threadID:))
             presentedCompletionAt = nil
             contextWindowUsage = nil
+            activeModelProvider = nil
         }
         activeSessionID = normalized
         target.activeSessionChanged(to: normalized)
+    }
+
+    func adoptModelProvider(_ modelProvider: String?, threadID: String) {
+        guard threadID == activeSessionID, let provider = ThreadModelProvider(modelProvider, threadID: threadID),
+              provider != activeModelProvider else { return }
+        activeModelProvider = provider
     }
 
     func beginNewChat() {
@@ -481,6 +489,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
               result.revision >= presentedRevision else { return }
         observe(session)
         activeConversation = snapshot.header
+        adoptModelProvider(snapshot.header.modelProvider, threadID: snapshot.header.id)
         await publish(result)
         logger.notice("Conversation observation merged source=\(source, privacy: .public) revision=\(result.revision) messages=\(result.messages.count)")
     }
@@ -940,6 +949,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         dismissAlert()
         activeConversation = thread
         setActiveSessionID(thread.id)
+        adoptModelProvider(thread.modelProvider, threadID: thread.id)
         showRecentSettings(threadID: thread.id)
         if transcriptIdentity != identity { showTranscript(identity: identity, threadID: thread.id) }
         let loadID = beginResumeLoad(threadID: thread.id)
@@ -1667,7 +1677,12 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         refreshNewChatDefaults()
     }
 
+    func pickerModelOptions(for selection: ModelOption) -> [ModelOption] {
+        target.modelCatalog.pickerOptions(including: selection, threadModelProvider: activeModelProvider)
+    }
+
     var providerNotice: String? {
+        if activeSessionID != nil, let notice = activeModelProvider?.notice { return notice }
         guard let health = target.providerHealth, let model = selectedModel else { return nil }
         guard activeSessionID == nil else { return health.warning(for: model, isNewChat: false) }
         if case .resolvedDefault(nil) = newChatModelSource, let preferred = target.modelCatalog.preferredProvider,

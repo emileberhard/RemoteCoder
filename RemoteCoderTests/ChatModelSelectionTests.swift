@@ -84,7 +84,7 @@ struct ChatModelSelectionTests {
         #expect(await waitUntil { model.loadingTranscriptID == nil })
         let reserve = try Fixtures.option(Fixtures.reserveID)
         #expect(model.selectedModel == reserve)
-        #expect(model.target.pickerModelOptions(for: reserve).map(\.id)
+        #expect(model.pickerModelOptions(for: reserve).map(\.id)
             == [Fixtures.astraID, Fixtures.solID, Fixtures.lunaID, Fixtures.sparkID, Fixtures.reserveID])
 
         var retired = try fixture.thread("retired-model", updatedAt: 101)

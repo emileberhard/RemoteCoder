@@ -8,7 +8,7 @@ import Foundation
 enum ThreadFixture {
     static func basic(_ id: String, updatedAt: Int64, preview: String = "Test", fields: [String: Any] = [:]) throws -> ConversationHeader {
         let base: [String: Any] = [
-            "id": id, "preview": preview, "modelProvider": "test",
+            "id": id, "preview": preview, "modelProvider": id.hasPrefix("claude_") ? "claude" : "openai",
             "createdAt": 0, "updatedAt": updatedAt, "cwd": "/repo", "cliVersion": "test",
             "source": "appServer", "status": ["type": "notLoaded"], "ephemeral": false, "turns": [],
         ]

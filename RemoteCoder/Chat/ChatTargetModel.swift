@@ -275,9 +275,6 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
     func modelOptions(for provider: AgentProvider) -> [ModelOption] {
         modelCatalog.options(for: provider)
     }
-    func pickerModelOptions(for selection: ModelOption) -> [ModelOption] {
-        modelCatalog.pickerOptions(including: selection)
-    }
     func newChatDefaultModel() -> NewChatModelLookup {
         modelCatalog.newChatDefault(for: nil, health: providerHealth)
     }
@@ -1811,6 +1808,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
                        requestedServiceTier: CodexAppServerV2.ServiceTierOverride?) async {
         if let owner = screens.first(where: { $0.selectedConversation === session }) {
             if owner.activeSessionID == nil { owner.setActiveSessionID(thread.id) }
+            owner.adoptModelProvider(thread.modelProvider, threadID: thread.id)
             if requestedServiceTier == nil {
                 owner.acceptThreadTierReadback(thread.extra, threadID: thread.id, selectionRevision: settingsRevision)
             }
