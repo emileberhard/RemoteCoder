@@ -8,7 +8,9 @@ import Synchronization
 /// domains. Apple reports are delayed/sampled; silence is not a health check.
 actor AppPerformanceDiagnostics {
     static let shared = AppPerformanceDiagnostics()
-    nonisolated static let signposter = OSSignposter(logHandle: MetricManager.logHandle(category: "History"))
+    nonisolated static let historyLog = MetricManager.logHandle(category: "History")
+    nonisolated static let transcriptLog = MetricManager.logHandle(category: "Transcript")
+    nonisolated static let signposter = OSSignposter(logHandle: historyLog)
     nonisolated static let pointsOfInterest = OSSignposter(subsystem: "RemoteCoder", category: .pointsOfInterest)
 
     @ReportableMetadata
@@ -141,17 +143,18 @@ struct HistoryOpenSignpost {
     enum Abandonment: String { case superseded, cancelled, empty, failed }
 
     private static let name: StaticString = "HistorySelectionToFirstContent"
-    private var interval: OSSignpostIntervalState?
+    private var interval: OSSignpostID?
 
     mutating func begin() {
         abandon(.superseded)
-        let signposter = AppPerformanceDiagnostics.signposter
-        interval = signposter.beginInterval(Self.name, id: signposter.makeSignpostID())
+        let id = OSSignpostID(log: AppPerformanceDiagnostics.historyLog)
+        mxSignpost(.begin, log: AppPerformanceDiagnostics.historyLog, name: Self.name, signpostID: id)
+        interval = id
     }
 
     mutating func contentVisible() {
         guard let interval else { return }
-        AppPerformanceDiagnostics.signposter.endInterval(Self.name, interval)
+        mxSignpost(.end, log: AppPerformanceDiagnostics.historyLog, name: Self.name, signpostID: interval)
         self.interval = nil
     }
 
@@ -159,5 +162,23 @@ struct HistoryOpenSignpost {
         guard interval != nil else { return }
         AppPerformanceDiagnostics.signposter.emitEvent("HistoryOpenAbandoned", "outcome=\(reason.rawValue, privacy: .public)")
         interval = nil
+    }
+}
+
+struct TranscriptScrollSignpost {
+    private static let name: StaticString = "TranscriptScroll"
+    private let pointOfInterest: OSSignpostIntervalState
+    private let animation: OSSignpostID
+
+    init() {
+        let signposter = AppPerformanceDiagnostics.pointsOfInterest
+        pointOfInterest = signposter.beginInterval(Self.name, id: signposter.makeSignpostID())
+        animation = OSSignpostID(log: AppPerformanceDiagnostics.transcriptLog)
+        mxSignpostAnimationIntervalBegin(log: AppPerformanceDiagnostics.transcriptLog, name: Self.name, signpostID: animation)
+    }
+
+    func end() {
+        mxSignpost(.end, log: AppPerformanceDiagnostics.transcriptLog, name: Self.name, signpostID: animation)
+        AppPerformanceDiagnostics.pointsOfInterest.endInterval(Self.name, pointOfInterest)
     }
 }
