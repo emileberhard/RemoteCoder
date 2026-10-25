@@ -153,6 +153,17 @@ struct FieldTelemetryTests {
         #expect(records.contains { $0["recordType"] as? String == "sample" })
     }
 
+    @Test func aSettingsExportCountsAsTheLatestCollection() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let outbox = DiagnosticsOutbox(directory: directory, deviceLabel: { "test-device" })
+        let archive = try #require(await outbox.exportArchive())
+        defer { try? FileManager.default.removeItem(at: archive) }
+        await outbox.drain(reason: "background")
+        let exports = try telemetryBatches(in: directory).flatMap { $0 }.filter { $0["recordType"] as? String == "export" }
+        #expect(exports.last?["collection"] as? String == "coalesced")
+    }
+
     @Test func aCollectionThatCouldNotWriteStaysDueAndKeepsItsCursor() async throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

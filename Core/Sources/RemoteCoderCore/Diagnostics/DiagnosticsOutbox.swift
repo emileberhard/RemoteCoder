@@ -308,7 +308,6 @@ actor DiagnosticsOutbox: DiagnosticsExporting {
             cost.collection = .coalesced
         } else {
             drainToSegments(&cost)
-            if cost.collection == .collected { lastCollection = started }
         }
         let afterScan = ProcessResources.current()
         let upload = Task.isCancelled ? DiagnosticsUpload() : await uploadPendingSegments()
@@ -458,6 +457,7 @@ actor DiagnosticsOutbox: DiagnosticsExporting {
         }
         writeSegment()
         if failed { cost.collection = .failed }
+        if cost.collection == .collected { lastCollection = started }
         cost.encodeMilliseconds = encoding.milliseconds
         cost.writeMilliseconds = writing.milliseconds
         cost.scanMilliseconds = max(0, started.duration(to: clock.now).milliseconds - cost.encodeMilliseconds - cost.writeMilliseconds)
