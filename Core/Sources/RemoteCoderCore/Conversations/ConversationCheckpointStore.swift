@@ -385,6 +385,7 @@ actor ConversationCheckpointStore {
 
     func restore(_ id: UUID, threadID: String?, generation: UInt64?) async throws -> LoadResult {
         let generation = try beginOperation(id, generation: generation)
+        records[id]?.historyExhausted = false
         defer { finishOperation(id) }
         try await index()
         try validate(id, generation: generation)

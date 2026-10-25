@@ -589,9 +589,10 @@ gaps.
 process snapshot, at `persistence.checkpoints.checkpoint`: successful database
 `writes`, encoded `inputBytes`, changed chunk `newPayloadBytes`, and
 `phases`. The paired byte counters cover only the main database replacement in
-`ConversationCheckpointStore.save`; submission sidecars and ancillary replacements
-remain in the existing owner counters. Input bytes include supplied unchanged
-chunks; new payload bytes exclude SQLite/index updates and WAL amplification.
+`ConversationCheckpointStore.save`. Submission sidecars use the existing owner
+counters; ancillary database replacements are outside the paired byte counters.
+Input bytes include supplied unchanged chunks; new payload bytes exclude
+SQLite/index updates and WAL amplification.
 
 Each observed phase holds `count`, total `milliseconds`, exact `maxMilliseconds`
 and `p50UpperBoundMilliseconds`. A fixed 64-bucket histogram starts at 0.001 ms

@@ -227,8 +227,9 @@ and interpretation.
 Over-budget saves can revisit preserved conversations even when all rebuildable
 history has already been removed. `DiskRecord.historyExhausted` remembers that
 proof at the checkpoint owner, so later saves skip inspection and decoding.
-Successful loads replace the disk record; writes and invalidation clear the proof
-through `sourceChanged`. Recovery-only protection can also prove exhaustion.
+Loads clear the proof before reading: an admission-limited rollback restore can
+return early without replacing its disk record. Writes and invalidation clear the
+proof through `sourceChanged`. Recovery-only protection can also prove exhaustion.
 Failed inspections remain unknown and retryable. No storage format or retention
 policy changes, and unique local records, pending sends and recovery bytes stay
 protected. Inspection already reuses an owned database connection when available.
@@ -238,6 +239,25 @@ rather than retaining decoded checkpoints or adding a connection/cache owner.
 The bit lasts only until an owner-observed source change or load. Repeated failed
 reads are deliberately not cached; any later identity-based backoff must preserve
 retry after the source changes.
+
+Optimized MacBook measurement (SwiftPM Release/`-O`, serial cases, schema 1):
+four preserved conversations each started with a 1,114,112-byte pending message
+and 1,179,648 bytes of remote-message text. A one-byte cache budget forced repeated
+pressure after the history was shed; primary admission remained 512 MiB.
+The table excludes the first save and reports the median of eleven repeats.
+
+| Store | Before memo | After memo | History inspections per repeated save |
+|---|---:|---:|---:|
+| Warm | 21.286 ms | 0.851 ms | 4 → 0 |
+| Cold-opened, after its first save | 20.587 ms | 0.856 ms | 4 → 0 |
+
+Warm ranges were 20.347–21.808 ms before and 0.807–1.262 ms after; cold-opened
+repeat ranges were 19.751–21.235 ms before and 0.795–1.248 ms after. The first
+cold save still inspected/indexed existing files: 92.908 ms before, 80.899 ms
+after. These are synthetic host measurements, not phone energy acceptance.
+The three owner regressions fail with the memo disabled, including recovery-only
+protection, and cover retry after a failed inspection plus proof reset on load
+and write. Benchmark clocks, prints and serialization are not retained in tests.
 
 ## Deferred content-defined checkpoint chunks
 
