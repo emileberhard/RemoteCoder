@@ -24,8 +24,9 @@ struct TargetModelCatalog {
         }
     }
 
-    func pickerOptions(including selection: ModelOption) -> [ModelOption] {
-        let options = options(for: selection.provider).filter { $0.modelProvider == selection.modelProvider }
+    func pickerOptions(including selection: ModelOption, threadModelProvider: ThreadModelProvider?) -> [ModelOption] {
+        let modelProvider = threadModelProvider.map(\.externalID) ?? selection.modelProvider?.id
+        let options = options(for: selection.provider).filter { $0.modelProvider?.id == modelProvider }
         return options.contains { $0.id == selection.id } ? options : options + [selection]
     }
 

@@ -11,6 +11,7 @@ extension CodexAppServerV2 {
             }
         }
         var model: String? = nil
+        var modelProvider: String? = nil
         var reasoningEffort: ReasoningEffort? = nil
         var extra: ThreadExtra? = nil
         let createdAt: Int64
@@ -201,6 +202,7 @@ extension CodexAppServerV2.Thread: Codable {
         case id
         case preview
         case model
+        case modelProvider
         case reasoningEffort
         case extra
         case createdAt
@@ -220,6 +222,7 @@ extension CodexAppServerV2.Thread: Codable {
         self.id = try container.decode(String.self, forKey: .id)
         self.preview = try container.decode(String.self, forKey: .preview)
         self.model = try container.decodeIfPresent(String.self, forKey: .model)
+        self.modelProvider = try container.decodeIfPresent(String.self, forKey: .modelProvider)
         self.reasoningEffort = try container.decodeIfPresent(CodexAppServerV2.ReasoningEffort.self, forKey: .reasoningEffort)
         self.extra = try container.decodeIfPresent(CodexAppServerV2.ThreadExtra.self, forKey: .extra)
         self.createdAt = try container.decode(Int64.self, forKey: .createdAt)
@@ -241,6 +244,7 @@ extension CodexAppServerV2.Thread: Codable {
         try container.encode(id, forKey: .id)
         try container.encode(preview, forKey: .preview)
         try container.encodeIfPresent(model, forKey: .model)
+        try container.encodeIfPresent(modelProvider, forKey: .modelProvider)
         try container.encodeIfPresent(reasoningEffort, forKey: .reasoningEffort)
         try container.encodeIfPresent(extra, forKey: .extra)
         try container.encode(createdAt, forKey: .createdAt)

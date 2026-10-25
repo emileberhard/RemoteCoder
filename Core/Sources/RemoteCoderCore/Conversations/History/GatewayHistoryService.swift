@@ -142,6 +142,7 @@ actor GatewayHistoryService {
     struct RecentThreads: Sendable {
         let threads: [ConversationHeader]
         let failures: [String]
+        let isDeferred: Bool
         let agentWarnings: [String]
         let unavailableCompletionTimes: Set<String>
         let continuation: ConversationListContinuation
@@ -189,7 +190,7 @@ actor GatewayHistoryService {
             }
         } catch {
             providerErrors.append(error)
-            failures.append("Codex history: \(error.localizedDescription)")
+            if !Self.defersRead(error) { failures.append("Codex history: \(error.localizedDescription)") }
         }
         do {
             let result = try await claude
@@ -201,14 +202,12 @@ actor GatewayHistoryService {
             }
         } catch {
             providerErrors.append(error)
-            failures.append("Claude history: \(error.localizedDescription)")
+            if !Self.defersRead(error) { failures.append("Claude history: \(error.localizedDescription)") }
         }
         try Task.checkCancellation()
         guard generation == epoch else { throw CancellationError() }
         if providerErrors.count == 2 {
-            if providerErrors.allSatisfy({ if case GatewayClient.ClientError.gatewayRestarting = $0 { true } else { false } }) {
-                throw GatewayClient.ClientError.gatewayRestarting
-            }
+            if let deferred = providerErrors.first, failures.isEmpty { throw deferred }
             throw HistoryListError.unavailable(failures.joined(separator: "\n"))
         }
         let ordered = ConversationHeaderStore.merging(current: [], fetched: fetched)
@@ -216,8 +215,15 @@ actor GatewayHistoryService {
         if !unavailable.isEmpty {
             failures.append("Completion times unavailable for \(unavailable.count) conversations; retaining their last known order.")
         }
-        return RecentThreads(threads: ordered, failures: failures, agentWarnings: Array(Set(agentWarnings)).sorted(),
+        return RecentThreads(threads: ordered, failures: failures, isDeferred: providerErrors.contains(where: Self.defersRead),
+                             agentWarnings: Array(Set(agentWarnings)).sorted(),
                              unavailableCompletionTimes: unavailable, continuation: continuation)
+    }
+
+    static func defersRead(_ error: any Error) -> Bool {
+        if case GatewayClient.ClientError.gatewayRestarting = error { return true }
+        if case .providerUnavailable(.codex, _) = (error as? GatewayRPCFailure)?.kind { return true }
+        return false
     }
 
     func classifyAgents(_ threads: [ConversationHeader]) async -> (threads: [ConversationHeader], warnings: [String]) {

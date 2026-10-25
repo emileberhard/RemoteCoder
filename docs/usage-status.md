@@ -57,7 +57,8 @@ or `unavailable`, with a one-line reason unless ready, in `daemon/ready` and in
 holds the latest value for its host and the rings read the selected host's. A
 gateway that reports nothing leaves health unknown, and the app shows nothing.
 Replayed notifications never change it, because every connection's
-`daemon/ready` carries the current value.
+`daemon/ready` carries the current value, and losing the connection clears it
+back to unknown.
 
 - A broken (`fallback` or `unavailable`) provider's ring dims its logo and adds
   a small warning badge. Its popover states the reason in one line, and
@@ -71,6 +72,11 @@ Replayed notifications never change it, because every connection's
   there. An existing native Codex conversation keeps its subscription provider,
   so it shows the reason, and its turns fail until the subscription recovers.
   An unavailable provider shows the reason everywhere.
+- A Codex conversation records its `modelProvider` from `thread/start`,
+  `thread/resume` and history (`ThreadModelProvider`). One whose provider is
+  not native (`openai`) reads "Runs on Copilot" (the id, capitalized) whatever
+  the health, and its picker offers that provider's models even when the
+  composer still shows the native model the chat was started with.
 - While the preferred new-chat provider is unavailable, a new chat whose model
   was not chosen starts on a working provider's default model, and the warning
   line shows the unavailable provider's reason. When no working provider has a
@@ -79,6 +85,10 @@ Replayed notifications never change it, because every connection's
   provider, and the stored preference stays unchanged.
 - A native request refused with `providerUnavailable` reads as its reason,
   including as a send error.
+- History reads treat a Codex `providerUnavailable` like a gateway restart
+  (`GatewayHistoryService.defersRead`): the conversation list keeps its cached
+  rows without an error and refreshes on the next connection, and an open
+  chat shows no alert; its failed history edge retries on reconnect.
 
 ## Ownership and recovery
 

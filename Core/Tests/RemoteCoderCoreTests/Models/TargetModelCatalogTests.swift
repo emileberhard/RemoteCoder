@@ -33,8 +33,10 @@ struct TargetModelCatalogTests {
         #expect(external.pickerTitle == "Model A · Relay")
         #expect(native.pickerTitle == "GPT-6.1 Sol")
         #expect(catalog.options(for: .codex).contains(external), "new chats offer every provider")
-        #expect(catalog.pickerOptions(including: external).map(\.id) == ["relay/model-a"])
-        #expect(!catalog.pickerOptions(including: native).contains { $0.modelProvider != nil })
+        #expect(catalog.pickerOptions(including: external, threadModelProvider: nil).map(\.id) == ["relay/model-a"])
+        #expect(!catalog.pickerOptions(including: native, threadModelProvider: nil).contains { $0.modelProvider != nil })
+        #expect(catalog.pickerOptions(including: native, threadModelProvider: .external(id: "relay")).map(\.id)
+            == ["relay/model-a", CodexModelFixtures.solID], "a thread started natively but running on Relay offers Relay's models")
 
         let encoded = try JSONEncoder().encode(models.last)
         #expect(try JSONDecoder().decode(CodexAppServerV2.Model.self, from: encoded).modelProvider == external.modelProvider)
@@ -53,7 +55,7 @@ struct TargetModelCatalogTests {
         #expect(catalog.newChatDefault(for: nil, health: nil).model?.id == "fable")
         #expect(catalog.configured(id: "claude-opus-5").model == opus)
         #expect(catalog.option(id: "claude-opus-5", threadID: "claude_existing", effort: nil, fastMode: false) == opus)
-        #expect(catalog.pickerOptions(including: opus).map(\.id) == ["fable", "sonnet", "haiku", "opus"])
+        #expect(catalog.pickerOptions(including: opus, threadModelProvider: nil).map(\.id) == ["fable", "sonnet", "haiku", "opus"])
 
         preferences.setClaudeModelVisible(false, id: "fable")
         #expect(catalog.defaultModel(for: .claude)?.id == "sonnet")

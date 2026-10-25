@@ -44,17 +44,13 @@ struct ProviderHealth: Sendable, Equatable {
 
     func warning(for model: ModelOption, isNewChat: Bool) -> String? {
         guard isImpaired(model), let status = statuses[model.provider] else { return nil }
-        if case .fallback(let route, _) = status, isNewChat { return "New chats run on \(Self.displayName(ofRoute: route))" }
+        if case .fallback(let route, _) = status, isNewChat { return "New chats run on \(ThreadModelProvider.displayName(of: route))" }
         return status.reason
     }
 
     func switchNotice(preferred: AgentProvider, selected: AgentProvider) -> String? {
         guard preferred != selected, case .unavailable(let reason) = statuses[preferred] else { return nil }
         return reason
-    }
-
-    private static func displayName(ofRoute route: String) -> String {
-        route.prefix(1).uppercased() + route.dropFirst()
     }
 }
 
