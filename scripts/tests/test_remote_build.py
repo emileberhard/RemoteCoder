@@ -36,6 +36,11 @@ class ProfilingSymbolsTests(unittest.TestCase):
             real_run = subprocess.run
 
             def target_process(*args, **kwargs):
+                if "input" in kwargs and "build_cache.py" in kwargs["input"]:
+                    payload, digest, _ = kwargs["input"].split("\n")
+                    payload = json.loads(payload)
+                    payload["build_cache.py"] += "\ndef cache_allocated_bytes(*args):\n    raise TimeoutError('whole-cache scan must not run during delivery')\n"
+                    kwargs["input"] = json.dumps(payload) + "\n" + digest + "\n"
                 return real_run(*args, **(kwargs | {"env": os.environ | {"HOME": str(home)}}))
 
             with (patch.object(module.subprocess, "run", side_effect=target_process),
@@ -47,7 +52,10 @@ class ProfilingSymbolsTests(unittest.TestCase):
             copied = Path(mirrored["directory"])
             self.assertEqual((copied / dwarf.relative_to(source)).read_bytes(), b"debug information")
             self.assertEqual(json.loads((copied.parent / "outcome.json").read_text())["exitCode"], 0)
-            self.assertTrue((copied.parent / "symbol-cache.json").is_file())
+            accounting = json.loads((copied.parent / "symbol-cache.json").read_text())
+            self.assertIsNone(accounting["allocatedBytes"])
+            self.assertIn("maintenance", accounting["unavailableReason"])
+            self.assertIn("retention", accounting)
 
 
 def worker_snapshot(

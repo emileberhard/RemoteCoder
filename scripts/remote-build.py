@@ -360,17 +360,15 @@ namespace={}
 payload=json.loads(sys.stdin.readline())
 exec(payload['build_artifacts.py'],namespace)
 (run/'receiver-bootstrap/build_cache.py').write_text(payload['build_cache.py'])
-from build_cache import load_policy,prune_caches,cache_allocated_bytes
+from build_cache import load_policy,prune_caches
 expected=json.loads(sys.stdin.readline())
 with file_lease(run.parent.parent/'leases/runs'/f'{run.name}.lock'):
  if namespace['tree_digest'](run/'symbols') != expected: raise SystemExit('Mirrored dSYM fingerprint mismatch')
  atomic_json(run/'outcome.json',{'exitCode':0,'finishedAt':time.time(),'kind':'device-symbols'})
 policy=load_policy()
 retention=prune_caches(run.parent.parent,policy,'',run.name)
-allocated=cache_allocated_bytes(run.parent.parent)
-evidence={'allocatedBytes':allocated,'budgetBytes':policy.compilation_budget_bytes,'retention':retention}
+evidence={'retention':retention,'allocatedBytes':None,'unavailableReason':'Whole-cache accounting is owned by maintenance'}
 atomic_json(run/'symbol-cache.json',evidence)
-if allocated>policy.compilation_budget_bytes: print('WARNING: RemoteCoder-Build total cap is unmet after symbol retention; inspect '+str(run/'symbol-cache.json'),file=sys.stderr)
 
 """
 
