@@ -98,9 +98,12 @@ Two toggles close/reopen a persistent sidebar and open/close a compact drawer. S
 use the production animated row-navigation path, rather than simulated finger
 physics. Voice, image/HTML assets, network latency, TLS and server CPU
 are outside this text/code workload. Choose conversations without visible
-external assets. Site icons deliberately return a missing result without
-networking; reports count these omissions. HTML WebKit surfaces are blocked
-and invalidate the run. Other uncaptured HTTP/RPC requests fail the run.
+images. Site icons deliberately return a missing result without networking,
+and published HTML visuals fail before their document download, as an
+unavailable visual; reports count both omissions. Agents publish visuals in
+most real conversations, so excluding such conversations would leave few to
+capture. A visual that still reaches WebKit invalidates the run. Other
+uncaptured HTTP/RPC requests fail the run.
 
 Each run fresh-installs, launches with benchmark-only storage and in-memory
 credentials, prepares history, settles, then measures the journey. Successful

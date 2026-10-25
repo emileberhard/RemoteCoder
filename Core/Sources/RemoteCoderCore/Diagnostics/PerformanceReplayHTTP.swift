@@ -9,12 +9,15 @@ final class PerformanceReplayHTTP: URLProtocol, @unchecked Sendable {
         var blockedExternal = 0
         var missing: Set<String> = []
         var omittedSiteIcons = 0
+        var omittedVisuals = 0
         var blockedVisuals = 0
     }
     private static let state = Mutex(State())
 
     static var omittedSiteIconFetches: Int { state.withLock { $0.omittedSiteIcons } }
     static func omitSiteIcon() { state.withLock { $0.omittedSiteIcons += 1 } }
+    static var omittedVisualFetches: Int { state.withLock { $0.omittedVisuals } }
+    static func omitVisual() { state.withLock { $0.omittedVisuals += 1 } }
     static var blockedVisualLoads: Int { state.withLock { $0.blockedVisuals } }
     static func blockVisual() { state.withLock { $0.blockedVisuals += 1 } }
 

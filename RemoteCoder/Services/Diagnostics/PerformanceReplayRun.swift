@@ -107,6 +107,7 @@ final class PerformanceReplayRun {
             report["uncapturedHTTP"] = http.missing
             report["blockedExternalHTTP"] = http.blockedExternal
             report["omittedSiteIconFetches"] = PerformanceReplayHTTP.omittedSiteIconFetches
+            report["omittedVisualFetches"] = PerformanceReplayHTTP.omittedVisualFetches
             report["blockedVisualLoads"] = PerformanceReplayHTTP.blockedVisualLoads
             report["valid"] = report["activeThroughout"] as? Bool == true && report["conservedEnergy"] as? Bool == false
                 && (report["frames"] as? Int ?? 0) > 0 && diagnostics.failures.isEmpty && diagnostics.unsupported.isEmpty && http.missing.isEmpty

@@ -234,7 +234,8 @@ benchmark storage scope, in-memory host credentials and the isolated gateway
 policy. A request the fixture did not capture must fail the run, never reach a
 real gateway, provider or website; extend the fixture or the blocking instead
 of relaxing that check. Site icons deliberately produce missing results and
-are counted as omissions; HTML visual loads are blocked and invalidate a run.
+and HTML visual documents deliberately fail before download; both are counted as
+omissions. A visual that still reaches WebKit invalidates the run.
 
 The fixture server mirrors the gateway's delivery scope
 (`host-daemon-rs/src/gateway/subscriptions.rs`): it applies every event to history and
