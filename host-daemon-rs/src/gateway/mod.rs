@@ -733,6 +733,12 @@ impl Gateway {
                 .is_some_and(|journal| journal.is_planned_transition())
     }
 
+    async fn codex_recovery_pending(&self) -> bool {
+        self.recovery_journal()
+            .await
+            .is_some_and(|journal| journal.pending_tasks().next().is_some())
+    }
+
     async fn recovery_journal(&self) -> Option<RecoveryJournal> {
         let store = self.recovery_store.clone()?;
         match tokio::task::spawn_blocking(move || store.load()).await {

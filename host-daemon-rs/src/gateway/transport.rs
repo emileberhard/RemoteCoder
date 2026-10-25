@@ -770,7 +770,7 @@ impl Gateway {
                 .await;
             return;
         }
-        let error = RpcError::codex_unavailable(self.codex_unavailable_reason());
+        let error = RpcError::from(self.codex_unavailable().await);
         let _ = self.send_error_to(out_tx, Some(id), &error).await;
     }
 
@@ -882,7 +882,7 @@ impl Gateway {
             && !crate::rpc::dispatch::claude_route(method, object)
             && !self.codex_ready().await
         {
-            return Err(RpcError::codex_unavailable(self.codex_unavailable_reason()));
+            return Err(self.codex_unavailable().await.into());
         }
         // The empty compaction acknowledgment can precede its turn/started
         // notification. Keep ordinary inputs out of that accepted-command gap;

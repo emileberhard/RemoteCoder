@@ -2,6 +2,7 @@ use super::{ClientCommand, ClientTx, Gateway, RESTARTING_CLOSE_CODE};
 use crate::observability::journal::Source;
 use crate::providers::claude::auth::ClaudeAuthSnapshot;
 use crate::providers::codex::external::ExternalProviders;
+use crate::rpc::error::CodexUnavailable;
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::collections::HashSet;
@@ -10,6 +11,8 @@ use tracing::{info, warn};
 pub(super) const PROVIDER_HEALTH_METHOD: &str = "gateway/providerHealth";
 const CODEX_NOT_RUNNING: &str = "Codex app-server is not running";
 const CODEX_STARTING: &str = "Codex is starting";
+const CODEX_AWAITING_SIGN_IN: &str =
+    "Codex is waiting for its subscription sign-in to resume interrupted work";
 const CODEX_SIGN_IN_FAILED: &str = "Codex subscription sign-in failed";
 const CODEX_CONNECTION_FAILED: &str = "This connection could not reach Codex; reconnect";
 const CODEX_READY_CLOSE_REASON: &str = "Codex is available; reconnect";
@@ -40,6 +43,7 @@ pub(crate) struct ProviderHealth {
 pub(super) enum CodexControl {
     Disconnected,
     Starting,
+    AwaitingSignIn,
     Ready,
 }
 
@@ -54,6 +58,7 @@ fn codex_health(
     match (control, subscription_failing, fallback) {
         (CodexControl::Disconnected, ..) => unavailable(CODEX_NOT_RUNNING),
         (CodexControl::Starting, ..) => unavailable(CODEX_STARTING),
+        (CodexControl::AwaitingSignIn, ..) => unavailable(CODEX_AWAITING_SIGN_IN),
         (CodexControl::Ready, false, _) => CodexHealth::Ready,
         (CodexControl::Ready, true, Some(fallback)) => CodexHealth::Fallback {
             reason: CODEX_SIGN_IN_FAILED.to_owned(),
@@ -105,15 +110,27 @@ impl Gateway {
         self.external_auth.is_some() && self.require_external_auth().await.is_err()
     }
 
+    async fn codex_control(&self) -> CodexControl {
+        let Some(generation) = self.control.current() else {
+            return CodexControl::Disconnected;
+        };
+        if self.codex_ready().await {
+            CodexControl::Ready
+        } else if generation
+            .auth
+            .lock()
+            .expect("Codex auth state poisoned")
+            .holds_recovery
+        {
+            CodexControl::AwaitingSignIn
+        } else {
+            CodexControl::Starting
+        }
+    }
+
     pub(super) async fn refresh_provider_health(&self) {
         let _refresh = self.provider_health.refresh.lock().await;
-        let control = if self.codex_ready().await {
-            CodexControl::Ready
-        } else if self.control.current().is_some() {
-            CodexControl::Starting
-        } else {
-            CodexControl::Disconnected
-        };
+        let control = self.codex_control().await;
         let failing = self.codex_subscription_failing().await;
         let snapshot = self.claude_auth.cached_snapshot().await;
         let health = ProviderHealth {
@@ -143,6 +160,7 @@ impl Gateway {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn published_codex_health(&self) -> CodexHealth {
         self.provider_health
             .published
@@ -152,10 +170,16 @@ impl Gateway {
             .clone()
     }
 
-    pub(super) fn codex_unavailable_reason(&self) -> String {
-        match self.published_codex_health() {
-            CodexHealth::Unavailable { reason } => reason,
-            CodexHealth::Ready | CodexHealth::Fallback { .. } => CODEX_CONNECTION_FAILED.into(),
+    pub(super) async fn codex_unavailable(&self) -> CodexUnavailable {
+        let (reason, retryable) = match self.codex_control().await {
+            CodexControl::Disconnected => (CODEX_NOT_RUNNING, true),
+            CodexControl::Starting => (CODEX_STARTING, true),
+            CodexControl::AwaitingSignIn => (CODEX_AWAITING_SIGN_IN, false),
+            CodexControl::Ready => (CODEX_CONNECTION_FAILED, true),
+        };
+        CodexUnavailable {
+            reason: reason.into(),
+            retryable,
         }
     }
 

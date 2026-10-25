@@ -9,7 +9,7 @@ use crate::notifications::history::NotificationOrigin;
 use crate::notifications::{notification_thread_id, realtime_notification_method};
 use crate::observability::journal::Source;
 use crate::providers::codex::daemon::CodexWebSocket;
-use crate::rpc::error::{CodexUnavailable, RpcCode};
+use crate::rpc::error::RpcCode;
 use crate::rpc::log_diagnostic_ws_frame;
 use crate::tasks::owned_tasks::OwnedTasks;
 use crate::time::unix_seconds;
@@ -141,10 +141,9 @@ impl Gateway {
 
     async fn send_control_text(&self, text: String) -> Result<()> {
         log_diagnostic_ws_frame("gateway->codex", None, &text);
-        let generation = self
-            .control
-            .current()
-            .ok_or_else(|| CodexUnavailable(self.codex_unavailable_reason()))?;
+        let Some(generation) = self.control.current() else {
+            return Err(self.codex_unavailable().await.into());
+        };
         send_control_frame(&generation.out_tx, text).await
     }
 
@@ -247,9 +246,7 @@ impl Gateway {
             let auth_generation = Arc::clone(&generation);
             generation.spawn("restart recovery", async move {
                 let ready = async {
-                    if let Err(error) = gateway.authenticate_external(&auth_generation).await {
-                        warn!(%error, "Codex subscription sign-in failed; Codex starts without it");
-                    }
+                    gateway.sign_in_before_recovery(&auth_generation).await?;
                     gateway.recover_restart_tasks().await
                 }
                 .await;

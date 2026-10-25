@@ -810,6 +810,64 @@ async fn answer_reset_account(gateway: &Arc<Gateway>, control: &mut FakeControl)
 }
 
 #[tokio::test]
+async fn interrupted_work_waits_for_sign_in_and_nothing_pending_starts_without_it() {
+    use crate::gateway::provider_health::CodexHealth;
+    use crate::runtime::recovery::{
+        RecoveryJournal, RecoveryStore, RecoveryTask, RecoveryTaskStatus,
+    };
+
+    let fixture = Fixture::host_default().await;
+    let _control = FakeControl::attach(&fixture.gateway, 8).await;
+    fixture.server.abort();
+    let generation = fixture.gateway.control.current().unwrap();
+    fixture
+        .gateway
+        .sign_in_before_recovery(&generation)
+        .await
+        .unwrap();
+
+    let interrupted = RecoveryTask {
+        thread_id: "thr_interrupted".into(),
+        turn_id: "turn-1".into(),
+        parent_thread_id: None,
+        depth: 0,
+        recovery_attempts: 0,
+        status: RecoveryTaskStatus::Suspended,
+        error: None,
+    };
+    let journal = RecoveryJournal::new(
+        "generation-1".into(),
+        "0123456789abcdef0123456789abcdef".into(),
+        vec![interrupted],
+    )
+    .unwrap();
+    RecoveryStore::new(
+        fixture
+            ._directory
+            .path()
+            .join("state/codex-restart-recovery.json"),
+    )
+    .write(&journal)
+    .unwrap();
+    let gateway = Arc::clone(&fixture.gateway);
+    let owner = Arc::clone(&generation);
+    let waiting = tokio::spawn(async move { gateway.sign_in_before_recovery(&owner).await });
+    let awaiting = CodexHealth::Unavailable {
+        reason: "Codex is waiting for its subscription sign-in to resume interrupted work".into(),
+    };
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while fixture.gateway.published_codex_health() != awaiting {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(!waiting.is_finished());
+    assert!(!fixture.gateway.codex_unavailable().await.retryable);
+    waiting.abort();
+}
+
+#[tokio::test]
 async fn a_router_token_failure_leaves_codex_ready_and_starts_new_chats_on_the_fallback() {
     let fixture = Fixture::with_fallback().await;
     let _control = FakeControl::attach(&fixture.gateway, 8).await;
