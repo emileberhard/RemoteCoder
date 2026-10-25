@@ -34,7 +34,6 @@ actor ConversationHeaderStore {
     init(hostID: UUID?, directory: URL? = nil, storage: HostStorage = .live) {
         hostKey = hostID?.uuidString ?? "default"
         encoder.dateEncodingStrategy = .iso8601
-        encoder.outputFormatting = .sortedKeys
         decoder.dateDecodingStrategy = .iso8601
         baseDirectory = directory ?? Self.defaultBaseDirectory(storage: storage)
     }

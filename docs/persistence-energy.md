@@ -22,6 +22,16 @@ every decoded item and turn again. Pages changed by overlap still remeasure thei
 retained content before enforcing the window budget.
 
 
+Thread headers still save immediately on content changes and skip identical
+saves. Their encoder no longer sorts JSON keys: equality is determined from the
+snapshot before encoding. A new debounce was rejected because the write counts
+alone do not establish redundant changed snapshots within a burst; it would add
+lifecycle and flush ownership without evidence that it reduces those writes.
+The separate Release header benchmark encoded 1,024 synthetic headers 44 times:
+key sorting used 125.401 ms of process CPU versus 114.610 ms without sorting,
+with the same 7,790,948 total JSON bytes. This reduces encoding work, not write
+count or encoded size.
+
 An optimized macOS Core workload (50 synthetic items, about 480 KB, one initial
 read and 20 unchanged forced tail refreshes) reduced logical persistence from
 23 writes / 10,709,397 bytes to 1 write / 486,769 bytes. Process CPU fell from
