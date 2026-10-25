@@ -30,15 +30,6 @@ struct NewChatFocusTests {
         controller.view.endEditing(true)
         try #require(await waitUntil { !hasComposerFirstResponder(in: controller.view) })
 
-        var drawerAction: ChatWindowActions?
-        if case .drawer = navigation {
-            try #require(await waitUntil {
-                guard let actions = fixture.workspace.keyWindow.performanceActions?(), actions.isEnabled(.toggleSidebar) else { return false }
-                drawerAction = actions
-                return true
-            }, "The window must expose its real drawer command before queuing focus")
-        }
-
         let before = try #require(fixture.workspace.selectedScreen).transcriptIdentity
         fixture.workspace.events.receive(.open(.newChat(slot: UUID())))
         try #require(fixture.workspace.selectedScreen?.transcriptIdentity != before)
@@ -51,8 +42,8 @@ struct NewChatFocusTests {
         defer { request.cancel(); completion.cancel() }
         switch navigation {
         case .drawer:
-            let actions = try #require(drawerAction)
-            actions.run(.toggleSidebar)
+            try #require(activateElement(identifier: "open-conversations", in: controller.view),
+                "The header's Conversations button must open the drawer")
             #expect(await waitUntil { fixture.workspace.keyWindow.isHistoryDrawerOpen })
         case .host:
             fixture.workspace.select(hostID: fixture.book.id)
@@ -79,6 +70,17 @@ struct NewChatFocusTests {
     private func findButton(in view: UIView, identifier: String) -> UIButton? {
         if let button = view as? UIButton, button.accessibilityIdentifier == identifier { return button }
         return view.subviews.lazy.compactMap { findButton(in: $0, identifier: identifier) }.first
+    }
+
+    private func activateElement(identifier: String, in element: Any) -> Bool {
+        guard let object = element as? NSObject else { return false }
+        if (object as? UIAccessibilityIdentification)?.accessibilityIdentifier == identifier {
+            return object.accessibilityActivate()
+        }
+        let elements = object.accessibilityElements
+            ?? (0..<max(object.accessibilityElementCount(), 0)).compactMap { object.accessibilityElement(at: $0) }
+        let children = elements + ((object as? UIView)?.subviews ?? [])
+        return children.contains { activateElement(identifier: identifier, in: $0) }
     }
 
     private func hasComposerFirstResponder(in view: UIView) -> Bool {
