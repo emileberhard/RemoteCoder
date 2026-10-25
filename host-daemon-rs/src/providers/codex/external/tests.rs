@@ -26,13 +26,25 @@ fn listing() -> Value {
 }
 
 fn providers(state: &Path) -> Arc<ExternalProviders> {
+    configured(state, vec![provider()])
+}
+
+fn providers_behind_a_fallback(state: &Path) -> Arc<ExternalProviders> {
+    let fallback = ExternalProvider {
+        id: "backup".into(),
+        name: "Backup".into(),
+        models: vec!["backup/model-b".into()],
+        ..provider()
+    };
+    configured(state, vec![fallback, provider()])
+}
+
+fn configured(state: &Path, providers: Vec<ExternalProvider>) -> Arc<ExternalProviders> {
     let directory = state.join(CATALOG_DIRECTORY);
     private_state::ensure_private_directory(&directory).unwrap();
     let models = project(&provider(), &listing()).unwrap();
     private_state::write_json(&directory.join("relay.json"), &json!({"models": models})).unwrap();
-    ExternalProviders::new(vec![provider()], state)
-        .unwrap()
-        .unwrap()
+    ExternalProviders::new(providers, state).unwrap().unwrap()
 }
 
 #[test]
@@ -94,7 +106,7 @@ fn a_model_without_responses_or_a_prompt_cap_is_never_projected() {
 #[tokio::test]
 async fn nested_and_per_turn_selections_get_the_same_checks() {
     let state = tempfile::tempdir().unwrap();
-    let external = providers(state.path());
+    let external = providers_behind_a_fallback(state.path());
     let foreign = json!({"mode": "default", "settings": {"model": "gpt-x"}});
     let ours = json!({"mode": "default", "settings": {"model": MODEL}});
 
@@ -195,7 +207,7 @@ async fn a_new_conversation_on_the_provider_gets_its_definition_and_catalog() {
 #[tokio::test]
 async fn unsupported_selections_fail_instead_of_changing_provider() {
     let state = tempfile::tempdir().unwrap();
-    let external = providers(state.path());
+    let external = providers_behind_a_fallback(state.path());
     let admit = |method: &'static str, mut params: Value, source: Option<&'static str>| {
         let external = Arc::clone(&external);
         async move {
@@ -505,25 +517,96 @@ fn configuration_rejects_ambiguous_providers() {
 async fn native_selections_on_a_fallback_thread_move_to_its_matching_model() {
     let state = tempfile::tempdir().unwrap();
     let external = providers(state.path());
-    let mut params = json!({"threadId": "thr_fallback", "model": "model-a",
-        "serviceTier": "fast", "collaborationMode": {"settings": {"model": "model-a"}}});
+    for method in [
+        "turn/start",
+        "thread/settings/update",
+        "turn/settings/update",
+    ] {
+        let mut params = json!({"threadId": "thr_fallback", "model": "model-a",
+            "serviceTier": "fast", "collaborationMode": {"settings": {"model": "model-a"}}});
+        assert!(
+            external
+                .admit(method, &mut params, Some("relay"))
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            params,
+            json!({"threadId": "thr_fallback", "model": MODEL,
+                "collaborationMode": {"settings": {"model": MODEL}}}),
+            "{method}"
+        );
+    }
 
+    let mut resume = json!({"threadId": "thr_fallback", "model": "model-a", "serviceTier": "fast"});
+    external
+        .admit("thread/resume", &mut resume, Some("relay"))
+        .await
+        .unwrap();
+    assert_eq!(resume["model"], MODEL);
+    assert_eq!(resume["modelProvider"], "relay");
+    assert!(resume.get("serviceTier").is_none());
+}
+
+#[tokio::test]
+async fn a_native_model_without_a_fallback_counterpart_keeps_the_threads_model() {
+    let state = tempfile::tempdir().unwrap();
+    let external = providers(state.path());
+    for method in [
+        "thread/resume",
+        "thread/fork",
+        "turn/start",
+        "thread/settings/update",
+    ] {
+        let mut params =
+            json!({"threadId": "thr_fallback", "model": "gpt-9", "serviceTierForTurn": "fast"});
+        assert!(
+            external
+                .admit(method, &mut params, Some("relay"))
+                .await
+                .unwrap(),
+            "{method}"
+        );
+        assert!(params.get("model").is_none(), "{method}");
+        assert!(params.get("serviceTierForTurn").is_none(), "{method}");
+    }
+
+    let mut tier_only = json!({"threadId": "thr_fallback", "serviceTier": "default"});
     assert!(
         external
-            .admit("turn/start", &mut params, Some("relay"))
+            .admit("turn/start", &mut tier_only, Some("relay"))
             .await
             .unwrap()
     );
+    assert_eq!(tier_only, json!({"threadId": "thr_fallback"}));
+
+    let mut nested =
+        json!({"threadId": "thr_fallback", "collaborationMode": {"settings": {"model": "gpt-9"}}});
+    let refusal = external
+        .admit("turn/start", &mut nested, Some("relay"))
+        .await
+        .unwrap_err();
+    assert!(refusal.message.contains("stays on Relay"));
+}
+
+#[tokio::test]
+async fn a_new_fallback_conversation_takes_the_matching_or_first_model() {
+    let state = tempfile::tempdir().unwrap();
+    let external = providers(state.path());
+    let mut matching = json!({"model": "model-a", "serviceTier": "fast"});
+    external.start_on_fallback(&mut matching).await.unwrap();
+    assert_eq!(matching, json!({"model": MODEL, "modelProvider": "relay"}));
+
+    let mut unmatched =
+        json!({"model": "gpt-9", "collaborationMode": {"settings": {"model": "gpt-9"}}});
+    external.start_on_fallback(&mut unmatched).await.unwrap();
     assert_eq!(
-        params,
-        json!({"threadId": "thr_fallback", "model": MODEL,
+        unmatched,
+        json!({"model": MODEL, "modelProvider": "relay",
             "collaborationMode": {"settings": {"model": MODEL}}})
     );
-    let mut unknown = json!({"threadId": "thr_fallback", "model": "gpt-9"});
-    assert!(
-        external
-            .admit("turn/start", &mut unknown, Some("relay"))
-            .await
-            .is_err()
-    );
+
+    let mut chosen = json!({"model": "gpt-9", "modelProvider": "openai-compatible"});
+    external.start_on_fallback(&mut chosen).await.unwrap();
+    assert_eq!(chosen["model"], "gpt-9");
 }

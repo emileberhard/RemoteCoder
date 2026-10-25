@@ -23,10 +23,11 @@ and tells the client which provider is broken and why.
 - `fallback` is the external provider id and appears only with `fallback`.
 - Codex is `unavailable` while the app-server is not running (`Codex
   app-server is not running`) and from its connection until restart recovery
-  finishes (`Codex is starting`). Once ready it is `fallback` while the
-  subscription token is missing or expired and an external provider is
-  configured, `unavailable` with the same reason without one, and `ready`
-  otherwise.
+  finishes (`Codex is starting`, or `Codex is waiting for its subscription
+  sign-in to resume interrupted work` while recovery waits for sign-in). Once
+  ready it is `fallback` while the subscription token is missing or expired
+  and an external provider is configured, `unavailable` with the same reason
+  without one, and `ready` otherwise.
 - Claude is `unavailable` when it is turned off on the gateway or its last
   preflight failed. It is absent until the first preflight, and a gateway that
   sends no `providers` at all is an older one. Absence means unknown, never
@@ -43,11 +44,18 @@ and tells the client which provider is broken and why.
 - Such a connection has no Codex upstream. The gateway answers `initialize`
   with an empty result, drops `initialized` and responses to server requests,
   and answers every other native request with `-32003` and
-  `data: {kind: "providerUnavailable", retryable: false, provider: "codex",
-  reason}` (`protocol-fixtures/errors/provider-unavailable.json`).
+  `data: {kind: "providerUnavailable", retryable, provider: "codex", reason}`
+  (`protocol-fixtures/errors/provider-unavailable.json`). `retryable` is true
+  while Codex is not running, starting or unreachable from this connection,
+  and false while recovery waits for sign-in. The reason is read from the live
+  control state, so a dropped control connection reports `Codex app-server is
+  not running` at once.
 - When Codex control becomes ready, the gateway closes every such connection
   with 4012 so the app reconnects through the ordinary path and gets a full
-  connection. There is no in-place upstream attach.
+  connection. A connection whose own app-server connect failed while control
+  was ready retries the connect after 1 s, doubling to 30 s, for as long as it
+  stays open, and closes with 4012 on the first success. There is no in-place
+  upstream attach.
 - New Codex work (requests that need admission) on any connection waits for
   Codex control to be ready, which happens only after restart recovery has
   resumed the exact interrupted turns. Until then it fails with the same
@@ -56,21 +64,31 @@ and tells the client which provider is broken and why.
 
 ## Copilot fallback
 
-- Codex sign-in no longer gates readiness. A failed router token issue is
-  recorded in the generation's auth state, and the renewal loop retries every
-  30 seconds until a token is installed.
+- Codex sign-in gates readiness only while the recovery journal has pending
+  tasks: interrupted turns resume after sign-in succeeds rather than into a
+  certain auth failure, retrying from 1 s, doubling to 30 s. Pending work on
+  fallback threads waits too. With nothing pending, a failed router token
+  issue is recorded in the generation's auth state, Codex becomes ready, and
+  the renewal loop retries every 30 seconds until a token is installed.
 - The first provider in the operator's external providers file is the
   fallback, and its first listed model is the default fallback model.
+- `ExternalProviders::map_onto_fallback` is the one owner of the
+  native-to-fallback mapping. A native model is one no external provider
+  lists. It becomes the fallback model whose slug ends in `/<model>`, and
+  service tiers are always dropped.
 - While the subscription is failing, a client-originated `thread/start` on the
   native provider moves to the fallback: `modelProvider` becomes the fallback
-  id, the model becomes the fallback model whose slug equals the requested
-  model or ends in `/<requested>`, otherwise the default fallback model, and
-  service tiers are dropped. The external provider admission then injects its
-  provider definition and catalog as for any external start.
-- Clients keep sending the model they selected on every turn. On a fallback
-  thread, a `turn/start` or settings update that names a native model maps it
-  to the fallback model whose slug ends in `/<model>` and drops its service
-  tier. An explicit fallback model keeps the ordinary external checks.
+  id and an unmatched native model becomes the default fallback model. The
+  external provider admission then injects its provider definition and
+  catalog as for any external start.
+- Clients keep sending the model and tier they selected on every send. On a
+  thread of the fallback provider, `thread/resume`, `thread/fork`,
+  `turn/start` and settings updates apply the same mapping; an unmatched
+  native `model` is dropped, so the thread keeps its stored model. An
+  unmatched native `collaborationMode.settings.model` cannot be dropped, as
+  that field is required, and still fails. An explicit fallback model, or a
+  model of another external provider, keeps the ordinary external checks.
+  Threads of other external providers keep the strict checks too.
 - **Copilot conversations stay Copilot.** A conversation started on the
   fallback keeps that provider after the subscription recovers, and existing
   subscription conversations never move to the fallback. Codex fixes a
@@ -85,3 +103,9 @@ and tells the client which provider is broken and why.
   fallback.
 - Without an external providers file there is no fallback: Codex reports
   `unavailable`, and the gateway refuses identity-gated Codex work as before.
+
+## Known gaps
+
+- Claude `ready` in router mode proves only that the router key file is
+  readable (`providers/claude/auth.rs`). A router-side Claude outage still
+  reports `ready`; its turns fail with the router's error.

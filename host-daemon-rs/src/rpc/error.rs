@@ -92,6 +92,7 @@ pub(crate) enum ErrorKind {
     ProviderUnavailable {
         provider: &'static str,
         reason: String,
+        retryable: bool,
     },
 }
 
@@ -141,7 +142,9 @@ impl ErrorKind {
             } => json!({"actualBytes": actual_bytes, "limitBytes": limit_bytes}),
             Self::ConversationBusy { retry_after_ms } => json!({"retryAfterMs": retry_after_ms}),
             Self::RequestTimedOut { limit_ms } => json!({"limitMs": limit_ms}),
-            Self::ProviderUnavailable { provider, reason } => {
+            Self::ProviderUnavailable {
+                provider, reason, ..
+            } => {
                 json!({"provider": provider, "reason": reason})
             }
         };
@@ -152,6 +155,10 @@ impl ErrorKind {
                 | Self::RequestTimedOut { .. }
                 | Self::AutomationUnavailable { .. }
                 | Self::AutomationAcknowledgementUnknown { .. }
+                | Self::ProviderUnavailable {
+                    retryable: true,
+                    ..
+                }
         ));
         data
     }
@@ -297,18 +304,6 @@ impl RpcError {
         }))
     }
 
-    pub(crate) fn codex_unavailable(reason: impl Into<String>) -> Self {
-        let reason = reason.into();
-        Self::new(
-            RpcCode::Unavailable,
-            format!("Codex is unavailable: {reason}"),
-        )
-        .with_data(RpcData::Kind(ErrorKind::ProviderUnavailable {
-            provider: "codex",
-            reason,
-        }))
-    }
-
     pub(crate) fn draining() -> Self {
         Self::new(
             RpcCode::ServerBusy,
@@ -343,19 +338,40 @@ impl RpcError {
 
 impl From<anyhow::Error> for RpcError {
     fn from(error: anyhow::Error) -> Self {
-        match error.downcast_ref::<CodexUnavailable>() {
-            Some(CodexUnavailable(reason)) => Self::codex_unavailable(reason.as_str()),
-            None => Self::new(RpcCode::Internal, error.to_string()),
-        }
+        CodexUnavailable::find(&error)
+            .unwrap_or_else(|| Self::new(RpcCode::Internal, error.to_string()))
     }
 }
 
-#[derive(Debug)]
-pub(crate) struct CodexUnavailable(pub(crate) String);
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct CodexUnavailable {
+    pub(crate) reason: String,
+    pub(crate) retryable: bool,
+}
+
+impl CodexUnavailable {
+    pub(crate) fn find(error: &anyhow::Error) -> Option<RpcError> {
+        error.downcast_ref::<Self>().cloned().map(RpcError::from)
+    }
+}
+
+impl From<CodexUnavailable> for RpcError {
+    fn from(CodexUnavailable { reason, retryable }: CodexUnavailable) -> Self {
+        Self::new(
+            RpcCode::Unavailable,
+            format!("Codex is unavailable: {reason}"),
+        )
+        .with_data(RpcData::Kind(ErrorKind::ProviderUnavailable {
+            provider: "codex",
+            reason,
+            retryable,
+        }))
+    }
+}
 
 impl std::fmt::Display for CodexUnavailable {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(&self.0)
+        formatter.write_str(&self.reason)
     }
 }
 
@@ -477,7 +493,11 @@ mod tests {
                 include_str!("../../../protocol-fixtures/errors/input-delivery-uncertain.json"),
             ),
             (
-                RpcError::codex_unavailable("Codex sign-in needed on mac-mini"),
+                CodexUnavailable {
+                    reason: "Codex sign-in needed on mac-mini".into(),
+                    retryable: false,
+                }
+                .into(),
                 41,
                 include_str!("../../../protocol-fixtures/errors/provider-unavailable.json"),
             ),
@@ -503,12 +523,17 @@ mod tests {
     }
 
     #[test]
-    fn an_unreachable_codex_keeps_its_kind_through_context() {
-        let error = anyhow::Error::new(CodexUnavailable("Codex app-server is not running".into()))
-            .context("model list failed");
+    fn an_unreachable_codex_keeps_its_kind_and_retryability_through_context() {
+        let unavailable = CodexUnavailable {
+            reason: "Codex app-server is not running".into(),
+            retryable: true,
+        };
+        let error = anyhow::Error::new(unavailable.clone()).context("model list failed");
+        let error = RpcError::from(error);
+        assert_eq!(error, RpcError::from(unavailable));
         assert_eq!(
-            RpcError::from(error),
-            RpcError::codex_unavailable("Codex app-server is not running")
+            error.response(&Value::Null)["error"]["data"]["retryable"],
+            json!(true)
         );
     }
 

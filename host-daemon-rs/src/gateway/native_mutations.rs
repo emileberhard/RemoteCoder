@@ -1,7 +1,7 @@
 //! Native conversation changes must remain fenced after the requesting socket leaves.
 use super::agent_gateway::parse_native_error;
 use super::{Gateway, NativeMutationTransport, PendingControlReply, SEND_TIMEOUT_SECONDS};
-use crate::rpc::error::{CodexUnavailable, RpcCode};
+use crate::rpc::error::RpcCode;
 use crate::rpc::{RpcError, RpcResult, log_diagnostic_ws_frame};
 use crate::turns::is_durable_codex_thread;
 use anyhow::{Context, Result, anyhow, ensure};
@@ -218,16 +218,12 @@ impl Gateway {
             .await
             .map_err(NativeMutationError::NotEnqueued)?
             .pid;
-        let transport = self
-            .native_mutation_transport
-            .lock()
-            .await
-            .clone()
-            .ok_or_else(|| {
-                NativeMutationError::NotEnqueued(
-                    CodexUnavailable(self.codex_unavailable_reason()).into(),
-                )
-            })?;
+        let transport = self.native_mutation_transport.lock().await.clone();
+        let Some(transport) = transport else {
+            return Err(NativeMutationError::NotEnqueued(
+                self.codex_unavailable().await.into(),
+            ));
+        };
         if transport.pid != current_pid {
             return Err(NativeMutationError::NotEnqueued(anyhow!(
                 "Codex control connection changed; retry the native conversation change"

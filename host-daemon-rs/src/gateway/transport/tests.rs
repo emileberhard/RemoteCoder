@@ -437,7 +437,7 @@ async fn a_client_without_codex_is_served_and_moved_to_codex_once_it_is_ready() 
     assert_eq!(refused["id"], 2);
     assert_eq!(
         refused["error"]["data"],
-        json!({"kind": "providerUnavailable", "retryable": false, "provider": "codex",
+        json!({"kind": "providerUnavailable", "retryable": true, "provider": "codex",
             "reason": "Codex app-server is not running"})
     );
     send_json(
@@ -449,6 +449,8 @@ async fn a_client_without_codex_is_served_and_moved_to_codex_once_it_is_ready() 
     assert_eq!(info["id"], 3);
     assert!(info["result"]["homeDirectory"].is_string(), "{info}");
 
+    let (control, _control_requests) = mpsc::channel(8);
+    gateway.attach_fake_control(control).await;
     *gateway.control_init_result.lock().await = Some(json!({}));
     gateway.refresh_provider_health().await;
     gateway.close_degraded_clients();
@@ -514,7 +516,10 @@ async fn new_codex_work_waits_for_a_ready_codex_and_claude_work_does_not() {
             .unwrap()
             .clone()
     };
-    let unavailable = RpcError::codex_unavailable("Codex app-server is not running");
+    let unavailable = RpcError::from(crate::rpc::error::CodexUnavailable {
+        reason: "Codex app-server is not running".into(),
+        retryable: true,
+    });
 
     assert_eq!(
         gateway

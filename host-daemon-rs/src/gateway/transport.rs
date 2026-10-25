@@ -211,6 +211,16 @@ impl Gateway {
             }));
         }
 
+        if !waiting_for_codex && upstream.is_none() {
+            let gw = Arc::clone(&self);
+            let task_gw = Arc::clone(&gw);
+            tasks.spawn(
+                task_gw.run_task_logged("client_codex_reconnect", async move {
+                    gw.reconnect_once_codex_is_reachable(client_id).await
+                }),
+            );
+        }
+
         let upstream_tx = upstream.map(|upstream| {
             let (upstream_tx, upstream_rx) =
                 mpsc::channel::<UpstreamMessage>(CLIENT_UPSTREAM_QUEUE_SIZE);
@@ -770,7 +780,7 @@ impl Gateway {
                 .await;
             return;
         }
-        let error = RpcError::codex_unavailable(self.codex_unavailable_reason());
+        let error = RpcError::from(self.codex_unavailable().await);
         let _ = self.send_error_to(out_tx, Some(id), &error).await;
     }
 
@@ -882,7 +892,7 @@ impl Gateway {
             && !crate::rpc::dispatch::claude_route(method, object)
             && !self.codex_ready().await
         {
-            return Err(RpcError::codex_unavailable(self.codex_unavailable_reason()));
+            return Err(self.codex_unavailable().await.into());
         }
         // The empty compaction acknowledgment can precede its turn/started
         // notification. Keep ordinary inputs out of that accepted-command gap;

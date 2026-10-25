@@ -66,7 +66,7 @@ fn copilot_fallback(
     let provider: ExternalProvider = serde_json::from_value(json!({
         "id": "copilot", "name": "Copilot", "baseUrl": "http://127.0.0.1:9/v1",
         "keyFile": "/private/copilot.key",
-        "models": ["copilot/gpt-6.1-sol", "copilot/gemini-4-argon"],
+        "models": ["copilot/gemini-4-argon"],
     }))
     .unwrap();
     let catalogs = state.join("external-models");
@@ -74,7 +74,7 @@ fn copilot_fallback(
     private_state::ensure_private_directory(&catalogs).unwrap();
     private_state::write_json(
         &catalogs.join("copilot.json"),
-        &json!({"models": [{"slug": "copilot/gpt-6.1-sol"}, {"slug": "copilot/gemini-4-argon"}]}),
+        &json!({"models": [{"slug": "copilot/gemini-4-argon"}]}),
     )
     .unwrap();
     ExternalProviders::new(vec![provider], state)
@@ -810,6 +810,64 @@ async fn answer_reset_account(gateway: &Arc<Gateway>, control: &mut FakeControl)
 }
 
 #[tokio::test]
+async fn interrupted_work_waits_for_sign_in_and_nothing_pending_starts_without_it() {
+    use crate::gateway::provider_health::CodexHealth;
+    use crate::runtime::recovery::{
+        RecoveryJournal, RecoveryStore, RecoveryTask, RecoveryTaskStatus,
+    };
+
+    let fixture = Fixture::host_default().await;
+    let _control = FakeControl::attach(&fixture.gateway, 8).await;
+    fixture.server.abort();
+    let generation = fixture.gateway.control.current().unwrap();
+    fixture
+        .gateway
+        .sign_in_before_recovery(&generation)
+        .await
+        .unwrap();
+
+    let interrupted = RecoveryTask {
+        thread_id: "thr_interrupted".into(),
+        turn_id: "turn-1".into(),
+        parent_thread_id: None,
+        depth: 0,
+        recovery_attempts: 0,
+        status: RecoveryTaskStatus::Suspended,
+        error: None,
+    };
+    let journal = RecoveryJournal::new(
+        "generation-1".into(),
+        "0123456789abcdef0123456789abcdef".into(),
+        vec![interrupted],
+    )
+    .unwrap();
+    RecoveryStore::new(
+        fixture
+            ._directory
+            .path()
+            .join("state/codex-restart-recovery.json"),
+    )
+    .write(&journal)
+    .unwrap();
+    let gateway = Arc::clone(&fixture.gateway);
+    let owner = Arc::clone(&generation);
+    let waiting = tokio::spawn(async move { gateway.sign_in_before_recovery(&owner).await });
+    let awaiting = CodexHealth::Unavailable {
+        reason: "Codex is waiting for its subscription sign-in to resume interrupted work".into(),
+    };
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while fixture.gateway.published_codex_health() != awaiting {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(!waiting.is_finished());
+    assert!(!fixture.gateway.codex_unavailable().await.retryable);
+    waiting.abort();
+}
+
+#[tokio::test]
 async fn a_router_token_failure_leaves_codex_ready_and_starts_new_chats_on_the_fallback() {
     let fixture = Fixture::with_fallback().await;
     let _control = FakeControl::attach(&fixture.gateway, 8).await;
@@ -851,14 +909,19 @@ async fn a_router_token_failure_leaves_codex_ready_and_starts_new_chats_on_the_f
     fixture.gateway.start_on_fallback(&mut start).await.unwrap();
     assert_eq!(
         start,
-        json!({"model": "copilot/gpt-6.1-sol", "modelProvider": "copilot",
-            "collaborationMode": {"mode": "default", "settings": {"model": "copilot/gpt-6.1-sol"}}})
+        json!({"model": "copilot/gemini-4-argon", "modelProvider": "copilot",
+            "collaborationMode": {"mode": "default", "settings": {"model": "copilot/gemini-4-argon"}}})
     );
-    let mut unknown = json!({"model": "gpt-9"});
-    fixture
-        .gateway
-        .start_on_fallback(&mut unknown)
-        .await
-        .unwrap();
-    assert_eq!(unknown["model"], "copilot/gpt-6.1-sol");
+
+    let external = fixture.gateway.external_providers.as_deref().unwrap();
+    for method in ["thread/resume", "turn/start"] {
+        let mut follow_up =
+            json!({"threadId": "thr_copilot", "model": "gpt-6.1-sol", "serviceTier": "fast"});
+        external
+            .admit(method, &mut follow_up, Some("copilot"))
+            .await
+            .unwrap();
+        assert!(follow_up.get("model").is_none(), "{method}");
+        assert!(follow_up.get("serviceTier").is_none(), "{method}");
+    }
 }

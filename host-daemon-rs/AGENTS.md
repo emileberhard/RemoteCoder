@@ -24,7 +24,7 @@ surface:
 |---|---|
 | History reads, native pages, `daemon/activeTurns` (read-only) | `just gateway-e2e-reads`, optionally `e2e_thread=<id>` |
 | Owned read burst, exact query cancellation and ready capability (isolated gateway) | `just gateway-e2e-query-admission-isolated /absolute/gateway/binary` |
-| Provider health and the Copilot fallback with Codex sign-in failing (isolated gateway, host router; one Claude and one Codex turn) | `just gateway-e2e-provider-fallback-isolated /absolute/gateway/binary` |
+| Provider health and the Copilot fallback with Codex sign-in failing (isolated gateway, host router, Argon-only catalog; one Claude turn and a two-turn Codex conversation naming a native model, the second with Fast) | `just gateway-e2e-provider-fallback-isolated /absolute/gateway/binary` |
 | `thread/fork(lastTurnId:)` boundaries (creates threads) | `just gateway-e2e-fork-live`, `just gateway-e2e-claude-fork-live` |
 | Claude steering folds into one completion (router-backed Sonnet; one completion plus an empty active-turn snapshot) | `just gateway-e2e-claude-steer-live` |
 | Claude agent-initiated turns | `just gateway-e2e-claude-wake-live` |
@@ -84,8 +84,10 @@ owner until the last fixture is dropped.
   a pending recovery journal) or a connection's own app-server connect fails,
   the client is served without Codex: gateway-owned requests run, `initialize`
   is answered locally and native requests fail with `providerUnavailable`.
-  Codex becoming ready closes those connections with 4012. New Codex work on
-  any connection waits for ready control, which follows restart recovery.
+  Codex becoming ready closes those connections with 4012; a connection whose
+  own connect failed while control was ready retries it (1 s doubling to 30 s)
+  and closes with 4012 on success. New Codex work on any connection waits for
+  ready control, which follows restart recovery.
 - Every authenticated remote WebSocket gets its own Unix WebSocket. The
   client's own `initialize`/`initialized`, request ids, capabilities,
   subscriptions, notifications and server requests pass through that exact
@@ -320,11 +322,14 @@ owner until the last fixture is dropped.
   - `model/list` is gateway-owned: the native list plus one row per external
     model, with `modelProvider` and `modelProviderName`, on the last page.
   - The first configured provider is the Codex fallback. A failed router token
-    issue no longer gates Codex readiness; while no valid subscription token is
-    installed, client `thread/start` on the native provider moves to the
-    fallback's matching or first model, and threads never change provider
-    afterwards. On fallback threads, a native model name in a turn or settings
-    selection maps to the matching fallback model and drops its service tier
+    issue gates Codex readiness only while the recovery journal has pending
+    tasks; while no valid subscription token is installed, client
+    `thread/start` on the native provider moves to the fallback's matching or
+    first model, and threads never change provider afterwards. On fallback
+    threads, every thread-scoped request (`thread/resume`, `thread/fork`,
+    `turn/start`, settings updates) maps a native model to the matching
+    fallback model or drops it, and drops service tiers, through
+    `ExternalProviders::map_onto_fallback`
     ([Provider health](../docs/provider-health.md)).
 
 - `src/rpc/dispatch.rs` owns request lifetime classification.
@@ -437,7 +442,8 @@ owner until the last fixture is dropped.
   `inputDeliveryUncertain` (both `-32003`; Claude stopped reading its stdin or
   answering controls, see *One warm runtime per active thread*),
   `providerUnavailable` (`-32003`, `provider`, `reason`; Codex is not ready or
-  this connection has no Codex upstream) and
+  this connection has no Codex upstream; retryable except while restart
+  recovery waits for sign-in) and
   `requestTimedOut` (`-32003`, `limitMs`, retryable), each with
   `retryable`; the JSON-RPC code is unchanged. Upstream Codex texts are matched only where the response is
   correlated to its request (`src/rpc/upstream_errors.rs`), pinned by a test to

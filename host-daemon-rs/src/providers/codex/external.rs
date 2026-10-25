@@ -199,22 +199,69 @@ impl ExternalProviders {
             return Ok(());
         }
         let models = self.fallback_catalog(provider).await?;
-        if !adopt_native_selection(fields, &models)
-            && let Some(default) = models.first()
-        {
-            fields.insert("model".into(), default["slug"].clone());
+        self.map_onto_fallback(fields, &models);
+        if let Some(default) = models.first() {
+            if fields.get("model").is_none_or(Value::is_null) {
+                fields.insert("model".into(), default["slug"].clone());
+            }
             if let Some(model) = fields
                 .get_mut("collaborationMode")
                 .and_then(|mode| mode.pointer_mut("/settings/model"))
+                && model
+                    .as_str()
+                    .is_some_and(|model| self.owner(model).is_none())
             {
                 *model = default["slug"].clone();
             }
         }
-        fields.remove("serviceTier");
-        fields.remove("serviceTierForTurn");
         fields.insert("modelProvider".into(), json!(provider.id));
         info!(provider = %provider.id, model = %fields["model"], "starting a new Codex conversation on the fallback provider");
         Ok(())
+    }
+
+    async fn map_onto_fallback_thread(
+        &self,
+        fields: &mut Map<String, Value>,
+        source: &str,
+    ) -> std::result::Result<bool, RpcError> {
+        match self.providers.first().filter(|first| first.id == source) {
+            Some(fallback) => {
+                let models = self.fallback_catalog(fallback).await?;
+                Ok(self.map_onto_fallback(fields, &models))
+            }
+            None => Ok(false),
+        }
+    }
+
+    fn map_onto_fallback(&self, fields: &mut Map<String, Value>, models: &[Value]) -> bool {
+        let native = |model: &Value| {
+            model
+                .as_str()
+                .filter(|model| self.owner(model).is_none())
+                .map(str::to_owned)
+        };
+        let tiers = [
+            fields.remove("serviceTier"),
+            fields.remove("serviceTierForTurn"),
+        ];
+        let mut mapped = tiers.iter().any(Option::is_some);
+        if let Some(requested) = fields.get("model").and_then(native) {
+            match matching_model(models, &requested) {
+                Some(slug) => fields.insert("model".into(), slug),
+                None => fields.remove("model"),
+            };
+            mapped = true;
+        }
+        if let Some(model) = fields
+            .get_mut("collaborationMode")
+            .and_then(|mode| mode.pointer_mut("/settings/model"))
+            && let Some(requested) = native(model)
+            && let Some(slug) = matching_model(models, &requested)
+        {
+            *model = slug;
+            mapped = true;
+        }
+        mapped
     }
 
     async fn fallback_catalog(
@@ -344,21 +391,16 @@ impl ExternalProviders {
                 }
                 let inherits = method == "thread/fork"
                     && fields.get("experimentalPredictionMode") == Some(&json!(true));
-                self.admit_thread(fields, source, false, !inherits).await
+                let mapped = self.map_onto_fallback_thread(fields, source).await?;
+                let configured = self.admit_thread(fields, source, false, !inherits).await?;
+                Ok(mapped || configured)
             }
             "turn/start" | "thread/settings/update" | "turn/settings/update" => {
                 let Some(source) = source_provider else {
                     return Ok(false);
                 };
-                let rewritten = match self.providers.first().filter(|first| first.id == source) {
-                    Some(fallback) => {
-                        adopt_native_selection(fields, &self.fallback_catalog(fallback).await?)
-                    }
-                    None => false,
-                };
-                self.check_selection(fields, source)
-                    .await
-                    .map(|_| rewritten)
+                let mapped = self.map_onto_fallback_thread(fields, source).await?;
+                self.check_selection(fields, source).await.map(|_| mapped)
             }
             _ => Ok(false),
         }
@@ -670,39 +712,15 @@ fn picker_row(provider: &ExternalProvider, model: &Value) -> Value {
     })
 }
 
-fn adopt_native_selection(fields: &mut Map<String, Value>, models: &[Value]) -> bool {
-    let fallback = |requested: &Value| {
-        let requested = requested.as_str()?;
-        models
-            .iter()
-            .map(|row| &row["slug"])
-            .find(|slug| {
-                slug.as_str().is_some_and(|slug| {
-                    slug != requested && slug.rsplit('/').next() == Some(requested)
-                })
-            })
-            .cloned()
-    };
-    let mut adopted = false;
-    if let Some(model) = fields.get_mut("model")
-        && let Some(slug) = fallback(model)
-    {
-        *model = slug;
-        adopted = true;
-    }
-    if let Some(model) = fields
-        .get_mut("collaborationMode")
-        .and_then(|mode| mode.pointer_mut("/settings/model"))
-        && let Some(slug) = fallback(model)
-    {
-        *model = slug;
-        adopted = true;
-    }
-    if adopted {
-        fields.remove("serviceTier");
-        fields.remove("serviceTierForTurn");
-    }
-    adopted
+fn matching_model(models: &[Value], requested: &str) -> Option<Value> {
+    models
+        .iter()
+        .map(|row| &row["slug"])
+        .find(|slug| {
+            slug.as_str()
+                .is_some_and(|slug| slug.rsplit('/').next() == Some(requested))
+        })
+        .cloned()
 }
 
 fn selected_models(fields: &Map<String, Value>) -> impl Iterator<Item = &str> {

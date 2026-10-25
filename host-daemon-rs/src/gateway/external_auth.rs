@@ -21,7 +21,10 @@ impl ExternalAuth {
 pub(super) struct InstalledAuth {
     pub(super) token: Option<Token>,
     pub(super) error: Option<String>,
+    pub(super) holds_recovery: bool,
 }
+
+const RECOVERY_SIGN_IN_RETRY_LIMIT: Duration = Duration::from_secs(30);
 
 impl Gateway {
     pub(super) fn require_auth_generation(
@@ -66,6 +69,43 @@ impl Gateway {
         }
         self.refresh_provider_health().await;
         result
+    }
+
+    pub(super) async fn sign_in_before_recovery(
+        &self,
+        generation: &Arc<ControlGeneration>,
+    ) -> Result<()> {
+        let Err(error) = self.authenticate_external(generation).await else {
+            return Ok(());
+        };
+        self.require_auth_generation(generation)?;
+        if !self.codex_recovery_pending().await {
+            tracing::warn!(%error, "Codex subscription sign-in failed; Codex starts without it");
+            return Ok(());
+        }
+        tracing::warn!(%error, "Codex subscription sign-in failed; interrupted Codex work waits for it");
+        generation
+            .auth
+            .lock()
+            .expect("Codex auth state poisoned")
+            .holds_recovery = true;
+        self.refresh_provider_health().await;
+        let mut retry = Duration::from_secs(1);
+        loop {
+            tokio::time::sleep(retry).await;
+            retry = (retry * 2).min(RECOVERY_SIGN_IN_RETRY_LIMIT);
+            if self.authenticate_external(generation).await.is_ok() {
+                break;
+            }
+            self.require_auth_generation(generation)?;
+        }
+        generation
+            .auth
+            .lock()
+            .expect("Codex auth state poisoned")
+            .holds_recovery = false;
+        self.refresh_provider_health().await;
+        Ok(())
     }
 
     async fn install_external_token(
