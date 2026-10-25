@@ -254,7 +254,7 @@ struct ChatWindowActionsPublisher: View {
         #if os(macOS)
         return ChatWindowFocusPublication(actions: ChatWindowActions(state: context.commandState, performer: performer)).equatable()
         #else
-        return EmptyView()
+        return Color.clear.frame(width: 0, height: 0)
         #endif
     }
 
