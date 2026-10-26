@@ -32,6 +32,7 @@ from .app_telemetry_summary import (
     activity,
     call_stack_tree,
     diagnostic,
+    checkpoint_inventories,
     export_costs,
     iso,
     losses,
@@ -109,6 +110,8 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
     child.add_argument("--by", action="append", choices=CONTEXT_FIELDS,
                        help=f"state fields to group by (repeatable; default: {' '.join(ACTIVITY_FIELDS)})")
     child.set_defaults(func=cmd_activity)
+    command("checkpoint-inventory", "latest retained checkpoint inventory per host; missing fields are unknown", "24h").set_defaults(
+        func=cmd_checkpoint_inventory)
     command("export-cost", "what the log export and the sampler cost on the device", "24h").set_defaults(
         func=cmd_export_cost)
 
@@ -449,3 +452,8 @@ async def cmd_activity(args: argparse.Namespace) -> int:
 async def cmd_export_cost(args: argparse.Namespace) -> int:
     runs, coverage = _telemetry(args)
     return _emit({"coverage": coverage, **export_costs(runs)})
+
+
+async def cmd_checkpoint_inventory(args: argparse.Namespace) -> int:
+    runs, coverage = _telemetry(args)
+    return _emit({"coverage": coverage, "inventories": checkpoint_inventories(runs)})

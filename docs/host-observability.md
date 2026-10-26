@@ -606,7 +606,7 @@ only, never WebKit's processes, and it cannot apportion battery to a feature.
 - **Records.** `TelemetryRecord` lines go into `<stamp>-<id>-telemetry.jsonl`
   batches: a `run` header (`runID`, installation ID, model, app version,
   build and source commit, OS build, wall and monotonic anchors, `flushedThroughSeq`), then
-  `sample`, `export` and `loss` lines with `schemaVersion`, `runID`, a per-run
+  `sample`, `export`, `checkpointInventory` and `loss` lines with `schemaVersion`, `runID`, a per-run
   `seq`, `ts` and `monoNs`. Samples hold cumulative counters and the
   `PersistenceMetrics` snapshot; the reader takes the deltas. `export` records
   each drain's stage times (scan, encode, write, compress, upload), records
@@ -627,6 +627,36 @@ only, never WebKit's processes, and it cannot apportion battery to a feature.
   started in one state and finished in the next counts toward the next. Battery
   levels appear on timeline stretches only; a 1 % step lands in whichever state
   held when iOS reported it, so no per-state battery rate is computed.
+- **Checkpoint inventory.** `TelemetryContext` queries each loaded checkpoint owner
+  on a 30 s foreground observation cadence, once after its ordinary index has loaded
+  and then at most once per four hours per host in the app run. It stops in the
+  background and checks again on return. This never starts an index, opens a file,
+  decodes a checkpoint or reads attachment bytes. The existing buffer and outbox
+  upload a `checkpointInventory` line with an `inventory` payload: `hostID`,
+  `cacheBudgetBytes`, `primaryBudgetBytes`, `totals`, `entries` and `droppedRecords`.
+  Entries carry the local `conversationID`, owner `protected` and fence `retained`
+  states, optional `invalidation`, `primaryPayloadBytes`, `cacheBytes`,
+  `physicalFileBytes` and optional `contents`. The byte counts are the owner's
+  current accounting, including retained sidecars and recovery files; physical
+  bytes mean accounted file lengths, not allocated filesystem blocks or a fresh
+  disk measurement. Primary accounting can conservatively include unreadable data.
+  Contents retain only `threadID`, canonical `turnCount`/`itemCount` and history
+  window `historyItemCount`/`historyTurnCount` (retained metadata entries), captured
+  when ordinary save/load/index work already has the checkpoint decoded. An absent
+  thread ID inside known contents is a draft. Absent contents mean identity and
+  composition are unknown, including unreadable, imported, mixed-format or
+  sidecar/recovery-only records. Attachment counts and byte sizes are currently
+  untracked and remain absent/unknown; telemetry never scans or decodes them.
+  There are no titles, filenames, conversation text or attachment payloads.
+  Each inventory retains at most 128 entries and its compact JSON payload stays
+  below 128 KiB (the line envelope adds less than 512 bytes). Entries are selected
+  in conversation UUID order and oversized entries count as dropped. Totals cover
+  every record, including dropped entries; whole-store content counts stay unknown
+  if any record's contents are unknown. `recordsWithKnownContents` and
+  `unknownProtectionRecords` expose that coverage. `just app-telemetry
+  checkpoint-inventory --device <exact-device>` returns the latest snapshot per
+  host in the selected window, without turning absent counts into zero.
+
 - **Switching it off.** `perf-sim --disable resourceSampler` turns the sampler
   off in `RC_PERF_HARNESS` builds for the overhead comparison; the projection,
   its device and network observers and the MetricKit states keep running, so the
@@ -670,6 +700,16 @@ byte cap for the gateway journal (age-bounded, up to 1.2 GB a day); per-purpose
 network counters and gateway connection correlation; an unknown initial phase in
 `ScenePhaseAggregate`, which starts as background, so a history read begun during
 a background launch stops holding its state through suspension.
+
+Decision summary (2026-10-26, retained checkpoint inventory). Replay preparation
+needs the phone's retained-state sizes without repeating the costly checkpoint
+inspection it measures. The store projects its existing accounting; ordinary
+reads and writes keep a small content-free composition beside that accounting.
+Telemetry owns observation cadence and the existing outbox owns delivery. A
+second disk scan and an inventory file were rejected: both add I/O and another
+lifetime owner. Untracked attachment sizes remain unknown. The byte accounting
+is a point-in-time owner snapshot; external disk changes are visible only when
+the store's normal operations account for them.
 
 ### Checkpoint save phases
 

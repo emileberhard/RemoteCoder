@@ -27,7 +27,7 @@ APP_LOG_DIRECTORY = "Library/Logs/remote-coder/app-logs"
 RETENTION_MARKER = "retention.json"
 LISTING_SEPARATOR = "--retention--"
 INDEX_ROOT = Path.home() / "Library/Caches/RemoteCoder/app-telemetry/index"
-INDEX_VERSION = 1
+INDEX_VERSION = 2
 INDEX_BYTE_CAP = 256 * 1024 * 1024
 LOCAL = "local"
 SSH = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "-o", "ServerAliveInterval=5",

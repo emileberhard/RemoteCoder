@@ -7,6 +7,7 @@ from pathlib import Path
 from remotecoder_tools import app_telemetry, app_telemetry_store, config
 from remotecoder_tools.app_telemetry_summary import (
     activity,
+    checkpoint_inventories,
     export_costs,
     heaviest_path,
     metrickit_report,
@@ -288,3 +289,22 @@ def test_a_local_listing_reads_the_gateway_cap_marker(tmp_path, monkeypatch):
         "capUnmet": {"checkedAt": "2026-10-24T13:53:20.000Z", "retainedBytes": None, "capBytes": 1024,
                      "unreadableEntries": 1},
     }
+
+
+def test_checkpoint_inventory_survives_indexing_and_keeps_latest_host_snapshot_with_unknowns():
+    earlier = {"recordType": "checkpointInventory", "runID": "older", "seq": 1,
+               "ts": "2026-10-26T10:00:00Z", "inventory": {"hostID": "host-a", "totals": {"records": 1}}}
+    latest = {"recordType": "checkpointInventory", "runID": "newer", "seq": 2,
+              "ts": "2026-10-26T11:00:00Z", "inventory": {
+                  "hostID": "host-a", "totals": {"records": 150, "recordsWithKnownContents": 128},
+                  "droppedRecords": 22, "entries": [{"conversationID": "conversation"}],
+              }}
+    other = {**earlier, "seq": 2, "inventory": {"hostID": "host-b", "totals": {"records": 0}}}
+    summary = summarize_segment([json.dumps(record).encode() for record in (latest, earlier, other)])
+    assert len(summary["telemetry"]) == 3
+    inventories = checkpoint_inventories(telemetry_runs(summary["telemetry"]))
+    assert inventories == [
+        {"runID": "newer", "ts": latest["ts"], **latest["inventory"]},
+        {"runID": "older", "ts": other["ts"], **other["inventory"]},
+    ]
+    assert "attachmentCount" not in inventories[0]["totals"]

@@ -5,7 +5,7 @@ from collections import Counter, defaultdict
 from collections.abc import Iterable
 
 REFERENCE_DATE = datetime.datetime(2001, 1, 1, tzinfo=datetime.UTC)
-TELEMETRY_RECORD_TYPES = frozenset({"run", "sample", "context", "export", "counts", "loss"})
+TELEMETRY_RECORD_TYPES = frozenset({"run", "sample", "context", "export", "counts", "loss", "checkpointInventory"})
 PERSISTENCE = re.compile(
     r"persistence owner=(?P<owner>\w+) writes=(?P<writes>\d+) bytes=(?P<bytes>\d+) skipped=(?P<skipped>\d+) "
     r"failures=(?P<failures>\d+) writesWithoutByteCount=(?P<unsized>\d+) milliseconds=(?P<milliseconds>[\d.]+)"
@@ -523,3 +523,18 @@ def losses(records: Iterable[dict]) -> list[dict]:
             totals[(str(record.get("what")), str(record.get("reason")))].update(
                 {"records": 1, "count": int(record.get("count") or 0), "bytes": int(record.get("bytes") or 0)})
     return [{"what": what, "reason": reason, **counts} for (what, reason), counts in sorted(totals.items())]
+
+
+def checkpoint_inventories(runs: list[dict]) -> list[dict]:
+    latest: dict[str, dict] = {}
+    for run in runs:
+        for record in run["records"]:
+            if record.get("recordType") != "checkpointInventory" or not isinstance(payload := record.get("inventory"), dict):
+                continue
+            host_id = payload.get("hostID")
+            if not isinstance(host_id, str):
+                continue
+            summary = {"runID": run["runID"], "ts": record.get("ts"), **payload}
+            if host_id not in latest or str(summary["ts"]) > str(latest[host_id]["ts"]):
+                latest[host_id] = summary
+    return [latest[key] for key in sorted(latest)]
