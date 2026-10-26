@@ -771,7 +771,7 @@ final class ConversationList {
 #if RC_PERF_HARNESS
 extension ConversationList {
     var performanceReplayRefreshState: (settled: Bool, deferred: Bool, revision: UInt64) {
-        (activeRefreshRequest == nil && pendingRefreshRequest == nil && !isLoadingOlder, refreshDeferredByRestart, headerRevision)
+        (activeRefreshRequest == nil && pendingRefreshRequest == nil && !isLoadingOlder, needsReconnectRefresh, headerRevision)
     }
 }
 #endif

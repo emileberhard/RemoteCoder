@@ -359,7 +359,7 @@ def harness_source_identity(settings: list[str], toolchain: str) -> dict:
                 for line in text.splitlines(keepends=True):
                     directive = line.strip()
                     if directive.startswith("#if "):
-                        if depth or "RC_PERF_HARNESS" in directive:
+                        if depth or directive == "#if RC_PERF_HARNESS":
                             depth += 1
                     if depth:
                         selected.append(line)
