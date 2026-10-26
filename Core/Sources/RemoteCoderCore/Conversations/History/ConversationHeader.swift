@@ -27,7 +27,7 @@ struct ConversationHeader: Codable, Identifiable, Equatable, Sendable {
     var reasoningEffort: CodexAppServerV2.ReasoningEffort?
     var extra: CodexAppServerV2.ThreadExtra?
     let createdAt: Int64
-    let updatedAt: Int64
+    private(set) var updatedAt: Int64
     var lastTurnCompletedAt: Int64?
     var recencyAt: Int64?
     let path: String?
@@ -130,6 +130,13 @@ struct ConversationHeader: Codable, Identifiable, Equatable, Sendable {
         nativeParentThreadID = nativeParentThreadID ?? previous.nativeParentThreadID
         spawnedAsSubAgent = spawnedAsSubAgent || previous.spawnedAsSubAgent
         canAcceptDirectInput = canAcceptDirectInput ?? previous.canAcceptDirectInput
+    }
+
+    func retainingHiddenAgentTimestamp(from previous: Self) -> Self {
+        guard isDelegatedAgent, previous.isDelegatedAgent else { return self }
+        var comparison = self
+        comparison.updatedAt = previous.updatedAt
+        return comparison == previous ? previous : self
     }
 
     var sidebarTimestamp: Int64 { lastTurnCompletedAt ?? createdAt }

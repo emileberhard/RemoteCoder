@@ -10,6 +10,7 @@ enum RoutedGatewayEvent: Sendable {
     case favorites(DirectoryFavorites)
     case preferences(PreferenceDocument)
     case settings(CodexAppServerV2.ThreadSettingsUpdatedNotification, sequence: UInt64?)
+    case threadChanged(threadID: String, sequence: UInt64?)
     case threadName(CodexAppServerV2.ThreadNameUpdatedNotification)
     case queueChanged(threadID: String)
     case warning(GatewayWarning)
@@ -17,10 +18,20 @@ enum RoutedGatewayEvent: Sendable {
     case activity(CodexGatewayDaemon.ActiveTurnsResponse)
     case liveActivity(ActiveTasksLiveActivitySnapshot?)
 
+    var requiresHistoryRefresh: Bool {
+        switch self {
+        case .threadChanged, .threadName, .settings: true
+        case .turnEvent(let event): event.method == "turn/started" || event.method == "turn/completed"
+        case .historyInvalidated(_, let removed, _): !removed
+        case .archive(_, let archived, _): !archived
+        default: false
+        }
+    }
+
     var sequence: UInt64? {
         switch self {
         case .tokenUsage(_, let sequence), .historyInvalidated(_, _, let sequence),
-             .archive(_, _, let sequence), .settings(_, let sequence): sequence
+             .archive(_, _, let sequence), .settings(_, let sequence), .threadChanged(_, let sequence): sequence
         case .turnEvent(let event): event.sequence
         case .threadName, .queueChanged, .marks, .favorites, .preferences, .warning, .providerHealth, .activity, .liveActivity: nil
         }
@@ -95,6 +106,8 @@ enum GatewayNotificationRouting {
             return .activity(snapshot)
         case .liveActivityChanged(let snapshot):
             return .liveActivity(snapshot)
+        case .threadStarted(let threadID), .threadStatusChanged(let threadID):
+            return .threadChanged(threadID: threadID, sequence: note.sequence)
         case .threadSettingsUpdated(let settings):
             return .settings(settings, sequence: note.sequence)
         case .threadNameUpdated(let name):

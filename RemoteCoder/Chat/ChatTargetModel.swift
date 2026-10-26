@@ -1143,6 +1143,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
     private func stopHistoryAutoRefresh() {
         ownedTasks.cancel(.warmConversations)
         ownedTasks.cancel(.historyAutoRefresh)
+        conversationList.cancelEventRefresh()
     }
 
     // MARK: - Gateway Route
@@ -1347,7 +1348,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
         if let connection {
             reconcileObservation(); observation.connected(connection)
             for screen in screens { screen.historyEdges.retryFailed() }
-            if conversationList.needsReconnectRefresh {
+            if isSceneActive && (isVisible || isHistoryDrawerOpen) {
                 ownedTasks.start(.historyRetry) { [weak self] in await self?.conversationList.refresh(reason: "reconnect") }
             }
             hostServices.registration.retry()
@@ -1476,7 +1477,10 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
 
     func apply(gatewayEvent event: RoutedGatewayEvent, replay: Bool = false) async {
         guard acceptsCurrentGatewayDelivery, !(replay && defersReplay(event)) else { return }
+        if isSceneActive, isHistoryDrawerOpen { conversationList.refresh(after: event) }
         switch event {
+        case .threadChanged:
+            break
         case .activity(let snapshot):
             applyActivity(snapshot, observedAt: .now)
         case .liveActivity(let snapshot):
@@ -1547,10 +1551,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
             guard acceptsCurrentGatewayDelivery else { return }
             for screen in screens where screen.activeSessionID == threadID { screen.startNewConversation() }
         case .archive(_, false, _):
-            Task { @MainActor [weak self] in
-                guard let self, self.acceptsWork else { return }
-                await self.conversationList.refresh(reason: "thread-unarchived")
-            }
+            break
         case .marks(let delta):
             conversationList.receiveMarks(delta)
         case .favorites(let favorites):

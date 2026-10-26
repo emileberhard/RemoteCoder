@@ -71,6 +71,8 @@ enum ServerNotification: Sendable {
     case turnPlanUpdated(TurnText)
     case turnDiffUpdated(TurnText)
     case turnScoped(method: String, address: TurnAddress)
+    case threadStarted(threadID: String)
+    case threadStatusChanged(threadID: String)
     case threadSettingsUpdated(CodexAppServerV2.ThreadSettingsUpdatedNotification)
     case threadNameUpdated(CodexAppServerV2.ThreadNameUpdatedNotification)
     case threadTokenUsageUpdated(CodexAppServerV2.ThreadTokenUsageUpdatedNotification)
@@ -103,7 +105,7 @@ extension ServerNotification {
              .reasoningTextDelta(let delta), .planDelta(let delta): delta.address
         case .turnPlanUpdated(let text), .turnDiffUpdated(let text): text.address
         case .threadTokenUsageUpdated(let usage): TurnAddress(threadID: usage.threadId, turnID: usage.turnId)
-        case .threadSettingsUpdated, .threadNameUpdated, .threadHistoryInvalidated, .threadArchived, .threadClosed,
+        case .threadStarted, .threadStatusChanged, .threadSettingsUpdated, .threadNameUpdated, .threadHistoryInvalidated, .threadArchived, .threadClosed,
              .threadQueueChanged, .conversationMarksChanged, .directoryFavoritesChanged, .preferencesChanged, .questionsChanged, .daemonReady, .callChanged, .gatewayWarning, .providerHealthChanged, .activeTurnsChanged, .liveActivityChanged, .transportError, .unknown,
              .malformed: nil
         }
@@ -160,6 +162,16 @@ extension ServerNotification {
         let explanation: String?
     }
 
+    private struct ThreadStartedPayload: Decodable {
+        struct Thread: Decodable { let id: String }
+        let thread: Thread
+    }
+
+    private struct ThreadStatusPayload: Decodable {
+        let threadId: String
+        let status: CodexAppServerV2.ThreadStatus
+    }
+
     private struct ThreadPayload: Decodable {
         let threadId: String
     }
@@ -211,6 +223,14 @@ extension ServerNotification {
             return turnScoped(method: method, frame: frame)
         }
         switch method {
+        case "thread/started":
+            let threadID = try params(ThreadStartedPayload.self, in: frame).thread.id
+            guard !threadID.isEmpty else { throw Failure(reason: "empty thread id") }
+            return .threadStarted(threadID: threadID)
+        case "thread/status/changed":
+            let payload = try params(ThreadStatusPayload.self, in: frame)
+            guard !payload.threadId.isEmpty else { throw Failure(reason: "empty thread id") }
+            return .threadStatusChanged(threadID: payload.threadId)
         case "gateway/warning":
             return .gatewayWarning(try params(GatewayWarning.self, in: frame))
         case "gateway/providerHealth":

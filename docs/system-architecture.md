@@ -2059,7 +2059,38 @@ The iOS app persists bounded headers, transcripts, timelines, model metadata,
 and voice-only history for fast reopening. Those caches improve presentation;
 they never replace provider-owned history.
 Quiet automatic history refreshes retain unchanged header arrays and do not
-publish loading transitions. The header store compares against its last
+publish loading transitions. `HistoryRefreshTiming` keeps a 15-second prefix
+poll while the drawer is open and a full recent-window safety read every five
+minutes. `GatewayNotificationRouting` decodes `thread/started` and
+`thread/status/changed` off-main; `ChatTargetModel` routes these, turn lifecycle,
+name/settings changes, unarchives and history invalidations into
+`ConversationList`'s quiet refresh. Bursts coalesce for 250 ms with one pending
+request; a change during a read requires a subsequent read. Connect/reconnect
+reads the full recent window. Closing the drawer, backgrounding or retirement
+cancels pending event refreshes.
+
+`GatewayHistoryService` probes one recent header per provider and stops an
+incremental read at the first identical page, comparing ordered classified
+headers, completion coverage and whether more history is known. A changed probe
+continues with the ordinary page size. The comparison snapshot retains at most
+4,000 headers per provider, fenced by read revision and the service invalidation
+epoch. Previews keep `ConversationHeader`'s 512-character bound. An unchanged
+first page from both providers skips the list merge, array replacement and
+header save when there is no new retained ancestry or pending local history.
+Manual reads and the five-minute safety read bypass this stop; older browsing keeps its own
+continuation. External CLI/file writers are not guaranteed to emit managed
+notifications. In particular, a standalone Codex CLI rename does not advance
+`updated_at`: an old thread's rename, external archive or another change that
+does not move recency within the ordinary recent window may therefore appear
+at the next full safety read, about five minutes while the drawer remains open.
+This replaces the former fifteen-second full-read bound for those changes.
+
+A retained delegated header's `updatedAt`-only change keeps its prior header
+when every other field is identical. Delegated rows are hidden and the drawer
+does not warm them; parent indicators derive from `ConversationActivity` and
+`agentOwners`. Root timestamps and every meaningful child field remain
+authoritative for retention, pruning, warming and offline reopening. The header
+store format remains version 4. The header store compares against its last
 persisted headers before encoding; refresh timestamps stay in memory until a
 header write also persists them, so a relaunch can trigger an extra refresh.
 The header window holds at most 1,024 root conversations. Delegated agent

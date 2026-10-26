@@ -5,6 +5,13 @@ import Foundation
 /// gets a bounded retry, not a tight loop. Interactive refresh still runs now.
 enum HistoryRefreshTiming {
     static let maximumStaleness: TimeInterval = 15
+    static let pollPageLimit = 1
+    static let fullRefreshInterval: TimeInterval = 5 * 60
+
+    static func needsFullRead(after lastFullRead: Date?, now: Date) -> Bool {
+        guard let lastFullRead else { return true }
+        return now.timeIntervalSince(lastFullRead) >= fullRefreshInterval
+    }
 
     static func delay(after lastSuccess: Date?, now: Date) -> Duration {
         guard let lastSuccess else { return .seconds(maximumStaleness) }

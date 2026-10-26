@@ -141,6 +141,32 @@ actor GatewayHistoryService {
         return ObservationHistory(turns: turns, entries: entries.reversed(), update: update)
     }
 
+    enum RecentRead: Sendable { case full, untilUnchanged }
+
+    private struct RecentCoverage {
+        let headers: [ConversationHeader]
+        let unavailable: Set<String>
+        let hasMore: Bool
+
+        init(headers: [ConversationHeader], unavailable: Set<String>, hasMore: Bool) {
+            self.headers = Array(headers.prefix(4_000))
+            self.unavailable = unavailable.intersection(self.headers.map(\.id))
+            self.hasMore = hasMore || self.headers.count < headers.count
+        }
+
+        func matches(_ page: [ConversationHeader], unavailable: Set<String>, offset: Int, hasMore: Bool) -> Bool {
+            let end = offset + page.count
+            guard end <= headers.count,
+                  page.elementsEqual(headers[offset..<end]),
+                  unavailable == self.unavailable.intersection(page.map(\.id))
+            else { return false }
+            return hasMore ? end < headers.count || self.hasMore : end == headers.count && !self.hasMore
+        }
+    }
+
+    private var recentCoverage: [AgentProvider: RecentCoverage] = [:]
+    private var recentReadRevisions: [AgentProvider: UInt64] = [:]
+
     struct RecentThreads: Sendable {
         let threads: [ConversationHeader]
         let failures: [String]
@@ -148,12 +174,13 @@ actor GatewayHistoryService {
         let agentWarnings: [String]
         let unavailableCompletionTimes: Set<String>
         let continuation: ConversationListContinuation
+        let isUnchanged: Bool
     }
 
-    func fetchRecentThreads(limit: Int, useStateDBOnly: Bool, knownHeaders: [ConversationHeader]) async throws -> RecentThreads {
+    func fetchRecentThreads(limit: Int, useStateDBOnly: Bool, knownHeaders: [ConversationHeader], read: RecentRead) async throws -> RecentThreads {
         precondition(limit > 0)
         return try await fetchThreads(limit: limit, useStateDBOnly: useStateDBOnly,
-            positions: ConversationListContinuation(), pageCountLimit: 20, knownHeaders: knownHeaders)
+            positions: ConversationListContinuation(), pageCountLimit: read == .untilUnchanged ? 21 : 20, knownHeaders: knownHeaders, read: read)
     }
 
     func fetchOlderPage(provider: AgentProvider, position: ConversationListPosition, knownHeaders: [ConversationHeader]) async throws
@@ -161,28 +188,30 @@ actor GatewayHistoryService {
         let generation = epoch
         let known = Dictionary(knownHeaders.map { ($0.id, $0) }, uniquingKeysWith: { _, latest in latest })
         let page = try await fetchProviderThreads(provider: provider, limit: 200, pageLimit: 200, position: position,
-            useStateDBOnly: true, pageCountLimit: 1, known: known)
+            useStateDBOnly: true, pageCountLimit: 1, known: known, read: .full)
         try Task.checkCancellation()
         guard generation == epoch else { throw CancellationError() }
         return (page.threads, page.unavailable, page.warnings, page.position)
     }
 
     private func fetchThreads(limit: Int, useStateDBOnly: Bool, positions: ConversationListContinuation,
-                              pageCountLimit: Int, knownHeaders: [ConversationHeader]) async throws -> RecentThreads {
+                              pageCountLimit: Int, knownHeaders: [ConversationHeader], read: RecentRead) async throws -> RecentThreads {
         let generation = epoch
         let known = Dictionary(knownHeaders.map { ($0.id, $0) }, uniquingKeysWith: { _, latest in latest })
         async let codex = fetchProviderThreads(provider: .codex, limit: limit, pageLimit: min(200, max(50, limit * 2)), position: positions.codex,
-            useStateDBOnly: useStateDBOnly, pageCountLimit: pageCountLimit, known: known)
+            useStateDBOnly: useStateDBOnly, pageCountLimit: pageCountLimit, known: known, read: read)
         async let claude = fetchProviderThreads(provider: .claude, limit: limit, pageLimit: min(200, max(50, limit * 2)), position: positions.claude,
-            useStateDBOnly: useStateDBOnly, pageCountLimit: pageCountLimit, known: known)
+            useStateDBOnly: useStateDBOnly, pageCountLimit: pageCountLimit, known: known, read: read)
         var fetched: [ConversationHeader] = []
         var failures: [String] = []
         var providerErrors: [any Error] = []
         var agentWarnings: [String] = []
         var unavailable = Set<String>()
         var continuation = positions
+        var unchangedProviders = 0
         do {
             let result = try await codex
+            if result.isUnchanged { unchangedProviders += 1 }
             fetched += result.threads
             unavailable = result.unavailable
             agentWarnings += result.warnings
@@ -190,18 +219,23 @@ actor GatewayHistoryService {
             if result.coverageIncomplete {
                 failures.append("Codex history reached its page limit; retaining cached conversations.")
             }
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             providerErrors.append(error)
             if !Self.defersRead(error) { failures.append("Codex history: \(error.localizedDescription)") }
         }
         do {
             let result = try await claude
+            if result.isUnchanged { unchangedProviders += 1 }
             fetched += result.threads
             agentWarnings += result.warnings
             continuation.claude = result.position
             if result.coverageIncomplete {
                 failures.append("Claude history reached its page limit; retaining cached conversations.")
             }
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             providerErrors.append(error)
             if !Self.defersRead(error) { failures.append("Claude history: \(error.localizedDescription)") }
@@ -219,7 +253,7 @@ actor GatewayHistoryService {
         }
         return RecentThreads(threads: ordered, failures: failures, isDeferred: providerErrors.contains(where: Self.defersRead),
                              agentWarnings: Array(Set(agentWarnings)).sorted(),
-                             unavailableCompletionTimes: unavailable, continuation: continuation)
+                             unavailableCompletionTimes: unavailable, continuation: continuation, isUnchanged: unchangedProviders == 2)
     }
 
     static func defersRead(_ error: any Error) -> Bool {
@@ -340,9 +374,16 @@ actor GatewayHistoryService {
     }
 
     private func fetchProviderThreads(provider: AgentProvider, limit: Int, pageLimit: Int, position: ConversationListPosition,
-        useStateDBOnly: Bool, pageCountLimit: Int, known: [String: ConversationHeader]) async throws
-        -> (threads: [ConversationHeader], unavailable: Set<String>, warnings: [String], coverageIncomplete: Bool, position: ConversationListPosition) {
-        guard position.canLoad else { return ([], [], [], false, .end) }
+        useStateDBOnly: Bool, pageCountLimit: Int, known: [String: ConversationHeader], read: RecentRead) async throws
+        -> (threads: [ConversationHeader], unavailable: Set<String>, warnings: [String], coverageIncomplete: Bool, position: ConversationListPosition, isUnchanged: Bool) {
+        guard position.canLoad else { return ([], [], [], false, .end, false) }
+        let generation = epoch
+        let recordsRecentPages = position == .notLoaded && pageCountLimit > 1
+        let revision = (recentReadRevisions[provider] ?? 0) &+ 1
+        if recordsRecentPages { recentReadRevisions[provider] = revision }
+        let previousCoverage = recentCoverage[provider]
+        var stoppedAtUnchanged = false
+        var firstPageUnchanged = false
         var cursor = position.cursor
         var seenCursors: Set<String> = []
         var fetchedThreads: [ConversationHeader] = []
@@ -352,12 +393,13 @@ actor GatewayHistoryService {
 
         var warnings: [String] = []
         while rootCount < limit && pages < pageCountLimit {
+            let requestedLimit = read == .untilUnchanged && pages == 0 ? HistoryRefreshTiming.pollPageLimit : pageLimit
             let response: CodexAppServerV2.ThreadListResponse
             switch provider {
-            case .codex: response = try await gateway.listThreads(limit: pageLimit, cursor: cursor, useStateDBOnly: useStateDBOnly)
-            case .claude: response = try await gateway.listClaudeThreads(limit: pageLimit, cursor: cursor)
+            case .codex: response = try await gateway.listThreads(limit: requestedLimit, cursor: cursor, useStateDBOnly: useStateDBOnly)
+            case .claude: response = try await gateway.listClaudeThreads(limit: requestedLimit, cursor: cursor)
             }
-            guard response.data.count <= pageLimit else { throw GatewayClient.ClientError.invalidMessage }
+            guard response.data.count <= requestedLimit else { throw GatewayClient.ClientError.invalidMessage }
             pages += 1
 
             let headers = response.data.map { wire in
@@ -368,19 +410,26 @@ actor GatewayHistoryService {
             let classified = await classifyAgents(headers)
             rootCount += classified.threads.count(where: { !$0.isDelegatedAgent })
             warnings += classified.warnings
+            var pageHeaders: [ConversationHeader] = []
+            var pageUnavailable = Set<String>()
             for var header in classified.threads {
                 if provider == .claude {
-                    fetchedThreads.append(header)
+                    pageHeaders.append(header)
                     continue
                 } else if let timestamp = response.completionTimes?[header.id] {
                     header.lastTurnCompletedAt = timestamp
                 } else {
-                    unavailable.insert(header.id)
+                    pageUnavailable.insert(header.id)
                 }
-                fetchedThreads.append(header)
+                pageHeaders.append(header)
             }
+            let unchanged = previousCoverage?.matches(pageHeaders, unavailable: pageUnavailable,
+                offset: fetchedThreads.count, hasMore: response.nextCursor != nil) == true
+            if pages == 1 { firstPageUnchanged = read == .untilUnchanged && unchanged }
+            fetchedThreads += pageHeaders
+            unavailable.formUnion(pageUnavailable)
             logger.info(
-                "thread/list provider=\(provider.rawValue) page=\(pages) requested=\(pageLimit) received=\(response.data.count) hasNextCursor=\(response.nextCursor != nil)"
+                "thread/list provider=\(provider.rawValue) page=\(pages) requested=\(requestedLimit) received=\(response.data.count) hasNextCursor=\(response.nextCursor != nil)"
             )
 
             guard let nextCursor = response.nextCursor else {
@@ -395,15 +444,33 @@ actor GatewayHistoryService {
                 throw GatewayClient.ClientError.invalidMessage
             }
             cursor = nextCursor
+            if read == .untilUnchanged, unchanged {
+                stoppedAtUnchanged = true
+                break
+            }
         }
 
+        try Task.checkCancellation()
+        guard generation == epoch else { throw CancellationError() }
+        if recordsRecentPages {
+            guard recentReadRevisions[provider] == revision else { throw CancellationError() }
+            if stoppedAtUnchanged, let previousCoverage {
+                let tail = previousCoverage.headers.dropFirst(fetchedThreads.count)
+                recentCoverage[provider] = RecentCoverage(headers: fetchedThreads + tail,
+                    unavailable: unavailable.union(previousCoverage.unavailable.intersection(tail.map(\.id))),
+                    hasMore: previousCoverage.hasMore)
+            } else {
+                recentCoverage[provider] = RecentCoverage(headers: fetchedThreads, unavailable: unavailable, hasMore: cursor != nil)
+            }
+        }
         let coverageIncomplete = pageCountLimit > 1 && pages == pageCountLimit && cursor != nil && rootCount < limit
         return (fetchedThreads, unavailable, Array(Set(warnings)).sorted(), coverageIncomplete,
-                cursor.map(ConversationListPosition.next) ?? .end)
+                cursor.map(ConversationListPosition.next) ?? .end, firstPageUnchanged)
     }
 
     func invalidateAll() async {
         epoch += 1
+        recentCoverage.removeAll()
         agentClassifications.removeAll()
         classificationBytes = 0
         retainedClassificationOffset = 0

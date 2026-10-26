@@ -162,7 +162,7 @@ struct ServerNotificationTests {
 
     @Test func aBrokenSettingsPayloadIsMalformedAndAnUnknownMethodIsNot() throws {
         guard case .malformed("thread/settings/updated", nil, _) = try decode(#"{"method":"thread/settings/updated","params":{"threadId":"t"}}"#),
-              case .unknown("thread/started") = try decode(#"{"method":"thread/started","params":{}}"#) else {
+              case .unknown("thread/future") = try decode(#"{"method":"thread/future","params":{}}"#) else {
             Issue.record("Expected malformed settings and an unknown method"); return
         }
     }

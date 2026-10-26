@@ -5,7 +5,11 @@ import OSLog
 @Observable
 @MainActor
 final class ConversationList {
-    private enum RefreshIntent { case mergeRecent, replaceCoverage }
+    private enum RefreshIntent {
+        case mergeRecent, pollRecent, eventRecent, replaceCoverage
+
+        var isQuiet: Bool { self == .pollRecent || self == .eventRecent }
+    }
 
     private struct PendingRefreshRequest {
         let limit: Int
@@ -32,6 +36,10 @@ final class ConversationList {
     var needsReconnectRefresh: Bool { errorMessage != nil || refreshDeferred }
 
     @ObservationIgnored var lastSuccessfulRefreshAt: Date?
+    @ObservationIgnored private var lastFullRefreshAt: Date?
+    @ObservationIgnored private var eventRefreshTask: Task<Void, Never>?
+    @ObservationIgnored private var eventRefreshGeneration: UInt64 = 0
+    @ObservationIgnored private var eventRefreshPending = false
     @ObservationIgnored private var refreshDeferred = false
 
     @ObservationIgnored private var hasLoadedPersistedThreads = false
@@ -117,7 +125,34 @@ final class ConversationList {
         await loadPersistedThreadsIfNeeded()
         guard !Task.isCancelled else { return }
         guard shouldRefreshForStaleness() else { return }
-        await refresh(limit: RefreshPolicy.incrementalLimit, reason: Self.staleAutoReason, intent: .mergeRecent)
+        await refresh(limit: RefreshPolicy.incrementalLimit, reason: Self.staleAutoReason, intent: .pollRecent)
+    }
+
+    func refresh(after event: RoutedGatewayEvent) {
+        guard !headerReadsRetired, event.requiresHistoryRefresh else { return }
+        eventRefreshPending = true
+        guard eventRefreshTask == nil else { return }
+        eventRefreshGeneration &+= 1
+        let generation = eventRefreshGeneration
+        eventRefreshTask = Task { [weak self] in
+            while let self, eventRefreshPending, generation == eventRefreshGeneration {
+                do { try await Task.sleep(for: .milliseconds(250)) }
+                catch { return }
+                guard !headerReadsRetired, !Task.isCancelled else { return }
+                eventRefreshPending = false
+                await loadPersistedThreadsIfNeeded()
+                await refresh(limit: RefreshPolicy.incrementalLimit, reason: "gateway-event", intent: .eventRecent)
+            }
+            if let self, generation == eventRefreshGeneration { eventRefreshTask = nil }
+        }
+    }
+
+    func cancelEventRefresh() {
+        eventRefreshGeneration &+= 1
+        eventRefreshTask?.cancel()
+        eventRefreshTask = nil
+        eventRefreshPending = false
+        if pendingRefreshRequest?.intent == .eventRecent { pendingRefreshRequest = nil }
     }
 
     /// Called after an automatic attempt. Manual refreshes may move the next
@@ -400,7 +435,7 @@ final class ConversationList {
         guard intent == .replaceCoverage || !isLoadingOlder else { return }
         let request = PendingRefreshRequest(limit: limit, reason: reason, intent: intent)
         if let activeRefreshRequest {
-            if activeRequestSatisfies(request: request, active: activeRefreshRequest) {
+            if intent != .eventRecent, activeRequestSatisfies(request: request, active: activeRefreshRequest) {
                 logger.notice(
                     "refresh ignored; active request already satisfies it (reason=\(reason), limit=\(limit))"
                 )
@@ -411,7 +446,7 @@ final class ConversationList {
             return
         }
 
-        let showsLoading = reason != Self.staleAutoReason || lastSuccessfulRefreshAt == nil
+        let showsLoading = !intent.isQuiet || lastSuccessfulRefreshAt == nil
         listReadGeneration &+= 1
         let generation = listReadGeneration
         isLoadingOlder = false
@@ -423,74 +458,97 @@ final class ConversationList {
         logger.info("refresh start (reason=\(reason), limit=\(limit), knownThreads=\(self.threads.count))")
 
         var persisted: ConversationHeaderStore.Snapshot?
+        var didRead = false
         do {
+            let read: GatewayHistoryService.RecentRead = intent.isQuiet
+                && !HistoryRefreshTiming.needsFullRead(after: lastFullRefreshAt, now: .now)
+                ? .untilUnchanged : .full
             let result = try await service.fetchRecentThreads(
                 limit: limit,
                 useStateDBOnly: limit <= RefreshPolicy.incrementalLimit,
-                knownHeaders: threads
+                knownHeaders: threads,
+                read: read
             )
             try Task.checkCancellation()
             guard !headerReadsRetired, generation == listReadGeneration else { throw CancellationError() }
-            let previousDates = Dictionary(uniqueKeysWithValues: threads.map { ($0.id, $0.lastTurnCompletedAt) })
-            let fetched = result.threads.map { thread in
-                var header = thread
-                if result.unavailableCompletionTimes.contains(thread.id) {
-                    header.lastTurnCompletedAt = previousDates[thread.id] ?? nil
+            didRead = true
+            let classifications: (threads: [ConversationHeader], warnings: [String]) = result.isUnchanged
+                ? await service.classifyRetainedAgents(threads) : ([], [])
+            try Task.checkCancellation()
+            guard !headerReadsRetired, generation == listReadGeneration else { throw CancellationError() }
+            let knownClassifications = classifications.threads.isEmpty ? [:]
+                : Dictionary(uniqueKeysWithValues: threads.map { ($0.id, $0.agentClassification) })
+            let classificationsChanged = classifications.threads.contains { knownClassifications[$0.id] != $0.agentClassification }
+            if result.isUnchanged, result.failures.isEmpty, !result.isDeferred,
+               !classificationsChanged, !threads.contains(where: { $0.pendingHistorySince != nil }) {
+                lastSuccessfulRefreshAt = .now
+                for warning in Set(result.agentWarnings + classifications.warnings) { logger.notice("Agent coverage: \(warning)") }
+            } else {
+                let previousHeaders = Dictionary(uniqueKeysWithValues: threads.map { ($0.id, $0) })
+                let fetched = result.threads.map { thread in
+                    var header = thread
+                    if result.unavailableCompletionTimes.contains(thread.id) {
+                        header.lastTurnCompletedAt = previousHeaders[thread.id]?.lastTurnCompletedAt
+                    }
+                    if let previous = previousHeaders[header.id] {
+                        header = header.retainingHiddenAgentTimestamp(from: previous)
+                    }
+                    return header
                 }
-                return header
+                let complete = result.failures.isEmpty && !result.isDeferred
+                // A local create/remove/completion after this request began is newer evidence.
+                let merged = complete ? ConversationHeaderStore.refreshing(
+                    current: threads, recent: fetched, continuation: result.continuation,
+                    retaining: priorityThreadIDs, preserving: locallyChangedDuringRefresh
+                ) : ConversationHeaderStore.merging(
+                    current: threads, fetched: fetched.filter { !locallyChangedDuringRefresh.contains($0.id) }
+                )
+                let retained = result.isUnchanged ? classifications : await service.classifyRetainedAgents(merged)
+                try Task.checkCancellation()
+                guard !headerReadsRetired, generation == listReadGeneration else { throw CancellationError() }
+                let classified = retained.threads.isEmpty ? merged
+                    : ConversationHeaderStore.merging(current: merged, fetched: retained.threads)
+                let committed = ConversationHeaderStore.merging(
+                    current: classified.filter { !locallyChangedDuringRefresh.contains($0.id) },
+                    fetched: threads.filter { locallyChangedDuringRefresh.contains($0.id) }
+                )
+                let refreshDate = complete ? Date() : lastSuccessfulRefreshAt
+                listReadGeneration &+= 1
+                let reopensCodex = continuation.codex == .end && result.continuation.codex.canLoad
+                let reopensClaude = continuation.claude == .end && result.continuation.claude.canLoad
+                let initializesCodex = intent == .replaceCoverage || continuation.codex == .notLoaded || reopensCodex
+                let initializesClaude = intent == .replaceCoverage || continuation.claude == .notLoaded || reopensClaude
+                if intent == .replaceCoverage {
+                    searchQuery = ""
+                    searchContinuation = ConversationListContinuation()
+                    browsedThreadIDs = []
+                    olderProvider = .codex
+                    searchProvider = .codex
+                }
+                if reopensCodex, searchContinuation.codex == .end { searchContinuation.codex = .notLoaded }
+                if reopensClaude, searchContinuation.claude == .end { searchContinuation.claude = .notLoaded }
+                if complete, !result.continuation.canLoad { hasDiscardedHeaders = false }
+                applyRetained(committed, promoting: intent == .replaceCoverage || browsedThreadIDs.isEmpty ? Set(fetched.map(\.id)) : [])
+                let admitted = Set(threads.map(\.id)).union(locallyChangedDuringRefresh)
+                if initializesCodex {
+                    continuation.codex = fetched.filter { !$0.isDelegatedAgent && AgentProvider.provider(forThreadID: $0.id) == .codex }
+                        .allSatisfy { admitted.contains($0.id) } ? result.continuation.codex : .notLoaded
+                }
+                if initializesClaude {
+                    continuation.claude = fetched.filter { !$0.isDelegatedAgent && AgentProvider.provider(forThreadID: $0.id) == .claude }
+                        .allSatisfy { admitted.contains($0.id) } ? result.continuation.claude : .notLoaded
+                }
+                lastSuccessfulRefreshAt = refreshDate
+                refreshDeferred = result.isDeferred
+                let failure = result.failures.isEmpty ? nil : result.failures.joined(separator: "\n")
+                if errorMessage != failure { errorMessage = failure }
+                for warning in Set(result.agentWarnings + retained.warnings) {
+                    logger.notice("Agent coverage: \(warning)")
+                }
+                logger.info("refresh success (reason=\(reason), requested=\(limit), fetched=\(result.threads.count), merged=\(merged.count))")
+                persisted = nextHeaderSnapshot()
             }
-            let complete = result.failures.isEmpty && !result.isDeferred
-            // A local create/remove/completion after this request began is newer evidence.
-            let merged = complete ? ConversationHeaderStore.refreshing(
-                current: threads, recent: fetched, continuation: result.continuation,
-                retaining: priorityThreadIDs, preserving: locallyChangedDuringRefresh
-            ) : ConversationHeaderStore.merging(
-                current: threads, fetched: fetched.filter { !locallyChangedDuringRefresh.contains($0.id) }
-            )
-            let retained = await service.classifyRetainedAgents(merged)
-            try Task.checkCancellation()
-            guard !headerReadsRetired, generation == listReadGeneration else { throw CancellationError() }
-            let classified = retained.threads.isEmpty ? merged
-                : ConversationHeaderStore.merging(current: merged, fetched: retained.threads)
-            let committed = ConversationHeaderStore.merging(
-                current: classified.filter { !locallyChangedDuringRefresh.contains($0.id) },
-                fetched: threads.filter { locallyChangedDuringRefresh.contains($0.id) }
-            )
-            let refreshDate = complete ? Date() : lastSuccessfulRefreshAt
-            listReadGeneration &+= 1
-            let reopensCodex = continuation.codex == .end && result.continuation.codex.canLoad
-            let reopensClaude = continuation.claude == .end && result.continuation.claude.canLoad
-            let initializesCodex = intent == .replaceCoverage || continuation.codex == .notLoaded || reopensCodex
-            let initializesClaude = intent == .replaceCoverage || continuation.claude == .notLoaded || reopensClaude
-            if intent == .replaceCoverage {
-                searchQuery = ""
-                searchContinuation = ConversationListContinuation()
-                browsedThreadIDs = []
-                olderProvider = .codex
-                searchProvider = .codex
-            }
-            if reopensCodex, searchContinuation.codex == .end { searchContinuation.codex = .notLoaded }
-            if reopensClaude, searchContinuation.claude == .end { searchContinuation.claude = .notLoaded }
-            if complete, !result.continuation.canLoad { hasDiscardedHeaders = false }
-            applyRetained(committed, promoting: intent == .replaceCoverage || browsedThreadIDs.isEmpty ? Set(fetched.map(\.id)) : [])
-            let admitted = Set(threads.map(\.id)).union(locallyChangedDuringRefresh)
-            if initializesCodex {
-                continuation.codex = fetched.filter { !$0.isDelegatedAgent && AgentProvider.provider(forThreadID: $0.id) == .codex }
-                    .allSatisfy { admitted.contains($0.id) } ? result.continuation.codex : .notLoaded
-            }
-            if initializesClaude {
-                continuation.claude = fetched.filter { !$0.isDelegatedAgent && AgentProvider.provider(forThreadID: $0.id) == .claude }
-                    .allSatisfy { admitted.contains($0.id) } ? result.continuation.claude : .notLoaded
-            }
-            lastSuccessfulRefreshAt = refreshDate
-            refreshDeferred = result.isDeferred
-            let failure = result.failures.isEmpty ? nil : result.failures.joined(separator: "\n")
-            if errorMessage != failure { errorMessage = failure }
-            for warning in Set(result.agentWarnings + retained.warnings) {
-                logger.notice("Agent coverage: \(warning)")
-            }
-            logger.info("refresh success (reason=\(reason), requested=\(limit), fetched=\(result.threads.count), merged=\(merged.count))")
-            persisted = nextHeaderSnapshot()
+            if read == .full, result.failures.isEmpty, !result.isDeferred { lastFullRefreshAt = .now }
         } catch is CancellationError {
             // SwiftUI cancels refresh tasks opportunistically (e.g. gesture conflicts).
             // Treat cancellations as a no-op rather than surfacing them as user-facing errors.
@@ -505,8 +563,8 @@ final class ConversationList {
         }
         if showsLoading { isLoading = false }
         activeRefreshRequest = nil
-        if let persisted {
-            await threadStore.save(snapshot: persisted)
+        if let persisted { await threadStore.save(snapshot: persisted) }
+        if didRead {
             await resolveProjects()
             await recoverProtectedHeaders(now: .now)
         }
@@ -578,6 +636,7 @@ final class ConversationList {
 
     func retireHeaderReads() {
         headerReadsRetired = true
+        cancelEventRefresh()
         listReadGeneration &+= 1
         headerRecovery = .superseded
         pendingRefreshRequest = nil
@@ -761,12 +820,15 @@ final class ConversationList {
         pendingRefreshRequest = PendingRefreshRequest(
             limit: max(existing.limit, request.limit),
             reason: request.reason,
-            intent: existing.intent == .replaceCoverage || request.intent == .replaceCoverage ? .replaceCoverage : .mergeRecent
+            intent: existing.intent == .replaceCoverage || request.intent == .replaceCoverage ? .replaceCoverage
+                : existing.intent == .mergeRecent || request.intent == .mergeRecent ? .mergeRecent
+                : existing.intent == .eventRecent || request.intent == .eventRecent ? .eventRecent : .pollRecent
         )
     }
 
     private func activeRequestSatisfies(request: PendingRefreshRequest, active: PendingRefreshRequest) -> Bool {
-        active.limit >= request.limit && (active.intent == .replaceCoverage || request.intent == .mergeRecent)
+        active.limit >= request.limit && (active.intent == .replaceCoverage
+            || active.intent == request.intent || request.intent == .pollRecent)
     }
 }
 
