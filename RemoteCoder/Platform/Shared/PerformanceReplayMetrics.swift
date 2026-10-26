@@ -162,7 +162,7 @@ final class PerformanceReplayMetrics: NSObject {
             "mainThreadCPUms": samples.last?["mainThreadCPUms"] ?? NSNull(),
             "fixtureCPUAttribution": ["cpuMs": samples.last?["fixtureCPUms"] ?? NSNull(),
                 "scope": "synchronous current-thread fixture sections; excludes Network callbacks and unattributed cleanup",
-                "coverage": "lowerBound", "calls": fixtureWork.map { $0.snapshot.calls as Any } ?? NSNull(),
+                "coverage": "lowerBound", "lifetimeCalls": fixtureWork.map { $0.snapshot.calls as Any } ?? NSNull(),
                 "lifetimePeakResponseBytes": fixtureWork.map { $0.snapshot.peakResponseBytes as Any } ?? NSNull()],
             "peakSampledFootprintMiB": samples.compactMap { $0["footprintMiB"] as? Double }.max().map { $0 as Any } ?? NSNull(),
             "counts": PerfBuild.counters.reduce(into: [String: Int]()) { $0[$1.key] = $1.value - counters[$1.key, default: 0] },

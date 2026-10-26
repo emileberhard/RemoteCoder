@@ -22,7 +22,6 @@ import json
 import math
 import os
 import plistlib
-import re
 import select
 import shutil
 import signal
@@ -280,7 +279,7 @@ def target(args) -> Simulator | Device:
     if unknown := set(filter(None, (args.disable or "").split(","))) - SWITCHES:
         raise SystemExit(f"unknown --disable switch {sorted(unknown)}; known: {sorted(SWITCHES)}")
     launch_arguments = ["-rcPerfDisable", args.disable] if args.disable else []
-    if getattr(args, "command", None) == "scenario":
+    if getattr(args, "command", None) in ("scenario", "footprint"):
         launch_arguments += ["-rcPerfOffline"]
     return Device(args.device, launch_arguments, getattr(args, "signing", "distribution")) if args.device else Simulator(launch_arguments)
 
@@ -322,7 +321,7 @@ def build(args) -> None:
         with log.open("w") as handle:
             status = run_owned(commands[0], ROOT, env, handle, (lease, capacity))
             if status == 0:
-                rows = json.loads(output([*commands[1][:-1], "-showBuildSettings", "-json"]))
+                rows = json.loads(subprocess.check_output([*commands[1][:-1], "-showBuildSettings", "-json"], cwd=ROOT, env=env, text=True))
                 effective = effective_compiler_settings(rows, device.derived)
                 settings = {"command": settings, "effective": effective}
                 harness = harness_source_identity(settings, toolchain)
@@ -367,11 +366,6 @@ def harness_source_identity(settings: list[str] | dict, toolchain: str) -> dict:
     for directory in (ROOT / "Core/Sources", ROOT / "RemoteCoder"):
         for path in sorted(directory.rglob("*.swift")):
             text = path.read_text()
-            if path.name == "ChatRootView.swift":
-                adapter = re.search(r"(?m)^([ \t]*)ChatWindowActionsPublisher\(\n.*?^\1\)", text, re.DOTALL)
-                if adapter is None:
-                    raise ValueError("replay action publisher hookup is missing")
-                sources[str(path.relative_to(ROOT)) + "#ChatWindowActionsPublisher"] = adapter[0]
             if "RC_PERF_HARNESS" not in text:
                 continue
             if path.name.startswith("PerformanceReplay") or path.name == "PerfHarness.swift":
@@ -380,6 +374,10 @@ def harness_source_identity(settings: list[str] | dict, toolchain: str) -> dict:
                 selected, depth = [], 0
                 for line in text.splitlines(keepends=True):
                     directive = line.strip()
+                    if directive.startswith(("#if ", "#elseif ")) and "RC_PERF_HARNESS" in directive and directive not in {
+                        "#if RC_PERF_HARNESS", "#if !RC_PERF_HARNESS", "#if os(macOS) && RC_PERF_HARNESS"
+                    }:
+                        raise ValueError(f"unclassified harness conditional in {path.relative_to(ROOT)}")
                     if directive.startswith("#if "):
                         if depth or directive == "#if RC_PERF_HARNESS":
                             depth += 1
@@ -761,6 +759,41 @@ def scenario(args) -> None:
                 run_scenario(args, index, deadline)
 
 
+def footprint(args) -> None:
+    from .perf_replay import private_destination
+    args.log = str(private_destination(args.log))
+    with scenario_signals(), scenario_window(600):
+        run_footprint(args)
+
+
+@leased
+def run_footprint(args, device: Simulator | Device) -> None:
+    identity = json.loads((device.derived / "perf-build-identity.json").read_text())
+    verify_scenario_artifact(device, identity)
+    source = Path(args.fixture).expanduser()
+    data = source.read_bytes()
+    digest = hashlib.sha256(data).hexdigest()
+    try:
+        fresh_launch(device)
+        if args.mode == "fixture":
+            stage_scenario(device, source, json.loads(data))
+        result = send(device, {"cmd": "fixture-footprint", "mode": args.mode}, 500, quiet_seconds=5)
+        if result is None or result.get("error"):
+            raise SystemExit(f"fixture footprint control failed: {result}")
+        if result.get("harnessSHA256") != identity.get("harnessSHA256") or not identity.get("harnessSHA256"):
+            raise SystemExit("footprint control harness differs from artifact")
+        if args.mode == "fixture" and result.get("fixtureSHA256") != digest:
+            raise SystemExit("footprint control fixture differs from staged input")
+        result.update(identity)
+        result.update(deviceUDID=device.udid, driverSHA256=DRIVER_SHA256, fixtureInputSHA256=digest)
+        with private_open(Path(args.log), "a") as handle:
+            handle.write(json.dumps(result, sort_keys=True) + "\n")
+        print(f"footprint control saved: {args.log}")
+    finally:
+        device.terminate()
+        device.uninstall()
+
+
 def stage_scenario(device: Simulator | Device, source: Path, fixture: dict) -> None:
     root = source.parent.resolve()
     indexes = [conversation[key] for conversation in fixture.get("conversations", [])
@@ -1090,6 +1123,11 @@ def main() -> None:
     compare_parser.add_argument("--before", required=True)
     compare_parser.add_argument("--after", required=True)
     compare_parser.set_defaults(func=compare)
+    footprint_parser = commands.add_parser("footprint", help="fresh-process empty/fixture footprint control; separate from journey CPU")
+    footprint_parser.add_argument("--fixture", required=True)
+    footprint_parser.add_argument("--mode", choices=("empty", "fixture"), required=True)
+    footprint_parser.add_argument("--log", required=True)
+    footprint_parser.set_defaults(func=footprint)
     calibration_parser = commands.add_parser("calibrate", help="run cheap real agents in read-only probe forks and measure the replay journey")
     add_connection_arguments(calibration_parser)
     calibration_parser.add_argument("--fixture", required=True)
