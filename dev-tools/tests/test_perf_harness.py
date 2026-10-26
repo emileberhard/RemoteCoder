@@ -1,12 +1,15 @@
 import argparse
 import contextlib
 import fcntl
+import gzip
 import hashlib
 import io
 import json
+import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -63,12 +66,70 @@ class LeaseTests(unittest.TestCase):
             command(SimpleNamespace())
         self.assertEqual(events, ["acquire UDID-1", "run UDID-1", "release UDID-1"])
 
-    def test_scenario_owns_its_artifact_before_entering_device_work(self) -> None:
+    def test_scenario_validates_paths_before_device_work(self) -> None:
+        args = SimpleNamespace(log="/tmp/private-report.jsonl", trace_dir="/tmp/traces", label="run")
+        with patch.object(perf_harness, "run_scenario") as run, self.assertRaises(ValueError):
+            perf_harness.scenario(args)
+        run.assert_not_called()
+
+    def test_scenario_orders_source_capacity_device_after_a_contending_installer(self) -> None:
         with tempfile.TemporaryDirectory() as directory, patch.object(build_support, "cache_root", return_value=Path(directory)):
-            identity = hashlib.sha256(str(perf_harness.ROOT.resolve()).encode()).hexdigest()[:16]
-            with patch.object(perf_harness, "run_scenario", side_effect=lambda _: self.assertTrue(
-                held(Path(directory) / "local-installs" / f"{identity}.lock"))):
-                perf_harness.scenario(SimpleNamespace())
+            compiler = Path(directory) / "capacity/0.lock"
+            compiler.parent.mkdir()
+            device_path = build_support.device_lease_path("test-ipad")
+            device_path.parent.mkdir(parents=True)
+            delivered = Path(directory) / "delivered"
+            program = "import fcntl,sys; from pathlib import Path; c=open(sys.argv[1],'a'); fcntl.flock(c,fcntl.LOCK_EX); print('capacity',flush=True); sys.stdin.read(1); d=open(sys.argv[2],'a'); fcntl.flock(d,fcntl.LOCK_EX); Path(sys.argv[3]).touch()"
+            installer = subprocess.Popen([sys.executable, "-c", program, str(compiler), str(device_path), str(delivered)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+            try:
+                self.assertEqual(installer.stdout.readline().strip(), "capacity")
+                @perf_harness.leased
+                def probe(args, device, index, deadline):
+                    self.assertTrue(delivered.exists())
+                    for path in (compiler, compiler.with_name("1.lock"), device_path, build_support.source_lease_path(perf_harness.ROOT)):
+                        self.assertTrue(held(path))
+                    self.assertGreater(deadline, perf_harness.time.monotonic())
+                def release():
+                    installer.stdin.write(".")
+                    installer.stdin.flush()
+                timer = threading.Timer(0.05, release)
+                timer.start()
+                try:
+                    with patch.object(perf_harness, "scenario_outputs"), patch.object(perf_harness, "run_scenario", probe), \
+                            patch.object(perf_harness, "target", return_value=SimpleNamespace(udid="test-ipad")):
+                        perf_harness.scenario(SimpleNamespace(runs=2))
+                finally:
+                    timer.cancel()
+                    timer.join()
+                self.assertFalse(held(compiler))
+                self.assertFalse(held(device_path))
+            finally:
+                if installer.poll() is None:
+                    installer.kill()
+                installer.communicate(timeout=2)
+
+    def test_window_activates_separate_deadline_after_queue(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            record = Path(directory) / "reservation.json"
+            record.write_text(json.dumps({"deadline": 1900, "owner": "unchanged"}))
+            capacity = SimpleNamespace(record=record)
+            with patch.object(perf_harness, "measurement_capacity", return_value=contextlib.nullcontext(capacity)) as reserve, \
+                    patch.object(perf_harness.time, "monotonic", return_value=100), \
+                    patch.object(perf_harness.signal, "setitimer", return_value=(0, 0)) as timer:
+                with perf_harness.scenario_window(400):
+                    self.assertEqual(json.loads(record.read_text())["deadline"], 530)
+                self.assertEqual(reserve.call_args.args[1], 1800)
+                self.assertEqual(timer.call_args_list[0].args, (signal.ITIMER_REAL, 400))
+                self.assertEqual(timer.call_args_list[-1].args, (signal.ITIMER_REAL, 0, 0))
+
+    def test_expired_queue_is_not_reactivated(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            record = Path(directory) / "reservation.json"
+            record.write_text(json.dumps({"deadline": 99}))
+            with patch.object(perf_harness, "measurement_capacity", return_value=contextlib.nullcontext(SimpleNamespace(record=record))), \
+                    patch.object(perf_harness.time, "monotonic", return_value=100), self.assertRaises(TimeoutError):
+                with perf_harness.scenario_window(400):
+                    self.fail("expired queue activated")
 
 
 class DeviceCleanupTests(unittest.TestCase):
@@ -200,7 +261,7 @@ class ArgumentTests(unittest.TestCase):
 
 class ScenarioTests(unittest.TestCase):
     def test_invalid_windows_and_trace_failures_keep_identity_and_diagnostics(self) -> None:
-        for failure in ("inactive", "trace", "cleanup"):
+        for failure in ("inactive", "trace", "cleanup", "interrupt", "artifact", "content", "trace-telemetry"):
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 app = root / "app"
@@ -212,36 +273,124 @@ class ScenarioTests(unittest.TestCase):
                 data = json.dumps(fixture).encode()
                 (root / "fixture.json").write_bytes(data)
                 device = Mock(derived=root, app=app, udid="test-ipad")
-                result = {"valid": True, "activeThroughout": failure != "inactive", "conservedEnergy": False,
+                result = {"valid": failure != "content", "activeThroughout": failure != "inactive", "conservedEnergy": False,
                           "frames": 120, "fixtureSHA256": hashlib.sha256(data).hexdigest(), "actions": [],
-                          "appliedFrames": 0, "diagnostic": "preserve me"}
+                          "appliedFrames": 0, "diagnostic": "preserve me", "telemetryFiles": ["segment.jsonl.gz"]}
                 args = SimpleNamespace(fixture=root / "fixture.json", trace_template="Time Profiler",
                                        trace_seconds=20, runs=1, settle=0, trace_dir=str(root), label="run",
                                        instrument=[], log=str(root / "reports.jsonl"))
-                if failure == "cleanup":
-                    def uninstall():
+                events = []
+                def uninstall(failure=failure, events=events):
+                    events.append("uninstall")
+                    if failure == "cleanup":
                         raise RuntimeError("disconnected")
-                    device.uninstall = uninstall
+                device.uninstall.side_effect = uninstall
+                device.uninstall.__name__ = "uninstall"
+                def collect(*_, failure=failure, events=events):
+                    events.append("telemetry")
+                    if failure == "trace-telemetry":
+                        raise ValueError("copy failed")
                 recorder = Mock()
                 recorder.poll.return_value = None
-                with patch.object(perf_harness, "fresh_launch"), patch.object(perf_harness, "send", side_effect=[{}, result]), \
+                ownership = {"source": True, "measurement": True}
+                def send(device, command, *args, ownership=ownership, failure=failure, result=result, app=app, **kwargs):
+                    if command["cmd"] == "scenario-load":
+                        self.assertGreater(args[0], 0)
+                        self.assertLessEqual(args[0], 1670)
+                        self.assertTrue(ownership["source"])
+                        self.assertTrue(ownership["measurement"])
+                        if failure == "artifact":
+                            (app / perf_harness.PROCESS).write_bytes(b"changed")
+                        return {}
+                    self.assertTrue(ownership["measurement"])
+                    self.assertTrue(ownership["source"])
+                    if failure == "interrupt":
+                        signal.raise_signal(signal.SIGTERM)
+                    return result
+                with perf_harness.scenario_signals(), patch.object(perf_harness, "scenario_outputs"), \
+                        patch.object(perf_harness, "collect_telemetry", side_effect=collect) as telemetry, \
+                        patch.object(perf_harness, "fresh_launch"), patch.object(perf_harness, "send", side_effect=send), \
                         patch.object(perf_harness.time, "sleep"), \
                         patch.object(perf_harness, "tracing", return_value=contextlib.nullcontext(recorder)), \
-                        patch.object(perf_harness, "finish_trace", side_effect=SystemExit("incomplete trace") if failure == "trace" else None), \
+                        patch.object(perf_harness, "finish_trace", side_effect=SystemExit("incomplete trace") if failure.startswith("trace") else None), \
                         self.assertRaises(SystemExit):
-                    perf_harness.run_scenario.__wrapped__(args, device)
+                    perf_harness.run_scenario.__wrapped__(args, device, 0, perf_harness.time.monotonic() + 1800)
                 device.prepare.assert_called_once()
                 device.terminate.assert_called_once()
                 failed = json.loads((root / "reports.failed-1.json").read_text())
                 self.assertFalse(failed["valid"])
                 self.assertEqual(failed["signing"], "development")
                 self.assertEqual(failed["driverSHA256"], perf_harness.DRIVER_SHA256)
-                self.assertEqual(failed["diagnostic"], "preserve me")
+                if failure not in ("interrupt", "artifact"):
+                    self.assertEqual(failed["diagnostic"], "preserve me")
+                    self.assertEqual(events, ["telemetry", "uninstall"])
+                    telemetry.assert_called_once()
+                if failure == "trace-telemetry":
+                    self.assertEqual(failed["validationError"], "incomplete trace")
+                    self.assertEqual(failed["telemetryCollectionFailures"], ["copy failed"])
+                self.assertTrue(ownership["measurement"])
+                self.assertEqual((root / "reports.failed-1.json").stat().st_mode & 0o777, 0o600)
                 if failure == "cleanup":
                     self.assertIn("uninstall: disconnected", failed["cleanupFailures"])
                     self.assertFalse((root / "reports.jsonl").exists())
                 else:
                     self.assertIn("validationError", failed)
+
+
+class TelemetryEvidenceTests(unittest.TestCase):
+    def test_missing_export_cpu_stays_unknown_and_empty_capture_is_distinct(self) -> None:
+        for exports, header, expected in [([{"processCpuNs": 1000000}, {}], True, None),
+                                           ([], False, None), ([], True, 0),
+                                           ([{"processCpuNs": 2000000}], True, 2)]:
+            with self.subTest(exports=exports, header=header), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                telemetry = root / "telemetry"
+                telemetry.mkdir()
+                records = ([{"recordType": "run", "runID": "run", "startedAt": "2026-01-01T00:00:00+00:00"}] if header else [])
+                records += [{"recordType": "export", "runID": "run", "seq": index, "ts": "2026-01-01T00:00:20+00:00", "totalMs": 1000, **entry}
+                            for index, entry in enumerate(exports)]
+                (telemetry / "segment.jsonl.gz").write_bytes(gzip.compress(b"\n".join(json.dumps(entry).encode() for entry in records)))
+                device = Mock()
+                device.perf_dir.return_value = root
+                result = {"label": "test", "telemetryFiles": ["segment.jsonl.gz"], "startedAt": 1767225610,
+                          "endedAt": 1767225630, "processCPUms": 10}
+                with patch("remotecoder_tools.perf_replay.private_destination", side_effect=Path):
+                    perf_harness.collect_telemetry(device, result, str(root / "reports.jsonl"))
+                self.assertEqual(result["exportsInWindow"]["wholeProcessCPUms"], expected)
+                self.assertEqual(result["exportsInWindow"]["telemetryEvidence"], header)
+                self.assertEqual(result["exportsInWindow"]["cpuUnmeasuredCount"], sum("processCpuNs" not in entry for entry in exports))
+                self.assertEqual(result["processAgeAtWindowStartSeconds"], 10 if header else None)
+                self.assertEqual((root / "reports.telemetry/test/segment.jsonl.gz").stat().st_mode & 0o777, 0o600)
+
+    def test_telemetry_collection_timeout_is_separate_from_original_validation(self) -> None:
+        result = {"valid": False, "validationError": "content mismatch"}
+        with patch.object(perf_harness, "collect_telemetry", side_effect=lambda *_: signal.raise_signal(signal.SIGALRM)):
+            perf_harness.retain_returned_telemetry(Mock(), result, "unused")
+        self.assertEqual(result["validationError"], "content mismatch")
+        self.assertEqual(result["telemetryCollectionFailures"], ["telemetry collection exceeded 30 seconds"])
+
+    def test_export_cpu_excludes_boundary_crossings_and_unknown_intervals(self) -> None:
+        result = {"startedAt": 1767225610, "endedAt": 1767225630, "processCPUms": 100}
+        records = [{"ts": "2026-01-01T00:00:12+00:00", "totalMs": 5000, "processCpuNs": 9000000},
+                   {"ts": "2026-01-01T00:00:20+00:00", "totalMs": 5000, "processCpuNs": 2000000},
+                   {"ts": "2026-01-01T00:00:32+00:00", "totalMs": 5000, "processCpuNs": 8000000},
+                   {"ts": "2026-01-01T00:00:22+00:00", "processCpuNs": 6000000}]
+        summary = perf_harness.export_window(records, True, result)
+        self.assertEqual(summary["count"], 1)
+        self.assertEqual(summary["wholeProcessCPUms"], 2)
+        self.assertEqual(summary["boundaryCrossingCount"], 2)
+        self.assertIsNone(summary["boundaryCrossingOverlapCPUms"])
+        self.assertEqual(summary["unknownIntervalCount"], 1)
+        self.assertEqual(summary["coverage"], "lowerBound")
+
+    def test_private_report_restricts_existing_permissions(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            report = Path(directory) / "report.json"
+            report.write_text("previous")
+            report.chmod(0o644)
+            with perf_harness.private_open(report, "w") as handle:
+                handle.write("result")
+            self.assertEqual(report.stat().st_mode & 0o777, 0o600)
 
 
 if __name__ == "__main__":

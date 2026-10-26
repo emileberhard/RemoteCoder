@@ -229,7 +229,7 @@ full `TranscriptLayout` re-measure.
 
 ### Offline everyday replay
 
-`perf-sim capture`, `scenario` and `compare` run the fixed offline journey that
+`perf-sim capture`, `scenario` and `compare` run the prepared offline journey that
 [`docs/performance-replay.md`](../docs/performance-replay.md) defines; that
 document owns the design decisions, measurement contract and Apple sources.
 The app side (`PerformanceReplayRun`, Core `PerformanceReplay*`) compiles only
@@ -241,7 +241,7 @@ benchmark storage scope, in-memory host credentials and the isolated gateway
 policy. A request the fixture did not capture must fail the run, never reach a
 real gateway, provider or website; extend the fixture or the blocking instead
 of relaxing that check. Site icons deliberately produce missing results and
-and HTML visual documents deliberately fail before download; both are counted as
+HTML visual documents deliberately fail before download; both are counted as
 omissions. A visual that still reaches WebKit invalidates the run.
 
 The fixture server mirrors the gateway's delivery scope
@@ -254,8 +254,21 @@ driver: it forks the given threads, marks them `probe`, runs one cheap Luna turn
 fork, writes the private `replay.json` from the complete per-agent streams, and always
 interrupts, archives and uninstalls; its `report.json` decides validity.
 
+Capture uses bounded native history pages with authoritative idle checks and
+header-only parent discovery. Version 2 histories are indexed private files;
+the loopback server reads requested pages without retaining the library.
+Unmeasured preparation loads and verifies the sidebar through production list
+pagination, reconciles captured user submissions and writes history
+and checkpoints through their production owners, retaining local-record
+semantics. Preserve production budgets. Reports distinguish preparation's
+physical sizes from logical checkpoint bytes written per measured state minute.
+The measured journey repeats recorded arrival offsets with continuous turns;
+inferred initial starts are explicit in provenance. Each repeat reserves source, compiler capacity and device in installer order,
+including preparation, with a fresh bounded deadline. It uses
+`ProcessResourceSampler` with a private buffer for field-equivalent CPU attribution. Inspect traces before changing a failed regression workload.
+
 Fixtures hold real user conversations. Capture is read-only and writes them
-only outside Git checkouts, mode 0600; never commit them, copy them into a
+under `~/perf-traces/remotecoder/`, outside Git checkouts, mode 0600; never commit them, copy them into a
 worktree, build cache or issue, or quote their content. Keep reports and traces
 outside the worktree too. Results compare only across reports with the same
 fixture SHA-256, device, OS and display, toolchain, configuration, signing mode,

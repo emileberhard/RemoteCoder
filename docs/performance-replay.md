@@ -1,134 +1,165 @@
 # Offline everyday performance replay
 
-## Outcome and design
+## Outcome and ownership
 
-Run a fixed, approximately one-minute journey with three captured conversations,
-overlapping streamed turns, conversation switching, drawer presentation and short
-scrolls. No provider inference or connection to an installed gateway occurs.
-The workload and ordering are deterministic; OS scheduling, frame delivery and
-timings remain measurements, not deterministic outputs.
+The canonical offline journey prepares realistic persisted state, then measures
+five minutes dominated by visible agent work. Capture freezes idle conversation
+histories, the sidebar inventory and recorded notification arrival offsets.
+Three conversations stream concurrently; occasional switches, drawer use and
+short scrolls use the normal UI entry points. Repeated recordings retain their
+arrival gaps and tool activity with fresh item identities and continuous turns.
+This repeats a captured workload; it does not simulate a provider's decisions.
 
-The existing `perf-sim` runner owns device/build leases and Instruments. Its
-in-app harness owns the journey. An on-device loopback WebSocket fixture serves
-captured history and protocol notifications, scoped to each connection’s
-subscriptions, to the unchanged production
-`GatewayClient`. Normal decoding, subscriptions, history pagination, sessions,
-rendering, layout and persistence remain in use. The fixture server adds a
-small measurable cost in the app process; this is a repeatable app workload,
-not a prediction of production CPU to the last percent.
+The unchanged production `GatewayClient`, history service, sessions, stores,
+rendering and UI consume an on-device loopback WebSocket fixture. The fixture
+reads requested history pages from indexed files instead of retaining the whole
+library. All replay code is guarded by `RC_PERF_HARNESS`; shipping behavior and
+production storage budgets remain unchanged. No inference or installed gateway
+is used by `scenario`, and uncaptured HTTP/RPC or external visual loads fail it.
 
-This boundary avoids a second transcript implementation and a test-only
-production transport. Direct notification injection would omit history and
-socket decoding. A fixture server on another Mac would introduce network and
-host availability as uncontrolled inputs. The loopback server is bound only
-to 127.0.0.1, has bounded connections and messages, and ends with its run.
+The existing `perf-sim` runner owns source/artifact and device leases. A scenario
+reserves both compiler slots separately for each complete repeat, including
+preparation. Source, compiler and device locks follow the installer's order;
+retaining prepared device state while later waiting for compiler slots can
+deadlock an installer. Each repeat has a fresh 1,800-second execution budget,
+with preparation reserving its measurement and cleanup time. Use the
+explicit cabled test iPad; the runner refuses phones. Check fleet load before
+building and keep unrelated device work out of the measurement window.
 
-Replay launches use the existing benchmark storage scope and in-memory host
-credentials. They never enroll with real services or read the user's host
-directory. Real conversation fixtures remain private, outside Git; the
-repository carries only the schema, capture tool and small contract fixtures.
+## Preparation and state scale
 
-## Measurement contract
+A fresh isolated install is only the starting boundary. Before measurement, the
+app loads every captured sidebar header through bounded production pagination,
+verifies retained root identities and reports omitted child headers, then prepares
+histories oldest first:
+page through the captured history, submit its captured text-only user message,
+persist its submission receipt, accept its captured turn identity, reopen the
+tail and reconcile the matching canonical history, flush and evict idle sessions
+normally. If the user item is outside the tail page, page back only until its
+authoritative delivery evidence reconciles.
+The fixture rewrites that canonical user item's client identity consistently.
+Preparation fails if the submission does not reconcile; it never leaves invented
+pending sends behind. This retains the locally originated message semantics that
+make checkpoints survive history shedding.
 
-Reports retain fixture SHA-256, source/build identity, device/OS/display and
-energy state, action schedule and actual execution/delivery lateness, process
-and main-thread CPU, memory samples, frame intervals and counters. Named
-Points of Interest delimit the journey and actions. Reject missing actions,
-incorrect final content, failed Codex observation or transcript loading, inactive/conserved-energy
-windows or incomplete traces. After the measured window, verification opens each
-replayed conversation and checks completed assistant items through the normal
-Codex observation checkpoint or Claude history path. Claude opens require a
-loaded transcript; they do not use the Codex observation coordinator.
-Slow actions are recorded rather than silently skipped to keep a schedule.
+Large remote histories alone are insufficient: disposable checkpoints are
+simply evicted at the normal cache limit. The 3.68.2 exhausted-history fix avoids
+repeated inspection of preserved checkpoints after their history is gone.
+Preparation reports conversation/page counts, preserved checkpoint counts,
+physical checkpoint/cache bytes, the owner's protected-record and
+record/cache/primary/eviction accounting and
+persistence phase counters when that version provides them. Physical file sizes include SQLite/WAL residue;
+they are distinct from logical write bytes and the owner's cache accounting.
 
-Use separate identical journeys for low-overhead CPU/hitch measurement and
-richer SwiftUI/Swift Executors, allocations/VM and GPU recordings. Instrument
-overhead is part of the measurement configuration and must match comparisons.
-CPU function weight includes callees unless explicitly reported as self time;
-overlapping inclusive functions cannot form a pie chart. Memory allocation
-sites and retained bytes are distinct. GPU absence is unknown, not zero.
+Prepare a deterministic recency-based subset, including the recorded streams,
+when checkpoint population is unknown; choose and freeze its count against the
+independent field byte range before CPU comparisons. Keep remaining captured
+histories available for ordinary reads. Reports retain owner inventories before
+and after the measured window so a transient preparation peak is visible.
 
-Swift Testing validates fixture, protocol, ordering and cleanup contracts.
-The measured journey runs without XCTest automation; Instruments supplies
-profiling rather than an XCTest performance wrapper around the app.
+Choose scale from uploaded field telemetry and app logs, looking only at counts,
+sizes and timings. Sidebar count, page size, retained state and live arrival rate
+are separate dimensions. Telemetry write counters do not establish retained disk
+occupancy. Preserve unknown values and document inferred targets in the private
+workload report. Do not shrink production budgets or inflate text to force an
+expected speedup.
 
 ## Capture and repeat
 
-Run on the primary service host with the test iPad cabled, unlocked and awake. Check fleet load
-before building; keep builds and other device automation out of trace windows.
-The build is optimized Release with `RC_PERF_HARNESS`; ordinary shipping builds
-exclude the replay implementation. No phone or provider inference is involved.
+Fixtures, uploaded logs, checkpoints and reports can contain private data. Keep
+them outside Git and worktrees under `~/perf-traces/remotecoder/`, with files at
+mode 0600. Never put them in build caches, issues, commits or reports containing
+quoted conversation text. Contract tests use small synthetic records.
 
 ```sh
 dev-tools/perf-sim capture \
-  --thread <codex-thread-id> --thread <claude-thread-id> --thread <other-thread-id> \
-  --out "$HOME/perf-traces/remotecoder/everyday/scenario.json"
-dev-tools/perf-sim --device <test-device-udid> build
-dev-tools/perf-sim --device <test-device-udid> scenario \
-  --fixture "$HOME/perf-traces/remotecoder/everyday/scenario.json" \
-  --label before --runs 3 --log "$HOME/perf-traces/remotecoder/everyday/before.jsonl"
+  --thread <idle-visible-thread> --thread <idle-background-thread> \
+  --thread <other-idle-thread> \
+  --recording "$HOME/perf-traces/remotecoder/calibration/replay.json" \
+  --sidebar-limit 1024 --history-count 700 --duration 300 \
+  --out "$HOME/perf-traces/remotecoder/workload/scenario.json"
+dev-tools/perf-sim --device <test-ipad-udid> build
+dev-tools/perf-sim --device <test-ipad-udid> scenario \
+  --fixture "$HOME/perf-traces/remotecoder/workload/scenario.json" \
+  --label before --runs 1 \
+  --log "$HOME/perf-traces/remotecoder/before.jsonl"
 ```
 
-Capture is read-only. It freezes up to 20 completed turns per conversation,
-account/model responses, selected conversation metadata/marks, question and
-agent inventories, related parent headers, project identities and host/account
-HTTP responses. It does not preserve unrelated pins or enrollments. The fixture
-limit is 16 MiB; each conversation has at most 1,000 history items. Capture two
-to six histories, including referenced parent conversations; the standard
-journey switches among the first three selected conversations.
-Keep the same fixture for all comparisons, rather than recapturing live state.
-Capture records its wall-clock time. Loading shifts known absolute timestamps
-by whole seconds so relative ages, settlement and usage windows stay stable;
-monotonic event offsets and durations remain unchanged.
+Capture is read-only and requires authoritative idle coverage before and after
+reading a history. It uses native paginated item/turn reads, never an unbounded
+`thread/read includeTurns=true`. Active, oversized and unavailable candidates
+are skipped and counted; explicit selected histories fail instead of silently
+changing. Related parents add headers only. Classification and question reads
+respect their gateway batch limits.
 
-The stream repeats a complete captured turn with fresh item/turn IDs, including
-user messages, reasoning, tool starts/completions and assistant replies. Text
-arrives in eight-character chunks in bursts at intervals of at most 30 ms,
-with gaps between items when the turn leaves time for them. When its text
-fills the window, pacing becomes uniform. Each turn spans 37 seconds and starts
-four seconds after the previous stream. Activity inventories and fixed synthetic token
-counters exercise their normal update paths. Token counters are workload data,
-not measured provider usage. Pacing is synthetic; a saved real multi-agent
-recording had a median 13-character delta and batched arrivals, so this lane
-exercises publication coalescing without claiming to reproduce provider timing. Actions use monotonic deadlines;
-late actions still execute and their lateness/overrun remain in the report.
-Conversation switches use the UI navigation entry point. Sidebar actions run
-the real window toggle command and record its published view state before/after.
-Two toggles close/reopen a persistent sidebar and open/close a compact drawer. Scrolls
-use the production animated row-navigation path, rather than simulated finger
-physics. Voice, image/HTML assets, network latency, TLS and server CPU
-are outside this text/code workload. Choose conversations without visible
-images. Site icons deliberately return a missing result without networking,
-and published HTML visuals fail before their document download, as an
-unavailable visual; reports count both omissions. Agents publish visuals in
-most real conversations, so excluding such conversations would leave few to
-capture. A visual that still reaches WebKit invalidates the run. Other
-uncaptured HTTP/RPC requests fail the run.
+Version 2 has a manifest and content-addressed indexed JSONL history files.
+Limits are 1,024 conversations, 20,000 records per indexed file, 8 MiB per record,
+24 MiB per history file, 16 MiB per manifest and 512 MiB per complete fixture.
+The server reads at most 100 records per page and shortens large pages to fit its
+WebSocket envelope. File hashes, sizes, offsets and paths are checked before use.
+Real histories are copied directly into the isolated device container; they are
+never bundled into the app. The server has no whole-history cache.
 
-Each run fresh-installs, launches with benchmark-only storage and in-memory
-credentials, prepares history, settles, then measures the journey. Successful
-teardown retires models, joins fixture sockets and removes benchmark storage.
-Uncaptured RPCs, missing/blocked HTTP, fixture errors, cleanup failures, missing
-frames or incorrect final text invalidate the report. Failed reports, including invalid energy or incomplete-trace windows, are saved
-with build/run identities beside the requested JSONL log for diagnosis. The
-runner uninstalls the dedicated app after each run, removing its private fixture.
+Timing input accepts a calibration `replay.json` or `record-start` JSONL.
+Missing initial turn starts are inferred from first observed activity and marked
+in provenance; their original start is unknown. Recorded completions are omitted
+while repeating the continuous measured turn. Monotonic arrival gaps are
+preserved. Known absolute timestamps are shifted on load so relative ages stay
+stable. The event schedule is bounded to 20,000 events and the measured window
+to 900 seconds. A short cheap calibration establishes arrival timing, not proof
+that it represents every long coding turn.
 
-Rebuild the candidate and repeat with the identical fixture and device. Save
-reports outside the worktree so each branch's build can be removed afterwards.
+Each repeat prepares its own state, settles, measures, verifies completed
+assistant content and stops its models, sockets and diagnostics pump. It removes
+benchmark storage and uninstalls the dedicated app on completion or failure.
+Failed reports retain their identities and diagnostics beside the requested log.
+Captured numeric telemetry exports are retained privately beside the report,
+including the final pending export; no production sampler data is consumed.
+
+## Measurement and acceptance
+
+Reports preserve fixture identity including every referenced file digest,
+source/build identity, device/OS/display/locale, toolchain, signing mode, driver
+hash, instrumentation, preparation evidence, actual action/delivery lateness,
+process/main-thread CPU, sampled footprint, frame intervals and counters.
+`ReplayJourney` and `ReplayAction` signposts delimit corresponding operations.
+A private buffer uses the unchanged production `ProcessResourceSampler`, including
+its cadence, transition spacing and mixed-interval semantics. Samples use scene, surface,
+visible-running-turn and voice-call breakdown. Counter deltas belong to the
+starting context; mixed or long-gap intervals are excluded. Checkpoint volume is
+logical bytes written per matching state minute, not filesystem amplification.
+
+`compare` requires version 2 workload and preparation-contract evidence,
+authoritative idle-capture evidence, verified preserved checkpoints, actual sidebar
+counts and owner accounting above its eviction allowance, valid windows and
+matching fixture, device, OS/display, locale, toolchain, signing, driver,
+feature switches, energy states and instrumentation. Actual preparation sizes
+and timing are results and may differ between builds. Legacy reports remain
+diagnostic evidence. Agent-working CPU, main-thread CPU, checkpoint bytes/minute
+and sampled footprint are reported as medians and ranges.
 
 ```sh
-dev-tools/perf-sim compare --before /absolute/before.jsonl --after /absolute/after.jsonl
+dev-tools/perf-sim compare --before /private/before.jsonl --after /private/after.jsonl
 ```
 
-Comparison prints medians and ranges for CPU and sampled footprint. It rejects
-different fixtures, devices, OS/display settings, locale, feature switches,
-toolchains, build configurations, driver hashes, sampled thermal/power states or instrumentation. Missing comparison metadata is rejected;
-legacy reports remain diagnostic evidence. Source
-fingerprints and app executable hashes travel with each report. The runner
-holds the source/artifact lease before its device lease so another build cannot
-replace the app between repeats. Three runs provide a first
-repeatability check, not a statistical confidence interval; alternate baseline
-and candidate installs for decisions near the observed variation.
+For a regression check, overlay identical harness-only changes onto the two
+production versions, alternate at least three runs per version on the same iPad,
+and keep the fixture fixed. The 3.68.1 to 3.68.2 acceptance target is at least a
+halving of agent-working CPU with checkpoint bytes moving in the same direction.
+If it fails, inspect corresponding trace stacks and preparation structure before
+changing the workload. A changed fixture starts a new comparison.
+
+Then check 3.70.1 to 3.71.0. Keep the production diagnostics pump enabled and
+record process age, export count, scanned records and whole-process CPU during
+exports. Preparation contributes genuine process uptime and logging; do not add
+synthetic log spam. Export CPU includes concurrent work. A bounded run that
+cannot reproduce the field uptime effect must report that result and its scale.
+
+Low-overhead runs establish CPU spreads. Use separate matching Instruments runs
+for call-tree attribution and actual presentation hitches. Display-link callback
+gaps are cadence evidence, not Apple's hitch count or presented FPS. Missing
+GPU, main-thread field measurements, retained bytes or export evidence remain
+unknown. No measured battery-life or joule estimate is produced.
 
 ## Rich diagnostic recordings
 
@@ -146,7 +177,7 @@ dev-tools/perf-sim --device <test-device-udid> scenario \
   --fixture /absolute/scenario.json --label cpu --runs 1 --log /absolute/cpu.jsonl \
   --trace-template 'Time Profiler' --instrument Hitches --instrument 'Points of Interest' \
   --instrument SwiftUI --instrument 'Swift Executors' --instrument 'Swift Tasks' \
-  --trace-seconds 75 --trace-dir /absolute/traces
+  --trace-seconds 315 --trace-dir /absolute/traces
 ```
 
 For allocation sites and object lifetimes, first build with `build --signing
@@ -186,7 +217,7 @@ journey. In Instruments select the corresponding interval, then inspect:
 - Allocations' live bytes, transient allocation counts and captured allocation backtraces; use retaining graphs when ownership is the question.
 - GPU/render-server tracks and Hitches for rendering/presentation costs separate from CPU.
 
-JSONL keeps every delivery/action deadline and completion, one-second CPU,
+JSONL keeps every delivery/action deadline and completion, periodic and context-transition CPU,
 footprint/thermal/power samples, applied input frames and actual notification
 recipient counts, raw display-link intervals, and render/layout
 counters. Render/layout counters cover the measured window. `rpcRequests`
