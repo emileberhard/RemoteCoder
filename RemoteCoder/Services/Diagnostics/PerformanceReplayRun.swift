@@ -222,25 +222,55 @@ final class PerformanceReplayRun {
     }
 
     private func verifyFinalContent() async throws -> [[String: Any]] {
-        let completed = scenario.events.compactMap { event -> (thread: String, turn: String, item: String, text: String)? in
-            guard let fields = event.frame.objectValue, fields["method"] == .string("item/completed"),
-                  let params = fields["params"]?.objectValue, let item = params["item"]?.objectValue,
-                  item["type"] == .string("agentMessage"), let id = item["id"]?.stringValue,
-                  let thread = params["threadId"]?.stringValue, let turn = params["turnId"]?.stringValue,
-                  let text = item["text"]?.stringValue else { return nil }
-            return (thread, turn, id, text)
-        }
         var verified: [[String: Any]] = []
         guard let model = workspace.model(for: hostID) else { return [] }
-        for (thread, entries) in Dictionary(grouping: completed, by: \.thread).sorted(by: { $0.key < $1.key }) {
+        for conversation in scenario.conversations {
+            guard let thread = conversation.thread.objectValue?["id"]?.stringValue else { continue }
+            let entries = PerformanceReplayVerification.completions(threadID: thread, events: scenario.events)
+            guard !entries.isEmpty else { continue }
             try await PerformanceReplayNavigation(workspace: workspace, hostID: hostID).open(thread)
-            let session = await model.conversations.existingSession(threadID: thread)
-            let snapshot = await session?.snapshot()
+            guard let session = await model.conversations.existingSession(threadID: thread) else {
+                throw PerformanceReplayScenario.Failure.invalidScenario("verification session is unavailable")
+            }
+            let snapshot = await session.snapshot()
+            var checks = PerformanceReplayVerification.checks(entries, messages: snapshot.messages, window: nil)
+            let header = try await model.historyService.readHeader(threadID: thread)
+            var read = await session.beginHistoryRead()
+            var history = try await model.historyService.openTail(header: header, base: nil, bypassCache: true)
+            var remaining = Dictionary(uniqueKeysWithValues: entries.map { ($0.identity, $0) })
+            var archived: [PerformanceReplayVerification.Identity: (text: String, complete: Bool)] = [:]
+            var seen = Set<String>()
+            let maximumPages = conversation.itemCount + scenario.events.count + 1
+            while true {
+                let projected = await session.merge(history, read: read)
+                for (identity, matches) in PerformanceReplayVerification.checks(entries, messages: projected.messages, window: history.window) {
+                    checks[identity] = (checks[identity] ?? true) && matches
+                }
+                for turn in history.window.turns {
+                    for entry in turn.entries {
+                        let identity = PerformanceReplayVerification.Identity(turn: entry.turnId, item: entry.item.id)
+                        guard remaining[identity] != nil,
+                              case .agentMessage(_, let text, _, _, _) = entry.item else { continue }
+                        archived[identity] = (text, entry.isComplete == true)
+                        remaining.removeValue(forKey: identity)
+                    }
+                }
+                guard !remaining.isEmpty, let cursor = history.window.older else { break }
+                guard seen.insert(cursor).inserted, seen.count <= maximumPages else {
+                    throw PerformanceReplayScenario.Failure.invalidScenario("verification history cursor did not advance")
+                }
+                read = await session.beginHistoryRead()
+                history = try await model.historyService.page(header: history.header, window: history.window,
+                    direction: .desc, priority: .foreground)
+            }
             for entry in entries {
-                let message = snapshot?.messages.first { $0.canonicalItemID == entry.item && $0.canonicalTurnID == entry.turn }
-                verified.append(["threadID": thread, "itemID": entry.item, "matches": message?.text == entry.text && message?.isStreaming == false,
+                let message = snapshot.messages.first { $0.canonicalItemID == entry.identity.item && $0.canonicalTurnID == entry.identity.turn }
+                let stored = archived[entry.identity]
+                verified.append(["threadID": thread, "itemID": entry.identity.item,
+                    "matches": checks[entry.identity] == true && stored?.text == entry.text && stored?.complete == true,
+                    "retained": message != nil, "historyVerified": stored != nil,
                     "expectedSHA256": SHA256.hash(data: Data(entry.text.utf8)).map { String(format: "%02x", $0) }.joined(),
-                    "actualSHA256": message.map { SHA256.hash(data: Data($0.text.utf8)).map { String(format: "%02x", $0) }.joined() } as Any? ?? NSNull()])
+                    "actualSHA256": stored.map { SHA256.hash(data: Data($0.text.utf8)).map { String(format: "%02x", $0) }.joined() } as Any? ?? NSNull()])
             }
         }
         return verified
