@@ -298,11 +298,11 @@ def persistence_runs(snapshots: list[dict]) -> list[dict]:
 
 
 SAMPLE_GAP_SECONDS = 45.0
-CONTEXT_FIELDS = ("scene", "surface", "turnRunningVisible", "voiceCall", "route", "network", "thermal", "lowPower",
+CONTEXT_FIELDS = ("scene", "surface", "turnRunningVisible", "voiceCall", "recording", "route", "network", "thermal", "lowPower",
                   "charging", "batteryPercent", "brightnessPercent")
-TIMELINE_FIELDS = ("scene", "surface", "turnRunningVisible", "voiceCall", "route", "network", "thermal", "lowPower",
+TIMELINE_FIELDS = ("scene", "surface", "turnRunningVisible", "voiceCall", "recording", "route", "network", "thermal", "lowPower",
                    "charging")
-ACTIVITY_FIELDS = ("scene", "surface", "turnRunningVisible", "voiceCall")
+ACTIVITY_FIELDS = ("scene", "surface", "turnRunningVisible", "voiceCall", "recording")
 WAKEUPS = ("interruptWakeups", "idleWakeups", "timerWakeups")
 INTERVAL_KINDS = {
     "measured": "one state held from sample to sample",

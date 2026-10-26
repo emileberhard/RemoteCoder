@@ -23,10 +23,8 @@ from remotecoder_tools.app_telemetry_builds import (
     select_build,
 )
 from remotecoder_tools.app_telemetry_summary import (
-    activity,
     diagnostic,
     metrickit_report,
-    sample_intervals,
     telemetry_runs,
 )
 
@@ -201,6 +199,28 @@ def test_signpost_resources_that_are_all_zero_are_unknown_not_zero():
     [post] = aggregated(record)["states"][0]["signposts"]
     assert post["resources"] == {"cpuTimeSeconds": 1.5, "logicalWritesMB": 4.0, "averageMemoryMB": 80.0,
                                  "measuredEntries": 1, "unmeasuredEntries": 1}
+
+
+def test_signpost_hitches_survive_state_aggregation_and_weight_by_animation_time():
+    posts = [signpost(1, 0, 0, 0, 199) for _ in range(3)]
+    for post, hitch, animation, ratio in zip(posts[:2], (20, 240), (10_000, 30_000), (2, 8), strict=True):
+        post["signpostIntervalMetric"].update({
+            "totalHitchTime": {"unit": "ms", "value": hitch},
+            "totalAnimationTime": {"unit": "ms", "value": animation},
+            "hitchTimeRatio": {"unit": "ms per s", "value": ratio},
+        })
+    record = metrics_record("r1", [state_entry("surface", "chat", 10, 10, [post]) for post in posts])
+    [post] = aggregated(record)["states"][0]["signposts"]
+    assert post["hitch"] == {"totalHitchMs": 260, "totalAnimationMs": 40_000, "hitchTimeRatio": 6.5,
+                             "unit": "ms per s, weighted by animation time"}
+    assert post["resources"]["status"] == "unknown"
+    absent = metrics_record("r2", [state_entry("surface", "chat", 10, 10, [posts[2]])])
+    [post] = aggregated(absent)["states"][0]["signposts"]
+    assert post["hitch"] == {"totalHitchMs": None, "totalAnimationMs": None, "hitchTimeRatio": None}
+    posts[2]["signpostIntervalMetric"]["totalHitchTime"] = {"unit": "ms", "value": 0}
+    [post] = aggregated(absent)["states"][0]["signposts"]
+    assert post["hitch"]["totalHitchMs"] == 0
+    assert post["hitch"]["totalAnimationMs"] is None
 
 
 def test_states_group_by_attributed_build_and_hitch_ratio_weights_by_animation_time():

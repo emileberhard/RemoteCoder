@@ -15,6 +15,7 @@ from remotecoder_tools.app_telemetry_summary import (
     sample_intervals,
     summarize_segment,
     telemetry_runs,
+    timeline,
 )
 
 
@@ -224,6 +225,19 @@ def test_activity_sums_each_state_kind_apart():
     assert idle["wakeupsPerSecond"]["interruptWakeups"] == round(30 / 59, 2)
     assert rows[("mixed", True)]["seconds"] == 1.0
     assert rows[("background", False)]["cpuSeconds"] == 0.6
+
+
+def test_recording_activity_and_timeline_keep_idle_and_legacy_unknown_apart():
+    records = [
+        sample(1, 0, 0),
+        sample(2, 30, 100, recording=False),
+        sample(3, 60, 300, recording=True),
+        sample(4, 90, 900, recording=False),
+    ]
+    intervals = sample_intervals(records)
+    rows = {row["state"]["recording"]: row for row in activity(intervals)}
+    assert {key: row["cpuSeconds"] for key, row in rows.items()} == {None: 0.1, False: 0.2, True: 0.6}
+    assert [row["state"]["recording"] for row in timeline(intervals)] == [None, False, True]
 
 
 def test_export_share_counts_only_exports_inside_the_sampled_coverage():

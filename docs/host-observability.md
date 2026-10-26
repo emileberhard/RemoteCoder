@@ -532,8 +532,10 @@ records. History older than the telemetry is `unknown`, never the delivery label
 `states` aggregates a report's state entries per domain, label, stable
 metadata, attributed build and device model: state, foreground and background seconds, hitch time and its
 animation-weighted ratio, the hang histogram, launch histograms and each
-signpost's count with p50 and p95 upper bounds from its duration histogram. A
-signpost whose CPU time, logical writes and average memory are all exactly 0 was
+signpost's count with p50 and p95 upper bounds from its duration histogram. Each
+signpost also keeps its hitch and animation totals and animation-weighted hitch
+ratio in `hitch`; missing measurements stay null, including when its resource
+counters are unmeasured. A signpost whose CPU time, logical writes and average memory are all exactly 0 was
 not measured (OSSignposter) and prints `resources: unknown`. Flags state what
 looks wrong rather than hiding it: `suspectedStuck` (a history, surface, turn or
 route state, which the app clears in the background, lasting longer than the
@@ -597,7 +599,8 @@ only, never WebKit's processes, and it cannot apportion battery to a feature.
   device run validates them.
 - **State.** `TelemetryContext` (app) projects the scene, the visible surface
   (chat or drawer), whether the shown conversation has a running turn, a voice
-  call, thermal state and Low Power Mode, battery level, charging and
+  call, whether any loaded target is recording composer dictation, thermal state
+  and Low Power Mode, battery level, charging and
   brightness in 10 % steps (iOS), the network interface and the shown host's
   route. Each sample carries the whole state; an absent field is unknown. The
   same projection drives the MetricKit state domains (see *iOS 27 performance
@@ -794,7 +797,7 @@ report stream, and the StateReporting domains under `emileberhard.RemoteCoder.`:
 | `surface` | `chat`, `drawer` | `TelemetryContext` projection, foreground only |
 | `turn` | `running` | the shown conversation has a running turn, foreground only |
 | `route` | `lan`, `configured`, `relay`, `restarting`, `disconnected` | the shown host's route, foreground only |
-| `voice` | `call` | a voice call, also in the background |
+| `voice` | `call`, `recording` | a voice call takes priority; otherwise composer dictation recording, also in the background |
 | `energy` | `conserving` | `AppEnergyPolicy.conservesEnergy` |
 | `history` | `opening`, `paging` | history opens and user-requested pages (not prefetch), stable metadata `provider` |
 

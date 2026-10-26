@@ -80,9 +80,35 @@ class Histogram:
 
 
 @dataclass
+class HitchMetrics:
+    hitch_ms: Total = field(default_factory=Total)
+    animation_ms: Total = field(default_factory=Total)
+    ratio_weighted: float = 0.0
+    ratio_weight: float = 0.0
+
+    def add(self, hitch: float | None, animation: float | None, ratio: float | None) -> None:
+        self.hitch_ms.add(hitch)
+        self.animation_ms.add(animation)
+        if ratio is not None and animation:
+            self.ratio_weighted += ratio * animation
+            self.ratio_weight += animation
+
+    def summary(self) -> dict:
+        result = {
+            "totalHitchMs": None if self.hitch_ms.known is None else round(self.hitch_ms.value, 3),
+            "totalAnimationMs": None if self.animation_ms.known is None else round(self.animation_ms.value, 3),
+            "hitchTimeRatio": round(self.ratio_weighted / self.ratio_weight, 3) if self.ratio_weight else None,
+        }
+        if self.hitch_ms.count:
+            result["unit"] = "ms per s, weighted by animation time"
+        return result
+
+
+@dataclass
 class SignpostGroup:
     count: int = 0
     entries: int = 0
+    hitch: HitchMetrics = field(default_factory=HitchMetrics)
     duration: Histogram = field(default_factory=Histogram)
     cpu_seconds: float = 0.0
     logical_writes_mb: float = 0.0
@@ -94,6 +120,8 @@ class SignpostGroup:
         self.entries += 1
         self.count += int(payload.get("totalCount") or 0)
         self.duration.add((payload.get("signpostDuration") or {}).get("buckets", []))
+        self.hitch.add(scalar(payload.get("totalHitchTime")), scalar(payload.get("totalAnimationTime")),
+                       scalar(payload.get("hitchTimeRatio")))
         memory = payload.get("averageMemory") or {}
         cpu, writes = scalar(payload.get("cpuTime")), scalar(payload.get("logicalWrites"))
         average = scalar(memory.get("average"))
@@ -116,7 +144,7 @@ class SignpostGroup:
                 "measuredEntries": self.measured_entries, "unmeasuredEntries": self.entries - self.measured_entries,
             }
         return {"category": category, "name": name, "count": self.count, "duration": self.duration.summary(),
-                "resources": resources}
+                "resources": resources, "hitch": self.hitch.summary()}
 
 
 @dataclass
@@ -126,10 +154,7 @@ class StateGroup:
     state_seconds: Total = field(default_factory=Total)
     foreground: Total = field(default_factory=Total)
     background: Total = field(default_factory=Total)
-    hitch_ms: Total = field(default_factory=Total)
-    animation_ms: Total = field(default_factory=Total)
-    ratio_weighted: float = 0.0
-    ratio_weight: float = 0.0
+    hitch: HitchMetrics = field(default_factory=HitchMetrics)
     hang: Histogram = field(default_factory=Histogram)
     launch: dict = field(default_factory=lambda: defaultdict(Histogram))
     signposts: dict = field(default_factory=lambda: defaultdict(SignpostGroup))
@@ -138,19 +163,13 @@ class StateGroup:
 
     def summary(self, domain: str, label: str, metadata: dict, build: str, model: str | None,
                 candidates: list[str]) -> dict:
-        animation = self.animation_ms.known
-        hitch: dict = {"totalHitchMs": None, "totalAnimationMs": None, "hitchTimeRatio": None}
-        if self.hitch_ms.count:
-            hitch = {"totalHitchMs": round(self.hitch_ms.value, 3), "totalAnimationMs": round(animation or 0.0, 3),
-                     "hitchTimeRatio": round(self.ratio_weighted / self.ratio_weight, 3) if self.ratio_weight else None,
-                     "unit": "ms per s, weighted by animation time"}
         row = {
             "domain": domain, "label": label, "stableMetadata": metadata, "build": build, "model": model,
             "reports": len(self.reports),
             "entries": self.entries,
             "stateSeconds": _round(self.state_seconds.known), "longestEntrySeconds": round(self.longest_entry_seconds, 1),
             "foregroundSeconds": _round(self.foreground.known), "backgroundSeconds": _round(self.background.known),
-            "hitch": hitch, "hang": self.hang.summary() if self.hang.buckets else None,
+            "hitch": self.hitch.summary(), "hang": self.hang.summary() if self.hang.buckets else None,
             "signposts": [group.summary(category, name)
                           for (category, name), group in sorted(self.signposts.items())],
             "flags": sorted(self.flags),
@@ -209,13 +228,8 @@ def _add_state_entry(group: StateGroup, entry: dict, coverage_seconds: float | N
             group.flags.add("suspectedStuck")
     for metric, payload in _values(values):
         if metric == "hitchTime":
-            hitch, animation = scalar(payload.get("totalHitchTime")), scalar(payload.get("totalAnimationTime"))
-            ratio = scalar(payload.get("ratio"))
-            group.hitch_ms.add(hitch)
-            group.animation_ms.add(animation)
-            if ratio is not None and animation:
-                group.ratio_weighted += ratio * animation
-                group.ratio_weight += animation
+            group.hitch.add(scalar(payload.get("totalHitchTime")), scalar(payload.get("totalAnimationTime")),
+                            scalar(payload.get("ratio")))
         elif metric == "hangTime":
             group.hang.add((payload.get("histogram") or {}).get("buckets", []))
         elif metric in LAUNCH_METRICS:

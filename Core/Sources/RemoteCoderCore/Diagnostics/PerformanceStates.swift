@@ -14,7 +14,7 @@ extension UsageStateLabels {
         surface = foreground ? context.surface?.rawValue : nil
         turn = foreground && context.turnRunningVisible == true ? "running" : nil
         route = foreground ? context.route?.rawValue : nil
-        voice = context.voiceCall ? "call" : nil
+        voice = context.voiceCall ? "call" : context.recording == true ? "recording" : nil
         energy = conservesEnergy ? "conserving" : nil
     }
 }

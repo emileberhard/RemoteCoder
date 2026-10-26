@@ -101,6 +101,31 @@ struct FieldTelemetryTests {
         #expect(labels.turn == nil && labels.route == nil)
     }
 
+    @Test func recordingIsSeparateFromIdleAndPreservesTurnAndCallState() throws {
+        var recording = context
+        recording.recording = true
+        #expect(recording != context)
+        #expect(UsageStateLabels(recording, conservesEnergy: false).voice == "recording")
+        #expect(UsageStateLabels(recording, conservesEnergy: false).turn == nil)
+        recording.turnRunningVisible = true
+        #expect(UsageStateLabels(recording, conservesEnergy: false).turn == "running")
+        recording.voiceCall = true
+        #expect(UsageStateLabels(recording, conservesEnergy: false).voice == "call")
+        recording.voiceCall = false
+        recording.recording = false
+        #expect(UsageStateLabels(recording, conservesEnergy: false).voice == nil)
+
+        let encoder = JSONEncoder()
+        let legacy = try encoder.encode(context)
+        #expect(try JSONDecoder().decode(UsageContext.self, from: legacy).recording == nil)
+        recording.recording = true
+        let encoded = try encoder.encode(recording)
+        let payload = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        #expect(payload["recording"] as? Bool == true)
+        #expect(payload["turnRunningVisible"] as? Bool == true)
+        #expect(try JSONDecoder().decode(UsageContext.self, from: encoded) == recording)
+    }
+
     @Test func historyStateShowsAnyOpenBeforePagingAndClearsOnEnteringTheBackground() {
         var operations = HistoryOperations()
         operations.sceneChanged(background: true)

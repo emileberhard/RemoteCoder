@@ -12,6 +12,7 @@ struct UsageContext: Codable, Sendable, Equatable {
     var surface: Surface?
     var turnRunningVisible: Bool?
     var voiceCall: Bool
+    var recording: Bool? = nil
     var thermal: Thermal?
     var lowPower: Bool
     var batteryPercent: Int?

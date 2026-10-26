@@ -92,6 +92,7 @@ final class TelemetryContext {
             surface: window.isHistoryDrawerOpen ? .drawer : .chat,
             turnRunningVisible: screen.map { $0.runningTurn != nil },
             voiceCall: voiceCalls.call.isActive,
+            recording: workspace.models.contains { $0.voice.isRecording },
             thermal: Self.thermal(policy.thermalState),
             lowPower: policy.isLowPowerModeEnabled,
             batteryPercent: device.batteryPercent,
