@@ -67,6 +67,7 @@ enum TelemetryRecord: Sendable {
     case sample(ProcessSample)
     case export(ExportCost)
     case loss(TelemetryLoss)
+    case checkpointInventory(CheckpointInventory)
 }
 
 struct TelemetryRun: Encodable, Sendable {
@@ -133,7 +134,7 @@ struct TelemetryLine: Encodable, Sendable {
         case encodeMs, writeMs, compressMs, uploadMs, totalMs, kept, segments, bytes
         case flushedRecords, uploadedSegments, uploadedBytes, footprintBefore, footprintSampledMax, footprintAfter
         case processCpuNs, logWrite
-        case what, count
+        case what, count, inventory
     }
 
     func encode(to encoder: any Encoder) throws {
@@ -178,6 +179,9 @@ struct TelemetryLine: Encodable, Sendable {
             try container.encodeIfPresent(cost.footprintAfter, forKey: .footprintAfter)
             try container.encodeIfPresent(cost.processCPUNanoseconds, forKey: .processCpuNs)
             try container.encodeIfPresent(cost.logWrite, forKey: .logWrite)
+        case .checkpointInventory(let inventory):
+            try container.encode("checkpointInventory", forKey: .recordType)
+            try container.encode(inventory, forKey: .inventory)
         case .loss(let loss):
             try container.encode("loss", forKey: .recordType)
             try container.encode(loss.what, forKey: .what)

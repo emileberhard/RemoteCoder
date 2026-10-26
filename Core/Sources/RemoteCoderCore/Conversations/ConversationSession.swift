@@ -705,6 +705,10 @@ actor ConversationSessions {
         self.projectionSignposter = projectionSignposter
     }
 
+    func checkpointInventory() async -> CheckpointInventory? {
+        await checkpoints.inventory()
+    }
+
     func session(conversationID: UUID, threadID: String? = nil) async -> ConversationSession {
         await pruneUnretainedReferences()
         let draft = drafts.contains(conversationID) ? byID[conversationID] : nil

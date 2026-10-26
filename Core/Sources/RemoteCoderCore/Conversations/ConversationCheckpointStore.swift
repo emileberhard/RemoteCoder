@@ -69,9 +69,11 @@ actor ConversationCheckpointStore {
         var recoveryBytes = 0
         var importedSource: ImportedSource?
         var historyExhausted = false
+        var inventoryContents: CheckpointInventory.Contents? = nil
 
         var cacheBytes: Int { max(0, bytes - payloadBytes) }
     }
+    private let hostID: UUID
     private let allowsLegacyMigration: Bool
     private let directory: URL
     private let storage: HostStorage
@@ -132,6 +134,7 @@ actor ConversationCheckpointStore {
     init(hostID: UUID, directory: URL? = nil, storage: HostStorage = .live,
          budgetBytes: Int = 64 * 1_024 * 1_024, primaryBudgetBytes: Int, metrics: PersistenceMetrics = .shared) {
         precondition(primaryBudgetBytes > 0)
+        self.hostID = hostID
         let legacy = storage.directory(for: .device).appending(path: "conversations-v1/\(hostID)")
         self.directory = directory ?? legacy
         self.storage = storage
@@ -144,6 +147,20 @@ actor ConversationCheckpointStore {
     var retainedFenceCount: Int { fences.count }
     var retainedRevisionCount: Int { revisions.count }
     var accountedDiskBytes: Int { records.values.reduce(0) { $0 + $1.bytes } }
+
+    func inventory() -> CheckpointInventory? {
+        guard indexed else { return nil }
+        var inventory = CheckpointInventory(hostID: hostID, cacheBudgetBytes: budgetBytes,
+            primaryBudgetBytes: primaryBudgetBytes)
+        for (id, record) in records.sorted(by: { $0.key.uuidString < $1.key.uuidString }) {
+            inventory.include(.init(conversationID: id, protected: record.protected,
+                retained: fences[id]?.retained == true, invalidation: record.invalidation?.rawValue,
+                primaryPayloadBytes: record.payloadBytes, cacheBytes: record.cacheBytes,
+                physicalFileBytes: record.bytes, contents: record.inventoryContents))
+        }
+        return inventory
+    }
+
     private var legacyDirectory: URL? {
         allowsLegacyMigration ? storage.directory(for: .device).appending(path: "codex-timelines") : nil
     }
@@ -284,7 +301,9 @@ actor ConversationCheckpointStore {
         let primary = try Self.primaryBytes(checkpoint) + sidecars + recovery + (source.pathExtension == "sqlite" ? jsonBytes : 0)
         records[id] = DiskRecord(bytes: try diskBytes(id) + jsonBytes + sidecars + recovery,
             payloadBytes: primary, modified: records[id]?.modified ?? .now,
-            protected: primary > 0, invalidation: nil, recoveryBytes: recovery)
+            protected: primary > 0, invalidation: nil, recoveryBytes: recovery,
+            inventoryContents: sidecars + recovery + (source.pathExtension == "sqlite" ? jsonBytes : 0) == 0
+                ? checkpoint.map(CheckpointInventory.Contents.init) : nil)
     }
 
     private static func recursiveBytes(_ directory: URL) throws -> Int {
@@ -355,7 +374,11 @@ actor ConversationCheckpointStore {
     }
 
     private func refreshRecoveryAccounting(_ id: UUID) {
-        guard let recovery = try? recoverySize(id) else { records[id]?.protected = true; return }
+        guard let recovery = try? recoverySize(id) else {
+            records[id]?.protected = true
+            records[id]?.inventoryContents = nil
+            return
+        }
         if let imported = records[id]?.importedSource {
             do { try refreshImportAccounting(id, source: imported) }
             catch {
@@ -665,6 +688,9 @@ actor ConversationCheckpointStore {
         records[conversationID]?.bytes = try diskBytes(conversationID) + retainedFileBytes + recoverySize(conversationID)
         records[conversationID]?.recoveryBytes = try recoverySize(conversationID)
         records[conversationID]?.historyExhausted = !historyAdmitted
+        if retainedFileBytes + (records[conversationID]?.recoveryBytes ?? 0) == 0 {
+            records[conversationID]?.inventoryContents = CheckpointInventory.Contents(checkpoint)
+        }
         if historyAdmitted, omittedHistory.removeValue(forKey: conversationID) != nil {
             metrics.recordReadmittedHistory(bytes: Self.historyBytes(checkpoint))
         }
@@ -1196,6 +1222,7 @@ actor ConversationCheckpointStore {
             let bytes = (resource.fileSize ?? 0) + ((try? wal.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
             let payloadBytes: Int
             var protected: Bool?
+            var contents: CheckpointInventory.Contents?
             if file.pathExtension == "sqlite", invalidated[id] != nil {
                 payloadBytes = 0
                 protected = true
@@ -1203,6 +1230,7 @@ actor ConversationCheckpointStore {
                 do {
                     let checkpoint = try decodeDatabase(CheckpointDatabase(url: file, access: .inspection).read())
                     payloadBytes = try primaryBytes(checkpoint)
+                    contents = checkpoint.map(CheckpointInventory.Contents.init)
                     protected = payloadBytes > 0
                 } catch { payloadBytes = bytes; protected = true }
             } else if invalidated[id] != nil {
@@ -1212,6 +1240,7 @@ actor ConversationCheckpointStore {
                 do {
                     let checkpoint = try decodeJSON(Data(contentsOf: file))
                     payloadBytes = try primaryBytes(checkpoint)
+                    contents = CheckpointInventory.Contents(checkpoint)
                     protected = payloadBytes > 0
                 } catch { payloadBytes = bytes; protected = true }
             }
@@ -1219,7 +1248,8 @@ actor ConversationCheckpointStore {
             records[id] = DiskRecord(bytes: (previous?.bytes ?? 0) + bytes,
                 payloadBytes: (previous?.payloadBytes ?? 0) + payloadBytes,
                 modified: max(previous?.modified ?? .distantPast, resource.contentModificationDate ?? .distantPast),
-                protected: protected == true || previous?.protected == true, invalidation: invalidated[id])
+                protected: protected == true || previous?.protected == true, invalidation: invalidated[id],
+                inventoryContents: previous == nil ? contents : nil)
         }
         for folder in files where folder.pathExtension == "submissions" {
             guard let id = UUID(uuidString: folder.deletingPathExtension().lastPathComponent) else { continue }

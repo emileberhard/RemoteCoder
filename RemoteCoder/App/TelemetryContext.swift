@@ -13,9 +13,13 @@ final class TelemetryContext {
     private let network = NetworkInterfaceState()
     private let sampler: ProcessResourceSampler?
     private var observation: Task<Void, Never>?
+    private var inventoryObservation: Task<Void, Never>?
+    private let recorder: TelemetryBuffer
+    private var lastInventories: [UUID: ContinuousClock.Instant] = [:]
 
     init(workspace: ChatWorkspaceModel, voiceCalls: VoiceCallCenter, energy: AppEnergyMonitor,
          scenes: ScenePhaseAggregate, recorder: TelemetryBuffer) {
+        self.recorder = recorder
         self.workspace = workspace
         self.voiceCalls = voiceCalls
         self.energy = energy
@@ -41,10 +45,37 @@ final class TelemetryContext {
 
     private func publish(_ context: UsageContext) {
         sampler?.update(context)
+        if context.scene == .background {
+            inventoryObservation?.cancel()
+            inventoryObservation = nil
+        } else if inventoryObservation == nil {
+            inventoryObservation = Task { [weak self] in
+                while !Task.isCancelled, self != nil {
+                    await self?.recordCheckpointInventories()
+                    do { try await Task.sleep(for: .seconds(30), tolerance: .seconds(5)) } catch { return }
+                }
+            }
+        }
         AppPerformanceDiagnostics.shared.usageChanged(context, conservesEnergy: energy.policy.conservesEnergy)
     }
 
+    private func recordCheckpointInventories() async {
+        let models = workspace.models
+        let hostIDs = Set(models.map(\.hostID))
+        lastInventories = lastInventories.filter { hostIDs.contains($0.key) }
+        for model in models {
+            guard !Task.isCancelled else { return }
+            let now = ContinuousClock.now
+            if let last = lastInventories[model.hostID], last.duration(to: now) < .seconds(4 * 60 * 60) { continue }
+            guard let inventory = await model.conversations.checkpointInventory(), !Task.isCancelled else { continue }
+            recorder.record(.checkpointInventory(inventory))
+            lastInventories[model.hostID] = now
+        }
+    }
+
     func stop() {
+        inventoryObservation?.cancel()
+        inventoryObservation = nil
         observation?.cancel()
         observation = nil
         device.stop()
