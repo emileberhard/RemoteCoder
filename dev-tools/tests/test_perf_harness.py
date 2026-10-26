@@ -33,6 +33,19 @@ def held(path: Path) -> bool:
 
 
 class LeaseTests(unittest.TestCase):
+    def test_saved_template_identity_changes_when_the_same_path_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            template = Path(directory) / "Immediate.tracetemplate"
+            template.write_bytes(b"saved immediate template")
+            before = perf_harness.instrumentation(SimpleNamespace(), str(template), [])
+            self.assertEqual(before["templateSHA256"], hashlib.sha256(template.read_bytes()).hexdigest())
+            template.write_bytes(b"saved deferred template")
+            after = perf_harness.instrumentation(SimpleNamespace(), str(template), [])
+            self.assertNotEqual(before, after)
+            template.write_bytes(b"x" * (4 * 1_048_576 + 1))
+            with self.assertRaisesRegex(ValueError, "exceeds 4 MiB"):
+                perf_harness.instrumentation(SimpleNamespace(), str(template), [])
+
     def test_device_lease_is_the_installers_per_device_lock(self) -> None:
         with tempfile.TemporaryDirectory() as directory, patch.object(build_support, "cache_root", return_value=Path(directory)):
             expected = Path(directory) / "device-locks" / (hashlib.sha256(b"UDID-1").hexdigest() + ".lock")
