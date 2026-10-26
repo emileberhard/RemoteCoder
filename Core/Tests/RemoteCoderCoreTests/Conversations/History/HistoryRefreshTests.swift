@@ -58,6 +58,62 @@ struct HistoryRefreshTests {
         }
     }
 
+    @Test func aCancelledAggregateReadDoesNotHideTheProviderThatAlreadyFinished() async throws {
+        try await withList { list, gateway, _ in
+            await gateway.setCodex([.historyFixture(id: "root", updatedAt: 2)])
+            await list.refresh()
+            await gateway.setCodex([.historyFixture(id: "new", updatedAt: 3), .historyFixture(id: "root", updatedAt: 2)])
+            await gateway.holdNextClaudeRead()
+            list.lastSuccessfulRefreshAt = .distantPast
+            let interrupted = Task { await list.refreshIfStale() }
+            defer { interrupted.cancel(); await gateway.releaseRead(); await interrupted.value }
+            try #require(await waitUntil { await gateway.isHeld })
+            interrupted.cancel()
+            await gateway.releaseRead()
+            await interrupted.value
+            #expect(list.header(id: "new") == nil)
+            await list.refreshIfStale()
+            #expect(list.header(id: "new") != nil)
+        }
+    }
+
+    @Test func anUnarchiveBelowAnUnchangedFirstHeaderBypassesThePrefixShortcut() async throws {
+        try await withList { list, gateway, _ in
+            let recent = [CodexAppServerV2.Thread.historyFixture(id: "top", updatedAt: 3),
+                          .historyFixture(id: "second", updatedAt: 2)]
+            await gateway.setCodex(recent)
+            await list.refresh()
+            await gateway.setCodex(recent + [.historyFixture(id: "restored", updatedAt: 1)])
+            let completed = list.lastSuccessfulRefreshAt
+            list.refresh(after: .archive(threadID: "restored", archived: false, sequence: nil))
+            list.refresh(after: .threadChanged(threadID: "top", sequence: nil))
+            try #require(await waitUntil { list.lastSuccessfulRefreshAt != completed })
+            #expect(list.header(id: "restored") != nil)
+        }
+    }
+
+    @Test func reconnectDefersAClosedDrawerReadAndOpeningReadsBelowTheUnchangedPrefix() async throws {
+        try await withList { list, gateway, _ in
+            let recent = [CodexAppServerV2.Thread.historyFixture(id: "top", updatedAt: 3),
+                          .historyFixture(id: "second", updatedAt: 2)]
+            await gateway.setCodex(recent)
+            await list.refresh()
+            await gateway.resetRequests()
+            await gateway.setCodex(recent + [.historyFixture(id: "missed", updatedAt: 1)])
+            await list.refreshAfterReconnect(isDrawerOpen: false)
+            #expect(await gateway.requests == 0)
+            #expect(list.lastSuccessfulRefreshAt == nil)
+            await list.refreshIfStale()
+            #expect(list.header(id: "missed") != nil)
+
+            var renamed = recent
+            renamed[1].name = "Changed while disconnected"
+            await gateway.setCodex(renamed)
+            await list.refreshAfterReconnect(isDrawerOpen: true)
+            #expect(list.header(id: "second")?.name == "Changed while disconnected")
+        }
+    }
+
     @Test func hiddenChildTimestampNoiseRetainsTheArrayAndFileButVisibleChangesPublishAndPersist() async throws {
         try await withList { list, gateway, file in
             _ = list.setProtectedThreadIDs(["child"])
@@ -222,12 +278,14 @@ private actor RefreshGateway: CodexHistoryGateway, ConversationMarksRemote {
     }
     private(set) var requests = 0
     private var holdsNext = false
+    private var holdsNextClaude = false
     private var held: CheckedContinuation<Void, Never>?
     var isHeld: Bool { held != nil }
 
     func setCodex(_ threads: [CodexAppServerV2.Thread]) { codex = threads }
     func resetRequests() { requests = 0 }
     func holdNextCodexRead() { holdsNext = true }
+    func holdNextClaudeRead() { holdsNextClaude = true }
     func releaseRead() { held?.resume(); held = nil }
     func listThreads(limit: Int, cursor: String?, useStateDBOnly: Bool) async -> CodexAppServerV2.ThreadListResponse {
         requests += 1
@@ -242,8 +300,12 @@ private actor RefreshGateway: CodexHistoryGateway, ConversationMarksRemote {
         return .init(data: page, nextCursor: end < threads.count ? String(end) : nil,
             completionTimes: Dictionary(uniqueKeysWithValues: page.map { ($0.id, Optional<Int64>.some(1)) }))
     }
-    func listClaudeThreads(limit: Int, cursor: String?) -> CodexAppServerV2.ThreadListResponse {
+    func listClaudeThreads(limit: Int, cursor: String?) async -> CodexAppServerV2.ThreadListResponse {
         requests += 1
+        if holdsNextClaude {
+            holdsNextClaude = false
+            await withCheckedContinuation { held = $0 }
+        }
         return .init(data: [], nextCursor: nil)
     }
     func readThread(threadID: String, includeTurns: Bool) throws -> CodexAppServerV2.ThreadReadResponse { throw Failure.unexpectedRead }

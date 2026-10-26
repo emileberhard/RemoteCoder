@@ -491,13 +491,18 @@ entrypoint linked above.
   - On `.background` with active tasks and no voice call, a 25 s background
     grace keeps sockets up for quick app switches. An idle model disconnects at
     once, and an active voice call keeps the connection.
-  - While `.active`, an incremental refresh loop keeps the history list at most
-    15 s stale. It runs while any of the target's windows shows the drawer
+  - While `.active`, a loop probes recent headers every 15 s and reads the full
+    recent window about every five minutes. It runs while any of the target's
+    windows shows the drawer
     (`TargetPresentation.drawerOpen` aggregates them). Opening it requests only
     newly added question scopes, and closing it narrows them; the workspace's
     bounded fan-out then reads each host's activity and stale list before
-    starting its loop. Explicit refresh, reconnect and invalidation keep their full
-    refreshes.
+    starting its loop. Explicit refresh and managed unarchives bypass the prefix
+    shortcut. Reconnect marks the list stale, reading immediately only for an
+    open drawer or failed/deferred refresh. `ConversationList` invalidates
+    provider comparison coverage after a cancelled aggregate read. The discovery
+    bounds and comparison contract live in `docs/system-architecture.md`,
+    *History and live state*.
   - After 1 s of continuous drawer visibility, the same loop warms every
     unsettled drawer conversation in rank order
     (`ConversationDrawerRank`; delegated agent threads, and probe threads the

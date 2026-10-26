@@ -15,7 +15,7 @@ struct ConversationListDeferralTests {
             #expect(Set(list.threads.map(\.id)) == ["cached", "claude_new"])
 
             await gateway.setCodex(.success([.historyFixture(id: "fresh", updatedAt: 6)]))
-            await list.refresh(reason: "reconnect")
+            await list.refreshAfterReconnect(isDrawerOpen: false)
 
             #expect(list.errorMessage == nil)
             #expect(!list.needsReconnectRefresh)

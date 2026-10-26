@@ -1348,8 +1348,9 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
         if let connection {
             reconcileObservation(); observation.connected(connection)
             for screen in screens { screen.historyEdges.retryFailed() }
-            if isSceneActive && (isVisible || isHistoryDrawerOpen) {
-                ownedTasks.start(.historyRetry) { [weak self] in await self?.conversationList.refresh(reason: "reconnect") }
+            ownedTasks.start(.historyRetry) { [weak self] in
+                guard let self, self.acceptsWork else { return }
+                await self.conversationList.refreshAfterReconnect(isDrawerOpen: self.isSceneActive && self.isHistoryDrawerOpen)
             }
             hostServices.registration.retry()
             directories.syncFavorites()

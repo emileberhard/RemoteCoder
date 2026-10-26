@@ -6,9 +6,10 @@ import OSLog
 @MainActor
 final class ConversationList {
     private enum RefreshIntent {
-        case mergeRecent, pollRecent, eventRecent, replaceCoverage
+        case mergeRecent, pollRecent, eventRecent, eventFullRecent, replaceCoverage
 
-        var isQuiet: Bool { self == .pollRecent || self == .eventRecent }
+        var isEvent: Bool { self == .eventRecent || self == .eventFullRecent }
+        var isQuiet: Bool { self == .pollRecent || isEvent }
     }
 
     private struct PendingRefreshRequest {
@@ -39,7 +40,7 @@ final class ConversationList {
     @ObservationIgnored private var lastFullRefreshAt: Date?
     @ObservationIgnored private var eventRefreshTask: Task<Void, Never>?
     @ObservationIgnored private var eventRefreshGeneration: UInt64 = 0
-    @ObservationIgnored private var eventRefreshPending = false
+    @ObservationIgnored private var pendingEventRefresh: RefreshIntent?
     @ObservationIgnored private var refreshDeferred = false
 
     @ObservationIgnored private var hasLoadedPersistedThreads = false
@@ -119,6 +120,13 @@ final class ConversationList {
         await refresh(limit: RefreshPolicy.incrementalLimit, reason: reason, intent: .mergeRecent)
     }
 
+    func refreshAfterReconnect(isDrawerOpen: Bool) async {
+        guard !headerReadsRetired, !Task.isCancelled else { return }
+        lastSuccessfulRefreshAt = nil
+        lastFullRefreshAt = nil
+        if needsReconnectRefresh || isDrawerOpen { await refresh(reason: "reconnect") }
+    }
+
     private static let staleAutoReason = "stale-auto"
 
     func refreshIfStale() async {
@@ -130,18 +138,22 @@ final class ConversationList {
 
     func refresh(after event: RoutedGatewayEvent) {
         guard !headerReadsRetired, event.requiresHistoryRefresh else { return }
-        eventRefreshPending = true
+        if case .archive(_, false, _) = event {
+            pendingEventRefresh = .eventFullRecent
+        } else if pendingEventRefresh == nil {
+            pendingEventRefresh = .eventRecent
+        }
         guard eventRefreshTask == nil else { return }
         eventRefreshGeneration &+= 1
         let generation = eventRefreshGeneration
         eventRefreshTask = Task { [weak self] in
-            while let self, eventRefreshPending, generation == eventRefreshGeneration {
+            while let self, pendingEventRefresh != nil, generation == eventRefreshGeneration {
                 do { try await Task.sleep(for: .milliseconds(250)) }
                 catch { return }
-                guard !headerReadsRetired, !Task.isCancelled else { return }
-                eventRefreshPending = false
+                guard !headerReadsRetired, !Task.isCancelled, let intent = pendingEventRefresh else { return }
+                pendingEventRefresh = nil
                 await loadPersistedThreadsIfNeeded()
-                await refresh(limit: RefreshPolicy.incrementalLimit, reason: "gateway-event", intent: .eventRecent)
+                await refresh(limit: RefreshPolicy.incrementalLimit, reason: "gateway-event", intent: intent)
             }
             if let self, generation == eventRefreshGeneration { eventRefreshTask = nil }
         }
@@ -151,8 +163,8 @@ final class ConversationList {
         eventRefreshGeneration &+= 1
         eventRefreshTask?.cancel()
         eventRefreshTask = nil
-        eventRefreshPending = false
-        if pendingRefreshRequest?.intent == .eventRecent { pendingRefreshRequest = nil }
+        pendingEventRefresh = nil
+        if pendingRefreshRequest?.intent.isEvent == true { pendingRefreshRequest = nil }
     }
 
     /// Called after an automatic attempt. Manual refreshes may move the next
@@ -435,7 +447,7 @@ final class ConversationList {
         guard intent == .replaceCoverage || !isLoadingOlder else { return }
         let request = PendingRefreshRequest(limit: limit, reason: reason, intent: intent)
         if let activeRefreshRequest {
-            if intent != .eventRecent, activeRequestSatisfies(request: request, active: activeRefreshRequest) {
+            if !intent.isEvent, activeRequestSatisfies(request: request, active: activeRefreshRequest) {
                 logger.notice(
                     "refresh ignored; active request already satisfies it (reason=\(reason), limit=\(limit))"
                 )
@@ -460,7 +472,7 @@ final class ConversationList {
         var persisted: ConversationHeaderStore.Snapshot?
         var didRead = false
         do {
-            let read: GatewayHistoryService.RecentRead = intent.isQuiet
+            let read: GatewayHistoryService.RecentRead = intent.isQuiet && intent != .eventFullRecent
                 && !HistoryRefreshTiming.needsFullRead(after: lastFullRefreshAt, now: .now)
                 ? .untilUnchanged : .full
             let result = try await service.fetchRecentThreads(
@@ -553,6 +565,7 @@ final class ConversationList {
             // SwiftUI cancels refresh tasks opportunistically (e.g. gesture conflicts).
             // Treat cancellations as a no-op rather than surfacing them as user-facing errors.
             logger.info("refresh cancelled (reason=\(reason), limit=\(limit))")
+            await service.invalidateRecentCoverage()
         } catch where GatewayHistoryService.defersRead(error) {
             refreshDeferred = true
             logger.notice("refresh deferred until the gateway and Codex are ready (reason=\(reason))")
@@ -808,6 +821,7 @@ final class ConversationList {
     }
 
     private func shouldRefreshForStaleness() -> Bool {
+        guard lastFullRefreshAt != nil else { return true }
         guard let lastSuccessfulRefreshAt else { return true }
         return Date().timeIntervalSince(lastSuccessfulRefreshAt) >= HistoryRefreshTiming.maximumStaleness
     }
@@ -822,6 +836,7 @@ final class ConversationList {
             reason: request.reason,
             intent: existing.intent == .replaceCoverage || request.intent == .replaceCoverage ? .replaceCoverage
                 : existing.intent == .mergeRecent || request.intent == .mergeRecent ? .mergeRecent
+                : existing.intent == .eventFullRecent || request.intent == .eventFullRecent ? .eventFullRecent
                 : existing.intent == .eventRecent || request.intent == .eventRecent ? .eventRecent : .pollRecent
         )
     }

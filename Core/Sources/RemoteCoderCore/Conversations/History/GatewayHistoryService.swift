@@ -468,9 +468,14 @@ actor GatewayHistoryService {
                 cursor.map(ConversationListPosition.next) ?? .end, firstPageUnchanged)
     }
 
+    func invalidateRecentCoverage() {
+        recentCoverage.removeAll()
+        for provider in AgentProvider.allCases { recentReadRevisions[provider, default: 0] &+= 1 }
+    }
+
     func invalidateAll() async {
         epoch += 1
-        recentCoverage.removeAll()
+        invalidateRecentCoverage()
         agentClassifications.removeAll()
         classificationBytes = 0
         retainedClassificationOffset = 0
