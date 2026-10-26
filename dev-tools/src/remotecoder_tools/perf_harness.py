@@ -13,6 +13,7 @@ container plus a Darwin notification; results come back as JSON lines.
 import argparse
 import asyncio
 import contextlib
+import ctypes
 import functools
 import gzip
 import hashlib
@@ -21,6 +22,7 @@ import json
 import math
 import os
 import plistlib
+import select
 import shutil
 import signal
 import subprocess
@@ -442,6 +444,25 @@ def stop_trace_process(process: subprocess.Popen) -> str:
 
 
 @contextlib.contextmanager
+def _trace_notification(name: str):
+    notify = ctypes.CDLL("/usr/lib/system/libsystem_notify.dylib")
+    notify.notify_register_file_descriptor.argtypes = [ctypes.c_char_p, ctypes.POINTER(ctypes.c_int), ctypes.c_int, ctypes.POINTER(ctypes.c_int)]
+    notify.notify_register_file_descriptor.restype = ctypes.c_uint32
+    notify.notify_cancel.argtypes = [ctypes.c_int]
+    notify.notify_cancel.restype = ctypes.c_uint32
+    descriptor, token = ctypes.c_int(-1), ctypes.c_int(-1)
+    status = notify.notify_register_file_descriptor(name.encode(), ctypes.byref(descriptor), 0, ctypes.byref(token))
+    if status != 0:
+        raise RuntimeError(f"Could not register tracing-started notification: libnotify status {status}")
+    try:
+        yield descriptor.value, token.value
+    finally:
+        status = notify.notify_cancel(token.value)
+        if status != 0:
+            raise RuntimeError(f"Could not cancel tracing-started notification: libnotify status {status}")
+
+
+@contextlib.contextmanager
 def tracing(device: Simulator | Device, template: str, instruments: list[str] | None, seconds: int, path: str):
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     scope = ["--attach", PROCESS] if instrumentation(device, template, instruments)["scope"] == "app" else ["--all-processes"]
@@ -450,39 +471,37 @@ def tracing(device: Simulator | Device, template: str, instruments: list[str] | 
                "--time-limit", f"{seconds}s", "--output", path, "--no-prompt", "--notify-tracing-started", notification]
     for instrument in instruments or []:
         command += ["--instrument", instrument]
-    watcher = subprocess.Popen(["notifyutil", "-q", "-1", notification], env=ENV,
-                               stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
-    recorder = None
-    try:
-        recorder = subprocess.Popen(command, env=ENV, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-        deadline = time.monotonic() + 30
-        while True:
-            if time.monotonic() >= deadline:
-                raise SystemExit("Instruments did not announce tracing-started within 30 seconds")
-            if recorder.poll() is not None:
-                raise SystemExit("Instruments stopped before its tracing-started notification")
-            status = watcher.poll()
-            if status is not None:
-                if status != 0:
-                    raise SystemExit(f"Tracing-started notification watcher failed with status {status}")
+    with _trace_notification(notification) as (descriptor, token):
+        recorder = None
+        try:
+            recorder = subprocess.Popen(command, env=ENV, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            deadline = time.monotonic() + 30
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise SystemExit("Instruments did not announce tracing-started within 30 seconds")
+                if recorder.poll() is not None:
+                    raise SystemExit("Instruments stopped before its tracing-started notification")
+                readable, _, _ = select.select([descriptor], [], [], min(0.1, remaining))
+                if not readable:
+                    continue
+                received = os.read(descriptor, 4)
+                if len(received) != 4 or int.from_bytes(received, "big") != token:
+                    raise RuntimeError("Tracing-started notification did not match its registered token")
                 if time.monotonic() >= deadline:
                     raise SystemExit("Instruments tracing-started notification arrived after its deadline")
                 break
-            time.sleep(0.05)
-        recorder.perf_started_monotonic = time.monotonic()
-        time.sleep(TRACE_WARMUP)
-        if recorder.poll() is not None:
-            raise SystemExit("Instruments stopped while settling after tracing-started")
-        yield recorder
-    finally:
-        try:
+            recorder.perf_started_monotonic = time.monotonic()
+            time.sleep(TRACE_WARMUP)
+            if recorder.poll() is not None:
+                raise SystemExit("Instruments stopped while settling after tracing-started")
+            yield recorder
+        finally:
             if recorder is not None:
                 log = stop_trace_process(recorder)
                 if log:
                     with private_open(Path(path).with_suffix(".recording.log"), "w") as handle:
                         handle.write(log)
-        finally:
-            stop_trace_process(watcher)
 
 
 def finish_trace(recorder: subprocess.Popen, path: str, window: dict | None = None) -> None:
