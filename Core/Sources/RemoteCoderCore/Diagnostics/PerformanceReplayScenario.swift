@@ -6,6 +6,17 @@ struct PerformanceReplayScenario: Codable, Sendable {
         let thread: JSONValue
         let items: [JSONValue]
         let turns: [JSONValue]
+        var itemFile: PerformanceReplayIndexedFile? = nil
+        var turnFile: PerformanceReplayIndexedFile? = nil
+        var localSubmission: LocalSubmission? = nil
+        var itemCount: Int { itemFile.map { $0.offsets.count - 1 } ?? items.count }
+        var turnCount: Int { turnFile.map { $0.offsets.count - 1 } ?? turns.count }
+    }
+
+    struct LocalSubmission: Codable, Sendable {
+        let messageID: UUID
+        let turnID: String
+        let text: String
     }
 
     struct Event: Codable, Sendable {
@@ -32,17 +43,33 @@ struct PerformanceReplayScenario: Codable, Sendable {
     let errors: [String: JSONValue]?
     let httpResponses: [String: JSONValue]?
     let threadResponses: [String: [String: JSONValue]]?
+    var completionTimes: [String: JSONValue]? = nil
+    var captureSummary: JSONValue? = nil
+    var fileTimeOffset: Double? = nil
+    private static let secondKeys: Set<String> = ["createdAt", "updatedAt", "recencyAt", "lastActiveAt", "lastTurnCompletedAt",
+        "startedAt", "completedAt", "observedAt", "resetsAt", "checkedAtUnixSeconds", "startedAtUnixSeconds",
+        "readBaseline", "seenThrough", "doneThrough", "through", "sectionEnteredAt"]
+    private static let millisecondKeys: Set<String> = ["startedAtMs", "completedAtMs"]
 
     enum Failure: Error, Equatable { case invalidScenario(String) }
 
     func validate() throws {
-        guard version == 1, capturedAt.isFinite, capturedAt > 0, !name.isEmpty, duration.isFinite, (10...120).contains(duration),
-              (2...6).contains(conversations.count), (1...20_000).contains(events.count),
+        guard (1...2).contains(version), capturedAt.isFinite, capturedAt > 0, !name.isEmpty, duration.isFinite, (10...900).contains(duration),
+              (2...1024).contains(conversations.count), (1...20_000).contains(events.count),
               (1...60).contains(actions.count) else { throw Failure.invalidScenario("invalid bounds or version") }
         let ids = conversations.compactMap { $0.thread.objectValue?["id"]?.stringValue }
         guard ids.count == conversations.count, Set(ids).count == ids.count,
-              conversations.allSatisfy({ $0.items.count <= 1000 && $0.turns.count <= 500 }) else {
+              conversations.allSatisfy({ $0.itemCount <= 20_000 && $0.turnCount <= 20_000 }) else {
             throw Failure.invalidScenario("invalid conversation identities or history size")
+        }
+        for conversation in conversations {
+            try conversation.itemFile?.validate()
+            try conversation.turnFile?.validate()
+            if let submission = conversation.localSubmission {
+                guard !submission.turnID.isEmpty, !submission.text.isEmpty, submission.text.utf8.count <= 1_048_576 else {
+                    throw Failure.invalidScenario("invalid preparation submission")
+                }
+            }
         }
         for times in [events.map(\.at), actions.map(\.at)] {
             guard times.allSatisfy({ $0.isFinite && $0 >= 0 && $0 < duration }),
@@ -65,24 +92,25 @@ struct PerformanceReplayScenario: Codable, Sendable {
     }
 
     func rebased(to now: Double) throws -> Self {
-        let seconds: Set<String> = ["createdAt", "updatedAt", "recencyAt", "lastActiveAt", "lastTurnCompletedAt",
-            "startedAt", "completedAt", "observedAt", "resetsAt", "checkedAtUnixSeconds", "startedAtUnixSeconds",
-            "readBaseline", "seenThrough", "doneThrough", "through", "sectionEnteredAt"]
-        let milliseconds: Set<String> = ["startedAtMs", "completedAtMs"]
         let offset = floor(now) - floor(capturedAt)
-        func shift(_ value: JSONValue, key: String = "") -> JSONValue {
-            switch value {
-            case .object(let fields): return .object(Dictionary(uniqueKeysWithValues: fields.map { ($0.key, shift($0.value, key: $0.key)) }))
-            case .array(let values): return .array(values.map { shift($0) })
-            case .number(let number) where number > 0 && number < 4_000_000_000 && seconds.contains(key): return .number(number + offset)
-            case .number(let number) where number > 0 && milliseconds.contains(key): return .number(number + offset * 1000)
-            default: return value
-            }
-        }
         let value = try JSONDecoder().decode(JSONValue.self, from: JSONEncoder().encode(self))
-        guard var fields = shift(value).objectValue else { throw Failure.invalidScenario("fixture is not an object") }
+        guard var fields = Self.shift(value, by: offset).objectValue else { throw Failure.invalidScenario("fixture is not an object") }
         fields["capturedAt"] = .number(now)
+        if let completionTimes {
+            fields["completionTimes"] = .object(completionTimes.mapValues { Self.shift($0, by: offset, key: "completedAt") })
+        }
+        fields["fileTimeOffset"] = .number((fileTimeOffset ?? 0) + offset)
         return try JSONDecoder().decode(Self.self, from: JSONEncoder().encode(JSONValue.object(fields)))
+    }
+
+    static func shift(_ value: JSONValue, by offset: Double, key: String = "") -> JSONValue {
+        switch value {
+            case .object(let fields): return .object(Dictionary(uniqueKeysWithValues: fields.map { ($0.key, shift($0.value, by: offset, key: $0.key)) }))
+            case .array(let values): return .array(values.map { shift($0, by: offset) })
+            case .number(let number) where number > 0 && number < 4_000_000_000 && secondKeys.contains(key): return .number(number + offset)
+            case .number(let number) where number > 0 && millisecondKeys.contains(key): return .number(number + offset * 1000)
+            default: return value
+        }
     }
 }
 
@@ -92,6 +120,7 @@ struct PerformanceReplayState: Sendable {
     private let errors: [String: JSONValue]
     private let threadResponses: [String: [String: JSONValue]]
     private var marks: ConversationMarks?
+    private var completionTimes: [String: JSONValue]
     private var liveItems: [String: [JSONValue]] = [:]
     private var liveTurns: [String: [JSONValue]] = [:]
     private var active: [String: JSONValue] = [:]
@@ -100,10 +129,15 @@ struct PerformanceReplayState: Sendable {
     private(set) var unsupportedRequests: [JSONValue] = []
     private var revision = 0
     private let startedAt: Double
+    private let fixtureRoot: URL?
+    private let fileTimeOffset: Double
 
-    init(_ scenario: PerformanceReplayScenario) throws {
+    init(_ scenario: PerformanceReplayScenario, fixtureRoot: URL? = nil) throws {
         conversations = scenario.conversations
         startedAt = scenario.capturedAt
+        self.fixtureRoot = fixtureRoot
+        fileTimeOffset = scenario.fileTimeOffset ?? 0
+        completionTimes = scenario.completionTimes ?? [:]
         responses = scenario.responses
         errors = scenario.errors ?? [:]
         threadResponses = scenario.threadResponses ?? [:]
@@ -131,12 +165,15 @@ struct PerformanceReplayState: Sendable {
                var header = conversations[index].thread.objectValue {
                 let conversation = conversations[index]
                 if method == "turn/completed", let completed = value.objectValue?["completedAt"] {
+                    completionTimes[threadID] = completed
                     header["lastTurnCompletedAt"] = completed
                     header["updatedAt"] = completed
                     header["recencyAt"] = completed
                 }
                 header["status"] = .object(["type": .string(method == "turn/started" ? "active" : "idle"), "activeFlags": .array([])])
-                conversations[index] = .init(thread: .object(header), items: conversation.items, turns: conversation.turns)
+                let updated = PerformanceReplayScenario.Conversation(thread: .object(header), items: conversation.items, turns: conversation.turns,
+                    itemFile: conversation.itemFile, turnFile: conversation.turnFile, localSubmission: conversation.localSubmission)
+                conversations[index] = updated
             }
         }
         if method == "item/started" || method == "item/completed", let item = params["item"],
@@ -217,39 +254,85 @@ struct PerformanceReplayState: Sendable {
             result = .object([:])
         case "thread/list", "claude/thread/list":
             let claude = method == "claude/thread/list"
-            result = .object(["data": .array(conversations.map(\.thread).filter {
+            let headers = conversations.map(\.thread).filter {
                 ($0.objectValue?["id"]?.stringValue?.hasPrefix("claude_") == true) == claude
-            }), "nextCursor": .null])
+            }.sorted {
+                func updated(_ header: JSONValue) -> Double {
+                    if case .number(let value) = header.objectValue?["updatedAt"] { return value }
+                    return 0
+                }
+                if updated($0) != updated($1) { return updated($0) > updated($1) }
+                return ($0.objectValue?["id"]?.stringValue ?? "") < ($1.objectValue?["id"]?.stringValue ?? "")
+            }
+            let rawCursor = params["cursor"]?.stringValue
+            let offset = rawCursor.flatMap(Int.init) ?? 0
+            let requested: Double
+            if case .number(let value) = params["limit"] { requested = value } else { requested = 50 }
+            guard (rawCursor == nil || Int(rawCursor ?? "") != nil), (0...headers.count).contains(offset),
+                  let limit = Int(exactly: requested), (1...1000).contains(limit) else {
+                throw PerformanceReplayScenario.Failure.invalidScenario("invalid list cursor or limit")
+            }
+            let end = min(headers.count, offset + limit)
+            let page = Array(headers[offset..<end])
+            let completions = page.compactMap { header -> (String, JSONValue)? in
+                guard let id = header.objectValue?["id"]?.stringValue,
+                      let value = completionTimes[id] else { return nil }
+                return (id, value)
+            }
+            result = .object(["data": .array(page), "nextCursor": end < headers.count ? .string(String(end)) : .null,
+                "completionTimes": .object(Dictionary(uniqueKeysWithValues: completions))])
         case "thread/read", "thread/resume":
             result = conversation.map { .object(["thread": $0.thread,
                 "modelProvider": .string(threadID.hasPrefix("claude_") ? "claude" : "openai")]) }
         case "thread/subscribe":
             result = conversation.map { conversation in
-                let items = conversation.items + liveItems[threadID, default: []]
-                let turns = conversation.turns + liveTurns[threadID, default: []]
+                let itemCount = conversation.itemCount + liveItems[threadID, default: []].count
+                let turnCount = conversation.turnCount + liveTurns[threadID, default: []].count
                 let activeTurn = liveTurns[threadID]?.last { $0.objectValue?["status"] == .string("inProgress") }
                 return .object(["status": .string("subscribed"), "subscriptionId": .string("replay-\(threadID)"),
                     "thread": conversation.thread, "checkpoint": .object([
-                        "turnsBackwardsCursor": .string(String(turns.count)),
-                        "itemsBackwardsCursor": .string(String(items.count)),
+                        "turnsBackwardsCursor": .string(String(turnCount)),
+                        "itemsBackwardsCursor": .string(String(itemCount)),
                         "activeTurn": activeTurn ?? .null, "historyUnavailable": .bool(false),
                         "liveItems": .array(liveItems[threadID, default: []])])])
             }
         case "thread/items/list", "thread/turns/list":
             if let conversation {
-                let values = method == "thread/items/list" ? conversation.items + liveItems[threadID, default: []] : conversation.turns + liveTurns[threadID, default: []]
+                let isItems = method == "thread/items/list"
+                let storedCount = isItems ? conversation.itemCount : conversation.turnCount
+                let live = isItems ? liveItems[threadID, default: []] : liveTurns[threadID, default: []]
+                let count = storedCount + live.count
                 let ascending = params["sortDirection"]?.stringValue == "asc"
-                let indexed = Array(values.enumerated())
-                let ordered = ascending ? indexed : Array(indexed.reversed())
                 let anchor = params["cursor"]?.stringValue.flatMap(Int.init)
-                let remaining = ordered.filter { entry in anchor.map { ascending ? entry.offset > $0 : entry.offset < $0 } ?? true }
+                guard anchor.map({ (0...count).contains($0) }) ?? true else {
+                    throw PerformanceReplayScenario.Failure.invalidScenario("invalid history cursor")
+                }
                 let requested: Double
                 if case .number(let count) = params["limit"] { requested = count } else { requested = 50 }
-                let limit = min(100, max(1, Int(requested)))
-                let page = Array(remaining.prefix(limit))
-                result = .object(["data": .array(page.map(\.element)),
-                    "nextCursor": remaining.count > page.count ? page.last.map { .string(String($0.offset)) } ?? .null : .null,
-                    "backwardsCursor": page.first.map { .string(String($0.offset)) } ?? .null])
+                guard requested.isFinite, let requestedLimit = Int(exactly: requested) else { throw PerformanceReplayScenario.Failure.invalidScenario("invalid page limit") }
+                let limit = min(100, max(1, requestedLimit))
+                let first = ascending ? max(0, (anchor ?? -1) + 1) : min(count - 1, (anchor ?? count) - 1)
+                var indices = ascending ? Array((min(count, first)..<min(count, first + limit)))
+                    : (first < 0 ? [] : Array(stride(from: first, through: max(0, first - limit + 1), by: -1)))
+                if let file = isItems ? conversation.itemFile : conversation.turnFile {
+                    while let lower = indices.filter({ $0 < storedCount }).min(), let upper = indices.filter({ $0 < storedCount }).max(),
+                          file.offsets[upper + 1] - file.offsets[lower] > 15 * 1_048_576 {
+                        guard indices.count > 1 else { throw PerformanceReplayScenario.Failure.invalidScenario("single history item exceeds frame capacity") }
+                        indices.removeLast()
+                    }
+                }
+                let storedIndices = indices.filter { $0 < storedCount }
+                let stored: [JSONValue]
+                if let file = isItems ? conversation.itemFile : conversation.turnFile, let lower = storedIndices.min(), let upper = storedIndices.max() {
+                    guard let fixtureRoot else { throw PerformanceReplayScenario.Failure.invalidScenario("missing history directory") }
+                    stored = try file.read(lower..<(upper + 1), root: fixtureRoot).map { PerformanceReplayScenario.shift($0, by: fileTimeOffset) }
+                } else { stored = isItems ? conversation.items : conversation.turns }
+                let storedStart = (isItems ? conversation.itemFile : conversation.turnFile) == nil ? 0 : storedIndices.min() ?? 0
+                let values = indices.map { $0 < storedCount ? stored[$0 - storedStart] : live[$0 - storedCount] }
+                let more = indices.last.map { ascending ? $0 + 1 < count : $0 > 0 } ?? false
+                result = .object(["data": .array(values),
+                    "nextCursor": more ? indices.last.map { .string(String($0)) } ?? .null : .null,
+                    "backwardsCursor": indices.first.map { .string(String($0)) } ?? .null])
             } else { result = nil }
         case "daemon/activeTurns":
             result = activitySnapshot

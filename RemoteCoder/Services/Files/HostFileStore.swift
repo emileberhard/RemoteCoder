@@ -84,7 +84,13 @@ actor HostFileStore {
 
     func openVisual(reference: HTMLVisualReference,
                     progress: @escaping @Sendable (HostFileProgress) -> Void) async throws -> HostFileLease {
-        try await open(acquisition: .visual(reference), progress: progress)
+        #if RC_PERF_HARNESS
+        if AppStorageScope.isOfflineReplay {
+            PerformanceReplayHTTP.omitVisual()
+            throw URLError(.resourceUnavailable)
+        }
+        #endif
+        return try await open(acquisition: .visual(reference), progress: progress)
     }
 
     private func open(acquisition: Acquisition,

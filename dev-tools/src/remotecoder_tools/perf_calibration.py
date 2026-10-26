@@ -107,7 +107,8 @@ async def run(args, device, harness) -> None:
             opened = await asyncio.to_thread(harness.send, device, {"cmd": "open", "host": host, "thread": threads[0]}, 45)
             if not opened or "error" in opened:
                 raise RuntimeError(f"live conversation did not open: {opened}")
-            device.put("scenario.json", fixture)
+            fixture_path = await asyncio.to_thread(lambda: Path(args.fixture).expanduser().resolve())
+            await asyncio.to_thread(harness.stage_scenario, device, fixture_path, supplied)
             await asyncio.sleep(3)
             path = str(destination / "live.trace")
             with harness.tracing(device, "Time Profiler", ["Hitches", "Points of Interest"], frozen["duration"] + harness.TRACE_WARMUP + 10, path) as recorder:

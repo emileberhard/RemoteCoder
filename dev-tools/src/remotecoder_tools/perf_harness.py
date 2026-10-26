@@ -14,15 +14,19 @@ import argparse
 import asyncio
 import contextlib
 import functools
+import gzip
 import hashlib
 import importlib.util
 import json
 import math
 import os
 import plistlib
+import shutil
+import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import uuid
 import xml.etree.ElementTree as ET
@@ -33,10 +37,14 @@ ROOT = Path(__file__).resolve().parents[3]
 DRIVER_SHA256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 sys.path.insert(0, str(ROOT / "scripts"))
 from build_support import (  # noqa: E402
+    MAX_MEASUREMENT_SECONDS,
+    atomic_json,
     build_capacity,
     device_lease_path,
     file_lease,
     job_sleep_assertion,
+    measurement_capacity,
+    measurement_record_lease,
     require_build_space,
     run_owned,
     source_lease_path,
@@ -236,9 +244,11 @@ class Device:
                        "--source", str(source), "--destination", destination)
 
     def put(self, name: str, data: bytes) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        TRACE_DIR.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=TRACE_DIR, prefix="replay-transfer-") as directory:
             source = Path(directory) / name
             source.write_bytes(data)
+            source.chmod(0o600)
             self.copy_to(source, f"{PERF_DIR}/{name}")
 
     def results(self) -> str:
@@ -339,10 +349,10 @@ def write_build_identity(device: Simulator | Device, identity: dict) -> None:
 
 def leased(command):
     @functools.wraps(command)
-    def run_leased(args) -> None:
+    def run_leased(args, *arguments) -> None:
         device = target(args)
         with device_lease(device.udid):
-            command(args, device)
+            command(args, device, *arguments)
 
     return run_leased
 
@@ -436,17 +446,20 @@ def tracing(device: Simulator | Device, template: str, instruments: list[str] | 
             recorder.terminate()
         if not recorder.stdout.closed:
             log = recorder.communicate()[0]
-            Path(path).with_suffix(".recording.log").write_text(log)
+            with private_open(Path(path).with_suffix(".recording.log"), "w") as handle:
+                handle.write(log)
 
 
 def finish_trace(recorder: subprocess.Popen, path: str, window: dict | None = None) -> None:
     log = recorder.communicate()[0].strip()
-    Path(path).with_suffix(".recording.log").write_text(log)
+    with private_open(Path(path).with_suffix(".recording.log"), "w") as handle:
+        handle.write(log)
     if recorder.returncode != 0:
         raise SystemExit(f"xctrace failed ({recorder.returncode}): {log[-500:]}")
     toc = subprocess.run(["xcrun", "xctrace", "export", "--input", path, "--toc"], env=ENV, check=True,
                          capture_output=True).stdout
-    Path(path).with_suffix(".toc.xml").write_bytes(toc)
+    with private_open(Path(path).with_suffix(".toc.xml"), "wb") as handle:
+        handle.write(toc)
     summary = ET.fromstring(toc).find("run/info/summary")
     if summary is None:
         raise SystemExit(f"{path} has no recorded run; xctrace said: {log[-500:]}")
@@ -513,13 +526,178 @@ def report(result: dict, device: Simulator | Device, load: float, log: str | Non
     line = json.dumps(result, sort_keys=True)
     print(line, flush=True)
     if log:
-        with open(log, "a") as handle:
+        with private_open(Path(log), "a") as handle:
             handle.write(line + "\n")
 
 
+def private_open(path: Path, mode: str):
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | (os.O_APPEND if mode == "a" else os.O_TRUNC), 0o600)
+    os.fchmod(descriptor, 0o600)
+    return os.fdopen(descriptor, mode)
+
+
+def scenario_outputs(args) -> None:
+    from .perf_replay import private_destination
+    args.log = str(private_destination(args.log))
+    args.trace_dir = str(private_destination(args.trace_dir))
+    if not args.label or Path(args.label).name != args.label or args.label in (".", ".."):
+        raise ValueError("scenario label must be one filename component")
+    for directory in (Path(args.log).parent, Path(args.trace_dir)):
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        directory.chmod(0o700)
+
+
+@contextlib.contextmanager
+def scenario_signals():
+    def interrupt(signum, _frame):
+        raise SystemExit(128 + signum)
+    previous = {signum: signal.signal(signum, interrupt) for signum in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)}
+    try:
+        yield
+    finally:
+        for signum, handler in previous.items():
+            signal.signal(signum, handler)
+
+
+@contextlib.contextmanager
+def scenario_window(seconds: float):
+    if not math.isfinite(seconds) or not 0 < seconds <= MAX_MEASUREMENT_SECONDS:
+        raise ValueError(f"measurement duration must fit within {MAX_MEASUREMENT_SECONDS} seconds")
+    with measurement_capacity(ROOT, 1800, threading.Event()) as capacity:
+        with measurement_record_lease(capacity.record):
+            holder = json.loads(capacity.record.read_text())
+            if time.monotonic() >= holder["deadline"]:
+                raise TimeoutError("measurement queue deadline expired before activation")
+            holder["deadline"] = time.monotonic() + seconds + 30
+            atomic_json(capacity.record, holder)
+        def expired(_signum, _frame):
+            raise TimeoutError("scenario measurement deadline expired")
+        previous = signal.signal(signal.SIGALRM, expired)
+        previous_timer = signal.setitimer(signal.ITIMER_REAL, seconds)
+        try:
+            yield holder["deadline"] - 30
+        finally:
+            signal.setitimer(signal.ITIMER_REAL, *previous_timer)
+            signal.signal(signal.SIGALRM, previous)
+
+
 def scenario(args) -> None:
-    with source_lease():
-        run_scenario(args)
+    scenario_outputs(args)
+    with scenario_signals():
+        for index in range(args.runs):
+            with scenario_window(MAX_MEASUREMENT_SECONDS) as deadline:
+                run_scenario(args, index, deadline)
+
+
+def stage_scenario(device: Simulator | Device, source: Path, fixture: dict) -> None:
+    root = source.parent.resolve()
+    indexes = [conversation[key] for conversation in fixture.get("conversations", [])
+               for key in ("itemFile", "turnFile") if conversation.get(key)]
+    total = source.stat().st_size
+    TRACE_DIR.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=TRACE_DIR, prefix="replay-transfer-") as temporary:
+        directory = Path(temporary) / "history"
+        directory.mkdir(mode=0o700)
+        for index in indexes:
+            path = (root / index["path"]).resolve()
+            if not path.is_relative_to(root) or Path(index["path"]).parts[0] != "history":
+                raise SystemExit("history file escapes fixture directory")
+            data = path.read_bytes()
+            total += len(data)
+            if total > 512 * 1_048_576 or len(data) != index["offsets"][-1] \
+                    or hashlib.sha256(data).hexdigest() != index["sha256"]:
+                raise SystemExit("history size or digest does not match fixture")
+            destination = directory / path.name
+            destination.write_bytes(data)
+            destination.chmod(0o600)
+        if indexes:
+            if isinstance(device, Device):
+                device.copy_to(directory, f"{PERF_DIR}/history")
+            else:
+                shutil.copytree(directory, device.perf_dir() / "history", dirs_exist_ok=True)
+        device.put("scenario.json", source.read_bytes())
+
+
+def collect_telemetry(device: Simulator | Device, result: dict, log: str) -> None:
+    from .perf_replay import private_destination
+    destination = private_destination(Path(log).with_suffix(".telemetry") / result["label"])
+    destination.mkdir(mode=0o700, parents=True, exist_ok=True)
+    destination.chmod(0o700)
+    exports = []
+    runs = {}
+    for name in result.get("telemetryFiles", []):
+        if Path(name).name != name or not name.endswith(".jsonl.gz"):
+            raise SystemExit("invalid telemetry capture filename")
+        path = destination / name
+        if isinstance(device, Device):
+            device.devicectl("copy", "from", "--domain-type", "appDataContainer", "--domain-identifier", BUNDLE,
+                            "--source", f"{PERF_DIR}/telemetry/{name}", "--destination", str(path))
+        else:
+            shutil.copyfile(device.perf_dir() / "telemetry" / name, path)
+        path.chmod(0o600)
+        with gzip.open(path, "rb") as handle:
+            data = handle.read(4 * 1_048_576 + 1)
+        if len(data) > 4 * 1_048_576:
+            raise SystemExit("telemetry capture exceeds decoded segment bound")
+        for line in data.splitlines():
+            record = json.loads(line)
+            if record.get("recordType") == "export":
+                exports.append(record)
+            elif record.get("recordType") == "run":
+                runs[record["runID"]] = record
+    unique = {(entry["runID"], entry["seq"]): entry for entry in exports}
+    result["capturedExports"] = list(unique.values())
+    result["capturedTelemetryRuns"] = list(runs.values())
+    result["exportsInWindow"] = export_window(list(unique.values()), bool(runs), result)
+    ages = [result["startedAt"] - datetime.fromisoformat(run["startedAt"]).timestamp()
+            for run in runs.values() if run.get("startedAt")]
+    result["processAgeAtWindowStartSeconds"] = ages[0] if len(ages) == 1 and ages[0] >= 0 else None
+    result["telemetryDirectory"] = str(destination)
+
+
+def retain_returned_telemetry(device: Simulator | Device, result: dict, log: str) -> None:
+    def expired(_signum, _frame):
+        raise TimeoutError("telemetry collection exceeded 30 seconds")
+    previous = signal.signal(signal.SIGALRM, expired)
+    previous_timer = signal.setitimer(signal.ITIMER_REAL, 30)
+    try:
+        collect_telemetry(device, result, log)
+    except (Exception, SystemExit) as error:
+        result.setdefault("telemetryCollectionFailures", []).append(str(error))
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, *previous_timer)
+        signal.signal(signal.SIGALRM, previous)
+
+
+def export_window(exports: list[dict], evidence: bool, result: dict) -> dict:
+    contained, crossing, unknown = [], [], []
+    for entry in exports:
+        duration = entry.get("totalMs")
+        if not isinstance(duration, (int, float)) or not math.isfinite(duration) or duration < 0:
+            unknown.append(entry)
+            continue
+        ended = datetime.fromisoformat(entry["ts"]).timestamp()
+        started = ended - duration / 1000
+        if started >= result["startedAt"] and ended <= result["endedAt"]:
+            contained.append(entry)
+        elif started < result["endedAt"] and ended > result["startedAt"]:
+            crossing.append(entry)
+    measured_cpu = [entry["processCpuNs"] for entry in contained
+                    if isinstance(entry.get("processCpuNs"), (int, float)) and math.isfinite(entry["processCpuNs"]) and entry["processCpuNs"] >= 0]
+    cpu_ns = sum(measured_cpu) if evidence and len(measured_cpu) == len(contained) else None
+    return {"count": len(contained) if evidence else None, "telemetryEvidence": evidence,
+        "coverage": "lowerBound" if evidence else "unavailable",
+        "cpuScope": "fullyContainedExportOperations",
+        "coverageReason": "completed captured exports only; final pending export interval is unavailable",
+        "cpuMeasuredCount": len(measured_cpu), "cpuUnmeasuredCount": len(contained) - len(measured_cpu),
+        "boundaryCrossingCount": len(crossing) if evidence else None, "boundaryCrossingOverlapCPUms": None,
+        "unknownIntervalCount": len(unknown) if evidence else None,
+        "outsideWindowCount": len(exports) - len(contained) - len(crossing) - len(unknown) if evidence else None,
+        "wholeProcessCPUms": cpu_ns / 1e6 if cpu_ns is not None else None,
+        "wholeProcessCPUSharePercent": cpu_ns / (result["processCPUms"] * 1e6) * 100 if cpu_ns is not None and result.get("processCPUms") else None,
+        "scanMs": sum(entry["scanMs"] for entry in contained) if contained and all("scanMs" in entry for entry in contained) else None,
+        "scannedRecords": sum(entry["scanned"] for entry in contained) if contained and all("scanned" in entry for entry in contained) else None}
 
 
 def calibrate(args) -> None:
@@ -538,80 +716,107 @@ def run_calibration(args, device: Simulator | Device) -> None:
     asyncio.run(perf_calibration.run(args, device, sys.modules[__name__]))
 
 
+def verify_scenario_artifact(device, identity: dict) -> None:
+    if hashlib.sha256((device.app / PROCESS).read_bytes()).hexdigest() != identity["appExecutableSHA256"]:
+        raise SystemExit("app artifact changed while preparing or queuing the measurement")
+
+
 @leased
-def run_scenario(args, device: Simulator | Device) -> None:
+def run_scenario(args, device: Simulator | Device, index: int, deadline: float) -> None:
+    scenario_outputs(args)
     identity = json.loads((device.derived / "perf-build-identity.json").read_text())
     if hashlib.sha256((device.app / PROCESS).read_bytes()).hexdigest() != identity["appExecutableSHA256"]:
         raise SystemExit("the app artifact no longer matches its performance build identity; rebuild")
     data = Path(args.fixture).expanduser().read_bytes()
     fixture = json.loads(data)
     duration = fixture["duration"]
-    if not isinstance(duration, (int, float)) or not math.isfinite(duration) or not 10 <= duration <= 120:
-        raise SystemExit("scenario duration must be 10–120 seconds")
+    if not isinstance(duration, (int, float)) or not math.isfinite(duration) or not 10 <= duration <= 900:
+        raise SystemExit("scenario duration must be 10–900 seconds")
     if args.trace_template and args.trace_seconds < duration + TRACE_WARMUP + 3:
         raise SystemExit("--trace-seconds must cover warmup, scenario and three seconds of tail")
+    hold_seconds = max(duration + 90, args.trace_seconds + 30 if args.trace_template else 0)
+    if hold_seconds > MAX_MEASUREMENT_SECONDS:
+        raise ValueError("trace and scenario must fit within the measurement duration limit")
     device.prepare()
-    for index in range(args.runs):
-        result = {"valid": False}
+    result = {"valid": False}
+    try:
+        verify_scenario_artifact(device, identity)
+        fresh_launch(device)
+        stage_scenario(device, Path(args.fixture).expanduser(), fixture)
+        preparation_started = time.monotonic()
+        preparation_timeout = deadline - time.monotonic() - hold_seconds - 30
+        if preparation_timeout <= 0:
+            raise TimeoutError("repeat has no preparation budget remaining")
+        loaded = send(device, {"cmd": "scenario-load"}, preparation_timeout)
+        if loaded is None or "error" in loaded:
+            raise SystemExit(f"scenario-load failed: {loaded}")
+        print(f"preparation complete run={index + 1} seconds={time.monotonic() - preparation_started:.1f}", file=sys.stderr, flush=True)
+        time.sleep(args.settle)
+        load = os.getloadavg()[0]
+        trace_path = f"{args.trace_dir}/{args.label}-{index + 1}.trace" if args.trace_template else None
+        verify_scenario_artifact(device, identity)
+        print(f"measuring run={index + 1} seconds={duration}", file=sys.stderr, flush=True)
+        with (tracing(device, args.trace_template, args.instrument, args.trace_seconds, trace_path)
+              if trace_path else contextlib.nullcontext()) as recorder:
+            if recorder:
+                time.sleep(TRACE_WARMUP)
+                if recorder.poll() is not None:
+                    finish_trace(recorder, trace_path)
+            result = send(device, {"cmd": "scenario-run"}, duration + 90, quiet_seconds=duration + 1)
+            result = result if result is not None else {"error": "scenario-run timed out"}
+            result.update(identity)
+            result.update(deviceUDID=device.udid, driverSHA256=DRIVER_SHA256,
+                          instrumentation=instrumentation(device, args.trace_template, args.instrument),
+                          target="device" if isinstance(device, Device) else "simulator",
+                          label=f"{args.label}-{index + 1}", hostLoad1m=round(load, 1))
+            if trace_path:
+                result["trace"] = trace_path
+            if result.get("error") or not result.get("valid") or not result.get("activeThroughout") \
+                    or result.get("conservedEnergy") or not result.get("frames"):
+                failures = [key for key in ["error", "serverFailures", "unsupportedRPCs", "uncapturedHTTP", "cleanupFailures"] if result.get(key)]
+                failures += ["finalContent"] if any(not item.get("matches") for item in result.get("finalContent", [])) else []
+                failures += [key for key in ["activeThroughout", "frames"] if not result.get(key)]
+                failures += ["conservedEnergy"] if result.get("conservedEnergy") else []
+                raise SystemExit("invalid scenario window: " + ", ".join(failures or ["app validity check"]))
+            if result.get("fixtureSHA256") != hashlib.sha256(data).hexdigest():
+                raise SystemExit("the app loaded a different fixture")
+            if len(result["actions"]) != len(fixture["actions"]) or result["appliedFrames"] != len(fixture["events"]):
+                raise SystemExit("scenario omitted actions or input frames")
+            if result.get("telemetryCaptureFailures"):
+                raise SystemExit("telemetry capture failed")
+            if recorder:
+                finish_trace(recorder, trace_path, result)
+    except BaseException as error:
+        result["valid"] = False
+        result["validationError"] = str(error)
+        raise
+    finally:
+        handlers = {signum: signal.signal(signum, signal.SIG_IGN)
+                    for signum in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT, signal.SIGALRM)}
         try:
-            fresh_launch(device)
-            device.put("scenario.json", data)
-            loaded = send(device, {"cmd": "scenario-load"}, 90)
-            if loaded is None or "error" in loaded:
-                raise SystemExit(f"scenario-load failed: {loaded}")
-            time.sleep(args.settle)
-            load = os.getloadavg()[0]
-            trace_path = f"{args.trace_dir}/{args.label}-{index + 1}.trace" if args.trace_template else None
-            with (tracing(device, args.trace_template, args.instrument, args.trace_seconds, trace_path)
-                  if trace_path else contextlib.nullcontext()) as recorder:
-                if recorder:
-                    time.sleep(TRACE_WARMUP)
-                    if recorder.poll() is not None:
-                        finish_trace(recorder, trace_path)
-                result = send(device, {"cmd": "scenario-run"}, duration + 90, quiet_seconds=duration + 1)
-                result = result if result is not None else {"error": "scenario-run timed out"}
-                result.update(identity)
-                result.update(deviceUDID=device.udid, driverSHA256=DRIVER_SHA256,
-                              instrumentation=instrumentation(device, args.trace_template, args.instrument),
-                              target="device" if isinstance(device, Device) else "simulator",
-                              label=f"{args.label}-{index + 1}", hostLoad1m=round(load, 1))
-                if trace_path:
-                    result["trace"] = trace_path
-                if result.get("error") or not result.get("valid") or not result.get("activeThroughout") \
-                        or result.get("conservedEnergy") or not result.get("frames"):
-                    failures = [key for key in ["error", "serverFailures", "unsupportedRPCs", "uncapturedHTTP", "cleanupFailures"] if result.get(key)]
-                    failures += ["finalContent"] if any(not item.get("matches") for item in result.get("finalContent", [])) else []
-                    failures += [key for key in ["activeThroughout", "frames"] if not result.get(key)]
-                    failures += ["conservedEnergy"] if result.get("conservedEnergy") else []
-                    raise SystemExit("invalid scenario window: " + ", ".join(failures or ["app validity check"]))
-                if result.get("fixtureSHA256") != hashlib.sha256(data).hexdigest():
-                    raise SystemExit("the app loaded a different fixture")
-                if len(result["actions"]) != len(fixture["actions"]) or result["appliedFrames"] != len(fixture["events"]):
-                    raise SystemExit("scenario omitted actions or input frames")
-                if recorder:
-                    finish_trace(recorder, trace_path, result)
-        except (Exception, SystemExit) as error:
-            result["valid"] = False
-            result["validationError"] = str(error)
-            raise
-        finally:
+            if result.get("telemetryFiles") or result.get("valid") is True:
+                retain_returned_telemetry(device, result, args.log)
             cleanup = result.setdefault("cleanupFailures", [])
             for operation in [device.terminate, device.uninstall]:
                 try:
                     operation()
                 except Exception as error:
                     cleanup.append(f"{operation.__name__}: {error}")
-            result["valid"] = result.get("valid") is True and not cleanup
+            result["valid"] = result.get("valid") is True and not cleanup and not result.get("telemetryCollectionFailures")
             if not result["valid"]:
                 result.update(identity)
                 result.update(deviceUDID=device.udid, driverSHA256=DRIVER_SHA256)
                 failed = Path(args.log).with_suffix(f".failed-{index + 1}.json")
-                failed.parent.mkdir(parents=True, exist_ok=True)
-                failed.write_text(json.dumps(result, sort_keys=True))
+                with private_open(failed, "w") as handle:
+                    handle.write(json.dumps(result, sort_keys=True))
                 print(f"full diagnostic report: {failed}", file=sys.stderr)
-        if not result["valid"]:
-            raise SystemExit("scenario cleanup failed")
-        report(result, device, load, args.log)
+        finally:
+            for signum, handler in handlers.items():
+                signal.signal(signum, handler)
+    if not result["valid"]:
+        raise SystemExit("scenario cleanup or telemetry collection failed")
+    report(result, device, load, args.log)
+    print(f"completed run={index + 1} seconds={result.get('seconds')}", file=sys.stderr, flush=True)
 
 
 def recording_seconds(recording: Path) -> float:
@@ -703,6 +908,10 @@ def main() -> None:
     add_connection_arguments(capture_parser)
     capture_parser.add_argument("--thread", action="append", required=True)
     capture_parser.add_argument("--out", required=True)
+    capture_parser.add_argument("--sidebar-limit", type=positive(int), default=1024)
+    capture_parser.add_argument("--history-count", type=positive(int), default=700)
+    capture_parser.add_argument("--recording")
+    capture_parser.add_argument("--duration", type=positive(float), default=300)
     capture_parser.set_defaults(func=capture_command)
     compare_parser = commands.add_parser("compare", help="compare repeated reports with matching fixture/device/instrumentation")
     compare_parser.add_argument("--before", required=True)
@@ -782,7 +991,7 @@ def main() -> None:
     open_parser.add_argument("--trace-seconds", type=positive(int), default=20)
     open_parser.add_argument("--trace-dir", default=str(TRACE_DIR))
     open_parser.set_defaults(func=open_bench)
-    scenario_parser = commands.add_parser("scenario", help="fresh isolated install, replay an offline everyday journey; repeat")
+    scenario_parser = commands.add_parser("scenario", help="prepare production persistence, then replay an offline working journey")
     scenario_parser.add_argument("--fixture", required=True)
     scenario_parser.add_argument("--label", required=True)
     scenario_parser.add_argument("--runs", type=positive(int), default=3)

@@ -1419,3 +1419,17 @@ actor ConversationCheckpointStore {
     }
 
 }
+
+#if RC_PERF_HARNESS
+extension ConversationCheckpointStore {
+    func performanceReplayInventory() -> [String: Int] {
+        ["records": records.count, "protectedRecords": records.values.filter { $0.protected == true }.count,
+         "unknownProtectionRecords": records.values.filter { $0.protected == nil }.count,
+         "recordBytes": records.values.reduce(0) { $0 + $1.bytes },
+         "primaryPayloadBytes": records.values.reduce(0) { $0 + $1.payloadBytes },
+         "cacheBytes": records.values.reduce(0) { $0 + max(0, $1.bytes - $1.payloadBytes) },
+         "evictionBytes": records.values.reduce(0) { $0 + $1.bytes },
+         "cacheLimitBytes": budgetBytes, "primaryLimitBytes": primaryBudgetBytes]
+    }
+}
+#endif

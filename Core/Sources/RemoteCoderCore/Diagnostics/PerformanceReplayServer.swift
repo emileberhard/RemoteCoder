@@ -32,9 +32,9 @@ actor PerformanceReplayServer {
     private var stopped = false
     private(set) var failures: [String] = []
 
-    init(scenario: PerformanceReplayScenario) throws {
+    init(scenario: PerformanceReplayScenario, fixtureRoot: URL? = nil) throws {
         try scenario.validate()
-        state = try PerformanceReplayState(scenario)
+        state = try PerformanceReplayState(scenario, fixtureRoot: fixtureRoot)
         let options = NWProtocolWebSocket.Options()
         options.autoReplyPing = true
         options.maximumMessageSize = 16 * 1_048_576

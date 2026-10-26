@@ -767,3 +767,11 @@ final class ConversationList {
         active.limit >= request.limit && (active.intent == .replaceCoverage || request.intent == .mergeRecent)
     }
 }
+
+#if RC_PERF_HARNESS
+extension ConversationList {
+    var performanceReplayRefreshState: (settled: Bool, deferred: Bool, revision: UInt64) {
+        (activeRefreshRequest == nil && pendingRefreshRequest == nil && !isLoadingOlder, refreshDeferredByRestart, headerRevision)
+    }
+}
+#endif
