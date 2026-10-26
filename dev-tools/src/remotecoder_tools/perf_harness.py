@@ -36,7 +36,10 @@ from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
-DRIVER_SHA256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+DRIVER_SHA256 = hashlib.sha256(b"".join(
+    path.name.encode() + b"\0" + path.read_bytes()
+    for path in (Path(__file__), Path(__file__).with_name("perf_replay.py"), Path(__file__).with_name("perf_calibration.py"))
+)).hexdigest()
 sys.path.insert(0, str(ROOT / "scripts"))
 from build_support import (  # noqa: E402
     MAX_MEASUREMENT_SECONDS,
@@ -300,12 +303,18 @@ def build(args) -> None:
     device = target(args)
     env = {**ENV, "TUIST_REMOTE_CODER_BUNDLE_LOCAL_CONFIG": "1",
            "TUIST_REMOTE_CODER_PERF_SIGNING": getattr(device, "signing", "distribution")}
-    commands = build_commands(device)
     log = ROOT / f"build/{device.derived.name}-build.log"
     log.parent.mkdir(parents=True, exist_ok=True)
     status = 0
     with source_lease() as lease, build_capacity(background=True) as capacity:
         identity = build_source_identity()
+        commands = build_commands(device)
+        toolchain = output(["xcodebuild", "-version"])
+        compile_command = commands[1]
+        settings = compile_command[compile_command.index("-scheme") + 2:compile_command.index("-derivedDataPath")]
+        settings += compile_command[compile_command.index("-derivedDataPath") + 2:]
+        harness = harness_source_identity(settings, toolchain)
+        env["TUIST_REMOTE_CODER_PERF_HARNESS_SHA256"] = harness["harnessSHA256"]
         try:
             require_build_space(ROOT)
         except ValueError as error:
@@ -316,7 +325,9 @@ def build(args) -> None:
                 if status != 0:
                     break
         if status == 0:
-            write_build_identity(device, identity)
+            if harness_source_identity(settings, toolchain) != harness:
+                raise SystemExit("harness changed during the performance build; rebuild from settled inputs")
+            write_build_identity(device, identity | harness | {"toolchain": toolchain})
     lines = log.read_text(errors="replace").splitlines()
     for line in [line for line in lines if "error:" in line][:40] or lines[-5:]:
         print(line)
@@ -334,13 +345,46 @@ def build_source_identity() -> dict:
     return {key: manifest[key] for key in ["sourceCommit", "sourceFingerprint", "sourceModified"]}
 
 
+def harness_source_identity(settings: list[str], toolchain: str) -> dict:
+    sources = {}
+    for directory in (ROOT / "Core/Sources", ROOT / "RemoteCoder"):
+        for path in sorted(directory.rglob("*.swift")):
+            text = path.read_text()
+            if "RC_PERF_HARNESS" not in text:
+                continue
+            if path.name.startswith("PerformanceReplay") or path.name == "PerfHarness.swift":
+                content = text
+            else:
+                selected, depth = [], 0
+                for line in text.splitlines(keepends=True):
+                    directive = line.strip()
+                    if directive.startswith("#if "):
+                        if depth or "RC_PERF_HARNESS" in directive:
+                            depth += 1
+                    if depth:
+                        selected.append(line)
+                        if directive == "#endif":
+                            depth -= 1
+                if depth:
+                    raise ValueError(f"unbalanced harness conditional in {path.relative_to(ROOT)}")
+                content = "".join(selected)
+            if content:
+                sources[str(path.relative_to(ROOT))] = content
+    if not sources:
+        raise ValueError("performance harness sources are missing")
+    payload = json.dumps({"sources": sources, "settings": settings, "toolchain": toolchain}, sort_keys=True).encode()
+    return {"harnessSHA256": hashlib.sha256(payload).hexdigest(), "harnessSourcePaths": sorted(sources)}
+
+
 def write_build_identity(device: Simulator | Device, identity: dict) -> None:
-    if build_source_identity() != identity:
+    if build_source_identity() != {key: identity[key] for key in ("sourceCommit", "sourceFingerprint", "sourceModified")}:
         raise SystemExit("source changed during the performance build; rebuild from settled inputs")
     identity = {**identity, "appExecutableSHA256": hashlib.sha256((device.app / PROCESS).read_bytes()).hexdigest(),
-                "toolchain": output(["xcodebuild", "-version"]),
                 "signing": device.signing if isinstance(device, Device) else "simulator",
                 "configuration": "Release" if isinstance(device, Device) else "Debug optimized"}
+    plist = plistlib.loads((device.app / "Info.plist").read_bytes())
+    if plist.get("RemoteCoderPerfHarnessSHA256") != identity["harnessSHA256"]:
+        raise SystemExit("built app does not contain the compiled performance harness fingerprint")
     if isinstance(device, Device):
         entitlements = run(["codesign", "--display", "--entitlements", "-", "--xml", str(device.app)], capture_output=True).stdout
         identity["debuggerAllowed"] = plistlib.loads(entitlements).get("get-task-allow", False)
@@ -873,6 +917,8 @@ def run_scenario(args, device: Simulator | Device, index: int, deadline: float) 
                 require_trace_time(recorder, args.trace_seconds, duration)
             result = send(device, {"cmd": "scenario-run"}, duration + 90, quiet_seconds=duration + 1)
             result = result if result is not None else {"error": "scenario-run timed out"}
+            if not result.get("harnessSHA256") or result.get("harnessSHA256") != identity.get("harnessSHA256"):
+                raise SystemExit("app-reported harness fingerprint differs from the built artifact")
             result.update(identity)
             result.update(deviceUDID=device.udid, driverSHA256=DRIVER_SHA256,
                           instrumentation=recorder.perf_instrumentation if recorder else instrumentation(device, None, args.instrument),

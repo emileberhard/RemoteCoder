@@ -59,7 +59,27 @@ def load_recording(path: Path) -> dict:
     return {"events": events}
 
 
-def replay_recording(recording: dict, ids: list[str], duration: float) -> list[dict]:
+def assign_item_ordinals(events: list[dict], last_ordinals: dict[str, int]) -> None:
+    if any(type(value) is not int or not 0 <= value <= 2**63 - 1 - MAX_EVENTS for value in last_ordinals.values()):
+        raise ValueError("history ordinals must leave room for the bounded replay")
+    next_ordinals = dict(last_ordinals)
+    assigned = {}
+    for event in events:
+        params = event["frame"].get("params", {})
+        thread = params.get("threadId")
+        item = params.get("item", {}).get("id") or params.get("itemId")
+        if thread not in next_ordinals or not item:
+            continue
+        key = (thread, item)
+        if key not in assigned:
+            next_ordinals[thread] += 1
+            assigned[key] = next_ordinals[thread]
+        if event["frame"].get("method") in {"item/started", "item/completed"}:
+            params["startedAtOrdinal"] = assigned[key]
+
+
+def replay_recording(recording: dict, last_ordinals: dict[str, int], duration: float) -> list[dict]:
+    ids = list(last_ordinals)
     source = recording.get("events", [])
     if any(not isinstance(event.get("at"), (int, float)) or not math.isfinite(event["at"]) or event["at"] < 0
            or not isinstance(event.get("frame"), dict) for event in source):
@@ -98,6 +118,7 @@ def replay_recording(recording: dict, ids: list[str], duration: float) -> list[d
             if at >= duration:
                 continue
             frame = copy.deepcopy(entry["frame"])
+            frame.pop("rcSequence", None)
             params = frame.get("params", {})
             original = params.get("threadId")
             if original not in mapping:
@@ -126,6 +147,7 @@ def replay_recording(recording: dict, ids: list[str], duration: float) -> list[d
             if len(events) > MAX_EVENTS:
                 raise ValueError("recording exceeds bounded replay event budget")
     events.sort(key=lambda event: event["at"])
+    assign_item_ordinals(events, last_ordinals)
     published = []
     for event in events:
         published.append(event)
@@ -154,7 +176,13 @@ def scenario_from_conversations(conversations: list[dict], responses: dict, erro
     if not 60 <= duration <= 900 or not math.isfinite(duration):
         raise ValueError("duration must be between 60 and 900 seconds")
     ids = [conversation["thread"]["id"] for conversation in conversations]
-    events = replay_recording(recording, ids, duration) if recording is not None else []
+    last_ordinals = {}
+    for conversation in conversations:
+        if "itemFile" in conversation and "lastStartedAtOrdinal" not in conversation:
+            raise ValueError("indexed histories require their captured final item ordinal")
+        last_ordinals[conversation["thread"]["id"]] = conversation.get("lastStartedAtOrdinal",
+            max((item.get("startedAtOrdinal") or 0 for item in conversation["items"]), default=0))
+    events = replay_recording(recording, last_ordinals, duration) if recording is not None else []
     return {"version": 2, "capturedAt": int(time.time()), "name": "field-state-v2", "duration": duration,
             "conversations": conversations, "events": events, "actions": journey_actions(ids[:3], duration),
             "responses": responses, "errors": errors, "httpResponses": http,
@@ -358,11 +386,13 @@ async def capture(args) -> dict:
         async def page_history(thread_id, method):
             records, cursor, seen = [], None, set()
             size = 0
+            pages = hashlib.sha256()
             while True:
                 params = {"threadId": thread_id, "limit": 100, "sortDirection": "asc", "cursor": cursor}
                 if method == "thread/turns/list":
                     params["itemsView"] = "notLoaded"
                 page = await read(method, params)
+                pages.update(encoded({"cursor": cursor, "page": page}))
                 for record in page["data"]:
                     size += len(encoded(record)) + 1
                     if len(encoded(record)) + 1 > MAX_RECORD_BYTES or size > MAX_HISTORY_BYTES or len(records) >= 20_000:
@@ -370,7 +400,7 @@ async def capture(args) -> dict:
                     records.append(record)
                 cursor = page.get("nextCursor")
                 if cursor is None:
-                    return records
+                    return records, pages.hexdigest()
                 if cursor in seen:
                     raise ValueError("history cursor did not advance")
                 seen.add(cursor)
@@ -385,23 +415,39 @@ async def capture(args) -> dict:
                     raise ValueError("selected thread is active or activity coverage is unknown")
                 continue
             try:
-                before = await activity_state()
-                if thread_id in before[0] or before[1].get(provider) is not True:
-                    raise ValueError("candidate activity changed before capture")
-                turns = await page_history(thread_id, "thread/turns/list")
-                items = await page_history(thread_id, "thread/items/list")
-                after = await activity_state()
-                if thread_id in after[0] or after[1].get(provider) is not True:
-                    raise ValueError("candidate activity changed during capture")
-                if any(turn.get("status") == "inProgress" for turn in turns):
-                    raise ValueError("candidate contains an unfinished turn")
+                for _attempt in range(3):
+                    before = await activity_state()
+                    if thread_id in before[0] or before[1].get(provider) is not True:
+                        raise ValueError("candidate activity changed before capture")
+                    turns, turn_pages = await page_history(thread_id, "thread/turns/list")
+                    items, item_pages = await page_history(thread_id, "thread/items/list")
+                    between = await activity_state()
+                    if thread_id in between[0] or between[1].get(provider) is not True:
+                        raise ValueError("candidate activity changed before capture revalidation")
+                    verified_turns, verified_turn_pages = await page_history(thread_id, "thread/turns/list")
+                    _, verified_item_pages = await page_history(thread_id, "thread/items/list")
+                    after = await activity_state()
+                    if thread_id in after[0] or after[1].get(provider) is not True:
+                        raise ValueError("candidate activity changed during capture")
+                    turn_ids = {turn["id"] for turn in turns}
+                    consistent = (turn_pages == verified_turn_pages and item_pages == verified_item_pages
+                                  and len(turn_ids) == len(turns)
+                                  and all(item.get("turnId") in turn_ids for item in items)
+                                  and not any(turn.get("status") == "inProgress" for turn in turns + verified_turns))
+                    if consistent:
+                        break
+                else:
+                    raise ValueError("history changed during bounded capture revalidation")
                 submission = local_submission(thread_id, items) if thread_id in eligible_roots else None
                 size = sum(len(encoded(record)) + 1 for record in items + turns)
                 if total_bytes + size > MAX_BUNDLE_BYTES - MAX_PAGE_BYTES:
                     raise ValueError("fixture bundle exceeds 512 MiB")
                 conversation = {"thread": {**headers[thread_id], "turns": [], "status": {"type": "idle"}},
                                 "items": [], "turns": [],
-                                "captureActivityEvidence": {"provider": provider, "before": before[2], "after": after[2]},
+                                "captureActivityEvidence": {"provider": provider, "before": before[2], "after": after[2],
+                                                            "historyValidation": {"attempts": _attempt + 1, "turnPagesSHA256": turn_pages,
+                                                                                  "itemPagesSHA256": item_pages, "turns": len(turns), "items": len(items)}},
+                                "lastStartedAtOrdinal": max((item.get("startedAtOrdinal") or 0 for item in items), default=0),
                                 "itemFile": write_history(root, items, "items"),
                                 "turnFile": write_history(root, turns, "turns")}
                 if submission is not None:
@@ -479,7 +525,8 @@ async def capture(args) -> dict:
                                "idleEvidence": {"contractVersion": 2, "capturedHistories": len(history_ids),
                                                 "beforeAndAfterChecks": sum(isinstance(conversation.get("captureActivityEvidence", {}).get(phase), dict)
                                                     for conversation in conversations for phase in ("before", "after")),
-                                                "requiresProviderCoverage": True, "requiresExternalAvailability": True}}}
+                                                "requiresProviderCoverage": True, "requiresExternalAvailability": True,
+                                                "requiresHistoryRevalidation": True, "consistencyMode": "revalidatedPages"}}}
 
 
 def capture_command(args) -> None:
@@ -506,6 +553,9 @@ def state_metrics(report: dict) -> dict:
     groups = {}
     excluded = {"mixed": 0, "gap": 0}
     samples = report["samples"]
+    has_fixture = any("fixtureCPUms" in sample for sample in samples)
+    fixture_measured = has_fixture and all(isinstance(sample.get("fixtureCPUms"), (int, float))
+        and math.isfinite(sample["fixtureCPUms"]) for sample in samples)
     for start, end in zip(samples, samples[1:], strict=False):
         seconds = end["at"] - start["at"]
         if seconds <= 0:
@@ -529,9 +579,12 @@ def state_metrics(report: dict) -> dict:
             state = context["surface"]
         counters = {metric: end[metric] - start[metric] for metric in ("processCPUms", "mainThreadCPUms")}
         counters["checkpointBytes"] = end["persistence"]["checkpoints"]["bytes"] - start["persistence"]["checkpoints"]["bytes"]
+        if fixture_measured:
+            counters["fixtureCPUms"] = end["fixtureCPUms"] - start["fixtureCPUms"]
         if any(value < 0 or not math.isfinite(value) for value in counters.values()):
             raise ValueError("sample counters reset or are nonfinite")
-        group = groups.setdefault(state, {"seconds": 0, "processCPUms": 0, "mainThreadCPUms": 0, "checkpointBytes": 0})
+        group = groups.setdefault(state, {"seconds": 0, "processCPUms": 0, "mainThreadCPUms": 0, "checkpointBytes": 0,
+                                          **({"fixtureCPUms": 0} if fixture_measured else {})})
         group["seconds"] += seconds
         for metric, value in counters.items():
             group[metric] += value
@@ -543,6 +596,11 @@ def state_metrics(report: dict) -> dict:
         result[state] = {"seconds": seconds, "processCPUPercent": group["processCPUms"] / seconds / 10,
                          "mainThreadCPUPercent": group["mainThreadCPUms"] / seconds / 10,
                          "checkpointBytesPerMinute": group["checkpointBytes"] / seconds * 60}
+        if has_fixture:
+            result[state].update({"measuredFixtureCPUPercent": group["fixtureCPUms"] / seconds / 10 if fixture_measured else None,
+                "processCPUWithoutMeasuredFixturePercent": (group["processCPUms"] - group["fixtureCPUms"]) / seconds / 10 if fixture_measured else None,
+                "measuredFixtureCPUSharePercent": group["fixtureCPUms"] / group["processCPUms"] * 100
+                    if fixture_measured and group["processCPUms"] > 0 else None})
     return result
 
 
@@ -554,7 +612,7 @@ def compare(args) -> None:
         if not values or any(value.get("valid") is not True for value in values):
             raise ValueError("comparison requires nonempty valid scenario reports")
         required = ("fixtureSHA256", "target", "deviceUDID", "operatingSystem", "display", "locale", "toolchain",
-                    "configuration", "signing", "driverSHA256", "instrumentation", "mode",
+                    "configuration", "signing", "driverSHA256", "harnessSHA256", "stateAggregationVersion", "instrumentation", "mode",
                     "workloadVersion", "preparationContractVersion", "preparation", "captureAuthority",
                     "preMeasurementOwner", "postMeasurementOwner", *identity_keys)
         for value in values:
@@ -565,6 +623,10 @@ def compare(args) -> None:
                 raise ValueError("comparison metadata missing: " + ", ".join(missing))
             if value["mode"] != "offlineReplay" or value["workloadVersion"] != 2 or value["preparationContractVersion"] != 2:
                 raise ValueError("controlled comparison requires version-two prepared offline replay reports")
+            if (not isinstance(value["harnessSHA256"], str) or len(value["harnessSHA256"]) != 64
+                    or any(character not in "0123456789abcdef" for character in value["harnessSHA256"])
+                    or type(value["stateAggregationVersion"]) is not int or value["stateAggregationVersion"] <= 0):
+                raise ValueError("comparison requires a compiled harness SHA-256 and positive state aggregation version")
             authority = value["captureAuthority"]
             if (authority.get("contractVersion") != 2 or authority.get("requiresExternalAvailability") is not True
                     or authority.get("requiresProviderCoverage") is not True
@@ -624,7 +686,7 @@ def compare(args) -> None:
     signatures = {(value["mode"], value["fixtureSHA256"], value["target"], value.get("deviceUDID"), value["operatingSystem"],
                    json.dumps(value.get("display"), sort_keys=True), value.get("locale"),
                    value.get("toolchain"), value.get("configuration"), value.get("signing"),
-                   value.get("driverSHA256"), value["workloadVersion"], value["preparationContractVersion"],
+                   value.get("driverSHA256"), value["harnessSHA256"], value["stateAggregationVersion"], value["workloadVersion"], value["preparationContractVersion"],
                    json.dumps(value.get("disabled"), sort_keys=True),
                    json.dumps(value.get("instrumentation"), sort_keys=True),
                    tuple(sorted({(sample["thermalState"], sample["lowPowerMode"]) for sample in value["samples"]})))
@@ -641,6 +703,8 @@ def compare(args) -> None:
             if working < seconds * 0.8:
                 raise ValueError(f"unrepresentative replay: agent-working context covered {working:.3f} of {seconds:.3f} seconds; at least 80% is required after mixed/gap exclusions")
     output = {"beforeRuns": len(before), "afterRuns": len(after), "fixtureSHA256": before[0]["fixtureSHA256"],
+              "captureConsistency": {side: sorted({value["captureAuthority"].get("consistencyMode", "legacyIdleChecksOnly")
+                                                   for value in values}) for side, values in (("before", before), ("after", after))},
               "buildIdentity": {"before": {key: before[0][key] for key in identity_keys},
                                 "after": {key: after[0][key] for key in identity_keys}},
               "metrics": {}, "activity": {"before": states[0], "after": states[1]},
@@ -661,6 +725,10 @@ def compare(args) -> None:
 
     for name in ("processCPUPercent", "mainThreadCPUPercent", "checkpointBytesPerMinute"):
         metric("agentWorking." + name, [[value["agentWorking"][name] for value in group] for group in states])
+    for name in ("measuredFixtureCPUPercent", "processCPUWithoutMeasuredFixturePercent", "measuredFixtureCPUSharePercent"):
+        groups = [[value["agentWorking"].get(name) for value in group] for group in states]
+        if all(isinstance(value, (int, float)) and math.isfinite(value) for group in groups for value in group):
+            metric("agentWorking." + name, groups)
     for name in ("processCPUms", "mainThreadCPUms", "peakSampledFootprintMiB"):
         if any(name in value for value in before + after):
             metric(name, [[value.get(name) for value in values] for values in (before, after)])

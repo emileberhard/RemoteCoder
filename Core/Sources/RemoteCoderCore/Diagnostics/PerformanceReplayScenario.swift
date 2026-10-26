@@ -36,7 +36,7 @@ struct PerformanceReplayScenario: Codable, Sendable {
     let capturedAt: Double
     let name: String
     let duration: Double
-    let conversations: [Conversation]
+    var conversations: [Conversation]
     let events: [Event]
     let actions: [Action]
     let responses: [String: JSONValue]
@@ -103,6 +103,42 @@ struct PerformanceReplayScenario: Codable, Sendable {
         return try JSONDecoder().decode(Self.self, from: JSONEncoder().encode(JSONValue.object(fields)))
     }
 
+    func prepared(to now: Double, root: URL, destination: URL) throws -> Self {
+        try validate()
+        guard root.resolvingSymlinksInPath() != destination.resolvingSymlinksInPath() else {
+            throw Failure.invalidScenario("prepared history must have a separate directory")
+        }
+        try FileManager.default.createDirectory(at: destination.appending(path: "history"),
+            withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        let originalBytes = conversations.reduce(UInt64(try JSONEncoder().encode(self).count)) { total, conversation in
+            total + (conversation.itemFile?.offsets.last ?? 0) + (conversation.turnFile?.offsets.last ?? 0)
+        }
+        guard originalBytes <= 512 * 1_048_576 else { throw Failure.invalidScenario("fixture bundle exceeds 512 MiB") }
+        var result = try rebased(to: now)
+        var bytes: UInt64 = 0
+        for index in result.conversations.indices {
+            let original = conversations[index]
+            if let file = original.itemFile {
+                let prepared = try file.prepared(root: root, destination: destination,
+                    path: "history/\(index)-items.jsonl", offset: result.fileTimeOffset ?? 0)
+                result.conversations[index].itemFile = prepared
+                bytes += prepared.offsets.last ?? 0
+            }
+            if let file = original.turnFile {
+                let prepared = try file.prepared(root: root, destination: destination,
+                    path: "history/\(index)-turns.jsonl", offset: result.fileTimeOffset ?? 0)
+                result.conversations[index].turnFile = prepared
+                bytes += prepared.offsets.last ?? 0
+            }
+            guard bytes <= 512 * 1_048_576 else { throw Failure.invalidScenario("prepared fixture exceeds 512 MiB") }
+        }
+        result.fileTimeOffset = 0
+        guard bytes + UInt64(try JSONEncoder().encode(result).count) <= 512 * 1_048_576 else {
+            throw Failure.invalidScenario("prepared fixture exceeds 512 MiB")
+        }
+        return result
+    }
+
     static func shift(_ value: JSONValue, by offset: Double, key: String = "") -> JSONValue {
         switch value {
             case .object(let fields): return .object(Dictionary(uniqueKeysWithValues: fields.map { ($0.key, shift($0.value, by: offset, key: $0.key)) }))
@@ -114,14 +150,64 @@ struct PerformanceReplayScenario: Codable, Sendable {
     }
 }
 
+enum PerformanceReplayResponse: Sendable {
+    case value(JSONValue)
+    case encoded(Data)
+
+    func encoded() throws -> Data {
+        let data: Data
+        switch self {
+        case .value(let value): data = try JSONEncoder().encode(value)
+        case .encoded(let value): data = value
+        }
+        guard data.count <= 16 * 1_048_576 else {
+            throw PerformanceReplayScenario.Failure.invalidScenario("response exceeds 16 MiB")
+        }
+        return data
+    }
+}
+
 struct PerformanceReplayState: Sendable {
+    private struct LiveItem: Sendable {
+        var fields: [String: JSONValue]
+        struct Delta: Sendable {
+            let field: String
+            let index: Int
+            let text: String
+        }
+        var deltas: [Delta] = []
+
+        func value() -> JSONValue {
+            guard !deltas.isEmpty, var item = fields["item"]?.objectValue else { return .object(fields) }
+            var text: [String] = [item["text"]?.stringValue ?? ""]
+            var summary: [Int: [String]] = [:]
+            var content: [Int: [String]] = [:]
+            for delta in deltas {
+                if delta.field == "summary" { summary[delta.index, default: []].append(delta.text) }
+                else if delta.field == "content" { content[delta.index, default: []].append(delta.text) }
+                else { text.append(delta.text) }
+            }
+            if text.count > 1 { item["text"] = .string(text.joined()) }
+            for (key, additions) in [("summary", summary), ("content", content)] where !additions.isEmpty {
+                var parts = item[key]?.arrayValue ?? []
+                for (index, values) in additions {
+                    while parts.count <= index { parts.append(.string("")) }
+                    parts[index] = .string(([parts[index].stringValue ?? ""] + values).joined())
+                }
+                item[key] = .array(parts)
+            }
+            var result = fields
+            result["item"] = .object(item)
+            return .object(result)
+        }
+    }
     private var conversations: [PerformanceReplayScenario.Conversation]
     private let responses: [String: JSONValue]
     private let errors: [String: JSONValue]
     private let threadResponses: [String: [String: JSONValue]]
     private var marks: ConversationMarks?
     private var completionTimes: [String: JSONValue]
-    private var liveItems: [String: [JSONValue]] = [:]
+    private var liveItems: [String: [LiveItem]] = [:]
     private var liveTurns: [String: [JSONValue]] = [:]
     private var active: [String: JSONValue] = [:]
     private(set) var requests: [String: Int] = [:]
@@ -178,32 +264,26 @@ struct PerformanceReplayState: Sendable {
         }
         if method == "item/started" || method == "item/completed", let item = params["item"],
            let itemID = item.objectValue?["id"]?.stringValue {
-            var items = liveItems[threadID, default: []]
-            let entry = JSONValue.object(["turnId": params["turnId"] ?? .null, "item": item,
-                "isComplete": .bool(method == "item/completed")])
-            if let index = items.firstIndex(where: { $0.objectValue?["item"]?.objectValue?["id"]?.stringValue == itemID }) {
-                items[index] = entry
-            } else { items.append(entry) }
-            liveItems[threadID] = items
-        } else if ["item/agentMessage/delta", "item/reasoning/summaryTextDelta", "item/reasoning/textDelta"].contains(method), let itemID = params["itemId"]?.stringValue,
-                  let delta = params["delta"]?.stringValue, var items = liveItems[threadID],
-                  let index = items.firstIndex(where: { $0.objectValue?["item"]?.objectValue?["id"]?.stringValue == itemID }),
-                  var entry = items[index].objectValue, var item = entry["item"]?.objectValue {
+            var entry: [String: JSONValue] = ["turnId": params["turnId"] ?? .null, "item": item,
+                "isComplete": .bool(method == "item/completed")]
+            let index = liveItems[threadID]?.firstIndex { $0.fields["item"]?.objectValue?["id"]?.stringValue == itemID }
+            for key in ["startedAtOrdinal", "startedAtMs", "completedAtMs"] {
+                entry[key] = params[key] ?? index.flatMap { liveItems[threadID]?[$0].fields[key] }
+            }
+            if let index { liveItems[threadID]?[index] = LiveItem(fields: entry) }
+            else { liveItems[threadID, default: []].append(LiveItem(fields: entry)) }
+        } else if ["item/agentMessage/delta", "item/reasoning/summaryTextDelta", "item/reasoning/textDelta"].contains(method),
+                  let itemID = params["itemId"]?.stringValue, params["delta"]?.stringValue != nil,
+                  let index = liveItems[threadID]?.firstIndex(where: { $0.fields["item"]?.objectValue?["id"]?.stringValue == itemID }) {
+            let value = params["delta"]?.stringValue ?? ""
             if method == "item/agentMessage/delta" {
-                item["text"] = .string((item["text"]?.stringValue ?? "") + delta)
+                liveItems[threadID]?[index].deltas.append(.init(field: "text", index: 0, text: value))
             } else {
                 let summary = method == "item/reasoning/summaryTextDelta"
-                let field = summary ? "summary" : "content"
                 guard case .number(let rawIndex) = params[summary ? "summaryIndex" : "contentIndex"],
                       let part = Int(exactly: rawIndex), (0..<1000).contains(part) else { return }
-                var parts = item[field]?.arrayValue ?? []
-                while parts.count <= part { parts.append(.string("")) }
-                parts[part] = .string((parts[part].stringValue ?? "") + delta)
-                item[field] = .array(parts)
+                liveItems[threadID]?[index].deltas.append(.init(field: summary ? "summary" : "content", index: part, text: value))
             }
-            entry["item"] = .object(item)
-            items[index] = .object(entry)
-            liveItems[threadID] = items
         }
     }
 
@@ -220,7 +300,7 @@ struct PerformanceReplayState: Sendable {
             "externalActivity": .object(["sessions": .array([]), "claudeAvailable": .bool(true), "codexAvailable": .bool(true)])])
     }
 
-    mutating func response(to request: JSONValue) throws -> JSONValue? {
+    mutating func response(to request: JSONValue) throws -> PerformanceReplayResponse? {
         guard let fields = request.objectValue, let id = fields["id"], let method = fields["method"]?.stringValue else { return nil }
         requests[method, default: 0] += 1
         let params = fields["params"]?.objectValue ?? [:]
@@ -228,7 +308,7 @@ struct PerformanceReplayState: Sendable {
         let conversation = conversations.first { $0.thread.objectValue?["id"]?.stringValue == threadID }
         if var reply = threadResponses[threadID]?[method]?.objectValue {
             reply["id"] = id
-            return .object(reply)
+            return .value(.object(reply))
         }
         let result: JSONValue?
         switch method {
@@ -294,14 +374,14 @@ struct PerformanceReplayState: Sendable {
                         "turnsBackwardsCursor": .string(String(turnCount)),
                         "itemsBackwardsCursor": .string(String(itemCount)),
                         "activeTurn": activeTurn ?? .null, "historyUnavailable": .bool(false),
-                        "liveItems": .array(liveItems[threadID, default: []])])])
+                        "liveItems": .array(liveItems[threadID, default: []].map { $0.value() })])])
             }
         case "thread/items/list", "thread/turns/list":
             if let conversation {
                 let isItems = method == "thread/items/list"
                 let storedCount = isItems ? conversation.itemCount : conversation.turnCount
-                let live = isItems ? liveItems[threadID, default: []] : liveTurns[threadID, default: []]
-                let count = storedCount + live.count
+                let liveCount = isItems ? liveItems[threadID, default: []].count : liveTurns[threadID, default: []].count
+                let count = storedCount + liveCount
                 let ascending = params["sortDirection"]?.stringValue == "asc"
                 let anchor = params["cursor"]?.stringValue.flatMap(Int.init)
                 guard anchor.map({ (0...count).contains($0) }) ?? true else {
@@ -322,27 +402,57 @@ struct PerformanceReplayState: Sendable {
                     }
                 }
                 let storedIndices = indices.filter { $0 < storedCount }
-                let stored: [JSONValue]
-                if let file = isItems ? conversation.itemFile : conversation.turnFile, let lower = storedIndices.min(), let upper = storedIndices.max() {
-                    guard let fixtureRoot else { throw PerformanceReplayScenario.Failure.invalidScenario("missing history directory") }
-                    stored = try file.read(lower..<(upper + 1), root: fixtureRoot).map { PerformanceReplayScenario.shift($0, by: fileTimeOffset) }
-                } else { stored = isItems ? conversation.items : conversation.turns }
-                let storedStart = (isItems ? conversation.itemFile : conversation.turnFile) == nil ? 0 : storedIndices.min() ?? 0
-                let values = indices.map { $0 < storedCount ? stored[$0 - storedStart] : live[$0 - storedCount] }
-                let more = indices.last.map { ascending ? $0 + 1 < count : $0 > 0 } ?? false
-                result = .object(["data": .array(values),
-                    "nextCursor": more ? indices.last.map { .string(String($0)) } ?? .null : .null,
-                    "backwardsCursor": indices.first.map { .string(String($0)) } ?? .null])
+                let file = isItems ? conversation.itemFile : conversation.turnFile
+                let stored: [Data]
+                if let file, let lower = storedIndices.min(), let upper = storedIndices.max() {
+                    guard let fixtureRoot, fileTimeOffset == 0 else {
+                        throw PerformanceReplayScenario.Failure.invalidScenario("indexed history must be prepared before replay")
+                    }
+                    stored = try file.records(lower..<(upper + 1), root: fixtureRoot)
+                } else { stored = [] }
+                let storedStart = storedIndices.min() ?? 0
+                var records: [Data] = []
+                for index in indices {
+                    if index < storedCount, file != nil { records.append(stored[index - storedStart]) }
+                    else {
+                        let value: JSONValue
+                        if index < storedCount { value = (isItems ? conversation.items : conversation.turns)[index] }
+                        else if isItems { value = liveItems[threadID, default: []][index - storedCount].value() }
+                        else { value = liveTurns[threadID, default: []][index - storedCount] }
+                        records.append(try JSONEncoder().encode(value))
+                    }
+                }
+                while true {
+                    let more = indices.last.map { ascending ? $0 + 1 < count : $0 > 0 } ?? false
+                    let cursor: JSONValue = more ? indices.last.map { .string(String($0)) } ?? .null : .null
+                    let backwards: JSONValue = indices.first.map { .string(String($0)) } ?? .null
+                    var data = Data("{\"id\":".utf8)
+                    data.append(try JSONEncoder().encode(id))
+                    data.append(Data(",\"result\":{\"data\":[".utf8))
+                    for (index, record) in records.enumerated() {
+                        if index > 0 { data.append(44) }
+                        data.append(record)
+                    }
+                    data.append(Data("],\"nextCursor\":".utf8))
+                    data.append(try JSONEncoder().encode(cursor))
+                    data.append(Data(",\"backwardsCursor\":".utf8))
+                    data.append(try JSONEncoder().encode(backwards))
+                    data.append(Data("}}".utf8))
+                    if data.count <= 16 * 1_048_576 { return .encoded(data) }
+                    guard records.count > 1 else { throw PerformanceReplayScenario.Failure.invalidScenario("single history item exceeds frame capacity") }
+                    records.removeLast()
+                    indices.removeLast()
+                }
             } else { result = nil }
         case "daemon/activeTurns":
             result = activitySnapshot
         default: result = responses[method]
         }
-        if let result { return .object(["id": id, "result": result]) }
-        if let error = errors[method] { return .object(["id": id, "error": error]) }
+        if let result { return .value(.object(["id": id, "result": result])) }
+        if let error = errors[method] { return .value(.object(["id": id, "error": error])) }
         unsupported[method, default: 0] += 1
         if unsupportedRequests.count < 128 { unsupportedRequests.append(.object(["method": .string(method), "params": .object(params)])) }
-        return .object(["id": id, "error": .object(["code": .number(-32601), "message": .string("Uncaptured replay RPC: \(method)")])])
+        return .value(.object(["id": id, "error": .object(["code": .number(-32601), "message": .string("Uncaptured replay RPC: \(method)")])]))
     }
 }
 #endif
