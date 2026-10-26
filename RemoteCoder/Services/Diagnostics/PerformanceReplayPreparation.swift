@@ -17,12 +17,12 @@ enum PerformanceReplayPreparation {
             }
         }
         try await settleSidebar()
-        let previousRefresh = model.conversationList.lastSuccessfulRefreshAt
+        let previousRefresh = model.conversationList.performanceReplayRefreshState.revision
         for attempt in 0..<2 {
             try await model.performanceReplayConnect()
             await model.conversationList.manualRefresh(reason: "performance preparation")
             try await settleSidebar()
-            if model.conversationList.lastSuccessfulRefreshAt != previousRefresh { break }
+            if model.conversationList.performanceReplayRefreshState.revision != previousRefresh { break }
             guard attempt == 0, model.conversationList.performanceReplayRefreshState.deferred,
                   ContinuousClock.now < sidebarDeadline else {
                 throw PerformanceReplayScenario.Failure.invalidScenario("sidebar refresh did not succeed; deferred=\(model.conversationList.performanceReplayRefreshState.deferred), neverLoaded=\(model.conversationList.lastSuccessfulRefreshAt == nil), count=\(model.conversationList.threads.count), failure=\(model.conversationList.errorMessage ?? "none")")
