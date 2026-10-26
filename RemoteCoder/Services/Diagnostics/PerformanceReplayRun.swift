@@ -31,20 +31,14 @@ final class PerformanceReplayRun {
         self.workspace = workspace
     }
 
-    @concurrent private static func fixture(_ url: URL) async throws -> (PerformanceReplayScenario, String) {
+    @concurrent static func fixture(_ url: URL) async throws -> (PerformanceReplayScenario, String, URL) {
         let data = try Data(contentsOf: url)
         guard data.count <= 16 * 1_048_576 else { throw PerformanceReplayScenario.Failure.invalidScenario("fixture exceeds 16 MiB") }
         let scenario = try JSONDecoder().decode(PerformanceReplayScenario.self, from: data)
-        try scenario.validate()
-        var bytes: UInt64 = UInt64(data.count)
-        for conversation in scenario.conversations {
-            for file in [conversation.itemFile, conversation.turnFile].compactMap({ $0 }) {
-                bytes += file.offsets.last ?? 0
-                guard bytes <= 512 * 1_048_576 else { throw PerformanceReplayScenario.Failure.invalidScenario("fixture bundle exceeds 512 MiB") }
-                try file.verify(root: url.deletingLastPathComponent())
-            }
-        }
-        return (try scenario.rebased(to: Date.now.timeIntervalSince1970), SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined())
+        let root = url.deletingLastPathComponent()
+        let prepared = root.appending(path: "prepared")
+        return (try scenario.prepared(to: Date.now.timeIntervalSince1970, root: root, destination: prepared),
+            SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined(), prepared)
     }
 
     static func prepare(_ url: URL, workspace: ChatWorkspaceModel) async throws -> PerformanceReplayRun {
@@ -52,9 +46,9 @@ final class PerformanceReplayRun {
               workspace.settings.hosts.isEmpty else {
             throw PerformanceReplayScenario.Failure.invalidScenario("launch with -rcPerfOffline and no configured hosts")
         }
-        let (scenario, hash) = try await fixture(url)
+        let (scenario, hash, fixtureRoot) = try await fixture(url)
         try PerformanceReplayHTTP.install(scenario.httpResponses ?? [:], telemetryDirectory: url.deletingLastPathComponent().appending(path: "telemetry"))
-        let server = try PerformanceReplayServer(scenario: scenario, fixtureRoot: url.deletingLastPathComponent())
+        let server = try PerformanceReplayServer(scenario: scenario, fixtureRoot: fixtureRoot)
         let run = PerformanceReplayRun(scenario: scenario, hash: hash, server: server, workspace: workspace)
         do {
             let port = try await server.start()
@@ -89,7 +83,7 @@ final class PerformanceReplayRun {
             throw PerformanceReplayScenario.Failure.invalidScenario("prepared host disappeared")
         }
         let beforeOwner = await model.conversations.performanceReplayCheckpointInventory()
-        let metrics = PerformanceReplayMetrics(workspace: workspace)
+        let metrics = PerformanceReplayMetrics(workspace: workspace, fixtureWork: server.work)
         let interval = Self.signposter.beginInterval("ReplayJourney", id: Self.signposter.makeSignpostID(), "\(self.scenario.name, privacy: .public)")
         let start = ContinuousClock.now
         do {
@@ -177,7 +171,7 @@ final class PerformanceReplayRun {
     }
 
     static func calibrate(_ url: URL, workspace: ChatWorkspaceModel, hostID: UUID, threads: [String]) async throws -> [String: Any] {
-        let (scenario, hash) = try await fixture(url)
+        let (scenario, hash, _) = try await fixture(url)
         let actionThreads = Set(scenario.actions.map(\.threadID))
         let ordered = scenario.conversations.compactMap { conversation -> String? in
             guard let threadID = conversation.thread.objectValue?["id"]?.stringValue,
@@ -198,7 +192,7 @@ final class PerformanceReplayRun {
         }
         try await navigation.open(first)
         try await navigation.setSidebarOpen(false)
-        let metrics = PerformanceReplayMetrics(workspace: workspace)
+        let metrics = PerformanceReplayMetrics(workspace: workspace, fixtureWork: nil)
         let interval = signposter.beginInterval("ReplayJourney", id: signposter.makeSignpostID(), "live calibration")
         do {
             let start = ContinuousClock.now

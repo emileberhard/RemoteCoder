@@ -130,6 +130,23 @@ final class PerfHarness {
                     writeResult(report)
                 } catch { writeResult(["cmd": "window", "id": id, "error": String(describing: error)]) }
             }
+        case "fixture-footprint":
+            windowTask?.cancel()
+            windowTask = Task {
+                do {
+                    guard offlineRun == nil, AppStorageScope.isOfflineReplay,
+                          try workspaceForReplay().settings.hosts.isEmpty,
+                          let rawMode = command["mode"] as? String,
+                          let mode = PerformanceReplayFixtureControl.Mode(rawValue: rawMode) else {
+                        throw PerformanceReplayScenario.Failure.invalidScenario("fixture control requires a fresh offline process and explicit mode")
+                    }
+                    var report = try await PerformanceReplayFixtureControl.run(
+                        Self.directory.appending(path: "scenario.json"), mode: mode)
+                    report["cmd"] = name
+                    report["id"] = id
+                    writeResult(report)
+                } catch { writeResult(["cmd": name, "id": id, "error": String(describing: error)]) }
+            }
         case "calibration-run":
             guard let host = (command["host"] as? String).flatMap(UUID.init(uuidString:)),
                   let threads = command["threads"] as? [String] else {

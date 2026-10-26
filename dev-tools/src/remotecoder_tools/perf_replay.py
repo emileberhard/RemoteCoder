@@ -535,6 +535,9 @@ def state_metrics(report: dict) -> dict:
     groups = {}
     excluded = {"mixed": 0, "gap": 0}
     samples = report["samples"]
+    has_fixture = any("fixtureCPUms" in sample for sample in samples)
+    fixture_measured = has_fixture and all(isinstance(sample.get("fixtureCPUms"), (int, float))
+        and math.isfinite(sample["fixtureCPUms"]) for sample in samples)
     for start, end in zip(samples, samples[1:], strict=False):
         seconds = end["at"] - start["at"]
         if seconds <= 0:
@@ -558,9 +561,12 @@ def state_metrics(report: dict) -> dict:
             state = context["surface"]
         counters = {metric: end[metric] - start[metric] for metric in ("processCPUms", "mainThreadCPUms")}
         counters["checkpointBytes"] = end["persistence"]["checkpoints"]["bytes"] - start["persistence"]["checkpoints"]["bytes"]
+        if fixture_measured:
+            counters["fixtureCPUms"] = end["fixtureCPUms"] - start["fixtureCPUms"]
         if any(value < 0 or not math.isfinite(value) for value in counters.values()):
             raise ValueError("sample counters reset or are nonfinite")
-        group = groups.setdefault(state, {"seconds": 0, "processCPUms": 0, "mainThreadCPUms": 0, "checkpointBytes": 0})
+        group = groups.setdefault(state, {"seconds": 0, "processCPUms": 0, "mainThreadCPUms": 0, "checkpointBytes": 0,
+                                          **({"fixtureCPUms": 0} if fixture_measured else {})})
         group["seconds"] += seconds
         for metric, value in counters.items():
             group[metric] += value
@@ -572,6 +578,11 @@ def state_metrics(report: dict) -> dict:
         result[state] = {"seconds": seconds, "processCPUPercent": group["processCPUms"] / seconds / 10,
                          "mainThreadCPUPercent": group["mainThreadCPUms"] / seconds / 10,
                          "checkpointBytesPerMinute": group["checkpointBytes"] / seconds * 60}
+        if has_fixture:
+            result[state].update({"measuredFixtureCPUPercent": group["fixtureCPUms"] / seconds / 10 if fixture_measured else None,
+                "processCPUWithoutMeasuredFixturePercent": (group["processCPUms"] - group["fixtureCPUms"]) / seconds / 10 if fixture_measured else None,
+                "measuredFixtureCPUSharePercent": group["fixtureCPUms"] / group["processCPUms"] * 100
+                    if fixture_measured and group["processCPUms"] > 0 else None})
     return result
 
 

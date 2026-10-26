@@ -517,3 +517,17 @@ def test_comparison_does_not_hide_missing_working_time_by_excluding_mixed_interv
     path.write_text(json.dumps(value))
     with pytest.raises(ValueError, match="unrepresentative replay:.*at least 80%"):
         compare(argparse.Namespace(before=path, after=path))
+
+
+@pytest.mark.parametrize("unavailable", [False, True])
+def test_fixture_cpu_attribution_uses_same_state_intervals_and_preserves_unknown(unavailable):
+    value = report()
+    for sample in value["samples"]:
+        sample["fixtureCPUms"] = sample["at"] * 25
+    if unavailable:
+        value["samples"][1]["fixtureCPUms"] = None
+    group = perf_replay.state_metrics(value)["agentWorking"]
+    assert group["processCPUPercent"] == 50
+    assert group["measuredFixtureCPUPercent"] == (None if unavailable else 2.5)
+    assert group["processCPUWithoutMeasuredFixturePercent"] == (None if unavailable else 47.5)
+    assert group["measuredFixtureCPUSharePercent"] == (None if unavailable else 5)
