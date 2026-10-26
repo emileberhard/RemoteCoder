@@ -732,8 +732,11 @@ entrypoint linked above.
     hit testing walks hosted trees on each wheel event. Tooltips on the jump
     button and other chrome stay outside those hosts. The document uses its
     row index to hit-test only the row under the pointer, caching the weak
-    result by point and host/root/layout revision. Input and scrolling clear
-    the cache. Preserve selection,
+    result by document point, indexed host identity, row frame, root revision
+    and render revision. Unrelated layout passes do not invalidate it. SwiftUI
+    resolves every cache miss; do not replace its traversal with native subtree
+    pruning because it lazily creates text interaction views. Input and scrolling
+    clear the cache. Preserve selection,
     clicks, menus, drag/drop and horizontal overflow. Route only vertical wheel
     hit tests to the native document; never override `scrollWheel` on the scroll,
     clip or document view. Harness-only responsive-scrolling opt-out is for

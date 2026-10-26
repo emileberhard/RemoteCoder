@@ -117,10 +117,9 @@ final class TranscriptRowHost {
     private static let logger = AppLogger(category: "Transcript")
     let view: NSHostingView<AnyView>
     weak var surfaceActivity: TranscriptSurfaceActivity?
-    private(set) var hitRevision = 0
     private(set) var inputs: TranscriptRowInputs
     private(set) var measurement: CGSize?
-    private var revision = 0
+    private(set) var rootRevision = 0
     #if RC_PERF_HARNESS
     struct AdmissionForBench {
         let row: CGRect
@@ -143,7 +142,7 @@ final class TranscriptRowHost {
     private var acceptedMeasurementChangesForBench = 0
 
     func workForBench(rowFrame: CGRect?) -> WorkForBench {
-        WorkForBench(view: view, rootRevision: revision, measureRequests: measureRequestsForBench,
+        WorkForBench(view: view, rootRevision: rootRevision, measureRequests: measureRequestsForBench,
             measurement: measurement, acceptedMeasurementChanges: acceptedMeasurementChangesForBench,
             rowFrame: rowFrame, admission: admissionForBench)
     }
@@ -154,7 +153,6 @@ final class TranscriptRowHost {
         self.inputs = inputs
         let hostingView = TranscriptHostingView(rootView: AnyView(EmptyView()))
         view = hostingView
-        hostingView.onLayout = { [weak self] in self?.hitRevision += 1 }
         hostingView.onDetachedLayout = { [weak self] in
             if self?.surfaceActivity?.state == .detached { PerfBuild.count("native.detachedLayout") }
         }
@@ -171,9 +169,8 @@ final class TranscriptRowHost {
         let span = PerfBuild.span("native.rowHostUpdate"); defer { span.end() }
         PerfBuild.count("native.rowHostUpdated")
         self.inputs = inputs
-        revision += 1
-        hitRevision += 1
-        let revision = revision
+        rootRevision += 1
+        let revision = rootRevision
         measurement = nil
         view.rootView = AnyView(
             content
@@ -216,7 +213,7 @@ final class TranscriptRowHost {
     }
 
     private func receive(_ value: TranscriptHostedRowMeasurement) {
-        guard value.revision == revision else {
+        guard value.revision == rootRevision else {
             PerfBuild.count("native.rowMeasurementStale")
             return
         }
@@ -243,7 +240,6 @@ final class TranscriptRowHost {
     func place(in frame: CGRect) {
         guard view.frame != frame || view.alphaValue == 0 else { return }
         let span = PerfBuild.span("native.rowPlacement"); defer { span.end() }
-        hitRevision += 1
         if view.frame.size != frame.size {
             let resizeSpan = PerfBuild.span("native.rowHostResize")
             let hostResizeSpan = PerfBuild.span("native.hostResize")
@@ -260,7 +256,7 @@ final class TranscriptRowHost {
     }
 
     func remove() {
-        revision += 1
+        rootRevision += 1
         onMeasurement = {}
         view.removeFromSuperview()
         PerfBuild.count("native.rowHostRemoved")
@@ -273,7 +269,6 @@ private struct TranscriptHostedRowMeasurement: Equatable, Sendable {
 }
 
 private final class TranscriptHostingView: NSHostingView<AnyView> {
-    var onLayout: () -> Void = {}
     var onDetachedLayout: () -> Void = {}
 
     override func layout() {
@@ -281,7 +276,6 @@ private final class TranscriptHostingView: NSHostingView<AnyView> {
         PerfBuild.count("native.rowLayouts")
         onDetachedLayout()
         super.layout()
-        onLayout()
     }
 }
 #endif

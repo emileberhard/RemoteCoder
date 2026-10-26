@@ -151,7 +151,9 @@ final class AppKitTranscriptContainer: NSScrollView, TranscriptReadingPositionCa
     private struct HitCache {
         let point: CGPoint
         weak var host: TranscriptRowHost?
-        let revision: Int
+        let frame: CGRect
+        let rootRevision: Int
+        let renderRevision: Int?
         weak var result: NSView?
     }
     private var geometryDirty = true
@@ -438,22 +440,25 @@ final class AppKitTranscriptContainer: NSScrollView, TranscriptReadingPositionCa
     }
 
     fileprivate func rowView(at point: CGPoint) -> NSView? {
-        if let hitCache, hitCache.point == point, let host = hitCache.host,
-           rowHosts[host.inputs.row.id] === host, host.hitRevision == hitCache.revision,
-           let result = hitCache.result {
-            PerfBuild.count("hit.cacheHit")
-            return result
-        }
-        PerfBuild.count("hit.cacheMiss")
         guard let id = index?.rowID(at: point.y), let host = rowHosts[id] else {
             PerfBuild.count("hit.documentGap")
             return nil
         }
         PerfBuild.count("hit.rowCandidate")
-        guard host.view.frame.contains(point) else { return nil }
+        let frame = host.view.frame
+        guard frame.contains(point) else { return nil }
+        let renderRevision = host.inputs.row.message.flatMap { renderedMessages?[$0.id]?.revision }
+        if let hitCache, hitCache.point == point, hitCache.host === host,
+           hitCache.frame == frame, hitCache.rootRevision == host.rootRevision,
+           hitCache.renderRevision == renderRevision, let result = hitCache.result {
+            PerfBuild.count("hit.cacheHit")
+            return result
+        }
+        PerfBuild.count("hit.cacheMiss")
         PerfBuild.count("hit.rowShortcut")
         let result = host.view.hitTest(point)
-        hitCache = HitCache(point: point, host: host, revision: host.hitRevision, result: result)
+        hitCache = HitCache(point: point, host: host, frame: frame,
+            rootRevision: host.rootRevision, renderRevision: renderRevision, result: result)
         return result
     }
 

@@ -1471,8 +1471,11 @@ presenter stay outside row hosts, so unmounting a row cannot dismiss an export.
 Row hosts have no tooltips: SwiftUI dynamic tooltip hit testing otherwise walks
 hosted content on scroll. The native document binary-searches its index for an
 ordinary pointer/cursor hit and enters only that row host. One weak hit result
-is cached by point, host identity and root/layout/frame revision; scrolling and
-input clear it. Repeated unchanged cursor queries do no graph traversal. Selection, normal
+is cached by document point, indexed host identity, row frame, root revision and
+render revision; scrolling and input clear it. Layout of another row does not
+invalidate the result. Every miss runs the row hosting view’s own hit test,
+preserving SwiftUI’s lazy text interaction views. Repeated unchanged cursor
+queries do no graph traversal. Selection, normal
 click/menu/drag hit testing and horizontal code/table scrolling stay enabled.
 Vertical wheel hit tests stop at the native container/document, including the
 first directional event. The local monitor holds the resolved event axis through
