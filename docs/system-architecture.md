@@ -2089,25 +2089,26 @@ does not move recency within the ordinary recent window may therefore appear
 at the next full safety read, about five minutes while the drawer remains open.
 This replaces the former fifteen-second full-read bound for those changes.
 
-The native history caller sends `boundedPreview: true` on both `thread/list`
-and `claude/thread/list`, including the prefix poll and five-minute safety read.
-The gateway translation layer caps only these outgoing list previews at 2,048
-extended grapheme clusters, without an ellipsis. It consumes the parameter
-before forwarding to Codex. Provider headers, caches, persisted metadata and
-full reads retain their current previews; no second cache is maintained.
-Without the opt-in, responses retain their existing bytes and behavior for the
-web client, older apps, internal callers and agent tools. Older gateways may
-ignore the opt-in and return full previews, which the native decoder still accepts.
+The native history caller sends `boundedPreview: true` on Codex `thread/list`,
+including the prefix poll and five-minute safety read. The gateway translation
+layer cuts plain outgoing previews longer than 2,048 extended grapheme clusters
+at a grapheme boundary, without an ellipsis. Previews containing a RemoteCoder
+prompt marker (`remotecoder_`) or the attached-files header line pass through
+whole, preserving length-prefixed paste blocks, legacy paste suffixes, literal
+blocks and attachment footers. Marker constants remain owned by
+`prompt_summary`; the list path does not parse or prepare prompts.
 
-`UserMessageText` remains the sole native prompt-preparation owner, followed by
-`ConversationHeader`'s 512-character display limit. The raw wire cap avoids
-duplicating that parser in Rust. A synthetic prompt whose attachment footer
-starts after the cap can consequently display a different native preview:
-preparation can no longer see that footer. This is an accepted opt-in contract,
-not a promise of equivalence for every possible prompt. The observed real
-history corpus retained identical native display at this bound. Native callers
-do not need to distinguish full from cut previews, so the response adds no
-truncation flag and callers must not infer truncation from length.
+The gateway consumes the parameter before forwarding to Codex. Provider
+headers, caches, persisted metadata and full reads retain their current
+previews; no second cache is maintained. Without the opt-in, responses retain
+their existing bytes and behavior for the web client, older apps, internal
+callers and agent tools. Older gateways may ignore the opt-in and return full
+previews, which the native decoder still accepts.
+
+`UserMessageText` remains the native prompt-preparation owner, followed by
+`ConversationHeader`'s 512-character display limit. Native callers do not need
+to distinguish full from cut previews, so the response adds no truncation flag
+and callers must not infer truncation from length.
 
 A retained delegated header's `updatedAt`-only change keeps its prior header
 when every other field is identical. Delegated rows are hidden and the drawer

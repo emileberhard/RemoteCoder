@@ -40,6 +40,7 @@ mod tests {
         PendingRequest::new(
             method,
             Some(&json!({"threadId": "thread-1", "expectedTurnId": "turn-1"})),
+            false,
         )
     }
 

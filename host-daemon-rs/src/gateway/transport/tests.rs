@@ -37,6 +37,45 @@ async fn buffered_codex_texts(
 }
 
 #[tokio::test]
+async fn bounded_preview_rejects_non_boolean_codex_opt_in_before_forwarding() {
+    let gateway = TestGateway::new();
+    let (tx, mut replies) = mpsc::channel(4);
+    let client = super::super::tests::test_client(1, tx);
+    let (upstream, mut forwarded) = mpsc::channel(4);
+    let pending: PendingRequests = Arc::default();
+    for value in [json!("true"), Value::Null] {
+        let raw =
+            json!({"id":9,"method":"thread/list","params":{"boundedPreview":value}}).to_string();
+        let DispatchPlan::Request(request) = DispatchPlan::parse(&raw) else {
+            panic!("request")
+        };
+        gateway
+            .forward_native_request(
+                1,
+                &client,
+                NativeRequest {
+                    _start_permit: None,
+                    raw,
+                    request,
+                    _admission: None,
+                },
+                Some(&upstream),
+                &pending,
+            )
+            .await
+            .unwrap();
+        let ClientCommand::Text(raw) = replies.recv().await.unwrap() else {
+            panic!("error response")
+        };
+        let response: Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(response["id"], 9);
+        assert_eq!(response["error"]["code"], RpcCode::InvalidParams.value());
+        assert!(forwarded.try_recv().is_err());
+        assert!(pending.lock().await.is_empty());
+    }
+}
+
+#[tokio::test]
 async fn bounded_preview_codex_opt_in_is_consumed_and_only_changes_the_list_payload() {
     for opted_in in [None, Some(false), Some(true)] {
         for grapheme in ["👩🏽‍💻", "e\u{301}"] {
@@ -88,7 +127,8 @@ async fn bounded_preview_codex_opt_in_is_consumed_and_only_changes_the_list_payl
             let preview = format!("{prefix}tail");
             let response = json!({"id":7,"result":{"data":[
                 {"id":"codex","preview":preview,"name":"Full title"},
-                {"id":"short","preview":"short"}
+                {"id":"short","preview":"short"},
+                {"id":"marked","preview":format!("{}<remotecoder_literal_text_v2 bytes=\"4\">\ntext\n</remotecoder_literal_text_v2>", "a".repeat(3_000))}
             ],"nextCursor":"next","completionTimes":{"codex":42}}});
             let raw_response = serde_json::to_string_pretty(&response).unwrap();
             let stream = buffered_codex_texts(vec![raw_response.clone()]).await;
@@ -690,10 +730,10 @@ async fn refused_native_starts_leave_no_durable_pending_turns() {
     let original_state = std::fs::read(&state_path).unwrap();
     let pending: PendingRequests = Arc::default();
     for id in 0..MAX_PENDING_REQUESTS {
-        pending
-            .lock()
-            .await
-            .insert(id.to_string(), PendingRequest::new("thread/read", None));
+        pending.lock().await.insert(
+            id.to_string(),
+            PendingRequest::new("thread/read", None, false),
+        );
     }
     let (tx, mut responses) = mpsc::channel(4);
     let out = super::super::tests::test_client(1, tx);
@@ -811,7 +851,7 @@ async fn forwarded_codex_input_changes_the_driver_only_on_its_exact_success_resp
             );
             pending.lock().await.insert(
                 id.to_string(),
-                PendingRequest::new(method, request.get("params")),
+                PendingRequest::new(method, request.get("params"), false),
             );
             server
                 .send(UpstreamMessage::Text(

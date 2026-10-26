@@ -968,9 +968,10 @@ impl Gateway {
                 let _ = self.send_json_awaiting_capacity(out_tx, &response).await;
                 return Ok(());
             }
-            let mut request = PendingRequest::new(method, object.get("params"));
-            request.bounded_preview = bounded_preview;
-            pending.insert(id.to_string(), request);
+            pending.insert(
+                id.to_string(),
+                PendingRequest::new(method, object.get("params"), bounded_preview),
+            );
         }
         self.capture_client_request_locked(client_id, &object)
             .await

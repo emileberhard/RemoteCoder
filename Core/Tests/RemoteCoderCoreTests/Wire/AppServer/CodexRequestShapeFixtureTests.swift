@@ -91,9 +91,9 @@ struct CodexRequestShapeFixtureTests {
         try expectShape(CodexAppServerV2.CommandExecParams(command: ["pwd"], cwd: "/repo"),
             #"{"command":["pwd"],"cwd":"/repo"}"#)
         try expectShape(CodexAppServerV2.ThreadListParams(cursor: nil, limit: 50, useStateDbOnly: false),
-            #"{"limit":50,"sortKey":"updated_at","useStateDbOnly":false,"includeCompletionTimes":true}"#)
+            #"{"limit":50,"sortKey":"updated_at","useStateDbOnly":false,"includeCompletionTimes":true,"boundedPreview":true}"#)
         try expectShape(CodexAppServerV2.ThreadListParams(cursor: "c", limit: 200, useStateDbOnly: true),
-            #"{"cursor":"c","limit":200,"sortKey":"updated_at","useStateDbOnly":true,"includeCompletionTimes":true}"#)
+            #"{"cursor":"c","limit":200,"sortKey":"updated_at","useStateDbOnly":true,"includeCompletionTimes":true,"boundedPreview":true}"#)
         try expectShape(CodexAppServerV2.ThreadReadParams(threadId: "thread-1", includeTurns: false),
             #"{"threadId":"thread-1","includeTurns":false}"#)
         try expectShape(CodexAppServerV2.TurnSteerParams(

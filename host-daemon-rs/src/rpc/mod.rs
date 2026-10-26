@@ -97,7 +97,7 @@ pub(crate) struct PendingRequest {
 }
 
 impl PendingRequest {
-    pub(crate) fn new(method: &'static str, params: Option<&Value>) -> Self {
+    pub(crate) fn new(method: &'static str, params: Option<&Value>, bounded_preview: bool) -> Self {
         let text = |name: &str| {
             params
                 .and_then(|params| params.get(name))
@@ -106,7 +106,7 @@ impl PendingRequest {
         };
         Self {
             method,
-            bounded_preview: false,
+            bounded_preview,
             thread_id: text("threadId"),
             turn_id: text("expectedTurnId"),
             issued_at: Instant::now(),

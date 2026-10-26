@@ -153,6 +153,7 @@ extension CodexAppServerV2 {
         let useStateDbOnly: Bool
         let sortKey = "updated_at"
         let includeCompletionTimes = true
+        let boundedPreview = true
     }
 
     struct ThreadListResponse: Codable, Sendable {

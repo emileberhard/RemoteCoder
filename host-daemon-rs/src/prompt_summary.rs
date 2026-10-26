@@ -3,12 +3,15 @@ use std::collections::HashSet;
 
 use serde_json::Value;
 
+pub(crate) const MARKER_PREFIX: &str = "remotecoder_";
+pub(crate) const ATTACHED_FILES_HEADER: &str =
+    "Attached files (uploaded to this host; use these absolute paths):\n";
+
 pub(crate) fn prompt_summary(text: &str) -> Cow<'_, str> {
     const START: &str = "<remotecoder_pasted_text_v1>\n";
     const END: &str = "\n</remotecoder_pasted_text_v1>";
-    const FILES: &str = "Attached files (uploaded to this host; use these absolute paths):\n";
     let text = text.trim();
-    let body = match text.rsplit_once(FILES) {
+    let body = match text.rsplit_once(ATTACHED_FILES_HEADER) {
         Some((body, paths))
             if (body.is_empty() || body.ends_with("\n\n"))
                 && !paths.is_empty()
