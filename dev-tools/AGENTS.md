@@ -281,9 +281,13 @@ under `~/perf-traces/remotecoder/`, outside Git checkouts, mode 0600; never comm
 worktree, build cache or issue, or quote their content. Keep reports and traces
 outside the worktree too. Results compare only across reports with the same
 fixture SHA-256, device, OS and display, toolchain, configuration, signing mode,
-driver hash, compiled harness fingerprint, state aggregation version and instrumentation; `compare` enforces this, so a recapture or a
-signing change starts a new baseline. Keep low-overhead runs as the baseline,
-fixture CPU is a synchronous lower bound; subtracting it leaves unattributed harness work. The separate fresh-process footprint control measures incremental process footprint, not exclusive journey allocations. Take Instruments recordings in separate runs of the same fixture, and compare
+driver hash, compiled harness fingerprint, state aggregation version and
+instrumentation; `compare` enforces this, so a recapture or a signing change
+starts a new baseline. Keep low-overhead runs as the baseline. Fixture CPU is a
+synchronous lower bound; subtracting it leaves unattributed harness work. The
+separate fresh-process footprint control measures incremental process footprint,
+not exclusive journey allocations. Take Instruments recordings in separate runs
+of the same fixture, and compare
 the `journey` block of `perf-trace summarize`, not whole-trace totals.
 
 ## mac-bench
