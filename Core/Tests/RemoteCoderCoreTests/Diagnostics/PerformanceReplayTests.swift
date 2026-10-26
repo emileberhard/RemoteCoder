@@ -90,8 +90,8 @@ import Testing
         defer { try? FileManager.default.removeItem(at: root) }
         var scenario = fixture()
         let file = try writeIndexed(scenario.conversations[0].items, root: root, path: "history/source.jsonl")
-        scenario.conversations[0].itemFile = .init(path: file.path, offsets: file.offsets, sha256: String(repeating: "0", count: 64))
-        scenario.conversations[0].items = []
+        scenario.conversations[0] = .init(thread: scenario.conversations[0].thread, items: [], turns: [],
+            itemFile: .init(path: file.path, offsets: file.offsets, sha256: String(repeating: "0", count: 64)))
         let destination = root.appending(path: "prepared")
         #expect(throws: PerformanceReplayScenario.Failure.self) {
             try scenario.prepared(to: 400, root: root, destination: destination)
