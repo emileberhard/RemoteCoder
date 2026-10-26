@@ -213,6 +213,8 @@ async def test_capture_paginates_native_history_and_reads_only_parent_headers(tm
         assert not (tmp_path / "history").exists()
         return
     result = await perf_replay.capture(args)
+    assert result["captureSummary"]["idleEvidence"]["requiresHistoryRevalidation"] is True
+    assert result["captureSummary"]["idleEvidence"]["consistencyMode"] == "revalidatedPages"
     assert result["captureSummary"]["histories"] == expected_histories
     assert len(result["conversations"]) == (4 if role == "child" or prioritize_roots else 3)
     if prioritize_roots:
@@ -250,7 +252,7 @@ def report():
             "appExecutableSHA256": "executable", "sourceCommit": "commit", "sourceFingerprint": "source",
             "operatingSystem": "27", "display": {"width": 800}, "instrumentation": {"instruments": []},
             "locale": "en", "toolchain": "27.1", "configuration": "Release", "signing": "distribution",
-            "driverSHA256": "driver", "disabled": [], "mode": "offlineReplay", "workloadVersion": 2,
+            "driverSHA256": "driver", "harnessSHA256": "a" * 64, "stateAggregationVersion": 2, "disabled": [], "mode": "offlineReplay", "workloadVersion": 2,
             "captureAuthority": {"contractVersion": 2, "requiresExternalAvailability": True, "requiresProviderCoverage": True,
                 "beforeAndAfterChecks": 200, "capturedHistories": 100},
             "preparationContractVersion": 2, "preparation": {"conversations": 100, "sidebarConversations": 1000,
@@ -269,7 +271,7 @@ def report():
                         for at in (0, 10, 20)]}
 
 
-@pytest.mark.parametrize("change", [{"display": {"width": 900}}, {"samples": [{**sample, "thermalState": 1} for sample in report()["samples"]]}])
+@pytest.mark.parametrize("change", [{"harnessSHA256": "b" * 64}, {"stateAggregationVersion": 3}, {"display": {"width": 900}}, {"samples": [{**sample, "thermalState": 1} for sample in report()["samples"]]}])
 def test_comparison_rejects_different_display_or_energy_state(tmp_path, change):
     before = tmp_path / "before.jsonl"
     after = tmp_path / "after.jsonl"
@@ -293,6 +295,7 @@ def test_compare_reports_field_state_cpu_and_checkpoint_rates(tmp_path, capsys):
     after.write_text(json.dumps(b))
     compare(argparse.Namespace(before=before, after=after))
     result = json.loads(capsys.readouterr().out)
+    assert result["captureConsistency"] == {"before": ["legacyIdleChecksOnly"], "after": ["legacyIdleChecksOnly"]}
     assert result["buildIdentity"]["before"]["sourceCommit"] == "commit"
     assert result["buildIdentity"]["after"]["sourceCommit"] == "different-commit"
     assert result["metrics"]["agentWorking.processCPUPercent"]["changePercent"] == -50
@@ -553,3 +556,13 @@ def test_fixture_cpu_attribution_uses_same_state_intervals_and_preserves_unknown
     assert group["measuredFixtureCPUPercent"] == (None if unavailable else 2.5)
     assert group["processCPUWithoutMeasuredFixturePercent"] == (None if unavailable else 47.5)
     assert group["measuredFixtureCPUSharePercent"] == (None if unavailable else 5)
+
+
+@pytest.mark.parametrize("version", [None, 0, -1, True, "2"])
+def test_comparison_rejects_unknown_or_invalid_aggregation_version(tmp_path, version):
+    value = report()
+    value["stateAggregationVersion"] = version
+    path = tmp_path / "invalid-aggregation.jsonl"
+    path.write_text(json.dumps(value))
+    with pytest.raises(ValueError, match="metadata missing|positive state aggregation"):
+        compare(argparse.Namespace(before=path, after=path))

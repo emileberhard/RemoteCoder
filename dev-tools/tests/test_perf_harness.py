@@ -220,6 +220,8 @@ class BuildTests(unittest.TestCase):
             patch.object(perf_harness, "build_capacity", capacity),
             patch.object(perf_harness, "build_source_identity", return_value={"sourceFingerprint": "fixture"}),
             patch.object(perf_harness, "write_build_identity"),
+            patch.object(perf_harness, "harness_source_identity", return_value={"harnessSHA256": "a" * 64}),
+            patch.object(perf_harness, "output", return_value="Xcode test"),
         ]
         for started in self.patches:
             started.start()
@@ -414,21 +416,23 @@ class ScenarioTests(unittest.TestCase):
             perf_harness.require_trace_time(recorder, 314, 300)
 
     def test_invalid_windows_and_trace_failures_keep_identity_and_diagnostics(self) -> None:
-        for failure in ("inactive", "trace", "cleanup", "interrupt", "artifact", "content", "trace-telemetry"):
+        for failure in ("inactive", "trace", "cleanup", "interrupt", "artifact", "content", "trace-telemetry", "harness"):
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 app = root / "app"
                 app.mkdir()
                 (app / perf_harness.PROCESS).write_bytes(b"binary")
-                identity = {"appExecutableSHA256": hashlib.sha256(b"binary").hexdigest(), "signing": "development"}
+                identity = {"appExecutableSHA256": hashlib.sha256(b"binary").hexdigest(), "signing": "development", "harnessSHA256": "a" * 64}
                 (root / "perf-build-identity.json").write_text(json.dumps(identity))
                 fixture = {"duration": 10, "actions": [], "events": []}
                 data = json.dumps(fixture).encode()
                 (root / "fixture.json").write_bytes(data)
                 device = Mock(derived=root, app=app, udid="test-ipad")
                 result = {"valid": failure != "content", "activeThroughout": failure != "inactive", "conservedEnergy": False,
-                          "frames": 120, "fixtureSHA256": hashlib.sha256(data).hexdigest(), "actions": [],
+                          "frames": 120, "fixtureSHA256": hashlib.sha256(data).hexdigest(), "harnessSHA256": "a" * 64, "actions": [],
                           "appliedFrames": 0, "diagnostic": "preserve me", "telemetryFiles": ["segment.jsonl.gz"]}
+                if failure == "harness":
+                    result["harnessSHA256"] = "b" * 64
                 args = SimpleNamespace(fixture=root / "fixture.json", trace_template="Time Profiler",
                                        trace_seconds=100, runs=1, settle=0, trace_dir=str(root), label="run",
                                        instrument=[], log=str(root / "reports.jsonl"))
@@ -550,3 +554,25 @@ class TelemetryEvidenceTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HarnessIdentityTests(unittest.TestCase):
+    def test_compiled_harness_identity_ignores_production_changes_and_tracks_guarded_code(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(perf_harness, "ROOT", Path(directory)):
+            root = Path(directory)
+            (root / "Core/Sources").mkdir(parents=True)
+            (root / "RemoteCoder").mkdir()
+            owner = root / "Core/Sources/Owner.swift"
+            owner.write_text("let production = 1\n#if RC_PERF_HARNESS\n#if os(iOS)\nlet fixture = 1\n#endif\n#endif\n")
+            harness = root / "RemoteCoder/PerformanceReplayRun.swift"
+            harness.write_text("#if RC_PERF_HARNESS\nlet replay = 1\n#endif\n")
+            before = perf_harness.harness_source_identity(["-configuration", "Release"], "Xcode 27")
+            owner.write_text(owner.read_text().replace("production = 1", "production = 2"))
+            self.assertEqual(perf_harness.harness_source_identity(["-configuration", "Release"], "Xcode 27"), before)
+            owner.write_text(owner.read_text().replace("fixture = 1", "fixture = 2"))
+            self.assertNotEqual(perf_harness.harness_source_identity(["-configuration", "Release"], "Xcode 27"), before)
+            changed = perf_harness.harness_source_identity(["-configuration", "Release"], "Xcode 27")
+            self.assertNotEqual(perf_harness.harness_source_identity(["-configuration", "Debug"], "Xcode 27"), changed)
+            self.assertNotEqual(perf_harness.harness_source_identity(["-configuration", "Release"], "Xcode 28"), changed)
+            harness.write_text(harness.read_text().replace("replay = 1", "replay = 2"))
+            self.assertNotEqual(perf_harness.harness_source_identity(["-configuration", "Release"], "Xcode 27"), changed)

@@ -415,12 +415,15 @@ async def capture(args) -> dict:
                     raise ValueError("selected thread is active or activity coverage is unknown")
                 continue
             try:
-                for attempt in range(3):
+                for _attempt in range(3):
                     before = await activity_state()
                     if thread_id in before[0] or before[1].get(provider) is not True:
                         raise ValueError("candidate activity changed before capture")
                     turns, turn_pages = await page_history(thread_id, "thread/turns/list")
                     items, item_pages = await page_history(thread_id, "thread/items/list")
+                    between = await activity_state()
+                    if thread_id in between[0] or between[1].get(provider) is not True:
+                        raise ValueError("candidate activity changed before capture revalidation")
                     verified_turns, verified_turn_pages = await page_history(thread_id, "thread/turns/list")
                     _, verified_item_pages = await page_history(thread_id, "thread/items/list")
                     after = await activity_state()
@@ -442,7 +445,7 @@ async def capture(args) -> dict:
                 conversation = {"thread": {**headers[thread_id], "turns": [], "status": {"type": "idle"}},
                                 "items": [], "turns": [],
                                 "captureActivityEvidence": {"provider": provider, "before": before[2], "after": after[2],
-                                                            "historyValidation": {"attempts": attempt + 1, "turnPagesSHA256": turn_pages,
+                                                            "historyValidation": {"attempts": _attempt + 1, "turnPagesSHA256": turn_pages,
                                                                                   "itemPagesSHA256": item_pages, "turns": len(turns), "items": len(items)}},
                                 "lastStartedAtOrdinal": max((item.get("startedAtOrdinal") or 0 for item in items), default=0),
                                 "itemFile": write_history(root, items, "items"),
@@ -522,7 +525,8 @@ async def capture(args) -> dict:
                                "idleEvidence": {"contractVersion": 2, "capturedHistories": len(history_ids),
                                                 "beforeAndAfterChecks": sum(isinstance(conversation.get("captureActivityEvidence", {}).get(phase), dict)
                                                     for conversation in conversations for phase in ("before", "after")),
-                                                "requiresProviderCoverage": True, "requiresExternalAvailability": True}}}
+                                                "requiresProviderCoverage": True, "requiresExternalAvailability": True,
+                                                "requiresHistoryRevalidation": True, "consistencyMode": "revalidatedPages"}}}
 
 
 def capture_command(args) -> None:
@@ -608,7 +612,7 @@ def compare(args) -> None:
         if not values or any(value.get("valid") is not True for value in values):
             raise ValueError("comparison requires nonempty valid scenario reports")
         required = ("fixtureSHA256", "target", "deviceUDID", "operatingSystem", "display", "locale", "toolchain",
-                    "configuration", "signing", "driverSHA256", "instrumentation", "mode",
+                    "configuration", "signing", "driverSHA256", "harnessSHA256", "stateAggregationVersion", "instrumentation", "mode",
                     "workloadVersion", "preparationContractVersion", "preparation", "captureAuthority",
                     "preMeasurementOwner", "postMeasurementOwner", *identity_keys)
         for value in values:
@@ -619,6 +623,10 @@ def compare(args) -> None:
                 raise ValueError("comparison metadata missing: " + ", ".join(missing))
             if value["mode"] != "offlineReplay" or value["workloadVersion"] != 2 or value["preparationContractVersion"] != 2:
                 raise ValueError("controlled comparison requires version-two prepared offline replay reports")
+            if (not isinstance(value["harnessSHA256"], str) or len(value["harnessSHA256"]) != 64
+                    or any(character not in "0123456789abcdef" for character in value["harnessSHA256"])
+                    or type(value["stateAggregationVersion"]) is not int or value["stateAggregationVersion"] <= 0):
+                raise ValueError("comparison requires a compiled harness SHA-256 and positive state aggregation version")
             authority = value["captureAuthority"]
             if (authority.get("contractVersion") != 2 or authority.get("requiresExternalAvailability") is not True
                     or authority.get("requiresProviderCoverage") is not True
@@ -678,7 +686,7 @@ def compare(args) -> None:
     signatures = {(value["mode"], value["fixtureSHA256"], value["target"], value.get("deviceUDID"), value["operatingSystem"],
                    json.dumps(value.get("display"), sort_keys=True), value.get("locale"),
                    value.get("toolchain"), value.get("configuration"), value.get("signing"),
-                   value.get("driverSHA256"), value["workloadVersion"], value["preparationContractVersion"],
+                   value.get("driverSHA256"), value["harnessSHA256"], value["stateAggregationVersion"], value["workloadVersion"], value["preparationContractVersion"],
                    json.dumps(value.get("disabled"), sort_keys=True),
                    json.dumps(value.get("instrumentation"), sort_keys=True),
                    tuple(sorted({(sample["thermalState"], sample["lowPowerMode"]) for sample in value["samples"]})))
@@ -695,6 +703,8 @@ def compare(args) -> None:
             if working < seconds * 0.8:
                 raise ValueError(f"unrepresentative replay: agent-working context covered {working:.3f} of {seconds:.3f} seconds; at least 80% is required after mixed/gap exclusions")
     output = {"beforeRuns": len(before), "afterRuns": len(after), "fixtureSHA256": before[0]["fixtureSHA256"],
+              "captureConsistency": {side: sorted({value["captureAuthority"].get("consistencyMode", "legacyIdleChecksOnly")
+                                                   for value in values}) for side, values in (("before", before), ("after", after))},
               "buildIdentity": {"before": {key: before[0][key] for key in identity_keys},
                                 "after": {key: after[0][key] for key in identity_keys}},
               "metrics": {}, "activity": {"before": states[0], "after": states[1]},
