@@ -221,7 +221,7 @@ class BuildTests(unittest.TestCase):
             patch.object(perf_harness, "build_source_identity", return_value={"sourceFingerprint": "fixture"}),
             patch.object(perf_harness, "write_build_identity"),
             patch.object(perf_harness, "harness_source_identity", return_value={"harnessSHA256": "a" * 64}),
-            patch.object(perf_harness, "output", return_value="Xcode test"),
+            patch.object(perf_harness, "output", side_effect=["Xcode test", json.dumps([{"target": "RemoteCoder", "buildSettings": {"SWIFT_OPTIMIZATION_LEVEL": "-O"}}])]),
         ]
         for started in self.patches:
             started.start()
@@ -576,3 +576,31 @@ class HarnessIdentityTests(unittest.TestCase):
             self.assertNotEqual(perf_harness.harness_source_identity(["-configuration", "Release"], "Xcode 28"), changed)
             harness.write_text(harness.read_text().replace("replay = 1", "replay = 2"))
             self.assertNotEqual(perf_harness.harness_source_identity(["-configuration", "Release"], "Xcode 27"), changed)
+
+
+class CompilerIdentityTests(unittest.TestCase):
+    def test_resolved_compiler_flags_are_identified_without_cache_locations(self):
+        root = perf_harness.ROOT
+        before = perf_harness.effective_compiler_settings([{"target": "RemoteCoder", "buildSettings": {
+            "SWIFT_OPTIMIZATION_LEVEL": "-O", "SWIFT_INCLUDE_PATHS": str(root / "build/one/include"), "TARGET_NAME": "RemoteCoder"
+        }}], root / "build/one")
+        after = perf_harness.effective_compiler_settings([{"target": "RemoteCoder", "buildSettings": {
+            "SWIFT_OPTIMIZATION_LEVEL": "-O", "SWIFT_INCLUDE_PATHS": str(root / "build/two/include"), "TARGET_NAME": "RemoteCoder"
+        }}], root / "build/two")
+        self.assertEqual(before, after)
+        after["SWIFT_OPTIMIZATION_LEVEL"] = "-Onone"
+        self.assertNotEqual(perf_harness.harness_source_identity(before, "Xcode"), perf_harness.harness_source_identity(after, "Xcode"))
+
+    def test_action_hookup_is_identified_under_mixed_or_unconditional_production_views(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(perf_harness, "ROOT", Path(directory)):
+            root = Path(directory)
+            (root / "RemoteCoder").mkdir()
+            (root / "Core/Sources").mkdir(parents=True)
+            path = root / "RemoteCoder/ChatRootView.swift"
+            call = "    ChatWindowActionsPublisher(\n        toggleSidebar: toggleHistory\n    )\n"
+            path.write_text(call)
+            before = perf_harness.harness_source_identity([], "Xcode")
+            path.write_text("#if os(macOS) || RC_PERF_HARNESS\n" + call + "#endif\n")
+            self.assertEqual(perf_harness.harness_source_identity([], "Xcode"), before)
+            path.write_text(path.read_text().replace("toggleHistory", "differentAction"))
+            self.assertNotEqual(perf_harness.harness_source_identity([], "Xcode"), before)
