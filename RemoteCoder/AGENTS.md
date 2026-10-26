@@ -1016,6 +1016,9 @@ entrypoint linked above.
     While recording, the composer becomes a Voice Memos-style scrolling
     waveform, white bars on red. The Voice Mode button presents the full-screen
     voice UI.
+    `ComposerWaveformView` owns its sample-rate task; `ComposerWaveformRenderer`
+    owns the bounded reusable bar layers and Core Animation scroll. Do not add
+    a display-rate timeline or rebuild settled bar geometry per sample.
   - Stop and Voice Mode go through `SlideToConfirmButton`. On iOS a tap never
     acts. Touch-down reveals the "Swipe up to …" guide track, the thumb follows
     the finger, and lifting or cancelling the touch collapses it at once; no
