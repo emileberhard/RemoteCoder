@@ -7,10 +7,10 @@ enum PerformanceReplayPreparation {
         let started = ContinuousClock.now
         var prepared = 0
         var pages = 0
-        let sidebarDeadline = ContinuousClock.now + .seconds(30)
         func settleSidebar() async throws {
+            let deadline = ContinuousClock.now + .seconds(30)
             while !model.conversationList.performanceReplayRefreshState.settled {
-                guard ContinuousClock.now < sidebarDeadline else {
+                guard ContinuousClock.now < deadline else {
                     throw PerformanceReplayScenario.Failure.invalidScenario("sidebar preparation did not settle")
                 }
                 try await Task.sleep(for: .milliseconds(50))
@@ -23,8 +23,7 @@ enum PerformanceReplayPreparation {
             await model.conversationList.manualRefresh(reason: "performance preparation")
             try await settleSidebar()
             if model.conversationList.performanceReplayRefreshState.revision != previousRefresh { break }
-            guard attempt == 0, model.conversationList.performanceReplayRefreshState.deferred,
-                  ContinuousClock.now < sidebarDeadline else {
+            guard attempt == 0, model.conversationList.performanceReplayRefreshState.deferred else {
                 throw PerformanceReplayScenario.Failure.invalidScenario("sidebar refresh did not succeed; deferred=\(model.conversationList.performanceReplayRefreshState.deferred), neverLoaded=\(model.conversationList.lastSuccessfulRefreshAt == nil), count=\(model.conversationList.threads.count), failure=\(model.conversationList.errorMessage ?? "none")")
             }
             try await Task.sleep(for: .milliseconds(100))
@@ -37,7 +36,7 @@ enum PerformanceReplayPreparation {
             await model.conversationList.loadOlder(query: "", including: { _ in true })
             try await settleSidebar()
             guard model.conversationList.threads.count != count || model.conversationList.continuation != position else {
-                throw PerformanceReplayScenario.Failure.invalidScenario("sidebar traversal made no progress")
+                throw PerformanceReplayScenario.Failure.invalidScenario("sidebar traversal made no progress; position=\(String(describing: model.conversationList.continuation)), failure=\(model.conversationList.errorMessage ?? "none")")
             }
         }
         let expectedHeaders = Set(scenario.conversations.compactMap { $0.thread.objectValue?["id"]?.stringValue })
