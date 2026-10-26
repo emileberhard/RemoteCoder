@@ -118,6 +118,13 @@ stable. The event schedule is bounded to 20,000 events and the measured window
 to 900 seconds. A short cheap calibration establishes arrival timing, not proof
 that it represents every long coding turn.
 
+The measured journey starts with the main stream already open and the drawer
+closed. Visits at 35 seconds and every 75 seconds open the drawer, switch at
++2 seconds, close it at +3, scroll at +5 and return at +8. The 300-second journey
+has 20 actions; the 900-second journey has 60. `compare` rejects a run unless
+measured agent-working intervals cover at least 80% of the full report duration,
+after excluding mixed and long-gap intervals.
+
 Each repeat prepares its own state, settles, measures, verifies completed
 assistant content and stops its models, sockets and diagnostics pump. It removes
 benchmark storage and uninstalls the dedicated app on completion or failure.

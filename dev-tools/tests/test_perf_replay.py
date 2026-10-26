@@ -185,7 +185,7 @@ async def test_capture_paginates_native_history_and_reads_only_parent_headers(tm
 
 
 def report():
-    return {"valid": True, "fixtureSHA256": "first", "target": "device", "deviceUDID": "ipad",
+    return {"valid": True, "seconds": 20, "fixtureSHA256": "first", "target": "device", "deviceUDID": "ipad",
             "appExecutableSHA256": "executable", "sourceCommit": "commit", "sourceFingerprint": "source",
             "operatingSystem": "27", "display": {"width": 800}, "instrumentation": {"instruments": []},
             "locale": "en", "toolchain": "27.1", "configuration": "Release", "signing": "distribution",
@@ -441,3 +441,42 @@ def test_preparation_seeds_all_ordinary_roots_and_only_explicit_journey_purpose_
     assert perf_replay.preparation_roots(known_roots, marks, set()) == {"ordinary", "null-purpose"}
     with pytest.raises(ValueError, match="at most three"):
         perf_replay.preparation_roots(known_roots, marks, {"one", "two", "three", "four"})
+
+
+@pytest.mark.parametrize("duration, expected_count", [(300, 20), (900, 60)])
+def test_journey_visits_close_the_drawer_and_return_to_the_main_stream(duration, expected_count):
+    actions = perf_replay.journey_actions(["main", "second", "third"], duration)
+    assert len(actions) == expected_count
+    assert actions[0]["at"] == 35
+    selected, drawer = "main", False
+    for visit in range(0, len(actions), 5):
+        opening, switch, closing, scroll, returning = actions[visit:visit + 5]
+        assert [action["kind"] for action in (opening, switch, closing, scroll, returning)] == ["toggleSidebar", "open", "toggleSidebar", "scroll", "open"]
+        assert closing["at"] - opening["at"] == 3
+        assert returning["at"] - opening["at"] == 8
+        for action in actions[visit:visit + 5]:
+            if action["kind"] == "open":
+                selected = action["threadID"]
+            else:
+                assert action["threadID"] == selected
+            if action["kind"] == "toggleSidebar":
+                drawer = not drawer
+        assert selected == "main" and drawer is False
+
+
+def test_comparison_rejects_the_previous_half_drawer_context_mix(tmp_path):
+    value = report()
+    value["samples"][1]["context"]["surface"] = "drawer"
+    path = tmp_path / "half-drawer.jsonl"
+    path.write_text(json.dumps(value))
+    with pytest.raises(ValueError, match="unrepresentative replay:.*at least 80%"):
+        compare(argparse.Namespace(before=path, after=path))
+
+
+def test_comparison_does_not_hide_missing_working_time_by_excluding_mixed_intervals(tmp_path):
+    value = report()
+    value["samples"][1]["mixed"] = True
+    path = tmp_path / "half-mixed.jsonl"
+    path.write_text(json.dumps(value))
+    with pytest.raises(ValueError, match="unrepresentative replay:.*at least 80%"):
+        compare(argparse.Namespace(before=path, after=path))

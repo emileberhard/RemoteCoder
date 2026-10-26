@@ -267,7 +267,9 @@ explicit recorded journey targets may seed as controlled purpose exceptions.
 Known-root seeding is an ownership proxy; actual phone ownership remains unknown.
 Child and unresolved histories stay remote without local-submission markers. Preserve production budgets. Reports distinguish preparation's
 physical sizes from logical checkpoint bytes written per measured state minute.
-The measured journey repeats recorded arrival offsets with continuous turns;
+The measured journey keeps the drawer closed between paired short visits;
+comparison requires agent-working context for at least 80% of the full report
+duration after mixed/gap exclusions. It repeats recorded arrival offsets with continuous turns;
 inferred initial starts are explicit in provenance. Each repeat reserves source, compiler capacity and device in installer order,
 including preparation, with a fresh bounded deadline. It uses
 `ProcessResourceSampler` with a private buffer for field-equivalent CPU attribution. Inspect traces before changing a failed regression workload.

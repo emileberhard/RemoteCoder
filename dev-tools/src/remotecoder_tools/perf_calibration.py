@@ -11,6 +11,12 @@ from .rpc import _initialize, _open_gateway, _timed_rpc
 from .turns import _run_probe_turn
 
 
+def calibration_sources(scenario: dict) -> list[str]:
+    action_threads = {action["threadID"] for action in scenario["actions"]}
+    return [conversation["thread"]["id"] for conversation in scenario["conversations"]
+            if conversation["thread"]["id"] in action_threads]
+
+
 def evidence(window: dict, events: list[list[dict]]) -> tuple[bool, list[dict]]:
     summaries = []
     for stream in events:
@@ -99,7 +105,7 @@ async def run(args, device, harness) -> None:
                 await rpc("conversation/marks/update", {"changes": [{"op": "setPurpose", "threadId": thread, "purpose": "probe"}]})
             frozen = await capture(SimpleNamespace(**{**vars(args), "thread": threads}))
             supplied = json.loads(fixture)
-            ordered = list(dict.fromkeys(action["threadID"] for action in supplied["actions"] if action["kind"] == "open"))
+            ordered = calibration_sources(supplied)
             mapping = dict(zip(ordered, threads, strict=True))
             frozen["actions"] = [{**action, "threadID": mapping[action["threadID"]]} for action in supplied["actions"]]
             frozen["duration"] = supplied["duration"]
