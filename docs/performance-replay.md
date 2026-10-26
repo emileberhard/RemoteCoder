@@ -336,3 +336,31 @@ same code is hot.
 The replay metrics recorder currently coexists with the older open/stream and
 Mac benchmark recorders. Consolidate those legacy lanes into the replay recorder
 when changing them; keep their existing metric contracts while doing so.
+
+
+## Fixture work and comparison identity
+
+Indexed histories are verified and rebased into separate private files during
+unmeasured preparation. Measured history responses assemble bounded raw records;
+hidden streams retain references to recorded deltas and reconstruct partial
+content only on subscription or history reads. Item ordinals increase after each
+target history, and recorded transport sequence stamps are removed before replay.
+Final verification follows production history pages after measurement so normal
+live-item eviction does not invalidate a correct run.
+
+The compiled harness fingerprint covers harness Swift source, guarded owner
+accessors, actual compiler settings and Xcode identity. The build embeds it and
+reports must match their artifact receipt. Comparisons require equal compiled
+harness fingerprints and state aggregation versions in addition to driver and
+fixture identities. New captures re-read bounded turn and item pages and verify
+item-to-turn coverage; old frozen fixtures retain their weaker idle-check evidence.
+
+`fixtureCPUms` counts disjoint synchronous sections on their executing thread.
+It excludes Network callbacks and cleanup outside those sections, so the count is
+a lower bound. Process CPU minus this counter still includes unattributed harness
+work. Both counters use the same field-state intervals. A separate fresh-process
+`fixture-footprint` command exercises the same fixture reducer and holds response
+bytes while sampling process footprint; paired empty controls provide an observed
+incremental process footprint, not an exclusive journey allocation or upper bound.
+It does not run app sessions or include Network buffers. Keep this diagnostic
+control separate from the canonical measured journey.

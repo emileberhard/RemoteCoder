@@ -725,6 +725,10 @@ def compare(args) -> None:
 
     for name in ("processCPUPercent", "mainThreadCPUPercent", "checkpointBytesPerMinute"):
         metric("agentWorking." + name, [[value["agentWorking"][name] for value in group] for group in states])
+    for name in ("measuredFixtureCPUPercent", "processCPUWithoutMeasuredFixturePercent", "measuredFixtureCPUSharePercent"):
+        groups = [[value["agentWorking"].get(name) for value in group] for group in states]
+        if all(isinstance(value, (int, float)) and math.isfinite(value) for group in groups for value in group):
+            metric("agentWorking." + name, groups)
     for name in ("processCPUms", "mainThreadCPUms", "peakSampledFootprintMiB"):
         if any(name in value for value in before + after):
             metric(name, [[value.get(name) for value in values] for values in (before, after)])

@@ -259,8 +259,8 @@ interrupts, archives and uninstalls; its `report.json` decides validity.
 Capture classifies the bounded header inventory before selecting explicit stream
 targets, ordinary authoritative known-root histories, then remaining root histories. Other child and unresolved headers
 do not consume the history budget. History reads use bounded native pages with
-authoritative idle checks and header-only parent discovery. Version 2 histories are indexed private files;
-the loopback server reads requested pages without retaining the library.
+authoritative idle checks, repeated full-page validation with item-to-turn coverage, and header-only parent discovery. Version 2 histories are indexed private files;
+unmeasured preparation rebases separate files and the loopback server assembles bounded raw pages. Hidden deltas remain shared references until a read needs their partial content.
 Unmeasured preparation loads and verifies the sidebar through production list
 pagination, reconciles captured user submissions only for authoritative known
 roots with no explicit probe/automation purpose, and writes history and checkpoints
@@ -281,9 +281,9 @@ under `~/perf-traces/remotecoder/`, outside Git checkouts, mode 0600; never comm
 worktree, build cache or issue, or quote their content. Keep reports and traces
 outside the worktree too. Results compare only across reports with the same
 fixture SHA-256, device, OS and display, toolchain, configuration, signing mode,
-driver hash and instrumentation; `compare` enforces this, so a recapture or a
+driver hash, compiled harness fingerprint, state aggregation version and instrumentation; `compare` enforces this, so a recapture or a
 signing change starts a new baseline. Keep low-overhead runs as the baseline,
-take Instruments recordings in separate runs of the same fixture, and compare
+fixture CPU is a synchronous lower bound; subtracting it leaves unattributed harness work. The separate fresh-process footprint control measures incremental process footprint, not exclusive journey allocations. Take Instruments recordings in separate runs of the same fixture, and compare
 the `journey` block of `perf-trace summarize`, not whole-trace totals.
 
 ## mac-bench
