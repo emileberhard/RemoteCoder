@@ -386,11 +386,13 @@ async def capture(args) -> dict:
         async def page_history(thread_id, method):
             records, cursor, seen = [], None, set()
             size = 0
+            pages = hashlib.sha256()
             while True:
                 params = {"threadId": thread_id, "limit": 100, "sortDirection": "asc", "cursor": cursor}
                 if method == "thread/turns/list":
                     params["itemsView"] = "notLoaded"
                 page = await read(method, params)
+                pages.update(encoded({"cursor": cursor, "page": page}))
                 for record in page["data"]:
                     size += len(encoded(record)) + 1
                     if len(encoded(record)) + 1 > MAX_RECORD_BYTES or size > MAX_HISTORY_BYTES or len(records) >= 20_000:
@@ -398,7 +400,7 @@ async def capture(args) -> dict:
                     records.append(record)
                 cursor = page.get("nextCursor")
                 if cursor is None:
-                    return records
+                    return records, pages.hexdigest()
                 if cursor in seen:
                     raise ValueError("history cursor did not advance")
                 seen.add(cursor)
@@ -413,23 +415,35 @@ async def capture(args) -> dict:
                     raise ValueError("selected thread is active or activity coverage is unknown")
                 continue
             try:
-                before = await activity_state()
-                if thread_id in before[0] or before[1].get(provider) is not True:
-                    raise ValueError("candidate activity changed before capture")
-                turns = await page_history(thread_id, "thread/turns/list")
-                items = await page_history(thread_id, "thread/items/list")
-                after = await activity_state()
-                if thread_id in after[0] or after[1].get(provider) is not True:
-                    raise ValueError("candidate activity changed during capture")
-                if any(turn.get("status") == "inProgress" for turn in turns):
-                    raise ValueError("candidate contains an unfinished turn")
+                for attempt in range(3):
+                    before = await activity_state()
+                    if thread_id in before[0] or before[1].get(provider) is not True:
+                        raise ValueError("candidate activity changed before capture")
+                    turns, turn_pages = await page_history(thread_id, "thread/turns/list")
+                    items, item_pages = await page_history(thread_id, "thread/items/list")
+                    verified_turns, verified_turn_pages = await page_history(thread_id, "thread/turns/list")
+                    _, verified_item_pages = await page_history(thread_id, "thread/items/list")
+                    after = await activity_state()
+                    if thread_id in after[0] or after[1].get(provider) is not True:
+                        raise ValueError("candidate activity changed during capture")
+                    turn_ids = {turn["id"] for turn in turns}
+                    consistent = (turn_pages == verified_turn_pages and item_pages == verified_item_pages
+                                  and len(turn_ids) == len(turns)
+                                  and all(item.get("turnId") in turn_ids for item in items)
+                                  and not any(turn.get("status") == "inProgress" for turn in turns + verified_turns))
+                    if consistent:
+                        break
+                else:
+                    raise ValueError("history changed during bounded capture revalidation")
                 submission = local_submission(thread_id, items) if thread_id in eligible_roots else None
                 size = sum(len(encoded(record)) + 1 for record in items + turns)
                 if total_bytes + size > MAX_BUNDLE_BYTES - MAX_PAGE_BYTES:
                     raise ValueError("fixture bundle exceeds 512 MiB")
                 conversation = {"thread": {**headers[thread_id], "turns": [], "status": {"type": "idle"}},
                                 "items": [], "turns": [],
-                                "captureActivityEvidence": {"provider": provider, "before": before[2], "after": after[2]},
+                                "captureActivityEvidence": {"provider": provider, "before": before[2], "after": after[2],
+                                                            "historyValidation": {"attempts": attempt + 1, "turnPagesSHA256": turn_pages,
+                                                                                  "itemPagesSHA256": item_pages, "turns": len(turns), "items": len(items)}},
                                 "lastStartedAtOrdinal": max((item.get("startedAtOrdinal") or 0 for item in items), default=0),
                                 "itemFile": write_history(root, items, "items"),
                                 "turnFile": write_history(root, turns, "turns")}

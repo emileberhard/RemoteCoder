@@ -126,8 +126,11 @@ def test_fixture_placement_rejects_worktrees_and_other_private_roots(tmp_path):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("role", ["root", "child", "unresolved"])
 @pytest.mark.parametrize("prioritize_roots", [False, True])
-async def test_capture_paginates_native_history_and_reads_only_parent_headers(tmp_path, monkeypatch, role, prioritize_roots):
+@pytest.mark.parametrize("history_change", [None, "completed-between-reads", "orphan-items", "page-count"])
+async def test_capture_paginates_native_history_and_reads_only_parent_headers(tmp_path, monkeypatch, role, prioritize_roots, history_change):
     calls = []
+    turn_reads = {}
+    item_reads = {}
     active = {"coverage": {"codex": True, "claude": True}, "activeTurns": [], "externalActivity": {"sessions": [], "codexAvailable": True, "claudeAvailable": True}}
 
     @asynccontextmanager
@@ -163,9 +166,20 @@ async def test_capture_paginates_native_history_and_reads_only_parent_headers(tm
             assert "includeCompletionTimes" not in params
             result = {"data": []}
         elif method == "thread/items/list":
+            key = params["threadId"]
+            if params["cursor"] is None:
+                item_reads[key] = item_reads.get(key, 0) + 1
             result = {"data": [{"turnId": "turn", "item": {"id": "user", "type": "userMessage", "content": [{"type": "text", "text": "synthetic"}]}}], "nextCursor": "page2"} if params["cursor"] is None else {"data": [{"turnId": "turn", "item": {"id": "answer", "type": "agentMessage", "text": "synthetic"}}]}
+            if history_change == "orphan-items":
+                result["data"][0]["turnId"] = "missing-turn"
+            if history_change == "page-count":
+                result["totalCount"] = item_reads[key]
         elif method == "thread/turns/list":
+            key = params["threadId"]
+            turn_reads[key] = turn_reads.get(key, 0) + 1
             result = {"data": [{"id": "turn", "status": "completed", "items": [], "itemsView": "notLoaded"}]}
+            if history_change == "completed-between-reads" and turn_reads[key] > 1:
+                result["data"].append({"id": "new-turn", "status": "completed", "items": [], "itemsView": "notLoaded"})
         elif method == "conversation/agents/classify":
             relations = {"chosen": {"parentThreadId": "parent"}} if role == "child" else {}
             if prioritize_roots:
@@ -192,6 +206,12 @@ async def test_capture_paginates_native_history_and_reads_only_parent_headers(tm
     monkeypatch.setattr(perf_replay, "_timed_rpc", rpc)
     expected_histories = 2 if prioritize_roots else 1
     args = argparse.Namespace(out="scenario.json", thread=["chosen"], sidebar_limit=10, history_count=expected_histories)
+    if history_change in {"orphan-items", "page-count"}:
+        with pytest.raises(ValueError, match="selected history is unavailable"):
+            await perf_replay.capture(args)
+        assert turn_reads["chosen"] == 6
+        assert not (tmp_path / "history").exists()
+        return
     result = await perf_replay.capture(args)
     assert result["captureSummary"]["histories"] == expected_histories
     assert len(result["conversations"]) == (4 if role == "child" or prioritize_roots else 3)
@@ -216,7 +236,9 @@ async def test_capture_paginates_native_history_and_reads_only_parent_headers(tm
         assert evidence[phase]["externalAvailability"]["codex"] is True
         assert len(evidence[phase]["snapshotSHA256"]) == 64
     assert result["captureSummary"]["idleEvidence"]["beforeAndAfterChecks"] == expected_histories * 2
-    assert len([call for call in calls if call[0] == "thread/items/list"]) == expected_histories * 2
+    assert len([call for call in calls if call[0] == "thread/items/list"]) == expected_histories * (8 if history_change else 4)
+    assert evidence["historyValidation"]["attempts"] == (2 if history_change else 1)
+    assert evidence["historyValidation"]["turns"] == (2 if history_change else 1)
     assert all(params.get("includeTurns") is not True for _, params in calls)
     active["activeTurns"] = [{"threadId": "chosen"}]
     with pytest.raises(ValueError, match="selected thread is active"):
