@@ -4,21 +4,23 @@ import QuartzCore
 final class ComposerWaveformRenderer {
     let layer = CALayer()
     private let scroll = CALayer()
-    private let bars: [CALayer]
+    private lazy var bars: [CALayer] = {
+        (0..<WaveformSamples.capacity).map { _ in
+            let bar = CALayer()
+            bar.cornerRadius = 1
+            bar.anchorPoint = CGPoint(x: 0, y: 0.5)
+            self.scroll.addSublayer(bar)
+            return bar
+        }
+    }()
     private var samples = WaveformSamples()
     private var newest: Int
     private var offset: CGFloat = 0
 
     init() {
-        bars = (0..<WaveformSamples.capacity).map { _ in CALayer() }
         newest = samples.values.count - 1
         layer.masksToBounds = true
         layer.addSublayer(scroll)
-        for bar in bars {
-            bar.cornerRadius = 1
-            bar.anchorPoint = CGPoint(x: 0, y: 0.5)
-            scroll.addSublayer(bar)
-        }
     }
 
     func layout(size: CGSize, color: CGColor) {
