@@ -853,6 +853,25 @@ impl Gateway {
         let mut object = object;
         let mut params = object.remove("params").unwrap_or(Value::Null);
         let mut selected = false;
+        let mut bounded_preview = false;
+        if method == "thread/list"
+            && let Some(value) = params
+                .as_object_mut()
+                .and_then(|fields| fields.remove("boundedPreview"))
+        {
+            let Some(enabled) = value.as_bool() else {
+                let _ = self
+                    .send_error_to(
+                        out_tx,
+                        id.as_ref(),
+                        &RpcError::new(RpcCode::InvalidParams, "boundedPreview must be a boolean"),
+                    )
+                    .await;
+                return Ok(());
+            };
+            bounded_preview = enabled;
+            selected = true;
+        }
         if starts_new_work && self.is_draining() {
             let _ = self.reject_draining(out_tx, id.as_ref()).await;
             return Ok(());
@@ -924,7 +943,8 @@ impl Gateway {
             }
         };
 
-        if let Some(method) = correlated_method(Some(method.as_str()))
+        if let Some(method) =
+            correlated_method(Some(method.as_str())).or(bounded_preview.then_some("thread/list"))
             && let Some(id) = &id
         {
             let mut pending = pending_requests.lock().await;
@@ -948,10 +968,9 @@ impl Gateway {
                 let _ = self.send_json_awaiting_capacity(out_tx, &response).await;
                 return Ok(());
             }
-            pending.insert(
-                id.to_string(),
-                PendingRequest::new(method, object.get("params")),
-            );
+            let mut request = PendingRequest::new(method, object.get("params"));
+            request.bounded_preview = bounded_preview;
+            pending.insert(id.to_string(), request);
         }
         self.capture_client_request_locked(client_id, &object)
             .await
@@ -1132,8 +1151,17 @@ impl Gateway {
                         .as_ref()
                         .zip(request.as_ref())
                         .and_then(|(message, request)| tag_upstream_error(message, request));
-                    let reencode = tagged.is_some();
+                    let mut reencode = tagged.is_some();
                     let mut parsed = tagged.or(parsed);
+                    if request
+                        .as_ref()
+                        .is_some_and(|request| request.bounded_preview)
+                        && let Some(result) = parsed
+                            .as_mut()
+                            .and_then(|message| message.get_mut("result"))
+                    {
+                        reencode |= super::list_previews::bound(result);
+                    }
                     if let Some(message) = parsed.as_mut()
                         && message.get("method").is_none()
                     {

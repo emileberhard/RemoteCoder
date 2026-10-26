@@ -90,6 +90,7 @@ pub(crate) const HISTORY_PAGE_RESPONSE_BUDGET: usize = 24 * 1024 * 1024;
 
 pub(crate) struct PendingRequest {
     pub(crate) method: &'static str,
+    pub(crate) bounded_preview: bool,
     pub(crate) thread_id: Option<String>,
     pub(crate) turn_id: Option<String>,
     pub(crate) issued_at: Instant,
@@ -105,6 +106,7 @@ impl PendingRequest {
         };
         Self {
             method,
+            bounded_preview: false,
             thread_id: text("threadId"),
             turn_id: text("expectedTurnId"),
             issued_at: Instant::now(),

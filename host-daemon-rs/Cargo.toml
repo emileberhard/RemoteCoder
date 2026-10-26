@@ -42,6 +42,7 @@ html5ever = { version = "=0.40.1", default-features = false }
 cssparser = { version = "=0.38.0", default-features = false }
 lol_html = "=3.0.1"
 url = "2.5.8"
+unicode-segmentation = "=1.13.3"
 
 [build-dependencies]
 sha2 = "0.10.8"

@@ -9,6 +9,12 @@ use tokio_util::sync::CancellationToken;
 async fn buffered_codex_frames(
     frames: Vec<Value>,
 ) -> futures_util::stream::SplitStream<CodexWebSocket> {
+    buffered_codex_texts(frames.into_iter().map(|frame| frame.to_string()).collect()).await
+}
+
+async fn buffered_codex_texts(
+    frames: Vec<String>,
+) -> futures_util::stream::SplitStream<CodexWebSocket> {
     use tokio_tungstenite::tungstenite::protocol::{
         Role,
         frame::{
@@ -19,19 +25,99 @@ async fn buffered_codex_frames(
     let (_server, client) = tokio::net::UnixStream::pair().unwrap();
     let mut buffered = Vec::new();
     for frame in frames {
-        Frame::message(
-            frame.to_string().into_bytes(),
-            OpCode::Data(Data::Text),
-            true,
-        )
-        .format(&mut buffered)
-        .unwrap();
+        Frame::message(frame.into_bytes(), OpCode::Data(Data::Text), true)
+            .format(&mut buffered)
+            .unwrap();
     }
     Frame::close(None).format(&mut buffered).unwrap();
     CodexWebSocket::from_partially_read(client, buffered, Role::Client, None)
         .await
         .split()
         .1
+}
+
+#[tokio::test]
+async fn bounded_preview_codex_opt_in_is_consumed_and_only_changes_the_list_payload() {
+    for opted_in in [None, Some(false), Some(true)] {
+        for grapheme in ["👩🏽‍💻", "e\u{301}"] {
+            let gateway = TestGateway::new();
+            let (tx, mut replies) = mpsc::channel(4);
+            let client = super::super::tests::test_client(1, tx);
+            let (upstream, mut forwarded) = mpsc::channel(4);
+            let pending: PendingRequests = Arc::default();
+            let mut params = json!({"limit":60,"cursor":"next","useStateDbOnly":true});
+            if let Some(value) = opted_in {
+                params["boundedPreview"] = json!(value);
+            }
+            let raw = json!({"id":7,"method":"thread/list","params":params}).to_string();
+            let DispatchPlan::Request(request) = DispatchPlan::parse(&raw) else {
+                panic!("request")
+            };
+            gateway
+                .forward_native_request(
+                    1,
+                    &client,
+                    NativeRequest {
+                        _start_permit: None,
+                        raw: raw.clone(),
+                        request,
+                        _admission: None,
+                    },
+                    Some(&upstream),
+                    &pending,
+                )
+                .await
+                .unwrap();
+            let UpstreamMessage::Text(sent) = forwarded.recv().await.unwrap() else {
+                panic!("forwarded request")
+            };
+            let sent_value: Value = serde_json::from_str(&sent).unwrap();
+            assert_eq!(
+                sent_value["params"],
+                json!({"limit":60,"cursor":"next","useStateDbOnly":true})
+            );
+            if opted_in.is_none() {
+                assert_eq!(sent, raw);
+            }
+            assert_eq!(
+                pending.lock().await.len(),
+                usize::from(opted_in == Some(true))
+            );
+
+            let prefix = format!("{}{}", "a".repeat(2_047), grapheme);
+            let preview = format!("{prefix}tail");
+            let response = json!({"id":7,"result":{"data":[
+                {"id":"codex","preview":preview,"name":"Full title"},
+                {"id":"short","preview":"short"}
+            ],"nextCursor":"next","completionTimes":{"codex":42}}});
+            let raw_response = serde_json::to_string_pretty(&response).unwrap();
+            let stream = buffered_codex_texts(vec![raw_response.clone()]).await;
+            gateway
+                .codex_to_client_loop(
+                    1,
+                    NotificationOrigin::Client {
+                        id: 1,
+                        opened_after: 0,
+                    },
+                    stream,
+                    client,
+                    upstream,
+                    pending.clone(),
+                )
+                .await;
+            let ClientCommand::Text(received) = replies.recv().await.unwrap() else {
+                panic!("list response")
+            };
+            if opted_in == Some(true) {
+                let mut expected = response;
+                expected["result"]["data"][0]["preview"] = json!(prefix);
+                assert_eq!(serde_json::from_str::<Value>(&received).unwrap(), expected);
+            } else {
+                assert_eq!(received, raw_response);
+            }
+            assert!(pending.lock().await.is_empty());
+        }
+    }
 }
 
 #[tokio::test]

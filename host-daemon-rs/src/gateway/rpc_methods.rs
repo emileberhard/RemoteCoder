@@ -1081,6 +1081,8 @@ impl Gateway {
             cursor: Option<String>,
             search_term: Option<String>,
             archived: Option<bool>,
+            #[serde(default)]
+            bounded_preview: bool,
         }
         let params: Params = if params.is_null() {
             Params::default()
@@ -1104,12 +1106,17 @@ impl Gateway {
             "claude/thread/list",
             "claudeHistoryIndex",
         );
-        let result = self
+        let mut result = self
             .claude_history
             .list_threads(query)
             .await
             .map_err(claude_history_error);
         phase.complete();
+        if params.bounded_preview
+            && let Ok(result) = &mut result
+        {
+            super::list_previews::bound(result);
+        }
         result
     }
 

@@ -648,6 +648,16 @@ owner until the last fixture is dropped.
   the 24 MiB history budget it fails with a typed `capacity` error (`resource`
   `thread/read turn bytes`) instead of a partial or empty list; page such a
   history with `thread/turns/list`.
+- `thread/list` and `claude/thread/list` accept the gateway-only Boolean
+  `boundedPreview` (default false). Only native history opts in. The translation
+  layer caps outgoing list previews at 2,048 extended grapheme clusters without
+  an ellipsis; it never forwards this parameter to Codex or changes provider
+  headers, caches, persisted metadata or full reads. Default callers preserve
+  their current response bytes. Native prompt preparation stays in
+  `UserMessageText`; a raw cut can hide a late attachment footer and change the
+  prepared display in that synthetic case. This is accepted by the opt-in
+  contract; do not add a second prompt parser here. There is no truncation flag
+  because the native caller does not need that state; length is not a signal.
 - `claude/thread/list` returns a page of headers (default 30, clamped to
   1–500) and `nextCursor` whenever more matches remain. Its opaque cursor
   continues strictly after the captured `updatedAt` descending / exact id

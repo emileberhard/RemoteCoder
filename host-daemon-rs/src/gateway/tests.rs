@@ -1856,6 +1856,7 @@ fn abandoned_history_requests_expire_without_removing_live_correlation() {
             "old".to_owned(),
             PendingRequest {
                 method: "thread/items/list",
+                bounded_preview: false,
                 thread_id: None,
                 turn_id: None,
                 issued_at: now - PENDING_REQUEST_TTL,
@@ -1865,6 +1866,7 @@ fn abandoned_history_requests_expire_without_removing_live_correlation() {
             "live".to_owned(),
             PendingRequest {
                 method: "thread/turns/list",
+                bounded_preview: false,
                 thread_id: None,
                 turn_id: None,
                 issued_at: now,
@@ -5717,6 +5719,85 @@ async fn isolated_history_gateway_serves_the_shared_completion_time_on_list_and_
     gateway.stop().await.unwrap();
     server.abort();
     let _ = server.await;
+}
+
+#[tokio::test]
+async fn bounded_preview_claude_list_preserves_default_headers_and_full_reads() {
+    let owner = Arc::new(crate::providers::claude::settings::ClaudeSettings::isolated_for_test());
+    let session = "aabbccdd-0000-4000-8000-000000000001";
+    let project = owner.settings.claude_home.join("projects/bounded-preview");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::write(
+        project.join(format!("{session}.jsonl")),
+        format!(
+            "{}\n",
+            json!({"type":"user","cwd":"/repo","timestamp":"2026-10-26T10:00:00Z",
+            "message":{"content":"👩🏽‍💻e\u{301}".repeat(3_000)}})
+        ),
+    )
+    .unwrap();
+    let gateway = crate::test_support::TestGateway::with_settings(
+        Arc::new(CodexAppServer::new(
+            PathBuf::from("/bin/true"),
+            HashMap::new(),
+        )),
+        ClaudeSettings {
+            enabled: true,
+            ..owner.settings.clone()
+        },
+        owner,
+    );
+    let canonical = gateway
+        .claude_history
+        .read_thread_header(session.into())
+        .await
+        .unwrap();
+    let (tx, mut replies) = mpsc::channel(2);
+    let client = test_client(1, tx);
+    let mut default = None;
+    for opt_in in [
+        None,
+        Some(json!(false)),
+        Some(json!(true)),
+        Some(json!("invalid")),
+        None,
+    ] {
+        let mut params = json!({"limit":60});
+        if let Some(value) = opt_in {
+            params["boundedPreview"] = value;
+        }
+        let invalid = params["boundedPreview"].is_string();
+        gateway
+            .handle_claude_rpc(
+                &client,
+                ClaudeMethod::ThreadList,
+                &request("claude/thread/list", params),
+            )
+            .await
+            .unwrap();
+        let ClientCommand::Text(raw) = replies.recv().await.unwrap() else {
+            panic!("response")
+        };
+        let response: Value = serde_json::from_str(&raw).unwrap();
+        if invalid {
+            assert_eq!(response["error"]["code"], RpcCode::InvalidParams.value());
+        } else {
+            assert_eq!(response["result"]["data"], json!([canonical]));
+            if let Some(default) = &default {
+                assert_eq!(&raw, default);
+            } else {
+                default = Some(raw);
+            }
+        }
+    }
+    assert_eq!(
+        gateway
+            .claude_history
+            .read_thread_header(session.into())
+            .await
+            .unwrap(),
+        canonical
+    );
 }
 
 #[tokio::test]

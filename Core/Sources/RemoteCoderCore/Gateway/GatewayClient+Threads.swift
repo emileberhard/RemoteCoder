@@ -116,7 +116,7 @@ extension GatewayClient {
         }
         return try await callDecodable(
             method: "claude/thread/list",
-            params: encodeToJSONValue(Params(limit: limit, cursor: cursor)),
+            params: boundedThreadListPayload(encodeToJSONValue(Params(limit: limit, cursor: cursor))),
             timeout: timeouts.history
         )
     }
@@ -179,7 +179,13 @@ extension GatewayClient {
             limit: UInt32(limit),
             useStateDbOnly: useStateDBOnly
         )
-        return try await callDecodable(method: "thread/list", params: encodeToJSONValue(params), timeout: timeouts.history)
+        return try await callDecodable(method: "thread/list", params: boundedThreadListPayload(encodeToJSONValue(params)), timeout: timeouts.history)
+    }
+
+    private func boundedThreadListPayload(_ params: JSONValue) -> JSONValue {
+        guard case .object(var fields) = params else { preconditionFailure("Thread list parameters must be an object") }
+        fields["boundedPreview"] = .bool(true)
+        return .object(fields)
     }
 
     func forkThread(
