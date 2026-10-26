@@ -35,10 +35,14 @@ final class PerformanceReplayRun {
         let data = try Data(contentsOf: url)
         guard data.count <= 16 * 1_048_576 else { throw PerformanceReplayScenario.Failure.invalidScenario("fixture exceeds 16 MiB") }
         let scenario = try JSONDecoder().decode(PerformanceReplayScenario.self, from: data)
-        let root = url.deletingLastPathComponent()
-        let prepared = root.appending(path: "prepared")
-        return (try scenario.prepared(to: Date.now.timeIntervalSince1970, root: root, destination: prepared),
-            SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined(), prepared)
+        try scenario.validate()
+        return (scenario, SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined(), url.deletingLastPathComponent())
+    }
+
+    @concurrent static func preparedFixture(_ url: URL) async throws -> (PerformanceReplayScenario, String, URL) {
+        let (scenario, hash, root) = try await fixture(url)
+        let destination = root.appending(path: "prepared")
+        return (try scenario.prepared(to: Date.now.timeIntervalSince1970, root: root, destination: destination), hash, destination)
     }
 
     static func prepare(_ url: URL, workspace: ChatWorkspaceModel) async throws -> PerformanceReplayRun {
@@ -46,7 +50,7 @@ final class PerformanceReplayRun {
               workspace.settings.hosts.isEmpty else {
             throw PerformanceReplayScenario.Failure.invalidScenario("launch with -rcPerfOffline and no configured hosts")
         }
-        let (scenario, hash, fixtureRoot) = try await fixture(url)
+        let (scenario, hash, fixtureRoot) = try await preparedFixture(url)
         try PerformanceReplayHTTP.install(scenario.httpResponses ?? [:], telemetryDirectory: url.deletingLastPathComponent().appending(path: "telemetry"))
         let server = try PerformanceReplayServer(scenario: scenario, fixtureRoot: fixtureRoot)
         let run = PerformanceReplayRun(scenario: scenario, hash: hash, server: server, workspace: workspace)
@@ -233,12 +237,18 @@ final class PerformanceReplayRun {
             var history = try await model.historyService.openTail(header: header, base: nil, bypassCache: true)
             var remaining = Dictionary(uniqueKeysWithValues: entries.map { ($0.identity, $0) })
             var archived: [PerformanceReplayVerification.Identity: (text: String, complete: Bool)] = [:]
+            var actualText: [PerformanceReplayVerification.Identity: String] = [:]
             var seen = Set<String>()
             let maximumPages = conversation.itemCount + scenario.events.count + 1
             while true {
                 let projected = await session.merge(history, read: read)
                 for (identity, matches) in PerformanceReplayVerification.checks(entries, messages: projected.messages, window: history.window) {
                     checks[identity] = (checks[identity] ?? true) && matches
+                }
+                for message in projected.messages {
+                    if let turn = message.canonicalTurnID, let item = message.canonicalItemID {
+                        actualText[.init(turn: turn, item: item)] = message.text
+                    }
                 }
                 for turn in history.window.turns {
                     for entry in turn.entries {
@@ -264,7 +274,7 @@ final class PerformanceReplayRun {
                     "matches": checks[entry.identity] == true && stored?.text == entry.text && stored?.complete == true,
                     "retained": message != nil, "historyVerified": stored != nil,
                     "expectedSHA256": SHA256.hash(data: Data(entry.text.utf8)).map { String(format: "%02x", $0) }.joined(),
-                    "actualSHA256": stored.map { SHA256.hash(data: Data($0.text.utf8)).map { String(format: "%02x", $0) }.joined() } as Any? ?? NSNull()])
+                    "actualSHA256": actualText[entry.identity].map { SHA256.hash(data: Data($0.utf8)).map { String(format: "%02x", $0) }.joined() } as Any? ?? NSNull()])
             }
         }
         return verified
@@ -326,19 +336,19 @@ private struct PerformanceReplayNavigation {
     func setSidebarOpen(_ requested: Bool) async throws -> (before: Bool, after: Bool) {
         let window = workspace.keyWindow
         let deadline = ContinuousClock.now + .seconds(2)
-        while window.performanceActions?() == nil {
+        while window.performanceSidebar == nil {
             try Task.checkCancellation()
             guard ContinuousClock.now < deadline else {
                 throw PerformanceReplayScenario.Failure.invalidScenario("window commands unavailable")
             }
             try await Task.sleep(for: .milliseconds(16))
         }
-        guard let commands = window.performanceActions?() else {
+        guard let commands = window.performanceSidebar else {
             throw PerformanceReplayScenario.Failure.invalidScenario("window commands unavailable")
         }
-        let previous = commands.isSidebarOpen
-        if previous != requested { commands.run(.toggleSidebar) }
-        while window.performanceActions?()?.isSidebarOpen != requested || window.isHistoryDrawerOpen != requested {
+        let previous = commands.isOpen
+        if previous != requested { commands.toggle() }
+        while window.performanceSidebar?.isOpen != requested || window.isHistoryDrawerOpen != requested {
             try Task.checkCancellation()
             guard ContinuousClock.now < deadline else {
                 throw PerformanceReplayScenario.Failure.invalidScenario("sidebar presentation did not change")
@@ -362,10 +372,10 @@ private struct PerformanceReplayNavigation {
                     try await open(action.threadID)
                 case .toggleSidebar:
                     let window = workspace.keyWindow
-                    guard let commands = window.performanceActions?() else {
+                    guard let commands = window.performanceSidebar else {
                         throw PerformanceReplayScenario.Failure.invalidScenario("window commands unavailable")
                     }
-                    let transition = try await setSidebarOpen(!commands.isSidebarOpen)
+                    let transition = try await setSidebarOpen(!commands.isOpen)
                     presentation = ["sidebarBefore": transition.before, "sidebarAfter": transition.after]
                 case .scroll:
                     guard let screen = workspace.selectedScreen, screen.openThreadID == action.threadID,

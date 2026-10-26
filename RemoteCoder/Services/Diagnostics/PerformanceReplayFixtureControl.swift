@@ -1,5 +1,10 @@
 #if RC_PERF_HARNESS
 import Foundation
+#if os(iOS)
+import UIKit
+#else
+import AppKit
+#endif
 
 @MainActor
 enum PerformanceReplayFixtureControl {
@@ -21,14 +26,18 @@ enum PerformanceReplayFixtureControl {
         }
         try await Task.sleep(for: .seconds(2))
         samples.append(sample("released"))
+        let active = samples.allSatisfy { $0["active"] as? Bool == true }
+        let conserved = samples.contains { $0["conservedEnergy"] as? Bool == true }
         return ["mode": mode.rawValue, "samples": samples,
+            "activeThroughout": active, "conservedEnergy": conserved,
+            "valid": active && !conserved && samples.allSatisfy { $0["footprintMiB"] is Double },
             "fixtureSHA256": hash.map { $0 as Any } ?? NSNull(),
             "harnessSHA256": Bundle.main.object(forInfoDictionaryKey: "RemoteCoderPerfHarnessSHA256") ?? NSNull(),
             "scope": "fresh-process fixture-only control; state reducer and response bytes; excludes app sessions and Network buffers"]
     }
 
     private static func loadedSamples(_ url: URL) async throws -> ([[String: Any]], String) {
-        let (scenario, hash, root) = try await PerformanceReplayRun.fixture(url)
+        let (scenario, hash, root) = try await PerformanceReplayRun.preparedFixture(url)
         var state = try PerformanceReplayState(scenario, fixtureRoot: root)
         try await Task.sleep(for: .seconds(2))
         var samples = [sample("loaded")]
@@ -61,7 +70,14 @@ enum PerformanceReplayFixtureControl {
 
     private static func sample(_ stage: String, responseBytes: Int = 0) -> [String: Any] {
         let resources = ProcessResources.current()
-        return ["stage": stage, "at": Date.now.timeIntervalSince1970,
+        #if os(iOS)
+        let active = UIApplication.shared.applicationState == .active
+        #else
+        let active = NSApp.isActive
+        #endif
+        let thermal = ProcessInfo.processInfo.thermalState
+        return ["active": active, "conservedEnergy": ProcessInfo.processInfo.isLowPowerModeEnabled || thermal == .serious || thermal == .critical,
+            "stage": stage, "at": Date.now.timeIntervalSince1970,
             "footprintMiB": resources.map { Double($0.footprintBytes) / 1_048_576 as Any } ?? NSNull(),
             "processCPUms": resources.map { Double($0.cpuNanoseconds) / 1_000_000 as Any } ?? NSNull(),
             "responseBytes": responseBytes]

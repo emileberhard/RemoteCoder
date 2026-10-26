@@ -20,7 +20,7 @@ final class ChatWindowModel {
     @ObservationIgnored private let focusTasks = OwnedTasks<FocusTask>()
     @ObservationIgnored private let logger = Logger(subsystem: "RemoteCoder", category: "ChatWindow")
     #if RC_PERF_HARNESS
-    @ObservationIgnored var performanceActions: (@MainActor () -> ChatWindowActions?)?
+    @ObservationIgnored var performanceSidebar: PerformanceReplaySidebarControl?
     #endif
 
     private enum FocusTask: Hashable { case composer }

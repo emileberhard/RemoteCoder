@@ -108,8 +108,11 @@ struct PerformanceReplayScenario: Codable, Sendable {
         guard root.resolvingSymlinksInPath() != destination.resolvingSymlinksInPath() else {
             throw Failure.invalidScenario("prepared history must have a separate directory")
         }
+        try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+        var complete = false
+        defer { if !complete { try? FileManager.default.removeItem(at: destination) } }
         try FileManager.default.createDirectory(at: destination.appending(path: "history"),
-            withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+            withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
         let originalBytes = conversations.reduce(UInt64(try JSONEncoder().encode(self).count)) { total, conversation in
             total + (conversation.itemFile?.offsets.last ?? 0) + (conversation.turnFile?.offsets.last ?? 0)
         }
@@ -136,6 +139,7 @@ struct PerformanceReplayScenario: Codable, Sendable {
         guard bytes + UInt64(try JSONEncoder().encode(result).count) <= 512 * 1_048_576 else {
             throw Failure.invalidScenario("prepared fixture exceeds 512 MiB")
         }
+        complete = true
         return result
     }
 
