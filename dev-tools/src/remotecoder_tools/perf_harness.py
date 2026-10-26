@@ -775,6 +775,7 @@ def run_footprint(args, device: Simulator | Device) -> None:
     digest = hashlib.sha256(data).hexdigest()
     result = {"valid": False}
     try:
+        device.prepare()
         fresh_launch(device)
         if args.mode == "fixture":
             stage_scenario(device, source, json.loads(data))
@@ -793,11 +794,11 @@ def run_footprint(args, device: Simulator | Device) -> None:
         raise
     finally:
         cleanup = []
-        for operation in (device.terminate, device.uninstall):
+        for name in ("terminate", "uninstall"):
             try:
-                operation()
+                getattr(device, name)()
             except Exception as error:
-                cleanup.append(f"{operation.__name__}: {error}")
+                cleanup.append(f"{name}: {error}")
         result["cleanupFailures"] = cleanup
         result["valid"] = result.get("valid") is True and not cleanup
         result.update(identity)

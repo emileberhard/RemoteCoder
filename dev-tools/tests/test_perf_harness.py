@@ -482,6 +482,7 @@ class ScenarioTests(unittest.TestCase):
                         self.assertRaises(SystemExit):
                     perf_harness.run_scenario.__wrapped__(args, device, 0, perf_harness.time.monotonic() + 1800)
                 device.prepare.assert_called_once()
+                device.prepare.assert_called_once()
                 device.terminate.assert_called_once()
                 failed = json.loads((root / "reports.failed-1.json").read_text())
                 self.assertFalse(failed["valid"])
@@ -632,5 +633,24 @@ class FixtureControlTests(unittest.TestCase):
                 self.assertEqual(stage.call_count, int(mode == "fixture"))
                 saved = json.loads((root / "control.jsonl").read_text())
                 self.assertEqual(saved["fixtureInputSHA256"], digest)
+                device.prepare.assert_called_once()
                 device.terminate.assert_called_once()
                 device.uninstall.assert_called_once()
+
+    def test_termination_failure_keeps_evidence_and_still_uninstalls(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "scenario.json"
+            source.write_text('{}')
+            (root / "perf-build-identity.json").write_text('{"harnessSHA256":"identity"}')
+            device = Mock(derived=root, udid="test-ipad")
+            device.terminate.side_effect = RuntimeError("transport unavailable")
+            args = SimpleNamespace(fixture=source, mode="empty", log=str(root / "control.jsonl"))
+            result = {"valid": True, "activeThroughout": True, "conservedEnergy": False, "harnessSHA256": "identity"}
+            with patch.object(perf_harness, "verify_scenario_artifact"), patch.object(perf_harness, "fresh_launch"), \
+                 patch.object(perf_harness, "send", return_value=result), self.assertRaisesRegex(SystemExit, "cleanup failed"):
+                perf_harness.run_footprint.__wrapped__(args, device)
+            device.uninstall.assert_called_once()
+            saved = json.loads((root / "control.failed.json").read_text())
+            self.assertFalse(saved["valid"])
+            self.assertEqual(saved["cleanupFailures"], ["terminate: transport unavailable"])
