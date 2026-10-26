@@ -23,7 +23,6 @@ final class ChatWindowModel {
     @ObservationIgnored private let logger = AppLogger(category: "ChatWindow")
     #if RC_PERF_HARNESS
     @ObservationIgnored var performanceSidebar: PerformanceReplaySidebarControl?
-    @ObservationIgnored var performanceActions: (@MainActor () -> ChatWindowActions?)?
     #endif
 
     private enum FocusTask: Hashable { case composer }

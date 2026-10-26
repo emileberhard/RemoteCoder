@@ -345,6 +345,8 @@ unmeasured preparation. Measured history responses assemble bounded raw records;
 hidden streams retain references to recorded deltas and reconstruct partial
 content only on subscription or history reads. Item ordinals increase after each
 target history, and recorded transport sequence stamps are removed before replay.
+The replay therefore does not exercise production sequence deduplication for those
+frames; unstamped delta semantics stay unchanged.
 Final verification follows production history pages after measurement so normal
 live-item eviction does not invalidate a correct run.
 

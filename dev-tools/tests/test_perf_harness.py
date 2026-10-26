@@ -620,7 +620,7 @@ class FixtureControlTests(unittest.TestCase):
                 (root / "perf-build-identity.json").write_text(json.dumps(identity))
                 device = Mock(derived=root, udid="test-ipad")
                 digest = hashlib.sha256(source.read_bytes()).hexdigest()
-                result = {"harnessSHA256": "a" * 64, "fixtureSHA256": digest, "samples": []}
+                result = {"valid": True, "activeThroughout": True, "conservedEnergy": False, "harnessSHA256": "a" * 64, "fixtureSHA256": digest, "samples": []}
                 args = SimpleNamespace(fixture=source, mode=mode, log=str(root / "control.jsonl"))
                 with patch.object(perf_harness, "verify_scenario_artifact") as verify, \
                      patch.object(perf_harness, "fresh_launch") as fresh, \

@@ -245,12 +245,6 @@ struct ChatWindowActionsPublisher: View {
     var body: some View {
         let context = context
         performer.context = context
-        #if RC_PERF_HARNESS
-        window.performanceActions = { [weak performer] in
-            guard let performer, let context = performer.context else { return nil }
-            return ChatWindowActions(state: context.commandState, performer: performer)
-        }
-        #endif
         #if os(macOS)
         return ChatWindowFocusPublication(actions: ChatWindowActions(state: context.commandState, performer: performer)).equatable()
         #else
