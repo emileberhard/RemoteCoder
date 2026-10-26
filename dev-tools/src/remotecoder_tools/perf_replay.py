@@ -255,8 +255,6 @@ async def capture_batched_services(read, ids: list[str], responses: dict, errors
 
 
 def preparation_roots(known_roots: set[str], marks: dict, journey_targets: set[str]) -> set[str]:
-    if len(journey_targets) > 3:
-        raise ValueError("preparation permits at most three recorded journey exceptions")
     return {thread_id for thread_id in known_roots
             if marks.get(thread_id, {}).get("purpose") is None
             or (thread_id in journey_targets and marks.get(thread_id, {}).get("purpose") in {"probe", "automation"})}

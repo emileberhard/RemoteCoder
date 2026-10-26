@@ -439,8 +439,6 @@ def test_preparation_seeds_all_ordinary_roots_and_only_explicit_journey_purpose_
     allowed = perf_replay.preparation_roots(known_roots, marks, {"journey-probe", "journey-automation", "child"})
     assert allowed == {"ordinary", "null-purpose", "journey-probe", "journey-automation"}
     assert perf_replay.preparation_roots(known_roots, marks, set()) == {"ordinary", "null-purpose"}
-    with pytest.raises(ValueError, match="at most three"):
-        perf_replay.preparation_roots(known_roots, marks, {"one", "two", "three", "four"})
 
 
 @pytest.mark.parametrize("duration, expected_count", [(300, 20), (900, 60)])

@@ -28,8 +28,9 @@ building and keep unrelated device work out of the measurement window.
 
 ## Preparation and state scale
 
-A fresh isolated install is only the starting boundary. Before measurement, the
-app loads every captured sidebar header through bounded production pagination,
+A fresh isolated install is only the starting boundary. Before preparation, the
+app closes the drawer through its window command to stop width-dependent warming.
+It then loads every captured sidebar header through bounded production pagination,
 verifies retained root identities and reports omitted child headers, then prepares
 histories oldest first. Capture classifies the bounded header inventory before selecting histories:
 explicit stream targets come first, then ordinary authoritative `knownRoots`,
@@ -57,9 +58,11 @@ make checkpoints survive history shedding. The preparation marker currently
 reconstructs one text submission per selected root. It does not reconstruct
 unknown phone-local attachments. Canonical matching replaces redundant local
 image bytes, and history shedding removes canonical user payloads. Remote inline
-image size therefore cannot establish retained primary image size. Replace
-captured image pixels with synthetic content matching observed metadata before
-staging a fixture; never invent mismatched images to force retention.
+image size therefore cannot establish retained primary image size. The capture tool preserves remote image inputs; it does not reconstruct local
+attachments or sanitize pixels. The measured acceptance fixtures require a
+private metadata audit and synthetic replacements before staging. Retained
+attachment fidelity remains unknown; never invent mismatched images to force
+retention.
 
 Large remote histories alone are insufficient: disposable checkpoints are
 simply evicted at the normal cache limit. The 3.68.2 exhausted-history fix avoids
