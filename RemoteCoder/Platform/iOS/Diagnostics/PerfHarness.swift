@@ -82,8 +82,6 @@ final class PerfHarness {
             )
         case "status":
             writeResult(["cmd": "status", "id": id, "status": status()])
-        case "signposting-status":
-            writeResult(["cmd": name, "id": id, "enabled": PerformanceReplayRun.signposter.isEnabled])
         case "scroll":
             guard let model = workspace?.selectedScreen,
                   let index = command["message"] as? Int, model.messages.indices.contains(index) else {
