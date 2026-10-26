@@ -157,9 +157,14 @@ The driver waits for xctrace's recording-start notification before measurement,
 with synchronous notification registration, a bounded startup deadline and
 owned registration cleanup. Custom template content is hashed into comparison
 metadata. Long deferred recordings can lose early app signposts even when the
-trace starts on time. For a saved Immediate template, verify its recorded mode,
-complete journey, all scheduled action intervals and early/late scroll coverage
-before interpreting journey CPU or hitches. Missing boundaries remain unknown.
+trace starts on time. A saved template does not establish its recorded mode: verify the actual
+recording and complete journey, all scheduled action intervals and early/late
+scroll coverage before interpreting trace-scoped results. A saved Immediate
+setting can still produce Deferred recording through xctrace. Missing boundaries
+leave hitch coverage unknown. CPU samples may be scoped separately by the app
+report timestamps only after verifying sample coverage at both window boundaries
+and alignment with surviving action receipts; this does not recover lost
+presentation evidence.
 A private buffer uses the unchanged production `ProcessResourceSampler`, including
 its cadence, transition spacing and mixed-interval semantics. Samples use scene, surface,
 visible-running-turn and voice-call breakdown. Counter deltas belong to the
@@ -240,7 +245,7 @@ Use `xcrun xctrace record --show-recording-options --template <template> --devic
 <test-device-udid>` to inspect the selected toolchain's capture defaults.
 
 ```sh
-scripts/perf-trace --symbols /absolute/RemoteCoder.app --frames 30 \
+scripts/perf-trace --symbols /absolute/RemoteCoder.app.dSYM --frames 30 \
   --callers 'AG::|Layout|malloc|write' summarize /absolute/traces/cpu-1.trace > /absolute/cpu-summary.json
 xcrun xctrace export --input /absolute/traces/cpu-1.trace --toc > /absolute/cpu-tables.xml
 ```

@@ -199,6 +199,8 @@ thread and `open-bench` opens a thread in a window that ends `--tail` seconds af
 its transcript loads. Both fresh-install per run and print one JSON window per run;
 a window is rejected unless the app stayed active at full energy and drew frames.
 
+A saved trace template does not prove the recorded mode. Missing journey or scroll signposts leave hitch coverage unknown even when app CPU counters and timestamped CPU samples remain usable. Supply the matching dSYM explicitly when resolving sampled app frames.
+
 The implementation is `src/remotecoder_tools/perf_harness.py`. `build` takes the
 worktree's source lease and a background compiler slot from
 `scripts/build_support.py`, so it queues behind `just install-dev`; every command
