@@ -42,7 +42,7 @@ struct PerformanceReplayVerificationTests: ConversationHistoryFixtures {
         #expect(checks.count == completions.count)
         #expect(checks.values.allSatisfy { $0 })
         let latest = try #require(completions.first { $0.identity.item == "item-298" })
-        let incorrect = ChatMessage(role: .assistant, text: "Corrupted content", canonicalTurnID: "turn", canonicalItemID: "item-298")
+        let incorrect = ChatMessage(role: .codex, text: "Corrupted content", canonicalTurnID: "turn", canonicalItemID: "item-298")
         let loaded = GatewayHistoryService.ConversationSnapshot.fixture(wire: entries([items[298]], turnID: "turn"))
         #expect(PerformanceReplayVerification.checks([latest], messages: [incorrect], window: loaded.window)[latest.identity] == false)
         #expect(PerformanceReplayVerification.checks([latest], messages: [], window: loaded.window)[latest.identity] == false)
