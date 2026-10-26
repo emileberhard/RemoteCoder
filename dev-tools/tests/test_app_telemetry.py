@@ -296,8 +296,10 @@ def test_checkpoint_inventory_survives_indexing_and_keeps_latest_host_snapshot_w
                "ts": "2026-10-26T10:00:00Z", "inventory": {"hostID": "host-a", "totals": {"records": 1}}}
     latest = {"recordType": "checkpointInventory", "runID": "newer", "seq": 2,
               "ts": "2026-10-26T11:00:00Z", "inventory": {
-                  "hostID": "host-a", "totals": {"records": 150, "recordsWithKnownContents": 128},
-                  "droppedRecords": 22, "entries": [{"conversationID": "conversation"}],
+                  "hostID": "host-a", "totals": {"records": 150, "recordsWithKnownContents": 128,
+                      "sizeDistributions": {"upperBoundsBytes": [0, 1024],
+                          "protected": {"physicalFileBytes": [0, 0, 150], "primaryPayloadBytes": [0, 0, 150]}}},
+                  "droppedRecords": 22, "entries": [{"conversationID": "conversation", "threadID": "exact-thread"}],
               }}
     other = {**earlier, "seq": 2, "inventory": {"hostID": "host-b", "totals": {"records": 0}}}
     summary = summarize_segment([json.dumps(record).encode() for record in (latest, earlier, other)])
@@ -308,3 +310,5 @@ def test_checkpoint_inventory_survives_indexing_and_keeps_latest_host_snapshot_w
         {"runID": "older", "ts": other["ts"], **other["inventory"]},
     ]
     assert "attachmentCount" not in inventories[0]["totals"]
+    assert inventories[0]["entries"][0]["threadID"] == "exact-thread"
+    assert inventories[0]["totals"]["sizeDistributions"]["protected"]["physicalFileBytes"] == [0, 0, 150]

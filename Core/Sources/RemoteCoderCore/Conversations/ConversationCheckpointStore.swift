@@ -148,12 +148,18 @@ actor ConversationCheckpointStore {
     var retainedRevisionCount: Int { revisions.count }
     var accountedDiskBytes: Int { records.values.reduce(0) { $0 + $1.bytes } }
 
-    func inventory() -> CheckpointInventory? {
+    func inventory(threadIDs: [UUID: String]) -> CheckpointInventory? {
         guard indexed else { return nil }
         var inventory = CheckpointInventory(hostID: hostID, cacheBudgetBytes: budgetBytes,
             primaryBudgetBytes: primaryBudgetBytes)
-        for (id, record) in records.sorted(by: { $0.key.uuidString < $1.key.uuidString }) {
-            inventory.include(.init(conversationID: id, protected: record.protected,
+        let ordered = records.sorted {
+            if ($0.value.protected == true) != ($1.value.protected == true) { return $0.value.protected == true }
+            if $0.value.bytes != $1.value.bytes { return $0.value.bytes > $1.value.bytes }
+            return $0.key.uuidString < $1.key.uuidString
+        }
+        for (id, record) in ordered {
+            inventory.include(.init(conversationID: id, threadID: record.inventoryContents?.threadID ?? threadIDs[id],
+                protected: record.protected,
                 retained: fences[id]?.retained == true, invalidation: record.invalidation?.rawValue,
                 primaryPayloadBytes: record.payloadBytes, cacheBytes: record.cacheBytes,
                 physicalFileBytes: record.bytes, contents: record.inventoryContents))

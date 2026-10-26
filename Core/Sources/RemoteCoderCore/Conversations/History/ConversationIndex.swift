@@ -77,6 +77,16 @@ actor ConversationIndex {
         return map[sessionID]
     }
 
+    func loadedThreadIDs() -> [UUID: String] {
+        var identities: [UUID: String] = [:]
+        var ambiguous: Set<UUID> = []
+        for (threadID, conversationID) in map {
+            if identities.updateValue(threadID, forKey: conversationID) != nil { ambiguous.insert(conversationID) }
+        }
+        for id in ambiguous { identities.removeValue(forKey: id) }
+        return identities
+    }
+
     func remove(sessionID: String) {
         loadIfNeeded()
         if map.removeValue(forKey: sessionID) != nil { needsSave = true }

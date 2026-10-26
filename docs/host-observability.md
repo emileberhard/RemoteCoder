@@ -634,26 +634,44 @@ only, never WebKit's processes, and it cannot apportion battery to a feature.
   decodes a checkpoint or reads attachment bytes. The existing buffer and outbox
   upload a `checkpointInventory` line with an `inventory` payload: `hostID`,
   `cacheBudgetBytes`, `primaryBudgetBytes`, `totals`, `entries` and `droppedRecords`.
-  Entries carry the local `conversationID`, owner `protected` and fence `retained`
+  Entries carry the local `conversationID`, optional exact `threadID`, owner `protected` and fence `retained`
   states, optional `invalidation`, `primaryPayloadBytes`, `cacheBytes`,
   `physicalFileBytes` and optional `contents`. The byte counts are the owner's
   current accounting, including retained sidecars and recovery files; physical
   bytes mean accounted file lengths, not allocated filesystem blocks or a fresh
   disk measurement. Primary accounting can conservatively include unreadable data.
-  Contents retain only `threadID`, canonical `turnCount`/`itemCount` and history
+  Contents retain only canonical `turnCount`/`itemCount` and history
   window `historyItemCount`/`historyTurnCount` (retained metadata entries), captured
   when ordinary save/load/index work already has the checkpoint decoded. An absent
-  thread ID inside known contents is a draft. Absent contents mean identity and
-  composition are unknown, including unreadable, imported, mixed-format or
+  thread ID is unknown or a draft. Absent contents mean composition is unknown,
+  including unreadable, imported, mixed-format or
   sidecar/recovery-only records. Attachment counts and byte sizes are currently
   untracked and remain absent/unknown; telemetry never scans or decodes them.
   There are no titles, filenames, conversation text or attachment payloads.
   Each inventory retains at most 128 entries and its compact JSON payload stays
   below 128 KiB (the line envelope adds less than 512 bytes). Entries are selected
-  in conversation UUID order and oversized entries count as dropped. Totals cover
+  protected first, then by descending physical file bytes, with conversation UUID
+  as the tie-breaker; oversized entries count as dropped. Totals cover
   every record, including dropped entries; whole-store content counts stay unknown
   if any record's contents are unknown. `recordsWithKnownContents` and
-  `unknownProtectionRecords` expose that coverage. `just app-telemetry
+  `unknownProtectionRecords` expose that coverage. `totals.sizeDistributions`
+  counts every record, including dropped entries, in physical-file and primary-payload
+  byte histograms split into `protected`, `unprotected` and `unknownProtection`.
+  `upperBoundsBytes` gives inclusive bucket ceilings; the final count is overflow
+  above the last ceiling. The fixed ceilings are 0, 1 KiB, 16 KiB, 256 KiB,
+  1 MiB, 4 MiB, 16 MiB, 64 MiB and 256 MiB.
+  Identity comes from already decoded checkpoint bookkeeping, supplemented by
+  `ConversationIndex`'s loaded, unambiguous thread-to-conversation map. Inventory
+  collection never loads that map from disk. Missing or ambiguous mappings stay
+  unknown. Conversation UUIDs are not reversible thread identities: new drafts
+  start with random UUIDs and the host-scoped index binds them to the actual
+  thread. `ConversationSessions.session(threadID:)` uses
+  `ChatMessage.deterministicID(for: threadID)` only when no binding exists: it
+  takes the first 16 bytes of SHA-256 over the thread ID's UTF-8, then stamps
+  UUID version 5 and RFC 4122 variant bits. It has no host input or UUID v5
+  namespace, cannot be inverted and is not the authoritative mapping for old
+  records. `ConversationAddress`'s `hostID|threadID` identity is separate.
+  `just app-telemetry
   checkpoint-inventory --device <exact-device>` returns the latest snapshot per
   host in the selected window, without turning absent counts into zero.
 

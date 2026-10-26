@@ -706,7 +706,8 @@ actor ConversationSessions {
     }
 
     func checkpointInventory() async -> CheckpointInventory? {
-        await checkpoints.inventory()
+        let threadIDs = await sessionIndex.loadedThreadIDs()
+        return await checkpoints.inventory(threadIDs: threadIDs)
     }
 
     func session(conversationID: UUID, threadID: String? = nil) async -> ConversationSession {

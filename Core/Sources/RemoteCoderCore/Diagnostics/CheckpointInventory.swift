@@ -3,6 +3,7 @@ import Foundation
 struct CheckpointInventory: Encodable, Sendable {
     static let entryLimit = 128
     static let byteLimit = 128 * 1_024
+    private static let payloadOverheadByteBound = 4_096
 
     struct Contents: Encodable, Sendable {
         let threadID: String?
@@ -10,8 +11,6 @@ struct CheckpointInventory: Encodable, Sendable {
         let historyTurnCount: Int
         let turnCount: Int
         let itemCount: Int
-        var attachmentCount: Int? = nil
-        var attachmentBytes: [Int]? = nil
 
         init(_ checkpoint: ConversationState.Checkpoint) {
             threadID = checkpoint.threadID
@@ -20,10 +19,15 @@ struct CheckpointInventory: Encodable, Sendable {
             turnCount = checkpoint.turns.count
             itemCount = checkpoint.turns.values.reduce(0) { $0 + $1.items.count }
         }
+
+        private enum CodingKeys: String, CodingKey {
+            case historyItemCount, historyTurnCount, turnCount, itemCount
+        }
     }
 
     struct Entry: Encodable, Sendable {
         let conversationID: UUID
+        let threadID: String?
         let protected: Bool?
         let retained: Bool
         let invalidation: String?
@@ -31,6 +35,37 @@ struct CheckpointInventory: Encodable, Sendable {
         let cacheBytes: Int
         let physicalFileBytes: Int
         let contents: Contents?
+    }
+
+    struct SizeDistributions: Encodable, Sendable {
+        static let bucketUpperBoundsBytes = [0, 1_024, 16_384, 262_144, 1_048_576, 4_194_304, 16_777_216, 67_108_864, 268_435_456]
+
+        struct Counts: Encodable, Sendable {
+            var physicalFileBytes = Array(repeating: 0, count: SizeDistributions.bucketUpperBoundsBytes.count + 1)
+            var primaryPayloadBytes = Array(repeating: 0, count: SizeDistributions.bucketUpperBoundsBytes.count + 1)
+
+            mutating func include(_ entry: Entry) {
+                let physical = SizeDistributions.bucketUpperBoundsBytes.firstIndex { entry.physicalFileBytes <= $0 }
+                    ?? SizeDistributions.bucketUpperBoundsBytes.count
+                let primary = SizeDistributions.bucketUpperBoundsBytes.firstIndex { entry.primaryPayloadBytes <= $0 }
+                    ?? SizeDistributions.bucketUpperBoundsBytes.count
+                physicalFileBytes[physical] += 1
+                primaryPayloadBytes[primary] += 1
+            }
+        }
+
+        let upperBoundsBytes = Self.bucketUpperBoundsBytes
+        var protected = Counts()
+        var unprotected = Counts()
+        var unknownProtection = Counts()
+
+        mutating func include(_ entry: Entry) {
+            switch entry.protected {
+            case true?: protected.include(entry)
+            case false?: unprotected.include(entry)
+            case nil: unknownProtection.include(entry)
+            }
+        }
     }
 
     struct Totals: Encodable, Sendable {
@@ -45,11 +80,11 @@ struct CheckpointInventory: Encodable, Sendable {
         var historyTurnCount: Int? = 0
         var turnCount: Int? = 0
         var itemCount: Int? = 0
-        var attachmentCount: Int? = nil
-        var attachmentBytes: Int? = nil
+        var sizeDistributions = SizeDistributions()
 
         mutating func include(_ entry: Entry) {
             records += 1
+            sizeDistributions.include(entry)
             if entry.protected == true { protectedRecords += 1 }
             if entry.protected == nil { unknownProtectionRecords += 1 }
             primaryPayloadBytes += entry.primaryPayloadBytes
@@ -88,7 +123,7 @@ struct CheckpointInventory: Encodable, Sendable {
         totals.include(entry)
         guard entries.count < Self.entryLimit,
               let bytes = try? JSONEncoder().encode(entry).count,
-              entryBytes + bytes < Self.byteLimit - 2_048 else {
+              entryBytes + bytes < Self.byteLimit - Self.payloadOverheadByteBound else {
             droppedRecords += 1
             return
         }
