@@ -62,7 +62,7 @@ SWITCHES = {
     "scrollTargets", "scrollPosition", "geometryGroup", "latestEdge",
     "contextMenu", "textSelection", "tooltips", "growthGate", "resourceSampler",
 }
-TRACE_WARMUP = 4
+TRACE_WARMUP = 10
 TRACE_COMPLETE = "Time limit reached"
 CLOCK_SLACK = 0.5
 SIGNING_KEYCHAIN = Path.home() / "configs/skills/apple-devops/scripts/ensure-signing-keychain"
@@ -721,6 +721,21 @@ def verify_scenario_artifact(device, identity: dict) -> None:
         raise SystemExit("app artifact changed while preparing or queuing the measurement")
 
 
+def wait_for_signposts(device: Simulator | Device, recorder: subprocess.Popen, trace_path: str) -> None:
+    deadline = time.monotonic() + TRACE_WARMUP
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise SystemExit("Instruments did not enable replay signposts before measurement")
+        if recorder.poll() is not None:
+            finish_trace(recorder, trace_path)
+            raise SystemExit("Instruments stopped before replay signposts became ready")
+        ready = send(device, {"cmd": "signposting-status"}, min(1, remaining))
+        if ready and ready.get("enabled") is True:
+            return
+        time.sleep(0.2)
+
+
 @leased
 def run_scenario(args, device: Simulator | Device, index: int, deadline: float) -> None:
     scenario_outputs(args)
@@ -759,9 +774,12 @@ def run_scenario(args, device: Simulator | Device, index: int, deadline: float) 
         with (tracing(device, args.trace_template, args.instrument, args.trace_seconds, trace_path)
               if trace_path else contextlib.nullcontext()) as recorder:
             if recorder:
-                time.sleep(TRACE_WARMUP)
-                if recorder.poll() is not None:
-                    finish_trace(recorder, trace_path)
+                if "Points of Interest" in (args.instrument or []):
+                    wait_for_signposts(device, recorder, trace_path)
+                else:
+                    time.sleep(TRACE_WARMUP)
+                    if recorder.poll() is not None:
+                        finish_trace(recorder, trace_path)
             result = send(device, {"cmd": "scenario-run"}, duration + 90, quiet_seconds=duration + 1)
             result = result if result is not None else {"error": "scenario-run timed out"}
             result.update(identity)

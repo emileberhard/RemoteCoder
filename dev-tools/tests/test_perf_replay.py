@@ -86,7 +86,8 @@ def test_fixture_placement_rejects_worktrees_and_other_private_roots(tmp_path):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("role", ["root", "child", "unresolved"])
-async def test_capture_paginates_native_history_and_reads_only_parent_headers(tmp_path, monkeypatch, role):
+@pytest.mark.parametrize("prioritize_roots", [False, True])
+async def test_capture_paginates_native_history_and_reads_only_parent_headers(tmp_path, monkeypatch, role, prioritize_roots):
     calls = []
     active = {"coverage": {"codex": True, "claude": True}, "activeTurns": [], "externalActivity": {"sessions": [], "codexAvailable": True, "claudeAvailable": True}}
 
@@ -127,8 +128,11 @@ async def test_capture_paginates_native_history_and_reads_only_parent_headers(tm
         elif method == "thread/turns/list":
             result = {"data": [{"id": "turn", "status": "completed", "items": [], "itemsView": "notLoaded"}]}
         elif method == "conversation/agents/classify":
-            result = {"relations": {"chosen": {"parentThreadId": "parent"}} if role == "child" else {},
-                      "knownRoots": ["chosen"] if role == "root" else []}
+            relations = {"chosen": {"parentThreadId": "parent"}} if role == "child" else {}
+            if prioritize_roots:
+                relations["known-null"] = {"parentThreadId": "parent"}
+            result = {"relations": relations,
+                      "knownRoots": (["chosen"] if role == "root" else []) + (["missing"] if prioritize_roots else [])}
         elif method == "thread/read":
             assert params == {"threadId": "parent", "includeTurns": False}
             result = {"thread": {"id": "parent", "cwd": "/synthetic"}}
@@ -147,10 +151,15 @@ async def test_capture_paginates_native_history_and_reads_only_parent_headers(tm
     monkeypatch.setattr(perf_replay, "_open_gateway", gateway)
     monkeypatch.setattr(perf_replay, "_initialize", initialize)
     monkeypatch.setattr(perf_replay, "_timed_rpc", rpc)
-    args = argparse.Namespace(out="scenario.json", thread=["chosen"], sidebar_limit=10, history_count=1)
+    expected_histories = 2 if prioritize_roots else 1
+    args = argparse.Namespace(out="scenario.json", thread=["chosen"], sidebar_limit=10, history_count=expected_histories)
     result = await perf_replay.capture(args)
-    assert result["captureSummary"]["histories"] == 1
-    assert len(result["conversations"]) == (4 if role == "child" else 3)
+    assert result["captureSummary"]["histories"] == expected_histories
+    assert len(result["conversations"]) == (4 if role == "child" or prioritize_roots else 3)
+    if prioritize_roots:
+        assert {conversation["thread"]["id"] for conversation in result["conversations"] if "itemFile" in conversation} == {"chosen", "missing"}
+        assert not any(method == "thread/items/list" and params["threadId"] == "known-null" for method, params in calls)
+        assert next(index for index, (method, _) in enumerate(calls) if method == "conversation/agents/classify") < next(index for index, (method, _) in enumerate(calls) if method == "thread/turns/list")
     conversation = result["conversations"][0]
     assert ("localSubmission" in conversation) == (role == "root")
     records = [json.loads(line) for line in (tmp_path / conversation["itemFile"]["path"]).read_bytes().splitlines()]
@@ -167,8 +176,8 @@ async def test_capture_paginates_native_history_and_reads_only_parent_headers(tm
         assert evidence[phase]["providerCoverage"]["codex"] is True
         assert evidence[phase]["externalAvailability"]["codex"] is True
         assert len(evidence[phase]["snapshotSHA256"]) == 64
-    assert result["captureSummary"]["idleEvidence"]["beforeAndAfterChecks"] == 2
-    assert len([call for call in calls if call[0] == "thread/items/list"]) == 2
+    assert result["captureSummary"]["idleEvidence"]["beforeAndAfterChecks"] == expected_histories * 2
+    assert len([call for call in calls if call[0] == "thread/items/list"]) == expected_histories * 2
     assert all(params.get("includeTurns") is not True for _, params in calls)
     active["activeTurns"] = [{"threadId": "chosen"}]
     with pytest.raises(ValueError, match="selected thread is active"):

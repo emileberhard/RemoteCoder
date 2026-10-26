@@ -260,6 +260,23 @@ class ArgumentTests(unittest.TestCase):
 
 
 class ScenarioTests(unittest.TestCase):
+    def test_trace_waits_for_app_signposting_readiness(self) -> None:
+        recorder = Mock()
+        recorder.poll.return_value = None
+        with patch.object(perf_harness.time, "monotonic", return_value=0), \
+                patch.object(perf_harness.time, "sleep") as sleep, \
+                patch.object(perf_harness, "send", side_effect=[None, {"enabled": False}, {"enabled": True}]) as send:
+            perf_harness.wait_for_signposts(Mock(), recorder, "trace")
+        self.assertEqual(send.call_count, 3)
+        self.assertEqual(send.call_args.args[1], {"cmd": "signposting-status"})
+        self.assertEqual(sleep.call_count, 2)
+
+    def test_trace_readiness_timeout_stops_before_measurement(self) -> None:
+        with patch.object(perf_harness.time, "monotonic", side_effect=[0, perf_harness.TRACE_WARMUP + 1]), \
+                patch.object(perf_harness, "send") as send, self.assertRaisesRegex(SystemExit, "enable replay signposts"):
+            perf_harness.wait_for_signposts(Mock(), Mock(), "trace")
+        send.assert_not_called()
+
     def test_invalid_windows_and_trace_failures_keep_identity_and_diagnostics(self) -> None:
         for failure in ("inactive", "trace", "cleanup", "interrupt", "artifact", "content", "trace-telemetry"):
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
@@ -277,7 +294,7 @@ class ScenarioTests(unittest.TestCase):
                           "frames": 120, "fixtureSHA256": hashlib.sha256(data).hexdigest(), "actions": [],
                           "appliedFrames": 0, "diagnostic": "preserve me", "telemetryFiles": ["segment.jsonl.gz"]}
                 args = SimpleNamespace(fixture=root / "fixture.json", trace_template="Time Profiler",
-                                       trace_seconds=20, runs=1, settle=0, trace_dir=str(root), label="run",
+                                       trace_seconds=25, runs=1, settle=0, trace_dir=str(root), label="run",
                                        instrument=[], log=str(root / "reports.jsonl"))
                 events = []
                 def uninstall(failure=failure, events=events):

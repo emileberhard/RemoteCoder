@@ -254,8 +254,10 @@ driver: it forks the given threads, marks them `probe`, runs one cheap Luna turn
 fork, writes the private `replay.json` from the complete per-agent streams, and always
 interrupts, archives and uninstalls; its `report.json` decides validity.
 
-Capture uses bounded native history pages with authoritative idle checks and
-header-only parent discovery. Version 2 histories are indexed private files;
+Capture classifies the bounded header inventory before selecting explicit stream
+targets and authoritative known-root histories. Other child and unresolved headers
+do not consume the history budget. History reads use bounded native pages with
+authoritative idle checks and header-only parent discovery. Version 2 histories are indexed private files;
 the loopback server reads requested pages without retaining the library.
 Unmeasured preparation loads and verifies the sidebar through production list
 pagination, reconciles captured user submissions only for authoritative known

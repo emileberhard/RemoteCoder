@@ -31,8 +31,11 @@ building and keep unrelated device work out of the measurement window.
 A fresh isolated install is only the starting boundary. Before measurement, the
 app loads every captured sidebar header through bounded production pagination,
 verifies retained root identities and reports omitted child headers, then prepares
-histories oldest first. Only authoritative `knownRoots` retain local-submission
-preparation markers; child and unresolved histories remain available remotely.
+histories oldest first. Capture classifies the bounded header inventory before selecting histories:
+explicit stream targets come first, then authoritative `knownRoots`. Other child
+and unresolved conversations retain sidebar headers without consuming the history
+budget. Only known roots retain local-submission preparation markers; explicitly
+selected child and unresolved histories remain available remotely.
 This is an ownership proxy: actual phone ownership is unknown even for roots.
 For each marked history, page through the captured history, submit its captured text-only user message,
 persist its submission receipt, accept its captured turn identity, reopen the
@@ -125,6 +128,8 @@ source/build identity, device/OS/display/locale, toolchain, signing mode, driver
 hash, instrumentation, preparation evidence, actual action/delivery lateness,
 process/main-thread CPU, sampled footprint, frame intervals and counters.
 `ReplayJourney` and `ReplayAction` signposts delimit corresponding operations.
+When Points of Interest is requested, the driver waits for the app's signposter
+to become enabled before starting measurement, with a ten-second readiness bound.
 A private buffer uses the unchanged production `ProcessResourceSampler`, including
 its cadence, transition spacing and mixed-interval semantics. Samples use scene, surface,
 visible-running-turn and voice-call breakdown. Counter deltas belong to the
