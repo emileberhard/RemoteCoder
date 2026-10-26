@@ -429,3 +429,15 @@ def test_recorded_and_inferred_turn_start_timestamps_are_wire_integers():
     assert len(starts) == 2
     assert all(isinstance(event["frame"]["params"]["turn"]["startedAt"], int) for event in starts)
     assert any(event["at"] % 1 for event in starts)
+
+
+def test_preparation_seeds_all_ordinary_roots_and_only_explicit_journey_purpose_exceptions():
+    known_roots = {"ordinary", "null-purpose", "probe", "automation", "journey-probe", "journey-automation", "unknown-purpose"}
+    marks = {"null-purpose": {"purpose": None}, "probe": {"purpose": "probe"}, "automation": {"purpose": "automation"},
+             "journey-probe": {"purpose": "probe"}, "journey-automation": {"purpose": "automation"},
+             "unknown-purpose": {"purpose": "future"}}
+    allowed = perf_replay.preparation_roots(known_roots, marks, {"journey-probe", "journey-automation", "child"})
+    assert allowed == {"ordinary", "null-purpose", "journey-probe", "journey-automation"}
+    assert perf_replay.preparation_roots(known_roots, marks, set()) == {"ordinary", "null-purpose"}
+    with pytest.raises(ValueError, match="at most three"):
+        perf_replay.preparation_roots(known_roots, marks, {"one", "two", "three", "four"})

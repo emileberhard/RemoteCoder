@@ -253,6 +253,14 @@ async def capture_batched_services(read, ids: list[str], responses: dict, errors
             responses.pop(method, None)
 
 
+def preparation_roots(known_roots: set[str], marks: dict, journey_targets: set[str]) -> set[str]:
+    if len(journey_targets) > 3:
+        raise ValueError("preparation permits at most three recorded journey exceptions")
+    return {thread_id for thread_id in known_roots
+            if marks.get(thread_id, {}).get("purpose") is None
+            or (thread_id in journey_targets and marks.get(thread_id, {}).get("purpose") in {"probe", "automation"})}
+
+
 async def capture(args) -> dict:
     config = _resolve_config(args)
     destination = private_destination(args.out)
@@ -338,7 +346,15 @@ async def capture(args) -> dict:
         if classification is None:
             raise ValueError("authoritative root classification is unavailable")
         known_roots = set(classification.get("knownRoots", []))
-        candidates = list(dict.fromkeys(selected + [thread_id for thread_id in headers if thread_id in known_roots]))
+        responses["conversation/marks/read"] = await read("conversation/marks/read", {})
+        marks = responses["conversation/marks/read"].get("threads")
+        if not isinstance(marks, dict):
+            raise ValueError("authoritative conversation purposes are unavailable")
+        journey_targets = set(selected[:min(3, len(recording_turn_ids(recording)))]) if recording else set()
+        eligible_roots = preparation_roots(known_roots, marks, journey_targets)
+        root_candidates = sorted((thread_id for thread_id in headers if thread_id in known_roots),
+                                 key=lambda thread_id: marks.get(thread_id, {}).get("purpose") is not None)
+        candidates = list(dict.fromkeys(selected + root_candidates))
 
         async def page_history(thread_id, method):
             records, cursor, seen = [], None, set()
@@ -380,7 +396,7 @@ async def capture(args) -> dict:
                     raise ValueError("candidate activity changed during capture")
                 if any(turn.get("status") == "inProgress" for turn in turns):
                     raise ValueError("candidate contains an unfinished turn")
-                submission = local_submission(thread_id, items) if thread_id in known_roots else None
+                submission = local_submission(thread_id, items) if thread_id in eligible_roots else None
                 size = sum(len(encoded(record)) + 1 for record in items + turns)
                 if total_bytes + size > MAX_BUNDLE_BYTES - MAX_PAGE_BYTES:
                     raise ValueError("fixture bundle exceeds 512 MiB")
@@ -405,7 +421,7 @@ async def capture(args) -> dict:
         ids = [conversation["thread"]["id"] for conversation in conversations]
         for method, params in {
             "model/list": {}, "account/read": {}, "account/rateLimits/read": {},
-            "conversation/metadata/read": {}, "conversation/marks/read": {},
+            "conversation/metadata/read": {},
             "host/info": {}, "directory/favorites/read": {},
             "conversation/projects/resolve": {"directories": sorted({thread.get("cwd", "") for thread in headers.values()})},
         }.items():
@@ -450,8 +466,8 @@ async def capture(args) -> dict:
     captured_ids = {conversation["thread"]["id"] for conversation in conversations}
     if completion_times is not None:
         scenario["completionTimes"] = {key: value for key, value in completion_times.items() if key in captured_ids}
-    scenario["provenance"]["historySelection"] = "explicit stream targets followed by authoritative known roots; other child and unresolved conversations retain headers only"
-    scenario["provenance"]["localPreparation"] = "known-root-only ownership proxy; actual phone ownership is unknown"
+    scenario["provenance"]["historySelection"] = "explicit stream targets, ordinary authoritative known roots, then remaining root histories; other child and unresolved conversations retain headers only"
+    scenario["provenance"]["localPreparation"] = "all eligible ordinary known roots; at most three explicit recorded journey purpose exceptions; actual phone ownership is unknown"
     scenario["provenance"]["completionMetadata"] = {"startedAtUnixSeconds": completion_metadata_started_at,
         "capturedAtUnixSeconds": completion_metadata_ended_at,
         "source": "thread/list completionTimes sibling map", "includeCompletionTimes": True,

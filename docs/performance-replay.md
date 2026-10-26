@@ -32,10 +32,13 @@ A fresh isolated install is only the starting boundary. Before measurement, the
 app loads every captured sidebar header through bounded production pagination,
 verifies retained root identities and reports omitted child headers, then prepares
 histories oldest first. Capture classifies the bounded header inventory before selecting histories:
-explicit stream targets come first, then authoritative `knownRoots`. Other child
+explicit stream targets come first, then ordinary authoritative `knownRoots`,
+then remaining root histories. Other child
 and unresolved conversations retain sidebar headers without consuming the history
-budget. Only known roots retain local-submission preparation markers; explicitly
-selected child and unresolved histories remain available remotely.
+budget. Local-submission preparation includes every eligible ordinary known root,
+excluding explicit `probe` and `automation` purposes. At most three explicit
+recorded journey targets may retain markers as controlled purpose exceptions.
+Child, unresolved, probe and automation histories remain available remotely.
 This is an ownership proxy: actual phone ownership is unknown even for roots.
 For each marked history, page through the captured history, submit its captured text-only user message,
 persist its submission receipt, accept its captured turn identity, reopen the
@@ -56,9 +59,10 @@ record/cache/primary/eviction accounting and
 persistence phase counters when that version provides them. Physical file sizes include SQLite/WAL residue;
 they are distinct from logical write bytes and the owner's cache accounting.
 
-Prepare a deterministic recency-based subset, including the recorded streams,
-when checkpoint population is unknown; choose and freeze its count against the
-independent field byte range before CPU comparisons. Keep remaining captured
+Freeze eligible ordinary roots and the explicit journey exceptions before CPU
+comparisons. When actual phone ownership is unknown, report the proxy's state
+size and its difference from the independent field byte range. Do not substitute
+purpose-tagged tasks solely to reach that range. Keep remaining captured
 histories available for ordinary reads. Reports retain owner inventories before
 and after the measured window so a transient preparation peak is visible.
 
@@ -128,8 +132,8 @@ source/build identity, device/OS/display/locale, toolchain, signing mode, driver
 hash, instrumentation, preparation evidence, actual action/delivery lateness,
 process/main-thread CPU, sampled footprint, frame intervals and counters.
 `ReplayJourney` and `ReplayAction` signposts delimit corresponding operations.
-When Points of Interest is requested, the driver waits for the app's signposter
-to become enabled before starting measurement, with a ten-second readiness bound.
+The driver waits for xctrace's recording-start notification before measurement,
+with a bounded startup deadline and owned notification-watcher cleanup.
 A private buffer uses the unchanged production `ProcessResourceSampler`, including
 its cadence, transition spacing and mixed-interval semantics. Samples use scene, surface,
 visible-running-turn and voice-call breakdown. Counter deltas belong to the
