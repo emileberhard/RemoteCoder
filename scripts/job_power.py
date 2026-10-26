@@ -110,7 +110,7 @@ def serve_host_job(lease_path: Path):
 
 @contextmanager
 def host_job_assertion(shell: list[str], lease_path: Path):
-    command = shlex.join(["python3", "-c", Path(__file__).read_text(), str(lease_path)])
+    command = shlex.join(["python3", "-c", _source, str(lease_path)])
     process = subprocess.Popen(
         [*shell, command],
         stdin=subprocess.PIPE,
@@ -174,3 +174,5 @@ def host_job_assertion(shell: list[str], lease_path: Path):
 
 if __name__ == "__main__":
     serve_host_job(Path(sys.argv[1]))
+else:
+    _source = Path(__file__).read_text()

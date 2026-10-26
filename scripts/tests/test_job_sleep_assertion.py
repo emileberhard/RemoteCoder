@@ -121,6 +121,17 @@ except (ValueError,SystemExit): pass
 p=root/'returned.tmp'; p.write_text('{}'); p.replace(root/'returned.json')
 sys.stdin.read(1)
 """
+DELETED_SOURCE_OWNER = r"""import shutil,sys
+from pathlib import Path
+root=Path(sys.argv[2])
+copy=root/'scripts'; copy.mkdir()
+shutil.copy(Path(sys.argv[1])/'job_power.py',copy)
+sys.path.insert(0,str(copy))
+from job_power import host_job_assertion
+shutil.rmtree(copy)
+with host_job_assertion(['bash','-c'],root/'job.lock') as pid:
+    print(pid,flush=True)
+"""
 HOLDER = r"""import fcntl,sys
 from pathlib import Path
 root=Path(sys.argv[1])
@@ -293,6 +304,17 @@ class JobSleepAssertionTests(unittest.TestCase):
                             owner.kill()
                             owner.communicate(timeout=5)
                     self.assertEqual(owner.returncode, 0)
+
+    def test_host_assertion_starts_after_its_source_is_deleted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            result = subprocess.run(
+                [sys.executable, "-c", DELETED_SOURCE_OWNER, str(SCRIPTS), directory],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(result.stdout.strip().isdigit())
 
     def test_connected_host_assertion_drains_a_live_writer_after_client_death(self):
         for ending in ("normal", "failed", "cancelled", "owner-killed"):
