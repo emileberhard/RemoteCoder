@@ -869,6 +869,9 @@ actor ConversationSessions {
             do { try await session.flush() }
             catch { failures.append(FlushFailure(conversationID: session.conversationID, reason: error.localizedDescription)) }
         }
+        for (id, reason) in await checkpoints.checkpointWALs() {
+            failures.append(FlushFailure(conversationID: id, reason: reason))
+        }
         return failures
     }
 

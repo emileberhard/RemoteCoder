@@ -151,8 +151,16 @@ Checkpoint saves use system SQLite behind the same actor. Each conversation has
 one WAL database with a bounded sixteen-connection cache. A transaction replaces
 changed metadata, turns and item payload chunks, then removes obsolete records.
 Unchanged turn and history stamps avoid re-encoding settled text. WAL checkpoints
-run automatically at 256 pages; no periodic vacuum or connection-per-save path
-is introduced. Auxiliary WAL and SHM files retire when the last connection closes.
+run automatically at 256 pages. The store completes a truncating WAL checkpoint
+at connection-cache eviction, teardown and the existing background/termination
+flush, then refreshes its physical byte accounting. Cold indexing nominates only
+successfully decoded databases with non-empty WALs and no companion JSON source;
+the store reclaims them serially on its actor before budget admission, skipping
+entries already changed or invalidated while indexing. Unknown input and
+coexisting rollback sources keep their exact file sets for recovery. Checkpoint
+contention fails immediately and remains visible; it does not change durable
+records. There is no per-save checkpoint, periodic vacuum or connection-per-save
+path. Auxiliary WAL and SHM files retire when the last connection closes.
 FULL synchronization preserves the durable commit boundary.
 
 Existing JSON checkpoints remain readable. The first changed save commits the

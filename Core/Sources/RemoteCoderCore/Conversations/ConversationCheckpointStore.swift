@@ -113,7 +113,11 @@ actor ConversationCheckpointStore {
     private var fences: [UUID: Fence] = [:]
     private var nextGeneration: UInt64 = 0
     private var records: [UUID: DiskRecord] = [:]
-    private var indexTask: Task<[UUID: DiskRecord], Error>?
+    private struct Scan: Sendable {
+        var records: [UUID: DiskRecord]
+        var walCheckpoints: Set<UUID>
+    }
+    private var indexTask: Task<Scan, Error>?
     private var indexed = false
     private var directoryPrepared = false
     private var databases: [UUID: CheckpointDatabase] = [:]
@@ -1195,9 +1199,23 @@ actor ConversationCheckpointStore {
         let task = indexTask ?? Task { try await Self.scan(directory) }
         indexTask = task
         do {
-            let scanned = try await task.value
+            var scanned = try await task.value
             guard !indexed else { return }
-            records.merge(scanned.filter { fences[$0.key]?.invalidated != true }) { current, _ in current }
+            for id in scanned.walCheckpoints where records[id] == nil && fences[id]?.invalidated != true {
+                do {
+                    let before = try diskBytes(id)
+                    defer {
+                        if let after = try? diskBytes(id) { scanned.records[id]?.bytes += after - before }
+                    }
+                    do {
+                        let database = try CheckpointDatabase(url: directory.appending(path: "\(id).sqlite"), access: .persistence)
+                        try database.checkpointWAL()
+                    }
+                } catch {
+                    logger.error("Checkpoint WAL reclamation failed conversation=\(id.uuidString): \(error.localizedDescription)")
+                }
+            }
+            records.merge(scanned.records.filter { fences[$0.key]?.invalidated != true }) { current, _ in current }
             for (id, record) in records where record.invalidation == .complete && fences[id]?.invalidated != true {
                 if try !Self.hasRollbackSource(id, directory: directory, legacyDirectory: legacyDirectory) { try reclaimMarker(id) }
             }
@@ -1211,8 +1229,8 @@ actor ConversationCheckpointStore {
         }
     }
 
-    @concurrent private static func scan(_ directory: URL) async throws -> [UUID: DiskRecord] {
-        guard FileManager.default.fileExists(atPath: directory.path) else { return [:] }
+    @concurrent private static func scan(_ directory: URL) async throws -> Scan {
+        guard FileManager.default.fileExists(atPath: directory.path) else { return Scan(records: [:], walCheckpoints: []) }
         let files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey])
         var invalidated: [UUID: Invalidation] = [:]
         for file in files where file.pathExtension == "sqlite" {
@@ -1221,6 +1239,7 @@ actor ConversationCheckpointStore {
             invalidated[id] = state
         }
         var records: [UUID: DiskRecord] = [:]
+        var walCheckpoints: Set<UUID> = []
         for file in files where file.pathExtension == "json" || file.pathExtension == "sqlite" {
             guard let id = UUID(uuidString: file.deletingPathExtension().lastPathComponent) else { continue }
             let resource = try file.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
@@ -1238,6 +1257,10 @@ actor ConversationCheckpointStore {
                     payloadBytes = try primaryBytes(checkpoint)
                     contents = checkpoint.map(CheckpointInventory.Contents.init)
                     protected = payloadBytes > 0
+                    if ((try? Self.fileBytes(wal)) ?? 0) > 0,
+                       !FileManager.default.fileExists(atPath: directory.appending(path: "\(id).json").path) {
+                        walCheckpoints.insert(id)
+                    }
                 } catch { payloadBytes = bytes; protected = true }
             } else if invalidated[id] != nil {
                 payloadBytes = try fileBytes(file)
@@ -1277,7 +1300,7 @@ actor ConversationCheckpointStore {
                     protected: true, invalidation: previous?.invalidation, recoveryBytes: bytes)
             }
         }
-        return records
+        return Scan(records: records, walCheckpoints: walCheckpoints)
     }
 
     private static func readInvalidation(_ file: URL) throws -> Invalidation? {
@@ -1287,7 +1310,33 @@ actor ConversationCheckpointStore {
         return try JSONDecoder().decode(Invalidation.self, from: bytes)
     }
 
-    isolated deinit {}
+    isolated deinit {
+        for (id, database) in databases {
+            do { try database.checkpointWAL() }
+            catch { logger.error("Checkpoint WAL reclamation failed conversation=\(id.uuidString): \(error.localizedDescription)") }
+        }
+    }
+
+    func checkpointWALs() -> [UUID: String] {
+        var failures: [UUID: String] = [:]
+        for id in databaseRecency {
+            do { try checkpointWAL(id) }
+            catch {
+                failures[id] = error.localizedDescription
+                logger.error("Checkpoint WAL reclamation failed conversation=\(id.uuidString): \(error.localizedDescription)")
+            }
+        }
+        return failures
+    }
+
+    private func checkpointWAL(_ id: UUID) throws {
+        guard let database = databases[id] else { return }
+        let before = try diskBytes(id)
+        defer {
+            if let after = try? diskBytes(id) { records[id]?.bytes += after - before }
+        }
+        try database.checkpointWAL()
+    }
 
     private func finishCommit(_ id: UUID, revision: UInt64) throws {
         let legacy = directory.appending(path: "\(id).json")
@@ -1334,6 +1383,8 @@ actor ConversationCheckpointStore {
         databaseRecency.append(id)
         while databaseRecency.count > 16 {
             let retired = databaseRecency.removeFirst()
+            do { try checkpointWAL(retired) }
+            catch { logger.error("Checkpoint WAL reclamation failed conversation=\(retired.uuidString): \(error.localizedDescription)") }
             databases.removeValue(forKey: retired)
             encodingStamps.removeValue(forKey: retired)
             pruneRevision(retired)

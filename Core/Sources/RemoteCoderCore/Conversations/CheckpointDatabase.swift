@@ -91,6 +91,10 @@ final class CheckpointDatabase {
 
     deinit { if let connection { sqlite3_close(connection) } }
 
+    func checkpointWAL() throws {
+        try check(sqlite3_wal_checkpoint_v2(connection, "main", SQLITE_CHECKPOINT_TRUNCATE, nil, nil), operation: "truncate WAL")
+    }
+
     func compact() throws {
         try execute("VACUUM")
     }

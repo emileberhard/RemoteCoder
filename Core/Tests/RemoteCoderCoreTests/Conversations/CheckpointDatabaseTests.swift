@@ -5,6 +5,32 @@ import Testing
 
 struct CheckpointDatabaseTests {
 
+    @Test func aBlockedWALCheckpointReportsBusyAndCanBeRetriedWithoutChangingRecords() throws {
+        let directory = URL.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appending(path: "checkpoint.sqlite")
+        let database = try CheckpointDatabase(url: file, access: .persistence)
+        _ = try database.replace([.init(key: "live", data: Data("Original".utf8))], retaining: ["live"])
+        var reader: OpaquePointer?
+        guard sqlite3_open_v2(file.path, &reader, SQLITE_OPEN_READONLY, nil) == SQLITE_OK else { throw CocoaError(.fileReadUnknown) }
+        defer { sqlite3_close(reader) }
+        guard sqlite3_exec(reader, "BEGIN; SELECT * FROM records", nil, nil, nil) == SQLITE_OK else { throw CocoaError(.fileReadUnknown) }
+        let changed = Data("Changed durable record".utf8)
+        _ = try database.replace([.init(key: "live", data: changed)], retaining: ["live"])
+        do {
+            try database.checkpointWAL()
+            Issue.record("A reader still holds the old WAL snapshot")
+        } catch let error as CheckpointDatabase.Failure {
+            #expect(error.code == SQLITE_BUSY)
+        }
+        #expect(try database.read(key: "live") == changed)
+        guard sqlite3_exec(reader, "ROLLBACK", nil, nil, nil) == SQLITE_OK else { throw CocoaError(.fileReadUnknown) }
+        try database.checkpointWAL()
+        #expect(try Data(contentsOf: URL(fileURLWithPath: file.path + "-wal")).isEmpty)
+        #expect(try database.read(key: "live") == changed)
+    }
+
     @Test func opaqueRecordIdentitiesKeepTheirEntireUTF8Contents() throws {
         let directory = URL.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

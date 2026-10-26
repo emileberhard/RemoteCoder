@@ -7,6 +7,51 @@ struct ConversationCheckpointStoreTests: ConversationHistoryFixtures {
     enum ImageChange: CaseIterable { case bytes, format, dimensions }
 
     @Test(arguments: [false, true])
+    func quietPointsReclaimWALBytesWithoutChangingRecords(cold: Bool) async throws {
+        let fixture = URL.temporaryDirectory.appending(path: UUID().uuidString)
+        let directory = URL.temporaryDirectory.appending(path: UUID().uuidString)
+        defer {
+            try? FileManager.default.removeItem(at: fixture)
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let host = UUID()
+        let id = UUID()
+        var state = ConversationState(conversationID: id, threadID: "retained")
+        state.submit(ChatMessage(role: .user, text: String(repeating: "Durable input. ", count: 2_048)))
+        state.merge(history(items: [.agentMessage(id: "answer", text: String(repeating: "Retained reply. ", count: 4_096))], threadID: "retained"))
+        let writer = ConversationCheckpointStore(hostID: host, directory: fixture, primaryBudgetBytes: 512 * 1_024 * 1_024)
+        try await writer.save(state.checkpoint, conversationID: id)
+        let target = cold ? directory : fixture
+        if cold {
+            try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+            for name in ["\(id).sqlite", "\(id).sqlite-wal"] {
+                try FileManager.default.copyItem(at: fixture.appending(path: name), to: target.appending(path: name))
+            }
+        }
+        let file = target.appending(path: "\(id).sqlite")
+        let wal = URL(fileURLWithPath: file.path + "-wal")
+        #expect(try Data(contentsOf: wal).count > 0)
+        let before = try checkpointFileBytes(id, directory: target)
+        let originalRecords = try CheckpointDatabase(url: file, access: .inspection).read()
+        let store = cold ? ConversationCheckpointStore(hostID: host, directory: target, primaryBudgetBytes: 512 * 1_024 * 1_024) : writer
+        if cold {
+            #expect(try await store.load(id)?.submissions.mapValues(\.message) == state.checkpoint.submissions.mapValues(\.message))
+        } else {
+            #expect(await store.accountedDiskBytes == before)
+            #expect(await store.checkpointWALs().isEmpty)
+        }
+        let after = try checkpointFileBytes(id, directory: target)
+        let remainingWALBytes = FileManager.default.fileExists(atPath: wal.path) ? try Data(contentsOf: wal).count : 0
+        #expect(remainingWALBytes == 0)
+        #expect(after < before)
+        #expect(await store.accountedDiskBytes == after)
+        let retained = try CheckpointDatabase(url: file, access: .inspection).read()
+        #expect(Dictionary(uniqueKeysWithValues: retained.map { ($0.key, $0.data) }) == Dictionary(uniqueKeysWithValues: originalRecords.map { ($0.key, $0.data) }))
+        #expect(try await store.load(id)?.turns == state.checkpoint.turns)
+        withExtendedLifetime(writer) {}
+    }
+
+    @Test(arguments: [false, true])
     func overBudgetSavesDoNotRereadExhaustedHistoryUntilItsSourceChanges(cold: Bool) async throws {
         let directory = URL.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -1556,6 +1601,10 @@ struct ConversationCheckpointStoreTests: ConversationHistoryFixtures {
         #expect(bytes <= 16 * 1_024)
         #expect(auxiliaryFiles.isEmpty)
         #expect(await store.retainedFenceCount == 0)
+        let physicalBytes = try (0..<32).reduce(0) { total, index in
+            try total + checkpointFileBytes(ChatMessage.deterministicID(for: "closed-invalidation-\(index)"), directory: directory)
+        }
+        #expect(await store.accountedDiskBytes == physicalBytes)
         print("Closed invalidation storage: \(bytes) bytes, \(auxiliaryFiles.count) auxiliary files")
     }
 
