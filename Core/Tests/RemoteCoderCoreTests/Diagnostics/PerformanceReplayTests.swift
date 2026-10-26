@@ -72,7 +72,8 @@ import Testing
             var params: [String: JSONValue] = ["threadId": .string("thread-a"), "limit": .number(3), "sortDirection": .string(direction)]
             if let cursor { params["cursor"] = .string(cursor) }
             let request: JSONValue = .object(["id": .string("escaped\"id"), "method": .string("thread/items/list"), "params": .object(params)])
-            let wire = try #require(actual.response(to: request))
+            let response = try actual.response(to: request)
+            let wire = try #require(response)
             guard case .encoded = wire else { Issue.record("history response did not use raw records"); return }
             let decoded = try JSONDecoder().decode(JSONValue.self, from: wire.encoded())
             #expect(decoded == (try wireResponse(&expected, to: request)))
@@ -100,7 +101,8 @@ import Testing
             "threadId": .string("thread-a"), "turnId": .string("live"), "item": item("live")])]))
         let request: JSONValue = .object(["id": .number(1), "method": .string("thread/items/list"), "params": .object([
             "threadId": .string("thread-a"), "limit": .number(2), "sortDirection": .string("desc")])])
-        let wire = try #require(state.response(to: request))
+        let response = try state.response(to: request)
+        let wire = try #require(response)
         let data = try wire.encoded()
         #expect(data.count <= 16 * 1_048_576)
         let result = try #require(JSONDecoder().decode(JSONValue.self, from: data).objectValue?["result"]?.objectValue)
