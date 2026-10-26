@@ -23,8 +23,8 @@ enum PerformanceReplayPreparation {
             await model.conversationList.manualRefresh(reason: "performance preparation")
             try await settleSidebar()
             if model.conversationList.performanceReplayRefreshState.revision != previousRefresh { break }
-            guard attempt == 0, model.conversationList.performanceReplayRefreshState.deferred else {
-                throw PerformanceReplayScenario.Failure.invalidScenario("sidebar refresh did not succeed; deferred=\(model.conversationList.performanceReplayRefreshState.deferred), neverLoaded=\(model.conversationList.lastSuccessfulRefreshAt == nil), count=\(model.conversationList.threads.count), failure=\(model.conversationList.errorMessage ?? "none")")
+            guard attempt == 0, model.conversationList.performanceReplayRefreshState.needsReconnect else {
+                throw PerformanceReplayScenario.Failure.invalidScenario("sidebar refresh did not succeed; reconnectNeeded=\(model.conversationList.performanceReplayRefreshState.needsReconnect), neverLoaded=\(model.conversationList.lastSuccessfulRefreshAt == nil), count=\(model.conversationList.threads.count), failure=\(model.conversationList.errorMessage ?? "none")")
             }
             try await Task.sleep(for: .milliseconds(100))
         }

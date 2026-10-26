@@ -222,7 +222,8 @@ class BuildTests(unittest.TestCase):
             patch.object(perf_harness, "build_source_identity", return_value={"sourceFingerprint": "fixture"}),
             patch.object(perf_harness, "write_build_identity"),
             patch.object(perf_harness, "harness_source_identity", return_value={"harnessSHA256": "a" * 64}),
-            patch.object(perf_harness, "output", side_effect=["Xcode test", json.dumps([{"target": "RemoteCoder", "buildSettings": {"SWIFT_OPTIMIZATION_LEVEL": "-O"}}])]),
+            patch.object(perf_harness, "output", return_value="Xcode test"),
+            patch.object(perf_harness.subprocess, "check_output", return_value=json.dumps([{"target": "RemoteCoder", "buildSettings": {"SWIFT_OPTIMIZATION_LEVEL": "-O"}}])),
         ]
         for started in self.patches:
             started.start()
@@ -245,7 +246,12 @@ class BuildTests(unittest.TestCase):
             perf_harness.build(SimpleNamespace(device=None, disable=None))
 
     def test_generation_and_build_run_under_source_lease_then_capacity_with_both_inherited(self) -> None:
-        self.run_build([0, 0, 0])
+        with tempfile.TemporaryDirectory() as caller, contextlib.chdir(caller):
+            self.run_build([0, 0, 0])
+        query = perf_harness.subprocess.check_output.call_args
+        self.assertEqual(query.kwargs["cwd"], Path(self.directory.name))
+        self.assertEqual(query.kwargs["env"]["TUIST_REMOTE_CODER_PERF_SIGNING"], "distribution")
+        self.assertIn("-showBuildSettings", query.args[0])
         self.assertEqual(
             self.events,
             ["source", ("capacity", True), "space", ("tuist", (11, 12)), ("tuist", (11, 12)), ("xcodebuild", (11, 12))],
@@ -592,16 +598,39 @@ class CompilerIdentityTests(unittest.TestCase):
         after["SWIFT_OPTIMIZATION_LEVEL"] = "-Onone"
         self.assertNotEqual(perf_harness.harness_source_identity(before, "Xcode"), perf_harness.harness_source_identity(after, "Xcode"))
 
-    def test_action_hookup_is_identified_under_mixed_or_unconditional_production_views(self):
+    def test_unknown_harness_conditionals_fail_instead_of_silently_omitting_code(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(perf_harness, "ROOT", Path(directory)):
             root = Path(directory)
             (root / "RemoteCoder").mkdir()
             (root / "Core/Sources").mkdir(parents=True)
-            path = root / "RemoteCoder/ChatRootView.swift"
-            call = "    ChatWindowActionsPublisher(\n        toggleSidebar: toggleHistory\n    )\n"
-            path.write_text(call)
-            before = perf_harness.harness_source_identity([], "Xcode")
-            path.write_text("#if os(macOS) || RC_PERF_HARNESS\n" + call + "#endif\n")
-            self.assertEqual(perf_harness.harness_source_identity([], "Xcode"), before)
-            path.write_text(path.read_text().replace("toggleHistory", "differentAction"))
-            self.assertNotEqual(perf_harness.harness_source_identity([], "Xcode"), before)
+            path = root / "RemoteCoder/Owner.swift"
+            path.write_text("#if RC_PERF_HARNESS && os(iOS)\nlet adapter = 1\n#endif\n")
+            with self.assertRaisesRegex(ValueError, "unclassified"):
+                perf_harness.harness_source_identity([], "Xcode")
+
+
+class FixtureControlTests(unittest.TestCase):
+    def test_controls_use_fresh_artifact_verified_inputs_and_owned_cleanup(self):
+        for mode in ("empty", "fixture"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                source = root / "scenario.json"
+                source.write_text('{"duration":300}')
+                identity = {"harnessSHA256": "a" * 64}
+                (root / "perf-build-identity.json").write_text(json.dumps(identity))
+                device = Mock(derived=root, udid="test-ipad")
+                digest = hashlib.sha256(source.read_bytes()).hexdigest()
+                result = {"harnessSHA256": "a" * 64, "fixtureSHA256": digest, "samples": []}
+                args = SimpleNamespace(fixture=source, mode=mode, log=str(root / "control.jsonl"))
+                with patch.object(perf_harness, "verify_scenario_artifact") as verify, \
+                     patch.object(perf_harness, "fresh_launch") as fresh, \
+                     patch.object(perf_harness, "stage_scenario") as stage, \
+                     patch.object(perf_harness, "send", return_value=result), contextlib.redirect_stdout(io.StringIO()):
+                    perf_harness.run_footprint.__wrapped__(args, device)
+                verify.assert_called_once_with(device, identity)
+                fresh.assert_called_once_with(device)
+                self.assertEqual(stage.call_count, int(mode == "fixture"))
+                saved = json.loads((root / "control.jsonl").read_text())
+                self.assertEqual(saved["fixtureInputSHA256"], digest)
+                device.terminate.assert_called_once()
+                device.uninstall.assert_called_once()

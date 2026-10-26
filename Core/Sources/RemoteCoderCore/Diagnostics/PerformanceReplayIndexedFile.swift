@@ -69,7 +69,7 @@ struct PerformanceReplayIndexedFile: Codable, Sendable {
         }
         let descriptor = open(target.path, O_WRONLY | O_CREAT | O_EXCL, 0o600)
         guard descriptor >= 0 else {
-            throw PerformanceReplayScenario.Failure.invalidScenario("could not create prepared history")
+            throw PerformanceReplayScenario.Failure.invalidScenario("could not create prepared history: \(String(cString: strerror(errno)))")
         }
         let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
         defer { try? handle.close() }

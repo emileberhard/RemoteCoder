@@ -317,7 +317,7 @@ private struct ChatScreen: View {
         .onChange(of: screen.acceptsConversationInput) { _, acceptsInput in
             if !acceptsInput { composerPresentations.dismiss() }
         }
-        #if os(macOS) || RC_PERF_HARNESS
+        #if os(macOS)
         .background {
             ChatWindowActionsPublisher(
                 workspace: workspace,
@@ -344,6 +344,11 @@ private struct ChatScreen: View {
                     commandPalette = commandPalette == nil ? CommandPaletteCatalog(actions: actions) : nil
                 }
             )
+        }
+        #endif
+        #if RC_PERF_HARNESS
+        .background {
+            PerformanceReplaySidebarPublisher(window: window, isOpen: isHistoryOpen, toggle: toggleHistory)
         }
         #endif
         .onChange(of: usesPersistentSidebar, initial: true) { _, persistent in isHistoryOpen = persistent }

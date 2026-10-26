@@ -85,6 +85,25 @@ import Testing
         #expect(try generated.read(0..<1, root: destination).first?.objectValue?["startedAtMs"] == .number(395_000))
     }
 
+    @Test func failedPreparationRemovesOnlyItsOwnDirectory() throws {
+        let root = URL.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        var scenario = fixture()
+        let file = try writeIndexed(scenario.conversations[0].items, root: root, path: "history/source.jsonl")
+        scenario.conversations[0].itemFile = .init(path: file.path, offsets: file.offsets, sha256: String(repeating: "0", count: 64))
+        scenario.conversations[0].items = []
+        let destination = root.appending(path: "prepared")
+        #expect(throws: PerformanceReplayScenario.Failure.self) {
+            try scenario.prepared(to: 400, root: root, destination: destination)
+        }
+        #expect(!FileManager.default.fileExists(atPath: destination.path))
+        try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: false)
+        let marker = destination.appending(path: "keep")
+        try Data([1]).write(to: marker)
+        #expect(throws: (any Error).self) { try scenario.prepared(to: 400, root: root, destination: destination) }
+        #expect(try Data(contentsOf: marker) == Data([1]))
+    }
+
     @Test func rawHistoryPagesIncludeLiveRecordsAndEnvelopeInFrameCapacity() throws {
         let root = URL.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

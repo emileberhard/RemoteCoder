@@ -27,6 +27,7 @@ final class PerfHarness {
     private var stagedReplay: StagedReplay?
     private var replayCounter = 0
     private var offlineRun: PerformanceReplayRun?
+    private var fixtureControlConsumed = false
 
     private struct StagedReplay {
         let address: ConversationAddress
@@ -134,12 +135,13 @@ final class PerfHarness {
             windowTask?.cancel()
             windowTask = Task {
                 do {
-                    guard offlineRun == nil, AppStorageScope.isOfflineReplay,
+                    guard offlineRun == nil, !fixtureControlConsumed, AppStorageScope.isOfflineReplay,
                           try workspaceForReplay().settings.hosts.isEmpty,
                           let rawMode = command["mode"] as? String,
                           let mode = PerformanceReplayFixtureControl.Mode(rawValue: rawMode) else {
                         throw PerformanceReplayScenario.Failure.invalidScenario("fixture control requires a fresh offline process and explicit mode")
                     }
+                    fixtureControlConsumed = true
                     var report = try await PerformanceReplayFixtureControl.run(
                         Self.directory.appending(path: "scenario.json"), mode: mode)
                     report["cmd"] = name

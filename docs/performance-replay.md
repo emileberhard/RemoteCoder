@@ -349,7 +349,7 @@ Final verification follows production history pages after measurement so normal
 live-item eviction does not invalidate a correct run.
 
 The compiled harness fingerprint covers harness Swift source, guarded owner
-accessors, actual compiler settings and Xcode identity. The build embeds it and
+accessors, the dedicated sidebar bridge, resolved compiler settings and Xcode identity. The build embeds it and
 reports must match their artifact receipt. Comparisons require equal compiled
 harness fingerprints and state aggregation versions in addition to driver and
 fixture identities. New captures re-read bounded turn and item pages and verify
@@ -359,7 +359,7 @@ item-to-turn coverage; old frozen fixtures retain their weaker idle-check eviden
 It excludes Network callbacks and cleanup outside those sections, so the count is
 a lower bound. Process CPU minus this counter still includes unattributed harness
 work. Both counters use the same field-state intervals. A separate fresh-process
-`fixture-footprint` command exercises the same fixture reducer and holds response
+`perf-sim --device <test-device-udid> footprint --fixture <path> --mode empty|fixture --log <private-path>` command exercises the same fixture reducer and holds response
 bytes while sampling process footprint; paired empty controls provide an observed
 incremental process footprint, not an exclusive journey allocation or upper bound.
 It does not run app sessions or include Network buffers. Keep this diagnostic

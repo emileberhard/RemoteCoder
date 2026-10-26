@@ -28,7 +28,7 @@ enum PerformanceReplayFixtureControl {
     }
 
     private static func loadedSamples(_ url: URL) async throws -> ([[String: Any]], String) {
-        let (scenario, hash, root) = try await PerformanceReplayRun.fixture(url)
+        let (scenario, hash, root) = try await PerformanceReplayRun.preparedFixture(url)
         var state = try PerformanceReplayState(scenario, fixtureRoot: root)
         try await Task.sleep(for: .seconds(2))
         var samples = [sample("loaded")]
