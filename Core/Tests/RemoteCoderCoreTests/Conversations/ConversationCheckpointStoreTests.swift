@@ -35,11 +35,11 @@ struct ConversationCheckpointStoreTests: ConversationHistoryFixtures {
         let originalRecords = try CheckpointDatabase(url: file, access: .inspection).read()
         let store = cold ? ConversationCheckpointStore(hostID: host, directory: target, primaryBudgetBytes: 512 * 1_024 * 1_024) : writer
         if cold {
-            #expect(try await store.load(id)?.submissions.mapValues(\.message) == state.checkpoint.submissions.mapValues(\.message))
+            #expect(try await store.load(UUID()) == nil)
         } else {
             #expect(await store.accountedDiskBytes == before)
-            #expect(await store.checkpointWALs().isEmpty)
         }
+        await store.checkpointWALs()
         let after = try checkpointFileBytes(id, directory: target)
         let remainingWALBytes = FileManager.default.fileExists(atPath: wal.path) ? try Data(contentsOf: wal).count : 0
         #expect(remainingWALBytes == 0)
@@ -48,6 +48,46 @@ struct ConversationCheckpointStoreTests: ConversationHistoryFixtures {
         let retained = try CheckpointDatabase(url: file, access: .inspection).read()
         #expect(Dictionary(uniqueKeysWithValues: retained.map { ($0.key, $0.data) }) == Dictionary(uniqueKeysWithValues: originalRecords.map { ($0.key, $0.data) }))
         #expect(try await store.load(id)?.turns == state.checkpoint.turns)
+        withExtendedLifetime(writer) {}
+    }
+
+    @Test func aColdLoadAndRetainedFenceSupersedePendingWALReclamation() async throws {
+        let fixture = URL.temporaryDirectory.appending(path: UUID().uuidString)
+        let directory = URL.temporaryDirectory.appending(path: UUID().uuidString)
+        defer {
+            try? FileManager.default.removeItem(at: fixture)
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let host = UUID()
+        let loadedID = UUID()
+        let fencedID = UUID()
+        let quietID = UUID()
+        let writer = ConversationCheckpointStore(hostID: host, directory: fixture, primaryBudgetBytes: 512 * 1_024 * 1_024)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        for id in [loadedID, fencedID, quietID] {
+            var state = ConversationState(conversationID: id, threadID: id.uuidString)
+            state.submit(ChatMessage(role: .user, text: "Durable input"))
+            try await writer.save(state.checkpoint, conversationID: id)
+            for name in ["\(id).sqlite", "\(id).sqlite-wal"] {
+                try FileManager.default.copyItem(at: fixture.appending(path: name), to: directory.appending(path: name))
+            }
+        }
+        let store = ConversationCheckpointStore(hostID: host, directory: directory, primaryBudgetBytes: 512 * 1_024 * 1_024)
+        func loadBeforeYieldingToTheSweep(_ store: isolated ConversationCheckpointStore) async throws -> (ConversationState.Checkpoint?, UInt64) {
+            _ = try await store.load(UUID())
+            let generation = store.generation(for: fencedID)
+            return (try await store.load(loadedID), generation)
+        }
+        let (loaded, generation) = try await loadBeforeYieldingToTheSweep(store)
+        #expect(loaded?.threadID == loadedID.uuidString)
+        await store.checkpointWALs()
+        for id in [loadedID, fencedID] {
+            #expect(try Data(contentsOf: directory.appending(path: "\(id).sqlite-wal")).count > 0)
+        }
+        #expect(!FileManager.default.fileExists(atPath: directory.appending(path: "\(quietID).sqlite-wal").path))
+        let physicalBytes = try [loadedID, fencedID, quietID].reduce(0) { try $0 + checkpointFileBytes($1, directory: directory) }
+        #expect(await store.accountedDiskBytes == physicalBytes)
+        await store.release(fencedID, generation: generation)
         withExtendedLifetime(writer) {}
     }
 

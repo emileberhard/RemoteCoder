@@ -155,12 +155,14 @@ run automatically at 256 pages. The store completes a truncating WAL checkpoint
 at connection-cache eviction, teardown and the existing background/termination
 flush, then refreshes its physical byte accounting. Cold indexing nominates only
 successfully decoded databases with non-empty WALs and no companion JSON source;
-the store reclaims them serially on its actor before budget admission, skipping
-entries already changed or invalidated while indexing. Unknown input and
-coexisting rollback sources keep their exact file sets for recovery. Checkpoint
-contention fails immediately and remains visible; it does not change durable
-records. There is no per-save checkpoint, periodic vacuum or connection-per-save
-path. Auxiliary WAL and SHM files retire when the last connection closes.
+indexing publishes its records before an owned utility task reclaims them one
+at a time on the store actor, yielding between databases. Any later access,
+fence, write or invalidation drops the candidate. A quiet-point flush joins this
+cleanup without holding up first restore. Unknown input and coexisting rollback
+sources keep their exact file sets for recovery. Checkpoint contention fails
+immediately and is logged; it does not change durable records or report a failed
+save. Flush failures describe durability only. There is no per-save checkpoint,
+periodic vacuum or connection-per-save path. Auxiliary WAL and SHM files retire when the last connection closes.
 FULL synchronization preserves the durable commit boundary.
 
 Existing JSON checkpoints remain readable. The first changed save commits the

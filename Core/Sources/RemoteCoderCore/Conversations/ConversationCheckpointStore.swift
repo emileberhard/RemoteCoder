@@ -118,6 +118,8 @@ actor ConversationCheckpointStore {
         var walCheckpoints: Set<UUID>
     }
     private var indexTask: Task<Scan, Error>?
+    private var walReclamationTask: Task<Void, Never>?
+    private var pendingWALCheckpoints: Set<UUID> = []
     private var indexed = false
     private var directoryPrepared = false
     private var databases: [UUID: CheckpointDatabase] = [:]
@@ -189,6 +191,7 @@ actor ConversationCheckpointStore {
     }
 
     private func ensureFence(_ id: UUID) -> UInt64 {
+        pendingWALCheckpoints.remove(id)
         if let fence = fences[id] { return fence.generation }
         nextGeneration += 1
         fences[id] = Fence(generation: nextGeneration)
@@ -231,6 +234,7 @@ actor ConversationCheckpointStore {
     }
 
     private func sourceChanged(_ id: UUID) {
+        pendingWALCheckpoints.remove(id)
         fences[id]?.sourceRevision += 1
         records[id]?.historyExhausted = false
     }
@@ -1199,22 +1203,9 @@ actor ConversationCheckpointStore {
         let task = indexTask ?? Task { try await Self.scan(directory) }
         indexTask = task
         do {
-            var scanned = try await task.value
+            let scanned = try await task.value
             guard !indexed else { return }
-            for id in scanned.walCheckpoints where records[id] == nil && fences[id]?.invalidated != true {
-                do {
-                    let before = try diskBytes(id)
-                    defer {
-                        if let after = try? diskBytes(id) { scanned.records[id]?.bytes += after - before }
-                    }
-                    do {
-                        let database = try CheckpointDatabase(url: directory.appending(path: "\(id).sqlite"), access: .persistence)
-                        try database.checkpointWAL()
-                    }
-                } catch {
-                    logger.error("Checkpoint WAL reclamation failed conversation=\(id.uuidString): \(error.localizedDescription)")
-                }
-            }
+            let candidates = scanned.walCheckpoints.filter { records[$0] == nil && fences[$0] == nil }
             records.merge(scanned.records.filter { fences[$0.key]?.invalidated != true }) { current, _ in current }
             for (id, record) in records where record.invalidation == .complete && fences[id]?.invalidated != true {
                 if try !Self.hasRollbackSource(id, directory: directory, legacyDirectory: legacyDirectory) { try reclaimMarker(id) }
@@ -1222,6 +1213,17 @@ actor ConversationCheckpointStore {
             indexed = true
             indexTask = nil
             for id in Array(fences.keys) { pruneFence(id) }
+            if !candidates.isEmpty {
+                pendingWALCheckpoints = candidates
+                walReclamationTask = Task(priority: .utility) { [weak self] in
+                    for id in candidates {
+                        await Task.yield()
+                        guard !Task.isCancelled else { return }
+                        await self?.reclaimIndexedWAL(id)
+                    }
+                    await self?.finishWALReclamation()
+                }
+            }
         } catch {
             indexTask = nil
             for id in Array(fences.keys) { pruneFence(id) }
@@ -1311,22 +1313,41 @@ actor ConversationCheckpointStore {
     }
 
     isolated deinit {
+        walReclamationTask?.cancel()
         for (id, database) in databases {
             do { try database.checkpointWAL() }
             catch { logger.error("Checkpoint WAL reclamation failed conversation=\(id.uuidString): \(error.localizedDescription)") }
         }
     }
 
-    func checkpointWALs() -> [UUID: String] {
-        var failures: [UUID: String] = [:]
+    private func reclaimIndexedWAL(_ id: UUID) {
+        guard pendingWALCheckpoints.remove(id) != nil, databases[id] == nil, fences[id] == nil,
+              let record = records[id], record.invalidation == nil else { return }
+        do {
+            let before = try diskBytes(id)
+            defer {
+                if let after = try? diskBytes(id) { records[id]?.bytes += after - before }
+            }
+            do {
+                let database = try CheckpointDatabase(url: directory.appending(path: "\(id).sqlite"), access: .persistence)
+                try database.checkpointWAL()
+            }
+        } catch {
+            logger.error("Checkpoint WAL reclamation failed conversation=\(id.uuidString): \(error.localizedDescription)")
+        }
+    }
+
+    private func finishWALReclamation() {
+        pendingWALCheckpoints.removeAll()
+        walReclamationTask = nil
+    }
+
+    func checkpointWALs() async {
+        await walReclamationTask?.value
         for id in databaseRecency {
             do { try checkpointWAL(id) }
-            catch {
-                failures[id] = error.localizedDescription
-                logger.error("Checkpoint WAL reclamation failed conversation=\(id.uuidString): \(error.localizedDescription)")
-            }
+            catch { logger.error("Checkpoint WAL reclamation failed conversation=\(id.uuidString): \(error.localizedDescription)") }
         }
-        return failures
     }
 
     private func checkpointWAL(_ id: UUID) throws {
@@ -1369,6 +1390,7 @@ actor ConversationCheckpointStore {
     }
 
     private func database(for id: UUID) throws -> CheckpointDatabase {
+        pendingWALCheckpoints.remove(id)
         if let existing = databases[id] {
             databaseRecency.removeAll { $0 == id }
             databaseRecency.append(id)
@@ -1393,6 +1415,7 @@ actor ConversationCheckpointStore {
     }
 
     private func inspectionDatabase(for id: UUID) throws -> CheckpointDatabase {
+        pendingWALCheckpoints.remove(id)
         if let existing = databases[id] { return existing }
         return try CheckpointDatabase(url: directory.appending(path: "\(id).sqlite"), access: .inspection)
     }

@@ -1,4 +1,5 @@
 import Foundation
+import SQLite3
 import Testing
 @testable import RemoteCoderCore
 
@@ -212,6 +213,32 @@ struct ConversationSessionTests: ConversationHistoryFixtures {
         var state = ConversationState(conversationID: original.conversationID, threadID: "original")
         state.restore(checkpoint)
         #expect(ConversationProjection.project(state).messages.map(\.text) == ["Admitted late text"])
+    }
+
+    @Test func aBlockedWALCleanupDoesNotReportAFailedDurableFlush() async throws {
+        let temporary = TemporaryHostStorage()
+        defer { temporary.cleanUp() }
+        let host = UUID()
+        let registry = ConversationSessions(hostID: host, sessionIndex: ConversationIndex(hostID: host, storage: temporary.storage),
+            contentSubscriptions: RecordingContentSubscriptions(), storage: temporary.storage)
+        let session = await registry.session(threadID: "retained")
+        await session.ingest(try event("item/started", item: .agentMessage(id: "answer", text: ""), ordinal: 1,
+            threadID: "retained"), replay: false)
+        await session.ingest(try GatewayEventFixture.delta("Initial", threadID: "retained", turnID: "turn", itemID: "answer"), replay: false)
+        try await session.flush()
+        let file = temporary.storage.directory(for: .device).appending(path: "conversations-v1/\(host)/\(session.conversationID).sqlite")
+        var reader: OpaquePointer?
+        guard sqlite3_open_v2(file.path, &reader, SQLITE_OPEN_READONLY, nil) == SQLITE_OK else { throw CocoaError(.fileReadUnknown) }
+        defer { sqlite3_close(reader) }
+        guard sqlite3_exec(reader, "BEGIN; SELECT * FROM records", nil, nil, nil) == SQLITE_OK else { throw CocoaError(.fileReadUnknown) }
+        await session.ingest(try GatewayEventFixture.delta(" tail", threadID: "retained", turnID: "turn", itemID: "answer"), replay: false)
+        #expect(await registry.flush().isEmpty)
+        let checkpoint = try #require(try await ConversationCheckpointStore(hostID: host, storage: temporary.storage,
+            primaryBudgetBytes: 512 * 1_024 * 1_024).load(session.conversationID))
+        var state = ConversationState(conversationID: session.conversationID, threadID: "retained")
+        state.restore(checkpoint)
+        #expect(ConversationProjection.project(state).messages.map(\.text) == ["Initial tail"])
+        guard sqlite3_exec(reader, "ROLLBACK", nil, nil, nil) == SQLITE_OK else { throw CocoaError(.fileReadUnknown) }
     }
 
     @Test func aPageReadAgainstAReplacedWindowIsRejected() async throws {
