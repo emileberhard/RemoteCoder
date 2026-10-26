@@ -62,7 +62,7 @@ SWITCHES = {
     "scrollTargets", "scrollPosition", "geometryGroup", "latestEdge",
     "contextMenu", "textSelection", "tooltips", "growthGate", "resourceSampler",
 }
-TRACE_WARMUP = 10
+TRACE_WARMUP = 2
 TRACE_COMPLETE = "Time limit reached"
 CLOCK_SLACK = 0.5
 SIGNING_KEYCHAIN = Path.home() / "configs/skills/apple-devops/scripts/ensure-signing-keychain"
@@ -430,24 +430,59 @@ def instrumentation(device: Simulator | Device, template: str | None, instrument
             "scope": ("app" if app_only else "allProcesses") if template else None}
 
 
+def stop_trace_process(process: subprocess.Popen) -> str:
+    if process.poll() is None:
+        process.terminate()
+    try:
+        output, _ = process.communicate(timeout=5)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        output, _ = process.communicate(timeout=5)
+    return output or ""
+
+
 @contextlib.contextmanager
 def tracing(device: Simulator | Device, template: str, instruments: list[str] | None, seconds: int, path: str):
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     scope = ["--attach", PROCESS] if instrumentation(device, template, instruments)["scope"] == "app" else ["--all-processes"]
+    notification = "com.remotecoder.perf.trace." + uuid.uuid4().hex
     command = ["xcrun", "xctrace", "record", "--template", template, "--device", device.udid, *scope,
-               "--time-limit", f"{seconds}s", "--output", path, "--no-prompt"]
+               "--time-limit", f"{seconds}s", "--output", path, "--no-prompt", "--notify-tracing-started", notification]
     for instrument in instruments or []:
         command += ["--instrument", instrument]
-    recorder = subprocess.Popen(command, env=ENV, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    watcher = subprocess.Popen(["notifyutil", "-q", "-1", notification], env=ENV,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+    recorder = None
     try:
+        recorder = subprocess.Popen(command, env=ENV, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        deadline = time.monotonic() + 30
+        while True:
+            if time.monotonic() >= deadline:
+                raise SystemExit("Instruments did not announce tracing-started within 30 seconds")
+            if recorder.poll() is not None:
+                raise SystemExit("Instruments stopped before its tracing-started notification")
+            status = watcher.poll()
+            if status is not None:
+                if status != 0:
+                    raise SystemExit(f"Tracing-started notification watcher failed with status {status}")
+                if time.monotonic() >= deadline:
+                    raise SystemExit("Instruments tracing-started notification arrived after its deadline")
+                break
+            time.sleep(0.05)
+        recorder.perf_started_monotonic = time.monotonic()
+        time.sleep(TRACE_WARMUP)
+        if recorder.poll() is not None:
+            raise SystemExit("Instruments stopped while settling after tracing-started")
         yield recorder
     finally:
-        if recorder.poll() is None:
-            recorder.terminate()
-        if not recorder.stdout.closed:
-            log = recorder.communicate()[0]
-            with private_open(Path(path).with_suffix(".recording.log"), "w") as handle:
-                handle.write(log)
+        try:
+            if recorder is not None:
+                log = stop_trace_process(recorder)
+                if log:
+                    with private_open(Path(path).with_suffix(".recording.log"), "w") as handle:
+                        handle.write(log)
+        finally:
+            stop_trace_process(watcher)
 
 
 def finish_trace(recorder: subprocess.Popen, path: str, window: dict | None = None) -> None:
@@ -721,19 +756,10 @@ def verify_scenario_artifact(device, identity: dict) -> None:
         raise SystemExit("app artifact changed while preparing or queuing the measurement")
 
 
-def wait_for_signposts(device: Simulator | Device, recorder: subprocess.Popen, trace_path: str) -> None:
-    deadline = time.monotonic() + TRACE_WARMUP
-    while True:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            raise SystemExit("Instruments did not enable replay signposts before measurement")
-        if recorder.poll() is not None:
-            finish_trace(recorder, trace_path)
-            raise SystemExit("Instruments stopped before replay signposts became ready")
-        ready = send(device, {"cmd": "signposting-status"}, min(1, remaining))
-        if ready and ready.get("enabled") is True:
-            return
-        time.sleep(0.2)
+def require_trace_time(recorder: subprocess.Popen, trace_seconds: float, duration: float) -> None:
+    remaining = recorder.perf_started_monotonic + trace_seconds - time.monotonic()
+    if recorder.poll() is not None or remaining < duration + 3:
+        raise SystemExit(f"Instruments has {max(0, remaining):.1f} seconds remaining; need {duration + 3:.1f} for the journey and tail; raise --trace-seconds")
 
 
 @leased
@@ -774,12 +800,7 @@ def run_scenario(args, device: Simulator | Device, index: int, deadline: float) 
         with (tracing(device, args.trace_template, args.instrument, args.trace_seconds, trace_path)
               if trace_path else contextlib.nullcontext()) as recorder:
             if recorder:
-                if "Points of Interest" in (args.instrument or []):
-                    wait_for_signposts(device, recorder, trace_path)
-                else:
-                    time.sleep(TRACE_WARMUP)
-                    if recorder.poll() is not None:
-                        finish_trace(recorder, trace_path)
+                require_trace_time(recorder, args.trace_seconds, duration)
             result = send(device, {"cmd": "scenario-run"}, duration + 90, quiet_seconds=duration + 1)
             result = result if result is not None else {"error": "scenario-run timed out"}
             result.update(identity)
@@ -861,8 +882,6 @@ def stream(args, device: Simulator | Device) -> None:
         trace_path = f"{args.trace_dir}/{args.label}-{index + 1}.trace" if args.trace_template else None
         with (tracing(device, args.trace_template, args.instrument, args.trace_seconds, trace_path)
               if trace_path else contextlib.nullcontext()) as recorder:
-            if recorder:
-                time.sleep(TRACE_WARMUP)
             result = measured(device, {"cmd": "replay", "speed": args.speed, "label": f"{args.label}-{index + 1}"},
                               600, quiet_seconds=duration)
             if recorder:
@@ -881,8 +900,6 @@ def open_bench(args, device: Simulator | Device) -> None:
         trace_path = f"{args.trace_dir}/{args.label}-{index + 1}.trace" if args.trace_template else None
         with (tracing(device, args.trace_template, args.instrument, args.trace_seconds, trace_path)
               if trace_path else contextlib.nullcontext()) as recorder:
-            if recorder:
-                time.sleep(TRACE_WARMUP)
             result = measured(device, {"cmd": "measure-open", "host": args.host, "thread": args.thread,
                                        "tail": args.tail, "label": f"{args.label}-{index + 1}"},
                               60, quiet_seconds=args.tail)

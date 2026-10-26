@@ -260,22 +260,68 @@ class ArgumentTests(unittest.TestCase):
 
 
 class ScenarioTests(unittest.TestCase):
-    def test_trace_waits_for_app_signposting_readiness(self) -> None:
-        recorder = Mock()
-        recorder.poll.return_value = None
-        with patch.object(perf_harness.time, "monotonic", return_value=0), \
-                patch.object(perf_harness.time, "sleep") as sleep, \
-                patch.object(perf_harness, "send", side_effect=[None, {"enabled": False}, {"enabled": True}]) as send:
-            perf_harness.wait_for_signposts(Mock(), recorder, "trace")
-        self.assertEqual(send.call_count, 3)
-        self.assertEqual(send.call_args.args[1], {"cmd": "signposting-status"})
-        self.assertEqual(sleep.call_count, 2)
+    def test_native_trace_notification_owns_readiness_and_process_cleanup(self) -> None:
+        for outcome in ("ready", "timeout", "recorder-failed", "watcher-failed", "launch-failed", "late"):
+            with self.subTest(outcome=outcome), tempfile.TemporaryDirectory() as directory:
+                clock = [0.0]
+                watcher, recorder = Mock(), Mock()
+                watcher.communicate.return_value = (None, "")
+                recorder.communicate.return_value = ("recorder output", None)
+                watcher.poll.return_value = None
+                recorder.poll.return_value = 1 if outcome == "recorder-failed" else None
+                if outcome == "ready":
+                    watcher.poll.side_effect = [None, 0, 0]
+                elif outcome == "watcher-failed":
+                    watcher.poll.return_value = 1
+                elif outcome == "late":
+                    def late(clock=clock):
+                        clock[0] = 31
+                        return 0
+                    watcher.poll.side_effect = late
+                def sleep(seconds, clock=clock):
+                    clock[0] += seconds
+                commands = []
+                def launch(command, outcome=outcome, watcher=watcher, recorder=recorder, commands=commands, **kwargs):
+                    commands.append(command)
+                    if len(commands) == 1:
+                        return watcher
+                    if outcome == "launch-failed":
+                        raise OSError("recorder launch failed")
+                    return recorder
+                with patch.object(perf_harness.subprocess, "Popen", side_effect=launch), \
+                        patch.object(perf_harness.time, "monotonic", side_effect=lambda clock=clock: clock[0]), \
+                        patch.object(perf_harness.time, "sleep", side_effect=sleep):
+                    if outcome == "ready":
+                        with perf_harness.tracing(SimpleNamespace(udid="ipad"), "Time Profiler", ["Points of Interest"], 315, str(Path(directory) / "run.trace")) as active:
+                            self.assertIs(active, recorder)
+                            self.assertAlmostEqual(clock[0] - recorder.perf_started_monotonic, perf_harness.TRACE_WARMUP)
+                    else:
+                        with self.assertRaises((SystemExit, OSError)):
+                            with perf_harness.tracing(SimpleNamespace(udid="ipad"), "Time Profiler", [], 315, str(Path(directory) / "run.trace")):
+                                self.fail("failed tracing startup yielded a recorder")
+                self.assertEqual(commands[0][:3], ["notifyutil", "-q", "-1"])
+                self.assertEqual(commands[1][commands[1].index("--notify-tracing-started") + 1], commands[0][-1])
+                watcher.communicate.assert_called_once_with(timeout=5)
+                if outcome != "launch-failed":
+                    recorder.communicate.assert_called_once_with(timeout=5)
+                if outcome == "timeout":
+                    self.assertLessEqual(clock[0], 30.1)
+                    watcher.terminate.assert_called_once()
+                    recorder.terminate.assert_called_once()
 
-    def test_trace_readiness_timeout_stops_before_measurement(self) -> None:
-        with patch.object(perf_harness.time, "monotonic", side_effect=[0, perf_harness.TRACE_WARMUP + 1]), \
-                patch.object(perf_harness, "send") as send, self.assertRaisesRegex(SystemExit, "enable replay signposts"):
-            perf_harness.wait_for_signposts(Mock(), Mock(), "trace")
-        send.assert_not_called()
+    def test_native_trace_cleanup_kills_processes_that_ignore_termination(self) -> None:
+        process = Mock()
+        process.poll.return_value = None
+        process.communicate.side_effect = [subprocess.TimeoutExpired("owned trace", 5), ("output", None)]
+        self.assertEqual(perf_harness.stop_trace_process(process), "output")
+        process.terminate.assert_called_once()
+        process.kill.assert_called_once()
+
+    def test_trace_rejects_insufficient_remaining_journey_and_tail(self) -> None:
+        recorder = Mock(perf_started_monotonic=0)
+        recorder.poll.return_value = None
+        with patch.object(perf_harness.time, "monotonic", return_value=12), self.assertRaisesRegex(SystemExit, "raise --trace-seconds"):
+            perf_harness.require_trace_time(recorder, 314, 300)
 
     def test_invalid_windows_and_trace_failures_keep_identity_and_diagnostics(self) -> None:
         for failure in ("inactive", "trace", "cleanup", "interrupt", "artifact", "content", "trace-telemetry"):
@@ -329,6 +375,7 @@ class ScenarioTests(unittest.TestCase):
                         patch.object(perf_harness, "fresh_launch"), patch.object(perf_harness, "send", side_effect=send), \
                         patch.object(perf_harness.time, "sleep"), \
                         patch.object(perf_harness, "tracing", return_value=contextlib.nullcontext(recorder)), \
+                        patch.object(perf_harness, "require_trace_time"), \
                         patch.object(perf_harness, "finish_trace", side_effect=SystemExit("incomplete trace") if failure.startswith("trace") else None), \
                         self.assertRaises(SystemExit):
                     perf_harness.run_scenario.__wrapped__(args, device, 0, perf_harness.time.monotonic() + 1800)
