@@ -19,6 +19,7 @@ final class PerformanceReplayRun {
     private let server: PerformanceReplayServer
     private let workspace: ChatWorkspaceModel
     private let hostID = ChatMessage.deterministicID(for: "performance-replay-host")
+    private var preparedState: [String: Any] = [:]
     private var consumed = false
     private var stopped = false
 
@@ -35,6 +36,14 @@ final class PerformanceReplayRun {
         guard data.count <= 16 * 1_048_576 else { throw PerformanceReplayScenario.Failure.invalidScenario("fixture exceeds 16 MiB") }
         let scenario = try JSONDecoder().decode(PerformanceReplayScenario.self, from: data)
         try scenario.validate()
+        var bytes: UInt64 = UInt64(data.count)
+        for conversation in scenario.conversations {
+            for file in [conversation.itemFile, conversation.turnFile].compactMap({ $0 }) {
+                bytes += file.offsets.last ?? 0
+                guard bytes <= 512 * 1_048_576 else { throw PerformanceReplayScenario.Failure.invalidScenario("fixture bundle exceeds 512 MiB") }
+                try file.verify(root: url.deletingLastPathComponent())
+            }
+        }
         return (try scenario.rebased(to: Date.now.timeIntervalSince1970), SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined())
     }
 
@@ -44,8 +53,8 @@ final class PerformanceReplayRun {
             throw PerformanceReplayScenario.Failure.invalidScenario("launch with -rcPerfOffline and no configured hosts")
         }
         let (scenario, hash) = try await fixture(url)
-        try PerformanceReplayHTTP.install(scenario.httpResponses ?? [:])
-        let server = try PerformanceReplayServer(scenario: scenario)
+        try PerformanceReplayHTTP.install(scenario.httpResponses ?? [:], telemetryDirectory: url.deletingLastPathComponent().appending(path: "telemetry"))
+        let server = try PerformanceReplayServer(scenario: scenario, fixtureRoot: url.deletingLastPathComponent())
         let run = PerformanceReplayRun(scenario: scenario, hash: hash, server: server, workspace: workspace)
         do {
             let port = try await server.start()
@@ -54,6 +63,10 @@ final class PerformanceReplayRun {
             guard workspace.settings.upsert(host) else { throw PerformanceReplayScenario.Failure.invalidScenario("could not install isolated host") }
             workspace.reconcileHosts()
             await workspace.bootstrap()
+            guard let model = workspace.model(for: run.hostID) else {
+                throw PerformanceReplayScenario.Failure.invalidScenario("isolated host did not bootstrap")
+            }
+            run.preparedState = try await PerformanceReplayPreparation.prepare(scenario, model: model, progressURL: url.deletingLastPathComponent().appending(path: "preparation-progress.json"))
             guard let first = scenario.conversations.first?.thread.objectValue?["id"]?.stringValue else {
                 throw PerformanceReplayScenario.Failure.invalidScenario("missing initial conversation")
             }
@@ -69,7 +82,11 @@ final class PerformanceReplayRun {
         guard !consumed else { throw PerformanceReplayScenario.Failure.invalidScenario("a replay run can only execute once") }
         consumed = true
         let preparation = await server.diagnostics()
-        let metrics = PerformanceReplayMetrics()
+        guard let model = workspace.model(for: hostID) else {
+            throw PerformanceReplayScenario.Failure.invalidScenario("prepared host disappeared")
+        }
+        let beforeOwner = await model.conversations.performanceReplayCheckpointInventory()
+        let metrics = PerformanceReplayMetrics(workspace: workspace)
         let interval = Self.signposter.beginInterval("ReplayJourney", id: Self.signposter.makeSignpostID(), "\(self.scenario.name, privacy: .public)")
         let start = ContinuousClock.now
         do {
@@ -78,10 +95,9 @@ final class PerformanceReplayRun {
             let delivered = try await delivery
             try await Task.sleep(until: start + .seconds(scenario.duration), clock: .continuous)
             Self.signposter.endInterval("ReplayJourney", interval)
-            var report = metrics.finish()
-            report["scenario"] = scenario.name
-            report["mode"] = "offlineReplay"
-            report["fixtureSHA256"] = hash
+            var report = measuredReport(metrics)
+            report["preMeasurementOwner"] = beforeOwner
+            report["postMeasurementOwner"] = await model.conversations.performanceReplayCheckpointInventory()
             report["scheduledDuration"] = scenario.duration
             report["actions"] = actions
             report["deliveries"] = delivered
@@ -115,16 +131,46 @@ final class PerformanceReplayRun {
                 && report["frameIntervalsOverflowed"] as? Bool == false
                 && !verification.isEmpty && verification.allSatisfy { $0["matches"] as? Bool == true }
             report["cleanupFailures"] = await stop()
+            report["telemetryFiles"] = PerformanceReplayHTTP.telemetryCapture.files
+            report["telemetryCaptureFailures"] = PerformanceReplayHTTP.telemetryCapture.failures
             report["serverFailures"] = await server.diagnostics().failures
             report["valid"] = report["valid"] as? Bool == true && (report["cleanupFailures"] as? [String])?.isEmpty == true
                 && (report["serverFailures"] as? [String])?.isEmpty == true
             return report
         } catch {
             Self.signposter.endInterval("ReplayJourney", interval)
-            _ = metrics.finish()
-            _ = await stop()
-            throw error
+            var report = measuredReport(metrics)
+            report["valid"] = false
+            report["preMeasurementOwner"] = beforeOwner
+            report["postMeasurementOwner"] = await model.conversations.performanceReplayCheckpointInventory()
+            report["error"] = String(describing: error)
+            let diagnostics = await server.diagnostics()
+            report["preparationRPCRequests"] = preparation.requests
+            report["rpcRequests"] = diagnostics.requests.reduce(into: [String: Int]()) {
+                $0[$1.key] = $1.value - preparation.requests[$1.key, default: 0]
+            }
+            report["unsupportedRPCs"] = diagnostics.unsupported
+            report["serverFailures"] = diagnostics.failures
+            report["cleanupFailures"] = await stop()
+            report["telemetryFiles"] = PerformanceReplayHTTP.telemetryCapture.files
+            report["telemetryCaptureFailures"] = PerformanceReplayHTTP.telemetryCapture.failures
+            return report
         }
+    }
+
+    private func measuredReport(_ metrics: PerformanceReplayMetrics) -> [String: Any] {
+        var report = metrics.finish()
+        report["scenario"] = scenario.name
+        report["mode"] = "offlineReplay"
+        report["workloadVersion"] = scenario.version
+        report["preparationContractVersion"] = 2
+        report["preparation"] = preparedState
+        report["fixtureSHA256"] = hash
+        if let evidence = scenario.captureSummary?.objectValue?["idleEvidence"],
+           let encoded = try? JSONEncoder().encode(evidence) {
+            report["captureAuthority"] = try? JSONSerialization.jsonObject(with: encoded)
+        }
+        return report
     }
 
     static func calibrate(_ url: URL, workspace: ChatWorkspaceModel, hostID: UUID, threads: [String]) async throws -> [String: Any] {
@@ -140,7 +186,7 @@ final class PerformanceReplayRun {
             return PerformanceReplayScenario.Action(at: action.at, kind: action.kind, threadID: thread, message: action.message)
         }
         let navigation = PerformanceReplayNavigation(workspace: workspace, hostID: hostID)
-        let metrics = PerformanceReplayMetrics()
+        let metrics = PerformanceReplayMetrics(workspace: workspace)
         let interval = signposter.beginInterval("ReplayJourney", id: signposter.makeSignpostID(), "live calibration")
         do {
             let start = ContinuousClock.now
@@ -212,6 +258,7 @@ final class PerformanceReplayRun {
         }
         await server.stop()
         await DiagnosticsOutbox.shared.stopPumping()
+        await PerformanceReplayHTTP.retainPendingTelemetry(at: AppStorageScope.current.applicationSupport.appending(path: "RemoteCoder/app-logs"))
         do { try await AppStorageScope.current.discardBenchmark() }
         catch { failures.append("Benchmark storage cleanup: " + error.localizedDescription) }
         return failures
@@ -231,7 +278,10 @@ private struct PerformanceReplayNavigation {
                 if !AppStorageScope.isOfflineReplay || threadID.hasPrefix("claude_") { return }
                 if workspace.model(for: hostID)?.observation.state(of: threadID) == .live { return }
             }
-            guard ContinuousClock.now < deadline else { throw PerformanceReplayScenario.Failure.invalidScenario("conversation did not load: \(threadID)") }
+            guard ContinuousClock.now < deadline else {
+                let screen = workspace.selectedScreen
+                throw PerformanceReplayScenario.Failure.invalidScenario("conversation load timed out selected=\(screen?.openThreadID == threadID) loading=\(screen?.loadingTranscriptID != nil) messages=\(screen?.messages.count ?? 0) alert=\(screen?.alert != nil) live=\(workspace.model(for: hostID)?.observation.state(of: threadID) == .live)")
+            }
             try await Task.sleep(for: .milliseconds(16))
         }
     }

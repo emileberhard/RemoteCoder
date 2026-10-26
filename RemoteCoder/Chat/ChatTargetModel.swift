@@ -1989,3 +1989,11 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
     }
 
 }
+
+#if RC_PERF_HARNESS
+extension ChatTargetModel {
+    func performanceReplayConnect() async throws {
+        try await gateway.connectIfNeeded()
+    }
+}
+#endif

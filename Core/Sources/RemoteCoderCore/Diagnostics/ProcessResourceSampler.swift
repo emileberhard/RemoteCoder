@@ -87,3 +87,12 @@ final class ProcessResourceSampler {
         )))
     }
 }
+
+#if RC_PERF_HARNESS
+extension ProcessResourceSampler {
+    func finishPerformanceReplay() {
+        sample(.interval)
+        stop()
+    }
+}
+#endif
