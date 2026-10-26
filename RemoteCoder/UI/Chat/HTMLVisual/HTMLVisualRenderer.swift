@@ -34,6 +34,7 @@ final class HTMLVisualInstance: Identifiable {
     enum Surface { case inline, expanded }
     let surface: Surface
     var page: WebPage?
+    @ObservationIgnored var userContentController: WKUserContentController?
     var measured = false
     var height: Double = 180
     enum Status: Equatable { case idle, waiting, loading, live, suspended, unavailable(String) }
@@ -67,6 +68,13 @@ final class HTMLVisualInstance: Identifiable {
 
     init(surface: Surface) {
         self.surface = surface
+    }
+
+    func retirePage() {
+        userContentController?.removeScriptMessageHandler(forName: "rcVisual", contentWorld: .defaultClient)
+        userContentController = nil
+        page?.stopLoading()
+        page = nil
     }
 }
 
@@ -455,8 +463,7 @@ final class HTMLVisualRenderer {
         Self.logger.notice("html visual teardown status=\(String(describing: instance.status)) stored=\(self.snapshots[key]?.image != nil) digest=\(key.digest.prefix(8))")
         #endif
         if instance.requestID == id {
-            instance.page?.stopLoading()
-            instance.page = nil
+            instance.retirePage()
             instance.capturedImage = nil
             let capture = instance.capture
             let update = instance.update
@@ -606,7 +613,7 @@ final class HTMLVisualRenderer {
             }, open: { [weak instance] request in
                 guard instance?.requestID == requestID, instance?.page != nil else { return }
                 open(request)
-            })
+            }, onRegistration: { instance.userContentController = $0 })
         try Task.checkCancellation()
         instance.page = page
         do { try await HTMLVisualWebContent.load(page, html: html, reference: reference) }

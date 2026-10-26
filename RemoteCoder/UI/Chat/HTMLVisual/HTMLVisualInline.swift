@@ -297,7 +297,9 @@ struct HTMLVisualInline: View {
             let index = blockIndex
             await source.renderer.run(instance, reference: reference, key: key,
                 document: { try await source.documents.document(reference) },
-                open: { [inlineAnchor] in open($0, anchor: inlineAnchor, scope: nil) },
+                open: { [inlineAnchor, files, openURL] in
+                    Self.open($0, files: files, openURL: openURL, anchor: inlineAnchor, scope: nil)
+                },
                 onPinChange: { [weak presentation] pinned in
                     if let index { presentation?.setPinned(pinned, for: .htmlVisual(index)) }
                 })
@@ -307,7 +309,9 @@ struct HTMLVisualInline: View {
             guard visible, scenePhase == .active, let expansion, let reference, let key, let source else { return }
             await source.renderer.run(expansion, reference: reference, key: key,
                 document: { try await source.documents.document(reference) },
-                open: { [expandedAnchor, expandedScope] in open($0, anchor: expandedAnchor, scope: expandedScope) },
+                open: { [expandedAnchor, expandedScope, files, openURL] in
+                    Self.open($0, files: files, openURL: openURL, anchor: expandedAnchor, scope: expandedScope)
+                },
                 onPinChange: { _ in })
         }
         .onChange(of: expansion != nil) { _, expanded in
@@ -356,7 +360,8 @@ struct HTMLVisualInline: View {
             .htmlVisualFrameAnchor(anchor)
     }
 
-    private func open(_ request: HTMLVisualOpenRequest, anchor: HTMLVisualFrameAnchor, scope: UUID?) {
+    private static func open(_ request: HTMLVisualOpenRequest, files: ChatImageSource?, openURL: OpenURLAction,
+                             anchor: HTMLVisualFrameAnchor, scope: UUID?) {
         switch request {
         case .link(let url):
             if url.isFileURL, let files { files.open(url, transition: nil, presentationScope: scope) } else { openURL(url) }

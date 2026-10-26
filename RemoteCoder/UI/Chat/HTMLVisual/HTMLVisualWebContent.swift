@@ -19,7 +19,7 @@ final class HTMLVisualWebContent {
     func make(reference: HTMLVisualReference, theme: HTMLVisualTheme,
               onEvent: @escaping @MainActor (HTMLVisualEvent) -> Void,
               open: @escaping @MainActor (HTMLVisualOpenRequest) -> Void,
-              instrument: (WKUserContentController) -> Void = { _ in }) async throws -> WebPage {
+              onRegistration: (WKUserContentController) -> Void = { _ in }) async throws -> WebPage {
         #if RC_PERF_HARNESS
         if AppStorageScope.isOfflineReplay {
             PerformanceReplayHTTP.blockVisual()
@@ -37,15 +37,20 @@ final class HTMLVisualWebContent {
         let controller = configuration.userContentController
         let bridge = HTMLVisualBridge(origin: origin, onEvent: onEvent, open: open)
         controller.add(bridge, contentWorld: .defaultClient, name: "rcVisual")
-        let themeScript = try await Self.prepareThemeScript(theme)
-        try Task.checkCancellation()
-        controller.addUserScript(WKUserScript(source: themeScript,
-            injectionTime: .atDocumentStart, forMainFrameOnly: true, in: .defaultClient))
-        controller.addUserScript(WKUserScript(source: Self.layoutScript,
-            injectionTime: .atDocumentEnd, forMainFrameOnly: true, in: .defaultClient))
-        instrument(controller)
-        return WebPage(configuration: configuration, navigationDecider: HTMLVisualNavigation(origin: origin),
-                       dialogPresenter: HTMLVisualDialogs())
+        onRegistration(controller)
+        do {
+            let themeScript = try await Self.prepareThemeScript(theme)
+            try Task.checkCancellation()
+            controller.addUserScript(WKUserScript(source: themeScript,
+                injectionTime: .atDocumentStart, forMainFrameOnly: true, in: .defaultClient))
+            controller.addUserScript(WKUserScript(source: Self.layoutScript,
+                injectionTime: .atDocumentEnd, forMainFrameOnly: true, in: .defaultClient))
+            return WebPage(configuration: configuration, navigationDecider: HTMLVisualNavigation(origin: origin),
+                           dialogPresenter: HTMLVisualDialogs())
+        } catch {
+            controller.removeScriptMessageHandler(forName: "rcVisual", contentWorld: .defaultClient)
+            throw error
+        }
     }
 
     func discardStorage() async {

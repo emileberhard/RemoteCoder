@@ -778,6 +778,10 @@ entrypoint linked above.
   - A `WebPage` backs at most one `WebView`. Only the host that claimed a
     preparation surface renders it; never render a shared page from a second
     view.
+  - Each instance owns its user content controller from `rcVisual` registration.
+    Page retirement removes that handler before clearing the page; failed creation
+    also unregisters it. Bridge callbacks capture capabilities, never view values
+    that retain `PresentedRaster` and its pixel reservations.
   - Readiness waits are bounded by `renderReadinessTimeout` and are recovery,
     not proof. Pixel demand (awaited presentable visuals and the near set
     around the visible rows) is planned nearest first to fit the raster

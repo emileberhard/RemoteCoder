@@ -360,6 +360,9 @@ The layout, interaction and link bridge lives in WebKit's isolated
 `defaultClient` content world. Native handling checks the main frame and
 synthetic origin and validates each bounded payload. Page-authored JavaScript
 does not receive an app RPC or arbitrary native-operation bridge.
+The content controller strongly retains that bridge, so link callbacks capture
+only the open-URL action, file source, frame anchor and presentation scope;
+they never capture a view value or its raster state.
 
 ## Visibility, interaction and cached geometry
 
@@ -382,8 +385,15 @@ cap: waiting visible demand admits before it and cancels its page, and it is
 the first eviction candidate. Under energy conservation it shares automatic
 admission's one-page limit, and conservation releases its pages beyond it.
 Leaving the active visibility scope cancels owned rendering,
-theme updates and snapshot capture, stops loading, clears the live page and
-releases admission. Expansion runs its own selected, pinned page in a
+theme updates and snapshot capture. The renderer retires the instance's page
+by removing its `rcVisual` handler from `defaultClient` before stopping loading
+and clearing the page, then releases admission. The instance owns the controller
+from handler registration, including while page creation is suspended, so
+cancellation before the page is assigned follows the same retirement path.
+`HTMLVisualWebContent.make` also removes its handler if creation throws after
+registration. This releases retired visual holders and their raster reservations;
+otherwise WebKit can keep those pixels reserved outside the renderer's cache
+eviction policy. Expansion runs its own selected, pinned page in a
 scrollable sheet.
 Inline document viewport overflow is clipped in the isolated style bridge;
 SwiftUI's `scrollDisabled` does not disable the native WebKit scroll view.
