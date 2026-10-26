@@ -430,13 +430,47 @@ def instrumentation(device: Simulator | Device, template: str | None, instrument
     app_only = not isinstance(device, Device) or template == "Allocations"
     result = {"template": template, "instruments": instruments,
               "scope": ("app" if app_only else "allProcesses") if template else None}
-    if template and (Path(template).expanduser().is_file() or template.endswith(".tracetemplate")):
-        with Path(template).expanduser().open("rb") as source:
-            data = source.read(4 * 1_048_576 + 1)
-        if len(data) > 4 * 1_048_576:
-            raise ValueError("Instruments template exceeds 4 MiB")
+    if (data := saved_template_data(template)) is not None:
         result["templateSHA256"] = hashlib.sha256(data).hexdigest()
+    elif template and template not in built_in_templates():
+        raise ValueError("Use a built-in Instruments template name or an explicit saved template file path")
     return result
+
+
+@functools.cache
+def built_in_templates() -> frozenset[str]:
+    result = subprocess.run(["xcrun", "xctrace", "list", "templates"], env=ENV, check=True,
+                            capture_output=True, text=True, timeout=10)
+    section = result.stdout.partition("== Standard Templates ==")[2].split("==", 1)[0]
+    names = frozenset(line.strip() for line in section.splitlines() if line.strip())
+    if not names:
+        raise ValueError("xctrace did not list any built-in Instruments templates")
+    return names
+
+
+def saved_template_data(template: str | None) -> bytes | None:
+    if not template or not (Path(template).expanduser().is_file() or template.endswith(".tracetemplate")):
+        return None
+    with Path(template).expanduser().open("rb") as source:
+        data = source.read(4 * 1_048_576 + 1)
+    if len(data) > 4 * 1_048_576:
+        raise ValueError("Instruments template exceeds 4 MiB")
+    return data
+
+
+@contextlib.contextmanager
+def recording_template(device: Simulator | Device, template: str, instruments: list[str] | None, directory: Path):
+    configuration = instrumentation(device, template, instruments)
+    if "templateSHA256" not in configuration:
+        yield template, configuration
+        return
+    data = saved_template_data(template)
+    if data is None or hashlib.sha256(data).hexdigest() != configuration["templateSHA256"]:
+        raise ValueError("Instruments template changed while preparing its recording snapshot")
+    with tempfile.NamedTemporaryFile(dir=directory, prefix=".replay-template-", suffix=".tracetemplate") as snapshot:
+        snapshot.write(data)
+        snapshot.flush()
+        yield snapshot.name, configuration
 
 
 def stop_trace_process(process: subprocess.Popen) -> str:
@@ -461,54 +495,64 @@ def _trace_notification(name: str):
     status = notify.notify_register_file_descriptor(name.encode(), ctypes.byref(descriptor), 0, ctypes.byref(token))
     if status != 0:
         raise RuntimeError(f"Could not register tracing-started notification: libnotify status {status}")
+    failure = None
     try:
         yield descriptor.value, token.value
+    except BaseException as error:
+        failure = error
+        raise
     finally:
         status = notify.notify_cancel(token.value)
         if status != 0:
-            raise RuntimeError(f"Could not cancel tracing-started notification: libnotify status {status}")
+            message = f"Could not cancel tracing-started notification: libnotify status {status}"
+            if failure is not None:
+                failure.add_note(message)
+            else:
+                raise RuntimeError(message)
 
 
 @contextlib.contextmanager
 def tracing(device: Simulator | Device, template: str, instruments: list[str] | None, seconds: int, path: str):
     Path(path).parent.mkdir(parents=True, exist_ok=True)
-    scope = ["--attach", PROCESS] if instrumentation(device, template, instruments)["scope"] == "app" else ["--all-processes"]
-    notification = "com.remotecoder.perf.trace." + uuid.uuid4().hex
-    command = ["xcrun", "xctrace", "record", "--template", template, "--device", device.udid, *scope,
-               "--time-limit", f"{seconds}s", "--output", path, "--no-prompt", "--notify-tracing-started", notification]
-    for instrument in instruments or []:
-        command += ["--instrument", instrument]
-    with _trace_notification(notification) as (descriptor, token):
-        recorder = None
-        try:
-            recorder = subprocess.Popen(command, env=ENV, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-            deadline = time.monotonic() + 30
-            while True:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise SystemExit("Instruments did not announce tracing-started within 30 seconds")
+    with recording_template(device, template, instruments, Path(path).parent) as (selected_template, configuration):
+        scope = ["--attach", PROCESS] if configuration["scope"] == "app" else ["--all-processes"]
+        notification = "com.remotecoder.perf.trace." + uuid.uuid4().hex
+        command = ["xcrun", "xctrace", "record", "--template", selected_template, "--device", device.udid, *scope,
+                   "--time-limit", f"{seconds}s", "--output", path, "--no-prompt", "--notify-tracing-started", notification]
+        for instrument in instruments or []:
+            command += ["--instrument", instrument]
+        with _trace_notification(notification) as (descriptor, token):
+            recorder = None
+            try:
+                recorder = subprocess.Popen(command, env=ENV, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                recorder.perf_instrumentation = configuration
+                deadline = time.monotonic() + 30
+                while True:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise SystemExit("Instruments did not announce tracing-started within 30 seconds")
+                    if recorder.poll() is not None:
+                        raise SystemExit("Instruments stopped before its tracing-started notification")
+                    readable, _, _ = select.select([descriptor], [], [], min(0.1, remaining))
+                    if not readable:
+                        continue
+                    received = os.read(descriptor, 4)
+                    if len(received) != 4 or int.from_bytes(received, "big") != token:
+                        raise RuntimeError("Tracing-started notification did not match its registered token")
+                    if time.monotonic() >= deadline:
+                        raise SystemExit("Instruments tracing-started notification arrived after its deadline")
+                    break
+                recorder.perf_started_monotonic = time.monotonic()
+                time.sleep(TRACE_WARMUP)
                 if recorder.poll() is not None:
-                    raise SystemExit("Instruments stopped before its tracing-started notification")
-                readable, _, _ = select.select([descriptor], [], [], min(0.1, remaining))
-                if not readable:
-                    continue
-                received = os.read(descriptor, 4)
-                if len(received) != 4 or int.from_bytes(received, "big") != token:
-                    raise RuntimeError("Tracing-started notification did not match its registered token")
-                if time.monotonic() >= deadline:
-                    raise SystemExit("Instruments tracing-started notification arrived after its deadline")
-                break
-            recorder.perf_started_monotonic = time.monotonic()
-            time.sleep(TRACE_WARMUP)
-            if recorder.poll() is not None:
-                raise SystemExit("Instruments stopped while settling after tracing-started")
-            yield recorder
-        finally:
-            if recorder is not None:
-                log = stop_trace_process(recorder)
-                if log:
-                    with private_open(Path(path).with_suffix(".recording.log"), "w") as handle:
-                        handle.write(log)
+                    raise SystemExit("Instruments stopped while settling after tracing-started")
+                yield recorder
+            finally:
+                if recorder is not None:
+                    log = stop_trace_process(recorder)
+                    if log:
+                        with private_open(Path(path).with_suffix(".recording.log"), "w") as handle:
+                            handle.write(log)
 
 
 def finish_trace(recorder: subprocess.Popen, path: str, window: dict | None = None) -> None:
@@ -799,9 +843,9 @@ def run_scenario(args, device: Simulator | Device, index: int, deadline: float) 
     duration = fixture["duration"]
     if not isinstance(duration, (int, float)) or not math.isfinite(duration) or not 10 <= duration <= 900:
         raise SystemExit("scenario duration must be 10–900 seconds")
-    if args.trace_template and args.trace_seconds < duration + TRACE_WARMUP + 3:
-        raise SystemExit("--trace-seconds must cover warmup, scenario and three seconds of tail")
-    hold_seconds = max(duration + 90, args.trace_seconds + 30 if args.trace_template else 0)
+    if args.trace_template and args.trace_seconds < duration + 15:
+        raise SystemExit("--trace-seconds must cover the scenario and fifteen seconds of setup and tail")
+    hold_seconds = args.settle + max(duration + 90, args.trace_seconds + 30 + TRACE_WARMUP + 10 if args.trace_template else 0)
     if hold_seconds > MAX_MEASUREMENT_SECONDS:
         raise ValueError("trace and scenario must fit within the measurement duration limit")
     device.prepare()
@@ -831,7 +875,7 @@ def run_scenario(args, device: Simulator | Device, index: int, deadline: float) 
             result = result if result is not None else {"error": "scenario-run timed out"}
             result.update(identity)
             result.update(deviceUDID=device.udid, driverSHA256=DRIVER_SHA256,
-                          instrumentation=instrumentation(device, args.trace_template, args.instrument),
+                          instrumentation=recorder.perf_instrumentation if recorder else instrumentation(device, None, args.instrument),
                           target="device" if isinstance(device, Device) else "simulator",
                           label=f"{args.label}-{index + 1}", hostLoad1m=round(load, 1))
             if trace_path:

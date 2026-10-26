@@ -66,11 +66,12 @@ final class PerformanceReplayRun {
             guard let model = workspace.model(for: run.hostID) else {
                 throw PerformanceReplayScenario.Failure.invalidScenario("isolated host did not bootstrap")
             }
+            let navigation = PerformanceReplayNavigation(workspace: workspace, hostID: run.hostID)
+            try await navigation.setSidebarOpen(false)
             run.preparedState = try await PerformanceReplayPreparation.prepare(scenario, model: model, progressURL: url.deletingLastPathComponent().appending(path: "preparation-progress.json"))
             guard let first = scenario.conversations.first?.thread.objectValue?["id"]?.stringValue else {
                 throw PerformanceReplayScenario.Failure.invalidScenario("missing initial conversation")
             }
-            let navigation = PerformanceReplayNavigation(workspace: workspace, hostID: run.hostID)
             try await navigation.open(first)
             try await navigation.setSidebarOpen(false)
             return run

@@ -62,7 +62,7 @@ def prepare(args):
         raise ValueError("calibration prompt must be nonempty and at most 16 KiB")
     fixture = Path(args.fixture).expanduser().read_bytes()
     scenario = json.loads(fixture)
-    required = {action["threadID"] for action in scenario["actions"] if action["kind"] == "open"}
+    required = calibration_sources(scenario)
     if len(args.thread) != len(required):
         raise ValueError("supply one source --thread for each replay stream")
     return destination, config, prompt, fixture
