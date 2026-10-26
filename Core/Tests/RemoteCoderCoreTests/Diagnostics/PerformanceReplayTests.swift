@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 import Testing
 @testable import RemoteCoderCore
 
@@ -26,6 +27,31 @@ import Testing
         #expect(throws: PerformanceReplayScenario.Failure.self) { try scenario.validate() }
     }
 
+    @Test func indexedHistoryIsVerifiedAndPagesRemainBounded() throws {
+        let root = URL.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: root.appending(path: "history"), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let values = fixture().conversations[0].items
+        var data = Data()
+        var offsets: [UInt64] = [0]
+        for value in values {
+            data.append(try JSONEncoder().encode(value))
+            data.append(10)
+            offsets.append(UInt64(data.count))
+        }
+        let file = PerformanceReplayIndexedFile(path: "history/items.jsonl", offsets: offsets,
+            sha256: SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined())
+        let url = root.appending(path: file.path)
+        try data.write(to: url)
+        try file.verify(root: root)
+        #expect(try file.read(1..<3, root: root) == Array(values[1..<3]))
+        #expect(throws: PerformanceReplayScenario.Failure.self) { try file.read(0..<101, root: root) }
+        try Data("changed".utf8).write(to: url)
+        #expect(throws: PerformanceReplayScenario.Failure.self) { try file.verify(root: root) }
+        let escaping = PerformanceReplayIndexedFile(path: "history/../items.jsonl", offsets: offsets, sha256: file.sha256)
+        #expect(throws: PerformanceReplayScenario.Failure.self) { try escaping.validate() }
+    }
+
     @Test func replayKeepsRelativeAgeAfterFourDays() throws {
         let now = 100.0 + 4 * 86_400
         let shifted = try fixture().rebased(to: now)
@@ -35,6 +61,31 @@ import Testing
         #expect(thread.updatedAt == Int64(now - 98))
         #expect(!marks.isSettled(thread, isLive: false, at: Int64(now)))
         #expect(shifted.events[0].at == 1)
+    }
+
+    @Test func sidebarPagesHonorLimitsAndProviderCursors() throws {
+        let source = fixture()
+        var header = try #require(source.conversations[0].thread.objectValue)
+        header["id"] = .string("thread-extra")
+        let scenario = PerformanceReplayScenario(version: source.version, capturedAt: source.capturedAt,
+            name: source.name, duration: source.duration,
+            conversations: source.conversations + [.init(thread: .object(header), items: [], turns: [])],
+            events: source.events, actions: source.actions, responses: [:], errors: [:], httpResponses: [:], threadResponses: [:])
+        var state = try PerformanceReplayState(scenario)
+        for method in ["thread/list", "claude/thread/list"] {
+            let page = try #require(state.response(to: .object(["id": .number(1), "method": .string(method),
+                "params": .object(["limit": .number(1)])]))?.objectValue?["result"]?.objectValue)
+            #expect(page["data"]?.arrayValue?.count == 1)
+            #expect(page["nextCursor"] == (method == "thread/list" ? .string("1") : .null))
+        }
+        let empty = try #require(state.response(to: .object(["id": .number(2), "method": .string("thread/list"),
+            "params": .object(["limit": .number(1), "cursor": .string("1")])]))?.objectValue?["result"]?.objectValue)
+        #expect(empty["data"]?.arrayValue?.first?.objectValue?["id"] == .string("thread-extra"))
+        #expect(empty["nextCursor"] == .null)
+        #expect(throws: PerformanceReplayScenario.Failure.self) {
+            try state.response(to: .object(["id": .number(3), "method": .string("thread/list"),
+                "params": .object(["limit": .number(1), "cursor": .string("invalid")])]))
+        }
     }
 
     @Test func cursorCanReverseDirectionWithoutDuplicatingTheAnchor() throws {
@@ -52,6 +103,39 @@ import Testing
         let newer = try #require(state.response(to: request(direction: "asc", cursor: older["backwardsCursor"]?.stringValue))?.objectValue?["result"]?.objectValue)
         let newItems = try #require(newer["data"]?.arrayValue)
         #expect(newItems.compactMap { $0.objectValue?["item"]?.objectValue?["id"]?.stringValue } == ["item-1", "item-2"])
+    }
+
+    @Test func reopenedBackgroundStreamUsesProductionCheckpointDecoder() throws {
+        var state = try PerformanceReplayState(fixture())
+        state.apply(.object(["method": .string("turn/started"), "params": .object([
+            "threadId": .string("thread-a"), "turn": .object(["id": .string("live"),
+                "status": .string("inProgress"), "items": .array([]), "startedAt": .number(103)])])]))
+        let result = try #require(state.response(to: .object(["id": .number(1), "method": .string("thread/subscribe"),
+            "params": .object(["threadId": .string("thread-a")])]))?.objectValue?["result"])
+        let decoded = try JSONDecoder().decode(CodexAppServerV2.ThreadSubscribeResponse.self, from: JSONEncoder().encode(result))
+        guard case .subscribed(_, _, let checkpoint) = decoded else { Issue.record("background subscription missing"); return }
+        #expect(checkpoint.activeTurn?.startedAt == 103)
+    }
+
+    @Test func sidebarCompletionEvidenceKeepsKnownNullAndUnavailableDistinct() throws {
+        var scenario = fixture()
+        scenario.completionTimes = ["thread-a": .null, "claude_thread-b": .number(90)]
+        var state = try PerformanceReplayState(scenario)
+        let response = try #require(state.response(to: .object(["id": .number(1), "method": .string("thread/list"),
+            "params": .object(["limit": .number(50)])]))?.objectValue?["result"]?.objectValue)
+        #expect(response["completionTimes"]?.objectValue?["thread-a"] == .null)
+        scenario.completionTimes = ["thread-a": .number(90)]
+        let rebased = try scenario.rebased(to: 200)
+        #expect(rebased.completionTimes?["thread-a"] == .number(190))
+        state = try PerformanceReplayState(scenario)
+        let numeric = try #require(state.response(to: .object(["id": .number(2), "method": .string("thread/list"),
+            "params": .object(["limit": .number(50)])]))?.objectValue?["result"]?.objectValue)
+        #expect(numeric["completionTimes"]?.objectValue?["thread-a"] == .number(90))
+        scenario.completionTimes = [:]
+        state = try PerformanceReplayState(scenario)
+        let unavailable = try #require(state.response(to: .object(["id": .number(2), "method": .string("thread/list"),
+            "params": .object(["limit": .number(50)])]))?.objectValue?["result"]?.objectValue)
+        #expect(unavailable["completionTimes"]?.objectValue?["thread-a"] == nil)
     }
 
     @Test func activityPushAndReadShareRevisionsAndCompletionRecency() throws {
@@ -91,6 +175,18 @@ import Testing
         #expect(diagnostics.requests == ["GET /accounts": 1])
         #expect(diagnostics.blockedExternal == 1)
         #expect(diagnostics.missing.isEmpty)
+        let directory = URL.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try PerformanceReplayHTTP.install(["POST /app-logs": .object(["status": .number(200), "body": .object([:])])], telemetryDirectory: directory)
+        let body = try #require(GzipEncoding.gzipped(Data("synthetic telemetry".utf8)))
+        var request = URLRequest(url: try #require(URL(string: "http://127.0.0.1:1/app-logs")))
+        request.httpMethod = "POST"
+        request.setValue("synthetic-telemetry", forHTTPHeaderField: "X-RemoteCoder-Segment")
+        request.httpBodyStream = InputStream(data: body)
+        _ = try await session.data(for: request)
+        let name = try #require(PerformanceReplayHTTP.telemetryCapture.files.first)
+        #expect(PerformanceReplayHTTP.telemetryCapture.failures.isEmpty)
+        #expect(try Data(contentsOf: directory.appending(path: name)) == body)
     }
 
     @Test(.timeLimit(.minutes(1))) func realGatewayClientReadsReplayHistoryOverLoopback() async throws {

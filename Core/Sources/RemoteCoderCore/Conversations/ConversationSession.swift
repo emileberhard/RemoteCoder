@@ -900,3 +900,11 @@ actor ConversationSessions {
         byThread.compactMap { threadID, id in byID[id] == nil ? nil : threadID }
     }
 }
+
+#if RC_PERF_HARNESS
+extension ConversationSessions {
+    func performanceReplayCheckpointInventory() async -> [String: Int] {
+        await checkpoints.performanceReplayInventory()
+    }
+}
+#endif
