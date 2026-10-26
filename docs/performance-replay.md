@@ -133,7 +133,8 @@ hash, instrumentation, preparation evidence, actual action/delivery lateness,
 process/main-thread CPU, sampled footprint, frame intervals and counters.
 `ReplayJourney` and `ReplayAction` signposts delimit corresponding operations.
 The driver waits for xctrace's recording-start notification before measurement,
-with a bounded startup deadline and owned notification-watcher cleanup.
+with synchronous notification registration, a bounded startup deadline and
+owned registration cleanup.
 A private buffer uses the unchanged production `ProcessResourceSampler`, including
 its cadence, transition spacing and mixed-interval semantics. Samples use scene, surface,
 visible-running-turn and voice-call breakdown. Counter deltas belong to the

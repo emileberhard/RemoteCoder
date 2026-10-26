@@ -260,53 +260,67 @@ class ArgumentTests(unittest.TestCase):
 
 
 class ScenarioTests(unittest.TestCase):
-    def test_native_trace_notification_owns_readiness_and_process_cleanup(self) -> None:
-        for outcome in ("ready", "timeout", "recorder-failed", "watcher-failed", "launch-failed", "late"):
+    def test_synchronous_trace_notification_registration_precedes_producer_and_cancels(self) -> None:
+        for outcome in ("ready", "timeout", "recorder-failed", "registration-failed", "launch-failed", "token-mismatch", "truncated", "late"):
             with self.subTest(outcome=outcome), tempfile.TemporaryDirectory() as directory:
-                clock = [0.0]
-                watcher, recorder = Mock(), Mock()
-                watcher.communicate.return_value = (None, "")
+                clock, events = [0.0], []
+                notify, recorder = Mock(), Mock()
+                notify.notify_cancel.return_value = 0
                 recorder.communicate.return_value = ("recorder output", None)
-                watcher.poll.return_value = None
                 recorder.poll.return_value = 1 if outcome == "recorder-failed" else None
-                if outcome == "ready":
-                    watcher.poll.side_effect = [None, 0, 0]
-                elif outcome == "watcher-failed":
-                    watcher.poll.return_value = 1
-                elif outcome == "late":
-                    def late(clock=clock):
-                        clock[0] = 31
-                        return 0
-                    watcher.poll.side_effect = late
-                def sleep(seconds, clock=clock):
-                    clock[0] += seconds
-                commands = []
-                def launch(command, outcome=outcome, watcher=watcher, recorder=recorder, commands=commands, **kwargs):
-                    commands.append(command)
-                    if len(commands) == 1:
-                        return watcher
+                def register(name, descriptor, flags, token, outcome=outcome, events=events):
+                    events.append("register")
+                    self.assertEqual(flags, 0)
+                    descriptor._obj.value = 91
+                    token._obj.value = 17
+                    return 1 if outcome == "registration-failed" else 0
+                notify.notify_register_file_descriptor.side_effect = register
+                def launch(command, outcome=outcome, events=events, recorder=recorder, **kwargs):
+                    events.append("producer")
+                    self.assertEqual(events, ["register", "producer"])
+                    self.assertIn("--notify-tracing-started", command)
                     if outcome == "launch-failed":
                         raise OSError("recorder launch failed")
                     return recorder
-                with patch.object(perf_harness.subprocess, "Popen", side_effect=launch), \
+                def select(readers, writers, errors, timeout, outcome=outcome, clock=clock):
+                    self.assertEqual(readers, [91])
+                    self.assertLessEqual(timeout, 0.1)
+                    if outcome == "timeout":
+                        clock[0] += timeout
+                        return [], [], []
+                    if outcome == "late":
+                        clock[0] = 31
+                    return [91], [], []
+                def sleep(seconds, clock=clock):
+                    clock[0] += seconds
+                payload = (18 if outcome == "token-mismatch" else 17).to_bytes(4, "big")
+                if outcome == "truncated":
+                    payload = payload[:3]
+                with patch.object(perf_harness.ctypes, "CDLL", return_value=notify), \
+                        patch.object(perf_harness.subprocess, "Popen", side_effect=launch) as producer, \
+                        patch.object(perf_harness.select, "select", side_effect=select), \
+                        patch.object(perf_harness.os, "read", return_value=payload), \
+                        patch.object(perf_harness.os, "close") as close, \
                         patch.object(perf_harness.time, "monotonic", side_effect=lambda clock=clock: clock[0]), \
                         patch.object(perf_harness.time, "sleep", side_effect=sleep):
                     if outcome == "ready":
                         with perf_harness.tracing(SimpleNamespace(udid="ipad"), "Time Profiler", ["Points of Interest"], 315, str(Path(directory) / "run.trace")) as active:
                             self.assertIs(active, recorder)
-                            self.assertAlmostEqual(clock[0] - recorder.perf_started_monotonic, perf_harness.TRACE_WARMUP)
+                            self.assertEqual(clock[0] - recorder.perf_started_monotonic, perf_harness.TRACE_WARMUP)
                     else:
-                        with self.assertRaises((SystemExit, OSError)):
+                        with self.assertRaises((SystemExit, OSError, RuntimeError)):
                             with perf_harness.tracing(SimpleNamespace(udid="ipad"), "Time Profiler", [], 315, str(Path(directory) / "run.trace")):
                                 self.fail("failed tracing startup yielded a recorder")
-                self.assertEqual(commands[0][:3], ["notifyutil", "-q", "-1"])
-                self.assertEqual(commands[1][commands[1].index("--notify-tracing-started") + 1], commands[0][-1])
-                watcher.communicate.assert_called_once_with(timeout=5)
-                if outcome != "launch-failed":
+                    close.assert_not_called()
+                if outcome == "registration-failed":
+                    producer.assert_not_called()
+                    notify.notify_cancel.assert_not_called()
+                else:
+                    notify.notify_cancel.assert_called_once_with(17)
+                if outcome not in ("launch-failed", "registration-failed"):
                     recorder.communicate.assert_called_once_with(timeout=5)
                 if outcome == "timeout":
                     self.assertLessEqual(clock[0], 30.1)
-                    watcher.terminate.assert_called_once()
                     recorder.terminate.assert_called_once()
 
     def test_native_trace_cleanup_kills_processes_that_ignore_termination(self) -> None:
