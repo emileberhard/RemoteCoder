@@ -25,11 +25,12 @@ def encoded(value) -> bytes:
 
 
 def journey_actions(ids: list[str], duration: float) -> list[dict]:
-    actions = [{"at": 1, "kind": "open", "threadID": ids[0]}]
+    actions = []
     for at in range(35, int(duration) - 5, 75):
         index = (at // 75 + 1) % len(ids)
         actions.extend([{"at": at, "kind": "toggleSidebar", "threadID": ids[0]},
                         {"at": at + 2, "kind": "open", "threadID": ids[index]},
+                        {"at": at + 3, "kind": "toggleSidebar", "threadID": ids[index]},
                         {"at": at + 5, "kind": "scroll", "threadID": ids[index], "message": 0},
                         {"at": at + 8, "kind": "open", "threadID": ids[0]}])
     return [action for action in actions if action["at"] < duration]
@@ -633,6 +634,14 @@ def compare(args) -> None:
     if len(signatures) != 1:
         raise ValueError("fixture, device, OS, energy state or instrumentation differs")
     states = [[state_metrics(value) for value in values] for values in (before, after)]
+    for values, measurements in zip((before, after), states, strict=True):
+        for value, measured in zip(values, measurements, strict=True):
+            seconds = value.get("seconds")
+            if not isinstance(seconds, (int, float)) or not math.isfinite(seconds) or seconds <= 0:
+                raise ValueError("comparison requires measured report seconds")
+            working = measured["agentWorking"]["seconds"]
+            if working < seconds * 0.8:
+                raise ValueError(f"unrepresentative replay: agent-working context covered {working:.3f} of {seconds:.3f} seconds; at least 80% is required after mixed/gap exclusions")
     output = {"beforeRuns": len(before), "afterRuns": len(after), "fixtureSHA256": before[0]["fixtureSHA256"],
               "buildIdentity": {"before": {key: before[0][key] for key in identity_keys},
                                 "after": {key: after[0][key] for key in identity_keys}},
