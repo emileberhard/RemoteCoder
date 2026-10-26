@@ -112,7 +112,7 @@ async def run(args, device, harness) -> None:
             await asyncio.sleep(3)
             path = str(destination / "live.trace")
             with harness.tracing(device, "Time Profiler", ["Hitches", "Points of Interest"], frozen["duration"] + harness.TRACE_WARMUP + 10, path) as recorder:
-                await asyncio.sleep(harness.TRACE_WARMUP)
+                await asyncio.to_thread(harness.wait_for_signposts, device, recorder, path)
                 measurement = asyncio.create_task(asyncio.to_thread(harness.send, device,
                     {"cmd": "calibration-run", "host": host, "threads": threads}, frozen["duration"] + 90, frozen["duration"] + 1))
 
