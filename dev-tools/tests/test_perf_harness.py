@@ -262,6 +262,14 @@ class BuildTests(unittest.TestCase):
 
 
 class ArgumentTests(unittest.TestCase):
+    def test_template_names_exclude_registered_custom_templates(self) -> None:
+        output = "== Standard Templates ==\nTime Profiler\nAllocations\n== Custom Templates ==\nMy Template\n"
+        with patch.object(perf_harness.subprocess, "run", return_value=SimpleNamespace(stdout=output)):
+            names = perf_harness.built_in_templates.__wrapped__()
+        self.assertEqual(names, frozenset({"Time Profiler", "Allocations"}))
+        with patch.object(perf_harness, "built_in_templates", return_value=names), self.assertRaisesRegex(ValueError, "explicit saved template"):
+            perf_harness.instrumentation(SimpleNamespace(), "My Template", [])
+
     def test_positive_accepts_finite_positive_numbers(self) -> None:
         self.assertEqual(perf_harness.positive(int)("3"), 3)
         self.assertEqual(perf_harness.positive(float)("0.5"), 0.5)
@@ -273,6 +281,61 @@ class ArgumentTests(unittest.TestCase):
 
 
 class ScenarioTests(unittest.TestCase):
+    def setUp(self) -> None:
+        templates = patch.object(perf_harness, "built_in_templates", return_value=frozenset({"Time Profiler", "Allocations"}))
+        templates.start()
+        self.addCleanup(templates.stop)
+
+    def test_notification_cleanup_failure_preserves_the_original_failure(self) -> None:
+        notify = Mock()
+        notify.notify_register_file_descriptor.return_value = 0
+        notify.notify_cancel.return_value = 1
+        original = ValueError("original window failure")
+        with patch.object(perf_harness.ctypes, "CDLL", return_value=notify):
+            with self.assertRaises(ValueError) as raised, perf_harness._trace_notification("test"):
+                raise original
+            self.assertIs(raised.exception, original)
+            self.assertIn("Could not cancel", original.__notes__[0])
+            with self.assertRaisesRegex(RuntimeError, "Could not cancel"), perf_harness._trace_notification("test"):
+                pass
+
+    def test_trace_uses_a_private_frozen_template_and_keeps_its_identity(self) -> None:
+        for failure in (False, True):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                original = root / "Immediate.tracetemplate"
+                original.write_bytes(b"template A")
+                recorder = Mock()
+                recorder.poll.return_value = None
+                recorder.communicate.return_value = ("", None)
+                snapshots = []
+                def launch(command, snapshots=snapshots, original=original, recorder=recorder, **kwargs):
+                    snapshot = Path(command[command.index("--template") + 1])
+                    snapshots.append(snapshot)
+                    self.assertNotEqual(snapshot, original)
+                    self.assertEqual(snapshot.stat().st_mode & 0o777, 0o600)
+                    original.write_bytes(b"template B")
+                    self.assertEqual(snapshot.read_bytes(), b"template A")
+                    return recorder
+                with patch.object(perf_harness, "_trace_notification", return_value=contextlib.nullcontext((91, 17))), \
+                        patch.object(perf_harness.subprocess, "Popen", side_effect=launch), \
+                        patch.object(perf_harness.select, "select", return_value=([91], [], [])), \
+                        patch.object(perf_harness.os, "read", return_value=(17).to_bytes(4, "big")), \
+                        patch.object(perf_harness.time, "sleep"):
+                    try:
+                        with perf_harness.tracing(SimpleNamespace(udid="ipad"), str(original), [], 315, str(root / "run.trace")) as active:
+                            self.assertEqual(active.perf_instrumentation["template"], str(original))
+                            self.assertEqual(active.perf_instrumentation["templateSHA256"], hashlib.sha256(b"template A").hexdigest())
+                            original.write_bytes(b"template C")
+                            self.assertEqual(snapshots[0].read_bytes(), b"template A")
+                            if failure:
+                                raise RuntimeError("measured window failed")
+                    except RuntimeError:
+                        if not failure:
+                            raise
+                self.assertFalse(snapshots[0].exists())
+                recorder.terminate.assert_called_once()
+
     def test_synchronous_trace_notification_registration_precedes_producer_and_cancels(self) -> None:
         for outcome in ("ready", "timeout", "recorder-failed", "registration-failed", "launch-failed", "token-mismatch", "truncated", "late"):
             with self.subTest(outcome=outcome), tempfile.TemporaryDirectory() as directory:
@@ -367,7 +430,7 @@ class ScenarioTests(unittest.TestCase):
                           "frames": 120, "fixtureSHA256": hashlib.sha256(data).hexdigest(), "actions": [],
                           "appliedFrames": 0, "diagnostic": "preserve me", "telemetryFiles": ["segment.jsonl.gz"]}
                 args = SimpleNamespace(fixture=root / "fixture.json", trace_template="Time Profiler",
-                                       trace_seconds=25, runs=1, settle=0, trace_dir=str(root), label="run",
+                                       trace_seconds=100, runs=1, settle=0, trace_dir=str(root), label="run",
                                        instrument=[], log=str(root / "reports.jsonl"))
                 events = []
                 def uninstall(failure=failure, events=events):
@@ -381,12 +444,13 @@ class ScenarioTests(unittest.TestCase):
                     if failure == "trace-telemetry":
                         raise ValueError("copy failed")
                 recorder = Mock()
+                recorder.perf_instrumentation = perf_harness.instrumentation(device, args.trace_template, args.instrument)
                 recorder.poll.return_value = None
                 ownership = {"source": True, "measurement": True}
                 def send(device, command, *args, ownership=ownership, failure=failure, result=result, app=app, **kwargs):
                     if command["cmd"] == "scenario-load":
                         self.assertGreater(args[0], 0)
-                        self.assertLessEqual(args[0], 1670)
+                        self.assertLessEqual(args[0], 1800 - 100 - 30 - perf_harness.TRACE_WARMUP - 10 - 30)
                         self.assertTrue(ownership["source"])
                         self.assertTrue(ownership["measurement"])
                         if failure == "artifact":
