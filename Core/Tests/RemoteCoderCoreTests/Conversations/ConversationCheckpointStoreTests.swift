@@ -36,6 +36,7 @@ struct ConversationCheckpointStoreTests: ConversationHistoryFixtures {
         let store = cold ? ConversationCheckpointStore(hostID: host, directory: target, primaryBudgetBytes: 512 * 1_024 * 1_024) : writer
         if cold {
             #expect(try await store.load(UUID()) == nil)
+            try await eventually { !FileManager.default.fileExists(atPath: wal.path) }
         } else {
             #expect(await store.accountedDiskBytes == before)
         }
@@ -51,7 +52,8 @@ struct ConversationCheckpointStoreTests: ConversationHistoryFixtures {
         withExtendedLifetime(writer) {}
     }
 
-    @Test func aColdLoadAndRetainedFenceSupersedePendingWALReclamation() async throws {
+    @Test(arguments: [false, true])
+    func aColdLoadAndFlushSupersedePendingWALReclamation(flushDuringSweep: Bool) async throws {
         let fixture = URL.temporaryDirectory.appending(path: UUID().uuidString)
         let directory = URL.temporaryDirectory.appending(path: UUID().uuidString)
         defer {
@@ -76,15 +78,24 @@ struct ConversationCheckpointStoreTests: ConversationHistoryFixtures {
         func loadBeforeYieldingToTheSweep(_ store: isolated ConversationCheckpointStore) async throws -> (ConversationState.Checkpoint?, UInt64) {
             _ = try await store.load(UUID())
             let generation = store.generation(for: fencedID)
+            if flushDuringSweep { await store.checkpointWALs() }
             return (try await store.load(loadedID), generation)
         }
         let (loaded, generation) = try await loadBeforeYieldingToTheSweep(store)
         #expect(loaded?.threadID == loadedID.uuidString)
+        let quietWAL = directory.appending(path: "\(quietID).sqlite-wal")
+        if !flushDuringSweep {
+            try await eventually { !FileManager.default.fileExists(atPath: quietWAL.path) }
+        }
         await store.checkpointWALs()
         for id in [loadedID, fencedID] {
             #expect(try Data(contentsOf: directory.appending(path: "\(id).sqlite-wal")).count > 0)
         }
-        #expect(!FileManager.default.fileExists(atPath: directory.appending(path: "\(quietID).sqlite-wal").path))
+        if flushDuringSweep {
+            #expect(try Data(contentsOf: quietWAL).count > 0)
+        } else {
+            #expect(!FileManager.default.fileExists(atPath: quietWAL.path))
+        }
         let physicalBytes = try [loadedID, fencedID, quietID].reduce(0) { try $0 + checkpointFileBytes($1, directory: directory) }
         #expect(await store.accountedDiskBytes == physicalBytes)
         await store.release(fencedID, generation: generation)

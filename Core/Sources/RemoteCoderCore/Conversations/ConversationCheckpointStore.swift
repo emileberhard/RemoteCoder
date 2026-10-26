@@ -1343,7 +1343,8 @@ actor ConversationCheckpointStore {
     }
 
     func checkpointWALs() async {
-        await walReclamationTask?.value
+        walReclamationTask?.cancel()
+        finishWALReclamation()
         for id in databaseRecency {
             do { try checkpointWAL(id) }
             catch { logger.error("Checkpoint WAL reclamation failed conversation=\(id.uuidString): \(error.localizedDescription)") }

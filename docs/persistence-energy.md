@@ -157,8 +157,9 @@ flush, then refreshes its physical byte accounting. Cold indexing nominates only
 successfully decoded databases with non-empty WALs and no companion JSON source;
 indexing publishes its records before an owned utility task reclaims them one
 at a time on the store actor, yielding between databases. Any later access,
-fence, write or invalidation drops the candidate. A quiet-point flush joins this
-cleanup without holding up first restore. Unknown input and coexisting rollback
+fence, write or invalidation drops the candidate. A quiet-point flush cancels the
+cold sweep, clears its pending state and truncates only open databases. The next
+cold index re-nominates remaining WALs. Unknown input and coexisting rollback
 sources keep their exact file sets for recovery. Checkpoint contention fails
 immediately and is logged; it does not change durable records or report a failed
 save. Flush failures describe durability only. There is no per-save checkpoint,
