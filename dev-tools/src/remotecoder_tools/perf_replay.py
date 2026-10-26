@@ -333,6 +333,13 @@ async def capture(args) -> dict:
         if len(headers) > MAX_CONVERSATIONS:
             raise ValueError("explicit histories exceed bounded sidebar inventory")
 
+        await capture_batched_services(read, list(headers), responses, errors)
+        classification = responses.get("conversation/agents/classify")
+        if classification is None:
+            raise ValueError("authoritative root classification is unavailable")
+        known_roots = set(classification.get("knownRoots", []))
+        candidates = list(dict.fromkeys(selected + [thread_id for thread_id in headers if thread_id in known_roots]))
+
         async def page_history(thread_id, method):
             records, cursor, seen = [], None, set()
             size = 0
@@ -353,7 +360,7 @@ async def capture(args) -> dict:
                     raise ValueError("history cursor did not advance")
                 seen.add(cursor)
 
-        for thread_id in list(dict.fromkeys(selected + list(headers))):
+        for thread_id in candidates:
             if len(conversations) >= history_count:
                 break
             provider = "claude" if thread_id.startswith("claude_") else "codex"
@@ -373,7 +380,7 @@ async def capture(args) -> dict:
                     raise ValueError("candidate activity changed during capture")
                 if any(turn.get("status") == "inProgress" for turn in turns):
                     raise ValueError("candidate contains an unfinished turn")
-                submission = local_submission(thread_id, items)
+                submission = local_submission(thread_id, items) if thread_id in known_roots else None
                 size = sum(len(encoded(record)) + 1 for record in items + turns)
                 if total_bytes + size > MAX_BUNDLE_BYTES - MAX_PAGE_BYTES:
                     raise ValueError("fixture bundle exceeds 512 MiB")
@@ -406,11 +413,6 @@ async def capture(args) -> dict:
                 responses[method] = await read(method, params)
             except GatewayRPCError as error:
                 errors[method] = {"code": error.code, "message": "Captured unavailable optional service"}
-        await capture_batched_services(read, ids, responses, errors)
-        known_roots = set(responses.get("conversation/agents/classify", {}).get("knownRoots", []))
-        for conversation in conversations:
-            if conversation["thread"]["id"] not in known_roots:
-                conversation.pop("localSubmission", None)
         if "host/info" in responses:
             responses["fs/readDirectory"] = await read("fs/readDirectory", {"path": responses["host/info"]["homeDirectory"]})
         relations = responses.get("conversation/agents/classify", {}).get("relations", {})
@@ -448,6 +450,7 @@ async def capture(args) -> dict:
     captured_ids = {conversation["thread"]["id"] for conversation in conversations}
     if completion_times is not None:
         scenario["completionTimes"] = {key: value for key, value in completion_times.items() if key in captured_ids}
+    scenario["provenance"]["historySelection"] = "explicit stream targets followed by authoritative known roots; other child and unresolved conversations retain headers only"
     scenario["provenance"]["localPreparation"] = "known-root-only ownership proxy; actual phone ownership is unknown"
     scenario["provenance"]["completionMetadata"] = {"startedAtUnixSeconds": completion_metadata_started_at,
         "capturedAtUnixSeconds": completion_metadata_ended_at,
@@ -455,6 +458,8 @@ async def capture(args) -> dict:
         "mapAvailable": completion_times is not None}
     return {**scenario, "threadResponses": thread_responses,
             "captureSummary": {"sidebarConversations": len(conversations), "histories": len(history_ids),
+                               "knownRootHistories": sum(thread_id in known_roots for thread_id in history_ids),
+                               "inventoryKnownRoots": len(known_roots),
                                "historyBytes": total_bytes, "skipped": skipped,
                                "idleEvidence": {"contractVersion": 2, "capturedHistories": len(history_ids),
                                                 "beforeAndAfterChecks": sum(isinstance(conversation.get("captureActivityEvidence", {}).get(phase), dict)
