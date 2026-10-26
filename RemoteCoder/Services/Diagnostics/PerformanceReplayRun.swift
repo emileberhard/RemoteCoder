@@ -70,7 +70,9 @@ final class PerformanceReplayRun {
             guard let first = scenario.conversations.first?.thread.objectValue?["id"]?.stringValue else {
                 throw PerformanceReplayScenario.Failure.invalidScenario("missing initial conversation")
             }
-            try await PerformanceReplayNavigation(workspace: workspace, hostID: run.hostID).open(first)
+            let navigation = PerformanceReplayNavigation(workspace: workspace, hostID: run.hostID)
+            try await navigation.open(first)
+            try await navigation.setSidebarOpen(false)
             return run
         } catch {
             await run.stop()
@@ -175,8 +177,12 @@ final class PerformanceReplayRun {
 
     static func calibrate(_ url: URL, workspace: ChatWorkspaceModel, hostID: UUID, threads: [String]) async throws -> [String: Any] {
         let (scenario, hash) = try await fixture(url)
-        let sources = scenario.actions.filter { $0.kind == .open }.map(\.threadID)
-        let ordered = sources.reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }
+        let actionThreads = Set(scenario.actions.map(\.threadID))
+        let ordered = scenario.conversations.compactMap { conversation -> String? in
+            guard let threadID = conversation.thread.objectValue?["id"]?.stringValue,
+                  actionThreads.contains(threadID) else { return nil }
+            return threadID
+        }
         guard !AppStorageScope.isOfflineReplay, threads.count == ordered.count else {
             throw PerformanceReplayScenario.Failure.invalidScenario("live calibration requires one real thread per replay stream")
         }
@@ -186,6 +192,11 @@ final class PerformanceReplayRun {
             return PerformanceReplayScenario.Action(at: action.at, kind: action.kind, threadID: thread, message: action.message)
         }
         let navigation = PerformanceReplayNavigation(workspace: workspace, hostID: hostID)
+        guard let first = threads.first else {
+            throw PerformanceReplayScenario.Failure.invalidScenario("live calibration has no initial conversation")
+        }
+        try await navigation.open(first)
+        try await navigation.setSidebarOpen(false)
         let metrics = PerformanceReplayMetrics(workspace: workspace)
         let interval = signposter.beginInterval("ReplayJourney", id: signposter.makeSignpostID(), "live calibration")
         do {
@@ -286,6 +297,32 @@ private struct PerformanceReplayNavigation {
         }
     }
 
+    @discardableResult
+    func setSidebarOpen(_ requested: Bool) async throws -> (before: Bool, after: Bool) {
+        let window = workspace.keyWindow
+        let deadline = ContinuousClock.now + .seconds(2)
+        while window.performanceActions?() == nil {
+            try Task.checkCancellation()
+            guard ContinuousClock.now < deadline else {
+                throw PerformanceReplayScenario.Failure.invalidScenario("window commands unavailable")
+            }
+            try await Task.sleep(for: .milliseconds(16))
+        }
+        guard let commands = window.performanceActions?() else {
+            throw PerformanceReplayScenario.Failure.invalidScenario("window commands unavailable")
+        }
+        let previous = commands.isSidebarOpen
+        if previous != requested { commands.run(.toggleSidebar) }
+        while window.performanceActions?()?.isSidebarOpen != requested || window.isHistoryDrawerOpen != requested {
+            try Task.checkCancellation()
+            guard ContinuousClock.now < deadline else {
+                throw PerformanceReplayScenario.Failure.invalidScenario("sidebar presentation did not change")
+            }
+            try await Task.sleep(for: .milliseconds(16))
+        }
+        return (previous, requested)
+    }
+
     func performActions(_ actions: [PerformanceReplayScenario.Action], start: ContinuousClock.Instant) async throws -> [[String: Any]] {
         var receipts: [[String: Any]] = []
         for action in actions {
@@ -303,16 +340,8 @@ private struct PerformanceReplayNavigation {
                     guard let commands = window.performanceActions?() else {
                         throw PerformanceReplayScenario.Failure.invalidScenario("window commands unavailable")
                     }
-                    let requested = !commands.isSidebarOpen
-                    commands.run(.toggleSidebar)
-                    let deadline = ContinuousClock.now + .seconds(2)
-                    while window.performanceActions?()?.isSidebarOpen != requested {
-                        guard ContinuousClock.now < deadline else {
-                            throw PerformanceReplayScenario.Failure.invalidScenario("sidebar presentation did not change")
-                        }
-                        try await Task.sleep(for: .milliseconds(16))
-                    }
-                    presentation = ["sidebarBefore": commands.isSidebarOpen, "sidebarAfter": requested]
+                    let transition = try await setSidebarOpen(!commands.isSidebarOpen)
+                    presentation = ["sidebarBefore": transition.before, "sidebarAfter": transition.after]
                 case .scroll:
                     guard let screen = workspace.selectedScreen, screen.openThreadID == action.threadID,
                           let index = action.message, screen.messages.indices.contains(index) else {

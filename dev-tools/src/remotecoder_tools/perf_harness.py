@@ -428,8 +428,15 @@ def screenshot(args, device: Simulator | Device) -> None:
 def instrumentation(device: Simulator | Device, template: str | None, instruments: list[str] | None) -> dict:
     instruments = instruments or []
     app_only = not isinstance(device, Device) or template == "Allocations"
-    return {"template": template, "instruments": instruments,
-            "scope": ("app" if app_only else "allProcesses") if template else None}
+    result = {"template": template, "instruments": instruments,
+              "scope": ("app" if app_only else "allProcesses") if template else None}
+    if template and (Path(template).expanduser().is_file() or template.endswith(".tracetemplate")):
+        with Path(template).expanduser().open("rb") as source:
+            data = source.read(4 * 1_048_576 + 1)
+        if len(data) > 4 * 1_048_576:
+            raise ValueError("Instruments template exceeds 4 MiB")
+        result["templateSHA256"] = hashlib.sha256(data).hexdigest()
+    return result
 
 
 def stop_trace_process(process: subprocess.Popen) -> str:
