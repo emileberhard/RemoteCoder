@@ -375,7 +375,7 @@ def harness_source_identity(settings: list[str] | dict, toolchain: str) -> dict:
                 for line in text.splitlines(keepends=True):
                     directive = line.strip()
                     if directive.startswith(("#if ", "#elseif ")) and "RC_PERF_HARNESS" in directive and directive not in {
-                        "#if RC_PERF_HARNESS", "#if !RC_PERF_HARNESS", "#if os(macOS) && RC_PERF_HARNESS"
+                        "#if RC_PERF_HARNESS", "#if os(macOS) && RC_PERF_HARNESS"
                     }:
                         raise ValueError(f"unclassified harness conditional in {path.relative_to(ROOT)}")
                     if directive.startswith("#if "):
@@ -773,25 +773,42 @@ def run_footprint(args, device: Simulator | Device) -> None:
     source = Path(args.fixture).expanduser()
     data = source.read_bytes()
     digest = hashlib.sha256(data).hexdigest()
+    result = {"valid": False}
     try:
+        device.prepare()
         fresh_launch(device)
         if args.mode == "fixture":
             stage_scenario(device, source, json.loads(data))
         result = send(device, {"cmd": "fixture-footprint", "mode": args.mode}, 500, quiet_seconds=5)
-        if result is None or result.get("error"):
-            raise SystemExit(f"fixture footprint control failed: {result}")
+        if result is None:
+            result = {"valid": False, "error": "control timed out"}
+        if result.get("error") or not result.get("valid") or not result.get("activeThroughout") or result.get("conservedEnergy"):
+            raise SystemExit("fixture footprint control failed; inspect its private diagnostic report")
         if result.get("harnessSHA256") != identity.get("harnessSHA256") or not identity.get("harnessSHA256"):
             raise SystemExit("footprint control harness differs from artifact")
         if args.mode == "fixture" and result.get("fixtureSHA256") != digest:
             raise SystemExit("footprint control fixture differs from staged input")
+    except BaseException as error:
+        result["valid"] = False
+        result.setdefault("error", str(error))
+        raise
+    finally:
+        cleanup = []
+        for name in ("terminate", "uninstall"):
+            try:
+                getattr(device, name)()
+            except Exception as error:
+                cleanup.append(f"{name}: {error}")
+        result["cleanupFailures"] = cleanup
+        result["valid"] = result.get("valid") is True and not cleanup
         result.update(identity)
         result.update(deviceUDID=device.udid, driverSHA256=DRIVER_SHA256, fixtureInputSHA256=digest)
-        with private_open(Path(args.log), "a") as handle:
+        path = Path(args.log) if result["valid"] else Path(args.log).with_suffix(".failed.json")
+        with private_open(path, "a" if result["valid"] else "w") as handle:
             handle.write(json.dumps(result, sort_keys=True) + "\n")
-        print(f"footprint control saved: {args.log}")
-    finally:
-        device.terminate()
-        device.uninstall()
+    if not result["valid"]:
+        raise SystemExit("fixture footprint cleanup failed; inspect its private diagnostic report")
+    print(f"footprint control saved: {args.log}")
 
 
 def stage_scenario(device: Simulator | Device, source: Path, fixture: dict) -> None:

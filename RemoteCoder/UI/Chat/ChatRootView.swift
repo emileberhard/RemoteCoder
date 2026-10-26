@@ -312,7 +312,6 @@ private struct ChatScreen: View {
         .onChange(of: screen.acceptsConversationInput) { _, acceptsInput in
             if !acceptsInput { composerPresentations.dismiss() }
         }
-        #if !RC_PERF_HARNESS
         .background {
             ChatWindowActionsPublisher(
                 workspace: workspace,
@@ -340,7 +339,6 @@ private struct ChatScreen: View {
                 }
             )
         }
-        #endif
         #if RC_PERF_HARNESS
         .background {
             PerformanceReplaySidebarPublisher(window: window, isOpen: isHistoryOpen, toggle: toggleHistory)
