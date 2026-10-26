@@ -1472,10 +1472,16 @@ Row hosts have no tooltips: SwiftUI dynamic tooltip hit testing otherwise walks
 hosted content on scroll. The native document binary-searches its index for an
 ordinary pointer/cursor hit and enters only that row host. One weak hit result
 is cached by document point, indexed host identity, row frame, root revision and
-render revision; scrolling and input clear it. Layout of another row does not
-invalidate the result. Every miss runs the row hosting view’s own hit test,
-preserving SwiftUI’s lazy text interaction views. Repeated unchanged cursor
-queries do no graph traversal. Selection, normal
+render revision. Reuse requires the result to remain in that host's view hierarchy
+and be less than 100 ms old on the monotonic clock; hits never renew its creation
+time. Layout of another row does not invalidate the result. Clip-bounds changes
+clear it. The local event monitor clears it before application dispatch of wheel,
+left/right/other mouse-button down, drag and up, and pressure events. AppKit's
+nested event-tracking loops bypass that monitor. Every miss runs the row hosting
+view's own hit test, preserving SwiftUI's lazy text interaction views. Repeated
+unchanged cursor queries within that age bound reuse the resolved view. Row-local
+changes outside those keys may receive a stale cursor answer until expiry;
+expiry does not itself schedule a cursor update. Selection, normal
 click/menu/drag hit testing and horizontal code/table scrolling stay enabled.
 Vertical wheel hit tests stop at the native container/document, including the
 first directional event. The local monitor holds the resolved event axis through

@@ -733,10 +733,16 @@ entrypoint linked above.
     button and other chrome stay outside those hosts. The document uses its
     row index to hit-test only the row under the pointer, caching the weak
     result by document point, indexed host identity, row frame, root revision
-    and render revision. Unrelated layout passes do not invalidate it. SwiftUI
+    and render revision. Reuse requires the result to remain in that host's
+    hierarchy and be less than 100 ms old on a monotonic clock; hits never renew
+    its creation time. Unrelated layout passes do not invalidate it. SwiftUI
     resolves every cache miss; do not replace its traversal with native subtree
-    pruning because it lazily creates text interaction views. Input and scrolling
-    clear the cache. Preserve selection,
+    pruning because it lazily creates text interaction views. Clip-bounds changes
+    clear the cache, as does the local monitor before application dispatch of
+    wheel, left/right/other mouse-button down, drag and up, and pressure events.
+    Nested tracking loops bypass that monitor. Row-local changes outside the
+    keys can leave a stale cursor answer until expiry; expiry schedules no cursor
+    update itself. Preserve selection,
     clicks, menus, drag/drop and horizontal overflow. Route only vertical wheel
     hit tests to the native document; never override `scrollWheel` on the scroll,
     clip or document view. Harness-only responsive-scrolling opt-out is for

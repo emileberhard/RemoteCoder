@@ -154,6 +154,7 @@ final class AppKitTranscriptContainer: NSScrollView, TranscriptReadingPositionCa
         let frame: CGRect
         let rootRevision: Int
         let renderRevision: Int?
+        let createdAt: CFTimeInterval
         weak var result: NSView?
     }
     private var geometryDirty = true
@@ -448,9 +449,12 @@ final class AppKitTranscriptContainer: NSScrollView, TranscriptReadingPositionCa
         let frame = host.view.frame
         guard frame.contains(point) else { return nil }
         let renderRevision = host.inputs.row.message.flatMap { renderedMessages?[$0.id]?.revision }
+        let now = CACurrentMediaTime()
         if let hitCache, hitCache.point == point, hitCache.host === host,
            hitCache.frame == frame, hitCache.rootRevision == host.rootRevision,
-           hitCache.renderRevision == renderRevision, let result = hitCache.result {
+           hitCache.renderRevision == renderRevision, now - hitCache.createdAt < 0.1,
+           let result = hitCache.result,
+           result === host.view || result.isDescendant(of: host.view) {
             PerfBuild.count("hit.cacheHit")
             return result
         }
@@ -458,7 +462,8 @@ final class AppKitTranscriptContainer: NSScrollView, TranscriptReadingPositionCa
         PerfBuild.count("hit.rowShortcut")
         let result = host.view.hitTest(point)
         hitCache = HitCache(point: point, host: host, frame: frame,
-            rootRevision: host.rootRevision, renderRevision: renderRevision, result: result)
+            rootRevision: host.rootRevision, renderRevision: renderRevision,
+            createdAt: now, result: result)
         return result
     }
 
@@ -1294,7 +1299,11 @@ final class AppKitTranscriptContainer: NSScrollView, TranscriptReadingPositionCa
         startReadingReadiness()
         hostsDirty = true
         if eventMonitor == nil {
-            eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .leftMouseDown, .rightMouseDown, .leftMouseDragged, .leftMouseUp]) { [weak self] event in
+            eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [
+                .scrollWheel, .leftMouseDown, .leftMouseDragged, .leftMouseUp,
+                .rightMouseDown, .rightMouseDragged, .rightMouseUp,
+                .otherMouseDown, .otherMouseDragged, .otherMouseUp, .pressure
+            ]) { [weak self] event in
                 let passes = MainActor.assumeIsolated {
                     guard let self else { return true }
                     return self.observe(event) != nil
