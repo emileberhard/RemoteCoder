@@ -20,7 +20,7 @@ final class PerfHarness {
     nonisolated static let commandNotification = "com.remotecoder.perf.command"
     nonisolated static let signposter = OSSignposter(subsystem: "RemoteCoder", category: "PerfHarness")
 
-    private let logger = AppLogger(category: "PerfHarness")
+    private let logger = Logger(subsystem: "RemoteCoder", category: "PerfHarness")
     private weak var workspace: ChatWorkspaceModel?
     private var window: MeasurementWindow?
     private var windowTask: Task<Void, Never>?

@@ -22,6 +22,7 @@ import json
 import math
 import os
 import plistlib
+import re
 import select
 import shutil
 import signal
@@ -313,21 +314,27 @@ def build(args) -> None:
         compile_command = commands[1]
         settings = compile_command[compile_command.index("-scheme") + 2:compile_command.index("-derivedDataPath")]
         settings += compile_command[compile_command.index("-derivedDataPath") + 2:]
-        harness = harness_source_identity(settings, toolchain)
-        env["TUIST_REMOTE_CODER_PERF_HARNESS_SHA256"] = harness["harnessSHA256"]
+        env["TUIST_REMOTE_CODER_PERF_HARNESS_SHA256"] = "0" * 64
         try:
             require_build_space(ROOT)
         except ValueError as error:
             raise SystemExit(str(error)) from error
         with log.open("w") as handle:
-            for command in commands:
-                status = run_owned(command, ROOT, env, handle, (lease, capacity))
-                if status != 0:
-                    break
+            status = run_owned(commands[0], ROOT, env, handle, (lease, capacity))
+            if status == 0:
+                rows = json.loads(output([*commands[1][:-1], "-showBuildSettings", "-json"]))
+                effective = effective_compiler_settings(rows, device.derived)
+                settings = {"command": settings, "effective": effective}
+                harness = harness_source_identity(settings, toolchain)
+                env["TUIST_REMOTE_CODER_PERF_HARNESS_SHA256"] = harness["harnessSHA256"]
+                for command in commands:
+                    status = run_owned(command, ROOT, env, handle, (lease, capacity))
+                    if status != 0:
+                        break
         if status == 0:
             if harness_source_identity(settings, toolchain) != harness:
                 raise SystemExit("harness changed during the performance build; rebuild from settled inputs")
-            write_build_identity(device, identity | harness | {"toolchain": toolchain})
+            write_build_identity(device, identity | harness | {"toolchain": toolchain, "effectiveCompilerSettings": effective})
     lines = log.read_text(errors="replace").splitlines()
     for line in [line for line in lines if "error:" in line][:40] or lines[-5:]:
         print(line)
@@ -345,11 +352,26 @@ def build_source_identity() -> dict:
     return {key: manifest[key] for key in ["sourceCommit", "sourceFingerprint", "sourceModified"]}
 
 
-def harness_source_identity(settings: list[str], toolchain: str) -> dict:
+def effective_compiler_settings(rows: list[dict], derived: Path) -> dict:
+    targets = [row["buildSettings"] for row in rows if row.get("target") == PROCESS]
+    if len(targets) != 1:
+        raise ValueError("expected exactly one app target in resolved build settings")
+    keys = {"ARCHS", "SDK_VERSION", "SDK_NAME", "IPHONEOS_DEPLOYMENT_TARGET", "MACOSX_DEPLOYMENT_TARGET",
+            "OTHER_SWIFT_FLAGS", "OTHER_CFLAGS", "GCC_PREPROCESSOR_DEFINITIONS"}
+    return {key: str(value).replace(str(derived), "<DERIVED>").replace(str(ROOT), "<SOURCE>")
+            for key, value in targets[0].items() if key.startswith("SWIFT_") or key in keys}
+
+
+def harness_source_identity(settings: list[str] | dict, toolchain: str) -> dict:
     sources = {}
     for directory in (ROOT / "Core/Sources", ROOT / "RemoteCoder"):
         for path in sorted(directory.rglob("*.swift")):
             text = path.read_text()
+            if path.name == "ChatRootView.swift":
+                adapter = re.search(r"(?m)^([ \t]*)ChatWindowActionsPublisher\(\n.*?^\1\)", text, re.DOTALL)
+                if adapter is None:
+                    raise ValueError("replay action publisher hookup is missing")
+                sources[str(path.relative_to(ROOT)) + "#ChatWindowActionsPublisher"] = adapter[0]
             if "RC_PERF_HARNESS" not in text:
                 continue
             if path.name.startswith("PerformanceReplay") or path.name == "PerfHarness.swift":
