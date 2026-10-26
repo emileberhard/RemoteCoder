@@ -59,7 +59,27 @@ def load_recording(path: Path) -> dict:
     return {"events": events}
 
 
-def replay_recording(recording: dict, ids: list[str], duration: float) -> list[dict]:
+def assign_item_ordinals(events: list[dict], last_ordinals: dict[str, int]) -> None:
+    if any(type(value) is not int or not 0 <= value <= 2**63 - 1 - MAX_EVENTS for value in last_ordinals.values()):
+        raise ValueError("history ordinals must leave room for the bounded replay")
+    next_ordinals = dict(last_ordinals)
+    assigned = {}
+    for event in events:
+        params = event["frame"].get("params", {})
+        thread = params.get("threadId")
+        item = params.get("item", {}).get("id") or params.get("itemId")
+        if thread not in next_ordinals or not item:
+            continue
+        key = (thread, item)
+        if key not in assigned:
+            next_ordinals[thread] += 1
+            assigned[key] = next_ordinals[thread]
+        if event["frame"].get("method") in {"item/started", "item/completed"}:
+            params["startedAtOrdinal"] = assigned[key]
+
+
+def replay_recording(recording: dict, last_ordinals: dict[str, int], duration: float) -> list[dict]:
+    ids = list(last_ordinals)
     source = recording.get("events", [])
     if any(not isinstance(event.get("at"), (int, float)) or not math.isfinite(event["at"]) or event["at"] < 0
            or not isinstance(event.get("frame"), dict) for event in source):
@@ -98,6 +118,7 @@ def replay_recording(recording: dict, ids: list[str], duration: float) -> list[d
             if at >= duration:
                 continue
             frame = copy.deepcopy(entry["frame"])
+            frame.pop("rcSequence", None)
             params = frame.get("params", {})
             original = params.get("threadId")
             if original not in mapping:
@@ -126,6 +147,7 @@ def replay_recording(recording: dict, ids: list[str], duration: float) -> list[d
             if len(events) > MAX_EVENTS:
                 raise ValueError("recording exceeds bounded replay event budget")
     events.sort(key=lambda event: event["at"])
+    assign_item_ordinals(events, last_ordinals)
     published = []
     for event in events:
         published.append(event)
@@ -154,7 +176,13 @@ def scenario_from_conversations(conversations: list[dict], responses: dict, erro
     if not 60 <= duration <= 900 or not math.isfinite(duration):
         raise ValueError("duration must be between 60 and 900 seconds")
     ids = [conversation["thread"]["id"] for conversation in conversations]
-    events = replay_recording(recording, ids, duration) if recording is not None else []
+    last_ordinals = {}
+    for conversation in conversations:
+        if "itemFile" in conversation and "lastStartedAtOrdinal" not in conversation:
+            raise ValueError("indexed histories require their captured final item ordinal")
+        last_ordinals[conversation["thread"]["id"]] = conversation.get("lastStartedAtOrdinal",
+            max((item.get("startedAtOrdinal") or 0 for item in conversation["items"]), default=0))
+    events = replay_recording(recording, last_ordinals, duration) if recording is not None else []
     return {"version": 2, "capturedAt": int(time.time()), "name": "field-state-v2", "duration": duration,
             "conversations": conversations, "events": events, "actions": journey_actions(ids[:3], duration),
             "responses": responses, "errors": errors, "httpResponses": http,
@@ -402,6 +430,7 @@ async def capture(args) -> dict:
                 conversation = {"thread": {**headers[thread_id], "turns": [], "status": {"type": "idle"}},
                                 "items": [], "turns": [],
                                 "captureActivityEvidence": {"provider": provider, "before": before[2], "after": after[2]},
+                                "lastStartedAtOrdinal": max((item.get("startedAtOrdinal") or 0 for item in items), default=0),
                                 "itemFile": write_history(root, items, "items"),
                                 "turnFile": write_history(root, turns, "turns")}
                 if submission is not None:

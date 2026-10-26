@@ -33,7 +33,7 @@ def recording():
 def test_recording_preserves_arrival_offsets_and_keeps_one_turn_running():
     source = recording()
     frozen = copy.deepcopy(source)
-    events = replay_recording(source, ["fixture"], 60)
+    events = replay_recording(source, {"fixture": 0}, 60)
     deltas = [event for event in events if event["frame"]["method"] == "item/agentMessage/delta"]
     assert deltas[1]["at"] - deltas[0]["at"] == pytest.approx(3.3)
     assert all(event["frame"]["params"]["threadId"] == "fixture" for event in events)
@@ -42,6 +42,45 @@ def test_recording_preserves_arrival_offsets_and_keeps_one_turn_running():
     assert len({event["frame"]["params"]["itemId"] for event in deltas}) > 1
     assert {event["frame"]["params"]["turnId"] for event in deltas} == {"replay-turn-0"}
     assert source == frozen
+
+
+def test_repeated_items_follow_each_target_history_and_keep_completion_ordinals():
+    source = recording()
+    for event in source["events"]:
+        if event["frame"]["method"] in {"item/started", "item/completed"}:
+            event["frame"]["params"]["startedAtOrdinal"] = 10
+    second = copy.deepcopy(source["events"][1])
+    second["at"] = 3
+    second["frame"]["params"]["item"]["id"] = "second"
+    second["frame"]["params"]["startedAtOrdinal"] = 11
+    completion = copy.deepcopy(second)
+    completion["at"] = 4
+    completion["frame"]["method"] = "item/completed"
+    source["events"].extend([second, completion])
+    other = copy.deepcopy(source["events"])
+    for event in other:
+        event["at"] += 0.1
+        event["frame"]["params"]["threadId"] = "other"
+    source["events"].extend(other)
+    source["events"].sort(key=lambda event: event["at"])
+    events = replay_recording(source, {"short-history": 100, "long-history": 9000}, 60)
+    for thread, baseline in (("short-history", 100), ("long-history", 9000)):
+        frames = [event["frame"] for event in events if event["frame"]["params"]["threadId"] == thread]
+        starts = [frame["params"] for frame in frames if frame["method"] == "item/started"]
+        assert [item["startedAtOrdinal"] for item in starts] == list(range(baseline + 1, baseline + len(starts) + 1))
+        positions = {item["item"]["id"]: item["startedAtOrdinal"] for item in starts}
+        assert all(frame["params"]["startedAtOrdinal"] == positions[frame["params"]["item"]["id"]]
+                   for frame in frames if frame["method"] == "item/completed")
+
+
+def test_recorded_transport_sequences_are_not_reused_for_fresh_items():
+    source = recording()
+    for index, event in enumerate(source["events"]):
+        if event["frame"]["method"] != "item/agentMessage/delta":
+            event["frame"]["rcSequence"] = 100 + index
+    events = replay_recording(source, {"fixture": 0}, 60)
+    assert sum(event["frame"]["method"] == "item/started" for event in events) > 3
+    assert all("rcSequence" not in event["frame"] for event in events)
 
 
 def test_history_is_not_trimmed_to_twenty_turns_or_fixed_paced():
@@ -354,7 +393,7 @@ def test_partial_recording_retains_background_stream_and_marks_inferred_start():
         {"at": 2.5, "frame": {"method": "item/started", "params": {"threadId": "background", "turnId": "ongoing", "item": {"id": "background-item", "type": "agentMessage", "text": ""}}}},
         {"at": 3.5, "frame": {"method": "item/agentMessage/delta", "params": {"threadId": "background", "turnId": "ongoing", "itemId": "background-item", "delta": "synthetic"}}},
     ])
-    events = replay_recording(source, ["visible", "hidden"], 60)
+    events = replay_recording(source, {"visible": 0, "hidden": 0}, 60)
     starts = [event for event in events if event["frame"]["method"] == "turn/started"]
     assert {event["frame"]["params"]["threadId"] for event in starts} == {"visible", "hidden"}
     inferred = next(event for event in starts if event["frame"]["params"]["threadId"] == "hidden")
@@ -368,7 +407,7 @@ def test_recording_with_conflicting_turn_identities_is_rejected():
     source = recording()
     source["events"][-1]["frame"]["params"]["turn"]["id"] = "different-turn"
     with pytest.raises(ValueError, match="inconsistent turn identities"):
-        replay_recording(source, ["fixture"], 60)
+        replay_recording(source, {"fixture": 0}, 60)
 
 
 def test_every_stream_start_publishes_inventory_without_a_subscription():
@@ -376,7 +415,7 @@ def test_every_stream_start_publishes_inventory_without_a_subscription():
     source["events"].append({"at": 4, "frame": {"method": "item/started", "params": {
         "threadId": "unopened-background", "turnId": "background-turn", "item": {
             "id": "background-message", "type": "agentMessage", "text": ""}}}})
-    events = replay_recording(source, ["visible", "background"], 60)
+    events = replay_recording(source, {"visible": 0, "background": 0}, 60)
     starts = [index for index, event in enumerate(events) if event["frame"]["method"] == "turn/started"]
     assert len(starts) == 2
     for index in starts:
@@ -424,7 +463,7 @@ def test_recorded_and_inferred_turn_start_timestamps_are_wire_integers():
     source["events"].append({"at": 3.25, "frame": {"method": "item/started", "params": {
         "threadId": "background", "turnId": "existing-turn", "item": {
             "id": "item", "type": "agentMessage", "text": ""}}}})
-    events = replay_recording(source, ["visible", "background"], 60)
+    events = replay_recording(source, {"visible": 0, "background": 0}, 60)
     starts = [event for event in events if event["frame"]["method"] == "turn/started"]
     assert len(starts) == 2
     assert all(isinstance(event["frame"]["params"]["turn"]["startedAt"], int) for event in starts)

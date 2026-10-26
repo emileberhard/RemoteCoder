@@ -179,8 +179,10 @@ struct PerformanceReplayState: Sendable {
         if method == "item/started" || method == "item/completed", let item = params["item"],
            let itemID = item.objectValue?["id"]?.stringValue {
             var items = liveItems[threadID, default: []]
-            let entry = JSONValue.object(["turnId": params["turnId"] ?? .null, "item": item,
-                "isComplete": .bool(method == "item/completed")])
+            var fields: [String: JSONValue] = ["turnId": params["turnId"] ?? .null, "item": item,
+                "isComplete": .bool(method == "item/completed")]
+            for key in ["startedAtOrdinal", "startedAtMs", "completedAtMs"] { fields[key] = params[key] }
+            let entry = JSONValue.object(fields)
             if let index = items.firstIndex(where: { $0.objectValue?["item"]?.objectValue?["id"]?.stringValue == itemID }) {
                 items[index] = entry
             } else { items.append(entry) }

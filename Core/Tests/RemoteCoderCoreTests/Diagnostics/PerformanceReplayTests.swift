@@ -117,6 +117,24 @@ import Testing
         #expect(checkpoint.activeTurn?.startedAt == 103)
     }
 
+    @Test func liveHistoryPreservesNotificationPositionAndCompletion() throws {
+        var state = try PerformanceReplayState(fixture())
+        for method in ["item/started", "item/completed"] {
+            state.apply(.object(["method": .string(method), "params": .object([
+                "threadId": .string("thread-a"), "turnId": .string("live"),
+                "startedAtOrdinal": .number(901), "startedAtMs": .number(103_000),
+                "completedAtMs": method == "item/completed" ? .number(104_000) : .null,
+                "item": .object(["id": .string("fresh"), "type": .string("agentMessage"), "text": .string("Complete")])])]))
+        }
+        let response = try #require(state.response(to: .object(["id": .number(1), "method": .string("thread/items/list"),
+            "params": .object(["threadId": .string("thread-a"), "limit": .number(1)])]))?.objectValue?["result"]?.objectValue)
+        let entry = try #require(response["data"]?.arrayValue?.first?.objectValue)
+        #expect(entry["startedAtOrdinal"] == .number(901))
+        #expect(entry["startedAtMs"] == .number(103_000))
+        #expect(entry["completedAtMs"] == .number(104_000))
+        #expect(entry["isComplete"] == .bool(true))
+    }
+
     @Test func sidebarCompletionEvidenceKeepsKnownNullAndUnavailableDistinct() throws {
         var scenario = fixture()
         scenario.completionTimes = ["thread-a": .null, "claude_thread-b": .number(90)]
