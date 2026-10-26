@@ -317,7 +317,9 @@ measurably beat SwiftUI.
   `--frames` ranks the main thread's top functions by self time and `--callers`
   attributes system work to app frames. Drive the journey with
   `dev-tools/perf-sim` or by hand: XCTest-based drivers (agent-device, XCUITest,
-  Xcode device interaction) snapshot the app on its main thread.
+  Xcode device interaction) snapshot the app on its main thread. The
+  `perf-sim` replay's magnitudes are not yet field-calibrated; read
+  [`docs/performance-replay.md`](docs/performance-replay.md) before relying on them.
   The detector also includes accessibility user-testing snapshot and MIG frames
   outside `/Developer/Library`. `perf-trace` reports main-thread CPU with and
   without automation and their CPU share and rejects a trace when automation exceeds

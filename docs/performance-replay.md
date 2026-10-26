@@ -26,6 +26,19 @@ with preparation reserving its measurement and cleanup time. Use the
 explicit cabled test iPad; the runner refuses phones. Check fleet load before
 building and keep unrelated device work out of the measurement window.
 
+## Calibration status
+
+The replay is not yet calibrated against field telemetry. Trust its direction
+and sampled mechanism, not its magnitude: for 3.68.1 to 3.68.2 it reproduces the
+removed checkpoint-shedding work but shows about a fifth of the agent-working
+CPU reduction that phones measured. Prepared state matches field conversation
+and checkpoint counts, not their retained bytes. Full-journey hitch counts are
+unavailable because recordings lose the journey-completion signpost; measure
+hitches with a `perf-trace` recording instead. The replay counts as calibrated
+once preparation seeded from field `checkpointInventory` telemetry at least
+halves agent-working CPU in that comparison. Update this section when that
+changes.
+
 ## Preparation and state scale
 
 A fresh isolated install is only the starting boundary. Before preparation, the
