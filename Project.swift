@@ -5,6 +5,8 @@ let projectMarketingVersion: SettingValue = "0.0.0"
 let projectBuildVersion: SettingValue = "0.0.0"
 let shouldBundleLocalConfig = ProcessInfo.processInfo.environment["TUIST_REMOTE_CODER_BUNDLE_LOCAL_CONFIG"] == "1"
 let isDevelopmentPerfBuild = ProcessInfo.processInfo.environment["TUIST_REMOTE_CODER_PERF_SIGNING"] == "development"
+let performanceHarnessInfo: [String: Plist.Value] = ProcessInfo.processInfo.environment["TUIST_REMOTE_CODER_PERF_HARNESS_SHA256"]
+    .map { ["RemoteCoderPerfHarnessSHA256": .string($0)] } ?? [:]
 let remoteCoderResources: ResourceFileElements = shouldBundleLocalConfig
     ? [
         "RemoteCoder/Assets.xcassets",
@@ -172,7 +174,7 @@ let project = Project(
                     "UIInterfaceOrientationLandscapeLeft",
                     "UIInterfaceOrientationLandscapeRight",
                 ],
-            ]),
+            ].merging(performanceHarnessInfo) { _, value in value }),
             sources: ["Shared/**/*.swift"],
             resources: remoteCoderResources,
             buildableFolders: [
@@ -248,7 +250,7 @@ let project = Project(
                 "RemoteCoderSourceModified": "$(RC_SOURCE_MODIFIED)",
                 "RemoteCoderSourceFingerprint": "$(RC_SOURCE_FINGERPRINT)",
                 "RemoteCoderBuildOptimization": "$(SWIFT_OPTIMIZATION_LEVEL)",
-            ]),
+            ].merging(performanceHarnessInfo) { _, value in value }),
             sources: SourceFilesList(globs: macAppSourceGlobs),
             resources: remoteCoderResources,
             dependencies: [

@@ -33,13 +33,17 @@ final class PerformanceReplayMetrics: NSObject {
     private let fieldBuffer = TelemetryBuffer(runID: "offline-replay", capacity: 128)
     private var fieldSampler: ProcessResourceSampler?
     private let fieldCPU = ProcessResources.current()?.cpuNanoseconds
-    private var reads: [(elapsed: Double, mainCPU: Double?)] = []
+    private let fixtureWork: PerformanceReplayWork?
+    private let fixtureCPU: UInt64?
+    private var reads: [(elapsed: Double, mainCPU: Double?, fixtureCPU: Double?)] = []
     #if os(macOS)
     private weak var window: NSWindow?
     #endif
 
-    init(workspace: ChatWorkspaceModel) {
+    init(workspace: ChatWorkspaceModel, fixtureWork: PerformanceReplayWork?) {
         self.workspace = workspace
+        self.fixtureWork = fixtureWork
+        fixtureCPU = fixtureWork?.snapshot.cpuNanoseconds
         super.init()
         intervals.reserveCapacity(110_000)
         #if os(iOS)
@@ -66,8 +70,10 @@ final class PerformanceReplayMetrics: NSObject {
         fieldSampler = ProcessResourceSampler(recorder: fieldBuffer, read: { [weak self] in
             guard let self, let resources = ProcessResources.current() else { return nil }
             guard reads.count < 128 else { overflow = true; return nil }
+            let fixture = fixtureWork?.snapshot.cpuNanoseconds
             reads.append((started.duration(to: .now) / .seconds(1),
-                ProcessMetrics.cpuMilliseconds(from: mainCPU, to: ProcessMetrics.mainThreadCPUSeconds())))
+                ProcessMetrics.cpuMilliseconds(from: mainCPU, to: ProcessMetrics.mainThreadCPUSeconds()),
+                fixtureCPU.flatMap { initial in fixture.flatMap { $0 >= initial ? Double($0 - initial) / 1_000_000 : nil } }))
             return resources
         })
         fieldSampler?.update(context())
@@ -124,6 +130,7 @@ final class PerformanceReplayMetrics: NSObject {
             samples.append(["at": read.elapsed,
                 "processCPUms": fieldCPU.flatMap { sample.resources.cpuNanoseconds >= $0 ? Double(sample.resources.cpuNanoseconds - $0) / 1_000_000 : nil }.map { $0 as Any } ?? NSNull(),
                 "mainThreadCPUms": read.mainCPU.map { $0 as Any } ?? NSNull(),
+                "fixtureCPUms": read.fixtureCPU.map { $0 as Any } ?? NSNull(),
                 "footprintMiB": Double(sample.resources.footprintBytes) / 1_048_576,
                 "thermalState": ProcessInfo.processInfo.thermalState.rawValue,
                 "lowPowerMode": ProcessInfo.processInfo.isLowPowerModeEnabled, "active": active,
@@ -153,17 +160,22 @@ final class PerformanceReplayMetrics: NSObject {
             "frameIntervalsOverflowed": overflow, "samples": samples,
             "processCPUms": samples.last?["processCPUms"] ?? NSNull(),
             "mainThreadCPUms": samples.last?["mainThreadCPUms"] ?? NSNull(),
+            "fixtureCPUAttribution": ["cpuMs": samples.last?["fixtureCPUms"] ?? NSNull(),
+                "scope": "synchronous current-thread fixture sections; excludes Network callbacks and unattributed cleanup",
+                "coverage": "lowerBound", "calls": fixtureWork.map { $0.snapshot.calls as Any } ?? NSNull(),
+                "lifetimePeakResponseBytes": fixtureWork.map { $0.snapshot.peakResponseBytes as Any } ?? NSNull()],
             "peakSampledFootprintMiB": samples.compactMap { $0["footprintMiB"] as? Double }.max().map { $0 as Any } ?? NSNull(),
             "counts": PerfBuild.counters.reduce(into: [String: Int]()) { $0[$1.key] = $1.value - counters[$1.key, default: 0] },
             "build": ["version": info["CFBundleShortVersionString"] ?? NSNull(),
                 "commit": info["RemoteCoderSourceCommit"] ?? NSNull(),
                 "modified": info["RemoteCoderSourceModified"] ?? NSNull()],
+            "harnessSHA256": info["RemoteCoderPerfHarnessSHA256"] ?? NSNull(),
             "operatingSystem": ProcessInfo.processInfo.operatingSystemVersionString,
             "display": display,
             "locale": Locale.current.identifier,
             "processors": ProcessInfo.processInfo.processorCount,
             "disabled": PerfBuild.disabled.sorted(),
-            "stateAggregationVersion": 1,
+            "stateAggregationVersion": 2,
             "frameMetric": "CADisplayLink callback intervals; use Instruments Hitches for presentation hitches"]
     }
 }

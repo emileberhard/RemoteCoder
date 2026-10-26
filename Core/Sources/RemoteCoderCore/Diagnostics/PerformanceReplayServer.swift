@@ -3,6 +3,7 @@ import Foundation
 import Network
 
 actor PerformanceReplayServer {
+    nonisolated let work = PerformanceReplayWork()
     private let listener: NWListener
     private let queue = DispatchQueue(label: "RemoteCoder.PerformanceReplayServer", qos: .userInitiated)
     private var state: PerformanceReplayState
@@ -91,9 +92,10 @@ actor PerformanceReplayServer {
             ])]), on: connection)
             while !stopped, !Task.isCancelled {
                 guard let data = try await receive(connection) else { continue }
-                let request = try JSONDecoder().decode(JSONValue.self, from: data)
-                if let response = try state.response(to: request) {
-                    try await send(try recordSubscriptions(request, response: response, peerID: id), on: connection)
+                let request = try work.measure { try JSONDecoder().decode(JSONValue.self, from: data) }
+                if let response = try work.measure({ try state.response(to: request) }) {
+                    let recorded = try work.measure { try recordSubscriptions(request, response: response, peerID: id) }
+                    try await send(recorded, on: connection)
                 }
             }
         } catch is CancellationError {
@@ -122,7 +124,12 @@ actor PerformanceReplayServer {
     }
 
     private func send(_ value: JSONValue, on connection: NWConnection) async throws {
-        let data = try JSONEncoder().encode(value)
+        try await send(.value(value), on: connection)
+    }
+
+    private func send(_ value: PerformanceReplayResponse, on connection: NWConnection) async throws {
+        let data = try work.measure { try value.encoded() }
+        work.recordResponse(bytes: data.count)
         let context = NWConnection.ContentContext(identifier: "performance-replay",
             metadata: [NWProtocolWebSocket.Metadata(opcode: .text)])
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
@@ -132,8 +139,8 @@ actor PerformanceReplayServer {
         }
     }
 
-    private func recordSubscriptions(_ request: JSONValue, response: JSONValue, peerID: UUID) throws -> JSONValue {
-        guard var peer = peers[peerID], var fields = response.objectValue,
+    private func recordSubscriptions(_ request: JSONValue, response: PerformanceReplayResponse, peerID: UUID) throws -> PerformanceReplayResponse {
+        guard case .value(let value) = response, var peer = peers[peerID], var fields = value.objectValue,
               var result = fields["result"]?.objectValue else { return response }
         let params = request.objectValue?["params"]?.objectValue ?? [:]
         switch request.objectValue?["method"]?.stringValue {
@@ -155,13 +162,13 @@ actor PerformanceReplayServer {
         }
         peers[peerID] = peer
         fields["result"] = .object(result)
-        return .object(fields)
+        return .value(.object(fields))
     }
 
     @discardableResult func deliver(_ frame: JSONValue) async throws -> Int {
         guard !stopped, !peers.isEmpty else { throw PerformanceReplayScenario.Failure.invalidScenario("no replay client connected") }
-        state.apply(frame)
-        let notification = state.notification(frame)
+        work.measure { state.apply(frame) }
+        let notification = work.measure { state.notification(frame) }
         var recipients = 0
         for id in Array(peers.keys) {
             if let peer = peers[id], peer.receives(notification) {
