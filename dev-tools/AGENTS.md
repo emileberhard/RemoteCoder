@@ -258,9 +258,10 @@ Capture uses bounded native history pages with authoritative idle checks and
 header-only parent discovery. Version 2 histories are indexed private files;
 the loopback server reads requested pages without retaining the library.
 Unmeasured preparation loads and verifies the sidebar through production list
-pagination, reconciles captured user submissions and writes history
-and checkpoints through their production owners, retaining local-record
-semantics. Preserve production budgets. Reports distinguish preparation's
+pagination, reconciles captured user submissions only for authoritative known
+roots, and writes history and checkpoints through their production owners.
+Known-root seeding is an ownership proxy; actual phone ownership remains unknown.
+Child and unresolved histories stay remote without local-submission markers. Preserve production budgets. Reports distinguish preparation's
 physical sizes from logical checkpoint bytes written per measured state minute.
 The measured journey repeats recorded arrival offsets with continuous turns;
 inferred initial starts are explicit in provenance. Each repeat reserves source, compiler capacity and device in installer order,

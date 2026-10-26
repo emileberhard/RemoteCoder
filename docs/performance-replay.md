@@ -31,8 +31,10 @@ building and keep unrelated device work out of the measurement window.
 A fresh isolated install is only the starting boundary. Before measurement, the
 app loads every captured sidebar header through bounded production pagination,
 verifies retained root identities and reports omitted child headers, then prepares
-histories oldest first:
-page through the captured history, submit its captured text-only user message,
+histories oldest first. Only authoritative `knownRoots` retain local-submission
+preparation markers; child and unresolved histories remain available remotely.
+This is an ownership proxy: actual phone ownership is unknown even for roots.
+For each marked history, page through the captured history, submit its captured text-only user message,
 persist its submission receipt, accept its captured turn identity, reopen the
 tail and reconcile the matching canonical history, flush and evict idle sessions
 normally. If the user item is outside the tail page, page back only until its

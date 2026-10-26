@@ -85,7 +85,8 @@ def test_fixture_placement_rejects_worktrees_and_other_private_roots(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_capture_paginates_native_history_and_reads_only_parent_headers(tmp_path, monkeypatch):
+@pytest.mark.parametrize("role", ["root", "child", "unresolved"])
+async def test_capture_paginates_native_history_and_reads_only_parent_headers(tmp_path, monkeypatch, role):
     calls = []
     active = {"coverage": {"codex": True, "claude": True}, "activeTurns": [], "externalActivity": {"sessions": [], "codexAvailable": True, "claudeAvailable": True}}
 
@@ -126,7 +127,8 @@ async def test_capture_paginates_native_history_and_reads_only_parent_headers(tm
         elif method == "thread/turns/list":
             result = {"data": [{"id": "turn", "status": "completed", "items": [], "itemsView": "notLoaded"}]}
         elif method == "conversation/agents/classify":
-            result = {"relations": {"chosen": {"parentThreadId": "parent"}}}
+            result = {"relations": {"chosen": {"parentThreadId": "parent"}} if role == "child" else {},
+                      "knownRoots": ["chosen"] if role == "root" else []}
         elif method == "thread/read":
             assert params == {"threadId": "parent", "includeTurns": False}
             result = {"thread": {"id": "parent", "cwd": "/synthetic"}}
@@ -148,7 +150,14 @@ async def test_capture_paginates_native_history_and_reads_only_parent_headers(tm
     args = argparse.Namespace(out="scenario.json", thread=["chosen"], sidebar_limit=10, history_count=1)
     result = await perf_replay.capture(args)
     assert result["captureSummary"]["histories"] == 1
-    assert len(result["conversations"]) == 4
+    assert len(result["conversations"]) == (4 if role == "child" else 3)
+    conversation = result["conversations"][0]
+    assert ("localSubmission" in conversation) == (role == "root")
+    records = [json.loads(line) for line in (tmp_path / conversation["itemFile"]["path"]).read_bytes().splitlines()]
+    assert records[0]["item"]["content"] == [{"type": "text", "text": "synthetic"}]
+    assert records[1]["item"]["text"] == "synthetic"
+    if role == "root":
+        assert conversation["localSubmission"]["messageID"] == records[0]["item"]["clientId"]
     assert result["completionTimes"] == {"chosen": 1700000000, "known-null": None}
     assert "missing" not in result["completionTimes"]
     assert result["conversations"][0]["itemFile"]["offsets"][-1] > 0

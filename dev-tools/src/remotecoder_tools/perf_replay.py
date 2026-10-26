@@ -407,6 +407,10 @@ async def capture(args) -> dict:
             except GatewayRPCError as error:
                 errors[method] = {"code": error.code, "message": "Captured unavailable optional service"}
         await capture_batched_services(read, ids, responses, errors)
+        known_roots = set(responses.get("conversation/agents/classify", {}).get("knownRoots", []))
+        for conversation in conversations:
+            if conversation["thread"]["id"] not in known_roots:
+                conversation.pop("localSubmission", None)
         if "host/info" in responses:
             responses["fs/readDirectory"] = await read("fs/readDirectory", {"path": responses["host/info"]["homeDirectory"]})
         relations = responses.get("conversation/agents/classify", {}).get("relations", {})
@@ -444,6 +448,7 @@ async def capture(args) -> dict:
     captured_ids = {conversation["thread"]["id"] for conversation in conversations}
     if completion_times is not None:
         scenario["completionTimes"] = {key: value for key, value in completion_times.items() if key in captured_ids}
+    scenario["provenance"]["localPreparation"] = "known-root-only ownership proxy; actual phone ownership is unknown"
     scenario["provenance"]["completionMetadata"] = {"startedAtUnixSeconds": completion_metadata_started_at,
         "capturedAtUnixSeconds": completion_metadata_ended_at,
         "source": "thread/list completionTimes sibling map", "includeCompletionTimes": True,
