@@ -214,6 +214,7 @@ class BuildTests(unittest.TestCase):
             yield 12
 
         self.patches = [
+            patch.object(perf_harness, "ENV", {}),
             patch.object(perf_harness, "ROOT", Path(self.directory.name)),
             patch.object(perf_harness, "target", return_value=self.device),
             patch.object(perf_harness, "source_lease", source_lease),
@@ -244,10 +245,10 @@ class BuildTests(unittest.TestCase):
             perf_harness.build(SimpleNamespace(device=None, disable=None))
 
     def test_generation_and_build_run_under_source_lease_then_capacity_with_both_inherited(self) -> None:
-        self.run_build([0, 0])
+        self.run_build([0, 0, 0])
         self.assertEqual(
             self.events,
-            ["source", ("capacity", True), "space", ("tuist", (11, 12)), ("xcodebuild", (11, 12))],
+            ["source", ("capacity", True), "space", ("tuist", (11, 12)), ("tuist", (11, 12)), ("xcodebuild", (11, 12))],
         )
 
     def test_failed_generation_stops_before_xcodebuild_and_propagates_its_status(self) -> None:
