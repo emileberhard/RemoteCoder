@@ -2,7 +2,7 @@
 
 ## Outcome and ownership
 
-The canonical offline journey prepares realistic persisted state, then measures
+The canonical offline journey prepares production-owned persisted state, then measures
 five minutes dominated by visible agent work. Capture freezes idle conversation
 histories, the sidebar inventory and recorded notification arrival offsets.
 Three conversations stream concurrently; occasional switches, drawer use and
@@ -40,6 +40,11 @@ excluding explicit `probe` and `automation` purposes. At most three explicit
 recorded journey targets may retain markers as controlled purpose exceptions.
 Child, unresolved, probe and automation histories remain available remotely.
 This is an ownership proxy: actual phone ownership is unknown even for roots.
+For field acceptance, narrow that proxy using device-scoped session-owner logs
+when available. Presentation and settings restoration prove that a phone opened
+a session; they do not prove a successful save, local submission origin or the
+complete set that survived cache eviction. Keep source gateway identity distinct
+from the host that received uploaded logs.
 For each marked history, page through the captured history, submit its captured text-only user message,
 persist its submission receipt, accept its captured turn identity, reopen the
 tail and reconcile the matching canonical history, flush and evict idle sessions
@@ -48,7 +53,13 @@ authoritative delivery evidence reconciles.
 The fixture rewrites that canonical user item's client identity consistently.
 Preparation fails if the submission does not reconcile; it never leaves invented
 pending sends behind. This retains the locally originated message semantics that
-make checkpoints survive history shedding.
+make checkpoints survive history shedding. The preparation marker currently
+reconstructs one text submission per selected root. It does not reconstruct
+unknown phone-local attachments. Canonical matching replaces redundant local
+image bytes, and history shedding removes canonical user payloads. Remote inline
+image size therefore cannot establish retained primary image size. Replace
+captured image pixels with synthetic content matching observed metadata before
+staging a fixture; never invent mismatched images to force retention.
 
 Large remote histories alone are insufficient: disposable checkpoints are
 simply evicted at the normal cache limit. The 3.68.2 exhausted-history fix avoids
@@ -141,7 +152,11 @@ process/main-thread CPU, sampled footprint, frame intervals and counters.
 `ReplayJourney` and `ReplayAction` signposts delimit corresponding operations.
 The driver waits for xctrace's recording-start notification before measurement,
 with synchronous notification registration, a bounded startup deadline and
-owned registration cleanup.
+owned registration cleanup. Custom template content is hashed into comparison
+metadata. Long deferred recordings can lose early app signposts even when the
+trace starts on time. For a saved Immediate template, verify its recorded mode,
+complete journey, all scheduled action intervals and early/late scroll coverage
+before interpreting journey CPU or hitches. Missing boundaries remain unknown.
 A private buffer uses the unchanged production `ProcessResourceSampler`, including
 its cadence, transition spacing and mixed-interval semantics. Samples use scene, surface,
 visible-running-turn and voice-call breakdown. Counter deltas belong to the
@@ -166,7 +181,10 @@ production versions, alternate at least three runs per version on the same iPad,
 and keep the fixture fixed. The 3.68.1 to 3.68.2 acceptance target is at least a
 halving of agent-working CPU with checkpoint bytes moving in the same direction.
 If it fails, inspect corresponding trace stacks and preparation structure before
-changing the workload. A changed fixture starts a new comparison.
+changing the workload. A changed fixture starts a new comparison. Matching an
+owner byte gauge alone does not reproduce the expensive preserved payload: compare
+the sampled inspection/decoding mechanism as well. Report partial reproduction
+and the missing state evidence when a defensible phone inventory is unavailable.
 
 Then check 3.70.1 to 3.71.0. Keep the production diagnostics pump enabled and
 record process age, export count, scanned records and whole-process CPU during

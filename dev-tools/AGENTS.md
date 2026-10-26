@@ -186,6 +186,8 @@ compact JSON event per line.
 
 ## perf-sim
 
+Presentation/settings-owner evidence narrows candidate phone sessions but does not establish successful checkpoint retention or local send origin. Source gateway identity and upload-store host remain distinct. Synthetic replacements preserve captured image metadata; never mismatch canonical images merely to retain local bytes. Custom trace templates are hashed; require complete journey/action/scroll coverage before using trace-scoped results.
+
 `perf-sim` runs repeatable performance windows against a `RC_PERF_HARNESS` build
 (`build`, then `install`) in its own simulator on the Mac that runs it or, with
 `--device`, on an iPad paired with that Mac. A device build is the Release
