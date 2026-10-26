@@ -21,14 +21,17 @@ idle time around it. Samples whose stacks run in XCTest's automation frameworks
 accessibility tree on its main thread) are attributed separately, and their CPU shares stay visible. A trace is rejected when automation exceeds
 1% of app CPU or main-thread CPU, or an observed automation share is unknown.
 
-Every xctrace export loads the whole trace, so exports run one at a time and stop
-at a quarter of the host's memory for xctrace and Python combined or after 120 seconds. One recording or summary
+Every xctrace process stops at a quarter of the host's memory for xctrace and
+Python combined, counting both resident memory and physical footprint. Recording
+post-processing and exports stop after 120 seconds. Each process owns and removes
+its Instruments scratch directory. One recording or summary
 runs per host, and a remote run stops when its SSH client disconnects.
 """
 
 import argparse
 import bisect
 import contextlib
+import ctypes
 import fcntl
 import hashlib
 import json
@@ -47,6 +50,7 @@ from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
+from functools import cache
 from pathlib import Path
 from statistics import median
 
@@ -71,7 +75,7 @@ SWIFTUI_UPDATES = "swiftui-updates"
 SSH = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "-o", "ServerAliveInterval=10", "-o", "ServerAliveCountMax=3"]
 TRACE_ROOT = "perf-traces/remotecoder"
 HOST_LOCK = ".perf-trace.lock"
-EXPORT_MEMORY_FRACTION = 0.25
+TRACE_MEMORY_FRACTION = 0.25
 EXPORT_TIMEOUT_SECONDS = 120
 CAPABILITY_TIMEOUT_SECONDS = 30
 PROBE_TIMEOUT_SECONDS = 2
@@ -155,53 +159,72 @@ def sysctl_number(name: str) -> int:
                               timeout=PROBE_TIMEOUT_SECONDS).stdout)
 
 
-def resident_bytes(pid: int) -> int:
-    output = subprocess.run(["ps", "-o", "rss=", "-p", str(pid)], check=True, capture_output=True, text=True,
-                            timeout=PROBE_TIMEOUT_SECONDS).stdout.strip()
-    return int(output) * 1024
+class ProcessUsage(ctypes.Structure):
+    _fields_ = [("uuid", ctypes.c_uint8 * 16), *[(name, ctypes.c_uint64) for name in (
+        "user_time", "system_time", "pkg_idle_wkups", "interrupt_wkups", "pageins", "wired_size",
+        "resident_size", "phys_footprint", "proc_start_abstime", "proc_exit_abstime",
+    )]]
+
+
+@cache
+def process_usage_reader():
+    reader = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True).proc_pid_rusage
+    reader.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_void_p]
+    reader.restype = ctypes.c_int
+    return reader
+
+
+def memory_bytes(pid: int) -> int:
+    usage = ProcessUsage()
+    if process_usage_reader()(pid, 0, ctypes.byref(usage)) != 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error))
+    return max(usage.resident_size, usage.phys_footprint)
 
 
 @contextlib.contextmanager
-def guarded_export(arguments: list[str], label: str):
-    limit = int(sysctl_number("hw.memsize") * EXPORT_MEMORY_FRACTION)
-    command = ["xcrun", "xctrace", "export", *arguments]
+def guarded_xctrace(arguments: list[str], label: str, timeout_seconds: float):
+    limit = int(sysctl_number("hw.memsize") * TRACE_MEMORY_FRACTION)
+    command = ["xcrun", "xctrace", *arguments]
     stop = threading.Event()
     peak = 0
     breach = None
     failure_lock = threading.Lock()
     started = time.monotonic()
-    with subprocess.Popen(command, stdout=subprocess.PIPE) as export:
-        def stop_export(reason: SystemExit) -> None:
+    with tempfile.TemporaryDirectory(prefix="perf-trace-") as scratch, subprocess.Popen(
+        command, stdout=subprocess.PIPE, env={**os.environ, "TMPDIR": scratch + os.sep},
+    ) as process:
+        def stop_process(reason: SystemExit) -> None:
             nonlocal breach
             with failure_lock:
                 if not stop.is_set():
                     breach = reason
                     stop.set()
-                    export.kill()
+                    process.kill()
 
         def deadline() -> None:
-            if not stop.wait(EXPORT_TIMEOUT_SECONDS):
+            if not stop.wait(timeout_seconds):
                 elapsed = time.monotonic() - started
-                stop_export(ExportLimitExceeded(f"stopped exporting {label} after {elapsed:.1f} seconds "
-                            f"(limit {EXPORT_TIMEOUT_SECONDS} seconds); record a shorter trace"))
+                stop_process(ExportLimitExceeded(f"stopped {label} after {elapsed:.1f} seconds "
+                            f"(limit {timeout_seconds} seconds); record a shorter trace"))
 
         def watch() -> None:
             nonlocal peak
             while not stop.wait(0.5):
-                if export.poll() is not None:
+                if process.poll() is not None:
                     return
                 try:
-                    peak = max(peak, resident_bytes(export.pid) + resident_bytes(os.getpid()))
+                    peak = max(peak, memory_bytes(process.pid) + memory_bytes(os.getpid()))
                     if stop.is_set():
                         return
                     available = sysctl_number("kern.memorystatus_level")
                 except (OSError, ValueError, subprocess.SubprocessError) as error:
-                    if export.poll() is None:
-                        stop_export(SystemExit(f"stopped exporting {label}: memory probe failed: {error}; "
+                    if process.poll() is None:
+                        stop_process(SystemExit(f"stopped {label}: memory probe failed: {error}; "
                                     "restore host monitoring before tracing again"))
                     return
                 if peak > limit or available < MINIMUM_AVAILABLE_MEMORY_PERCENT:
-                    stop_export(ExportLimitExceeded(f"stopped exporting {label}: xctrace and Python reached {peak / 2**30:.1f} GiB (limit "
+                    stop_process(ExportLimitExceeded(f"stopped {label}: xctrace and Python reached {peak / 2**30:.1f} GiB (limit "
                                 f"{limit / 2**30:.0f} GiB) with {available}% of memory available; record a shorter trace"))
                     return
 
@@ -211,10 +234,10 @@ def guarded_export(arguments: list[str], label: str):
                 guard = threading.Thread(target=target, daemon=True)
                 guards.append(guard)
                 guard.start()
-            yield export
-            export.wait()
+            yield process
+            process.wait()
         except BaseException:
-            export.kill()
+            process.kill()
             if breach is None:
                 raise
         finally:
@@ -224,20 +247,27 @@ def guarded_export(arguments: list[str], label: str):
                     guard.join()
     if breach is not None:
         raise breach
-    print(f"exported {label} in {time.monotonic() - started:.1f} s, peak {peak / 2**30:.1f} GiB", file=sys.stderr)
+    print(f"finished {label} in {time.monotonic() - started:.1f} s, peak {peak / 2**30:.1f} GiB", file=sys.stderr)
+
+
+@contextlib.contextmanager
+def guarded_export(arguments: list[str], label: str):
+    command = ["export", *arguments]
+    with guarded_xctrace(command, f"exporting {label}", EXPORT_TIMEOUT_SECONDS) as export:
+        yield export
     if export.returncode != 0:
-        raise subprocess.CalledProcessError(export.returncode, command)
+        raise subprocess.CalledProcessError(export.returncode, ["xcrun", "xctrace", *command])
 
 
 def check_python_memory(label: str, limit: int) -> None:
-    used = resident_bytes(os.getpid())
+    used = memory_bytes(os.getpid())
     if used > limit:
         raise ExportLimitExceeded(f"stopped measuring {label}: Python reached {used / 2**30:.1f} GiB "
                                   f"(limit {limit / 2**30:.0f} GiB); record a shorter trace")
 
 
 def budgeted(values: Iterable, label: str):
-    limit = int(sysctl_number("hw.memsize") * EXPORT_MEMORY_FRACTION)
+    limit = int(sysctl_number("hw.memsize") * TRACE_MEMORY_FRACTION)
     next_check = 0
     for index, value in enumerate(values):
         if index % 1024 == 0 and time.monotonic() >= next_check:
@@ -249,7 +279,7 @@ def budgeted(values: Iterable, label: str):
 
 def measurement(label: str, operation, failures: dict):
     try:
-        limit = int(sysctl_number("hw.memsize") * EXPORT_MEMORY_FRACTION)
+        limit = int(sysctl_number("hw.memsize") * TRACE_MEMORY_FRACTION)
         check_python_memory(label, limit)
         result = operation()
         check_python_memory(label, limit)
@@ -267,7 +297,7 @@ def table_rows(trace: str, schema: str, columns: set[str]):
     interned_frames = {}
     parents = []
     next_memory_check = 0
-    limit = int(sysctl_number("hw.memsize") * EXPORT_MEMORY_FRACTION)
+    limit = int(sysctl_number("hw.memsize") * TRACE_MEMORY_FRACTION)
 
     def resolve(element: ET.Element):
         identifier = element.get("ref") or element.get("id")
@@ -800,7 +830,7 @@ def processor_trace(trace: str, run: Run, count: int, apps: list[Path]) -> dict 
         return {"topFunctions": None, "unavailableReason": "no processor-trace-intervals export"} if run.template == "Processor Trace" else None
     profiles = {}
     missing = Counter()
-    limit = int(sysctl_number("hw.memsize") * EXPORT_MEMORY_FRACTION)
+    limit = int(sysctl_number("hw.memsize") * TRACE_MEMORY_FRACTION)
     columns = {"process", "name", "self-duration", "self-cycles", "self-instructions", "backtrace"}
     for row in table_rows(trace, "processor-trace-intervals", columns):
         if process_name(row.get("process")) != APP:
@@ -1199,8 +1229,9 @@ def recording(trace: Path, seconds: int, target: list[str], instruments: list[st
     if "SwiftUI" in instruments:
         require_swiftui(command)
     command += ["--time-limit", f"{seconds}s", "--output", str(trace)]
-    with subprocess.Popen(command, stdout=subprocess.PIPE, text=True) as recorder:
-        for line in recorder.stdout:
+    with guarded_xctrace(command[2:], f"recording {trace}", seconds + EXPORT_TIMEOUT_SECONDS) as recorder:
+        for encoded in recorder.stdout:
+            line = encoded.decode(errors="replace")
             sys.stderr.write(line)
             if line.startswith(RECORDING_STARTED):
                 break
@@ -1208,10 +1239,9 @@ def recording(trace: Path, seconds: int, target: list[str], instruments: list[st
             sys.exit(f"xctrace exited ({recorder.wait()}) before it started recording {trace}. "
                      + ("Processor Trace requires a debuggable install signed with get-task-allow (distribution builds are excluded from attach discovery), A18+/M4+ hardware, and Developer → Processor Trace enabled on the device."
                         if template == "Processor Trace" else "Keep RemoteCoder running and the device unlocked. Single-process recording requires a debuggable install signed with get-task-allow; distribution builds are excluded from xctrace attach discovery."))
-        try:
-            yield
-        finally:
-            sys.stderr.writelines(recorder.stdout)
+        yield
+        for encoded in recorder.stdout:
+            sys.stderr.write(encoded.decode(errors="replace"))
     if recorder.returncode != 0:
         if template == "Processor Trace" or "Processor Trace" in instruments:
             sys.exit("Processor Trace recording failed; see xctrace errors above. Requires a debuggable app, A18+/M4+ "

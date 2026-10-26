@@ -7,7 +7,7 @@ import sys
 import tempfile
 import threading
 import unittest
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import nullcontext, redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
@@ -54,7 +54,7 @@ class Export:
 
 class Recorder(Export):
     def __init__(self):
-        self.stdout = io.StringIO("Ctrl-C to stop the recording\nTime limit reached\n")
+        self.stdout = io.BytesIO(b"Ctrl-C to stop the recording\nTime limit reached\n")
         self.returncode = 0
 
 
@@ -248,7 +248,7 @@ class PerfTraceTests(unittest.TestCase):
 
     def test_single_process_attach_failure_explains_debug_signing(self):
         recorder = Recorder()
-        recorder.stdout = io.StringIO("")
+        recorder.stdout = io.BytesIO(b"")
         recorder.returncode = 19
         with (patch.object(trace.subprocess, "Popen", return_value=recorder),
               self.assertRaisesRegex(SystemExit, "debuggable.*get-task-allow.*distribution"),
@@ -381,7 +381,7 @@ class PerfTraceTests(unittest.TestCase):
                     return original(samples, names)
                 with (patch.object(trace, "symbolicate", side_effect=symbols),
                       patch.object(trace, "frame_statistics", side_effect=statistics),
-                      patch.object(trace, "resident_bytes", side_effect=lambda pid: 17 * 2**30 if exceeded else 0)):
+                      patch.object(trace, "memory_bytes", side_effect=lambda pid: 17 * 2**30 if exceeded else 0)):
                     result, _ = self.summary({"time-profile", "OSSignpostIntervals"}, frames=10, tables={
                         "time-profile": PROFILE_XML,
                         "OSSignpostIntervals": SIGNPOST_XML.replace("TranscriptScroll", "ReplayJourney"),
@@ -410,14 +410,14 @@ class PerfTraceTests(unittest.TestCase):
         self.assertEqual(len(nodes[0].findall("row")), 0)
         self.assertEqual(trace.process_name(rows[1]["process"]), "RemoteCoder")
         with (patch.object(trace.subprocess, "Popen", return_value=Export(PROFILE_XML)),
-              patch.object(trace, "resident_bytes", return_value=17 * 2**30),
+              patch.object(trace, "memory_bytes", return_value=17 * 2**30),
               self.assertRaisesRegex(trace.ExportLimitExceeded, "Python reached")):
             list(trace.table_rows("x.trace", "time-profile", {"process"}))
 
     def test_python_memory_alone_can_stop_and_reap_the_export(self):
         child = WaitingExport()
         with (patch.object(trace.subprocess, "Popen", return_value=child),
-              patch.object(trace, "resident_bytes", side_effect=lambda pid: 17 * 2**30 if pid == trace.os.getpid() else 0),
+              patch.object(trace, "memory_bytes", side_effect=lambda pid: 17 * 2**30 if pid == trace.os.getpid() else 0),
               self.assertRaisesRegex(trace.ExportLimitExceeded, "Python reached"),
               trace.guarded_export(["--input", "ios.trace", "--toc"], "profile")):
             child.wait()
@@ -448,7 +448,7 @@ class PerfTraceTests(unittest.TestCase):
 
     def setUp(self):
         memory = {"hw.memsize": 64 * 2**30, "kern.memorystatus_level": 90}
-        for target, stub in (("sysctl_number", memory.__getitem__), ("resident_bytes", lambda pid: 0)):
+        for target, stub in (("sysctl_number", memory.__getitem__), ("memory_bytes", lambda pid: 0)):
             patcher = patch.object(trace, target, side_effect=stub)
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -626,7 +626,7 @@ class PerfTraceTests(unittest.TestCase):
 
         with (
             patch.object(trace, "EXPORT_TIMEOUT_SECONDS", 0.7),
-            patch.object(trace, "resident_bytes", side_effect=blocked_probe),
+            patch.object(trace, "memory_bytes", side_effect=blocked_probe),
             patch.object(trace.subprocess, "Popen", return_value=export),
         ):
             owner = threading.Thread(target=summarize)
@@ -644,8 +644,8 @@ class PerfTraceTests(unittest.TestCase):
 
     def test_memory_probe_error_or_timeout_stops_and_reaps_export(self):
         for probe, error in (
-            ("resident_bytes", subprocess.TimeoutExpired(["ps"], 2)),
-            ("resident_bytes", subprocess.CalledProcessError(1, ["ps"])),
+            ("memory_bytes", subprocess.TimeoutExpired(["ps"], 2)),
+            ("memory_bytes", subprocess.CalledProcessError(1, ["ps"])),
             ("sysctl_number", ValueError("invalid memory level")),
         ):
             with self.subTest(probe=probe, error=error):
@@ -711,7 +711,7 @@ class PerfTraceTests(unittest.TestCase):
         popen = subprocess.Popen
         for constraint, override, diagnostic in (
             ("time", patch.object(trace, "EXPORT_TIMEOUT_SECONDS", 0.01), "seconds"),
-            ("memory", patch.object(trace, "resident_bytes", return_value=17 * 2**30), "GiB"),
+            ("memory", patch.object(trace, "memory_bytes", return_value=17 * 2**30), "GiB"),
         ):
             with self.subTest(constraint=constraint):
                 child = popen([sys.executable, "-c", "import time; time.sleep(30)"], stdout=subprocess.PIPE)
@@ -919,20 +919,96 @@ class PerfTraceTests(unittest.TestCase):
 
 
 class MemoryProbeTests(unittest.TestCase):
+    def test_memory_counts_compressed_footprint_and_resident_pages(self):
+        for resident, footprint in ((4, 62), (14, 8)):
+            def read(pid, flavor, pointer):
+                usage = trace.ctypes.cast(pointer, trace.ctypes.POINTER(trace.ProcessUsage)).contents
+                usage.resident_size = resident * 2**30
+                usage.phys_footprint = footprint * 2**30
+                return 0
+
+            with self.subTest(resident=resident, footprint=footprint), patch.object(trace, "process_usage_reader", return_value=read):
+                self.assertEqual(trace.memory_bytes(123), max(resident, footprint) * 2**30)
+
+    def test_failed_native_probe_does_not_report_zero_memory(self):
+        with (patch.object(trace, "process_usage_reader", return_value=lambda *args: -1),
+              patch.object(trace.ctypes, "get_errno", return_value=3),
+              self.assertRaises(OSError)):
+            trace.memory_bytes(123)
+
     def test_monitoring_commands_timeout_and_reap_delayed_children(self):
         run = subprocess.run
 
         def delayed_command(command, **kwargs):
             return run([sys.executable, "-c", "import time; time.sleep(0.2); print(0)"], **kwargs)
 
-        for probe, value in ((trace.sysctl_number, "hw.memsize"), (trace.resident_bytes, 123)):
-            with (
-                self.subTest(probe=probe.__name__),
-                patch.object(trace, "PROBE_TIMEOUT_SECONDS", 0.01),
-                patch.object(trace.subprocess, "run", side_effect=delayed_command),
-                self.assertRaises(subprocess.TimeoutExpired),
-            ):
-                probe(value)
+        with (patch.object(trace, "PROBE_TIMEOUT_SECONDS", 0.01),
+              patch.object(trace.subprocess, "run", side_effect=delayed_command),
+              self.assertRaises(subprocess.TimeoutExpired)):
+            trace.sysctl_number("hw.memsize")
+
+
+class RecordingGuardTests(unittest.TestCase):
+    def setUp(self):
+        memory = {"hw.memsize": 64 * 2**30, "kern.memorystatus_level": 90}
+        patcher = patch.object(trace, "sysctl_number", side_effect=memory.__getitem__)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_recording_post_processing_is_bounded_and_owned_scratch_is_removed(self):
+        popen = subprocess.Popen
+        exceeded = threading.Event()
+        children = []
+        scratch_paths = []
+
+        def launch(command, **kwargs):
+            scratch_paths.append(Path(kwargs["env"]["TMPDIR"]))
+            program = ("import os,time; from pathlib import Path; "
+                       "Path(os.environ['TMPDIR'], 'instruments.ktrace').write_bytes(b'trace'); "
+                       "print('Ctrl-C to stop the recording', flush=True); "
+                       "print('Time limit reached', flush=True); time.sleep(30)")
+            child = popen([sys.executable, "-c", program], **kwargs)
+            children.append(child)
+            return child
+
+        def memory(pid):
+            return 17 * 2**30 if exceeded.is_set() and pid != trace.os.getpid() else 0
+
+        with tempfile.TemporaryDirectory() as unrelated:
+            retained = Path(unrelated) / "instruments-other.ktrace"
+            retained.write_bytes(b"other capture")
+            with (patch.object(trace.subprocess, "Popen", side_effect=launch),
+                  patch.object(trace, "memory_bytes", side_effect=memory),
+                  self.assertRaisesRegex(trace.ExportLimitExceeded, "recording.*GiB")):
+                with trace.recording(Path("fixture.trace"), 1, ["--attach", "RemoteCoder"], []):
+                    self.assertTrue((scratch_paths[0] / "instruments.ktrace").exists())
+                    rescue = threading.Timer(3, children[0].kill)
+                    rescue.start()
+                    self.addCleanup(rescue.cancel)
+                    exceeded.set()
+            self.assertEqual(children[0].returncode, -9)
+            self.assertFalse(scratch_paths[0].exists())
+            self.assertEqual(retained.read_bytes(), b"other capture")
+            rescue.cancel()
+            rescue.join()
+
+    def test_scratch_is_removed_after_success_and_consumer_failure(self):
+        for fail in (False, True):
+            paths = []
+
+            def launch(command, **kwargs):
+                scratch = Path(kwargs["env"]["TMPDIR"])
+                (scratch / "instruments.ktrace").touch()
+                paths.append(scratch)
+                return Recorder()
+
+            with (self.subTest(fail=fail), patch.object(trace.subprocess, "Popen", side_effect=launch),
+                  patch.object(trace, "memory_bytes", return_value=0)):
+                expected = self.assertRaisesRegex(ValueError, "consumer failed") if fail else nullcontext()
+                with expected, trace.recording(Path("fixture.trace"), 1, [], []):
+                    if fail:
+                        raise ValueError("consumer failed")
+                self.assertFalse(paths[0].exists())
 
 
 if __name__ == "__main__":

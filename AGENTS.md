@@ -343,8 +343,12 @@ measurably beat SwiftUI.
   can include off-CPU waits, so use self cycles to rank CPU work. Unsupported export
   tables, including allocation events on current Xcode, stay unavailable. Each
   measurement that hits a guard reports `exceeds export limit` in `exportFailures`;
-  other measurements remain available. The memory budget counts xctrace and Python
-  together; the XML parser detaches consumed rows, interns frames, and checks its
+  other measurements remain available. Recording, its post-processing and exports
+  share the quarter-memory bound for xctrace and Python combined, using the larger
+  of resident memory and physical footprint per process. A recording has its
+  requested duration plus 120 seconds to finish; each export has 120 seconds.
+  Each xctrace process owns a private TMPDIR removed after it is reaped, including
+  on failure. The XML parser detaches consumed rows, interns frames, and checks its
   own budget while reducing the table. Sampled-frame and journey analysis share
   the measurement boundary; unavailable frame details preserve app CPU totals.
   `--frames` includes UUID/address/source and inline-frame details alongside
