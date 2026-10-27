@@ -271,7 +271,7 @@ def allocated_bytes(path: Path) -> int:
 
 def prune_symbols(published: str | None) -> dict:
     by_version: dict[str, list[Path]] = {}
-    for path in DEPLOYMENTS.iterdir():
+    for path in DEPLOYMENTS.glob("*"):
         if match := re.fullmatch(SYMBOL_DIRECTORY, path.name):
             by_version.setdefault(match[1], []).append(path)
     newest_first = sorted(by_version, key=version_key, reverse=True)
