@@ -37,6 +37,20 @@ impl NativeInputAcceptance {
     pub(crate) fn has(&self, fact: NativeInputFact) -> bool {
         self.facts.contains(&fact)
     }
+
+    fn validate(&self) -> Result<()> {
+        ensure!(
+            !self.turn_id.is_empty()
+                && !self.root_turn_id.is_empty()
+                && self.fingerprint.len() == 64
+                && self
+                    .fingerprint
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit()),
+            "native acceptance evidence is invalid"
+        );
+        Ok(())
+    }
 }
 
 impl Gateway {
@@ -202,16 +216,7 @@ impl Gateway {
                 .context("native acceptance reply has no acceptance field")?,
         )?;
         if let Some(accepted) = &accepted {
-            ensure!(
-                !accepted.turn_id.is_empty()
-                    && !accepted.root_turn_id.is_empty()
-                    && accepted.fingerprint.len() == 64
-                    && accepted
-                        .fingerprint
-                        .bytes()
-                        .all(|byte| byte.is_ascii_hexdigit()),
-                "native acceptance evidence is invalid"
-            );
+            accepted.validate()?;
         }
         Ok(accepted)
     }
@@ -286,6 +291,7 @@ impl Gateway {
             })?)
             .map_err(|error| RpcError::new(RpcCode::Internal, error.to_string()))?;
         if let Some(accepted) = accepted {
+            accepted.validate().map_err(RpcError::from)?;
             if !accepted.has(NativeInputFact::Terminal) {
                 return Err(RpcError::new(
                     RpcCode::Internal,
@@ -320,5 +326,59 @@ fn accepted_delivery(thread: &str, input: &str, accepted: &NativeInputAcceptance
         }
     } else {
         DeliveryState::Accepted { receipt }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::notifications::history::NotificationOrigin;
+    use crate::test_support::{FakeControl, TestGateway};
+
+    #[tokio::test]
+    async fn input_stop_requires_positive_native_fence_acknowledgement() {
+        let thread = "e1741c43-3d9a-4448-9f4a-3c7e5906e852";
+        for (reply, succeeds) in [
+            (json!({}), false),
+            (json!({"acceptance":null}), true),
+            (
+                json!({"acceptance":{
+                    "turnId":"reserved-turn", "rootTurnId":"reserved-turn",
+                    "fingerprint":"a".repeat(64), "facts":[],
+                }}),
+                false,
+            ),
+            (
+                json!({"acceptance":{
+                    "turnId":"reserved-turn", "rootTurnId":"reserved-turn",
+                    "fingerprint":"a".repeat(64), "facts":["terminal","finished"],
+                }}),
+                true,
+            ),
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let gateway = TestGateway::with_native_runtime(directory.path());
+            let mut control = FakeControl::attach(&gateway, 1).await.requests;
+            let owner = gateway.clone();
+            let responder = tokio::spawn(async move {
+                let request: Value = serde_json::from_str(&control.recv().await.unwrap()).unwrap();
+                assert_eq!(request["method"], "thread/input/stop");
+                assert_eq!(
+                    request["params"],
+                    json!({
+                        "threadId":thread,"clientUserMessageId":"stable-input",
+                    })
+                );
+                owner
+                    .handle_control_text(
+                        json!({"id":request["id"],"result":reply}).to_string(),
+                        NotificationOrigin::Control { opened_after: 0 },
+                    )
+                    .await;
+            });
+            let result = gateway.job_stop_codex_input(thread, "stable-input").await;
+            responder.await.unwrap();
+            assert_eq!(result.is_ok(), succeeds, "{result:?}");
+        }
     }
 }
