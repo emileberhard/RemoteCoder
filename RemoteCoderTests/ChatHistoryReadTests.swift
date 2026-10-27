@@ -145,7 +145,7 @@ struct ChatHistoryReadTests {
         await chat.target.conversationList.record(try fixture.thread(threadID, updatedAt: 1))
         workspace.selectConversation(at: .init(hostID: fixture.mini.id, threadID: threadID))
         try #require(workspace.selectedScreen === chat)
-        await chat.target.prepareIfNeeded()
+        Task { await chat.target.prepareIfNeeded() }
         return chat
     }
 
@@ -160,7 +160,7 @@ struct ChatHistoryReadTests {
 
     private func open(_ fixture: WorkspaceFixture) async throws -> ChatScreenModel {
         let chat = try await beginOpening(fixture)
-        try #require(await waitUntil(timeout: .seconds(30)) { chat.loadingTranscriptID == nil && chat.activeSessionID == threadID && !chat.messages.isEmpty },
+        try #require(await waitUntil { chat.loadingTranscriptID == nil && chat.activeSessionID == threadID && !chat.messages.isEmpty },
             "loading=\(chat.loadingTranscriptID ?? "none") messages=\(chat.messages.count) error=\(chat.alert?.message ?? "none")")
         return chat
     }

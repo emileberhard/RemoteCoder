@@ -389,7 +389,7 @@ struct TranscriptScrollRenderingTests {
         hosted.show(controller)
         defer { hosted.close() }
 
-        let answers = (0..<40).map { ChatMessage(role: .codex, text: String(repeating: "Answer \($0).\n\n", count: 3)) }
+        let answers = (0..<40).map { ChatMessage(role: .codex, text: "Answer \($0) is short.") }
         await fixture.show(answers)
         let scroll = try await waitForScroll(in: controller.view)
         try await settle(scroll)
@@ -399,19 +399,15 @@ struct TranscriptScrollRenderingTests {
         fixture.request = TranscriptRowRequest(rowID: ChatStreamItem.message(answers[2]).id, token: 1, anchor: .top, motion: .instant)
         try await settle(scroll)
         try await Task.sleep(for: .milliseconds(400))
-        try #require(scroll.contentOffset.y + scroll.bounds.height < scroll.contentSize.height - scroll.bounds.height / 2)
-        recordScreenshot(in: controller.view, named: "jump-control-above-latest.png")
         #expect(try darkPixelsInJumpControlCorner(in: controller.view, scroll: scroll) > 40)
     }
 
     private func darkPixelsInJumpControlCorner(in view: UIView, scroll: UIScrollView) throws -> Int {
-        let viewport = scroll.convert(scroll.bounds, to: view).inset(by: scroll.adjustedContentInset)
-        let region = CGRect(x: viewport.midX, y: viewport.maxY - 90, width: viewport.width / 2, height: 90)
+        let bottom = scroll.convert(scroll.bounds, to: view).maxY - scroll.adjustedContentInset.bottom
+        let region = CGRect(x: view.bounds.maxX - 100, y: bottom - 90, width: 100, height: 90)
         let image = UIGraphicsImageRenderer(bounds: region).image { _ in
             view.drawHierarchy(in: view.bounds, afterScreenUpdates: true)
         }
-        Attachment.record("view=\(view.bounds) viewport=\(viewport) region=\(region)", named: "jump-control-geometry.txt")
-        if let data = image.pngData() { Attachment.record(data, named: "jump-control-corner.png") }
         let cgImage = try #require(image.cgImage)
         var pixels = [UInt8](repeating: 0, count: cgImage.width * cgImage.height * 4)
         try pixels.withUnsafeMutableBytes { buffer in

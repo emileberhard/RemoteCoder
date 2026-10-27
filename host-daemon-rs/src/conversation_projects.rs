@@ -270,8 +270,6 @@ mod tests {
 
     #[tokio::test]
     async fn a_directory_outside_any_repository_is_its_own_project() {
-        let _diagnostics =
-            tracing::subscriber::set_default(tracing_subscriber::fmt().with_test_writer().finish());
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().to_string_lossy().into_owned();
         let resolved = ProjectResolver::default()
