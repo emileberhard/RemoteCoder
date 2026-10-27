@@ -628,6 +628,18 @@ impl TurnLedger {
         Ok(())
     }
 
+    pub(crate) fn queued_input(
+        &self,
+        thread_id: &str,
+        input_id: &str,
+    ) -> Option<&QueuedSubmission> {
+        self.queues
+            .get(thread_id)?
+            .submissions
+            .iter()
+            .find(|submission| submission.client_user_message_id == input_id)
+    }
+
     pub(crate) fn finish_queue_add(&mut self, thread_id: &str) {
         let count = self
             .in_flight_queue_adds

@@ -56,11 +56,11 @@ pub(crate) async fn create(
     Ok(conversation)
 }
 
-pub(crate) async fn start(
-    gateway: &Arc<Gateway>,
-    job: &JobRecord,
-) -> Result<ExecutionBinding> {
-    ensure!(job.source == JobSource::Runtime, "imported input cannot be dispatched");
+pub(crate) async fn start(gateway: &Arc<Gateway>, job: &JobRecord) -> Result<ExecutionBinding> {
+    ensure!(
+        job.source == JobSource::Runtime,
+        "imported input cannot be dispatched"
+    );
     ensure!(
         matches!(job.stop, StopState::NotRequested),
         "the job has a durable Stop request"
@@ -71,7 +71,10 @@ pub(crate) async fn start(
         bail!("the original Codex input specification is unavailable");
     };
     let input_id = job.initial_input_id();
-    if let ExecutionState::Dispatching { input_id: retained, .. } = &job.execution {
+    if let ExecutionState::Dispatching {
+        input_id: retained, ..
+    } = &job.execution
+    {
         ensure!(retained == &input_id, "the retained input identity changed");
     }
     let mut resume = thread_params(gateway, &job.job_id, spec).await?;
@@ -89,7 +92,8 @@ pub(crate) async fn start(
         service_tier,
         cyber_access_program,
         ..
-    } = &spec.settings else {
+    } = &spec.settings
+    else {
         bail!("Codex job has settings for another provider");
     };
     let sandbox = match spec.tool_scope {
@@ -131,10 +135,7 @@ pub(crate) async fn start(
     })
 }
 
-pub(crate) async fn inspect(
-    gateway: &Arc<Gateway>,
-    job: &JobRecord,
-) -> Result<Inspection> {
+pub(crate) async fn inspect(gateway: &Arc<Gateway>, job: &JobRecord) -> Result<Inspection> {
     let conversation = conversation(job)?;
     verify_home(gateway, conversation)?;
     let input_id = job.initial_input_id();
@@ -142,22 +143,25 @@ pub(crate) async fn inspect(
         .job_read_codex_acceptance(&conversation.thread_id, &input_id)
         .await?
     else {
-        return Ok(if job.source == JobSource::Runtime
-            && matches!(
-                job.execution,
-                ExecutionState::Dispatching { .. } | ExecutionState::Unknown { .. }
-            )
-            && matches!(job.spec, SpecEvidence::Known { .. })
-        {
-            Inspection::RetryableInput {
-                conversation: conversation.clone(),
-                input_id,
-            }
-        } else {
-            Inspection::Unknown {
-                reason: "the native owner has no acceptance evidence for the exact input".into(),
-            }
-        });
+        return Ok(
+            if job.source == JobSource::Runtime
+                && matches!(
+                    job.execution,
+                    ExecutionState::Dispatching { .. } | ExecutionState::Unknown { .. }
+                )
+                && matches!(job.spec, SpecEvidence::Known { .. })
+            {
+                Inspection::RetryableInput {
+                    conversation: conversation.clone(),
+                    input_id,
+                }
+            } else {
+                Inspection::Unknown {
+                    reason: "the native owner has no acceptance evidence for the exact input"
+                        .into(),
+                }
+            },
+        );
     };
     let binding = ExecutionBinding {
         conversation: conversation.clone(),
@@ -165,9 +169,14 @@ pub(crate) async fn inspect(
         turn_id: accepted.turn_id.clone(),
     };
     if let ExecutionState::Running { binding: retained }
-    | ExecutionState::Recovering { binding: retained, .. } = &job.execution
+    | ExecutionState::Recovering {
+        binding: retained, ..
+    } = &job.execution
     {
-        ensure!(retained == &binding, "native input acceptance changed its binding");
+        ensure!(
+            retained == &binding,
+            "native input acceptance changed its binding"
+        );
     }
     if accepted.has(NativeInputFact::Rejected) {
         return Ok(Inspection::Finished {
@@ -239,10 +248,7 @@ pub(crate) async fn inspect(
     })
 }
 
-pub(crate) async fn recover(
-    gateway: &Arc<Gateway>,
-    job: &JobRecord,
-) -> Result<ExecutionBinding> {
+pub(crate) async fn recover(gateway: &Arc<Gateway>, job: &JobRecord) -> Result<ExecutionBinding> {
     let target = conversation(job)?;
     let accepted = gateway
         .job_read_codex_acceptance(&target.thread_id, &job.initial_input_id())
@@ -274,9 +280,8 @@ pub(crate) async fn stop(gateway: &Arc<Gateway>, job: &JobRecord) -> Result<()> 
 
 fn conversation(job: &JobRecord) -> Result<&ConversationIdentity> {
     match &job.execution {
-        ExecutionState::Bound { conversation } | ExecutionState::Dispatching { conversation, .. } => {
-            Ok(conversation)
-        }
+        ExecutionState::Bound { conversation }
+        | ExecutionState::Dispatching { conversation, .. } => Ok(conversation),
         ExecutionState::Running { binding } | ExecutionState::Recovering { binding, .. } => {
             Ok(&binding.conversation)
         }
@@ -289,7 +294,10 @@ fn conversation(job: &JobRecord) -> Result<&ConversationIdentity> {
 }
 
 fn verify_home(gateway: &Gateway, target: &ConversationIdentity) -> Result<()> {
-    ensure!(target.provider == Provider::Codex, "the conversation is not Codex");
+    ensure!(
+        target.provider == Provider::Codex,
+        "the conversation is not Codex"
+    );
     let ProviderHome::Known { path } = &target.provider_home else {
         bail!("the native provider home is unresolved");
     };
@@ -301,7 +309,13 @@ fn verify_home(gateway: &Gateway, target: &ConversationIdentity) -> Result<()> {
 }
 
 async fn thread_params(gateway: &Gateway, id: &JobId, spec: &JobSpec) -> Result<Value> {
-    let ExecutionSettings::Codex { model, model_provider, service_tier, .. } = &spec.settings else {
+    let ExecutionSettings::Codex {
+        model,
+        model_provider,
+        service_tier,
+        ..
+    } = &spec.settings
+    else {
         bail!("Codex thread settings use another provider");
     };
     let socket = gateway.job_coordination_socket(id);
@@ -309,7 +323,10 @@ async fn thread_params(gateway: &Gateway, id: &JobId, spec: &JobSpec) -> Result<
         "shell_environment_policy":{"set":{"RC_AGENT_JOB_SOCKET":socket}}
     });
     if let ToolScope::ReadOnly { root } = &spec.tool_scope {
-        ensure!(spec.cwd.starts_with(root), "working directory is outside the read-only root");
+        ensure!(
+            spec.cwd.starts_with(root),
+            "working directory is outside the read-only root"
+        );
         let effective = gateway
             .job_native_call("config/read", json!({"cwd":spec.cwd,"includeLayers":false}))
             .await?;
@@ -325,7 +342,10 @@ async fn thread_params(gateway: &Gateway, id: &JobId, spec: &JobSpec) -> Result<
         };
         config["shell_environment_policy"]["inherit"] = json!("core");
         config["mcp_servers"] = Value::Object(
-            servers.keys().map(|name| (name.clone(), json!({"enabled":false}))).collect(),
+            servers
+                .keys()
+                .map(|name| (name.clone(), json!({"enabled":false})))
+                .collect(),
         );
         config["features"] = Value::Object(
             READ_ONLY_DISABLED_FEATURES
@@ -360,17 +380,22 @@ async fn final_result(gateway: &Gateway, binding: &ExecutionBinding) -> Result<R
                 }),
             )
             .await?;
-        let items = page["data"].as_array().context("native result page has no items")?;
-        ensure!(items.len() <= RESULT_PAGE_SIZE, "native result page exceeds its bound");
+        let items = page["data"]
+            .as_array()
+            .context("native result page has no items")?;
+        ensure!(
+            items.len() <= RESULT_PAGE_SIZE,
+            "native result page exceeds its bound"
+        );
         for entry in items {
             ensure!(
                 entry["turnId"].as_str() == Some(binding.turn_id.as_str()),
                 "native result page contains a different turn"
             );
-            if entry["item"]["type"] == "agentMessage"
-                && entry["item"]["phase"] == "final_answer"
-            {
-                let text = entry["item"]["text"].as_str().context("final answer has no text")?;
+            if entry["item"]["type"] == "agentMessage" && entry["item"]["phase"] == "final_answer" {
+                let text = entry["item"]["text"]
+                    .as_str()
+                    .context("final answer has no text")?;
                 return Ok(ResultEvidence::Available {
                     result: bounded_result(text.to_owned(), false)?,
                 });

@@ -222,7 +222,8 @@ impl Gateway {
     ) -> Result<Option<ActiveTurn>> {
         let acceptance = match &pending.client_user_message_id {
             Some(input) => {
-                self.job_read_codex_acceptance(&pending.thread_id, input).await?
+                self.job_read_codex_acceptance(&pending.thread_id, input)
+                    .await?
             }
             None => None,
         };
@@ -315,21 +316,17 @@ impl Gateway {
             }
         });
         if status == "idle" {
-            if let Some(turn) = turns
-                .iter()
-                .rev()
-                .find(|turn| {
-                    is_terminal_turn_for_pending(turn, pending)
-                        || acceptance.as_ref().is_some_and(|accepted| {
-                            accepted.has(super::agent_jobs_codex::NativeInputFact::Terminal)
-                                && turn["id"].as_str() == Some(accepted.turn_id.as_str())
-                                && matches!(
-                                    turn["status"].as_str(),
-                                    Some("completed" | "failed" | "interrupted")
-                                )
-                        })
-                })
-            {
+            if let Some(turn) = turns.iter().rev().find(|turn| {
+                is_terminal_turn_for_pending(turn, pending)
+                    || acceptance.as_ref().is_some_and(|accepted| {
+                        accepted.has(super::agent_jobs_codex::NativeInputFact::Terminal)
+                            && turn["id"].as_str() == Some(accepted.turn_id.as_str())
+                            && matches!(
+                                turn["status"].as_str(),
+                                Some("completed" | "failed" | "interrupted")
+                            )
+                    })
+            }) {
                 self.record_recovered_terminal_turn(key, pending, turn)
                     .await?;
             } else {
@@ -636,14 +633,19 @@ impl Gateway {
                             .filter_map(|(_, pending)| pending.client_user_message_id.clone())
                             .take(65)
                             .collect::<Vec<_>>();
-                        ensure!(pending_inputs.len() <= 64, "pending native input evidence exceeds the reconciliation bound");
+                        ensure!(
+                            pending_inputs.len() <= 64,
+                            "pending native input evidence exceeds the reconciliation bound"
+                        );
                         for input in pending_inputs {
                             if let Some(accepted) = self
-                                    .job_read_codex_acceptance(&turn.thread_id, &input)
-                                    .await?
+                                .job_read_codex_acceptance(&turn.thread_id, &input)
+                                .await?
                                 && accepted.turn_id == turn.turn_id
-                                && (!accepted.has(super::agent_jobs_codex::NativeInputFact::Terminal)
-                                    || accepted.has(super::agent_jobs_codex::NativeInputFact::Suspended))
+                                && (!accepted
+                                    .has(super::agent_jobs_codex::NativeInputFact::Terminal)
+                                    || accepted
+                                        .has(super::agent_jobs_codex::NativeInputFact::Suspended))
                             {
                                 return Err(anyhow!(
                                     "accepted native input retains custody while canonical execution is inactive"
@@ -829,7 +831,12 @@ mod tests {
             },
             created_at_unix_seconds: 1.0,
         };
-        gateway.core.lock().await.turns.insert_pending("pending".into(), pending.clone());
+        gateway
+            .core
+            .lock()
+            .await
+            .turns
+            .insert_pending("pending".into(), pending.clone());
         gateway.commit_turn_state().await.unwrap();
         let restored = TestGateway::with_native_runtime(directory.path());
         restored.load_turn_state().await.unwrap();
@@ -839,24 +846,35 @@ mod tests {
             let request: Value = serde_json::from_str(&control.recv().await.unwrap()).unwrap();
             assert_eq!(request["method"], "thread/input/acceptance/read");
             assert_eq!(request["params"]["clientUserMessageId"], "identified-input");
-            owner.handle_control_text(
-                json!({"id":request["id"],"result":{"acceptance":{
-                    "turnId":"reserved-turn",
-                    "rootTurnId":"reserved-turn",
-                    "fingerprint":"a".repeat(64),
-                    "facts":[],
-                }}}).to_string(),
-                NotificationOrigin::Control { opened_after: 0 },
-            ).await;
+            owner
+                .handle_control_text(
+                    json!({"id":request["id"],"result":{"acceptance":{
+                        "turnId":"reserved-turn",
+                        "rootTurnId":"reserved-turn",
+                        "fingerprint":"a".repeat(64),
+                        "facts":[],
+                    }}})
+                    .to_string(),
+                    NotificationOrigin::Control { opened_after: 0 },
+                )
+                .await;
         });
-        assert!(restored.reconcile_pending_turn("pending", &pending).await.is_err());
+        assert!(
+            restored
+                .reconcile_pending_turn("pending", &pending)
+                .await
+                .is_err()
+        );
         responder.await.unwrap();
         let again = TestGateway::with_native_runtime(directory.path());
         again.load_turn_state().await.unwrap();
         {
             let core = again.core.lock().await;
             assert_eq!(core.turns.pending_start("pending"), Some(&pending));
-            let active = core.turns.active_turn(&TurnKey::new(thread, "reserved-turn")).unwrap();
+            let active = core
+                .turns
+                .active_turn(&TurnKey::new(thread, "reserved-turn"))
+                .unwrap();
             assert_eq!(active.owner_client_id, 42);
         }
         again.capture_agent_message(&json!({
@@ -866,7 +884,15 @@ mod tests {
                 }
             }
         })).await;
-        assert!(again.core.lock().await.turns.pending_start("pending").is_none());
+        assert!(
+            again
+                .core
+                .lock()
+                .await
+                .turns
+                .pending_start("pending")
+                .is_none()
+        );
     }
 
     #[tokio::test]

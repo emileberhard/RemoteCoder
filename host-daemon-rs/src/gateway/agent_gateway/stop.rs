@@ -89,15 +89,20 @@ impl<'a> CodexStop<'a> {
             tokio::time::timeout(DESCENDANT_STOP_WAIT, self.descendants(thread)),
         );
         let mut missed = commands.err().into_iter().collect::<Vec<_>>();
-        missed.extend(descendants.unwrap_or_else(|_| {
-            vec!["its agents did not all answer the Stop in time".to_owned()]
-        }));
+        missed.extend(
+            descendants.unwrap_or_else(|_| {
+                vec!["its agents did not all answer the Stop in time".to_owned()]
+            }),
+        );
         if missed.is_empty() {
             Ok(json!({}))
         } else {
             Err(RpcError::new(
                 RpcCode::Internal,
-                format!("some stopped work may still be running: {}", missed.join("; ")),
+                format!(
+                    "some stopped work may still be running: {}",
+                    missed.join("; ")
+                ),
             ))
         }
     }
