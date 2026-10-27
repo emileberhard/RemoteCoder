@@ -97,6 +97,8 @@ final class PerfHarness {
             )
         case "status":
             writeResult(["cmd": "status", "id": id, "status": status()])
+        case "sidebar":
+            setSidebarOpen(command["open"] as? Bool, commandID: id)
         case "scroll":
             guard let model = workspace?.selectedScreen,
                   let index = command["message"] as? Int, model.messages.indices.contains(index) else {
@@ -224,6 +226,37 @@ final class PerfHarness {
                 return
             }
             writeResult(["cmd": "open", "id": commandID])
+        }
+    }
+
+    private func setSidebarOpen(_ requested: Bool?, commandID: String) {
+        guard let requested, let window = workspace?.keyWindow else {
+            writeResult(["cmd": "sidebar", "id": commandID, "error": "provide open with an available window"])
+            return
+        }
+        Task {
+            let deadline = ContinuousClock.now + .seconds(2)
+            while window.performanceSidebar == nil {
+                guard ContinuousClock.now < deadline,
+                      (try? await Task.sleep(for: .milliseconds(16))) != nil else {
+                    writeResult(["cmd": "sidebar", "id": commandID, "error": "window commands unavailable"])
+                    return
+                }
+            }
+            guard let commands = window.performanceSidebar else {
+                writeResult(["cmd": "sidebar", "id": commandID, "error": "window commands unavailable"])
+                return
+            }
+            let previous = commands.isOpen
+            if previous != requested { commands.toggle() }
+            while window.performanceSidebar?.isOpen != requested || window.isHistoryDrawerOpen != requested {
+                guard ContinuousClock.now < deadline,
+                      (try? await Task.sleep(for: .milliseconds(16))) != nil else {
+                    writeResult(["cmd": "sidebar", "id": commandID, "error": "sidebar presentation did not change"])
+                    return
+                }
+            }
+            writeResult(["cmd": "sidebar", "id": commandID, "before": previous, "after": requested])
         }
     }
 

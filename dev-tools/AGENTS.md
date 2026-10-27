@@ -217,6 +217,10 @@ scrolling, compare its `motion` block, which covers only the transcript's
 `TranscriptScroll` signposts. The harness drives the app in-process, so its
 traces carry no XCTest automation, which `perf-trace` rejects.
 
+`cmd '{"cmd":"sidebar","open":true}'` drives the existing SwiftUI drawer
+control and waits for its published presentation state. Use the corresponding
+`false` command before measuring a warm-idle opening; it does not report HTML paint.
+
 To attribute a code change, alternate installs of both Release builds in one
 session (`xcrun devicectl device install app` between runs, same journey, at
 least three runs each) and compare the `motion` block's main-thread CPU per
