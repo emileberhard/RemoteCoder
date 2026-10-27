@@ -15,7 +15,6 @@ from pathlib import Path
 API = "https://api.appstoreconnect.apple.com/v1/"
 EDITABLE = {"PREPARE_FOR_SUBMISSION", "DEVELOPER_REJECTED", "REJECTED", "METADATA_REJECTED", "INVALID_BINARY"}
 RELEASED = {"READY_FOR_DISTRIBUTION", "PROCESSING_FOR_DISTRIBUTION", "REPLACED_WITH_NEW_VERSION"}
-IN_BETA = {"WAITING_FOR_BETA_REVIEW", "IN_BETA_REVIEW", "BETA_APPROVED", "READY_FOR_BETA_TESTING", "IN_BETA_TESTING"}
 DEADLINE = time.monotonic() + 40 * 60
 
 
@@ -153,7 +152,7 @@ def processed_build(app, version, number, platform):
     return builds[0]["id"] if state == "VALID" else None
 
 
-def submit_beta(app, version, build, notes):
+def set_what_to_test(app, build, notes):
     localizations = api("GET", f"builds/{build}/betaBuildLocalizations", limit=50)
     if not localizations:
         locale = api("GET", f"apps/{app}")["attributes"]["primaryLocale"]
@@ -166,10 +165,13 @@ def submit_beta(app, version, build, notes):
 
 def testflight(app, platform, version, number, notes):
     build = wait(f"The {version} build", lambda: processed_build(app, version, number, platform))
-    submit_beta(app, version, build, notes)
+    subprocess.run([sys.executable, "scripts/release_tag.py", version, os.environ["GITHUB_SHA"]], check=True)
+    set_what_to_test(app, build, notes)
 
 
 def app_store(app, platform, version, number, notes):
+    build = wait(f"The {version} build", lambda: processed_build(app, version, number, platform))
+    subprocess.run([sys.executable, "scripts/release_tag.py", version, os.environ["GITHUB_SHA"]], check=True)
     version_id, released = draft_version(app, platform, version)
     if version_id is None:
         return
@@ -177,7 +179,6 @@ def app_store(app, platform, version, number, notes):
         for localization in api("GET", f"appStoreVersions/{version_id}/appStoreVersionLocalizations", limit=50):
             api("PATCH", f"appStoreVersionLocalizations/{localization['id']}", {"type": "appStoreVersionLocalizations",
                 "id": localization['id'], "attributes": {"whatsNew": notes}})
-    build = wait(f"The {version} build", lambda: processed_build(app, version, number, platform))
     api("PATCH", f"appStoreVersions/{version_id}/relationships/build", {"type": "builds", "id": build})
     print(f"App Store version {version} for {platform} is prepared with build {number} and manual release.", file=sys.stderr)
 

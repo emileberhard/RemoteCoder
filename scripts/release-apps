@@ -3,8 +3,8 @@ import argparse
 import json
 import os
 import plistlib
-import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -41,6 +41,7 @@ def archive(platform, directory):
     config = json.loads(os.environ['RC_RELEASE_CONFIGURATION'])
     env = os.environ | config['xcodeSettings'] | {'RC_APNS_ENVIRONMENT': 'production'}
     app = path / 'Products/Applications/RemoteCoder.app'
+    run(sys.executable, 'scripts/release_tag.py', os.environ['VERSION'], os.environ['COMMIT'])
     subprocess.run(['scripts/sign-bundles', 'sign', str(app), platform], env=env, check=True)
     info = app / ('Contents/Info.plist' if platform == 'mac' else 'Info.plist')
     stamp = plistlib.loads(info.read_bytes())

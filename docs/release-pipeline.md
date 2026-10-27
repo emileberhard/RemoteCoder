@@ -15,7 +15,7 @@ Public CI compiles every shipping platform and test target and runs the existing
 device and waits for `simctl bootstatus -b`, preserving the existing worker's
 device/runtime and boot-readiness boundary. The public tag workflow admits
 the exact green main commit before exposing signing credentials, reserves
-per-platform ASC build numbers and persists
+one ASC build number shared by both platforms and persists
 one reservation artifact per run. Archives, verified exports and signed entitlement
 checks run on hosted macOS. This keeps public repositories free of personal
 runners and avoids billed hosted builds in the private deployment repository.
@@ -37,12 +37,14 @@ source/version/build stamps, signatures and required entitlements before deliver
 
 The app has no minimum gateway release-version gate. The existing protocol and
 capability compatibility remains authoritative, so app upload and gateway deploy
-run independently. The private GitHub release joins both delivery paths and the
-public processing result. An install, upload, processed build, store preparation,
+run independently. The public workflow publishes the GitHub release after both platforms finish
+store preparation, using its own contents-write job token. The private run ends
+after direct delivery, triggering MacBook catch-up independently of Apple processing. An install, upload, processed build, store preparation,
 fleet catch-up and user acceptance remain separate outcomes.
 
 A same-run retry restores the build reservation. The template's upload fence
-checks whether any earlier run attempt started the platform's upload step. A
+checks whether any earlier run attempt started the platform's upload step before
+configuration, archive or export. An already-uploaded platform skips all that work. A
 later attempt checks ASC for the exact reserved identity for up to 15 minutes;
 when an upload started but Apple exposes no matching build, it stops for
 reconciliation instead of uploading again. Artifacts expire after bounded retention; an expired reservation
@@ -59,11 +61,19 @@ Rejected alternatives: putting cloud signing on the Mini uses its installed
 Distribution certificate and defeats cloud signing; putting hosted archives in
 the private repository multiplies billed minutes. Transferring hosted archives
 would avoid the local archives, but GitHub artifact downloads require an Actions
-read credential for the public repository. The existing public-release token has
-Contents write only, and extending a fine-grained PAT requires Emil in GitHub's
-UI. Keep the established independent direct builds; revisit archive transfer only
+read credential for the public repository. Archive transfer would require another permission boundary. Keep the established independent direct builds; revisit archive transfer only
 if measured Mini build time justifies that credential boundary. No new token,
-permission or runtime protocol change is required.
+permission or runtime protocol change is required. The private publication token
+has no remaining consumer and is retained unused until separately authorized removal.
+
+Every resumable signing, upload, store-update and release-publication boundary
+rechecks remote tag identity, main ancestry and highest-version ordering. Full
+public reruns find the existing private dispatch by its version/public-run title;
+private failures are retried in that existing run. Main CI never cancels an
+admitted commit when a newer push arrives. The gateway release builds its binary
+and checks runtime approval without repeating green CI fmt, clippy or tests.
+Retained gateway copies are signature/identity checked before reuse; new copies
+are verified under a .partial sibling and renamed before deployment.
 
 ## Deferred product observation
 

@@ -6,7 +6,6 @@ import os
 import subprocess
 import zipfile
 from pathlib import Path
-from datetime import datetime, timezone
 
 
 def api(path):
@@ -19,10 +18,6 @@ def main():
     parser.add_argument('destination', type=Path)
     args = parser.parse_args()
     repo, run = os.environ['GITHUB_REPOSITORY'], os.environ['GITHUB_RUN_ID']
-    receipt = json.loads(api(f'repos/{repo}/actions/runs/{run}'))
-    age = datetime.now(timezone.utc) - datetime.fromisoformat(receipt['created_at'].replace('Z', '+00:00'))
-    if age.days >= 7:
-        raise SystemExit('This release run is older than its archive retention; reconcile it and release a new patch.')
     artifacts = json.loads(api(f'repos/{repo}/actions/runs/{run}/artifacts?per_page=100'))['artifacts']
     matches = [a for a in artifacts if a['name'] == args.name]
     if any(a['expired'] for a in matches):

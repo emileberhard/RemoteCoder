@@ -294,7 +294,8 @@ Plain `just` lists commands. `just install-dev`, `just gateway-candidate`,
 `just verify` and `just verify-all` snapshot source for the configured builder,
 `scripts/build-host`, which defaults to the local machine. `just install-mac`
 and `mac-bench` use the configured GUI host, which they install on and measure.
-There is no implicit fallback after a builder fails. `RC_IOS_BUILD_HOST` (iOS kinds, `verify-all`) or `RC_GATEWAY_BUILD_HOST` (the other kinds) set to `local` or a
+There is no implicit fallback after a builder fails. `RC_IOS_BUILD_HOST` (iOS
+kinds, `verify-all`) or `RC_GATEWAY_BUILD_HOST` (the other kinds) set to `local` or a
 host, such as `<gui-test-host>`, selects a builder through the same worker, capacity and
 source-ownership checks. `just ios-device-build` prepares a device artifact
 without contacting the phone.

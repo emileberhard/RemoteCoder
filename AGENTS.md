@@ -202,8 +202,8 @@ hosted rendering/history suites. Release admission waits for that exact main CI
 commit; releases do not rerun it. `scripts/select-xcode` selects `.xcode-version`
 without changing the host's default Xcode.
 
-The public tag workflow reserves the next two global App Store Connect build
-numbers, retains the exact reservation for retries, archives iOS and macOS on
+The public tag workflow reserves the next global App Store Connect build
+number shared by both platforms, retains the exact reservation for retries, archives iOS and macOS on
 hosted runners and cloud-signs checked App Store exports. `Config/entitlements-*.json`
 covers every shipped bundle. The upload fence checks earlier attempts' upload
 steps; a retry queries Apple and refuses a second uncertain upload. Each platform then
@@ -222,8 +222,10 @@ It independently admits the tag and successful public CI before running the
 Mini's gateway build and planned restart/recovery. It independently archives the
 same commit locally for ad hoc iPhone and Developer ID Mac delivery, preserving
 the existing semver-derived direct build numbers, cache/capacity leases and host
-job cap. It retains symbols, publishes fleet catch-up and creates the GitHub release
-from the annotated notes after public processing completes. Apps and gateway
+job cap. Direct builds never upload to ASC. It retains direct-delivery symbols
+and publishes fleet catch-up when its own delivery completes. The public workflow
+publishes the annotated GitHub release after store preparation, independently of
+direct delivery. Every resumable mutation rechecks current tag admission. Apps and gateway
 preserve their existing protocol compatibility, so upload has no gateway-version
 ordering dependency. Public contributions never execute on personal runners.
 
