@@ -149,6 +149,9 @@ impl JobStore {
             let origin = found.next().map(|agent| agent.origin.clone());
             ensure!(found.next().is_none(), "multiple agents claim the same provider conversation");
             if origin.is_some() { return Ok(origin); }
+            if inner.agents.values().any(|agent| matches!(&agent.conversation, ConversationBinding::Known { conversation: known } if known.provider == conversation.provider && known.thread_id == conversation.thread_id && matches!(known.provider_home, ProviderHome::Unknown { .. }))) {
+                return Ok(Some(Origin::Unknown { reason: "recorded conversation ancestry has an unresolved provider home".into() }));
+            }
             if let Some(evidence) = inner.uncertainties.iter().find(|evidence| {
                 evidence.provider.is_none_or(|provider| provider == conversation.provider)
                     && evidence.provider_home.as_ref().is_none_or(|home| matches!(&conversation.provider_home, ProviderHome::Known { path } if path == home))
