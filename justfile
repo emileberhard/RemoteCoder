@@ -296,10 +296,14 @@ ios-simulator-test-local *test_ids: setup
     #!/usr/bin/env bash
     set -euo pipefail
     derived_data="${RC_DERIVED_DATA:-$PWD/build/ios-test-derived}"
+    destination="platform=iOS Simulator,name=${RC_IOS_SIMULATOR:?},OS=latest"
+    if [[ "$RC_IOS_SIMULATOR" =~ ^[0-9a-fA-F-]{36}$ ]]; then
+        destination="platform=iOS Simulator,id=$RC_IOS_SIMULATOR"
+    fi
     build_command=(xcodebuild
         -project RemoteCoder.xcodeproj -scheme "{{ scheme }}"
         -configuration Debug "RC_LIVE_GATEWAY=${RC_LIVE_GATEWAY:-0}" -derivedDataPath "$derived_data"
-        -destination "platform=iOS Simulator,name=${RC_IOS_SIMULATOR:?},OS=latest"
+        -destination "$destination"
         -disableAutomaticPackageResolution -onlyUsePackageVersionsFromResolvedFile -skipPackageUpdates -collect-test-diagnostics never CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=-)
     ./scripts/run-logged ios-simulator-build python3 scripts/xcode_build.py ios-build "${build_command[@]}" build-for-testing
     xcodebuild -project RemoteCoder.xcodeproj -alltargets -configuration Debug \

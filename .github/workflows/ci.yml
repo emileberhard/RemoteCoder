@@ -105,7 +105,6 @@ jobs:
     env:
       RC_COMPILATION_OWNER: '1'
       RC_DERIVED_DATA: ${{ github.workspace }}/.local/app-build
-      RC_IOS_SIMULATOR: iPhone 17 Pro
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -117,6 +116,26 @@ jobs:
       - run: just ios-build-local
       - run: just mac-build-local
       - run: just mac-harness-build-local
+      - name: Select an available iPhone simulator
+        run: |
+          python3 - <<'PY'
+          import json, os, subprocess
+          catalog = json.loads(subprocess.check_output(['xcrun', 'simctl', 'list', 'devices', 'available', '--json']))['devices']
+          candidates = []
+          for runtime, devices in catalog.items():
+              if '.iOS-' not in runtime:
+                  continue
+              version = tuple(map(int, runtime.rsplit('.iOS-', 1)[1].split('-')))
+              if version < (27, 0):
+                  continue
+              candidates.extend((version, device) for device in devices if device['isAvailable'] and device['name'].startswith('iPhone'))
+          if not candidates:
+              raise SystemExit('No available iPhone simulator runs iOS 27 or newer.')
+          version, device = max(candidates, key=lambda candidate: candidate[0])
+          with open(os.environ['GITHUB_ENV'], 'a') as environment:
+              environment.write('RC_IOS_SIMULATOR=' + device['udid'] + '\n')
+          print('Selected ' + device['name'] + ' on iOS ' + '.'.join(map(str, version)) + ': ' + device['udid'])
+          PY
       - run: just verify-simulator-local
 
   web:
