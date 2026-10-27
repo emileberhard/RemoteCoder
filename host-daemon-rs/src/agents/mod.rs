@@ -1,4 +1,5 @@
 pub mod claude;
+pub(crate) mod jobs;
 pub mod launcher;
 pub mod mcp;
 pub mod tools;
