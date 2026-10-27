@@ -359,67 +359,9 @@ struct TranscriptScrollRenderingTests {
         #expect(visibleBottom >= scroll.contentSize.height - 2)
     }
 
-    @Test func aShortReplyUnderATallComposerShowsNoJumpControl() async throws {
-        let scene = try #require(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
-        let hosted = HostedWindow(scene: scene)
-        let fixture = TranscriptScrollFixture()
-        let controller = UIHostingController(rootView: TranscriptScrollFixtureView(fixture: fixture)
-            .environment(AppThemeStore()).environment(\.colorScheme, .light))
-        hosted.show(controller)
-        defer { hosted.close() }
-
-        let user = ChatMessage(role: .user, text: "test")
-        let reply = ChatMessage(role: .codex, text: "Short reply")
-        fixture.composerHeight = 400
-        await fixture.show([user, reply])
-        fixture.request = TranscriptRowRequest(rowID: ChatStreamItem.message(user).id, token: 1, anchor: .top, motion: .instant)
-        let scroll = try await waitForScroll(in: controller.view)
-        try await settle(scroll)
-        try await Task.sleep(for: .milliseconds(400))
-        #expect(try darkPixelsInJumpControlCorner(in: controller.view, scroll: scroll) == 0,
-                "Only the latest turn's reserved space lies below the reader")
-    }
-
-    @Test func readingFarAboveTheLatestAnswerShowsTheJumpControl() async throws {
-        let scene = try #require(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
-        let hosted = HostedWindow(scene: scene)
-        let fixture = TranscriptScrollFixture()
-        let controller = UIHostingController(rootView: TranscriptScrollFixtureView(fixture: fixture)
-            .environment(AppThemeStore()).environment(\.colorScheme, .light))
-        hosted.show(controller)
-        defer { hosted.close() }
-
-        let answers = (0..<40).map { ChatMessage(role: .codex, text: "Answer \($0) is short.") }
-        await fixture.show(answers)
-        let scroll = try await waitForScroll(in: controller.view)
-        try await settle(scroll)
-        try await Task.sleep(for: .milliseconds(400))
-        #expect(try darkPixelsInJumpControlCorner(in: controller.view, scroll: scroll) == 0, "A follower at the latest answer needs no jump")
-
-        fixture.request = TranscriptRowRequest(rowID: ChatStreamItem.message(answers[2]).id, token: 1, anchor: .top, motion: .instant)
-        try await settle(scroll)
-        try await Task.sleep(for: .milliseconds(400))
-        #expect(try darkPixelsInJumpControlCorner(in: controller.view, scroll: scroll) > 40)
-    }
-
-    private func darkPixelsInJumpControlCorner(in view: UIView, scroll: UIScrollView) throws -> Int {
-        let bottom = scroll.convert(scroll.bounds, to: view).maxY - scroll.adjustedContentInset.bottom
-        let region = CGRect(x: view.bounds.maxX - 100, y: bottom - 90, width: 100, height: 90)
-        let image = UIGraphicsImageRenderer(bounds: region).image { _ in
-            view.drawHierarchy(in: view.bounds, afterScreenUpdates: true)
-        }
-        let cgImage = try #require(image.cgImage)
-        var pixels = [UInt8](repeating: 0, count: cgImage.width * cgImage.height * 4)
-        try pixels.withUnsafeMutableBytes { buffer in
-            let context = try #require(CGContext(data: buffer.baseAddress, width: cgImage.width,
-                height: cgImage.height, bitsPerComponent: 8, bytesPerRow: cgImage.width * 4,
-                space: CGColorSpaceCreateDeviceRGB(), bitmapInfo:
-                    CGBitmapInfo.byteOrder32Big.rawValue | CGImageAlphaInfo.premultipliedLast.rawValue))
-            context.draw(cgImage, in: CGRect(x: 0, y: 0, width: cgImage.width, height: cgImage.height))
-        }
-        return stride(from: 0, to: pixels.count, by: 4).count { offset in
-            pixels[offset] < 100 && pixels[offset + 1] < 100 && pixels[offset + 2] < 100 && pixels[offset + 3] > 200
-        }
+    @Test(arguments: [(800.0, false), (600.0, false), (599.0, true), (200.0, true)])
+    func theJumpControlAppearsOnlyBeyondHalfAViewportFromTheLatestAnswer(visibleBottom: Double, showsJump: Bool) {
+        #expect(TranscriptLayout.isFarFromLatest(latestEnd: 800, visibleBottom: visibleBottom, viewportHeight: 400) == showsJump)
     }
 
     private func bubbleRestingTop(in scroll: UIScrollView) -> CGFloat {

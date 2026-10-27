@@ -6,19 +6,44 @@ import Testing
 struct ChatHistoryReadTests {
     private let threadID = "claude_44444444-0000-0000-0000-000000000004"
 
-    @Test(.timeLimit(.minutes(1))) func aPageReadThatOutlivesInvalidationLeavesTheReplacementSessionEmpty() async throws {
-        let gateway = try await serving(entries: 60)
-        await gateway.holdCursorPages()
-        let fixture = await WorkspaceFixture(miniGatewayPort: try await gateway.start())
-        defer { await fixture.cleanUp(); await gateway.stop() }
-        let chat = try await open(fixture)
-        let read = try #require(chat.historyEdges.load(.older))
-        await gateway.waitForHeldPage()
-        await chat.target.conversations.invalidate(threadID: threadID)
-        await gateway.releaseHeldPage()
-        await read.value
-        let replacement = await chat.target.conversations.session(conversationID: chat.currentConversationID, threadID: threadID)
-        #expect(await replacement.beginHistoryRead().base?.turn("t0") == nil)
+    @Test(.timeLimit(.minutes(1))) func aLatePageFromAnInvalidatedOwnerCannotPopulateItsReplacement() async throws {
+        let fixture = TargetModelFixture()
+        defer { await fixture.cleanUp() }
+        let target = fixture.target
+        let chat = target.makeScreen(newChat: UUID())
+        chat.selectDraft(.thread(threadID))
+        try #require(await chat.prepareDraft())
+        chat.setActiveSessionID(threadID)
+        let original = await target.conversations.session(conversationID: chat.currentConversationID, threadID: threadID)
+        await chat.adopt(original)
+        let gateway = HistoryGatewayFixture(threadID: threadID)
+        await gateway.setHistory(.init(entries: (0..<60).map { index in
+            .init(turnId: "t\(index / 3)", item: .agentMessage(id: "m\(index)", text: "Message \(index)"),
+                  startedAtOrdinal: Int64(index), isComplete: true)
+        }, turns: []))
+        let history = GatewayHistoryService(gateway: gateway, cache: HistoryPageCache(
+            directory: fixture.temporaryStorage.storage.root.appending(path: "history-pages")))
+        let header = await gateway.header
+        let opening = await original.beginHistoryRead()
+        let tail = try await history.openTail(header: header, base: opening.base)
+        await chat.applyConversationSnapshot(tail, read: opening, from: original, source: "network")
+        try #require(!chat.messages.isEmpty)
+        let read = await original.beginHistoryRead()
+        let page = try await history.page(header: header, window: try #require(read.base), direction: .desc, priority: .foreground)
+
+        await target.conversations.invalidate(threadID: threadID)
+        let replacement = await target.conversations.session(conversationID: chat.currentConversationID, threadID: threadID)
+        try #require(replacement !== original)
+        await chat.adopt(replacement)
+        await chat.applyConversationSnapshot(page, read: read, from: original, source: "paging")
+        #expect(await replacement.beginHistoryRead().base == nil)
+        #expect(chat.messages.isEmpty)
+
+        let current = await replacement.beginHistoryRead()
+        await chat.applyConversationSnapshot(tail, read: current, from: replacement, source: "network")
+        #expect(chat.messages.count == 50)
+        #expect(chat.messages.first?.text == "Message 10")
+        #expect(chat.messages.last?.text == "Message 59")
     }
 
     @Test(.timeLimit(.minutes(1))) func coveringTheTranscriptDefersPagingUntilItIsUncovered() async throws {
