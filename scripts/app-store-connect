@@ -108,13 +108,18 @@ def wait(description, check):
     return result
 
 
+def build_components(number):
+    if not isinstance(number, str) or not re.fullmatch(r"[0-9]+(?:\.[0-9]+){0,2}", number):
+        sys.exit(f"App Store Connect contains an unrecognized CFBundleVersion: {number!r}.")
+    parts = tuple(int(part) for part in number.split("."))
+    return parts + (0,) * (3 - len(parts))
+
+
 def next_build_number(app):
     builds = api("GET", "builds", **{"filter[app]": app, "fields[builds]": "version", "limit": 200})
     uploads = api("GET", f"apps/{app}/buildUploads", **{"fields[buildUploads]": "cfBundleVersion", "limit": 200})
     versions = [b["attributes"]["version"] for b in builds] + [u["attributes"]["cfBundleVersion"] for u in uploads]
-    if any(re.fullmatch(r"[0-9]+(?:\.[0-9]+){0,2}", version) is None for version in versions):
-        sys.exit("App Store Connect contains an unsupported build-number format; reconcile it before reserving an integer.")
-    return max((int(version.split(".")[0]) for version in versions), default=0) + 1
+    return max((build_components(version)[0] for version in versions), default=0) + 1
 
 
 def processed_build(app, version, number, platform):
@@ -170,13 +175,22 @@ def main(command, *arguments):
         print(next_build_number(app))
         return
     if command == "upload-state":
-        platform, version, number = arguments
-        builds = api("GET", "builds", **{"filter[app]": app, "filter[preReleaseVersion.version]": version,
-            "filter[preReleaseVersion.platform]": platform, "filter[version]": number})
-        uploads = api("GET", f"apps/{app}/buildUploads", limit=200, **{"filter[cfBundleVersion]": number,
-            "filter[cfBundleShortVersionString]": version, "filter[platform]": platform})
-        print("present" if builds or uploads else "absent")
-        return
+        platform, version, number, fence = arguments
+        if fence not in {"fenced", "open"}:
+            sys.exit("The upload fence must be fenced or open.")
+        deadline = time.monotonic() + (15 * 60 if fence == "fenced" else 0)
+        while True:
+            builds = api("GET", "builds", **{"filter[app]": app, "filter[preReleaseVersion.version]": version,
+                "filter[preReleaseVersion.platform]": platform, "filter[version]": number})
+            uploads = api("GET", f"apps/{app}/buildUploads", limit=200, **{"filter[cfBundleVersion]": number,
+                "filter[cfBundleShortVersionString]": version, "filter[platform]": platform})
+            if builds or uploads:
+                print("present")
+                return
+            if time.monotonic() >= deadline:
+                print("absent")
+                return
+            time.sleep(20)
     platform, version, number, notes = arguments
     text = Path(notes).read_text().strip()
     if command == "testflight":
@@ -186,9 +200,9 @@ def main(command, *arguments):
 
 
 if __name__ == "__main__":
-    counts = {"build-number": 2, "upload-state": 5, "testflight": 6, "app-store": 6}
+    counts = {"build-number": 2, "upload-state": 6, "testflight": 6, "app-store": 6}
     if len(sys.argv) != counts.get(sys.argv[1] if len(sys.argv) > 1 else "", 0):
-        sys.exit("Usage: scripts/app-store-connect build-number\n       scripts/app-store-connect testflight IOS|MAC_OS VERSION BUILD NOTES\n       scripts/app-store-connect app-store IOS|MAC_OS VERSION BUILD NOTES")
+        sys.exit("Usage: scripts/app-store-connect build-number\n       scripts/app-store-connect upload-state IOS|MAC_OS VERSION BUILD fenced|open\n       scripts/app-store-connect testflight IOS|MAC_OS VERSION BUILD NOTES\n       scripts/app-store-connect app-store IOS|MAC_OS VERSION BUILD NOTES")
     try:
         main(*sys.argv[1:])
     except RequestFailed as failure:

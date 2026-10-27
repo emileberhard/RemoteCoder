@@ -38,5 +38,20 @@ class StorePreparationTests(unittest.TestCase):
         with patch.dict(os.environ, {'APP_STORE_CONNECT_KEY_ID': 'fixture', 'APP_STORE_CONNECT_ISSUER_ID': 'fixture',
                 'APP_STORE_CONNECT_KEY_PATH': 'fixture', 'APP_BUNDLE_ID': 'example', 'ASC_PLATFORM': 'IOS'}), \
                 patch.object(asc, 'api', side_effect=[[{'id': 'app'}], [], [upload]]), patch('builtins.print') as output:
-            asc.main('upload-state', 'IOS', '3.73.1', '3073001')
+            asc.main('upload-state', 'IOS', '3.73.1', '3073001', 'open')
             output.assert_called_once_with('present')
+
+    def test_uncertain_upload_waits_for_apple_before_reporting_absence(self):
+        with patch.dict(os.environ, {'APP_STORE_CONNECT_KEY_ID': 'fixture', 'APP_STORE_CONNECT_ISSUER_ID': 'fixture',
+                'APP_STORE_CONNECT_KEY_PATH': 'fixture', 'APP_BUNDLE_ID': 'example'}), \
+                patch.object(asc, 'api', side_effect=[[{'id': 'app'}], [], [], [], []]), \
+                patch.object(asc.time, 'monotonic', side_effect=[0, 0, 901]), \
+                patch.object(asc.time, 'sleep') as sleep, patch('builtins.print') as output:
+            asc.main('upload-state', 'MAC_OS', '3.73.1', '3073002', 'fenced')
+            sleep.assert_called_once_with(20)
+            output.assert_called_once_with('absent')
+
+    def test_unrecognized_historical_build_number_stops_reservation(self):
+        with patch.object(asc, 'api', side_effect=[[{'attributes': {'version': '1.2b3'}}], []]):
+            with self.assertRaisesRegex(SystemExit, 'unrecognized CFBundleVersion'):
+                asc.next_build_number('app')

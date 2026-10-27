@@ -193,7 +193,7 @@ jobs:
           FENCED: ${{ steps.fence.outputs.fenced }}
         run: |
           set -euo pipefail
-          state=$(scripts/app-store-connect upload-state "$ASC_PLATFORM" "$VERSION" "$BUILD_NUMBER")
+          state=$(scripts/app-store-connect upload-state "$ASC_PLATFORM" "$VERSION" "$BUILD_NUMBER" "$([[ $FENCED == true ]] && echo fenced || echo open)")
           if [[ "$state" == present ]]; then
             echo "needed=false" >> "$GITHUB_OUTPUT"
           elif [[ "$FENCED" == true ]]; then

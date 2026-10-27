@@ -34,8 +34,8 @@ fleet catch-up and user acceptance remain separate outcomes.
 
 A same-run retry restores the build reservation. The template's upload fence
 checks whether any earlier run attempt started the platform's upload step. A
-later attempt checks ASC for the exact reserved identity; when an upload started
-but Apple exposes no matching build, it stops for reconciliation instead of
+later attempt checks ASC for the exact reserved identity for up to 15 minutes;
+when an upload started but Apple exposes no matching build, it stops for reconciliation instead of
 uploading again. Artifacts expire after bounded retention; an expired reservation
 is not permission to upload that release again. A code change requires the next
 patch tag. Published tags never move.
