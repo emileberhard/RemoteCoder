@@ -66,6 +66,7 @@ final class HTMLVisualPreparation {
 
     let surface = HTMLVisualPreparationSurface()
     private(set) var layoutContext = HTMLVisualLayoutContext()
+    var onBackgroundPreparationReady: (@MainActor () -> Void)?
     private let renderer: HTMLVisualRenderer
     private var active = false
     private var conservesEnergy = false
@@ -100,6 +101,7 @@ final class HTMLVisualPreparation {
     }
 
     func updateLayoutContext(_ change: (inout HTMLVisualLayoutContext) -> Void) {
+        let previous = backgroundPreparationContext
         var context = layoutContext
         change(&context)
         guard layoutContext != context else { return }
@@ -110,10 +112,12 @@ final class HTMLVisualPreparation {
         #endif
         planNear()
         stateChanged()
+        notifyBackgroundPreparationReady(previous: previous)
     }
 
     func setActive(_ active: Bool, conservesEnergy: Bool) {
         guard self.active != active || self.conservesEnergy != conservesEnergy else { return }
+        let previous = backgroundPreparationContext
         self.active = active
         self.conservesEnergy = conservesEnergy
         if !active { interacting = false }
@@ -121,6 +125,16 @@ final class HTMLVisualPreparation {
         Self.logger.notice("html visual preparation active=\(active) conserving=\(conservesEnergy) uptime=\(ProcessInfo.processInfo.systemUptime)")
         #endif
         stateChanged()
+        notifyBackgroundPreparationReady(previous: previous)
+    }
+
+    var backgroundPreparationContext: HTMLVisualPreparationContext? {
+        guard Self.preparesInBackground, active, surface.host != nil, !conservesEnergy else { return nil }
+        return layoutContext.preparationContext
+    }
+
+    private func notifyBackgroundPreparationReady(previous: HTMLVisualPreparationContext?) {
+        if let context = backgroundPreparationContext, context != previous { onBackgroundPreparationReady?() }
     }
 
     func cancelDemand() {

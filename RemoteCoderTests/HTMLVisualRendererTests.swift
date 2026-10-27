@@ -631,6 +631,50 @@ struct HTMLVisualRendererTests {
     }
 
     @Test(.timeLimit(.minutes(1)))
+    func backgroundReadinessReportsUsableContextEdgesWithoutClearingNearDemand() async throws {
+        try await withFixture { fixture in
+            try await withPreparationHost(fixture) { host in
+                let preparation = host.preparation
+                var readinessEvents = 0
+                preparation.onBackgroundPreparationReady = { readinessEvents += 1 }
+                #expect(preparation.backgroundPreparationContext == nil)
+                preparation.updateLayoutContext { $0.width = 320 }
+                #expect(preparation.backgroundPreparationContext?.width == 320)
+                #expect(readinessEvents == 1)
+                preparation.updateNear(host.references, documents: host.source.documents)
+                preparation.setActive(false, conservesEnergy: false)
+                #expect(preparation.backgroundPreparationContext == nil)
+                preparation.setActive(true, conservesEnergy: false)
+                preparation.setActive(true, conservesEnergy: false)
+                #expect(readinessEvents == 2)
+                preparation.setActive(true, conservesEnergy: true)
+                #expect(preparation.backgroundPreparationContext == nil)
+                preparation.setActive(true, conservesEnergy: false)
+                preparation.updateLayoutContext { $0.width = 360 }
+                #expect(readinessEvents == 4)
+                try await wait { host.references.allSatisfy(preparation.isPresentable) }
+            }
+        }
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func cancellingBackgroundPreparationPreservesNearViewportPreparation() async throws {
+        try await withFixture { fixture in
+            try await withPreparationHost(fixture, access: RendererHoldingAccess()) { host in
+                let preparation = host.preparation
+                preparation.updateLayoutContext { $0.width = 320 }
+                let held = try Self.reference("<body>held background</body>")
+                let background = Task { await preparation.prepareInBackground([held], documents: host.source.documents) }
+                try await wait { preparation.surface.instance != nil }
+                preparation.updateNear(host.references, documents: host.source.documents)
+                background.cancel()
+                #expect(await background.value == .interrupted)
+                try await wait { host.references.allSatisfy(preparation.isPresentable) }
+            }
+        }
+    }
+
+    @Test(.timeLimit(.minutes(1)))
     func backgroundPreparationStoresEveryVisualAcrossChunksAndThenHasNothingLeft() async throws {
         let documents = (0..<18).map { "<body><div id='content' style='height:\(40 + $0)px'>\($0)</div></body>" }
         try await withFixture { fixture in

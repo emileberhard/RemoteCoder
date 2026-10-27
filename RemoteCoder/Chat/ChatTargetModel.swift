@@ -18,6 +18,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
     private static let warmingDwell = Duration.seconds(1)
     @ObservationIgnored lazy var conversationWarmer = ConversationWarmer(host: self, conversations: conversations, history: historyService)
     @ObservationIgnored var recentConversations = RecentConversationCache(capacity: 8)
+    @ObservationIgnored private var warmingRequested = false
     #if os(macOS) && RC_PERF_HARNESS
     @ObservationIgnored var switchFixtures: [String: SwitchFixture] = [:]
     #endif
@@ -1055,15 +1056,23 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
     /// at background priority and queues their HTML visuals; the top two also get
     /// a session, rendered Markdown and agent lists, so opening one paints from cache.
     func warmConversationsIfIdle() {
-        guard !ownedTasks.isRunning(.warmConversations), shouldWarmConversations() else { return }
-        let unsettled = unsettledConversationsByRank()
-        let top = unsettled.prefix(2).map(\.id).filter(recentConversations.admitsWarmed)
-        let hot = top.filter { turns.turn(forThread: $0) == nil }
-        let candidates = unsettled.filter(conversationWarmer.needsWarm)
-        let agentCandidates = top.filter { recentConversations.agents(threadID: $0) == nil }
-        guard !candidates.isEmpty || !agentCandidates.isEmpty else { return }
+        guard shouldWarmConversations() else { return }
+        warmingRequested = true
+        guard !ownedTasks.isRunning(.warmConversations) else { return }
         ownedTasks.startBackground(.warmConversations) { [weak self] in
-            await self?.conversationWarmer.warm(Array(candidates), hot: Set(hot), agentThreadIDs: agentCandidates)
+            guard let self else { return }
+            while !Task.isCancelled, self.shouldWarmConversations(), self.warmingRequested {
+                self.warmingRequested = false
+                let unsettled = self.unsettledConversationsByRank()
+                let top = unsettled.prefix(2).map(\.id).filter(self.recentConversations.admitsWarmed)
+                let hot = top.filter { self.turns.turn(forThread: $0) == nil }
+                let candidates = unsettled.filter(self.conversationWarmer.needsWarm)
+                let agentCandidates = top.filter { self.recentConversations.agents(threadID: $0) == nil }
+                guard !candidates.isEmpty || !agentCandidates.isEmpty else { continue }
+                let ranks = unsettled.prefix(5).enumerated().map { "\($0.offset + 1):\($0.element.id)" }.joined(separator: ",")
+                self.logger.notice("warm selection ranked=\(unsettled.count) candidates=\(candidates.count) ranks=\(ranks)")
+                await self.conversationWarmer.warm(Array(candidates), hot: Set(hot), agentThreadIDs: agentCandidates)
+            }
         }
     }
 
@@ -1106,11 +1115,15 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
     }
 
     var htmlVisualPreparationContext: HTMLVisualPreparationContext? {
-        presentingScreens.first?.htmlVisualPreparation.layoutContext.preparationContext
+        backgroundPreparationScreen?.htmlVisualPreparation.backgroundPreparationContext
+    }
+
+    private var backgroundPreparationScreen: ChatScreenModel? {
+        presentingScreens.first { $0.htmlVisualPreparation.backgroundPreparationContext != nil }
     }
 
     func prepareHTMLVisuals(_ references: [HTMLVisualReference]) async -> HTMLVisualPreparationOutcome {
-        guard let screen = presentingScreens.first else { return .interrupted }
+        guard let screen = backgroundPreparationScreen else { return .interrupted }
         return await screen.htmlVisualPreparation.prepareInBackground(references, documents: screen.htmlVisualDocuments)
     }
 

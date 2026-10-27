@@ -33,7 +33,7 @@ struct HistoryWarmLedger: Sendable {
     }
     func needsWarm(threadID: String, revision: Int64, context: HTMLVisualPreparationContext?) -> Bool {
         entries[threadID]?.warmed != observation(threadID: threadID, revision: revision)
-            || entries[threadID]?.warmedContext != context
+            || (context != nil && entries[threadID]?.warmedContext != context)
     }
     func readCovers(threadID: String, revision: Int64) -> Bool? {
         guard let entry = entries[threadID] else { return nil }
@@ -47,8 +47,10 @@ struct HistoryWarmLedger: Sendable {
     mutating func succeeded(threadID: String, observation: Observation, context: HTMLVisualPreparationContext?) {
         guard observation == self.observation(threadID: threadID, revision: observation.revision) else { return }
         retain(threadID)
+        if entries[threadID]?.warmed != observation || context != nil {
+            entries[threadID]?.warmedContext = context
+        }
         entries[threadID]?.warmed = observation
-        entries[threadID]?.warmedContext = context
         entries[threadID]?.read = observation
     }
     mutating func invalidate(_ threadID: String) {

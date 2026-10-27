@@ -117,6 +117,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         } else {
             selectDraft(draftDestination)
         }
+        htmlVisualPreparation.onBackgroundPreparationReady = { [weak target] in target?.warmConversationsIfIdle() }
     }
 
     func showPreview(_ previewMessages: [ChatMessage]) {
@@ -1025,7 +1026,8 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
             let read = await session.beginHistoryRead()
             let snapshot = try await historyService.openTail(header: thread, base: read.base,
                 bypassCache: target.conversationWarmer.needsRead(threadID: thread.id, revision: thread.updatedAt))
-            await applyConversationSnapshot(snapshot, read: read, from: session, source: "network")
+            logger.notice("Conversation opening thread=\(thread.id) retained=\(previousOwner === session) source=\(String(describing: snapshot.source))")
+            await applyConversationSnapshot(snapshot, read: read, from: session, source: String(describing: snapshot.source))
             target.dispatcher.reconcileQueue(threadID: thread.id)
             target.conversationWarmer.readSucceeded(threadID: thread.id, observation: observed)
             if isCurrentResumeLoad(loadID, threadID: thread.id), contextWindowUsage == nil {

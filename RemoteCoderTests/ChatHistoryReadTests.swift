@@ -6,6 +6,43 @@ import Testing
 struct ChatHistoryReadTests {
     private let threadID = "claude_44444444-0000-0000-0000-000000000004"
 
+    @Test(.timeLimit(.minutes(1))) func preparationReadinessDuringAnEndingPassRetainsNewConversationDemand() async throws {
+        let gateway = try FakeGatewayServer(threadID: "first", model: "opus")
+        await gateway.serveHistory([.init(turnId: "turn", item: .agentMessage(id: "answer", text: "Prepared tail"),
+            startedAtOrdinal: 1, isComplete: true)])
+        await gateway.holdTailPages()
+        let fixture = await WorkspaceFixture(miniGatewayPort: try await gateway.start())
+        defer { await gateway.releaseHeldTailPage(); await fixture.cleanUp(); await gateway.stop() }
+        let screen = try #require(fixture.workspace.selectedScreen)
+        let target = screen.target
+        let preparation = screen.htmlVisualPreparation
+        let surfaceID = UUID()
+        try #require(preparation.surface.claim(surfaceID))
+        defer { preparation.setActive(false, conservesEnergy: false); preparation.surface.release(surfaceID) }
+        preparation.updateLayoutContext {
+            $0.width = 320
+            $0.theme = HTMLVisualTheme(fontSize: 17, text: "#000", secondaryText: "#333", background: "#fff",
+                surface: "#eee", accent: "#00f", isDark: false)
+            $0.displayScale = 2
+        }
+        let now = Int64(Date.now.timeIntervalSince1970)
+        let first = try fixture.thread("first", updatedAt: now)
+        await target.conversationList.record(first)
+        target.warmConversationsIfIdle()
+        await gateway.waitForHeldTailPage()
+
+        let second = try fixture.thread("second", updatedAt: now - 1)
+        await target.conversationList.record(second)
+        preparation.setActive(true, conservesEnergy: false)
+        preparation.setActive(false, conservesEnergy: false)
+        preparation.setActive(true, conservesEnergy: false)
+        await gateway.releaseHeldTailPage()
+        #expect(await waitUntil {
+            !target.conversationWarmer.needsWarm(first) && !target.conversationWarmer.needsWarm(second)
+        })
+        #expect(await gateway.tailReads == 2)
+    }
+
     @Test(.timeLimit(.minutes(1))) func aPageReadThatOutlivesInvalidationLeavesTheReplacementSessionEmpty() async throws {
         let gateway = try await serving(entries: 60)
         await gateway.holdCursorPages()

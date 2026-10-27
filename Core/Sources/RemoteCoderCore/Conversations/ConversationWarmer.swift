@@ -91,9 +91,14 @@ final class ConversationWarmer {
                     ledger.readSucceeded(threadID: thread.id, observation: observation)
                     source = "read"
                 }
-                let references = await Self.visualReferences(in: tail)
                 guard mayContinue, let host else { return }
-                let context = host.htmlVisualPreparationContext
+                guard let context = host.htmlVisualPreparationContext else {
+                    ledger.succeeded(threadID: thread.id, observation: observation, context: nil)
+                    logger.notice("warmed thread=\(thread.id) revision=\(thread.updatedAt) source=\(source) outcome=historyOnly")
+                    continue
+                }
+                let references = await Self.visualReferences(in: tail)
+                guard mayContinue else { return }
                 let outcome = await host.prepareHTMLVisuals(references)
                 logger.notice("warmed thread=\(thread.id) revision=\(thread.updatedAt) source=\(source) visuals=\(references.count) outcome=\(String(describing: outcome))")
                 switch outcome {
