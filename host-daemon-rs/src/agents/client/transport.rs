@@ -118,6 +118,39 @@ async fn exchange(
     let EncodedJson::Text(encoded) = encode(&request)? else {
         anyhow::bail!("agent request exceeds the gateway frame limit");
     };
+    let mut socket = connect(endpoint).await?;
+    *submission = Submission::Uncertain;
+    socket.send(Message::Text(encoded)).await?;
+    while let Some(frame) = socket.next().await {
+        match frame? {
+            Message::Text(text) => {
+                let response: Value = serde_json::from_str(&text)?;
+                if response["id"] == 1 {
+                    anyhow::ensure!(
+                        response.get("result").is_some() ^ response.get("error").is_some(),
+                        "gateway returned an invalid RPC response"
+                    );
+                    return Ok(response);
+                }
+            }
+            Message::Ping(bytes) => socket.send(Message::Pong(bytes)).await?,
+            Message::Close(_) => break,
+            _ => {}
+        }
+    }
+    anyhow::bail!("gateway closed before acknowledging the request")
+}
+
+pub(super) type Socket =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+pub(super) async fn connect(endpoint: &GatewayEndpoint) -> anyhow::Result<Socket> {
+    tokio::time::timeout(REQUEST_DEADLINE, initialize_connection(endpoint))
+        .await
+        .map_err(|_| anyhow::anyhow!("gateway did not initialize within30seconds"))?
+}
+
+async fn initialize_connection(endpoint: &GatewayEndpoint) -> anyhow::Result<Socket> {
     let url = endpoint.url("ws").replacen("http://", "ws://", 1);
     let mut request = url.into_client_request()?;
     let mut authorization = format!("Bearer {}", endpoint.bearer())
@@ -166,26 +199,7 @@ async fn exchange(
     socket
         .send(Message::Text(json!({"method":"initialized"}).to_string()))
         .await?;
-    *submission = Submission::Uncertain;
-    socket.send(Message::Text(encoded)).await?;
-    while let Some(frame) = socket.next().await {
-        match frame? {
-            Message::Text(text) => {
-                let response: Value = serde_json::from_str(&text)?;
-                if response["id"] == 1 {
-                    anyhow::ensure!(
-                        response.get("result").is_some() ^ response.get("error").is_some(),
-                        "gateway returned an invalid RPC response"
-                    );
-                    return Ok(response);
-                }
-            }
-            Message::Ping(bytes) => socket.send(Message::Pong(bytes)).await?,
-            Message::Close(_) => break,
-            _ => {}
-        }
-    }
-    anyhow::bail!("gateway closed before acknowledging the request")
+    Ok(socket)
 }
 
 #[cfg(test)]
