@@ -29,6 +29,8 @@ pub(crate) enum AgentCommand {
     List(ListArgs),
     Read {
         target: String,
+        #[command(flatten)]
+        caller: CallerArgs,
         #[arg(long)]
         json: bool,
     },
@@ -217,6 +219,12 @@ async fn scoped_mutation(request_id: String, request: ScopedRequest) -> Result<V
     scoped(request).await.context(RequestIdentity(request_id))
 }
 
+fn use_scoped(caller: &CallerArgs) -> bool {
+    !caller.operator
+        && caller.caller_context.is_none()
+        && std::env::var_os(SCOPED_SOCKET_ENV).is_some()
+}
+
 fn endpoint(env_file: Option<&Path>) -> Result<GatewayEndpoint> {
     let default_file = HostPaths::from_env()?.state("codex-gateway.env");
     let env_file = env_file.or_else(|| default_file.exists().then_some(default_file.as_path()));
@@ -396,7 +404,20 @@ async fn resolve(endpoint: &GatewayEndpoint, target: &str) -> Result<JobId> {
                     .first()
                     .is_some_and(|first| matches.iter().all(|row| row.agent_id == first.agent_id))
             {
-                return Ok(matches[0].job_id.clone());
+                let view: JobView = rpc(
+                    endpoint,
+                    "agent/jobs/read",
+                    ReadParams {
+                        job_id: matches[0].job_id.clone(),
+                    },
+                )
+                .await?;
+                return Ok(view
+                    .agent
+                    .context(
+                        "Conversation history has no resolved agent identity; use an exact run ID",
+                    )?
+                    .latest_job_id);
             }
             return match matches.as_slice() {
                 [] => Err(NoMatchingJob.into()),
@@ -819,7 +840,7 @@ async fn items(endpoint: &GatewayEndpoint, target: &str) -> Result<Value> {
     let ConversationBinding::Known { conversation } = agent.conversation else {
         bail!("Job's provider conversation is unknown");
     };
-    let super::jobs::model::ProviderHome::Known { path: home } = &conversation.provider_home else {
+    let ProviderHome::Known { .. } = &conversation.provider_home else {
         bail!("Job's provider home is unknown");
     };
     let header: Value = rpc(
@@ -832,13 +853,8 @@ async fn items(endpoint: &GatewayEndpoint, target: &str) -> Result<Value> {
         header["thread"]["id"] == conversation.thread_id,
         "Gateway returned a different conversation"
     );
-    let history_path = Path::new(
-        header["thread"]["path"]
-            .as_str()
-            .context("Conversation has no authoritative history path")?,
-    );
     ensure!(
-        history_path.is_absolute() && history_path.starts_with(home),
+        conversation_from_header(&header["thread"])? == conversation,
         "Conversation belongs to a different provider home"
     );
     let mut output = Vec::new();
@@ -900,9 +916,9 @@ async fn execute(command: AgentCommand, env_file: Option<&Path>) -> Result<Value
     } else {
         None
     };
-    if let AgentCommand::Read { target, .. } = &command
+    if let AgentCommand::Read { target, caller, .. } = &command
         && target == "self"
-        && std::env::var_os(SCOPED_SOCKET_ENV).is_some()
+        && use_scoped(caller)
     {
         return scoped(ScopedRequest::ReadSelf {}).await;
     }
@@ -936,7 +952,7 @@ async fn execute(command: AgentCommand, env_file: Option<&Path>) -> Result<Value
                     .context("Message text was not prepared")?,
             )?));
         }
-        if arguments.target == "parent" && std::env::var_os(SCOPED_SOCKET_ENV).is_some() {
+        if arguments.target == "parent" && use_scoped(&arguments.caller) {
             let delivery_id = arguments
                 .delivery_id
                 .clone()
@@ -954,9 +970,11 @@ async fn execute(command: AgentCommand, env_file: Option<&Path>) -> Result<Value
         }
     }
     if let AgentCommand::SetTitle {
-        title, mutation_id, ..
+        title,
+        mutation_id,
+        caller,
     } = &command
-        && std::env::var_os(SCOPED_SOCKET_ENV).is_some()
+        && use_scoped(caller)
     {
         let mutation_id = mutation_id
             .clone()
@@ -973,14 +991,16 @@ async fn execute(command: AgentCommand, env_file: Option<&Path>) -> Result<Value
     let endpoint = endpoint(env_file)?;
     match command {
         AgentCommand::Spawn(arguments) => spawn(&endpoint, arguments).await,
-        AgentCommand::Read { target, .. } if target == "self" => {
+        AgentCommand::Read {
+            target,
+            caller: arguments,
+            ..
+        } if target == "self" => {
             rpc(
                 &endpoint,
                 "agent/context/read",
                 ContextReadParams {
-                    caller: Caller::Captured {
-                        context_id: capture(&endpoint).await?.context_id,
-                    },
+                    caller: caller(&endpoint, &arguments).await?,
                 },
             )
             .await
