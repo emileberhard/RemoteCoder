@@ -294,7 +294,12 @@ async fn model_catalog(endpoint: &GatewayEndpoint) -> Result<Vec<models::Model>>
     let mut cursor = Value::Null;
     let mut models = Vec::new();
     for _ in 0..MAX_INVENTORY_PAGES {
-        let page: Value = rpc(endpoint, "model/list", json!({"cursor":cursor,"limit":100})).await?;
+        let page: Value = rpc(
+            endpoint,
+            "model/list",
+            json!({"cursor":cursor,"limit":100,"includeHidden":true}),
+        )
+        .await?;
         models.extend(serde_json::from_value::<Vec<models::Model>>(
             page["data"].clone(),
         )?);

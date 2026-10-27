@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, bail, ensure};
 use serde::Deserialize;
 
-use crate::agents::jobs::model::ExecutionSettings;
+use crate::agents::jobs::model::{CyberAccessProgram, ExecutionSettings};
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -15,6 +15,7 @@ pub(super) struct Model {
 
 #[derive(Debug, Deserialize)]
 struct Effort {
+    #[serde(rename = "reasoningEffort")]
     effort: String,
 }
 
@@ -91,6 +92,8 @@ pub(super) fn codex(
             .unwrap_or_else(|| "openai".into()),
         effort: effort.to_owned(),
         service_tier,
+        cyber_access_program: (normalized == "codex-daybreak-blue")
+            .then_some(CyberAccessProgram::DaybreakBlue),
     })
 }
 
@@ -100,9 +103,9 @@ mod tests {
 
     fn catalog() -> Vec<Model> {
         serde_json::from_value(serde_json::json!([
-            {"id":"gpt-6.2-sol","model":"gpt-6.2-sol","supportedReasoningEfforts":[{"effort":"medium"}],"defaultReasoningEffort":"low"},
-            {"id":"gpt-6.10-sol","model":"gpt-6.10-sol","supportedReasoningEfforts":[{"effort":"medium"},{"effort":"xhigh"}],"defaultReasoningEffort":"low"},
-            {"id":"external/model","model":"external/model","modelProvider":"relay","supportedReasoningEfforts":[{"effort":"none"}],"defaultReasoningEffort":"none"}
+            {"id":"gpt-6.2-sol","model":"gpt-6.2-sol","supportedReasoningEfforts":[{"reasoningEffort":"medium"}],"defaultReasoningEffort":"low"},
+            {"id":"gpt-6.10-sol","model":"gpt-6.10-sol","supportedReasoningEfforts":[{"reasoningEffort":"medium"},{"reasoningEffort":"xhigh"}],"defaultReasoningEffort":"low"},
+            {"id":"external/model","model":"external/model","modelProvider":"relay","supportedReasoningEfforts":[{"reasoningEffort":"none"}],"defaultReasoningEffort":"none"}
         ])).unwrap()
     }
 
@@ -115,6 +118,7 @@ mod tests {
                 model_provider: "openai".into(),
                 effort: "medium".into(),
                 service_tier: None,
+                cyber_access_program: None,
             }
         );
         assert!(codex("codex-sol", Some("high"), None, &catalog()).is_err());
@@ -129,9 +133,26 @@ mod tests {
                 model_provider: "relay".into(),
                 effort: "none".into(),
                 service_tier: None,
+                cyber_access_program: None,
             }
         );
         assert!(codex("external/model", None, Some("fast"), &catalog()).is_err());
         assert!(codex("EXTERNAL/MODEL", None, None, &catalog()).is_err());
+    }
+
+    #[test]
+    fn approved_program_alias_retains_its_program_and_exact_model() {
+        let mut models = catalog();
+        models.push(serde_json::from_value(serde_json::json!({"id":"gpt-6-sol","model":"gpt-6-sol","supportedReasoningEfforts":[{"reasoningEffort":"medium"},{"reasoningEffort":"max"}],"defaultReasoningEffort":"medium"})).unwrap());
+        assert_eq!(
+            codex("codex-daybreak-blue", Some("max"), None, &models).unwrap(),
+            ExecutionSettings::Codex {
+                model: "gpt-6-sol".into(),
+                model_provider: "openai".into(),
+                effort: "max".into(),
+                service_tier: None,
+                cyber_access_program: Some(CyberAccessProgram::DaybreakBlue),
+            }
+        );
     }
 }
