@@ -441,9 +441,11 @@ def catch_up(host: str) -> dict:
         "gateway": directory / gateway_bundle.NAME,
         "mac-app": directory / MAC_APP,
         "mac-package": directory / MAC_PACKAGE,
-        "ios-symbols": symbol_directory("ios", version),
-        "mac-symbols": symbol_directory("mac", version),
     }
+    for platform in ("ios", "mac"):
+        name = f"{platform}-symbols"
+        if name in artifacts:
+            targets[name] = symbol_directory(platform, version)
     for name, target in targets.items():
         if name in artifacts:
             mirror(host, name, artifacts[name], target)
