@@ -7,6 +7,8 @@ use futures_util::{FutureExt, StreamExt, stream};
 use super::model::JobId;
 use super::owner::JobOwner;
 
+const SETTLE_DELAY: Duration = Duration::from_secs(2);
+
 impl JobOwner {
     pub(crate) fn start_driver(&self) -> Result<()> {
         if self.root.is_none() {
@@ -20,6 +22,7 @@ impl JobOwner {
             .map(|provider| provider.subscribe_job_changes());
         let admitted = self.tasks.spawn_graceful("delegated_jobs", move |shutdown| async move {
             let mut delay = Duration::from_millis(250);
+            let mut settle = false;
             loop {
                 if gateway.is_draining() { break; }
                 let ids = gateway.jobs.store().await?.pending_ids().await?;
@@ -38,14 +41,17 @@ impl JobOwner {
                     }
                 }).buffer_unordered(16).collect::<Vec<_>>().await;
                 let retry = outcomes.into_iter().any(|retry| retry);
+                let wait = if retry { delay } else { SETTLE_DELAY };
+                let settling = std::mem::take(&mut settle);
                 tokio::select! {
                     _ = shutdown.cancelled() => break,
-                    result = changes.changed() => { if result.is_err() { break; } delay = Duration::from_millis(250); }
+                    result = changes.changed() => { if result.is_err() { break; } delay = Duration::from_millis(250); settle = true; }
                     result = async { match &mut provider_changes { Some(changes) => changes.changed().await, None => std::future::pending().await } } => {
                         if result.is_err() { provider_changes = None; }
                         delay = Duration::from_millis(250);
+                        settle = true;
                     }
-                    _ = tokio::time::sleep(delay), if retry => { delay = (delay * 2).min(Duration::from_secs(60)); }
+                    _ = tokio::time::sleep(wait), if retry || settling => { if retry { delay = (delay * 2).min(Duration::from_secs(60)); } }
                 }
             }
             Ok(())
