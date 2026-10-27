@@ -749,7 +749,9 @@ struct HTMLVisualRendererTests {
         let server = try FakeGatewayServer()
         let port = try await server.start()
         defer { await server.releaseHeldVisualResource(); await server.stop() }
-        let held = "<body><script src='http://127.0.0.1:\(port)/held-visual.js'></script><div style='height:47px'>late</div></body>"
+        let held = (0..<HTMLVisualPageAdmission.maximumLivePages).map {
+            "<body><script src='http://127.0.0.1:\(port)/held-visual.js?attempt=\($0)'></script><div style='height:47px'>late</div></body>"
+        }
         let healthy = "<body><div style='height:48px'>after</div></body>"
         let (timeouts, timeout) = AsyncStream<Void>.makeStream()
         defer { timeout.finish() }
@@ -757,30 +759,34 @@ struct HTMLVisualRendererTests {
             let preparation = HTMLVisualPreparation(renderer: fixture.renderer, pageTimeout: {
                 for await _ in timeouts { return }
             })
-            try await withPreparationHost(fixture, documents: [held, healthy], preparation: preparation) { host in
+            try await withPreparationHost(fixture, documents: held + [healthy], preparation: preparation) { host in
                 preparation.updateLayoutContext { $0.width = 320 }
-                let late = try #require(host.references.first)
-                let key = HTMLVisualLayoutKey(digest: late.digest, width: 320, theme: theme)
-                let attempt = Task { await preparation.prepareInBackground([late], documents: host.source.documents) }
-                await server.waitForHeldVisualResource()
-                let instance = try #require(preparation.surface.instance)
-                let page = try #require(instance.page)
-                timeout.yield()
-                #expect(await attempt.value == .incomplete(missing: 1))
-                #expect(instance.page == nil && instance.requestID == nil && instance.activity == nil)
-                #expect(preparation.surface.instance == nil)
+                for late in host.references.dropLast() {
+                    let key = HTMLVisualLayoutKey(digest: late.digest, width: 320, theme: theme)
+                    let attempt = Task { await preparation.prepareInBackground([late], documents: host.source.documents) }
+                    await server.waitForHeldVisualResource()
+                    let instance = try #require(preparation.surface.instance)
+                    let page = try #require(instance.page)
+                    timeout.yield()
+                    #expect(await attempt.value == .incomplete(missing: 1))
+                    #expect(instance.page == nil && instance.requestID == nil && instance.activity == nil)
+                    #expect(preparation.surface.instance == nil)
 
-                await server.releaseHeldVisualResource()
-                #expect(try await page.callJavaScript(
-                    "return typeof window.webkit?.messageHandlers?.rcVisual === 'undefined';",
-                    contentWorld: .defaultClient) as? Bool == true)
-                #expect(fixture.renderer.height(for: key) == nil && !fixture.renderer.hasStoredSnapshot(for: key))
+                    await server.releaseHeldVisualResource()
+                    #expect(try await page.callJavaScript(
+                        "return typeof window.webkit?.messageHandlers?.rcVisual === 'undefined';",
+                        contentWorld: .defaultClient) as? Bool == true)
+                    #expect(fixture.renderer.height(for: key) == nil && !fixture.renderer.hasStoredSnapshot(for: key))
+                }
 
                 let next = try #require(host.references.last)
                 #expect(await preparation.prepareInBackground([next], documents: host.source.documents)
                     == .settled(stored: 1, unpreparable: 0))
                 #expect(fixture.renderer.height(for: HTMLVisualLayoutKey(digest: next.digest, width: 320, theme: theme)) == 48)
-                #expect(fixture.renderer.height(for: key) == nil && !fixture.renderer.hasStoredSnapshot(for: key))
+                for late in host.references.dropLast() {
+                    let key = HTMLVisualLayoutKey(digest: late.digest, width: 320, theme: theme)
+                    #expect(fixture.renderer.height(for: key) == nil && !fixture.renderer.hasStoredSnapshot(for: key))
+                }
             }
         }
     }
