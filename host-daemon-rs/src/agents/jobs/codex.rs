@@ -209,7 +209,7 @@ pub(crate) async fn inspect(gateway: &Arc<Gateway>, job: &JobRecord) -> Result<I
     let inspected = gateway
         .job_inspect_turn(&conversation.thread_id, &accepted.turn_id)
         .await
-        .map_err(anyhow::Error::from)?;
+        .map_err(|error| anyhow::anyhow!("{}", error.message))?;
     ensure!(
         inspected["executionTurnId"].as_str() == Some(accepted.turn_id.as_str()),
         "exact Codex inspection returned another execution"
@@ -274,7 +274,7 @@ pub(crate) async fn stop(gateway: &Arc<Gateway>, job: &JobRecord) -> Result<()> 
     gateway
         .job_stop_codex_input(&target.thread_id, &input_id, &accepted)
         .await
-        .map_err(anyhow::Error::from)?;
+        .map_err(|error| anyhow::anyhow!("{}", error.message))?;
     Ok(())
 }
 

@@ -2,9 +2,9 @@ use super::*;
 use crate::agents::Capabilities;
 use crate::gateway::{ApnsSend, GatewayConstruction};
 use crate::observability::journal::Journal;
-use crate::providers::claude::ClaudeSupervisor;
 use crate::providers::codex::daemon::CodexAppServer;
 use std::collections::HashSet;
+use std::sync::Arc;
 use tokio::sync::mpsc;
 
 async fn respond_control(

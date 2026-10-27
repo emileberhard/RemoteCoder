@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use serde_json::{Value, json};
+use serde_json::json;
 
 use super::Gateway;
 use crate::agents::jobs::model::{ConversationIdentity, DeliveryState, Provider};

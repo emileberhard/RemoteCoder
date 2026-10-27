@@ -231,7 +231,7 @@ impl Gateway {
         let _admission = self.admit_request(Some("turn/start"), object)?;
         self.validate_dispatch("turn/start", object)
             .await
-            .map_err(anyhow::Error::from)?;
+            .map_err(|error| anyhow::anyhow!("{}", error.message))?;
         let key = format!("0:{id}");
         let exists = self
             .core

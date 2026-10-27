@@ -155,6 +155,20 @@ impl Gateway {
         &self,
         process: ProcessInstance,
     ) -> Result<ProvenCaller> {
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            loop {
+                if let Some(caller) = self.find_job_process_context(process).await? {
+                    return Ok(caller);
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            }
+        }).await.context("caller is outside a live agent tool process or its owner is unavailable; capture context before detaching and pass --caller-context explicitly, or select deliberate --operator work")?
+    }
+
+    async fn find_job_process_context(
+        &self,
+        process: ProcessInstance,
+    ) -> Result<Option<ProvenCaller>> {
         let chain = tokio::task::spawn_blocking(move || ancestry(process)).await??;
         ensure!(
             !chain.is_empty(),
@@ -204,7 +218,7 @@ impl Gateway {
                         && !context.tool_call_id.is_empty(),
                     "native tool context is incomplete"
                 );
-                return Ok(ProvenCaller {
+                return Ok(Some(ProvenCaller {
                     conversation: ConversationIdentity {
                         provider: Provider::Codex,
                         provider_home: ProviderHome::Known {
@@ -215,14 +229,14 @@ impl Gateway {
                     process: *candidate,
                     turn_id: Some(context.turn_id.clone()),
                     tool_call_id: Some(context.tool_call_id.clone()),
-                });
+                }));
             }
             if let Some(supervisor) = self.claude_agent()
                 && let Some((thread_id, turn_id)) = supervisor
                     .owned_process_session(candidate.pid, candidate.started_micros)
                     .await
             {
-                return Ok(ProvenCaller {
+                return Ok(Some(ProvenCaller {
                     conversation: ConversationIdentity {
                         provider: Provider::Claude,
                         provider_home: ProviderHome::Known { path: claude_home },
@@ -231,7 +245,7 @@ impl Gateway {
                     process: *candidate,
                     turn_id,
                     tool_call_id: None,
-                });
+                }));
             }
             if let Some(owner) = crate::providers::claude::native_parent::prove_owner(
                 &claude_home,
@@ -240,7 +254,7 @@ impl Gateway {
             )
             .await?
             {
-                return Ok(ProvenCaller {
+                return Ok(Some(ProvenCaller {
                     conversation: ConversationIdentity {
                         provider: Provider::Claude,
                         provider_home: ProviderHome::Known { path: claude_home },
@@ -249,15 +263,13 @@ impl Gateway {
                     process: *candidate,
                     turn_id: None,
                     tool_call_id: None,
-                });
+                }));
             }
         }
         if let Some(error) = native_failure {
             return Err(error).context("caller could not be proved; native process mapping was unavailable and no Claude owner matched");
         }
-        anyhow::bail!(
-            "caller is outside a live agent tool process; capture context before detaching and pass --caller-context explicitly, or select deliberate --operator work"
-        )
+        Ok(None)
     }
 
     async fn capture_job_context(&self, request: CaptureParams) -> Result<CapturedContext> {
@@ -360,6 +372,12 @@ impl Gateway {
         let _operation = self.jobs.operations.read().await;
         if self.is_draining() {
             return Err(RpcError::draining());
+        }
+        if self.jobs.execution_held().await? {
+            return Err(RpcError::new(
+                RpcCode::Unavailable,
+                "delegated messaging is held for the coordinated runtime cutover",
+            ));
         }
         if request
             .delivery_id

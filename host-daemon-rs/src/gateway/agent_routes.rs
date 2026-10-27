@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::Context;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::sync::{Mutex, oneshot};

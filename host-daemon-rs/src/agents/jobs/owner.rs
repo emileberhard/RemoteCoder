@@ -91,6 +91,10 @@ impl JobOwner {
         self.store().await?.ensure_new_message_id(id.into()).await
     }
 
+    pub(crate) async fn execution_held(&self) -> Result<bool> {
+        self.store().await?.execution_held().await
+    }
+
     pub(crate) async fn agent_for_conversation(
         &self,
         conversation: &ConversationIdentity,
