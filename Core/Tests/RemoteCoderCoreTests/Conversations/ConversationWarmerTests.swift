@@ -177,7 +177,7 @@ private struct WarmingFixture {
 
     func warmer() -> ConversationWarmer {
         ConversationWarmer(host: host, conversations: sessions, history: GatewayHistoryService(gateway: gateway,
-            cache: HistoryPageCache(directory: temporary.storage.root.appending(path: "pages"))))
+            cache: HistoryPageCache(directory: temporary.storage.root.appending(path: "pages"), freshnessInterval: 0)))
     }
 
     func cleanUp() { temporary.cleanUp() }
