@@ -637,6 +637,16 @@ def _group_has_live_members(group):
     return group_has_live_members(group)
 
 
+def _signal_owned_group(group, signum):
+    try:
+        os.killpg(group, signum)
+    except ProcessLookupError:
+        pass
+    except PermissionError:
+        if _group_has_live_members(group):
+            raise
+
+
 @job_sleep_assertion()
 def run_owned(
     command,
@@ -714,22 +724,7 @@ def run_owned(
                     else -exited.si_status
                 )
                 stop(signal.SIGTERM, None)
-            if cancelled and not termination_sent:
-                try:
-                    os.killpg(child.pid, signal.SIGTERM)
-                except ProcessLookupError:
-                    pass
-                termination_sent = True
             if cancelled:
-                if (
-                    not kill_sent
-                    and time.monotonic() - cancelled[1] >= termination_grace_seconds
-                ):
-                    try:
-                        os.killpg(child.pid, signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
-                    kill_sent = True
                 if exited is not None and not _group_has_live_members(child.pid):
                     child.wait()
                     reaped = True
@@ -738,6 +733,15 @@ def run_owned(
                     if timed_out:
                         raise subprocess.TimeoutExpired(command, timeout_seconds)
                     raise SystemExit(128 + cancelled[0])
+                if not termination_sent:
+                    _signal_owned_group(child.pid, signal.SIGTERM)
+                    termination_sent = True
+                if (
+                    not kill_sent
+                    and time.monotonic() - cancelled[1] >= termination_grace_seconds
+                ):
+                    _signal_owned_group(child.pid, signal.SIGKILL)
+                    kill_sent = True
             elif exited is not None:
                 status = child.wait()
                 reaped = True
@@ -752,10 +756,7 @@ def run_owned(
         try:
             if child is not None and not reaped:
                 if _group_has_live_members(child.pid):
-                    try:
-                        os.killpg(child.pid, signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
+                    _signal_owned_group(child.pid, signal.SIGKILL)
                 while _group_has_live_members(child.pid):
                     time.sleep(0.05)
                 child.wait()
