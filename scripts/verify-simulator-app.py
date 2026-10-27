@@ -4,7 +4,6 @@ import os
 import plistlib
 import subprocess
 import sys
-import tempfile
 import time
 from pathlib import Path
 
@@ -59,21 +58,14 @@ def verified_bundle(
     )
     signed_entitlements = plistlib.loads(result.stdout)
     executable = bundle / info["CFBundleExecutable"]
-    with tempfile.TemporaryDirectory() as temporary:
-        section = Path(temporary) / "entitlements.plist"
-        subprocess.run(
-            [
-                "xcrun",
-                "llvm-objcopy",
-                "--dump-section",
-                f"__TEXT,__entitlements={section}",
-                str(executable),
-                str(Path(temporary) / "executable"),
-            ],
-            capture_output=True,
-            check=True,
-        )
-        entitlements = plistlib.loads(section.read_bytes().rstrip(b"\0"))
+    section = subprocess.run(
+        ["xcrun", "otool", "-arch", "arm64", "-X", "-s", "__TEXT", "__entitlements", str(executable)],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    payload = b"".join(bytes.fromhex(word)[::-1] for line in section.splitlines() for word in line.split()[1:])
+    entitlements = plistlib.loads(payload.rstrip(b"\0"))
     declared = resolve(plistlib.loads(declared_entitlements.read_bytes()), settings)
     for name, value in declared.items():
         if entitlements.get(name) != value:

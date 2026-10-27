@@ -324,9 +324,11 @@ elif '--display' in sys.argv:
                 f"#!{sys.executable}\n"
                 + """import sys
 from pathlib import Path
-if sys.argv[1] == 'llvm-objcopy':
-    section = Path(sys.argv[sys.argv.index('--dump-section') + 1].split('=', 1)[1])
-    section.write_bytes((Path(sys.argv[-2]).parent / 'simulator-entitlements.plist').read_bytes())
+if sys.argv[1] == 'otool':
+    payload = (Path(sys.argv[-1]).parent / 'simulator-entitlements.plist').read_bytes()
+    for offset in range(0, len(payload), 16):
+        words = [payload[index:index + 4][::-1].hex() for index in range(offset, min(offset + 16, len(payload)), 4)]
+        print(format(4096 + offset, '016x') + ' ' + ' '.join(words))
 else:
     print(Path(sys.argv[sys.argv.index('--path') + 1]).joinpath('summary.json').read_text())
 """
