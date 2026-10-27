@@ -11,6 +11,8 @@ struct ChatHistoryReadTests {
         defer { await fixture.cleanUp() }
         let target = fixture.target
         let chat = target.makeScreen(newChat: UUID())
+        chat.selectDraft(.thread(threadID))
+        try #require(await chat.prepareDraft())
         chat.setActiveSessionID(threadID)
         let original = await target.conversations.session(conversationID: chat.currentConversationID, threadID: threadID)
         await chat.adopt(original)
