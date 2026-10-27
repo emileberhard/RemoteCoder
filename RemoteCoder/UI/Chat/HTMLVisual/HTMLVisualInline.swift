@@ -275,6 +275,7 @@ struct HTMLVisualInline: View {
             Self.logger.notice("html visual visible ready=\(ready) digest=\(reference.digest.prefix(8)) scrolling=\(rowVisibility?.isScrolling == true)")
         }
         #endif
+        .onChange(of: rowVisibility?.isVisible == true, initial: true) { _, value in instance.rowVisible = value }
         .onChange(of: canCapture, initial: true) { _, value in source?.renderer.setCaptureAllowed(instance, value) }
         .onChange(of: energyPolicy, initial: true) { _, value in source?.renderer.setEnergyPolicy(value) }
         .onChange(of: interfaceScale, initial: true) { _, scale in

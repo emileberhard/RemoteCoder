@@ -31,7 +31,7 @@ final class HTMLVisualSnapshot {
 @Observable
 @MainActor
 final class HTMLVisualInstance: Identifiable {
-    enum Surface { case inline, expanded }
+    enum Surface: String { case inline, expanded }
     let surface: Surface
     var page: WebPage?
     @ObservationIgnored var userContentController: WKUserContentController?
@@ -63,6 +63,9 @@ final class HTMLVisualInstance: Identifiable {
     @ObservationIgnored var onSnapshotStored: () -> Void = {}
     @ObservationIgnored var captureAllowed = false
     @ObservationIgnored var onPinChange: (Bool) -> Void = { _ in }
+    @ObservationIgnored var rowVisible = false
+    @ObservationIgnored var occurrenceVisible: Bool?
+    @ObservationIgnored var activity: HTMLVisualPageActivity?
 
     var pinned: Bool { interacting || surface == .expanded }
 
@@ -75,6 +78,26 @@ final class HTMLVisualInstance: Identifiable {
         userContentController = nil
         page?.stopLoading()
         page = nil
+    }
+}
+
+@MainActor
+final class HTMLVisualPageActivity {
+    enum ReleaseReason: String {
+        case ended, cancelled, superseded, selectedEviction, preparationPreempted, energyConservation, failed, webContentTerminated
+    }
+
+    let started = ContinuousClock.now
+    let kind: HTMLVisualPageAdmission.Kind
+    var releaseReason = ReleaseReason.ended
+    var layoutEvents = 0
+    var settledEvents = 0
+    var capturesStarted = 0
+    var capturesCompleted = 0
+    var captureDuration = Duration.zero
+
+    init(kind: HTMLVisualPageAdmission.Kind) {
+        self.kind = kind
     }
 }
 
@@ -110,7 +133,11 @@ final class HTMLVisualRenderer {
     private static let logger = AppLogger(category: "HTMLVisual")
     private var admission = HTMLVisualPageAdmission()
     private var waiters: [UUID: CheckedContinuation<Void, any Error>] = [:]
-    private var work: [UUID: Task<Void, Never>] = [:]
+    private struct PageWork {
+        let task: Task<Void, Never>
+        let activity: HTMLVisualPageActivity
+    }
+    private var work: [UUID: PageWork] = [:]
     private var snapshots: [HTMLVisualLayoutKey: HTMLVisualSnapshot] = [:]
     private var snapshotOrder: [HTMLVisualLayoutKey] = []
     private var heights: [HTMLVisualLayoutKey: Double] = [:]
@@ -143,7 +170,7 @@ final class HTMLVisualRenderer {
     isolated deinit {
         loadTask?.cancel()
         persistence?.cancel()
-        for task in work.values { task.cancel() }
+        for work in work.values { work.task.cancel() }
         for raster in rasterWork.values { raster.task.cancel() }
         for task in sharpWork.values { task.cancel() }
     }
@@ -408,6 +435,7 @@ final class HTMLVisualRenderer {
         instance.operationGeneration += 1
         let generation = instance.operationGeneration
         let previous = instance.operation
+        if previous != nil { instance.activity?.releaseReason = .superseded }
         previous?.cancel()
         await previous?.value
         guard !Task.isCancelled, instance.operationGeneration == generation else { return }
@@ -434,9 +462,10 @@ final class HTMLVisualRenderer {
         instance.snapshot = snapshot(for: key)
         instance.height = instance.snapshot?.height ?? 180
         instance.status = .waiting
+        let kind: HTMLVisualPageAdmission.Kind = instance.preparing ? .preparation
+            : instance.userSelected || instance.surface == .expanded ? .selected : .automatic
         do {
-            try await acquire(id, kind: instance.preparing ? .preparation
-                : instance.userSelected || instance.surface == .expanded ? .selected : .automatic)
+            try await acquire(id, kind: kind)
             try Task.checkCancellation()
             pin(instance)
         } catch {
@@ -449,16 +478,20 @@ final class HTMLVisualRenderer {
             }
             return
         }
+        let activity = HTMLVisualPageActivity(kind: kind)
+        instance.activity = activity
         let task = Task {
             await render(instance, requestID: id, reference: reference, document: document, open: open)
         }
-        work[id] = task
+        work[id] = PageWork(task: task, activity: activity)
         instance.status = .loading
-        Self.logger.notice("html visual admitted live=\(self.admission.live.count) waiting=\(self.admission.waiting.count)")
+        Self.logger.notice("html visual admitted id=\(id.uuidString.prefix(8)) digest=\(key.digest.prefix(12)) surface=\(instance.surface.rawValue) reason=\(String(describing: kind)) rowVisible=\(instance.rowVisible) occurrenceVisible=\(instance.occurrenceVisible.map(String.init) ?? "unknown") pinned=\(instance.pinned) live=\(self.admission.live.count) waiting=\(self.admission.waiting.count)")
         await withTaskCancellationHandler {
             await task.value
         } onCancel: { task.cancel() }
         work.removeValue(forKey: id)
+        if Task.isCancelled, activity.releaseReason == .ended { activity.releaseReason = .cancelled }
+        let pinned = instance.pinned
         #if DEBUG
         Self.logger.notice("html visual teardown status=\(String(describing: instance.status)) stored=\(self.snapshots[key]?.image != nil) digest=\(key.digest.prefix(8))")
         #endif
@@ -480,9 +513,11 @@ final class HTMLVisualRenderer {
             if instance.failure == nil { instance.status = .suspended }
             instance.onPinChange(instance.pinned)
             instance.onPinChange = { _ in }
+            instance.activity = nil
         }
         release(id)
-        Self.logger.notice("html visual released live=\(self.admission.live.count) waiting=\(self.admission.waiting.count)")
+        let lifetime = activity.started.duration(to: .now).milliseconds
+        Self.logger.notice("html visual released id=\(id.uuidString.prefix(8)) digest=\(key.digest.prefix(12)) surface=\(instance.surface.rawValue) admission=\(String(describing: activity.kind)) reason=\(activity.releaseReason.rawValue) rowVisible=\(instance.rowVisible) occurrenceVisible=\(instance.occurrenceVisible.map(String.init) ?? "unknown") pinned=\(pinned) lifetimeMs=\(lifetime) layouts=\(activity.layoutEvents) settled=\(activity.settledEvents) capturesStarted=\(activity.capturesStarted) capturesCompleted=\(activity.capturesCompleted) captureMs=\(activity.captureDuration.milliseconds) live=\(self.admission.live.count) waiting=\(self.admission.waiting.count)")
     }
 
     func update(_ instance: HTMLVisualInstance, key: HTMLVisualLayoutKey) {
@@ -523,7 +558,7 @@ final class HTMLVisualRenderer {
             } catch {
                 guard instance.page === page else { return }
                 instance.status = .unavailable(error.localizedDescription)
-                if let id = instance.requestID { work[id]?.cancel() }
+                if let id = instance.requestID { cancel(id, reason: .failed) }
             }
         }
     }
@@ -533,7 +568,7 @@ final class HTMLVisualRenderer {
         guard let id = instance.requestID, instance.waiting else { return }
         admission.prioritize(id)
         if let next = admission.admitWaiting() { waiters.removeValue(forKey: next)?.resume(); return }
-        if let victim = admission.evictionCandidate(excluding: id) { work[victim]?.cancel() }
+        if let victim = admission.evictionCandidate(excluding: id) { cancel(victim, reason: .selectedEviction) }
     }
 
     private func acquire(_ id: UUID, kind: HTMLVisualPageAdmission.Kind) async throws {
@@ -541,9 +576,9 @@ final class HTMLVisualRenderer {
         if try admission.request(id, kind: kind) { return }
         if kind == .selected {
             admission.prioritize(id)
-            if let victim = admission.evictionCandidate(excluding: id) { work[victim]?.cancel() }
+            if let victim = admission.evictionCandidate(excluding: id) { cancel(victim, reason: .selectedEviction) }
         } else if let victim = admission.preparationBlocking(id) {
-            work[victim]?.cancel()
+            cancel(victim, reason: .preparationPreempted)
         }
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { waiters[id] = $0 }
@@ -553,6 +588,12 @@ final class HTMLVisualRenderer {
                 self.release(id)
             }
         }
+    }
+
+    private func cancel(_ id: UUID, reason: HTMLVisualPageActivity.ReleaseReason) {
+        guard let work = work[id] else { return }
+        work.activity.releaseReason = reason
+        work.task.cancel()
     }
 
     private func release(_ id: UUID) {
@@ -578,9 +619,11 @@ final class HTMLVisualRenderer {
             if let navigation = error as? WebPage.NavigationError,
                case .webContentProcessTerminated = navigation {
                 instance.status = .suspended
+                instance.activity?.releaseReason = .webContentTerminated
                 Self.logger.notice("html visual web process terminated")
             } else {
                 instance.status = .unavailable(error.localizedDescription)
+                instance.activity?.releaseReason = .failed
                 Self.logger.error("html visual failed reason=\(error.localizedDescription)")
             }
         }
@@ -600,6 +643,7 @@ final class HTMLVisualRenderer {
                 guard let self, let instance, instance.requestID == requestID, instance.page != nil else { return }
                 switch event {
                 case .layout(let height):
+                    instance.activity?.layoutEvents += 1
                     instance.pendingHeight = height
                     if instance.status == .live { layout(instance, height: height) }
                 case .interaction(let active):
@@ -607,6 +651,7 @@ final class HTMLVisualRenderer {
                     pin(instance)
                     if !active { capture(instance) }
                 case .settled:
+                    instance.activity?.settledEvents += 1
                     instance.capturedImage = nil
                     capture(instance)
                 }
@@ -656,7 +701,7 @@ final class HTMLVisualRenderer {
     }
 
     func setEnergyPolicy(_ policy: AppEnergyPolicy) {
-        for victim in admission.conserveEnergy(policy.conservesEnergy) { work[victim]?.cancel() }
+        for victim in admission.conserveEnergy(policy.conservesEnergy) { cancel(victim, reason: .energyConservation) }
         while let next = admission.admitWaiting() { waiters.removeValue(forKey: next)?.resume() }
     }
 
@@ -686,11 +731,18 @@ final class HTMLVisualRenderer {
                     Self.logger.notice("html visual snapshot began id=\(signpostID.rawValue)")
                     #endif
                     let data: Data
+                    let activity = instance.activity
+                    let captureStarted = ContinuousClock.now
+                    activity?.capturesStarted += 1
                     do {
-                        defer { signposter.endInterval("HTMLVisualSnapshot", interval) }
+                        defer {
+                            signposter.endInterval("HTMLVisualSnapshot", interval)
+                            activity?.captureDuration += captureStarted.duration(to: .now)
+                        }
                         data = try await page.exported(as: .pdf(
                             region: .rect(CGRect(x: 0, y: 0, width: CGFloat(key.width), height: height)),
                             allowTransparentBackground: true))
+                        activity?.capturesCompleted += 1
                     }
                     #if DEBUG
                     Self.logger.notice("html visual snapshot completed id=\(signpostID.rawValue) bytes=\(data.count)")

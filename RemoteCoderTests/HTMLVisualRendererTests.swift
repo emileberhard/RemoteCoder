@@ -1234,11 +1234,13 @@ struct HTMLVisualRendererTests {
         try await withFixture { fixture in
             let live = (0..<3).map { _ in fixture.start() }
             try await wait { live.allSatisfy { $0.status == .live } }
+            let displaced = try #require(live[0].activity)
             let selected = HTMLVisualInstance(surface: .inline)
             fixture.renderer.promote(selected)
             fixture.start(selected)
             try await wait { selected.status == .live }
             #expect(live[0].status == .suspended)
+            #expect(displaced.releaseReason == .selectedEviction)
             #expect(live[1].status == .live && live[2].status == .live)
             #expect(fixture.instances.filter { $0.page != nil }.count == 3)
         }
@@ -1282,10 +1284,17 @@ struct HTMLVisualRendererTests {
         try await withFixture { fixture in
             let instance = fixture.start()
             try await wait { instance.status == .live && instance.measured }
+            let activity = try #require(instance.activity)
+            #expect(activity.kind == .automatic)
+            #expect(activity.layoutEvents > 0)
+            #expect(activity.capturesStarted == 0)
             try await Task.sleep(for: .milliseconds(250))
             #expect(instance.snapshot?.image == nil)
             fixture.renderer.setCaptureAllowed(instance, true)
             try await wait { instance.snapshot?.image != nil }
+            #expect(activity.capturesStarted >= activity.capturesCompleted)
+            #expect(activity.capturesCompleted > 0)
+            #expect(activity.captureDuration > .zero)
             fixture.renderer.setCaptureAllowed(instance, false)
             let revision = instance.snapshot?.revision
             let page = try #require(instance.page)
@@ -1294,6 +1303,9 @@ struct HTMLVisualRendererTests {
             try await wait { instance.height == 260 }
             try await Task.sleep(for: .milliseconds(250))
             #expect(instance.snapshot?.revision == revision)
+            await fixture.stop(instance)
+            #expect(instance.activity == nil)
+            #expect(activity.releaseReason == .cancelled)
         }
     }
 
