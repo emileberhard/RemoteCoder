@@ -291,6 +291,23 @@ impl TurnLedger {
         self.pending.remove(request_key)
     }
 
+    pub(crate) fn bind_pending_acceptance(
+        &mut self,
+        request_key: &str,
+        turn_id: &str,
+        now: f64,
+    ) -> bool {
+        let Some(pending) = self.pending.get(request_key).cloned() else {
+            return false;
+        };
+        let key = TurnKey::new(&pending.thread_id, turn_id);
+        if self.contexts.contains_key(&key) {
+            return false;
+        }
+        self.start_from_pending(pending, turn_id, now, None);
+        true
+    }
+
     pub(crate) fn take_pending_matching(
         &mut self,
         request_key: &str,

@@ -220,6 +220,28 @@ impl Gateway {
         key: &str,
         pending: &PendingTurnStart,
     ) -> Result<Option<ActiveTurn>> {
+        let acceptance = match &pending.client_user_message_id {
+            Some(input) => {
+                self.job_read_codex_acceptance(&pending.thread_id, input).await?
+            }
+            None => None,
+        };
+        if let Some(accepted) = &acceptance
+            && !accepted.has(super::agent_jobs_codex::NativeInputFact::Recorded)
+            && !accepted.has(super::agent_jobs_codex::NativeInputFact::Terminal)
+        {
+            let changed = self.core.lock().await.turns.bind_pending_acceptance(
+                key,
+                &accepted.turn_id,
+                unix_seconds(),
+            );
+            if changed {
+                self.commit_turn_state().await?;
+            }
+            return Err(anyhow!(
+                "the native owner retains accepted input before its user item; reconciliation remains pending"
+            ));
+        }
         let websocket = self.codex.connect_ws().await?;
         let (mut sink, mut stream) = websocket.split();
         self.initialize_codex_connection(&mut sink, &mut stream)
@@ -254,6 +276,11 @@ impl Gateway {
                 continue;
             }
             if message.get("error").is_some() {
+                ensure!(
+                    pending.client_user_message_id.is_none(),
+                    "identified pending input has no proven native rejection: {}",
+                    message["error"]
+                );
                 self.remove_pending_turn_if_matches(key, pending).await?;
                 self.unsubscribe_observer(&mut sink, &pending.thread_id)
                     .await?;
@@ -291,11 +318,25 @@ impl Gateway {
             if let Some(turn) = turns
                 .iter()
                 .rev()
-                .find(|turn| is_terminal_turn_for_pending(turn, pending))
+                .find(|turn| {
+                    is_terminal_turn_for_pending(turn, pending)
+                        || acceptance.as_ref().is_some_and(|accepted| {
+                            accepted.has(super::agent_jobs_codex::NativeInputFact::Terminal)
+                                && turn["id"].as_str() == Some(accepted.turn_id.as_str())
+                                && matches!(
+                                    turn["status"].as_str(),
+                                    Some("completed" | "failed" | "interrupted")
+                                )
+                        })
+                })
             {
                 self.record_recovered_terminal_turn(key, pending, turn)
                     .await?;
             } else {
+                ensure!(
+                    pending.client_user_message_id.is_none(),
+                    "identified pending input has no positive terminal evidence"
+                );
                 self.remove_pending_turn_if_matches(key, pending).await?;
             }
             self.unsubscribe_observer(&mut sink, &pending.thread_id)
@@ -585,6 +626,30 @@ impl Gateway {
                     }) {
                         running = None;
                     } else if terminal.is_some() || running.is_some() || status != Some("active") {
+                        let pending_inputs = self
+                            .core
+                            .lock()
+                            .await
+                            .turns
+                            .pending()
+                            .filter(|(_, pending)| pending.thread_id == turn.thread_id)
+                            .filter_map(|(_, pending)| pending.client_user_message_id.clone())
+                            .take(65)
+                            .collect::<Vec<_>>();
+                        ensure!(pending_inputs.len() <= 64, "pending native input evidence exceeds the reconciliation bound");
+                        for input in pending_inputs {
+                            if let Some(accepted) = self
+                                    .job_read_codex_acceptance(&turn.thread_id, &input)
+                                    .await?
+                                && accepted.turn_id == turn.turn_id
+                                && (!accepted.has(super::agent_jobs_codex::NativeInputFact::Terminal)
+                                    || accepted.has(super::agent_jobs_codex::NativeInputFact::Suspended))
+                            {
+                                return Err(anyhow!(
+                                    "accepted native input retains custody while canonical execution is inactive"
+                                ));
+                            }
+                        }
                         if terminal.is_none() && self.turn_was_recovered_after_restart(turn).await {
                             return Err(anyhow!(
                                 "recovered turn is temporarily inactive during restart handoff"
@@ -743,9 +808,66 @@ fn started_turn_on_thread<'a>(message: &'a Value, thread_id: &str) -> Option<&'a
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::TestGateway;
+    use crate::test_support::{FakeControl, TestGateway};
     use crate::turns::{PromptContext, QueuedSubmission};
     use serde_json::json;
+
+    #[tokio::test]
+    async fn accepted_input_keeps_durable_custody_before_its_user_item() {
+        let directory = tempfile::tempdir().unwrap();
+        let gateway = TestGateway::with_native_runtime(directory.path());
+        let thread = "e1741c43-3d9a-4448-9f4a-3c7e5906e852";
+        let pending = PendingTurnStart {
+            thread_id: thread.to_owned(),
+            client_user_message_id: Some("identified-input".to_owned()),
+            previous_turn_id: None,
+            context: PromptContext {
+                compaction: false,
+                preview: "Keep this input".to_owned(),
+                cwd: Some("/repo".to_owned()),
+                owner_client_id: 42,
+            },
+            created_at_unix_seconds: 1.0,
+        };
+        gateway.core.lock().await.turns.insert_pending("pending".into(), pending.clone());
+        gateway.commit_turn_state().await.unwrap();
+        let restored = TestGateway::with_native_runtime(directory.path());
+        restored.load_turn_state().await.unwrap();
+        let mut control = FakeControl::attach(&restored, 1).await.requests;
+        let owner = restored.clone();
+        let responder = tokio::spawn(async move {
+            let request: Value = serde_json::from_str(&control.recv().await.unwrap()).unwrap();
+            assert_eq!(request["method"], "thread/input/acceptance/read");
+            assert_eq!(request["params"]["clientUserMessageId"], "identified-input");
+            owner.handle_control_text(
+                json!({"id":request["id"],"result":{"acceptance":{
+                    "turnId":"reserved-turn",
+                    "rootTurnId":"reserved-turn",
+                    "fingerprint":"a".repeat(64),
+                    "facts":[],
+                }}}).to_string(),
+                NotificationOrigin::Control { opened_after: 0 },
+            ).await;
+        });
+        assert!(restored.reconcile_pending_turn("pending", &pending).await.is_err());
+        responder.await.unwrap();
+        let again = TestGateway::with_native_runtime(directory.path());
+        again.load_turn_state().await.unwrap();
+        {
+            let core = again.core.lock().await;
+            assert_eq!(core.turns.pending_start("pending"), Some(&pending));
+            let active = core.turns.active_turn(&TurnKey::new(thread, "reserved-turn")).unwrap();
+            assert_eq!(active.owner_client_id, 42);
+        }
+        again.capture_agent_message(&json!({
+            "method":"item/completed","params":{
+                "threadId":thread,"turnId":"reserved-turn","item":{
+                    "type":"userMessage","id":"user-item","clientId":"identified-input","content":[]
+                }
+            }
+        })).await;
+        assert!(again.core.lock().await.turns.pending_start("pending").is_none());
+    }
 
     #[tokio::test]
     async fn queued_resume_snapshot_attributes_an_already_active_restored_turn() {
