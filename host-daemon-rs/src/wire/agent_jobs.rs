@@ -164,6 +164,15 @@ pub(crate) struct ContextReadParams {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ContextView {
+    pub context: CapturedContext,
+    pub conversation: ConversationIdentity,
+    pub sender_id: String,
+    pub job_id: Option<JobId>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct SetTitleParams {
     pub caller: Caller,
     pub mutation_id: String,

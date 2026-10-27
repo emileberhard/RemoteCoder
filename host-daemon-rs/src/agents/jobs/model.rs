@@ -144,6 +144,13 @@ pub(crate) struct JobSpec {
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) enum SpecEvidence {
     Known { spec: JobSpec },
+    Expired {
+        cwd: PathBuf,
+        settings: ExecutionSettings,
+        #[serde(rename = "toolScope")]
+        tool_scope: ToolScope,
+        title: Option<String>,
+    },
     Unknown { reason: String },
 }
 
@@ -213,6 +220,11 @@ pub(crate) enum CompletionPayload {
         delivery_id: String,
         fingerprint: String,
         reason: String,
+    },
+    Expired {
+        #[serde(rename = "deliveryId")]
+        delivery_id: String,
+        fingerprint: String,
     },
 }
 
@@ -299,10 +311,19 @@ pub(crate) struct JobRecord {
     pub updated_at_ms: i64,
     pub revision: u64,
     pub previous_job_id: Option<JobId>,
+    pub source: JobSource,
+    pub admission_origin: Option<Origin>,
     pub spec: SpecEvidence,
     pub recipient: Recipient,
     pub execution: ExecutionState,
     pub stop: StopState,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum JobSource {
+    Runtime,
+    Imported,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
