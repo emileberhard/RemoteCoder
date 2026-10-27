@@ -74,6 +74,7 @@ def export(platform, directory, mode):
         packages = list(output.glob('*.pkg'))
         if len(packages) != 1:
             raise SystemExit('The Mac export must contain one package.')
+        run('pkgutil', '--check-signature', str(packages[0]))
         run('pkgutil', '--expand-full', str(packages[0]), str(output / 'expanded'))
         apps = list((output / 'expanded').rglob('RemoteCoder.app'))
         if len(apps) != 1:
