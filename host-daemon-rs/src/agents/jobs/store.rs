@@ -51,7 +51,6 @@ impl JobStore {
                 .custom_flags(libc::O_NOFOLLOW)
                 .open(root.join("owner.lock"))?;
             lease.try_lock().context("another process owns the delegated-job store")?;
-            ensure!(tree_bytes(&root)? <= MAX_STORE_BYTES, "delegated-job store exceeds its 512 MiB budget; admission remains closed");
             let mut inner = Inner { root, _lease: lease, jobs: BTreeMap::new(), agents: BTreeMap::new(), uncertainties: Vec::new() };
             for name in ["jobs", "agents", "evidence", "uncertainties"] {
                 private_state::ensure_private_directory(&inner.root.join(name))?;
@@ -86,7 +85,10 @@ impl JobStore {
                 inner.uncertainties.push(evidence);
             }
             inner.validate_slots()?;
-            ensure!(inner.accounted_bytes()? + MUTATION_RESERVE <= MAX_STORE_BYTES, "delegated-job state cannot preserve its mutation reservations; admission remains closed");
+            let accounted = inner.accounted_bytes()?;
+            if accounted + MUTATION_RESERVE > MAX_STORE_BYTES {
+                tracing::warn!(accounted, "delegated-job store is over its budget; admission stays closed until settled payloads are reclaimed");
+            }
             Ok(Self { inner: Arc::new(Mutex::new(inner)) })
         }).await.context("opening delegated-job store")?
     }
@@ -233,8 +235,10 @@ impl JobStore {
                         for agent in inner.agents.values() {
                             if matches!(&agent.origin, Origin::Parent { conversation } if parents.contains(conversation)) && included.insert(agent.agent_id.clone()) {
                                 changed = true;
-                                if matches!(selection, Selection::Descendants(_)) {
-                                    if let ConversationBinding::Known { conversation } = &agent.conversation { parents.insert(conversation.clone()); }
+                                if matches!(selection, Selection::Descendants(_))
+                                    && let ConversationBinding::Known { conversation } = &agent.conversation
+                                {
+                                    parents.insert(conversation.clone());
                                 }
                             }
                         }
@@ -699,8 +703,10 @@ impl Inner {
             .context("job revision exhausted")?;
         job.updated_at_ms = at_ms;
         if job.source == JobSource::Imported {
+            let current = std::fs::metadata(self.job_path(&job.job_id))?.len();
+            let growth = (serde_json::to_vec(&job)?.len() as u64).saturating_sub(current);
             ensure!(
-                tree_bytes(&self.root)? + serde_json::to_vec(&job)?.len() as u64 <= MAX_STORE_BYTES,
+                growth == 0 || tree_bytes(&self.root)? + growth <= MAX_STORE_BYTES,
                 "imported job mutation exceeds the store budget; reclaim settled payloads first"
             );
         }
@@ -729,16 +735,18 @@ impl Inner {
         let mut candidates: Vec<_> = self
             .jobs
             .values()
-            .filter(|job| settled(job))
+            .filter(|job| settled(job) && has_reclaimable_payload(job))
             .map(|job| (job.updated_at_ms, job.job_id.clone()))
             .collect();
         candidates.sort();
+        let mut accounted = self.accounted_bytes()?;
         for (at, id) in candidates {
             if now.saturating_sub(at) < RETENTION_MS
-                && self.accounted_bytes()? + incoming + MUTATION_RESERVE <= MAX_STORE_BYTES
+                && accounted + incoming + MUTATION_RESERVE <= MAX_STORE_BYTES
             {
                 break;
             }
+            let before = std::fs::metadata(self.job_path(&id))?.len();
             let mut job = self.job(&id)?.clone();
             if let SpecEvidence::Known { spec } = job.spec {
                 job.spec = SpecEvidence::Expired {
@@ -749,7 +757,9 @@ impl Inner {
                 };
             }
             if let ExecutionState::Terminal { terminal } = &mut job.execution {
-                terminal.result = ResultEvidence::Expired;
+                if matches!(terminal.result, ResultEvidence::Available { .. }) {
+                    terminal.result = ResultEvidence::Expired;
+                }
                 if let Completion::Required { payload, .. } = &mut terminal.completion {
                     expire_payload(payload);
                 }
@@ -759,9 +769,22 @@ impl Inner {
                 expire_payload(&mut notice.payload);
             }
             self.commit(job, at)?;
+            let after = std::fs::metadata(self.job_path(&id))?.len();
+            accounted = (accounted + after).saturating_sub(before);
         }
         Ok(())
     }
+}
+
+fn has_reclaimable_payload(job: &JobRecord) -> bool {
+    let prepared =
+        |payload: &CompletionPayload| matches!(payload, CompletionPayload::Prepared { .. });
+    matches!(job.spec, SpecEvidence::Known { .. })
+        || job.unconfirmed_result.is_some()
+        || job.notices.iter().any(|notice| prepared(&notice.payload))
+        || matches!(&job.execution, ExecutionState::Terminal { terminal }
+            if matches!(terminal.result, ResultEvidence::Available { .. })
+                || matches!(&terminal.completion, Completion::Required { payload, .. } if prepared(payload)))
 }
 
 fn expire_payload(payload: &mut CompletionPayload) {

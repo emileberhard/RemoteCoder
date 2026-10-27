@@ -208,7 +208,7 @@ async fn only_one_process_owner_and_unresolved_job_can_claim_a_conversation() {
             .await
             .unwrap_err()
             .to_string()
-            .contains("unresolved job")
+            .contains("unresolved runtime job")
     );
 }
 
@@ -394,11 +394,19 @@ async fn settled_notice_payload_expires_but_its_identity_survives() {
     store.admit(later).await.unwrap();
     drop(store);
     let store = JobStore::open(directory.path().into()).await.unwrap();
-    let retained = store.read(original.job_id).await.unwrap();
+    let retained = store.read(original.job_id.clone()).await.unwrap();
     assert!(
         matches!(&retained.notices[0].payload, CompletionPayload::Expired { delivery_id, .. } if delivery_id == &notice_id)
     );
     assert!(store.ensure_new_message_id(notice_id).await.is_err());
+    let mut another = job(13);
+    another.created_at_ms = Some(32 * 24 * 60 * 60 * 1000);
+    store.admit(another).await.unwrap();
+    assert_eq!(
+        store.read(original.job_id).await.unwrap().revision,
+        retained.revision,
+        "an already expired settled job is not rewritten by later admissions"
+    );
 }
 
 #[tokio::test]
