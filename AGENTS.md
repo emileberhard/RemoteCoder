@@ -156,7 +156,7 @@ the private [operations entrypoint](https://github.com/emileberhard/RemoteCoder-
     only for a change spanning that coverage or an explicit user request. State
     the reason and select the smallest relevant suite; it is never a routine
     prerequisite for a gateway change, cleanup, merge, or release.
-  - **Releases:** the release workflow runs the `verify-all` checks itself (see
+  - **Releases:** the release workflow requires green main CI on the exact tagged commit (see
     [Releasing](#releasing)). Run any relevant targeted iOS tests and live
     probes according to the changed behavior above before tagging.
 - `scripts/build_cache.py` owns the total RemoteCoder-Build cap, including pinned
