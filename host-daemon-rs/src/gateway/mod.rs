@@ -259,6 +259,7 @@ pub(crate) struct Gateway {
     external_providers: Option<Arc<ExternalProviders>>,
     questions: question_gateway::Runtime,
     agents: agent_gateway::Runtime,
+    pub(crate) jobs: Arc<crate::agents::jobs::owner::JobOwner>,
     codex: Arc<CodexAppServer>,
     apns: Arc<PushService>,
     clients: DashMap<u64, ClientTx>,
@@ -469,6 +470,13 @@ impl Gateway {
             external_providers,
             admission: Arc::clone(&admission),
             agents: agent_gateway::Runtime::default(),
+            jobs: Arc::new(crate::agents::jobs::owner::JobOwner::new(
+                turn_state_path
+                    .as_deref()
+                    .and_then(Path::parent)
+                    .map(|root| root.join("agent-jobs/v1")),
+                gateway.clone(),
+            )),
             questions: question_gateway::Runtime::new(
                 turn_state_path
                     .as_ref()
@@ -544,6 +552,7 @@ impl Gateway {
         self.codex.verify_ready().await?;
         self.load_turn_state().await?;
         self.calls.load().await?;
+        self.jobs.initialize().await?;
         self.start_notification_ancestry_preflight().await;
 
         // APNs is best-effort, but should be serialized/coalesced to avoid bursts and JWT churn.

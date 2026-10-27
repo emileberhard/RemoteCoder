@@ -105,6 +105,17 @@ impl JobStore {
         self.access(move |inner| inner.agent_view(&agent_id)).await
     }
 
+    pub(crate) async fn find_agent(&self, agent_id: String) -> Result<Option<AgentRecord>> {
+        self.access(move |inner| {
+            if inner.agents.contains_key(&agent_id) {
+                inner.agent_view(&agent_id).map(Some)
+            } else {
+                Ok(None)
+            }
+        })
+        .await
+    }
+
     pub(crate) async fn snapshot(&self) -> Result<Vec<JobRecord>> {
         self.access(|inner| Ok(inner.jobs.values().cloned().collect()))
             .await
