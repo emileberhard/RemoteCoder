@@ -406,7 +406,7 @@ struct TranscriptScrollRenderingTests {
 
     private func darkPixelsInJumpControlCorner(in view: UIView, scroll: UIScrollView) throws -> Int {
         let viewport = scroll.convert(scroll.bounds, to: view).inset(by: scroll.adjustedContentInset)
-        let region = CGRect(x: viewport.maxX - 100, y: viewport.maxY - 90, width: 100, height: 90)
+        let region = CGRect(x: viewport.midX, y: viewport.maxY - 90, width: viewport.width / 2, height: 90)
         let image = UIGraphicsImageRenderer(bounds: region).image { _ in
             view.drawHierarchy(in: view.bounds, afterScreenUpdates: true)
         }
