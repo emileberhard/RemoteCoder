@@ -7,6 +7,35 @@ struct ConversationWarmerTests {
     private static let digest = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     private static let now = Int64(Date.now.timeIntervalSince1970)
 
+    @Test func theRankedShortlistDoesNotAdvancePastFiveAcrossRepeatedPasses() async throws {
+        let fixture = WarmingFixture()
+        defer { fixture.cleanUp() }
+        fixture.host.htmlVisualPreparationContext = nil
+        let warmer = fixture.warmer()
+        var ranked = (0..<150).map { ConversationHeader.historyFixture(id: "rank-\($0)", updatedAt: Self.now - Int64($0)) }
+        let hot = Set(ranked.prefix(2).map(\.id))
+        for _ in 0..<4 {
+            await warmer.warm(warmer.candidates(in: ranked), hot: hot, agentThreadIDs: [])
+        }
+        #expect(await fixture.gateway.itemReads == 5)
+        #expect(warmer.candidates(in: ranked).isEmpty)
+        #expect(await fixture.sessions.existingSession(threadID: ranked[0].id) != nil)
+        #expect(await fixture.sessions.existingSession(threadID: ranked[5].id) == nil)
+
+        ranked[2] = .historyFixture(id: ranked[2].id, updatedAt: Self.now + 1)
+        ranked[5] = .historyFixture(id: ranked[5].id, updatedAt: Self.now + 1)
+        #expect(warmer.candidates(in: ranked).map(\.id) == [ranked[2].id])
+        await warmer.warm(warmer.candidates(in: ranked), hot: hot, agentThreadIDs: [])
+        #expect(await fixture.gateway.itemReads == 6)
+        #expect(warmer.candidates(in: ranked).isEmpty)
+
+        let promoted = ranked.remove(at: 5)
+        ranked.insert(promoted, at: 0)
+        #expect(warmer.candidates(in: ranked).map(\.id) == [ranked[0].id])
+        await warmer.warm(warmer.candidates(in: ranked), hot: hot, agentThreadIDs: [])
+        #expect(await fixture.gateway.itemReads == 7)
+    }
+
     @Test func anUnchangedConversationIsReadOnceAcrossPassesAndLaunches() async throws {
         let fixture = WarmingFixture()
         defer { fixture.cleanUp() }

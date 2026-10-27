@@ -1052,7 +1052,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
 
     // MARK: - Conversation warming
 
-    /// Prefetches the opening tails of every unsettled conversation in rank order
+    /// Prefetches the opening tails of up to five highest-ranked unsettled conversations
     /// at background priority and queues their HTML visuals; the top two also get
     /// a session, rendered Markdown and agent lists, so opening one paints from cache.
     func warmConversationsIfIdle() {
@@ -1066,7 +1066,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
                 let unsettled = self.unsettledConversationsByRank()
                 let top = unsettled.prefix(2).map(\.id).filter(self.recentConversations.admitsWarmed)
                 let hot = top.filter { self.turns.turn(forThread: $0) == nil }
-                let candidates = unsettled.filter(self.conversationWarmer.needsWarm)
+                let candidates = self.conversationWarmer.candidates(in: unsettled)
                 let agentCandidates = top.filter { self.recentConversations.agents(threadID: $0) == nil }
                 guard !candidates.isEmpty || !agentCandidates.isEmpty else { continue }
                 let ranks = unsettled.prefix(5).enumerated().map { "\($0.offset + 1):\($0.element.id)" }.joined(separator: ",")

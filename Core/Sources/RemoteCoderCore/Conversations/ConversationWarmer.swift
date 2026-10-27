@@ -31,6 +31,10 @@ final class ConversationWarmer {
         ledger.needsWarm(threadID: thread.id, revision: thread.updatedAt, context: host?.htmlVisualPreparationContext)
     }
 
+    func candidates(in ranked: [ConversationHeader]) -> [ConversationHeader] {
+        ranked.prefix(5).filter(needsWarm)
+    }
+
     func observation(threadID: String, revision: Int64) -> HistoryWarmLedger.Observation {
         ledger.observation(threadID: threadID, revision: revision)
     }
