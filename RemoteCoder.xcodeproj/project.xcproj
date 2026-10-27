@@ -1,0 +1,1739 @@
+{
+  "default-configuration": "Release",
+  "configurations": [
+    "Debug",
+    "Release"
+  ],
+  "localizations": {
+    "development": "en",
+    "supported": [
+      "Base"
+    ]
+  },
+  "packages": [
+    {
+      "kind": "remote",
+      "repository": "https://github.com/emileberhard/SpeechKit.git",
+      "version": {
+        "revision": "4a7d06482656e925d2c2e7c17d8b281c2a2d2c69"
+      }
+    },
+    {
+      "kind": "remote",
+      "repository": "https://github.com/googlemaps/ios-navigation-sdk",
+      "version": {
+        "version": "11.1.0"
+      }
+    },
+    {
+      "kind": "remote",
+      "repository": "https://github.com/stasel/WebRTC.git",
+      "version": {
+        "version": "152.0.0"
+      }
+    }
+  ],
+  "files": [
+    {
+      "kind": "group",
+      "name": "Products",
+      "children": [
+        {
+          "path": "<PRODUCTS>/RemoteCoder.app",
+          "id": "TEMP_BE237CF3-CAAA-4924-8F82-E448B1B52D99",
+          "type": "wrapper.application",
+          "index": false
+        },
+        {
+          "path": "<PRODUCTS>/RemoteCoder.app",
+          "id": "TEMP_08435F79-73FB-4A55-A2DB-A1D5751D4987",
+          "type": "wrapper.application",
+          "index": false
+        },
+        {
+          "path": "<PRODUCTS>/RemoteCoderCaptureExtension.appex",
+          "id": "TEMP_75877422-E459-4B10-9A30-A8C10AC3C4D8",
+          "type": "wrapper.app-extension",
+          "index": false,
+          "target-membership": [
+            {
+              "build-phase": "RemoteCoder/copy/Embed ExtensionKit Extensions",
+              "header-preservation": "remove-on-copy"
+            }
+          ]
+        },
+        {
+          "path": "<PRODUCTS>/RemoteCoderLiveActivities.appex",
+          "id": "TEMP_B960181A-C398-4EF9-9D78-BAE31C2A58A1",
+          "type": "wrapper.app-extension",
+          "index": false,
+          "target-membership": [
+            {
+              "build-phase": "RemoteCoder/copy/Embed Foundation Extensions",
+              "header-preservation": "remove-on-copy"
+            }
+          ]
+        },
+        {
+          "path": "<PRODUCTS>/RemoteCoderLocationPushService.appex",
+          "id": "TEMP_E0C31EF0-10D7-474E-890D-92ED4F8A85DB",
+          "type": "wrapper.app-extension",
+          "index": false,
+          "target-membership": [
+            {
+              "build-phase": "RemoteCoder/copy/Embed Foundation Extensions",
+              "header-preservation": "remove-on-copy"
+            }
+          ]
+        },
+        {
+          "path": "<PRODUCTS>/RemoteCoderNotificationService.appex",
+          "id": "TEMP_0275A7EB-6EE1-46DB-B1F1-6B148BAFF823",
+          "type": "wrapper.app-extension",
+          "index": false,
+          "target-membership": [
+            {
+              "build-phase": "RemoteCoder/copy/Embed Foundation Extensions",
+              "header-preservation": "remove-on-copy"
+            }
+          ]
+        },
+        {
+          "path": "<PRODUCTS>/RemoteCoderShareExtension.appex",
+          "id": "TEMP_C22ADDA6-39DF-4B09-86DF-72B912D1BB9B",
+          "type": "wrapper.app-extension",
+          "index": false,
+          "target-membership": [
+            {
+              "build-phase": "RemoteCoder/copy/Embed Foundation Extensions",
+              "header-preservation": "remove-on-copy"
+            }
+          ]
+        },
+        {
+          "path": "<PRODUCTS>/RemoteCoderTests.xctest",
+          "id": "TEMP_4F91EE6A-D869-40E5-98B6-A66EEE7A3347",
+          "type": "wrapper.cfbundle",
+          "index": false
+        },
+        {
+          "path": "<PRODUCTS>/RemoteCoderUITests.xctest",
+          "id": "TEMP_E4920633-1F98-4E65-B54C-7AFBCF4B25C0",
+          "type": "wrapper.cfbundle",
+          "index": false
+        }
+      ]
+    },
+    {
+      "kind": "group",
+      "name": "Project",
+      "children": [
+        {
+          "kind": "group",
+          "path": "Config",
+          "children": [
+            {
+              "path": "RemoteCoder.xcconfig"
+            }
+          ]
+        },
+        {
+          "kind": "group",
+          "path": "Core",
+          "children": [
+            {
+              "kind": "group",
+              "path": "Sources",
+              "children": [
+                {
+                  "path": "RemoteCoderCore/Turns/ActiveTasksLiveActivityContent.swift",
+                  "target-membership": [
+                    "RemoteCoderLiveActivities/compile-sources"
+                  ]
+                },
+                {
+                  "path": "RemoteCoderCore/Files/CameraCaptureBatch.swift",
+                  "target-membership": [
+                    "RemoteCoderCaptureExtension/compile-sources"
+                  ]
+                },
+                {
+                  "path": "RemoteCoderCore/Notifications/NotificationSoundPolicy.swift",
+                  "target-membership": [
+                    "RemoteCoderNotificationService/compile-sources"
+                  ]
+                },
+                {
+                  "path": "RemoteCoderCore/Workspace/OwnedTasks.swift",
+                  "target-membership": [
+                    "RemoteCoderCaptureExtension/compile-sources"
+                  ]
+                },
+                {
+                  "path": "RemoteCoderCore/Files/SharedItemsInbox.swift",
+                  "target-membership": [
+                    "RemoteCoderShareExtension/compile-sources"
+                  ]
+                }
+              ]
+            },
+            {
+              "kind": "group",
+              "path": "Tests",
+              "children": [
+                {
+                  "kind": "group",
+                  "path": "RemoteCoderCoreTests",
+                  "children": [
+                    {
+                      "kind": "folder",
+                      "path": "SharedSupport",
+                      "target-membership": [
+                        "RemoteCoderTests"
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "kind": "group",
+          "path": "protocol-fixtures",
+          "children": [
+            {
+              "kind": "group",
+              "path": "activity",
+              "children": [
+                {
+                  "path": "active-turn-null-start.json",
+                  "target-membership": [
+                    "RemoteCoderTests/resources"
+                  ]
+                },
+                {
+                  "path": "coverage.json",
+                  "target-membership": [
+                    "RemoteCoderTests/resources"
+                  ]
+                }
+              ]
+            },
+            {
+              "kind": "group",
+              "path": "attachments",
+              "children": [
+                {
+                  "path": "pasted-text-v1-cases.json",
+                  "target-membership": [
+                    "RemoteCoderTests/resources"
+                  ]
+                },
+                {
+                  "path": "pasted-text-v2-cases.json",
+                  "target-membership": [
+                    "RemoteCoderTests/resources"
+                  ]
+                }
+              ]
+            },
+            {
+              "kind": "group",
+              "path": "checkpoints",
+              "children": [
+                {
+                  "path": "inline-literal-text-v2.json",
+                  "target-membership": [
+                    "RemoteCoderTests/resources"
+                  ]
+                },
+                {
+                  "path": "inline-pasted-text-v2.json",
+                  "target-membership": [
+                    "RemoteCoderTests/resources"
+                  ]
+                },
+                {
+                  "path": "main-9db89687.json",
+                  "target-membership": [
+                    "RemoteCoderTests/resources"
+                  ]
+                },
+                {
+                  "path": "sent-attachments-v1.json",
+                  "target-membership": [
+                    "RemoteCoderTests/resources"
+                  ]
+                }
+              ]
+            },
+            {
+              "kind": "group",
+              "path": "devices",
+              "children": [
+                {
+                  "path": "register.json",
+                  "target-membership": [
+                    "RemoteCoderTests/resources"
+                  ]
+                }
+              ]
+            },
+            {
+              "kind": "group",
+              "path": "errors",
+              "children": [
+                {
+                  "path": "conversation-busy.json",
+                  "target-membership": [
+                    "RemoteCoderTests/resources"
+                  ]
+                },
+                {
+                  "path": "history-cursor-invalid.json",
+                  "target-membership": [
+                    "RemoteCoderTests/resources"
+                  ]
+                },
+                {
+                  "path": "history-page-too-large.json",
+                  "target-membership": [
+                    "RemoteCoderTests/resources"
+                  ]
+                },
+                {
+                  "path": "input-delivery-uncertain.json",
+                  "target-membership": [
+                    "RemoteCoderTests/resources"
+                  ]
+                },
+                {
+                  "path": "provider-unavailable.json",
+                  "target-membership": [
+                    "RemoteCoderTests/resources"
+                  ]
+                },
+                {
+                  "path": "queue-change-uncertain.json",
+                  "target-membership": [
+                    "RemoteCoderTests/resources"
+                  ]
+                },
+                {
+                  "path": "turn-not-running.json",
+                  "target-membership": [
+                    "RemoteCoderTests/resources"
+                  ]
+                }
+              ]
+            },
+            {
+              "kind": "group",
+              "path": "providers",
+              "children": [
+                {
+                  "path": "provider-health.json",
+                  "target-membership": [
+                    "RemoteCoderTests/resources"
+                  ]
+                }
+              ]
+            },
+            {
+              "kind": "group",
+              "path": "questions",
+              "children": [
+                {
+                  "path": "answered-outside-viewport.json",
+                  "target-membership": [
+                    "RemoteCoderTests/resources"
+                  ]
+                },
+                {
+                  "path": "answered-snapshot.json",
+                  "target-membership": [
+                    "RemoteCoderTests/resources"
+                  ]
+                }
+              ]
+            },
+            {
+              "kind": "group",
+              "path": "replay",
+              "children": [
+                {
+                  "path": "epoch-reset.json",
+                  "target-membership": [
+                    "RemoteCoderTests/resources"
+                  ]
+                },
+                {
+                  "path": "page-has-more.json",
+                  "target-membership": [
+                    "RemoteCoderTests/resources"
+                  ]
+                },
+                {
+                  "path": "skipped.json",
+                  "target-membership": [
+                    "RemoteCoderTests/resources"
+                  ]
+                }
+              ]
+            },
+            {
+              "path": "attached-files-block.json",
+              "target-membership": [
+                "RemoteCoderTests/resources"
+              ]
+            },
+            {
+              "path": "fixture-manifest.json",
+              "target-membership": [
+                "RemoteCoderTests/resources"
+              ]
+            },
+            {
+              "path": "metadata-conflict.json",
+              "target-membership": [
+                "RemoteCoderTests/resources"
+              ]
+            },
+            {
+              "path": "metadata-record.json",
+              "target-membership": [
+                "RemoteCoderTests/resources"
+              ]
+            },
+            {
+              "path": "metadata-update.json",
+              "target-membership": [
+                "RemoteCoderTests/resources"
+              ]
+            },
+            {
+              "path": "request-capacity.json",
+              "target-membership": [
+                "RemoteCoderTests/resources"
+              ]
+            },
+            {
+              "path": "voice-call-ended.json",
+              "target-membership": [
+                "RemoteCoderTests/resources"
+              ]
+            }
+          ]
+        },
+        {
+          "kind": "group",
+          "path": "RemoteCoder",
+          "children": [
+            {
+              "path": "Assets.xcassets",
+              "target-membership": [
+                "RemoteCoder/resources",
+                "RemoteCoderMac/resources"
+              ]
+            }
+          ]
+        },
+        {
+          "kind": "group",
+          "path": "RemoteCoderCaptureExtension",
+          "children": [
+            {
+              "path": "RemoteCoderCaptureExtension.swift",
+              "target-membership": [
+                "RemoteCoderCaptureExtension/compile-sources"
+              ]
+            }
+          ]
+        },
+        {
+          "kind": "group",
+          "path": "RemoteCoderLiveActivities",
+          "children": [
+            {
+              "path": "Assets.xcassets",
+              "target-membership": [
+                "RemoteCoderLiveActivities/resources"
+              ]
+            },
+            {
+              "path": "RemoteCoderActiveTasksWidget.swift",
+              "target-membership": [
+                "RemoteCoderLiveActivities/compile-sources"
+              ]
+            },
+            {
+              "path": "RemoteCoderCameraControl.swift",
+              "target-membership": [
+                "RemoteCoderLiveActivities/compile-sources"
+              ]
+            },
+            {
+              "path": "RemoteCoderLiveActivities.entitlements"
+            },
+            {
+              "path": "RemoteCoderLiveActivitiesBundle.swift",
+              "target-membership": [
+                "RemoteCoderLiveActivities/compile-sources"
+              ]
+            },
+            {
+              "path": "RemoteCoderVoiceCallWidget.swift",
+              "target-membership": [
+                "RemoteCoderLiveActivities/compile-sources"
+              ]
+            }
+          ]
+        },
+        {
+          "kind": "group",
+          "path": "RemoteCoderLocationPushService",
+          "children": [
+            {
+              "path": "LocationPushService.swift",
+              "target-membership": [
+                "RemoteCoderLocationPushService/compile-sources"
+              ]
+            },
+            {
+              "path": "RemoteCoderLocationPushService.entitlements"
+            }
+          ]
+        },
+        {
+          "kind": "group",
+          "path": "RemoteCoderNotificationService",
+          "children": [
+            {
+              "path": "NotificationService.swift",
+              "target-membership": [
+                "RemoteCoderNotificationService/compile-sources"
+              ]
+            },
+            {
+              "path": "RemoteCoderNotificationService.entitlements"
+            }
+          ]
+        },
+        {
+          "kind": "group",
+          "path": "RemoteCoderShareExtension",
+          "children": [
+            {
+              "path": "RemoteCoderShareExtension.entitlements"
+            },
+            {
+              "path": "SharedItemLoading.swift",
+              "target-membership": [
+                "RemoteCoderShareExtension/compile-sources"
+              ]
+            },
+            {
+              "path": "ShareView.swift",
+              "target-membership": [
+                "RemoteCoderShareExtension/compile-sources"
+              ]
+            },
+            {
+              "path": "ShareViewController.swift",
+              "target-membership": [
+                "RemoteCoderShareExtension/compile-sources"
+              ]
+            }
+          ]
+        },
+        {
+          "kind": "group",
+          "path": "Shared",
+          "children": [
+            {
+              "kind": "group",
+              "path": "AppExtensionContract",
+              "children": [
+                {
+                  "path": "AppGroup.swift",
+                  "target-membership": [
+                    "RemoteCoderLiveActivities/compile-sources",
+                    "RemoteCoderLocationPushService/compile-sources",
+                    "RemoteCoderNotificationService/compile-sources",
+                    "RemoteCoderShareExtension/compile-sources"
+                  ]
+                },
+                {
+                  "path": "NotificationContract.swift",
+                  "target-membership": [
+                    "RemoteCoderLiveActivities/compile-sources",
+                    "RemoteCoderNotificationService/compile-sources"
+                  ]
+                },
+                {
+                  "path": "RemoteCoderActiveTasksAttributes.swift",
+                  "target-membership": [
+                    "RemoteCoderLiveActivities/compile-sources"
+                  ]
+                },
+                {
+                  "path": "RemoteCoderCameraCaptureIntent.swift",
+                  "target-membership": [
+                    "RemoteCoderCaptureExtension/compile-sources",
+                    "RemoteCoderLiveActivities/compile-sources"
+                  ]
+                },
+                {
+                  "path": "RemoteCoderDeepLinks.swift",
+                  "target-membership": [
+                    "RemoteCoderLiveActivities/compile-sources",
+                    "RemoteCoderShareExtension/compile-sources"
+                  ]
+                },
+                {
+                  "path": "RemoteCoderVoiceCallAttributes.swift",
+                  "target-membership": [
+                    "RemoteCoderLiveActivities/compile-sources"
+                  ]
+                }
+              ]
+            },
+            {
+              "kind": "group",
+              "path": "CameraCapture",
+              "children": [
+                {
+                  "path": "CameraCaptureModel.swift",
+                  "target-membership": [
+                    "RemoteCoderCaptureExtension/compile-sources"
+                  ]
+                },
+                {
+                  "path": "CameraCaptureSession.swift",
+                  "target-membership": [
+                    "RemoteCoderCaptureExtension/compile-sources"
+                  ]
+                },
+                {
+                  "path": "CameraCaptureView.swift",
+                  "target-membership": [
+                    "RemoteCoderCaptureExtension/compile-sources"
+                  ]
+                },
+                {
+                  "path": "CameraPhotoProcessing.swift",
+                  "target-membership": [
+                    "RemoteCoderCaptureExtension/compile-sources"
+                  ]
+                },
+                {
+                  "path": "CameraPhotoReview.swift",
+                  "target-membership": [
+                    "RemoteCoderCaptureExtension/compile-sources"
+                  ]
+                },
+                {
+                  "path": "CameraPreview.swift",
+                  "target-membership": [
+                    "RemoteCoderCaptureExtension/compile-sources"
+                  ]
+                }
+              ]
+            },
+            {
+              "kind": "group",
+              "path": "LiveNavigationContract",
+              "children": [
+                {
+                  "path": "LiveNavigationModels.swift",
+                  "target-membership": [
+                    "RemoteCoderLocationPushService/compile-sources"
+                  ]
+                },
+                {
+                  "path": "LiveNavigationUploader.swift",
+                  "target-membership": [
+                    "RemoteCoderLocationPushService/compile-sources"
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "path": "LICENSES",
+          "target-membership": [
+            "RemoteCoder/resources",
+            "RemoteCoderMac/resources"
+          ]
+        },
+        {
+          "path": "RemoteCoderTests/Fixtures/providers.pcm",
+          "target-membership": [
+            "RemoteCoderTests/resources"
+          ]
+        },
+        {
+          "kind": "folder",
+          "path": "RemoteCoderTests",
+          "target-membership": [
+            "RemoteCoderTests"
+          ]
+        },
+        {
+          "kind": "folder",
+          "path": "RemoteCoderUITests",
+          "target-membership": [
+            "RemoteCoderUITests"
+          ]
+        },
+        {
+          "path": "THIRD_PARTY_NOTICES.md",
+          "target-membership": [
+            "RemoteCoder/resources",
+            "RemoteCoderMac/resources"
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "group",
+      "name": "Frameworks",
+      "children": [
+        {
+          "path": "<DEVELOPER>/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk/System/Library/Frameworks/AppIntents.framework",
+          "target-membership": [
+            "RemoteCoder/frameworks"
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "folder",
+      "path": "RemoteCoder/App",
+      "target-membership": [
+        "RemoteCoder",
+        "RemoteCoderMac"
+      ],
+      "membership-exceptions": [
+        {
+          "target": "RemoteCoderMac",
+          "exclusions": [
+            "App.swift",
+            "CodexIntentOptions.swift",
+            "RemoteCoderAppShortcuts.swift",
+            "RemoteCoderQuickActions.swift",
+            "VoiceModeIntentOptions.swift"
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "folder",
+      "path": "RemoteCoder/Chat",
+      "target-membership": [
+        "RemoteCoder",
+        "RemoteCoderMac"
+      ]
+    },
+    {
+      "kind": "folder",
+      "path": "RemoteCoder/Platform/Shared",
+      "target-membership": [
+        "RemoteCoder",
+        "RemoteCoderMac"
+      ]
+    },
+    {
+      "kind": "folder",
+      "path": "RemoteCoder/Services",
+      "target-membership": [
+        "RemoteCoder",
+        "RemoteCoderMac"
+      ],
+      "membership-exceptions": [
+        {
+          "target": "RemoteCoderMac",
+          "exclusions": [
+            "RealtimeVoice/RealtimeWebRTCSession.swift",
+            "RealtimeVoice/VoiceCall.swift"
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "folder",
+      "path": "RemoteCoder/UI",
+      "target-membership": [
+        "RemoteCoder",
+        "RemoteCoderMac"
+      ],
+      "membership-exceptions": [
+        {
+          "target": "RemoteCoderMac",
+          "exclusions": [
+            "Chat/VoiceMode/VoiceModeComponents.swift",
+            "Chat/VoiceMode/VoiceModeView.swift",
+            "Conversations/ConversationDrawer.swift",
+            "Settings/LocationSettingsSection.swift",
+            "Settings/RealtimeVoiceSettingsSection.swift"
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "folder",
+      "path": "RemoteCoder/Workspace",
+      "target-membership": [
+        "RemoteCoder",
+        "RemoteCoderMac"
+      ]
+    },
+    {
+      "kind": "folder",
+      "path": "RemoteCoder/Platform/iOS",
+      "target-membership": [
+        "RemoteCoder"
+      ]
+    },
+    {
+      "kind": "folder",
+      "path": "RemoteCoder/Platform/macOS",
+      "target-membership": [
+        "RemoteCoderMac"
+      ]
+    },
+    {
+      "kind": "folder",
+      "path": "Core/Sources/RemoteCoderCore",
+      "target-membership": [
+        "RemoteCoder",
+        "RemoteCoderMac"
+      ]
+    },
+    {
+      "kind": "folder",
+      "path": "Shared",
+      "target-membership": [
+        "RemoteCoder",
+        "RemoteCoderMac"
+      ],
+      "membership-exceptions": [
+        {
+          "target": "RemoteCoderMac",
+          "exclusions": [
+            "AppExtensionContract/RemoteCoderActiveTasksAttributes.swift",
+            "AppExtensionContract/RemoteCoderCameraCaptureIntent.swift",
+            "AppExtensionContract/RemoteCoderVoiceCallAttributes.swift",
+            "CameraCapture/CameraCaptureModel.swift",
+            "CameraCapture/CameraCaptureSession.swift",
+            "CameraCapture/CameraCaptureView.swift",
+            "CameraCapture/CameraPhotoProcessing.swift",
+            "CameraCapture/CameraPhotoReview.swift",
+            "CameraCapture/CameraPreview.swift",
+            "LiveNavigationContract/LiveNavigationModels.swift",
+            "LiveNavigationContract/LiveNavigationUploader.swift"
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "folder",
+      "path": "RemoteCoder/Resources",
+      "target-membership": [
+        "RemoteCoder",
+        "RemoteCoderMac"
+      ],
+      "membership-exceptions": [
+        {
+          "target": "RemoteCoder",
+          "exclusions": [
+            "RemoteCoderLocalConfig.example.json"
+          ]
+        },
+        {
+          "target": "RemoteCoderMac",
+          "exclusions": [
+            "RemoteCoderLocalConfig.example.json"
+          ]
+        }
+      ]
+    }
+  ],
+  "targets": [
+    {
+      "name": "RemoteCoder",
+      "id": "TEMP_41D29B9C-0C5F-4729-BC76-8F5FF0326655",
+      "product": "id:TEMP_BE237CF3-CAAA-4924-8F82-E448B1B52D99",
+      "product-type": "application",
+      "specialized-configurations": [
+        {
+          "name": "Debug",
+          "file": "Project/Config/RemoteCoder.xcconfig"
+        },
+        {
+          "name": "Release",
+          "file": "Project/Config/RemoteCoder.xcconfig"
+        }
+      ],
+      "dependencies": [
+        "RemoteCoderCaptureExtension",
+        "RemoteCoderLiveActivities",
+        "RemoteCoderLocationPushService",
+        "RemoteCoderNotificationService",
+        "RemoteCoderShareExtension"
+      ],
+      "build-phases": [
+        "compile-sources",
+        "resources",
+        {
+          "kind": "copy",
+          "name": "Embed Foundation Extensions",
+          "bundle-base-path": "plugins-directory"
+        },
+        {
+          "kind": "copy",
+          "name": "Embed ExtensionKit Extensions",
+          "bundle-base-path": "build-products-directory",
+          "relative-path": "$(EXTENSIONS_FOLDER_PATH)"
+        },
+        "frameworks",
+        {
+          "kind": "copy",
+          "name": "Embed Frameworks",
+          "bundle-base-path": "frameworks-directory"
+        }
+      ],
+      "package-product-members": [
+        {
+          "product-name": "DictationLibrary",
+          "build-phase": {
+            "build-phase": "frameworks"
+          }
+        },
+        {
+          "product-name": "GoogleNavigation",
+          "build-phase": {
+            "build-phase": "frameworks"
+          }
+        },
+        {
+          "product-name": "SpeechKit",
+          "build-phase": {
+            "build-phase": "frameworks"
+          }
+        },
+        {
+          "product-name": "WebRTC",
+          "build-phase": {
+            "build-phase": "frameworks"
+          }
+        }
+      ],
+      "build-settings": {
+        "ASSETCATALOG_COMPILER_APPICON_NAME": "AppIcon",
+        "ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME": "AccentColor",
+        "CODE_SIGN_ENTITLEMENTS": "$(RC_APP_ENTITLEMENTS)",
+        "CURRENT_PROJECT_VERSION": "1",
+        "ENABLE_PREVIEWS": "YES",
+        "EXCLUDED_SOURCE_FILE_NAMES": [
+          "$(inherited)",
+          ".gitkeep",
+          ".DS_Store",
+          "AGENTS.md",
+          "CLAUDE.md"
+        ],
+        "INFOPLIST_FILE": "Config/InfoPlists/RemoteCoder-Info.plist",
+        "INFOPLIST_KEY_CFBundleShortVersionString": "$(MARKETING_VERSION)",
+        "INFOPLIST_KEY_CFBundleVersion": "$(CURRENT_PROJECT_VERSION)",
+        "IPHONEOS_DEPLOYMENT_TARGET": "27.0",
+        "LD_RUNPATH_SEARCH_PATHS": [
+          "$(inherited)",
+          "@executable_path/Frameworks"
+        ],
+        "MARKETING_VERSION": "0.0.0",
+        "OTHER_LDFLAGS": [
+          "$(inherited) -Wl,-no_objc_class_refs_in_got",
+          "-L$(DT_TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME)"
+        ],
+        "PRODUCT_BUNDLE_IDENTIFIER": "$(RC_BUNDLE_ID)",
+        "PRODUCT_NAME": "RemoteCoder",
+        "RC_APNS_ENVIRONMENT[config=Debug]": "development",
+        "RC_APNS_ENVIRONMENT[config=Release]": "production",
+        "RC_BUILD_ID": "unrecorded",
+        "RC_SOURCE_COMMIT": "unrecorded",
+        "RC_SOURCE_FINGERPRINT": "unrecorded",
+        "RC_SOURCE_MODIFIED": "unrecorded",
+        "SDKROOT": "iphoneos",
+        "STRING_CATALOG_GENERATE_SYMBOLS": "YES",
+        "SUPPORTS_MACCATALYST": "NO",
+        "SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD": "YES",
+        "SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD": "NO",
+        "SWIFT_ACTIVE_COMPILATION_CONDITIONS[config=Debug]": [
+          "$(inherited) REMOTE_CODER_APP",
+          "DEBUG"
+        ],
+        "SWIFT_ACTIVE_COMPILATION_CONDITIONS[config=Release]": "$(inherited) REMOTE_CODER_APP",
+        "SWIFT_APPROACHABLE_CONCURRENCY": "YES",
+        "SWIFT_COMPILATION_MODE[config=Debug]": "singlefile",
+        "SWIFT_COMPILATION_MODE[config=Release]": "wholemodule",
+        "SWIFT_DEFAULT_ACTOR_ISOLATION": "nonisolated",
+        "SWIFT_OPTIMIZATION_LEVEL[config=Debug]": "-Onone",
+        "SWIFT_OPTIMIZATION_LEVEL[config=Release]": "-O",
+        "SWIFT_STRICT_CONCURRENCY": "complete",
+        "SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY": "YES",
+        "SWIFT_VERSION": "6.0",
+        "SWIFT_WARN_CONCURRENCY": "YES",
+        "TARGETED_DEVICE_FAMILY": "1,2",
+        "CODE_SIGN_STYLE": "Automatic",
+        "CODE_SIGN_IDENTITY[config=Debug]": "Apple Development",
+        "CODE_SIGN_IDENTITY[config=Release]": "Apple Distribution",
+        "RC_PERF_HARNESS_SHA256": "unrecorded",
+        "PROVISIONING_PROFILE_SPECIFIER[config=Release]": "$(RC_PROFILE_REMOTECODER_APP)",
+        "RC_APP_ENTITLEMENTS[config=Debug]": "RemoteCoder/Entitlements/RemoteCoder.Debug.entitlements",
+        "RC_APP_ENTITLEMENTS[config=Release]": "RemoteCoder/Entitlements/RemoteCoder.Release.entitlements"
+      }
+    },
+    {
+      "name": "RemoteCoderCaptureExtension",
+      "id": "TEMP_C8450EB9-AB34-463D-90EA-E75791F39329",
+      "product": "Products/RemoteCoderCaptureExtension.appex",
+      "product-type": "extensionkit-extension",
+      "specialized-configurations": [
+        {
+          "name": "Debug",
+          "file": "Project/Config/RemoteCoder.xcconfig"
+        },
+        {
+          "name": "Release",
+          "file": "Project/Config/RemoteCoder.xcconfig"
+        }
+      ],
+      "build-phases": [
+        "compile-sources",
+        "resources",
+        "frameworks",
+        {
+          "kind": "copy",
+          "name": "Embed Frameworks",
+          "bundle-base-path": "frameworks-directory"
+        }
+      ],
+      "build-settings": {
+        "APPLICATION_EXTENSION_API_ONLY": "YES",
+        "CURRENT_PROJECT_VERSION": "1",
+        "INFOPLIST_FILE": "Config/InfoPlists/RemoteCoderCaptureExtension-Info.plist",
+        "INFOPLIST_KEY_CFBundleShortVersionString": "$(MARKETING_VERSION)",
+        "INFOPLIST_KEY_CFBundleVersion": "$(CURRENT_PROJECT_VERSION)",
+        "IPHONEOS_DEPLOYMENT_TARGET": "27.0",
+        "LD_RUNPATH_SEARCH_PATHS": [
+          "$(inherited)",
+          "@executable_path/Frameworks",
+          "@executable_path/../../Frameworks"
+        ],
+        "MARKETING_VERSION": "0.0.0",
+        "OTHER_LDFLAGS": [
+          "$(inherited)",
+          "-L$(DT_TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME)"
+        ],
+        "PRODUCT_BUNDLE_IDENTIFIER": "$(RC_BUNDLE_ID).RemoteCoderCaptureExtension",
+        "PRODUCT_NAME": "RemoteCoderCaptureExtension",
+        "RC_BUILD_ID": "unrecorded",
+        "RC_SOURCE_COMMIT": "unrecorded",
+        "RC_SOURCE_FINGERPRINT": "unrecorded",
+        "RC_SOURCE_MODIFIED": "unrecorded",
+        "SDKROOT": "iphoneos",
+        "SKIP_INSTALL": "YES",
+        "STRING_CATALOG_GENERATE_SYMBOLS": "YES",
+        "SUPPORTS_MACCATALYST": "NO",
+        "SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD": "YES",
+        "SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD": "NO",
+        "SWIFT_ACTIVE_COMPILATION_CONDITIONS[config=Debug]": [
+          "$(inherited)",
+          "DEBUG"
+        ],
+        "SWIFT_APPROACHABLE_CONCURRENCY": "YES",
+        "SWIFT_COMPILATION_MODE[config=Debug]": "singlefile",
+        "SWIFT_COMPILATION_MODE[config=Release]": "wholemodule",
+        "SWIFT_DEFAULT_ACTOR_ISOLATION": "nonisolated",
+        "SWIFT_OPTIMIZATION_LEVEL[config=Debug]": "-Onone",
+        "SWIFT_OPTIMIZATION_LEVEL[config=Release]": "-O",
+        "SWIFT_STRICT_CONCURRENCY": "complete",
+        "SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY": "YES",
+        "SWIFT_VERSION": "6.0",
+        "SWIFT_WARN_CONCURRENCY": "YES",
+        "TARGETED_DEVICE_FAMILY": "1,2",
+        "CODE_SIGN_STYLE": "Automatic",
+        "CODE_SIGN_IDENTITY[config=Debug]": "Apple Development",
+        "CODE_SIGN_IDENTITY[config=Release]": "Apple Distribution",
+        "EXCLUDED_SOURCE_FILE_NAMES": [
+          "$(inherited)",
+          ".gitkeep",
+          ".DS_Store",
+          "AGENTS.md",
+          "CLAUDE.md"
+        ],
+        "PROVISIONING_PROFILE_SPECIFIER[config=Release]": "$(RC_PROFILE_CAPTURE_EXTENSION)"
+      }
+    },
+    {
+      "name": "RemoteCoderLiveActivities",
+      "id": "TEMP_B46AD2A7-08A0-4F76-BFA5-7EADC6A49AEB",
+      "product": "Products/RemoteCoderLiveActivities.appex",
+      "product-type": "app-extension",
+      "specialized-configurations": [
+        {
+          "name": "Debug",
+          "file": "Project/Config/RemoteCoder.xcconfig"
+        },
+        {
+          "name": "Release",
+          "file": "Project/Config/RemoteCoder.xcconfig"
+        }
+      ],
+      "build-phases": [
+        "compile-sources",
+        "resources",
+        "frameworks",
+        {
+          "kind": "copy",
+          "name": "Embed Frameworks",
+          "bundle-base-path": "frameworks-directory"
+        }
+      ],
+      "build-settings": {
+        "APPLICATION_EXTENSION_API_ONLY": "YES",
+        "CODE_SIGN_ENTITLEMENTS": "RemoteCoderLiveActivities/RemoteCoderLiveActivities.entitlements",
+        "CURRENT_PROJECT_VERSION": "1",
+        "INFOPLIST_FILE": "Config/InfoPlists/RemoteCoderLiveActivities-Info.plist",
+        "INFOPLIST_KEY_CFBundleShortVersionString": "$(MARKETING_VERSION)",
+        "INFOPLIST_KEY_CFBundleVersion": "$(CURRENT_PROJECT_VERSION)",
+        "IPHONEOS_DEPLOYMENT_TARGET": "27.0",
+        "LD_RUNPATH_SEARCH_PATHS": [
+          "$(inherited)",
+          "@executable_path/Frameworks",
+          "@executable_path/../../Frameworks"
+        ],
+        "MARKETING_VERSION": "0.0.0",
+        "OTHER_LDFLAGS": [
+          "$(inherited)",
+          "-L$(DT_TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME)"
+        ],
+        "PRODUCT_BUNDLE_IDENTIFIER": "$(RC_BUNDLE_ID).RemoteCoderLiveActivities",
+        "PRODUCT_NAME": "RemoteCoderLiveActivities",
+        "RC_BUILD_ID": "unrecorded",
+        "RC_SOURCE_COMMIT": "unrecorded",
+        "RC_SOURCE_FINGERPRINT": "unrecorded",
+        "RC_SOURCE_MODIFIED": "unrecorded",
+        "SDKROOT": "iphoneos",
+        "SKIP_INSTALL": "YES",
+        "STRING_CATALOG_GENERATE_SYMBOLS": "YES",
+        "SUPPORTS_MACCATALYST": "NO",
+        "SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD": "YES",
+        "SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD": "NO",
+        "SWIFT_ACTIVE_COMPILATION_CONDITIONS[config=Debug]": [
+          "$(inherited)",
+          "DEBUG"
+        ],
+        "SWIFT_APPROACHABLE_CONCURRENCY": "YES",
+        "SWIFT_COMPILATION_MODE[config=Debug]": "singlefile",
+        "SWIFT_COMPILATION_MODE[config=Release]": "wholemodule",
+        "SWIFT_DEFAULT_ACTOR_ISOLATION": "nonisolated",
+        "SWIFT_OPTIMIZATION_LEVEL[config=Debug]": "-Onone",
+        "SWIFT_OPTIMIZATION_LEVEL[config=Release]": "-O",
+        "SWIFT_STRICT_CONCURRENCY": "complete",
+        "SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY": "YES",
+        "SWIFT_VERSION": "6.0",
+        "SWIFT_WARN_CONCURRENCY": "YES",
+        "TARGETED_DEVICE_FAMILY": "1,2",
+        "CODE_SIGN_STYLE": "Automatic",
+        "CODE_SIGN_IDENTITY[config=Debug]": "Apple Development",
+        "CODE_SIGN_IDENTITY[config=Release]": "Apple Distribution",
+        "EXCLUDED_SOURCE_FILE_NAMES": [
+          "$(inherited)",
+          ".gitkeep",
+          ".DS_Store",
+          "AGENTS.md",
+          "CLAUDE.md"
+        ],
+        "PROVISIONING_PROFILE_SPECIFIER[config=Release]": "$(RC_PROFILE_LIVE_ACTIVITIES)"
+      }
+    },
+    {
+      "name": "RemoteCoderLocationPushService",
+      "id": "TEMP_47E3B879-7FC5-4930-B4F1-4383CAB321E8",
+      "product": "Products/RemoteCoderLocationPushService.appex",
+      "product-type": "app-extension",
+      "specialized-configurations": [
+        {
+          "name": "Debug",
+          "file": "Project/Config/RemoteCoder.xcconfig"
+        },
+        {
+          "name": "Release",
+          "file": "Project/Config/RemoteCoder.xcconfig"
+        }
+      ],
+      "build-phases": [
+        "compile-sources",
+        "resources",
+        "frameworks",
+        {
+          "kind": "copy",
+          "name": "Embed Frameworks",
+          "bundle-base-path": "frameworks-directory"
+        }
+      ],
+      "build-settings": {
+        "APPLICATION_EXTENSION_API_ONLY": "YES",
+        "CODE_SIGN_ENTITLEMENTS": "RemoteCoderLocationPushService/RemoteCoderLocationPushService.entitlements",
+        "CURRENT_PROJECT_VERSION": "1",
+        "INFOPLIST_FILE": "Config/InfoPlists/RemoteCoderLocationPushService-Info.plist",
+        "INFOPLIST_KEY_CFBundleShortVersionString": "$(MARKETING_VERSION)",
+        "INFOPLIST_KEY_CFBundleVersion": "$(CURRENT_PROJECT_VERSION)",
+        "IPHONEOS_DEPLOYMENT_TARGET": "27.0",
+        "LD_RUNPATH_SEARCH_PATHS": [
+          "$(inherited)",
+          "@executable_path/Frameworks",
+          "@executable_path/../../Frameworks"
+        ],
+        "MARKETING_VERSION": "0.0.0",
+        "OTHER_LDFLAGS": [
+          "$(inherited)",
+          "-L$(DT_TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME)"
+        ],
+        "PRODUCT_BUNDLE_IDENTIFIER": "$(RC_BUNDLE_ID).RemoteCoderLocationPushService",
+        "PRODUCT_NAME": "RemoteCoderLocationPushService",
+        "RC_BUILD_ID": "unrecorded",
+        "RC_SOURCE_COMMIT": "unrecorded",
+        "RC_SOURCE_FINGERPRINT": "unrecorded",
+        "RC_SOURCE_MODIFIED": "unrecorded",
+        "SDKROOT": "iphoneos",
+        "SKIP_INSTALL": "YES",
+        "STRING_CATALOG_GENERATE_SYMBOLS": "YES",
+        "SUPPORTS_MACCATALYST": "NO",
+        "SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD": "YES",
+        "SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD": "NO",
+        "SWIFT_ACTIVE_COMPILATION_CONDITIONS[config=Debug]": [
+          "$(inherited)",
+          "DEBUG"
+        ],
+        "SWIFT_APPROACHABLE_CONCURRENCY": "YES",
+        "SWIFT_COMPILATION_MODE[config=Debug]": "singlefile",
+        "SWIFT_COMPILATION_MODE[config=Release]": "wholemodule",
+        "SWIFT_DEFAULT_ACTOR_ISOLATION": "nonisolated",
+        "SWIFT_OPTIMIZATION_LEVEL[config=Debug]": "-Onone",
+        "SWIFT_OPTIMIZATION_LEVEL[config=Release]": "-O",
+        "SWIFT_STRICT_CONCURRENCY": "complete",
+        "SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY": "YES",
+        "SWIFT_VERSION": "6.0",
+        "SWIFT_WARN_CONCURRENCY": "YES",
+        "TARGETED_DEVICE_FAMILY": "1,2",
+        "CODE_SIGN_STYLE": "Automatic",
+        "CODE_SIGN_IDENTITY[config=Debug]": "Apple Development",
+        "CODE_SIGN_IDENTITY[config=Release]": "Apple Distribution",
+        "EXCLUDED_SOURCE_FILE_NAMES": [
+          "$(inherited)",
+          ".gitkeep",
+          ".DS_Store",
+          "AGENTS.md",
+          "CLAUDE.md"
+        ],
+        "PROVISIONING_PROFILE_SPECIFIER[config=Release]": "$(RC_PROFILE_LOCATION_PUSH_SERVICE)"
+      }
+    },
+    {
+      "name": "RemoteCoderMac",
+      "id": "TEMP_9503A30C-E88A-4F7D-92AB-9495B8861674",
+      "product": "id:TEMP_08435F79-73FB-4A55-A2DB-A1D5751D4987",
+      "product-type": "application",
+      "specialized-configurations": [
+        {
+          "name": "Debug",
+          "file": "Project/Config/RemoteCoder.xcconfig"
+        },
+        {
+          "name": "Release",
+          "file": "Project/Config/RemoteCoder.xcconfig"
+        }
+      ],
+      "build-phases": [
+        "compile-sources",
+        "resources",
+        "frameworks",
+        {
+          "kind": "copy",
+          "name": "Embed Frameworks",
+          "bundle-base-path": "frameworks-directory"
+        }
+      ],
+      "package-product-members": [
+        {
+          "product-name": "DictationLibrary",
+          "build-phase": {
+            "build-phase": "frameworks"
+          }
+        },
+        {
+          "product-name": "SpeechKit",
+          "build-phase": {
+            "build-phase": "frameworks"
+          }
+        }
+      ],
+      "build-settings": {
+        "ASSETCATALOG_COMPILER_APPICON_NAME": "AppIcon",
+        "ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME": "AccentColor",
+        "CODE_SIGN_ENTITLEMENTS": "RemoteCoder/Entitlements/RemoteCoderMac.$(CONFIGURATION).entitlements",
+        "COMBINE_HIDPI_IMAGES": "YES",
+        "CURRENT_PROJECT_VERSION": "1",
+        "ENABLE_PREVIEWS": "YES",
+        "INFOPLIST_FILE": "Config/InfoPlists/RemoteCoderMac-Info.plist",
+        "INFOPLIST_KEY_CFBundleShortVersionString": "$(MARKETING_VERSION)",
+        "INFOPLIST_KEY_CFBundleVersion": "$(CURRENT_PROJECT_VERSION)",
+        "LD_RUNPATH_SEARCH_PATHS": [
+          "$(inherited)",
+          "@executable_path/../Frameworks"
+        ],
+        "MACOSX_DEPLOYMENT_TARGET": "27.0",
+        "MARKETING_VERSION": "0.0.0",
+        "OTHER_LDFLAGS": [
+          "$(inherited)",
+          "-L$(DT_TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME)"
+        ],
+        "PRODUCT_BUNDLE_IDENTIFIER": "$(RC_BUNDLE_ID)",
+        "PRODUCT_NAME": "RemoteCoder",
+        "RC_APNS_ENVIRONMENT[config=Debug]": "development",
+        "RC_APNS_ENVIRONMENT[config=Release]": "production",
+        "RC_BUILD_ID": "unrecorded",
+        "RC_SOURCE_COMMIT": "unrecorded",
+        "RC_SOURCE_FINGERPRINT": "unrecorded",
+        "RC_SOURCE_MODIFIED": "unrecorded",
+        "SDKROOT": "macosx",
+        "STRING_CATALOG_GENERATE_SYMBOLS": "YES",
+        "SWIFT_ACTIVE_COMPILATION_CONDITIONS[config=Debug]": [
+          "$(inherited)",
+          "DEBUG"
+        ],
+        "SWIFT_APPROACHABLE_CONCURRENCY": "YES",
+        "SWIFT_COMPILATION_MODE[config=Debug]": "singlefile",
+        "SWIFT_COMPILATION_MODE[config=Release]": "wholemodule",
+        "SWIFT_DEFAULT_ACTOR_ISOLATION": "nonisolated",
+        "SWIFT_OPTIMIZATION_LEVEL[config=Debug]": "-Onone",
+        "SWIFT_OPTIMIZATION_LEVEL[config=Release]": "-O",
+        "SWIFT_STRICT_CONCURRENCY": "complete",
+        "SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY": "YES",
+        "SWIFT_VERSION": "6.0",
+        "SWIFT_WARN_CONCURRENCY": "YES",
+        "CODE_SIGN_STYLE": "Automatic",
+        "CODE_SIGN_IDENTITY[config=Debug]": "Apple Development",
+        "CODE_SIGN_IDENTITY[config=Release]": "Apple Distribution",
+        "EXCLUDED_SOURCE_FILE_NAMES": [
+          "$(inherited)",
+          ".gitkeep",
+          ".DS_Store",
+          "AGENTS.md",
+          "CLAUDE.md"
+        ],
+        "RC_PERF_HARNESS_SHA256": "unrecorded",
+        "PROVISIONING_PROFILE_SPECIFIER[config=Release]": "$(RC_PROFILE_REMOTECODER_MAC)"
+      }
+    },
+    {
+      "name": "RemoteCoderNotificationService",
+      "id": "TEMP_6B0B96CF-1C37-4914-921C-337F552317FA",
+      "product": "Products/RemoteCoderNotificationService.appex",
+      "product-type": "app-extension",
+      "specialized-configurations": [
+        {
+          "name": "Debug",
+          "file": "Project/Config/RemoteCoder.xcconfig"
+        },
+        {
+          "name": "Release",
+          "file": "Project/Config/RemoteCoder.xcconfig"
+        }
+      ],
+      "build-phases": [
+        "compile-sources",
+        "resources",
+        "frameworks",
+        {
+          "kind": "copy",
+          "name": "Embed Frameworks",
+          "bundle-base-path": "frameworks-directory"
+        }
+      ],
+      "build-settings": {
+        "APPLICATION_EXTENSION_API_ONLY": "YES",
+        "CODE_SIGN_ENTITLEMENTS": "RemoteCoderNotificationService/RemoteCoderNotificationService.entitlements",
+        "CURRENT_PROJECT_VERSION": "1",
+        "INFOPLIST_FILE": "Config/InfoPlists/RemoteCoderNotificationService-Info.plist",
+        "INFOPLIST_KEY_CFBundleShortVersionString": "$(MARKETING_VERSION)",
+        "INFOPLIST_KEY_CFBundleVersion": "$(CURRENT_PROJECT_VERSION)",
+        "IPHONEOS_DEPLOYMENT_TARGET": "27.0",
+        "LD_RUNPATH_SEARCH_PATHS": [
+          "$(inherited)",
+          "@executable_path/Frameworks",
+          "@executable_path/../../Frameworks"
+        ],
+        "MARKETING_VERSION": "0.0.0",
+        "OTHER_LDFLAGS": [
+          "$(inherited)",
+          "-L$(DT_TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME)"
+        ],
+        "PRODUCT_BUNDLE_IDENTIFIER": "$(RC_BUNDLE_ID).RemoteCoderNotificationService",
+        "PRODUCT_NAME": "RemoteCoderNotificationService",
+        "RC_BUILD_ID": "unrecorded",
+        "RC_SOURCE_COMMIT": "unrecorded",
+        "RC_SOURCE_FINGERPRINT": "unrecorded",
+        "RC_SOURCE_MODIFIED": "unrecorded",
+        "SDKROOT": "iphoneos",
+        "SKIP_INSTALL": "YES",
+        "STRING_CATALOG_GENERATE_SYMBOLS": "YES",
+        "SUPPORTS_MACCATALYST": "NO",
+        "SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD": "YES",
+        "SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD": "NO",
+        "SWIFT_ACTIVE_COMPILATION_CONDITIONS[config=Debug]": [
+          "$(inherited)",
+          "DEBUG"
+        ],
+        "SWIFT_APPROACHABLE_CONCURRENCY": "YES",
+        "SWIFT_COMPILATION_MODE[config=Debug]": "singlefile",
+        "SWIFT_COMPILATION_MODE[config=Release]": "wholemodule",
+        "SWIFT_DEFAULT_ACTOR_ISOLATION": "nonisolated",
+        "SWIFT_OPTIMIZATION_LEVEL[config=Debug]": "-Onone",
+        "SWIFT_OPTIMIZATION_LEVEL[config=Release]": "-O",
+        "SWIFT_STRICT_CONCURRENCY": "complete",
+        "SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY": "YES",
+        "SWIFT_VERSION": "6.0",
+        "SWIFT_WARN_CONCURRENCY": "YES",
+        "TARGETED_DEVICE_FAMILY": "1,2",
+        "CODE_SIGN_STYLE": "Automatic",
+        "CODE_SIGN_IDENTITY[config=Debug]": "Apple Development",
+        "CODE_SIGN_IDENTITY[config=Release]": "Apple Distribution",
+        "EXCLUDED_SOURCE_FILE_NAMES": [
+          "$(inherited)",
+          ".gitkeep",
+          ".DS_Store",
+          "AGENTS.md",
+          "CLAUDE.md"
+        ],
+        "PROVISIONING_PROFILE_SPECIFIER[config=Release]": "$(RC_PROFILE_NOTIFICATION_SERVICE)"
+      }
+    },
+    {
+      "name": "RemoteCoderShareExtension",
+      "id": "TEMP_51CDAC26-F368-42E7-B108-553DBEC19DA7",
+      "product": "Products/RemoteCoderShareExtension.appex",
+      "product-type": "app-extension",
+      "specialized-configurations": [
+        {
+          "name": "Debug",
+          "file": "Project/Config/RemoteCoder.xcconfig"
+        },
+        {
+          "name": "Release",
+          "file": "Project/Config/RemoteCoder.xcconfig"
+        }
+      ],
+      "build-phases": [
+        "compile-sources",
+        "resources",
+        "frameworks",
+        {
+          "kind": "copy",
+          "name": "Embed Frameworks",
+          "bundle-base-path": "frameworks-directory"
+        }
+      ],
+      "build-settings": {
+        "APPLICATION_EXTENSION_API_ONLY": "YES",
+        "CODE_SIGN_ENTITLEMENTS": "RemoteCoderShareExtension/RemoteCoderShareExtension.entitlements",
+        "CURRENT_PROJECT_VERSION": "1",
+        "INFOPLIST_FILE": "Config/InfoPlists/RemoteCoderShareExtension-Info.plist",
+        "INFOPLIST_KEY_CFBundleShortVersionString": "$(MARKETING_VERSION)",
+        "INFOPLIST_KEY_CFBundleVersion": "$(CURRENT_PROJECT_VERSION)",
+        "IPHONEOS_DEPLOYMENT_TARGET": "27.0",
+        "LD_RUNPATH_SEARCH_PATHS": [
+          "$(inherited)",
+          "@executable_path/Frameworks",
+          "@executable_path/../../Frameworks"
+        ],
+        "MARKETING_VERSION": "0.0.0",
+        "OTHER_LDFLAGS": [
+          "$(inherited)",
+          "-L$(DT_TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME)"
+        ],
+        "PRODUCT_BUNDLE_IDENTIFIER": "$(RC_BUNDLE_ID).RemoteCoderShareExtension",
+        "PRODUCT_NAME": "RemoteCoderShareExtension",
+        "RC_BUILD_ID": "unrecorded",
+        "RC_SOURCE_COMMIT": "unrecorded",
+        "RC_SOURCE_FINGERPRINT": "unrecorded",
+        "RC_SOURCE_MODIFIED": "unrecorded",
+        "SDKROOT": "iphoneos",
+        "SKIP_INSTALL": "YES",
+        "STRING_CATALOG_GENERATE_SYMBOLS": "YES",
+        "SUPPORTS_MACCATALYST": "NO",
+        "SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD": "YES",
+        "SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD": "NO",
+        "SWIFT_ACTIVE_COMPILATION_CONDITIONS[config=Debug]": [
+          "$(inherited)",
+          "DEBUG"
+        ],
+        "SWIFT_APPROACHABLE_CONCURRENCY": "YES",
+        "SWIFT_COMPILATION_MODE[config=Debug]": "singlefile",
+        "SWIFT_COMPILATION_MODE[config=Release]": "wholemodule",
+        "SWIFT_DEFAULT_ACTOR_ISOLATION": "nonisolated",
+        "SWIFT_OPTIMIZATION_LEVEL[config=Debug]": "-Onone",
+        "SWIFT_OPTIMIZATION_LEVEL[config=Release]": "-O",
+        "SWIFT_STRICT_CONCURRENCY": "complete",
+        "SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY": "YES",
+        "SWIFT_VERSION": "6.0",
+        "SWIFT_WARN_CONCURRENCY": "YES",
+        "TARGETED_DEVICE_FAMILY": "1,2",
+        "CODE_SIGN_STYLE": "Automatic",
+        "CODE_SIGN_IDENTITY[config=Debug]": "Apple Development",
+        "CODE_SIGN_IDENTITY[config=Release]": "Apple Distribution",
+        "EXCLUDED_SOURCE_FILE_NAMES": [
+          "$(inherited)",
+          ".gitkeep",
+          ".DS_Store",
+          "AGENTS.md",
+          "CLAUDE.md"
+        ],
+        "PROVISIONING_PROFILE_SPECIFIER[config=Release]": "$(RC_PROFILE_SHARE_EXTENSION)"
+      }
+    },
+    {
+      "name": "RemoteCoderTests",
+      "id": "TEMP_E6F5E277-4AF9-44C6-977B-E909CA8AE6CA",
+      "product": "Products/RemoteCoderTests.xctest",
+      "product-type": "bundle.unit-test",
+      "test-host-target": "RemoteCoder",
+      "specialized-configurations": [
+        {
+          "name": "Debug",
+          "file": "Project/Config/RemoteCoder.xcconfig"
+        },
+        {
+          "name": "Release",
+          "file": "Project/Config/RemoteCoder.xcconfig"
+        }
+      ],
+      "dependencies": [
+        "RemoteCoder"
+      ],
+      "build-phases": [
+        "compile-sources",
+        "resources",
+        "frameworks",
+        {
+          "kind": "copy",
+          "name": "Embed Frameworks",
+          "bundle-base-path": "frameworks-directory"
+        }
+      ],
+      "build-settings": {
+        "BUNDLE_LOADER": "$(TEST_HOST)",
+        "CURRENT_PROJECT_VERSION": "1",
+        "EXCLUDED_SOURCE_FILE_NAMES": [
+          "$(inherited)",
+          ".gitkeep",
+          ".DS_Store",
+          "AGENTS.md",
+          "CLAUDE.md"
+        ],
+        "INFOPLIST_FILE": "Config/InfoPlists/RemoteCoderTests-Info.plist",
+        "INFOPLIST_KEY_CFBundleShortVersionString": "$(MARKETING_VERSION)",
+        "INFOPLIST_KEY_CFBundleVersion": "$(CURRENT_PROJECT_VERSION)",
+        "IPHONEOS_DEPLOYMENT_TARGET": "27.0",
+        "LD_RUNPATH_SEARCH_PATHS": [
+          "$(inherited)",
+          "@executable_path/Frameworks",
+          "@loader_path/Frameworks"
+        ],
+        "MARKETING_VERSION": "0.0.0",
+        "OTHER_LDFLAGS": [
+          "$(inherited)",
+          "-L$(DT_TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME)"
+        ],
+        "PRODUCT_BUNDLE_IDENTIFIER": "$(RC_BUNDLE_ID)Tests",
+        "PRODUCT_NAME": "RemoteCoderTests",
+        "RC_BUILD_ID": "unrecorded",
+        "RC_SOURCE_COMMIT": "unrecorded",
+        "RC_SOURCE_FINGERPRINT": "unrecorded",
+        "RC_SOURCE_MODIFIED": "unrecorded",
+        "SDKROOT": "iphoneos",
+        "SKIP_INSTALL": "YES",
+        "SUPPORTS_MACCATALYST": "NO",
+        "SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD": "YES",
+        "SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD": "NO",
+        "SWIFT_ACTIVE_COMPILATION_CONDITIONS[config=Debug]": [
+          "$(inherited)",
+          "DEBUG"
+        ],
+        "SWIFT_APPROACHABLE_CONCURRENCY": "YES",
+        "SWIFT_COMPILATION_MODE[config=Debug]": "singlefile",
+        "SWIFT_COMPILATION_MODE[config=Release]": "wholemodule",
+        "SWIFT_DEFAULT_ACTOR_ISOLATION": "nonisolated",
+        "SWIFT_OPTIMIZATION_LEVEL[config=Debug]": "-Onone",
+        "SWIFT_OPTIMIZATION_LEVEL[config=Release]": "-O",
+        "SWIFT_STRICT_CONCURRENCY": "complete",
+        "SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY": "YES",
+        "SWIFT_VERSION": "6.0",
+        "SWIFT_WARN_CONCURRENCY": "YES",
+        "TARGETED_DEVICE_FAMILY": "1,2",
+        "TEST_HOST": "$(BUILT_PRODUCTS_DIR)/RemoteCoder.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/RemoteCoder",
+        "TEST_TARGET_NAME": "RemoteCoder",
+        "CODE_SIGN_STYLE": "Automatic",
+        "CODE_SIGN_IDENTITY[config=Debug]": "Apple Development",
+        "CODE_SIGN_IDENTITY[config=Release]": "Apple Distribution"
+      }
+    },
+    {
+      "name": "RemoteCoderUITests",
+      "id": "TEMP_9DEB3D2B-6D0F-4DC6-BE78-4D7FF94EA0D4",
+      "product": "Products/RemoteCoderUITests.xctest",
+      "product-type": "bundle.ui-testing",
+      "test-host-target": "RemoteCoder",
+      "specialized-configurations": [
+        {
+          "name": "Debug",
+          "file": "Project/Config/RemoteCoder.xcconfig"
+        },
+        {
+          "name": "Release",
+          "file": "Project/Config/RemoteCoder.xcconfig"
+        }
+      ],
+      "dependencies": [
+        "RemoteCoder"
+      ],
+      "build-phases": [
+        "compile-sources",
+        "resources",
+        "frameworks",
+        {
+          "kind": "copy",
+          "name": "Embed Frameworks",
+          "bundle-base-path": "frameworks-directory"
+        }
+      ],
+      "build-settings": {
+        "CURRENT_PROJECT_VERSION": "1",
+        "EXCLUDED_SOURCE_FILE_NAMES": [
+          "$(inherited)",
+          ".gitkeep",
+          ".DS_Store",
+          "AGENTS.md",
+          "CLAUDE.md"
+        ],
+        "INFOPLIST_FILE": "Config/InfoPlists/RemoteCoderUITests-Info.plist",
+        "INFOPLIST_KEY_CFBundleShortVersionString": "$(MARKETING_VERSION)",
+        "INFOPLIST_KEY_CFBundleVersion": "$(CURRENT_PROJECT_VERSION)",
+        "IPHONEOS_DEPLOYMENT_TARGET": "27.0",
+        "LD_RUNPATH_SEARCH_PATHS": [
+          "$(inherited)",
+          "@executable_path/Frameworks",
+          "@loader_path/Frameworks"
+        ],
+        "MARKETING_VERSION": "0.0.0",
+        "OTHER_LDFLAGS": [
+          "$(inherited)",
+          "-L$(DT_TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME)"
+        ],
+        "PRODUCT_BUNDLE_IDENTIFIER": "$(RC_BUNDLE_ID)UITests",
+        "PRODUCT_NAME": "RemoteCoderUITests",
+        "RC_BUILD_ID": "unrecorded",
+        "RC_SOURCE_COMMIT": "unrecorded",
+        "RC_SOURCE_FINGERPRINT": "unrecorded",
+        "RC_SOURCE_MODIFIED": "unrecorded",
+        "SDKROOT": "iphoneos",
+        "SKIP_INSTALL": "YES",
+        "SUPPORTS_MACCATALYST": "NO",
+        "SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD": "YES",
+        "SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD": "NO",
+        "SWIFT_ACTIVE_COMPILATION_CONDITIONS[config=Debug]": [
+          "$(inherited)",
+          "DEBUG"
+        ],
+        "SWIFT_APPROACHABLE_CONCURRENCY": "YES",
+        "SWIFT_COMPILATION_MODE[config=Debug]": "singlefile",
+        "SWIFT_COMPILATION_MODE[config=Release]": "wholemodule",
+        "SWIFT_DEFAULT_ACTOR_ISOLATION": "nonisolated",
+        "SWIFT_OPTIMIZATION_LEVEL[config=Debug]": "-Onone",
+        "SWIFT_OPTIMIZATION_LEVEL[config=Release]": "-O",
+        "SWIFT_STRICT_CONCURRENCY": "complete",
+        "SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY": "YES",
+        "SWIFT_VERSION": "6.0",
+        "SWIFT_WARN_CONCURRENCY": "YES",
+        "TARGETED_DEVICE_FAMILY": "1,2",
+        "TEST_TARGET_NAME": "RemoteCoder",
+        "CODE_SIGN_STYLE": "Automatic",
+        "CODE_SIGN_IDENTITY[config=Debug]": "Apple Development",
+        "CODE_SIGN_IDENTITY[config=Release]": "Apple Distribution"
+      }
+    }
+  ],
+  "build-settings": {
+    "ALWAYS_SEARCH_USER_PATHS": "NO",
+    "CLANG_ANALYZER_LOCALIZABILITY_NONLOCALIZED": "YES",
+    "CLANG_ANALYZER_NONNULL": "YES",
+    "CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION": "YES_AGGRESSIVE",
+    "CLANG_CXX_LANGUAGE_STANDARD": "gnu++14",
+    "CLANG_CXX_LIBRARY": "libc++",
+    "CLANG_ENABLE_MODULES": "YES",
+    "CLANG_ENABLE_OBJC_ARC": "YES",
+    "CLANG_ENABLE_OBJC_WEAK": "YES",
+    "CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING": "YES",
+    "CLANG_WARN_BOOL_CONVERSION": "YES",
+    "CLANG_WARN_COMMA": "YES",
+    "CLANG_WARN_CONSTANT_CONVERSION": "YES",
+    "CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS": "YES",
+    "CLANG_WARN_DIRECT_OBJC_ISA_USAGE": "YES_ERROR",
+    "CLANG_WARN_DOCUMENTATION_COMMENTS": "YES",
+    "CLANG_WARN_EMPTY_BODY": "YES",
+    "CLANG_WARN_ENUM_CONVERSION": "YES",
+    "CLANG_WARN_INFINITE_RECURSION": "YES",
+    "CLANG_WARN_INT_CONVERSION": "YES",
+    "CLANG_WARN_NON_LITERAL_NULL_CONVERSION": "YES",
+    "CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF": "YES",
+    "CLANG_WARN_OBJC_LITERAL_CONVERSION": "YES",
+    "CLANG_WARN_OBJC_ROOT_CLASS": "YES_ERROR",
+    "CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER": "YES",
+    "CLANG_WARN_RANGE_LOOP_ANALYSIS": "YES",
+    "CLANG_WARN_STRICT_PROTOTYPES": "YES",
+    "CLANG_WARN_SUSPICIOUS_MOVE": "YES",
+    "CLANG_WARN_UNGUARDED_AVAILABILITY": "YES_AGGRESSIVE",
+    "CLANG_WARN_UNREACHABLE_CODE": "YES",
+    "CLANG_WARN__DUPLICATE_METHOD_MATCH": "YES",
+    "COPY_PHASE_STRIP": "NO",
+    "DEAD_CODE_STRIPPING": "YES",
+    "DEBUG_INFORMATION_FORMAT[config=Debug]": "dwarf",
+    "DEBUG_INFORMATION_FORMAT[config=Release]": "dwarf-with-dsym",
+    "ENABLE_NS_ASSERTIONS[config=Release]": "NO",
+    "ENABLE_STRICT_OBJC_MSGSEND": "YES",
+    "ENABLE_TESTABILITY[config=Debug]": "YES",
+    "GCC_C_LANGUAGE_STANDARD": "gnu11",
+    "GCC_DYNAMIC_NO_PIC[config=Debug]": "NO",
+    "GCC_NO_COMMON_BLOCKS": "YES",
+    "GCC_OPTIMIZATION_LEVEL[config=Debug]": "0",
+    "GCC_PREPROCESSOR_DEFINITIONS[config=Debug]": [
+      "DEBUG=1",
+      "$(inherited)"
+    ],
+    "GCC_WARN_64_TO_32_BIT_CONVERSION": "YES",
+    "GCC_WARN_ABOUT_RETURN_TYPE": "YES_ERROR",
+    "GCC_WARN_UNDECLARED_SELECTOR": "YES",
+    "GCC_WARN_UNINITIALIZED_AUTOS": "YES_AGGRESSIVE",
+    "GCC_WARN_UNUSED_FUNCTION": "YES",
+    "GCC_WARN_UNUSED_VARIABLE": "YES",
+    "MTL_ENABLE_DEBUG_INFO[config=Debug]": "YES",
+    "MTL_ENABLE_DEBUG_INFO[config=Release]": "NO",
+    "ONLY_ACTIVE_ARCH[config=Debug]": "YES",
+    "PRODUCT_NAME": "$(TARGET_NAME)",
+    "VALIDATE_PRODUCT[config=Release]": "YES"
+  }
+}

@@ -38,7 +38,7 @@ TEAM = maintainer_config().get("xcodeSettings", {}).get("DEVELOPMENT_TEAM", "")
 APP_IDENTIFIER = maintainer_config().get("xcodeSettings", {}).get("RC_BUNDLE_ID", "com.example.RemoteCoder")
 MAC_APP = "RemoteCoderMac-direct.app"
 MAC_PACKAGE = "RemoteCoderMac.pkg"
-MIRRORED = ("gateway", "mac-app", "mac-package", "ios-symbols", "mac-symbols")
+MIRRORED = ("build-numbers", "gateway", "mac-app", "mac-package", "ios-symbols", "mac-symbols")
 COMPONENTS = ("gateway", "app")
 SYMBOL_DIRECTORY = rf"testflight-(?:ios|mac)-({VERSION})-[0-9]+"
 SYMBOL_WINDOW_SECONDS = 7 * 24 * 3600
@@ -58,9 +58,18 @@ def version_key(version: str) -> tuple[int, ...]:
     return tuple(map(int, version.split(".")))
 
 
-def build_number(version: str) -> str:
-    major, minor, patch = version_key(version)
-    return str(major * 1000000 + minor * 1000 + patch)
+def release_build_number(version: str, platform: str) -> str:
+    key = version_key(version)
+    if key <= (3, 73, 0):
+        major, minor, patch = key
+        return str(major * 1000000 + minor * 1000 + patch)
+    directory = RELEASES / version
+    record = json.loads((directory / "build-numbers.json").read_text())
+    if (set(record) != {"version", "commit", "ios", "mac"}
+        or record["version"] != version or record["commit"] != (directory / "commit").read_text().strip()
+        or any(not isinstance(record[name], str) or re.fullmatch(r"[1-9][0-9]*", record[name]) is None for name in ("ios", "mac"))):
+        raise ValueError("The release build-number receipt does not match its source")
+    return record[platform]
 
 
 def git(*arguments: str) -> str:
@@ -234,12 +243,15 @@ def publish(version: str, gateway: Path, package: Path) -> dict:
 
 
 def symbol_directory(platform: str, version: str) -> Path:
-    return DEPLOYMENTS / f"testflight-{platform}-{version}-{build_number(version)}"
+    return DEPLOYMENTS / f"testflight-{platform}-{version}-{release_build_number(version, platform)}"
 
 
 def attach(version: str, platform: str) -> dict:
     directory = RELEASES / version
     required = {"mac-app": directory / MAC_APP, "mac-package": directory / MAC_PACKAGE} if platform == "mac" else {}
+    if version_key(version) > (3, 73, 0):
+        release_build_number(version, platform)
+        required["build-numbers"] = directory / "build-numbers.json"
     artifacts = {name: entry(path) for name, path in required.items()}
     symbols = symbol_directory(platform, version)
     if symbols.is_dir():
@@ -336,7 +348,8 @@ def installed_app(app: Path) -> str:
     if (
         isinstance(version, str)
         and re.fullmatch(VERSION, version)
-        and info.get("CFBundleVersion") == build_number(version)
+        and isinstance(info.get("CFBundleVersion"), str)
+        and re.fullmatch(r"[1-9][0-9]*", info["CFBundleVersion"])
         and info.get("RemoteCoderSourceModified") == "false"
     ):
         return version
@@ -418,6 +431,8 @@ def catch_up(host: str) -> dict:
         return {"version": None}
     version, artifacts = record["version"], record["artifacts"]
     directory = admit(version, record["commit"])
+    if "build-numbers" in artifacts:
+        mirror(host, "build-numbers", artifacts["build-numbers"], directory / "build-numbers.json")
     facts, done = installed(), settled(directory)
     plan = {name: decision(facts[name], version, name in done) for name in COMPONENTS}
     if plan["app"] == "deliver" and "mac-app" not in artifacts:
@@ -465,7 +480,7 @@ def verify(directory: Path) -> dict:
     expected = {
         "CFBundleIdentifier": APP_IDENTIFIER,
         "CFBundleShortVersionString": directory.name,
-        "CFBundleVersion": build_number(directory.name),
+        "CFBundleVersion": release_build_number(directory.name, "mac"),
         "RemoteCoderSourceCommit": commit,
         "RemoteCoderSourceModified": "false",
     }

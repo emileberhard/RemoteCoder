@@ -4,7 +4,7 @@ The repository root and [iOS area instructions](../RemoteCoder/AGENTS.md) apply.
 
 `just core-test [filter]` runs this package on the configured build host without an iOS
 simulator, app host, signing, or provider services. These production sources
-are also compiled directly by the Tuist app target. There is one source owner;
+are also compiled directly by the Xcode app target. There is one source owner;
 never duplicate definitions or maintain a separate implementation for tests.
 Keep iOS-only imports and view hosting outside this package. Mac-native tests
 belong here, in the same domain folders as their sources; affected iOS

@@ -19,7 +19,7 @@ class ReleaseConfigurationTests(unittest.TestCase):
         )
 
     def test_tracked_release_configuration_is_public(self):
-        module.validate((Path(__file__).resolve().parents[2] / "fastlane/release-config.json").read_bytes())
+        module.validate((Path(__file__).resolve().parents[2] / "Config/release-config.json").read_bytes())
 
     def test_private_and_unknown_fields_fail_closed(self):
         for key in (

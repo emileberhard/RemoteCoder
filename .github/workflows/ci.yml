@@ -45,7 +45,7 @@ jobs:
                 host-daemon-rs/*|docs/codex/compatibility.json|protocol-fixtures/*|dev-tools/fixtures/*|rust-toolchain.toml|.github/workflows/ci.yml) gateway=true ;;
               esac
               case "$path" in
-                *.swift|protocol-fixtures/*|Core/*|RemoteCoder/*|RemoteCoderMac/*|RemoteCoderTests/*|RemoteCoderUITests/*|RemoteCoderLiveActivities/*|RemoteCoderNotificationService/*|RemoteCoderLocationPushService/*|RemoteCoderShareExtension/*|RemoteCoderCaptureExtension/*|Shared/*|Config/*|Tuist/*|scripts/*|.xcode-version|.swift-version|.github/workflows/ci.yml) swift=true ;;
+                *.swift|protocol-fixtures/*|Core/*|RemoteCoder/*|RemoteCoderMac/*|RemoteCoderTests/*|RemoteCoderUITests/*|RemoteCoderLiveActivities/*|RemoteCoderNotificationService/*|RemoteCoderLocationPushService/*|RemoteCoderShareExtension/*|RemoteCoderCaptureExtension/*|Shared/*|Config/*|RemoteCoder.xcodeproj/*|scripts/*|.xcode-version|.swift-version|.github/workflows/ci.yml) swift=true ;;
               esac
             done < "$RUNNER_TEMP/changed-paths"
           fi
@@ -57,7 +57,6 @@ jobs:
     runs-on: xcode-27
     timeout-minutes: 35
     env:
-      DEVELOPER_DIR: /Applications/Xcode_27.1.0.app/Contents/Developer
       CARGO_BUILD_JOBS: '4'
       RUST_TEST_THREADS: '4'
     steps:
@@ -68,6 +67,7 @@ jobs:
         run: |
           /usr/bin/time -p /usr/bin/git --version
           /usr/bin/time -p /usr/bin/python3 -c 'import json, pathlib'
+      - run: scripts/select-xcode
       - run: rustup show
       - run: cargo fmt --manifest-path host-daemon-rs/Cargo.toml --check
       - run: cargo clippy --manifest-path host-daemon-rs/Cargo.toml --locked --all-targets --all-features -- -D warnings
@@ -77,19 +77,38 @@ jobs:
     needs: changes
     if: ${{ needs.changes.outputs.swift == 'true' }}
     runs-on: xcode-27
-    timeout-minutes: 20
-    env:
-      DEVELOPER_DIR: /Applications/Xcode_27.1.0.app/Contents/Developer
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - run: scripts/select-xcode
       - run: python3 scripts/core-test.py
       - run: ./scripts/lint-glass
       - run: ./scripts/lint-haptics
       - run: ./scripts/lint-symbol-effects
       - run: ./scripts/lint-interface-scale
       - run: ./scripts/lint-platform-imports
+      - run: uv run --project dev-tools --locked python -m unittest discover -s scripts/tests
+
+  apps:
+    needs: changes
+    if: ${{ needs.changes.outputs.swift == 'true' }}
+    runs-on: xcode-27
+    timeout-minutes: 60
+    env:
+      RC_COMPILATION_OWNER: '1'
+      RC_DERIVED_DATA: ${{ github.workspace }}/.local/app-build
+      RC_IOS_SIMULATOR: iPhone 17 Pro
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: scripts/select-xcode
+      - run: just ios-build-local
+      - run: just mac-build-local
+      - run: just mac-harness-build-local
+      - run: just verify-simulator-local
 
   web:
     if: ${{ !github.event.repository.private }}
@@ -110,4 +129,3 @@ jobs:
         working-directory: web-client
       - run: bun run build
         working-directory: web-client
-      - run: python3 -m unittest discover -s scripts/tests -p test_release_tag.py

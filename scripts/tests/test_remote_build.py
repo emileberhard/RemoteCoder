@@ -150,13 +150,13 @@ class RemoteBuildTests(unittest.TestCase):
             mirror.mkdir()
             (source / "new.swift").write_text("source")
             (mirror / "removed.swift").write_text("stale")
-            for name in ("RemoteCoder.xcodeproj", "RemoteCoder.xcworkspace", "Derived"):
+            for name in ("RemoteCoder.xcworkspace", "Derived"):
                 (mirror / name).mkdir()
                 (mirror / name / "generated").write_text("retained")
             subprocess.run(module.mirror_source_command(source, mirror), check=True)
             self.assertFalse((mirror / "removed.swift").exists())
             self.assertEqual((mirror / "new.swift").read_text(), "source")
-            for name in ("RemoteCoder.xcodeproj", "RemoteCoder.xcworkspace", "Derived"):
+            for name in ("RemoteCoder.xcworkspace", "Derived"):
                 self.assertEqual((mirror / name / "generated").read_text(), "retained")
 
 

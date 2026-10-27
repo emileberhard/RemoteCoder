@@ -80,16 +80,13 @@ class PipelineRecipesTests(unittest.TestCase):
                 tempfile.TemporaryDirectory() as temporary,
             ):
                 root = Path(temporary)
-                for name in ("justfile", ".xcode-version", ".tuist-version"):
+                for name in ("justfile", ".xcode-version"):
                     shutil.copy2(ROOT / name, root / name)
                 (root / "scripts").mkdir()
                 for name in ("build-host", "xcode_build.py", "maintainer_config.py"):
                     shutil.copy2(ROOT / "scripts" / name, root / "scripts" / name)
                 bin_dir = root / "bin"
                 bin_dir.mkdir()
-                (bin_dir / "tuist").write_text(
-                    '#!/bin/sh\nif [ "$1" = version ]; then cat .tuist-version; fi\n'
-                )
                 (bin_dir / "xcodebuild").write_text(
                     f"#!{sys.executable}\n"
                     + """import json, os, sys
@@ -191,7 +188,6 @@ sys.exit(65 if os.environ['FIXTURE_MODE'] == 'native-failure' and scheme == 'Rem
             root = Path(temporary)
             shutil.copy2(ROOT / "justfile", root / "justfile")
             shutil.copy2(ROOT / ".xcode-version", root / ".xcode-version")
-            shutil.copy2(ROOT / ".tuist-version", root / ".tuist-version")
             (root / "scripts").mkdir(exist_ok=True)
             shutil.copy2(ROOT / "scripts/build-host", root / "scripts/build-host")
             shutil.copy2(ROOT / "scripts/maintainer_config.py", root / "scripts/maintainer_config.py")
@@ -217,16 +213,16 @@ sys.exit(65 if os.environ['FIXTURE_MODE'] == 'native-failure' and scheme == 'Rem
                         "targets": [
                             {
                                 "name": "RemoteCoder",
-                                "bundleId": "$(RC_BUNDLE_ID)",
+                                "build-settings": {"PRODUCT_BUNDLE_IDENTIFIER": "$(RC_BUNDLE_ID)"},
                                 "dependencies": [
-                                    {"target": {"name": name}} for name in extensions
+                                    name for name in extensions
                                 ],
                             },
                             *[
                                 {
                                     "name": name,
-                                    "product": "app_extension",
-                                    "bundleId": "$(RC_BUNDLE_ID)." + name,
+                                    "product-type": "app-extension",
+                                    "build-settings": {"PRODUCT_BUNDLE_IDENTIFIER": "$(RC_BUNDLE_ID)." + name},
                                 }
                                 for name in extensions
                             ],
@@ -234,9 +230,8 @@ sys.exit(65 if os.environ['FIXTURE_MODE'] == 'native-failure' and scheme == 'Rem
                     }
                 )
             )
-            (bin_dir / "tuist").write_text(
-                '#!/bin/sh\nif [ "$1" = version ]; then cat .tuist-version; elif [ "$1" = dump ]; then cat project.json; fi\n'
-            )
+            (root / "RemoteCoder.xcodeproj").mkdir()
+            shutil.copy2(root / "project.json", root / "RemoteCoder.xcodeproj/project.xcproj")
             for target in (
                 "RemoteCoder",
                 "RemoteCoderLiveActivities",
@@ -395,8 +390,8 @@ else:
                         ["-only-testing:" + s for s in selectors],
                     )
                     self.assertEqual(
-                        arguments[arguments.index("-workspace") + 1],
-                        "RemoteCoder.xcworkspace",
+                        arguments[arguments.index("-project") + 1],
+                        "RemoteCoder.xcodeproj",
                     )
                     self.assertEqual(
                         arguments[arguments.index("-collect-test-diagnostics") + 1],
@@ -448,7 +443,7 @@ else:
                     self.assertIn("tests were not launched", rejected.stderr)
 
     def test_app_has_one_lock_with_only_linked_package_pins(self):
-        resolved = json.loads((ROOT / ".package.resolved").read_text())
+        resolved = json.loads((ROOT / "RemoteCoder.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved").read_text())
         self.assertEqual(
             {pin["identity"] for pin in resolved["pins"]},
             {"ios-maps-sdk", "ios-navigation-sdk", "speechkit", "webrtc"},

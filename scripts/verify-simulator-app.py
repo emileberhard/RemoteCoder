@@ -14,25 +14,15 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def declared_bundles(settings: dict) -> tuple[str, dict[str, str]]:
-    manifest = json.loads(
-        subprocess.run(
-            ["tuist", "dump", "--path", str(ROOT)],
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout
-    )
+    manifest = json.loads((ROOT / "RemoteCoder.xcodeproj/project.xcproj").read_text())
     targets = {target["name"]: target for target in manifest["targets"]}
     app = targets["RemoteCoder"]
-    extensions = {}
-    for dependency in app["dependencies"]:
-        if "target" in dependency:
-            target = targets[dependency["target"]["name"]]
-            if target["product"] == "app_extension":
-                extensions[target["name"] + ".appex"] = resolve(
-                    target["bundleId"], settings[target["name"]]
-                )
-    return resolve(app["bundleId"], settings[app["name"]]), extensions
+    extensions = {
+        name + ".appex": resolve(targets[name]["build-settings"]["PRODUCT_BUNDLE_IDENTIFIER"], settings[name])
+        for name in app["dependencies"]
+        if targets[name]["product-type"] == "app-extension"
+    }
+    return resolve(app["build-settings"]["PRODUCT_BUNDLE_IDENTIFIER"], settings[app["name"]]), extensions
 
 
 def verified_bundle(
@@ -111,7 +101,7 @@ def verify_app(app: Path, settings: dict) -> dict:
     embedded = {path.name for path in (app / "PlugIns").glob("*.appex")}
     if embedded != expected_extensions.keys():
         raise ValueError(
-            f"{app}: embedded extensions differ from Project.swift; missing={sorted(expected_extensions.keys() - embedded)}, unexpected={sorted(embedded - expected_extensions.keys())}"
+            f"{app}: embedded extensions differ from the Xcode project; missing={sorted(expected_extensions.keys() - embedded)}, unexpected={sorted(embedded - expected_extensions.keys())}"
         )
     widget = app / "PlugIns/RemoteCoderLiveActivities.appex"
     widget_info = plistlib.loads((widget / "Info.plist").read_bytes())

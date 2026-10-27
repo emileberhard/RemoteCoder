@@ -304,8 +304,8 @@ Source snapshots compare file bytes before linking reusable files. Promotion to
 the leased build mirror compares bytes and gives only changed files fresh mtimes;
 identical files retain their mirror mtimes so Cargo and Xcode can reuse artifacts.
 The source fingerprint binds file contents rather than transfer timestamps.
-The generated Xcode project, workspace and `Derived/` outputs survive mirror
-updates; changed generation inputs still invalidate their fingerprint.
+The committed JSON Xcode project and package lock are ordinary snapshot inputs.
+Only obsolete workspace/Derived outputs are excluded from mirror deletion.
 
 ### Signed iPhone iteration
 
@@ -415,7 +415,7 @@ another cache. An explicit `RC_DERIVED_DATA` override remains caller-owned.
 Hosted simulator tests build Debug with ad hoc signing. Before launching, the
 recipe verifies the app and embedded extension signatures, checks Xcode's
 simulator entitlement sections against their declared entitlements, and requires
-the exact app and extension identities and embedded set from the Tuist manifest.
+the exact app and extension identities and embedded set from the committed JSON Xcode project.
 It also requires Live Activities support and an embedded WidgetKit extension. The
 verified build runs with `test-without-building`; generic build-only gates remain
 unsigned.
@@ -714,8 +714,7 @@ matching layouts; gateway and mixed iOS/verify layouts can still differ.
 that has that Xcode installed; elsewhere local tools keep the selected Xcode and
 remote builds still derive the pin on the build host.
 `RC_XCODE_DEVELOPER_DIR`/`DEVELOPER_DIR` are per-command overrides; the release
-workflow also reads `.xcode-version` and checks its approved build. `.tuist-version`
-is checked by generation, the device installer and the release workflow. No
+workflow selects `.xcode-version` on its hosted runner. No
 compiler/runtime upgrade is implicit. Public contribution CI runs on disposable
 hosted workers without personal-network access or deployment secrets. Private
 release execution, host mappings, signing and catch-up live in the private

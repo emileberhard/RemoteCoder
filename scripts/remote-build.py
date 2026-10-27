@@ -516,7 +516,6 @@ def mirror_source_command(source: Path, repository: Path) -> list[str]:
     return source_sync_command(
         [
             "--delete",
-            "--exclude=/RemoteCoder.xcodeproj/",
             "--exclude=/RemoteCoder.xcworkspace/",
             "--exclude=/Derived/",
             str(source) + "/",
@@ -557,11 +556,6 @@ def worker(run: Path) -> dict:
             + ".app/Contents/Developer"
         )
     environment["DEVELOPER_DIR"] = developer
-    tuist_version = source / ".tuist-version"
-    if tuist_version.is_file():
-        tuist = Path("/opt/homebrew/opt/tuist@" + tuist_version.read_text().strip()) / "bin"
-        if tuist.is_dir():
-            environment["PATH"] = str(tuist) + os.pathsep + environment.get("PATH", "")
     environment.setdefault("COMPILATION_CACHE_ENABLE_CACHING_DEFAULT", "YES")
     environment.setdefault("SWIFT_ENABLE_PREFIX_MAPPING", "YES")
     environment.setdefault("SWIFT_ENABLE_PROJECT_PREFIX_MAPPING", "YES")

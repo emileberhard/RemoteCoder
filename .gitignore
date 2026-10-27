@@ -1,10 +1,12 @@
 # Xcode
 .DS_Store
 *.xcuserstate
-*.xcworkspace
+*.xcworkspace/
+!RemoteCoder.xcodeproj/project.xcworkspace/
+RemoteCoder.xcodeproj/project.xcworkspace/*
+!RemoteCoder.xcodeproj/project.xcworkspace/xcshareddata/
 xcuserdata/
 DerivedData/
-RemoteCoder.xcodeproj/
 Derived/
 
 # Swift Package Manager
@@ -14,13 +16,9 @@ Derived/
 # Python
 .venv/
 
-# Ruby/Bundler
-.bundle/
-vendor/bundle/
-
 # Secrets
 **/Secrets.swift
-RemoteCoder/Resources/RemoteCoderLocalConfig.json
+RemoteCoderLocalConfig.json
 .private/
 
 # Local Xcode build server metadata
@@ -30,9 +28,6 @@ buildServer.json
 build/release/
 *.ipa
 *.dSYM.zip
-
-# Fastlane
-fastlane/report.xml
 
 # Python (host daemon)
 **/__pycache__/
@@ -51,8 +46,10 @@ build/
 Core/.build/
 Core/.swiftpm/
 
-Config/Local.xcconfig
+Local.xcconfig
 
 notes/
 experiments/
 web-client/evidence/
+
+.local/

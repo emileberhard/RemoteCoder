@@ -8,20 +8,19 @@ for a conversation.
 
 ## Native build
 
-Install Xcode matching [`.xcode-version`](../.xcode-version), the pinned Tuist
-version, `just`, `uv`, Bun and the Rust toolchain. Select that Xcode in your
+Install Xcode matching [`.xcode-version`](../.xcode-version), `just`, `uv`, Bun and the Rust toolchain. Select that Xcode in your
 local environment, or set `RC_XCODE_DEVELOPER_DIR` for a build invocation.
 The public build runner uses this Mac by default and supplies its own bounded
 cache policy when there is no maintainer policy.
 
 ```sh
-just generate
+just setup
 just ios-build
 just mac-build
 ```
 
 These compile without signing or installing and do not boot a simulator.
-They generate an ignored Xcode workspace you can open for your own run target.
+Open the committed `RemoteCoder.xcodeproj` for your own run target.
 For signed device installs, use your own Apple Developer team, app identifiers,
 provisioning profiles and enabled capabilities for the app and extensions.
 The [root verification policy](../AGENTS.md#build-install-and-verify) describes

@@ -1838,7 +1838,7 @@ The gateway side is in `host-daemon-rs/AGENTS.md`; both paths are in
   workspace startup or teardown.
 - **Windows.** Both apps declare `WindowGroup(for: ConversationWindowValue.self)`.
   The iPhone and iPad run one window (`UIApplicationSupportsMultipleScenes` is
-  false in `Project.swift`). The Mac runs one conversation per window, with
+  false in `Config/InfoPlists/RemoteCoder-Info.plist`). The Mac runs one conversation per window, with
   native window tabs and the sidebar in every window: ⇧⌘N opens a window, ⌘T
   opens a tab through `WindowTabbing` (AppKit `addTabbedWindow`; SwiftUI has no
   tabbing API), and the app keeps running after its last window closes.

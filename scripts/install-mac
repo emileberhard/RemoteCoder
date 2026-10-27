@@ -81,17 +81,17 @@ def build(run: Path, bench: bool) -> tuple[Path, dict]:
     ).split()
     derived = Path(os.environ["RC_DERIVED_DATA"] + "-mac-optimized")
     arguments = [
-        "xcodebuild", "-workspace", "RemoteCoder.xcworkspace", "-scheme", SCHEME,
+        "xcodebuild", "-project", "RemoteCoder.xcodeproj", "-scheme", SCHEME,
         "-configuration", "Release" if bench else "Debug",
         "-destination", "generic/platform=macOS", "-derivedDataPath", str(derived),
-        "-onlyUsePackageVersionsFromResolvedFile", "-skipPackagePluginValidation", "-skipMacroValidation",
+        "-disableAutomaticPackageResolution", "-onlyUsePackageVersionsFromResolvedFile", "-skipPackageUpdates", "-skipPackagePluginValidation", "-skipMacroValidation",
         "CODE_SIGNING_ALLOWED=NO", "COMPILER_INDEX_STORE_ENABLE=NO", "DEBUG_INFORMATION_FORMAT=dwarf-with-dsym",
         "SWIFT_OPTIMIZATION_LEVEL=-O", "SWIFT_COMPILATION_MODE=wholemodule", "RC_APNS_ENVIRONMENT=production",
         *flags,
     ]
     if bench:
         arguments.append("SWIFT_ACTIVE_COMPILATION_CONDITIONS=$(inherited) RC_PERF_HARNESS")
-    subprocess.run(["just", "generate"], check=True)
+    subprocess.run(["just", "setup"], check=True)
     settings = run / "settings.json"
     settings.write_text(subprocess.check_output([*arguments, "-showBuildSettings", "-json"], text=True))
     evidence = run / "verified-settings.json"

@@ -1,0 +1,194 @@
+#!/usr/bin/env python3
+import base64
+import json
+import os
+import random
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from pathlib import Path
+
+API = "https://api.appstoreconnect.apple.com/v1/"
+EDITABLE = {"PREPARE_FOR_SUBMISSION", "DEVELOPER_REJECTED", "REJECTED", "METADATA_REJECTED", "INVALID_BINARY"}
+RELEASED = {"READY_FOR_DISTRIBUTION", "PROCESSING_FOR_DISTRIBUTION", "REPLACED_WITH_NEW_VERSION"}
+IN_BETA = {"WAITING_FOR_BETA_REVIEW", "IN_BETA_REVIEW", "BETA_APPROVED", "READY_FOR_BETA_TESTING", "IN_BETA_TESTING"}
+DEADLINE = time.monotonic() + 40 * 60
+
+
+class RequestFailed(Exception):
+    pass
+
+
+def token():
+    now = int(time.time())
+    encode = lambda value: base64.urlsafe_b64encode(json.dumps(value).encode()).rstrip(b"=")
+    claims = {"iss": os.environ["APP_STORE_CONNECT_ISSUER_ID"], "iat": now, "exp": now + 600, "aud": "appstoreconnect-v1"}
+    signed = encode({"alg": "ES256", "kid": os.environ["APP_STORE_CONNECT_KEY_ID"], "typ": "JWT"}) + b"." + encode(claims)
+    der = subprocess.run(["openssl", "dgst", "-sha256", "-sign", os.environ["APP_STORE_CONNECT_KEY_PATH"]],
+                         input=signed, capture_output=True, check=True).stdout
+    r, s = der[4:4 + der[3]], der[6 + der[3]:]
+    signature = r[-32:].rjust(32, b"\0") + s[-32:].rjust(32, b"\0")
+    return (signed + b"." + base64.urlsafe_b64encode(signature).rstrip(b"=")).decode()
+
+
+def send(request):
+    for attempt in range(6):
+        try:
+            with urllib.request.urlopen(request, timeout=60) as response:
+                return response.read()
+        except urllib.error.HTTPError as error:
+            retryable = error.code == 429 or error.code >= 500 and request.get_method() != "POST"
+            if not retryable or attempt == 5:
+                raise RequestFailed(f"{request.get_method()} {request.full_url} failed with {error.code}: {error.read().decode(errors='replace')[:2000]}")
+            delay = error.headers.get("Retry-After")
+        except (urllib.error.URLError, TimeoutError) as error:
+            if request.get_method() == "POST" or attempt == 5:
+                raise RequestFailed(f"{request.get_method()} {request.full_url} failed: {error}")
+            delay = None
+        time.sleep(float(delay) if delay and delay.isdigit() else 2 ** attempt * random.uniform(0.5, 1))
+
+
+def api(method, path, data=None, **params):
+    url = API + path + ("?" + urllib.parse.urlencode(params) if params else "")
+    body = json.dumps({"data": data}).encode() if data else None
+    records = []
+    while True:
+        response = send(urllib.request.Request(url, body, method=method, headers={
+            "Authorization": f"Bearer {token()}", "Content-Type": "application/json"}))
+        if not response:
+            return None
+        document = json.loads(response)
+        if not isinstance(document["data"], list):
+            return document["data"]
+        records.extend(document["data"])
+        url = document.get("links", {}).get("next")
+        if not url:
+            return records
+
+
+def link(kind, identifier):
+    return {"data": {"type": kind, "id": identifier}}
+
+
+def parse(version):
+    return tuple(int(part) for part in version.split("."))
+
+
+def draft_version(app, platform, version):
+    versions = api("GET", f"apps/{app}/appStoreVersions", **{"filter[platform]": platform, "limit": 200})
+    unreleased = [v for v in versions if v["attributes"]["appVersionState"] not in RELEASED]
+    released = len(unreleased) < len(versions)
+    if not unreleased:
+        return api("POST", "appStoreVersions", {"type": "appStoreVersions",
+                   "attributes": {"platform": platform, "versionString": version, "releaseType": "MANUAL"},
+                   "relationships": {"app": link("apps", app)}})["id"], released
+    draft = unreleased[0]
+    state, name = draft["attributes"]["appVersionState"], draft["attributes"]["versionString"]
+    if parse(name) > parse(version):
+        sys.exit(f"App Store version {name} is newer than {version}.")
+    if state not in EDITABLE:
+        print(f"::notice::App Store version {name} is {state}; preparation of {version} is pending until it is released or removed from review.", file=sys.stderr)
+        return None, released
+    updated = api("PATCH", f"appStoreVersions/{draft['id']}", {"type": "appStoreVersions", "id": draft["id"],
+                  "attributes": {"releaseType": "MANUAL"} | ({"versionString": version} if name != version else {})})
+    if (updated["attributes"]["versionString"], updated["attributes"]["releaseType"]) != (version, "MANUAL"):
+        sys.exit(f"App Store Connect kept {name} as {updated['attributes']['versionString']} with release type {updated['attributes']['releaseType']}.")
+    return draft["id"], released
+
+
+def wait(description, check):
+    while (result := check()) is None:
+        if time.monotonic() > DEADLINE:
+            sys.exit(f"{description} did not finish processing within 40 minutes of the start.")
+        time.sleep(20)
+    return result
+
+
+def next_build_number(app):
+    builds = api("GET", "builds", **{"filter[app]": app, "fields[builds]": "version", "limit": 200})
+    uploads = api("GET", f"apps/{app}/buildUploads", **{"fields[buildUploads]": "cfBundleVersion", "limit": 200})
+    versions = [b["attributes"]["version"] for b in builds] + [u["attributes"]["cfBundleVersion"] for u in uploads]
+    if any(not version.isdecimal() for version in versions):
+        sys.exit("Use integer build numbers; App Store Connect contains a non-integer build version.")
+    return max((int(version) for version in versions), default=0) + 1
+
+
+def processed_build(app, version, number, platform):
+    builds = api("GET", "builds", sort="-uploadedDate", limit=1, **{"filter[app]": app, "filter[preReleaseVersion.version]": version,
+                 "filter[preReleaseVersion.platform]": platform, "filter[version]": number, "filter[buildAudienceType]": "APP_STORE_ELIGIBLE"})
+    state = builds[0]["attributes"]["processingState"] if builds else "PROCESSING"
+    if state in {"FAILED", "INVALID"}:
+        sys.exit(f"The {version} build is {state}.")
+    return builds[0]["id"] if state == "VALID" else None
+
+
+def submit_beta(app, version, build, notes):
+    localizations = api("GET", f"builds/{build}/betaBuildLocalizations", limit=50)
+    if not localizations:
+        locale = api("GET", f"apps/{app}")["attributes"]["primaryLocale"]
+        api("POST", "betaBuildLocalizations", {"type": "betaBuildLocalizations",
+            "attributes": {"locale": locale, "whatsNew": notes}, "relationships": {"build": link("builds", build)}})
+    for localization in localizations:
+        api("PATCH", f"betaBuildLocalizations/{localization['id']}", {"type": "betaBuildLocalizations",
+            "id": localization["id"], "attributes": {"whatsNew": notes}})
+
+
+def testflight(app, platform, version, number, notes):
+    build = wait(f"The {version} build", lambda: processed_build(app, version, number, platform))
+    submit_beta(app, version, build, notes)
+
+
+def app_store(app, platform, version, number, notes):
+    version_id, released = draft_version(app, platform, version)
+    if version_id is None:
+        return
+    if released:
+        for localization in api("GET", f"appStoreVersions/{version_id}/appStoreVersionLocalizations", limit=50):
+            api("PATCH", f"appStoreVersionLocalizations/{localization['id']}", {"type": "appStoreVersionLocalizations",
+                "id": localization['id'], "attributes": {"whatsNew": notes}})
+    build = wait(f"The {version} build", lambda: processed_build(app, version, number, platform))
+    api("PATCH", f"appStoreVersions/{version_id}/relationships/build", {"type": "builds", "id": build})
+    print(f"App Store version {version} is ready to submit for review; existing screenshots are preserved.", file=sys.stderr)
+
+
+def main(command, *arguments):
+    if command != "build-number" and arguments[0] not in {"IOS", "MAC_OS"}:
+        sys.exit("The platform must be IOS or MAC_OS.")
+    missing = [name for name in ("APP_STORE_CONNECT_KEY_ID", "APP_STORE_CONNECT_ISSUER_ID", "APP_STORE_CONNECT_KEY_PATH", "APP_BUNDLE_ID")
+               if not os.environ.get(name)]
+    if missing:
+        sys.exit(f"Set {', '.join(missing)}.")
+    apps = api("GET", "apps", **{"filter[bundleId]": os.environ["APP_BUNDLE_ID"]})
+    if not apps:
+        sys.exit(f"No app has the bundle ID {os.environ['APP_BUNDLE_ID']}.")
+    app = apps[0]["id"]
+    if command == "build-number":
+        print(next_build_number(app))
+        return
+    if command == "upload-state":
+        platform, version, number = arguments
+        builds = api("GET", "builds", **{"filter[app]": app, "filter[preReleaseVersion.version]": version,
+            "filter[preReleaseVersion.platform]": platform, "filter[version]": number})
+        uploads = api("GET", f"apps/{app}/buildUploads", limit=200, **{"filter[cfBundleVersion]": number,
+            "filter[cfBundleShortVersionString]": version, "filter[platform]": platform})
+        print("present" if builds or uploads else "absent")
+        return
+    platform, version, number, notes = arguments
+    text = Path(notes).read_text().strip()
+    if command == "testflight":
+        testflight(app, platform, version, number, text)
+    else:
+        app_store(app, platform, version, number, text)
+
+
+if __name__ == "__main__":
+    counts = {"build-number": 2, "upload-state": 5, "testflight": 6, "app-store": 6}
+    if len(sys.argv) != counts.get(sys.argv[1] if len(sys.argv) > 1 else "", 0):
+        sys.exit("Usage: scripts/app-store-connect build-number\n       scripts/app-store-connect testflight IOS|MAC_OS VERSION BUILD NOTES\n       scripts/app-store-connect app-store IOS|MAC_OS VERSION BUILD NOTES")
+    try:
+        main(*sys.argv[1:])
+    except RequestFailed as failure:
+        sys.exit(str(failure))

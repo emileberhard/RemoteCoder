@@ -112,10 +112,9 @@ the private [operations entrypoint](https://github.com/emileberhard/RemoteCoder-
   device; ambiguous matches fail. There is no TestFlight fallback. It syncs the Google Maps
   key into the ignored local config, and `scripts/release-config.py
   verify-development` fails on any field beyond the public ones plus
-  `codexGatewayAuthToken`. It skips `tuist generate` when manifests, the local
-  config bundling choice and globbed paths are unchanged (a fingerprint in the
-  derived data dir; `RC_FORCE_GENERATE=1` forces it), and builds with pinned
-  packages and no index store.
+  `codexGatewayAuthToken`. The committed `RemoteCoder.xcodeproj/project.xcproj`
+  owns every target, synchronized source folders and shared schemes. Builds use
+  its committed package lock and never resolve newer versions.
 - Shared ad hoc packaging and managed-app onboarding belong to the
   `apple-devops` skill's iPhone iteration workflow. The repository adapter strips
   private local configuration, sets production APNs for the ad hoc copy, and
@@ -178,9 +177,8 @@ the private [operations entrypoint](https://github.com/emileberhard/RemoteCoder-
 - Local setup needs no bundled runtime seed. Add a gateway in the app's host
   settings, or optionally copy `RemoteCoder/Resources/RemoteCoderLocalConfig.example.json`
   to ignored `RemoteCoderLocalConfig.json`. Maps needs its own optional key;
-  basic chat does not. A generated project includes the local file only with
-  `TUIST_REMOTE_CODER_BUNDLE_LOCAL_CONFIG=1`; `just generate` selects it when
-  the file exists. Provider keys never enter the app. Public identity defaults
+  basic chat does not. The synchronized Resources folder includes the ignored
+  local configuration when present; its example template is excluded. Provider keys never enter the app. Public identity defaults
   live in `Config/RemoteCoder.xcconfig`, with ignored `Config/Local.xcconfig`
   overrides; see [`docs/self-hosting.md`](docs/self-hosting.md).
 - Optional maintainer settings are loaded by `scripts/maintainer_config.py`;
@@ -194,17 +192,43 @@ the private [operations entrypoint](https://github.com/emileberhard/RemoteCoder-
 
 ## Releasing
 
-A release is one annotated stable `X.Y.Z` tag (each part 0–999, no leading zeros), on the
-pushed default branch and higher than every existing stable version. The tag is
-the version of every artifact; build numbers may count separately. Tags are
-immutable: fixes ship with the next patch. Public CI uses hosted workers and no
-personal-network access; it is deliberately gated while the source repository
-is private. Private release admission independently requires the exact tag/main
-identity. The private run's `verify-all` is the release gate; public CI provides
-hosted contributor feedback. Signing, gateway deployment, device installation and
-fleet catch-up belong to the private
-[RemoteCoder-deploy operations entrypoint](https://github.com/emileberhard/RemoteCoder-deploy/blob/main/AGENTS.md).
-[`fastlane/README.md`](fastlane/README.md) describes the public/private boundary.
+A release is one annotated stable `X.Y.Z` tag (each part 0–999, no leading zeros),
+on pushed `main` and higher than every stable tag. The tag is every artifact's
+marketing version. Tags are immutable; fixes use the next patch.
+
+Public hosted CI compiles both apps, their extensions, hosted tests and the Mac
+performance harness, runs the existing logic/tooling/gateway checks and targeted
+hosted rendering/history suites. Release admission waits for that exact main CI
+commit; releases do not rerun it. `scripts/select-xcode` selects `.xcode-version`
+without changing the host's default Xcode.
+
+The public tag workflow reserves the next two global App Store Connect build
+numbers, retains the exact reservation for retries, archives iOS and macOS on
+hosted runners and cloud-signs checked App Store exports. `Config/entitlements-*.json`
+covers every shipped bundle. An upload fence is persisted before an upload; a
+retry queries Apple and refuses a second uncertain upload. Each platform then
+waits for processing, updates What to Test under the existing internal distribution
+policy and prepares its App Store version, preserving screenshots. A version in
+review or pending release is left untouched. App Review and release stay with Emil.
+
+The protected `testflight` environment supplies `APP_BUNDLE_ID`, the ASC key,
+`RC_RELEASE_CONFIGURATION` (the operator's nonsecret xcodeSettings and public
+releaseConfig) and the optional Maps key. Provider and gateway credentials never
+enter release bundles. `scripts/release-config.py` validates this boundary.
+
+The public workflow also hands the exact tag, commit and run ID to the private
+[operations entrypoint](https://github.com/emileberhard/RemoteCoder-deploy/blob/main/AGENTS.md).
+It independently admits the tag and successful public CI before running the
+Mini's gateway build and planned restart/recovery. It exports hosted archives
+locally only for ad hoc iPhone and Developer ID Mac delivery, retains symbols and
+build-number receipts, publishes fleet catch-up and creates the GitHub release
+from the annotated notes after public processing completes. Apps and gateway
+preserve their existing protocol compatibility, so upload has no gateway-version
+ordering dependency. Public contributions never execute on personal runners.
+
+`just setup` prepares optional local identity overrides; it generates no project.
+Local development/install commands retain their source, cache and device leases.
+`docs/release-pipeline.md` records the ownership decision and retry contracts.
 
 ## Engineering invariants
 
@@ -307,67 +331,10 @@ measurably beat SwiftUI.
   require one.
 
 **Measuring**
-- Measure before and after on the cabled test iPhone, not in the simulator; the
-  test iPad is the second device for its layout and for parallel traces.
-  Compare traces only from the same device.
-  `just perf-trace record <label> --device <UDID>` records Instruments on
-  the primary service host the test devices are cabled to and summarizes CPU time by thread, Core
-  Animation commits, GPU time and hitches; its `motion` block limits them to the
-  transcript's `TranscriptScroll` signposts and gives Apple's hitch rate.
-  `--frames` ranks the main thread's top functions by self time and `--callers`
-  attributes system work to app frames. Drive the journey with
-  `dev-tools/perf-sim` or by hand: XCTest-based drivers (agent-device, XCUITest,
-  Xcode device interaction) snapshot the app on its main thread. The
-  `perf-sim` replay's magnitudes are not yet field-calibrated; read
-  [`docs/performance-replay.md`](docs/performance-replay.md) before relying on them.
-  The detector also includes accessibility user-testing snapshot and MIG frames
-  outside `/Developer/Library`. `perf-trace` reports main-thread CPU with and
-  without automation and their CPU share and rejects a trace when automation exceeds
-  1% of app CPU or main-thread CPU, or when an observed automation share is unknown.
-  `dev-tools/streaming-motion-report` measures streaming jitter from a screen
-  recording.
-- `perf-trace record --template` selects `Time Profiler` (default),
-  `Processor Trace`, `Swift Concurrency`, `System Trace`, `File Activity`, or
-  `Allocations`; repeat `--instrument` to add Apple instruments. Processor
-  Trace defaults to 5 seconds and requires A18+/M4+ hardware plus the device's
-  Developer → Processor Trace setting. Both cabled test devices are older and
-  cannot record it. Single-process attachment requires a debuggable install
-  signed with `get-task-allow`; distribution builds are excluded from attach
-  discovery. Mac recording also needs Developer Tools profiling access.
-  Other templates retain Time Profiler for the XCTest-driver rejection.
-  File Activity reports logical bytes and operations by exported path (an
-  unavailable path stays unknown), System Trace reports blocked thread time,
-  Swift Concurrency reports task states and actor queues, and Processor Trace
-  reports observed function-call intervals and self cycles. Processor Trace
-  backtraces resolve by UUID through the same dSYMs; its elapsed self duration
-  can include off-CPU waits, so use self cycles to rank CPU work. Unsupported export
-  tables, including allocation events on current Xcode, stay unavailable. Each
-  measurement that hits a guard reports `exceeds export limit` in `exportFailures`;
-  other measurements remain available. Recording, its post-processing and exports
-  share the quarter-memory bound for xctrace and Python combined, using the larger
-  of resident memory and physical footprint per process. A recording has its
-  requested duration plus 120 seconds to finish; each export has 120 seconds.
-  Each xctrace process owns a private TMPDIR removed after it is reaped, including
-  on failure. The XML parser detaches consumed rows, interns frames, and checks its
-  own budget while reducing the table. Sampled-frame and journey analysis share
-  the measurement boundary; unavailable frame details preserve app CPU totals.
-  `--frames` includes UUID/address/source and inline-frame details alongside
-  the existing frame aggregates. Device builds mirror their matching dSYMs to
-  the configured tracing host under leased `RemoteCoder-Build/runs` retention;
-  published release symbols remain in the deployment owner's symbol retention.
-  A trace without app CPU samples fails with a diagnostic. On a device that
-  records only the kernel, verify the app is foreground and unlocked, then
-  repair its profiling services before collecting another measurement.
-- Low Power Mode and serious or critical thermal states set
-  `AppEnergyPolicy.conservesEnergy`, which switches rendering and prefetch
-  paths. A hot phone therefore runs different code, not just slower code.
-  Compare traces only within the same energy state. `AppEnergyMonitor` logs
-  that state at launch and on every change (category `Energy`), so uploaded
-  app logs show which state a period ran in.
-- Known dead end: on iOS, `OSLogStore` ignores `position(date:)` and reverse
-  enumeration (Apple DTS r.87416514, r.87622922), and predicates do not shorten
-  its scan, so every read enumerates the whole process lifetime. App logs reach
-  the host through `AppLogger` at the call instead; never read them back.
+
+Read [Performance verification](docs/performance-verification.md) before collecting
+or comparing traces. It owns device/energy-state comparability, automation
+rejection, recording/export limits, symbol ownership and the iOS logging boundary.
 
 ## System invariants
 
