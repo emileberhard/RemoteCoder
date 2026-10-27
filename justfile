@@ -552,12 +552,6 @@ verify-all-local:
         --lane apps 'just verify-apps-local' 'just verify-simulator-local'
 
 [private]
-release-gate-local:
-    python3 scripts/concurrent_lanes.py \
-        --lane gateway 'just gateway-candidate-local' 'bun test dev-tools/tests/isolated-probes.test.mjs' \
-        --lane apps 'just verify-apps-local' 'just verify-simulator-local'
-
-[private]
 verify-apps-local:
     just --summary >/dev/null
     ./scripts/lint-glass

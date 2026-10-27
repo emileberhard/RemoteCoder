@@ -131,18 +131,17 @@ class RemoteBuildTests(unittest.TestCase):
             with (patch.object(module, "ROOT", root),
                   patch.object(module.build_hosts, "load", return_value={}),
                   patch.object(module.build_hosts, "MAC_GUI_HOST", "laptop")):
-                for kind in ("ios-install", "ios-build", "verify", "verify-all", "release-gate", "gateway", "core-test"):
+                for kind in ("ios-install", "ios-build", "verify", "verify-all", "gateway", "core-test"):
                     self.assertEqual(module.selected_build_host(kind, {}), "fixture-builder")
                 for kind in ("mac-install", "mac-bench"):
                     self.assertEqual(module.selected_build_host(kind, {}), module.build_hosts.MAC_GUI_HOST)
                 explicit = {"RC_IOS_BUILD_HOST": "fixture-phone-builder", "RC_GATEWAY_BUILD_HOST": "fixture-other"}
                 self.assertEqual(module.selected_build_host("ios-install", explicit), "fixture-phone-builder")
                 self.assertEqual(module.selected_build_host("verify-all", explicit), "fixture-phone-builder")
-                self.assertEqual(module.selected_build_host("release-gate", explicit), "fixture-phone-builder")
                 self.assertEqual(module.selected_build_host("verify", explicit), "fixture-other")
                 self.assertEqual(module.selected_build_host("mac-install", explicit), "fixture-other")
 
-    def test_mirror_retains_only_generated_outputs_and_deletes_removed_sources(self):
+    def test_mirror_deletes_removed_sources_and_stale_generated_outputs(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             source, mirror = root / "source", root / "mirror"
@@ -157,7 +156,7 @@ class RemoteBuildTests(unittest.TestCase):
             self.assertFalse((mirror / "removed.swift").exists())
             self.assertEqual((mirror / "new.swift").read_text(), "source")
             for name in ("RemoteCoder.xcworkspace", "Derived"):
-                self.assertEqual((mirror / name / "generated").read_text(), "retained")
+                self.assertFalse((mirror / name).exists())
 
 
     def test_gateway_return_preserves_the_bundle_and_rejects_a_changed_resource_seal(self):
@@ -736,13 +735,12 @@ class RemoteBuildTests(unittest.TestCase):
             ("tools-test", [], ["just", "tools-test-local"]),
             ("verify", [], ["just", "verify-local"]),
             ("verify-all", [], ["just", "verify-all-local"]),
-            ("release-gate", [], ["just", "release-gate-local"]),
         ):
             with self.subTest(kind=kind, arguments=arguments):
                 self.assertEqual(module.build_command(kind, arguments), command)
         self.assertEqual(
             module.SIMULATOR_KINDS,
-            {"ios-simulator-test", "ios-ui-test", "verify-all", "release-gate"},
+            {"ios-simulator-test", "ios-ui-test", "verify-all"},
         )
 
     def test_fingerprint_checks_file_contents_and_symlink_target(self):
