@@ -495,6 +495,7 @@ fn seed_origin(
                     reason: "No Git fixture".into(),
                 },
                 completion: Completion::NotRequired,
+                cleanup: crate::agents::jobs::model::CleanupState::Complete,
                 execution: None,
             },
         },

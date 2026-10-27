@@ -170,6 +170,13 @@ impl CodexAppServer {
         &self.socket_path
     }
 
+    pub(crate) fn provider_home(&self) -> Result<&Path> {
+        self.pid_file
+            .parent()
+            .and_then(Path::parent)
+            .context("Codex daemon state has no provider home")
+    }
+
     pub(crate) fn child_environment(&self) -> &HashMap<String, String> {
         &self.child_env
     }

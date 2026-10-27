@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::Weak;
 
 use anyhow::{Context, Result, bail, ensure};
-use tokio::sync::{OnceCell, watch};
+use tokio::sync::{Mutex, OnceCell, RwLock, watch};
 
 use super::model::*;
 use super::store::{JobStore, Selection, fingerprint};
@@ -11,7 +11,13 @@ use crate::wire::agent_jobs::*;
 
 pub(crate) struct JobOwner {
     pub(crate) contexts: super::context::Contexts,
-    root: Option<PathBuf>,
+    pub(crate) native_routes: super::routes::NativeRoutes,
+    pub(crate) operations: RwLock<()>,
+    pub(super) tasks: crate::tasks::owned_tasks::OwnedTasks,
+    pub(super) scopes: super::routes::ScopedEndpoints,
+    pub(super) endpoints:
+        Mutex<std::collections::HashMap<JobId, super::routes::ScopedEndpointLease>>,
+    pub(super) root: Option<PathBuf>,
     store: OnceCell<JobStore>,
     gateway: Weak<Gateway>,
     changed: watch::Sender<u64>,
@@ -21,6 +27,11 @@ impl JobOwner {
     pub(crate) fn new(root: Option<PathBuf>, gateway: Weak<Gateway>) -> Self {
         Self {
             contexts: Default::default(),
+            native_routes: Default::default(),
+            operations: Default::default(),
+            tasks: Default::default(),
+            scopes: Default::default(),
+            endpoints: Default::default(),
             root,
             store: OnceCell::new(),
             gateway,
@@ -52,7 +63,7 @@ impl JobOwner {
         self.gateway.upgrade().context("gateway is shutting down")
     }
 
-    pub(super) fn dirty(&self) {
+    pub(crate) fn dirty(&self) {
         self.changed
             .send_modify(|revision| *revision = revision.wrapping_add(1));
     }
@@ -91,7 +102,10 @@ impl JobOwner {
         conversation: &ConversationIdentity,
         created_at_ms: Option<i64>,
     ) -> Result<Option<Origin>> {
-        self.store().await?.classify(conversation.clone(), created_at_ms).await
+        self.store()
+            .await?
+            .classify(conversation.clone(), created_at_ms)
+            .await
     }
 
     pub(crate) async fn list(&self, request: ListParams) -> Result<ListPage> {
@@ -137,6 +151,11 @@ impl JobOwner {
         request: StartParams,
         origin: Origin,
     ) -> Result<AdmissionReceipt> {
+        let _operation = self.operations.read().await;
+        ensure!(
+            !self.gateway()?.is_draining(),
+            "gateway is restarting; admission is closed"
+        );
         ensure!(
             !matches!(origin, Origin::Unknown { .. }),
             "new work requires a proven parent or explicit operator intent"
@@ -172,6 +191,11 @@ impl JobOwner {
         request: ContinueParams,
         caller: Origin,
     ) -> Result<AdmissionReceipt> {
+        let _operation = self.operations.read().await;
+        ensure!(
+            !self.gateway()?.is_draining(),
+            "gateway is restarting; admission is closed"
+        );
         let store = self.store().await?;
         let current_recipient = match &request.recipient {
             ContinueRecipient::Previous => None,
@@ -321,16 +345,8 @@ impl JobOwner {
             "dismissal requires a nonempty reason of at most 4096 bytes"
         );
         let store = self.store().await?;
-        let job = store.read(request.job_id.clone()).await?;
         let job = store
-            .delivery(
-                request.job_id,
-                job.revision,
-                DeliveryState::Dismissed {
-                    reason: request.reason,
-                },
-                now_ms(),
-            )
+            .dismiss_obligations(request.job_id, request.reason, now_ms())
             .await?;
         self.dirty();
         Ok(job)

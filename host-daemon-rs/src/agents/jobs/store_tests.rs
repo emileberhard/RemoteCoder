@@ -120,7 +120,7 @@ async fn runnerless_stop_survives_reopen_and_fences_late_execution_evidence() {
                 bound.revision,
                 ExecutionState::Dispatching {
                     conversation: conversation(),
-                    input_id: "dispatch-fixture".into()
+                    input_id: original.initial_input_id()
                 },
                 103
             )
@@ -143,7 +143,7 @@ async fn runnerless_stop_survives_reopen_and_fences_late_execution_evidence() {
                 stopped.revision,
                 ExecutionState::Dispatching {
                     conversation: conversation(),
-                    input_id: "dispatch-fixture".into()
+                    input_id: original.initial_input_id()
                 },
                 104
             )
@@ -163,6 +163,7 @@ async fn runnerless_stop_survives_reopen_and_fences_late_execution_evidence() {
             reason: "stopped before dispatch".into(),
         },
         completion: Completion::NotRequired,
+        cleanup: crate::agents::jobs::model::CleanupState::Complete,
     };
     let final_job = store
         .advance(
@@ -236,6 +237,7 @@ async fn continuation_order_uses_identity_chain_instead_of_wall_clock() {
                         },
                     },
                     completion: Completion::NotRequired,
+                    cleanup: crate::agents::jobs::model::CleanupState::Complete,
                 },
             },
             101,

@@ -1,6 +1,9 @@
 mod account_resets;
 mod agent_actions;
+mod agent_delivery;
 mod agent_gateway;
+mod agent_jobs;
+mod agent_routes;
 mod question_gateway;
 
 use crate::agents::mcp::McpTokens;
@@ -312,6 +315,7 @@ pub(crate) struct Gateway {
     side_question_forks: side_question::Forks,
     device_tools: Arc<device_tools::DeviceTools>,
     tool_claims: crate::agents::tools::claims::ToolClaims,
+    job_routes: agent_routes::ParentHolders,
     tool_tasks: crate::tasks::owned_tasks::OwnedTasks,
     command_tasks: crate::tasks::owned_tasks::OwnedTasks,
     voice_tasks: crate::tasks::owned_tasks::OwnedTasks,
@@ -540,6 +544,7 @@ impl Gateway {
             request_budgets,
             device_tools,
             tool_claims: crate::agents::tools::claims::ToolClaims::default(),
+            job_routes: Default::default(),
             tool_tasks: crate::tasks::owned_tasks::OwnedTasks::default(),
             command_tasks: crate::tasks::owned_tasks::OwnedTasks::default(),
             voice_tasks: crate::tasks::owned_tasks::OwnedTasks::default(),
@@ -553,7 +558,6 @@ impl Gateway {
         self.load_turn_state().await?;
         self.calls.load().await?;
         self.jobs.initialize().await?;
-        self.start_notification_ancestry_preflight().await;
 
         // APNs is best-effort, but should be serialized/coalesced to avoid bursts and JWT churn.
         let (completion_tx, completion_rx) = mpsc::channel::<ApnsSend>(256);
@@ -614,9 +618,13 @@ impl Gateway {
                 )
             };
             *self.claude_notification_task.lock().await = Some(claude_notification_task);
+            self.jobs
+                .apply_pending_stops(crate::agents::jobs::model::Provider::Claude)
+                .await?;
             self.spawn_claude_restart_recovery().await;
         }
 
+        self.jobs.start_driver()?;
         Ok(())
     }
 
@@ -801,8 +809,10 @@ impl Gateway {
 
     pub(crate) async fn stop(&self) -> Result<()> {
         self.draining.store(true, Ordering::Release);
+        self.jobs.quiesce().await;
+        self.job_routes.stop().await;
+        self.jobs.close_endpoints().await;
         self.stop_voice_for_shutdown().await;
-        self.stop_notification_ancestry_preflight().await;
         // Accepted command work is gateway-owned, not tied to a socket. Finish
         // its cancellation before taking away provider/control resources.
         self.review.stop().await;
@@ -846,7 +856,6 @@ impl Gateway {
             let _ = task.await;
         }
         self.stop_activity_publisher().await;
-        self.stop_agent_inventory().await;
         let task = self.apns_completion_task.lock().await.take();
         if let Some(task) = task {
             task.abort();

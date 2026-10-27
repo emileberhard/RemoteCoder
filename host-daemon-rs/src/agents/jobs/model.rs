@@ -296,6 +296,14 @@ pub(crate) struct Terminal {
     pub outcome: JobOutcome,
     pub result: ResultEvidence,
     pub completion: Completion,
+    pub cleanup: CleanupState,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum CleanupState {
+    Pending,
+    Complete,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -367,6 +375,12 @@ pub(crate) struct JobRecord {
     pub stop: StopState,
 }
 
+impl JobRecord {
+    pub(crate) fn initial_input_id(&self) -> String {
+        format!("{}:input", self.job_id.as_str())
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub(crate) enum JobSource {
@@ -408,9 +422,24 @@ pub(crate) struct ImportedUncertainty {
 
 pub(crate) enum Inspection {
     Prepared,
-    RetryableInput { conversation: ConversationIdentity, input_id: String },
-    Running { binding: ExecutionBinding },
-    Recoverable { binding: ExecutionBinding },
-    Unknown { reason: String },
-    Finished { outcome: JobOutcome, result: ResultEvidence },
+    PreparedRecovery {
+        recovery_input_id: String,
+    },
+    RetryableInput {
+        conversation: ConversationIdentity,
+        input_id: String,
+    },
+    Running {
+        binding: ExecutionBinding,
+    },
+    Recoverable {
+        binding: ExecutionBinding,
+    },
+    Unknown {
+        reason: String,
+    },
+    Finished {
+        outcome: JobOutcome,
+        result: ResultEvidence,
+    },
 }

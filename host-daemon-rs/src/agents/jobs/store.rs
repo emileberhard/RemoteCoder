@@ -134,9 +134,19 @@ impl JobStore {
         .await
     }
 
-    pub(crate) async fn snapshot(&self) -> Result<Vec<JobRecord>> {
-        self.access(|inner| Ok(inner.jobs.values().cloned().collect()))
-            .await
+    pub(crate) async fn pending_ids(&self) -> Result<Vec<JobId>> {
+        self.access(|inner| {
+            Ok(inner
+                .jobs
+                .values()
+                .filter(|job| {
+                    job.source == JobSource::Runtime && !settled(job)
+                        || !is_terminal(job) && matches!(job.stop, StopState::Requested { .. })
+                })
+                .map(|job| job.job_id.clone())
+                .collect())
+        })
+        .await
     }
 
     pub(crate) async fn classify(
@@ -253,7 +263,7 @@ impl JobStore {
             ensure!(!inner.jobs.values().any(|existing| existing.agent_id == job.agent_id && !is_terminal(existing)), "conversation already has an unresolved job");
             if let Some(previous_id) = &job.previous_job_id {
                 let previous = inner.job(previous_id)?;
-                ensure!(previous.agent_id == job.agent_id && is_terminal(previous), "Continue must name a terminal job in this conversation");
+                ensure!(previous.agent_id == job.agent_id && matches!(&previous.execution, ExecutionState::Terminal { terminal } if terminal.cleanup == CleanupState::Complete), "Continue waits until the previous terminal result is acknowledged by its provider");
                 ensure!(inner.agent_view(&job.agent_id)?.latest_job_id.as_ref() == Some(previous_id), "Continue was based on a superseded job");
                 ensure!(job.admission_origin.is_none(), "Continue cannot replace original ancestry");
             } else {
@@ -331,6 +341,90 @@ impl JobStore {
         .await
     }
 
+    pub(crate) async fn record_uncertainty(
+        &self,
+        id: JobId,
+        revision: u64,
+        reason: String,
+        notice: Option<String>,
+        at_ms: i64,
+    ) -> Result<JobRecord> {
+        self.access(move |inner| {
+            let mut job = inner.current(&id, revision)?;
+            let next = ExecutionState::Unknown { conversation: execution_conversation(&job.execution).cloned(), reason };
+            validate_transition(&job, &next)?;
+            job.execution = next;
+            let delivery_id = format!("{}:notice:observation", id.as_str());
+            if let Some(text) = notice
+                && !job.notices.iter().any(|notice| matches!(&notice.payload, CompletionPayload::Prepared { delivery_id: existing, .. } if existing == &delivery_id)) {
+                    job.notices.push(JobNotice { at_ms: Some(at_ms), payload: CompletionPayload::Prepared { delivery_id, fingerprint: fingerprint(text.as_bytes()), text }, delivery: DeliveryState::Pending });
+            }
+            inner.commit(job, at_ms)
+        }).await
+    }
+
+    pub(crate) async fn complete_cleanup(
+        &self,
+        id: JobId,
+        revision: u64,
+        at_ms: i64,
+    ) -> Result<JobRecord> {
+        self.access(move |inner| {
+            let mut job = inner.current(&id, revision)?;
+            let ExecutionState::Terminal { terminal } = &mut job.execution else {
+                bail!("provider cleanup requires a durable terminal outcome");
+            };
+            terminal.cleanup = CleanupState::Complete;
+            inner.commit(job, at_ms)
+        })
+        .await
+    }
+
+    pub(crate) async fn notice_delivery(
+        &self,
+        id: JobId,
+        revision: u64,
+        delivery_id: String,
+        next: DeliveryState,
+        at_ms: i64,
+    ) -> Result<JobRecord> {
+        self.access(move |inner| {
+            let mut job = inner.current(&id, revision)?;
+            let notice = job.notices.iter_mut().find(|notice| matches!(&notice.payload, CompletionPayload::Prepared { delivery_id: existing, .. } if existing == &delivery_id)).context("job notice is missing")?;
+            ensure!(!delivery_settled(&notice.delivery) || notice.delivery == next || matches!((&notice.delivery, &next), (DeliveryState::Accepted { .. }, DeliveryState::Recorded { .. })), "settled notice cannot be resent or changed");
+            notice.delivery = next;
+            inner.commit(job, at_ms)
+        }).await
+    }
+
+    pub(crate) async fn dismiss_obligations(
+        &self,
+        id: JobId,
+        reason: String,
+        at_ms: i64,
+    ) -> Result<JobRecord> {
+        self.access(move |inner| {
+            let mut job = inner.job(&id)?.clone();
+            if let ExecutionState::Terminal { terminal } = &mut job.execution
+                && let Completion::Required { delivery, .. } = &mut terminal.completion
+                && !delivery_settled(delivery)
+            {
+                *delivery = DeliveryState::Dismissed {
+                    reason: reason.clone(),
+                };
+            }
+            for notice in &mut job.notices {
+                if !delivery_settled(&notice.delivery) {
+                    notice.delivery = DeliveryState::Dismissed {
+                        reason: reason.clone(),
+                    };
+                }
+            }
+            inner.commit(job, at_ms)
+        })
+        .await
+    }
+
     pub(crate) async fn delivery(
         &self,
         id: JobId,
@@ -347,7 +441,15 @@ impl JobStore {
                 bail!("job has no completion recipient")
             };
             ensure!(
-                !delivery_settled(delivery) || *delivery == next || matches!((&*delivery, &next), (DeliveryState::Accepted { .. }, DeliveryState::Recorded { .. })),
+                !delivery_settled(delivery)
+                    || *delivery == next
+                    || matches!(
+                        (&*delivery, &next),
+                        (
+                            DeliveryState::Accepted { .. },
+                            DeliveryState::Recorded { .. }
+                        )
+                    ),
                 "settled completion cannot be changed or resent"
             );
             *delivery = next;
@@ -687,19 +789,47 @@ fn delivery_settled(delivery: &DeliveryState) -> bool {
     )
 }
 fn settled(job: &JobRecord) -> bool {
-    matches!(&job.execution, ExecutionState::Terminal { terminal } if match &terminal.completion {
-        Completion::NotRequired => true,
-        Completion::Required { delivery, .. } => delivery_settled(delivery),
-    })
+    job.notices
+        .iter()
+        .all(|notice| delivery_settled(&notice.delivery))
+        && matches!(&job.execution, ExecutionState::Terminal { terminal } if terminal.cleanup == CleanupState::Complete && match &terminal.completion {
+            Completion::NotRequired => true,
+            Completion::Required { delivery, .. } => delivery_settled(delivery),
+        })
 }
 fn live_reservation(job: &JobRecord) -> bool {
     job.source == JobSource::Runtime && !settled(job)
 }
 
 fn validate_job(job: &JobRecord) -> Result<()> {
-    ensure!(job.source == JobSource::Imported || job.created_at_ms.is_some(), "runtime job requires its creation time");
+    ensure!(
+        job.source == JobSource::Imported || job.created_at_ms.is_some(),
+        "runtime job requires its creation time"
+    );
     if let Some(result) = &job.unconfirmed_result {
-        ensure!(serde_json::to_vec(result)?.len() <= MAX_RESULT_BYTES, "encoded unconfirmed result exceeds 256 KiB");
+        ensure!(
+            serde_json::to_vec(result)?.len() <= MAX_RESULT_BYTES,
+            "encoded unconfirmed result exceeds 256 KiB"
+        );
+    }
+    let mut notice_ids = std::collections::HashSet::new();
+    for notice in &job.notices {
+        if let CompletionPayload::Prepared {
+            delivery_id,
+            fingerprint: expected,
+            text,
+        } = &notice.payload
+        {
+            ensure!(
+                delivery_id.starts_with(&format!("{}:notice:", job.job_id.as_str()))
+                    && notice_ids.insert(delivery_id),
+                "runtime notice identity is invalid or duplicated"
+            );
+            ensure!(
+                *expected == fingerprint(text.as_bytes()),
+                "notice fingerprint differs from its immutable payload"
+            );
+        }
     }
     ensure!(
         !job.agent_id.is_empty() && job.agent_id.len() <= 200,
@@ -711,12 +841,52 @@ fn validate_job(job: &JobRecord) -> Result<()> {
             "job prompt must contain text and fit within 512 KiB"
         );
         ensure!(spec.cwd.is_absolute(), "job cwd must be absolute");
+        if let ToolScope::ReadOnly { root } = &spec.tool_scope {
+            ensure!(
+                root.is_absolute(),
+                "read-only scope requires an absolute root"
+            );
+        }
+        match &spec.settings {
+            ExecutionSettings::Codex {
+                model,
+                model_provider,
+                effort,
+                ..
+            } => {
+                ensure!(
+                    !model.is_empty() && !model_provider.is_empty() && !effort.is_empty(),
+                    "Codex model, provider and effort are required"
+                );
+                ensure!(
+                    model_provider != "claude",
+                    "Claude execution must use the Claude provider contract"
+                );
+            }
+            ExecutionSettings::Claude { model, .. } => {
+                ensure!(!model.is_empty(), "Claude model is required")
+            }
+        }
         ensure!(
             job.job_id
                 .as_str()
                 .starts_with(&format!("agent-{}-", spec.settings.provider().as_str())),
             "job identity provider differs from its settings"
         );
+    }
+    if job.source == JobSource::Runtime {
+        if let ExecutionState::Dispatching { input_id, .. } = &job.execution {
+            ensure!(
+                *input_id == job.initial_input_id(),
+                "dispatch input differs from the job's immutable initial input identity"
+            );
+        }
+        if let ExecutionState::Terminal { terminal } = &job.execution {
+            ensure!(
+                terminal.at_ms.is_some(),
+                "runtime terminal outcome requires its observation time"
+            );
+        }
     }
     if let ExecutionState::Terminal { terminal } = &job.execution {
         if let ResultEvidence::Available { result } = &terminal.result {
@@ -797,6 +967,15 @@ fn validate_transition(job: &JobRecord, next: &ExecutionState) -> Result<()> {
             ExecutionState::Running { .. }
         ) | (
             ExecutionState::Unknown { .. },
+            ExecutionState::Recovering { .. }
+        ) | (
+            ExecutionState::Unknown { .. },
+            ExecutionState::Unknown { .. }
+        ) | (
+            ExecutionState::Running { .. },
+            ExecutionState::Running { .. }
+        ) | (
+            ExecutionState::Recovering { .. },
             ExecutionState::Recovering { .. }
         ) | (_, ExecutionState::Terminal { .. })
     );
