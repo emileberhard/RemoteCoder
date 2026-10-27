@@ -151,6 +151,9 @@ async fn runnerless_stop_survives_reopen_and_fences_late_execution_evidence() {
     let terminal = Terminal {
         at_ms: 105,
         execution: None,
+        git: GitSnapshot::Unknown {
+            reason: "not a Git checkout".into(),
+        },
         outcome: JobOutcome::Stopped {
             effects: EffectEvidence::NotStarted,
         },
@@ -220,14 +223,14 @@ async fn continuation_order_uses_identity_chain_instead_of_wall_clock() {
                 terminal: Terminal {
                     at_ms: 101,
                     execution: None,
+                    git: GitSnapshot::Unknown {
+                        reason: "not a Git checkout".into(),
+                    },
                     outcome: JobOutcome::Completed,
                     result: ResultEvidence::Available {
                         result: JobResult {
                             text: "fixture".into(),
                             truncated: false,
-                            git: GitSnapshot::Unknown {
-                                reason: "not a Git checkout".into(),
-                            },
                         },
                     },
                     completion: Completion::NotRequired,

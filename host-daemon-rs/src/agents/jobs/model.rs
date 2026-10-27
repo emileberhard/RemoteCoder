@@ -215,7 +215,6 @@ pub(crate) enum GitSnapshot {
 pub(crate) struct JobResult {
     pub text: String,
     pub truncated: bool,
-    pub git: GitSnapshot,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -293,6 +292,7 @@ pub(crate) enum Completion {
 pub(crate) struct Terminal {
     pub at_ms: i64,
     pub execution: Option<ExecutionBinding>,
+    pub git: GitSnapshot,
     pub outcome: JobOutcome,
     pub result: ResultEvidence,
     pub completion: Completion,
