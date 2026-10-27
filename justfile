@@ -150,11 +150,23 @@ gateway-candidate-local:
     if [[ "${RC_COMPILATION_OWNER:-}" != 1 ]]; then
         exec python3 scripts/remote-build.py local-build gateway
     fi
-    if [[ -n "${RC_RELEASE_VERSION:-}" ]]; then
-        scripts/codex-runtime-approval check --json
-    else
-        just gateway-check-local
+    just gateway-check-local
+    just gateway-bundle-local
+
+[private]
+gateway-release-local:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ "${RC_COMPILATION_OWNER:-}" != 1 ]]; then
+        exec python3 scripts/remote-build.py local-build gateway-release
     fi
+    scripts/codex-runtime-approval check --json
+    just gateway-bundle-local
+
+[private]
+gateway-bundle-local:
+    #!/usr/bin/env bash
+    set -euo pipefail
     if [[ -n "${RC_BUILD_PROVENANCE:-}" ]]; then
         export RC_SOURCE_COMMIT="$(jq -r .sourceCommit "$RC_BUILD_PROVENANCE")"
         export RC_SOURCE_MODIFIED="$(jq -r .sourceModified "$RC_BUILD_PROVENANCE")"

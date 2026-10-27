@@ -88,6 +88,7 @@ KINDS = (
     "ios-ui-test",
     "core-test",
     "gateway",
+    "gateway-release",
     "gateway-check",
     "gateway-test",
     "tools-test",
@@ -108,7 +109,7 @@ SSH = [
 SIMULATOR_KINDS = frozenset(
     ("ios-simulator-test", "ios-ui-test", "verify-all")
 )
-GATEWAY_ARTIFACT_KINDS = frozenset(("gateway",))
+GATEWAY_ARTIFACT_KINDS = frozenset(("gateway", "gateway-release"))
 IOS_KINDS = frozenset(
     (
         "ios-install",
@@ -271,6 +272,8 @@ def build_command(kind: str, arguments: list[str]) -> list[str]:
         return ["./scripts/install-mac", "--bench", *arguments]
     if kind == "gateway":
         return ["just", "gateway-candidate-local"]
+    if kind == "gateway-release":
+        return ["just", "gateway-release-local"]
     if kind in ("core-test", "gateway-check", "gateway-test", "tools-test"):
         return ["just", kind + "-local", *arguments]
     if kind == "verify-all":
@@ -813,7 +816,7 @@ def compiler_paths(kind: str, environment: dict[str, str]) -> list[Path]:
         paths.append(derived)
     if kind in {"core-test", "verify", "verify-all"}:
         paths.append(Path(environment["RC_SWIFT_BUILD_PATH"]))
-    if kind in {"gateway", "gateway-check", "gateway-test", "verify", "verify-all"}:
+    if kind in {"gateway", "gateway-release", "gateway-check", "gateway-test", "verify", "verify-all"}:
         paths.append(Path(environment["CARGO_TARGET_DIR"]))
     return [canonical_path(path) for path in paths]
 
