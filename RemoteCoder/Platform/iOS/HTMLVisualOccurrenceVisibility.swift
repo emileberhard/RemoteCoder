@@ -8,7 +8,7 @@ struct HTMLVisualOccurrenceVisibility: ViewModifier {
         if UIDevice.current.userInterfaceIdiom == .phone {
             content.onScrollVisibilityChange(threshold: 0.01) { isVisible = $0 }
         } else {
-            content.onAppear { isVisible = true }
+            content.onAppear { isVisible = true }.onDisappear { isVisible = false }
         }
     }
 }

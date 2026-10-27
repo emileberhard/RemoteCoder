@@ -42,7 +42,7 @@ revision. A caller with a retained snapshot can send `knownRevision`; an exact
 match returns `unchanged: true` and that revision without entries. The gateway
 hashes the ordered serialized records inside the same file transaction as the
 read, so changes to any record, deletions and restores invalidate the token.
-An empty snapshot remains a full response, not an unchanged response. The
+An empty full response never decodes as unchanged. The
 `conversation/metadata/update` request identifies a single session, desired
 selection, expected server revision and mutation ID. The host owns the compound
 read/modify/write operation; a file lock also protects two gateway processes during

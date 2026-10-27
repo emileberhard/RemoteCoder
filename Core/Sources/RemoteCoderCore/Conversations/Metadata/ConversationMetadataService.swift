@@ -266,8 +266,7 @@ actor ConversationMetadataService {
                         let applied = try await remote.updateRemoteMetadata(pending.mutation)
                         try Task.checkCancellation()
                         guard !isRetired else { return }
-                        if document.acknowledged[id] != applied { knownRevision = nil }
-                        document.acknowledged[id] = applied
+                        acknowledge(applied, for: id)
                         if document.observed?[id] == observed { document.observed?[id] = nil }
                         if document.pending[id]?.mutation.mutationID == pending.mutation.mutationID {
                             document.pending[id] = nil
@@ -279,8 +278,7 @@ actor ConversationMetadataService {
                         revision += 1
                         try await persist()
                     } catch let conflict as GatewayRPCFailure where conflict.kind == .metadataConflict {
-                        if document.acknowledged[id] != conflict.currentMetadata { knownRevision = nil }
-                        document.acknowledged[id] = conflict.currentMetadata
+                        acknowledge(conflict.currentMetadata, for: id)
                         if document.pending[id]?.mutation.selection == conflict.currentMetadata?.selection {
                             document.pending[id] = nil
                         } else { status.conflicts.insert(id) }
@@ -315,7 +313,7 @@ actor ConversationMetadataService {
             received = entries
             knownRevision = revision
         case .unchanged(let revision):
-            guard let requestedRevision, revision == requestedRevision, knownRevision == requestedRevision else {
+            guard let requestedRevision, revision == requestedRevision else {
                 throw GatewayClient.ClientError.invalidMessage
             }
             received = document.acknowledged
@@ -353,5 +351,11 @@ actor ConversationMetadataService {
         }
         if document != previous { revision += 1 }
         try await persist()
+    }
+
+    private func acknowledge(_ metadata: ConversationMetadata?, for sessionID: String) {
+        guard document.acknowledged[sessionID] != metadata else { return }
+        document.acknowledged[sessionID] = metadata
+        knownRevision = nil
     }
 }

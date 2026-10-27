@@ -379,6 +379,7 @@ lifetime even when the occurrence itself leaves view. This avoids starting
 unseen blocks inside a visible message without introducing earlier JavaScript
 state resets. Near-viewport preparation and raster demand remain independent of
 this admission gate. iPad and Mac keep row-scoped admission.
+Automatic admission on iPhone requires an enclosing `ScrollView`.
 
 The workspace-owned `HTMLVisualRenderer` admits three live pages and at most sixteen
 waiting requests. Routine admission is FIFO. Explicit Interact or Load
