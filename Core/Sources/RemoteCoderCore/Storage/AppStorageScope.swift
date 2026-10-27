@@ -12,9 +12,17 @@ struct AppStorageScope: Sendable {
         #endif
     }
 
+    static var isPerformanceLab: Bool {
+        #if RC_PERF_HARNESS
+        ProcessInfo.processInfo.arguments.contains("-rcPerfLab")
+        #else
+        false
+        #endif
+    }
+
     static let current: AppStorageScope = {
         #if RC_PERF_HARNESS
-        if isOfflineReplay { return benchmark() }
+        if isOfflineReplay || isPerformanceLab { return benchmark() }
         #endif
         #if os(macOS) && RC_PERF_HARNESS
         if ProcessInfo.processInfo.arguments.contains("-rcPerfBench") { return benchmark() }

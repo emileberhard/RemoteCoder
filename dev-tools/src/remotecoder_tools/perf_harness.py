@@ -197,8 +197,6 @@ class Device:
             if hardware.get("reality") != "physical":
                 continue
             if name in {device.get("identifier"), hardware.get("udid"), device.get("deviceProperties", {}).get("name")}:
-                if hardware.get("deviceType") != "iPad":
-                    raise SystemExit(f"{name} is not an iPad; harness builds never go on a phone the gateways notify")
                 if device.get("connectionProperties", {}).get("tunnelState") in (None, "unavailable"):
                     raise SystemExit(f"{name} is paired but not reachable; connect and unlock it")
                 return hardware["udid"]
@@ -434,6 +432,14 @@ def install(args, device: Simulator | Device) -> None:
 def launch(args, device: Simulator | Device) -> None:
     device.prepare()
     device.terminate()
+    if args.lab_config:
+        source = Path(args.lab_config).resolve(strict=True)
+        if not source.is_file() or source.stat().st_size > 16_384:
+            raise ValueError("lab config must be a regular file of at most 16 KiB")
+        if source.stat().st_uid != os.getuid() or source.stat().st_mode & 0o077:
+            raise ValueError("lab config must be private to its owner")
+        device.put("lab-config.json", source.read_bytes())
+        device.launch_arguments += ["-rcPerfLab"]
     print(device.launch())
     if args.clear_results:
         device.clear_results()
@@ -1162,6 +1168,7 @@ def main() -> None:
     commands.add_parser("install").set_defaults(func=install)
     launch_parser = commands.add_parser("launch")
     launch_parser.add_argument("--clear-results", action="store_true")
+    launch_parser.add_argument("--lab-config", help="private GatewayHostConfiguration JSON for an isolated live fixture")
     launch_parser.set_defaults(func=launch)
     cmd_parser = commands.add_parser("cmd")
     cmd_parser.add_argument("json")

@@ -145,6 +145,26 @@ class LeaseTests(unittest.TestCase):
                     self.fail("expired queue activated")
 
 
+class DeviceResolutionTests(unittest.TestCase):
+    def test_explicit_physical_phone_is_supported_and_unreachable_devices_fail(self) -> None:
+        def inventory(command, **kwargs):
+            path = Path(command[command.index("--json-output") + 1])
+            path.write_text(json.dumps({"result": {"devices": [
+                {"identifier": "sim", "hardwareProperties": {"udid": "sim", "reality": "simulated", "deviceType": "iPhone"}},
+                {"identifier": "phone", "hardwareProperties": {"udid": "phone-udid", "reality": "physical", "deviceType": "iPhone"},
+                 "connectionProperties": {"tunnelState": "connected"}},
+                {"identifier": "disconnected", "hardwareProperties": {"udid": "disconnected", "reality": "physical", "deviceType": "iPad"},
+                 "connectionProperties": {"tunnelState": "unavailable"}},
+            ]}}))
+
+        with patch.object(perf_harness, "run", side_effect=inventory):
+            self.assertEqual(perf_harness.Device.resolve("phone-udid"), "phone-udid")
+            with self.assertRaisesRegex(SystemExit, "not reachable"):
+                perf_harness.Device.resolve("disconnected")
+            with self.assertRaisesRegex(SystemExit, "no physical device"):
+                perf_harness.Device.resolve("sim")
+
+
 class DeviceCleanupTests(unittest.TestCase):
     def test_failed_uninstall_requires_proven_absence(self) -> None:
         device = object.__new__(perf_harness.Device)

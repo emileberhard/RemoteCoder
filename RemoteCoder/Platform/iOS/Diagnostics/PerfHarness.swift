@@ -38,6 +38,20 @@ final class PerfHarness {
         URL.cachesDirectory.appending(path: "perf", directoryHint: .isDirectory)
     }
 
+    static func labHostStore(defaults: UserDefaults) -> HostStore {
+        do {
+            let data = try Data(contentsOf: directory.appending(path: "lab-config.json"))
+            let host = try JSONDecoder().decode(GatewayHostConfiguration.self, from: data)
+            guard host.isValid else { preconditionFailure("Invalid performance lab host") }
+            let store = HostStore(hosts: [host], activeHostID: host.id, defaults: defaults,
+                credentials: PerformanceReplayCredentials())
+            if let error = store.errorMessage { preconditionFailure(error) }
+            return store
+        } catch {
+            preconditionFailure("Performance lab configuration failed: \(error)")
+        }
+    }
+
     func start(workspace: ChatWorkspaceModel) {
         guard self.workspace == nil else { return }
         self.workspace = workspace
