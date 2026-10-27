@@ -299,6 +299,14 @@ pub(crate) struct Terminal {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct JobNotice {
+    pub at_ms: Option<i64>,
+    pub payload: CompletionPayload,
+    pub delivery: DeliveryState,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) enum ExecutionState {
     Admitted,
@@ -352,6 +360,7 @@ pub(crate) struct JobRecord {
     pub source: JobSource,
     pub admission_origin: Option<Origin>,
     pub unconfirmed_result: Option<JobResult>,
+    pub notices: Vec<JobNotice>,
     pub spec: SpecEvidence,
     pub recipient: Recipient,
     pub execution: ExecutionState,

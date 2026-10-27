@@ -48,7 +48,7 @@ impl JobOwner {
             .await
     }
 
-    pub(super) fn gateway(&self) -> Result<std::sync::Arc<Gateway>> {
+    pub(crate) fn gateway(&self) -> Result<std::sync::Arc<Gateway>> {
         self.gateway.upgrade().context("gateway is shutting down")
     }
 
@@ -156,6 +156,7 @@ impl JobOwner {
             source: JobSource::Runtime,
             admission_origin: Some(origin),
             unconfirmed_result: None,
+            notices: Vec::new(),
             spec: SpecEvidence::Known { spec: request.spec },
             recipient,
             execution: ExecutionState::Admitted,
@@ -289,6 +290,7 @@ impl JobOwner {
             source: JobSource::Runtime,
             admission_origin: None,
             unconfirmed_result: None,
+            notices: Vec::new(),
             spec: SpecEvidence::Known { spec },
             recipient,
             execution: ExecutionState::Admitted,

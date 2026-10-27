@@ -473,6 +473,7 @@ fn seed_origin(
         agent_id: agent_id.clone(),
         request_fingerprint: None,
         unconfirmed_result: None,
+        notices: Vec::new(),
         created_at_ms: Some(1),
         updated_at_ms: 1,
         revision: 0,

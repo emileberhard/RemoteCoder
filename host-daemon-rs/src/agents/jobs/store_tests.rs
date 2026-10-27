@@ -15,6 +15,7 @@ fn job(sequence: u8) -> JobRecord {
         source: JobSource::Runtime,
         admission_origin: Some(Origin::TopLevel),
         unconfirmed_result: None,
+        notices: Vec::new(),
         spec: SpecEvidence::Known {
             spec: JobSpec {
                 prompt: "Read the fixture and report its contents.".into(),
