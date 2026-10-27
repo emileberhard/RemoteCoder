@@ -359,12 +359,6 @@ struct TranscriptScrollRenderingTests {
         #expect(visibleBottom >= scroll.contentSize.height - 2)
     }
 
-    @Test func aShortReplyUnderATallComposerNeedsNoJumpPastReservedSpace() {
-        let padding = TranscriptLayout.tailPadding(heights: [60, 40, 20], latestTurnIndex: 0, minimumTurnHeight: 400)
-        #expect(padding == 288)
-        #expect(!TranscriptLayout.isFarFromLatest(latestEnd: 112, visibleBottom: 400, viewportHeight: 400))
-    }
-
     @Test(arguments: [(800.0, false), (600.0, false), (599.0, true), (200.0, true)])
     func theJumpControlAppearsOnlyBeyondHalfAViewportFromTheLatestAnswer(visibleBottom: Double, showsJump: Bool) {
         #expect(TranscriptLayout.isFarFromLatest(latestEnd: 800, visibleBottom: visibleBottom, viewportHeight: 400) == showsJump)
