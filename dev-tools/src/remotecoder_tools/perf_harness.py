@@ -314,7 +314,6 @@ def build(args) -> None:
         compile_command = commands[1]
         settings = compile_command[compile_command.index("-scheme") + 2:compile_command.index("-derivedDataPath")]
         settings += compile_command[compile_command.index("-derivedDataPath") + 2:]
-        compile_command.insert(-1, "RC_PERF_HARNESS_SHA256=" + "0" * 64)
         try:
             require_build_space(ROOT)
         except ValueError as error:
@@ -326,7 +325,12 @@ def build(args) -> None:
                 effective = effective_compiler_settings(rows, device.derived)
                 settings = {"command": settings, "effective": effective}
                 harness = harness_source_identity(settings, toolchain)
-                compile_command[-2] = "RC_PERF_HARNESS_SHA256=" + harness["harnessSHA256"]
+                info = plistlib.loads((ROOT / "Config/InfoPlists/RemoteCoder-Info.plist").read_bytes())
+                info["RemoteCoderPerfHarnessSHA256"] = harness["harnessSHA256"]
+                device.derived.mkdir(parents=True, exist_ok=True)
+                harness_info = device.derived / "PerfHarness-Info.plist"
+                harness_info.write_bytes(plistlib.dumps(info))
+                compile_command.insert(-1, "RC_IOS_INFOPLIST_FILE=" + str(harness_info))
                 for command in commands[1:]:
                     status = run_owned(command, ROOT, env, handle, (lease, capacity))
                     if status != 0:

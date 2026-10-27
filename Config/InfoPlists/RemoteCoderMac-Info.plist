@@ -64,8 +64,6 @@
 	<string>$(SWIFT_OPTIMIZATION_LEVEL)</string>
 	<key>RemoteCoderDictationContainer</key>
 	<string>$(RC_ICLOUD_CONTAINER)</string>
-	<key>RemoteCoderPerfHarnessSHA256</key>
-	<string>$(RC_PERF_HARNESS_SHA256)</string>
 	<key>RemoteCoderSourceCommit</key>
 	<string>$(RC_SOURCE_COMMIT)</string>
 	<key>RemoteCoderSourceFingerprint</key>

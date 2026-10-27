@@ -213,6 +213,10 @@ class BuildTests(unittest.TestCase):
             self.events.append(("capacity", background))
             yield 12
 
+        info = Path(self.directory.name) / "Config/InfoPlists/RemoteCoder-Info.plist"
+        info.parent.mkdir(parents=True)
+        info.write_bytes(b'<plist version="1.0"><dict/></plist>')
+
         self.patches = [
             patch.object(perf_harness, "ENV", {}),
             patch.object(perf_harness, "ROOT", Path(self.directory.name)),

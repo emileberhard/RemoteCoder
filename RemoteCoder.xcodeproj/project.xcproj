@@ -944,7 +944,8 @@
           "AGENTS.md",
           "CLAUDE.md"
         ],
-        "INFOPLIST_FILE": "Config/InfoPlists/RemoteCoder-Info.plist",
+        "INFOPLIST_FILE": "$(RC_IOS_INFOPLIST_FILE)",
+        "RC_IOS_INFOPLIST_FILE": "Config/InfoPlists/RemoteCoder-Info.plist",
         "INFOPLIST_KEY_CFBundleShortVersionString": "$(MARKETING_VERSION)",
         "INFOPLIST_KEY_CFBundleVersion": "$(CURRENT_PROJECT_VERSION)",
         "IPHONEOS_DEPLOYMENT_TARGET": "27.0",
@@ -989,7 +990,6 @@
         "CODE_SIGN_STYLE": "Automatic",
         "CODE_SIGN_IDENTITY[config=Debug]": "Apple Development",
         "CODE_SIGN_IDENTITY[config=Release]": "Apple Distribution",
-        "RC_PERF_HARNESS_SHA256": "unrecorded",
         "PROVISIONING_PROFILE_SPECIFIER[config=Release]": "$(RC_PROFILE_REMOTECODER_APP)",
         "RC_APP_ENTITLEMENTS[config=Debug]": "RemoteCoder/Entitlements/RemoteCoder.Debug.entitlements",
         "RC_APP_ENTITLEMENTS[config=Release]": "RemoteCoder/Entitlements/RemoteCoder.Release.entitlements"
@@ -1336,7 +1336,6 @@
           "AGENTS.md",
           "CLAUDE.md"
         ],
-        "RC_PERF_HARNESS_SHA256": "unrecorded",
         "PROVISIONING_PROFILE_SPECIFIER[config=Release]": "$(RC_PROFILE_REMOTECODER_MAC)"
       }
     },
