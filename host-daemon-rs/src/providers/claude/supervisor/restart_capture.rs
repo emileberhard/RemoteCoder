@@ -230,10 +230,10 @@ impl ClaudeSupervisor {
             .map_err(|error| {
                 resume_error(format!("the Stop state could not be read: {error:#}"))
             })?;
-        if let Some(captured) = item.stop_generation {
-            if stop_generation > captured {
-                return Ok(ResumeDelivery::Stopped);
-            }
+        if let Some(captured) = item.stop_generation
+            && stop_generation > captured
+        {
+            return Ok(ResumeDelivery::Stopped);
         }
         let mut frames = self
             .undelivered(item)

@@ -68,7 +68,7 @@ fn main() -> Result<()> {
         let code = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?
-            .block_on(agents::client::run(command, args.env_file.as_deref()))?;
+            .block_on(agents::client::run(*command, args.env_file.as_deref()))?;
         std::process::exit(code);
     }
     if let Some(config::Command::ClaudeNotificationHook {

@@ -48,7 +48,7 @@ pub(crate) struct Args {
 pub(crate) enum Command {
     Agent {
         #[command(subcommand)]
-        command: crate::agents::client::AgentCommand,
+        command: Box<crate::agents::client::AgentCommand>,
     },
     CheckConfig,
     #[command(hide = true)]

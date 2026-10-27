@@ -246,6 +246,10 @@ mod tests {
         let endpoint = endpoint(listener.local_addr().unwrap().port());
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
+            #[allow(
+                clippy::result_large_err,
+                reason = "tungstenite's handshake callback fixes the error type"
+            )]
             let mut socket = tokio_tungstenite::accept_hdr_async(
                 stream,
                 |request: &tokio_tungstenite::tungstenite::handshake::server::Request, response| {

@@ -112,13 +112,15 @@ fn an_echo_or_a_frame_that_lists_an_input_marks_it_consumed() {
 fn a_dispatched_turn_skips_only_a_result_that_answers_other_work() {
     let queue = UnconsumedInputs::default();
     for id in ["earlier", "prompt", "steer"] {
-        queue.queue(
-            Some(ClaudeUserInput {
-                client_id: Some(id.to_owned()),
-                ..ClaudeUserInput::text(id)
-            }),
-            || (),
-        );
+        queue
+            .queue(
+                Some(ClaudeUserInput {
+                    client_id: Some(id.to_owned()),
+                    ..ClaudeUserInput::text(id)
+                }),
+                || (),
+            )
+            .unwrap();
     }
     let awaiting = || RuntimeTurn {
         agent_initiated: false,

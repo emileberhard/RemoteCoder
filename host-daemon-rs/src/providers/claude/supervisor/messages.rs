@@ -753,7 +753,6 @@ mod tests {
     use nix::sys::signal::Signal;
     use nix::unistd::Pid;
     use std::fs;
-    use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
     use std::time::Duration;
     use tokio::sync::mpsc;
@@ -1373,14 +1372,16 @@ mod tests {
         let mut fixture = Fixture::new();
         fixture.initial_turn().await;
         let history_dir = fixture.root.root_path().join("remotecoder-history");
-        fs::set_permissions(&history_dir, fs::Permissions::from_mode(0o500))
-            .expect("make parent ledger unwritable");
+        let lock = history_dir.join(format!("{:x}.lock", Sha256::digest(THREAD.as_bytes())));
+        if lock.exists() {
+            fs::remove_file(&lock).unwrap();
+        }
+        fs::create_dir(&lock).expect("block the parent transaction lock");
         let outcome = fixture
             .agent
             .deliver_parent_message(message("write-failed", "the child finished"))
             .await;
-        fs::set_permissions(&history_dir, fs::Permissions::from_mode(0o700))
-            .expect("restore parent ledger permissions");
+        fs::remove_dir(&lock).expect("restore the parent transaction lock");
         let error = outcome.expect_err("delivery must not be acknowledged");
         assert_eq!(error.code, RpcCode::Internal);
         assert_eq!(fixture.received(1).await.len(), 1);

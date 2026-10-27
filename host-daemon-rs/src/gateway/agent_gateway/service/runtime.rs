@@ -203,13 +203,12 @@ impl AgentService<'_> {
         for view in &views {
             if let Some(agent) = &view.agent
                 && let ConversationBinding::Known { conversation } = &agent.conversation
+                && self.gateway.agent_conversation(&conversation.thread_id)? == *conversation
             {
-                if self.gateway.agent_conversation(&conversation.thread_id)? == *conversation {
-                    parents.insert(
-                        conversation.clone(),
-                        Some(format!("job:{}", agent.agent_id)),
-                    );
-                }
+                parents.insert(
+                    conversation.clone(),
+                    Some(format!("job:{}", agent.agent_id)),
+                );
             }
         }
         let mut projected = Vec::new();
