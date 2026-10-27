@@ -78,6 +78,16 @@ in `RemoteCoder/`, `Core/`, `Shared/`, the app-extension directories,
 `host-daemon-rs/`, `web-client/`, `agent-calls/` and `dev-tools/`.
 See [CONTRIBUTING.md](CONTRIBUTING.md) before submitting changes.
 
+## Dependency updates
+
+Dependabot updates GitHub Actions, Cargo, Bun and uv dependencies. The app's
+remote Swift dependencies are declared in the Xcode project, while `Core` has
+no remote dependencies. Dependabot cannot update an Xcode-only
+`Package.resolved`. Maintainers review those upstream releases, update the
+package requirements in Xcode and commit the project and its
+`RemoteCoder.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved`
+together after the relevant app checks pass.
+
 ## License, name and icon
 
 Original RemoteCoder code is [PolyForm Shield 1.0.0](LICENSE): you may read,
