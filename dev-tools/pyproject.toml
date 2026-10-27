@@ -19,6 +19,9 @@ dev = ["pytest>=8", "pytest-asyncio>=1", "ruff>=0.12", "ty>=0.0.1"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 
+[tool.uv]
+exclude-newer = "12 hours"
+
 [tool.ruff]
 target-version = "py314"
 
