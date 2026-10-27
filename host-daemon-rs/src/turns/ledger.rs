@@ -542,7 +542,8 @@ impl TurnLedger {
         client_user_message_id: &str,
     ) -> bool {
         let queued = self.take_queued(key.thread_id(), client_user_message_id);
-        let consumed = queued.is_some();
+        let pending = self.take_pending_with_message(key.thread_id(), client_user_message_id);
+        let consumed = queued.is_some() || pending.is_some();
         if !self
             .contexts
             .get(key)
@@ -552,9 +553,7 @@ impl TurnLedger {
         }
         let prompt = match queued {
             Some(submission) => Some(submission.context),
-            None => self
-                .take_pending_with_message(key.thread_id(), client_user_message_id)
-                .map(|pending| pending.context),
+            None => pending.map(|pending| pending.context),
         };
         match prompt {
             Some(prompt) => {
