@@ -32,6 +32,29 @@ impl JobId {
     pub(crate) fn as_str(&self) -> &str {
         &self.0
     }
+
+    pub(crate) fn for_mutation(provider: Provider, mutation_id: &str) -> Result<Self, String> {
+        use sha2::{Digest, Sha256};
+        if mutation_id.is_empty() || mutation_id.len() > 200 {
+            return Err("mutation identity must contain 1–200 bytes".into());
+        }
+        let digest = Sha256::new()
+            .chain_update(b"remotecoder-agent-job\0")
+            .chain_update(provider.as_str().as_bytes())
+            .chain_update(b"\0")
+            .chain_update(mutation_id.as_bytes())
+            .finalize();
+        let mut time = [0u8; 8];
+        time.copy_from_slice(&digest[..8]);
+        let mut suffix = [0u8; 4];
+        suffix.copy_from_slice(&digest[8..12]);
+        Self::try_from(format!(
+            "agent-{}-{:019}-{:08x}",
+            provider.as_str(),
+            u64::from_be_bytes(time) % 10_000_000_000_000_000_000,
+            u32::from_be_bytes(suffix)
+        ))
+    }
 }
 
 impl TryFrom<String> for JobId {
@@ -284,6 +307,8 @@ pub(crate) enum ExecutionState {
     },
     Recovering {
         binding: ExecutionBinding,
+        #[serde(rename = "recoveryInputId")]
+        recovery_input_id: Option<String>,
     },
     Unknown {
         conversation: Option<ConversationIdentity>,

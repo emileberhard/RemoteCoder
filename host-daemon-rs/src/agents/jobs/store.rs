@@ -603,7 +603,7 @@ fn execution_conversation(execution: &ExecutionState) -> Option<&ConversationIde
         ExecutionState::Admitted | ExecutionState::Terminal { .. } => None,
         ExecutionState::Bound { conversation }
         | ExecutionState::Dispatching { conversation, .. } => Some(conversation),
-        ExecutionState::Running { binding } | ExecutionState::Recovering { binding } => {
+        ExecutionState::Running { binding } | ExecutionState::Recovering { binding, .. } => {
             Some(&binding.conversation)
         }
         ExecutionState::Unknown { conversation, .. } => conversation.as_ref(),

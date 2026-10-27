@@ -528,7 +528,7 @@ fn receipt(receipt: AdmissionReceipt) -> Value {
     let provider_session_id = match &receipt.job.execution {
         ExecutionState::Bound { conversation }
         | ExecutionState::Dispatching { conversation, .. } => Some(conversation.thread_id.as_str()),
-        ExecutionState::Running { binding } | ExecutionState::Recovering { binding } => {
+        ExecutionState::Running { binding } | ExecutionState::Recovering { binding, .. } => {
             Some(binding.conversation.thread_id.as_str())
         }
         ExecutionState::Unknown {
