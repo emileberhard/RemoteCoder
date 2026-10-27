@@ -668,7 +668,7 @@ final class HTMLVisualRenderer {
             }, onRegistration: { instance.userContentController = $0 })
         try Task.checkCancellation()
         instance.page = page
-        do { try await webContent.load(page, html: html, reference: reference) }
+        do { try await HTMLVisualWebContent.load(page, html: html, reference: reference) }
         catch {
             page.stopLoading()
             throw error

@@ -68,7 +68,6 @@ final class HTMLVisualPreparation {
     private(set) var layoutContext = HTMLVisualLayoutContext()
     var onBackgroundPreparationReady: (@MainActor () -> Void)?
     private let renderer: HTMLVisualRenderer
-    private let pageTimeout: @Sendable () async -> Void
     private var active = false
     private var conservesEnergy = false
     private var waiters: [Waiter] = []
@@ -91,11 +90,8 @@ final class HTMLVisualPreparation {
     #endif
     private static let logger = AppLogger(category: "HTMLVisual")
 
-    init(renderer: HTMLVisualRenderer, pageTimeout: @escaping @Sendable () async -> Void = {
-        try? await Task.sleep(for: .seconds(4))
-    }) {
+    init(renderer: HTMLVisualRenderer) {
         self.renderer = renderer
-        self.pageTimeout = pageTimeout
     }
 
     isolated deinit {
@@ -406,7 +402,7 @@ final class HTMLVisualPreparation {
         }
         await withTaskGroup(of: Void.self) { group in
             group.addTask { for await _ in stored { return } }
-            group.addTask { await self.pageTimeout() }
+            group.addTask { try? await Task.sleep(for: .seconds(4)) }
             await group.next()
             group.cancelAll()
         }

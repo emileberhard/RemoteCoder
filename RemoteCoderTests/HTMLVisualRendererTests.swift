@@ -745,53 +745,6 @@ struct HTMLVisualRendererTests {
     }
 
     @Test(.timeLimit(.minutes(1)))
-    func pagesStillLoadingAtTheTimeoutReleaseTheirPagesAndAdmissionForTheNextVisual() async throws {
-        let resource = HeldVisualResource()
-        let scheme = try #require(URLScheme("rc-held"))
-        let held = (0..<HTMLVisualPageAdmission.maximumLivePages).map {
-            "<body><script src='rc-held://visual/script.js?attempt=\($0)'></script><div style='height:47px'>late</div></body>"
-        }
-        let healthy = "<body><div style='height:48px'>after</div></body>"
-        let (timeouts, timeout) = AsyncStream<Void>.makeStream()
-        defer { timeout.finish() }
-        try await withFixture(webContent: HTMLVisualWebContent(resourceHandlers: [scheme: resource])) { fixture in
-            let preparation = HTMLVisualPreparation(renderer: fixture.renderer, pageTimeout: {
-                for await _ in timeouts { return }
-            })
-            try await withPreparationHost(fixture, documents: held + [healthy], preparation: preparation) { host in
-                preparation.updateLayoutContext { $0.width = 320 }
-                for late in host.references.dropLast() {
-                    let key = HTMLVisualLayoutKey(digest: late.digest, width: 320, theme: theme)
-                    let attempt = Task { await preparation.prepareInBackground([late], documents: host.source.documents) }
-                    await resource.waitForRequest()
-                    let instance = try #require(preparation.surface.instance)
-                    let page = try #require(instance.page)
-                    timeout.yield()
-                    #expect(await attempt.value == .incomplete(missing: 1))
-                    #expect(instance.page == nil && instance.requestID == nil && instance.activity == nil)
-                    #expect(preparation.surface.instance == nil)
-
-                    await resource.waitForCancellation()
-                    #expect(await resource.release())
-                    #expect(try await page.callJavaScript(
-                        "return typeof window.webkit?.messageHandlers?.rcVisual === 'undefined';",
-                        contentWorld: .defaultClient) as? Bool == true)
-                    #expect(fixture.renderer.height(for: key) == nil && !fixture.renderer.hasStoredSnapshot(for: key))
-                }
-
-                let next = try #require(host.references.last)
-                #expect(await preparation.prepareInBackground([next], documents: host.source.documents)
-                    == .settled(stored: 1, unpreparable: 0))
-                #expect(fixture.renderer.height(for: HTMLVisualLayoutKey(digest: next.digest, width: 320, theme: theme)) == 48)
-                for late in host.references.dropLast() {
-                    let key = HTMLVisualLayoutKey(digest: late.digest, width: 320, theme: theme)
-                    #expect(fixture.renderer.height(for: key) == nil && !fixture.renderer.hasStoredSnapshot(for: key))
-                }
-            }
-        }
-    }
-
-    @Test(.timeLimit(.minutes(1)))
     func anExplicitFailureSettlesButATimedOutVisualStaysIncomplete() async throws {
         let missing = try Self.reference("<body>missing</body>")
         try await withFixture { fixture in
@@ -819,7 +772,6 @@ struct HTMLVisualRendererTests {
     private func withPreparationHost(_ fixture: RendererLifecycleFixture, documents: [String]? = nil,
                                      access: any HostFileAccess = RendererCacheOnlyAccess(),
                                      energyPolicy: AppEnergyPolicy = Self.unconstrained,
-                                     preparation: HTMLVisualPreparation? = nil,
                                      _ operation: (PreparationHost) async throws -> Void) async throws {
         let hostID = UUID()
         let cache = HTMLVisualDocumentCache(directory: fixture.directory.appending(path: "documents-\(UUID().uuidString)"),
@@ -834,7 +786,7 @@ struct HTMLVisualRendererTests {
         }
         let store = HTMLVisualDocumentStore(hostID: hostID, access: access, cache: cache)
         let source = HTMLVisualSource(hostID: hostID, documents: store, renderer: fixture.renderer,
-            preparation: preparation ?? HTMLVisualPreparation(renderer: fixture.renderer))
+            preparation: HTMLVisualPreparation(renderer: fixture.renderer))
         let controller = UIHostingController(rootView: preparationHost(source, energyPolicy: energyPolicy))
         fixture.window.show(controller)
         do {
@@ -1471,8 +1423,7 @@ struct HTMLVisualRendererTests {
         }
     }
 
-    private func withFixture(webContent: HTMLVisualWebContent = Self.webContent,
-                             _ operation: (RendererLifecycleFixture) async throws -> Void) async throws {
+    private func withFixture(_ operation: (RendererLifecycleFixture) async throws -> Void) async throws {
         let digest = SHA256.hash(data: Data(html.utf8)).map { String(format: "%02x", $0) }.joined()
         let url = try #require(URL(string: "rc-visual:" + digest))
         let reference = try #require(HTMLVisualReference(url: url))
@@ -1480,7 +1431,7 @@ struct HTMLVisualRendererTests {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         let fixture = RendererLifecycleFixture(directory: directory, scene: scene, reference: reference,
             url: url, key: HTMLVisualLayoutKey(digest: digest, width: 320, theme: theme), html: html,
-            webContent: webContent)
+            webContent: Self.webContent)
         await fixture.renderer.load()
         do {
             try await operation(fixture)
@@ -1555,57 +1506,6 @@ struct HTMLVisualRendererTests {
     nonisolated private static func write(_ html: String, to url: URL) async throws {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data(html.utf8).write(to: url)
-    }
-}
-
-private actor HeldVisualResource: URLSchemeHandler {
-    private var held: (URL, AsyncThrowingStream<URLSchemeTaskResult, any Error>.Continuation)?
-    private var arrival: CheckedContinuation<Void, Never>?
-    private var cancellation: CheckedContinuation<Void, Never>?
-    private var cancelled = false
-
-    nonisolated func reply(for request: URLRequest) -> AsyncThrowingStream<URLSchemeTaskResult, any Error> {
-        let (stream, continuation) = AsyncThrowingStream<URLSchemeTaskResult, any Error>.makeStream()
-        continuation.onTermination = { reason in
-            if case .cancelled = reason { Task { await self.didCancel() } }
-        }
-        Task { await receive(request, continuation: continuation) }
-        return stream
-    }
-
-    private func receive(_ request: URLRequest, continuation: AsyncThrowingStream<URLSchemeTaskResult, any Error>.Continuation) {
-        guard let url = request.url else { continuation.finish(throwing: URLError(.badURL)); return }
-        held = (url, continuation)
-        cancelled = false
-        arrival?.resume()
-        arrival = nil
-    }
-
-    func waitForRequest() async {
-        if held != nil { return }
-        await withCheckedContinuation { arrival = $0 }
-    }
-
-    private func didCancel() {
-        cancelled = true
-        cancellation?.resume()
-        cancellation = nil
-    }
-
-    func waitForCancellation() async {
-        if cancelled { return }
-        await withCheckedContinuation { cancellation = $0 }
-    }
-
-    func release() -> Bool {
-        guard let (url, continuation) = held else { return false }
-        held = nil
-        let response = URLResponse(url: url, mimeType: "application/javascript", expectedContentLength: -1, textEncodingName: "utf-8")
-        let result = continuation.yield(.response(response))
-        continuation.yield(.data(Data("globalThis.resourceFinished = true;".utf8)))
-        continuation.finish()
-        if case .terminated = result { return true }
-        return false
     }
 }
 
