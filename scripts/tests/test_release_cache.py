@@ -258,7 +258,7 @@ class SymbolRetentionTests(unittest.TestCase):
             os.utime(directory, (stamp, stamp))
 
     def present(self):
-        return sorted({module.re.fullmatch(module.SYMBOL_DIRECTORY, p.name)[1] for p in self.deployments.glob("testflight-*")})
+        return sorted({module.re.fullmatch(module.SYMBOL_DIRECTORY, p.name)[1] for p in self.deployments.iterdir()})
 
     def test_versions_retained_within_seven_days_the_newest_older_one_and_the_published_one_stay(self):
         self.retain("3.40.0", 30)

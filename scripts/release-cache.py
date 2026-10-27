@@ -40,7 +40,7 @@ MAC_APP = "RemoteCoderMac-direct.app"
 MAC_PACKAGE = "RemoteCoderMac.pkg"
 MIRRORED = ("gateway", "mac-app", "mac-package", "mac-receipt", "ios-symbols", "mac-symbols")
 COMPONENTS = ("gateway", "app")
-SYMBOL_DIRECTORY = rf"testflight-(?:ios|mac)-({VERSION})-[0-9]+"
+SYMBOL_DIRECTORY = rf"(?:testflight|direct)-(?:ios|mac)-({VERSION})-[0-9]+"
 SYMBOL_WINDOW_SECONDS = 7 * 24 * 3600
 SYMBOL_BYTE_CAP = 5 * 1024**3
 
@@ -238,7 +238,8 @@ def publish(version: str, gateway: Path, package: Path) -> dict:
 
 
 def symbol_directory(platform: str, version: str) -> Path:
-    return DEPLOYMENTS / f"testflight-{platform}-{version}-{build_number(version)}"
+    kind = "testflight" if version_key(version) <= (3, 73, 0) else "direct"
+    return DEPLOYMENTS / f"{kind}-{platform}-{version}-{build_number(version)}"
 
 
 def attach(version: str, platform: str) -> dict:
@@ -270,7 +271,7 @@ def allocated_bytes(path: Path) -> int:
 
 def prune_symbols(published: str | None) -> dict:
     by_version: dict[str, list[Path]] = {}
-    for path in DEPLOYMENTS.glob("testflight-*"):
+    for path in DEPLOYMENTS.iterdir():
         if match := re.fullmatch(SYMBOL_DIRECTORY, path.name):
             by_version.setdefault(match[1], []).append(path)
     newest_first = sorted(by_version, key=version_key, reverse=True)
