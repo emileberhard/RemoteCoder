@@ -3,6 +3,7 @@ import base64
 import json
 import os
 import random
+import re
 import subprocess
 import sys
 import time
@@ -111,9 +112,9 @@ def next_build_number(app):
     builds = api("GET", "builds", **{"filter[app]": app, "fields[builds]": "version", "limit": 200})
     uploads = api("GET", f"apps/{app}/buildUploads", **{"fields[buildUploads]": "cfBundleVersion", "limit": 200})
     versions = [b["attributes"]["version"] for b in builds] + [u["attributes"]["cfBundleVersion"] for u in uploads]
-    if any(not version.isdecimal() for version in versions):
-        sys.exit("Use integer build numbers; App Store Connect contains a non-integer build version.")
-    return max((int(version) for version in versions), default=0) + 1
+    if any(re.fullmatch(r"[0-9]+(?:\.[0-9]+){0,2}", version) is None for version in versions):
+        sys.exit("App Store Connect contains an unsupported build-number format; reconcile it before reserving an integer.")
+    return max((int(version.split(".")[0]) for version in versions), default=0) + 1
 
 
 def processed_build(app, version, number, platform):

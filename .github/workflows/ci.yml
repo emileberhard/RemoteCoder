@@ -83,6 +83,12 @@ jobs:
         with:
           persist-credentials: false
       - run: scripts/select-xcode
+      - uses: extractions/setup-just@f8a3cce218d9f83db3a2ecd90e41ac3de6cdfd9b # v3
+        with:
+          just-version: '1.59.0'
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+        with:
+          version: '0.13.4'
       - run: python3 scripts/core-test.py
       - run: ./scripts/lint-glass
       - run: ./scripts/lint-haptics
@@ -105,6 +111,9 @@ jobs:
         with:
           persist-credentials: false
       - run: scripts/select-xcode
+      - uses: extractions/setup-just@f8a3cce218d9f83db3a2ecd90e41ac3de6cdfd9b # v3
+        with:
+          just-version: '1.59.0'
       - run: just ios-build-local
       - run: just mac-build-local
       - run: just mac-harness-build-local

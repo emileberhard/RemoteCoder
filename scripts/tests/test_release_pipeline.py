@@ -28,7 +28,7 @@ class StorePreparationTests(unittest.TestCase):
 
     def test_numbers_include_uploads_that_are_not_processed_builds_yet(self):
         with patch.object(asc, 'api', side_effect=[
-            [{'attributes': {'version': '3073000'}}],
+            [{'attributes': {'version': '3073000'}}, {'attributes': {'version': '1.5.12'}}],
             [{'attributes': {'cfBundleVersion': '3073002'}}],
         ]):
             self.assertEqual(asc.next_build_number('app'), 3073003)
