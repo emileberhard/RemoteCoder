@@ -8,12 +8,13 @@ fn job(sequence: u8) -> JobRecord {
         agent_id: job_id.as_str().into(),
         job_id,
         request_fingerprint: Some(format!("request-{sequence}")),
-        created_at_ms: 100,
+        created_at_ms: Some(100),
         updated_at_ms: 100,
         revision: 0,
         previous_job_id: None,
         source: JobSource::Runtime,
         admission_origin: Some(Origin::TopLevel),
+        unconfirmed_result: None,
         spec: SpecEvidence::Known {
             spec: JobSpec {
                 prompt: "Read the fixture and report its contents.".into(),
@@ -244,10 +245,10 @@ async fn continuation_order_uses_identity_chain_instead_of_wall_clock() {
     next.agent_id = original.agent_id.clone();
     next.previous_job_id = Some(original.job_id);
     next.admission_origin = None;
-    next.created_at_ms = 90;
+    next.created_at_ms = Some(90);
     let (admitted, _) = store.admit(next).await.unwrap();
     assert_eq!(
         store.agent(original.agent_id).await.unwrap().latest_job_id,
-        admitted.job_id
+        Some(admitted.job_id)
     );
 }

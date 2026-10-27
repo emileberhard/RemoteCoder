@@ -10,6 +10,7 @@ use crate::gateway::Gateway;
 use crate::wire::agent_jobs::*;
 
 pub(crate) struct JobOwner {
+    pub(crate) contexts: super::context::Contexts,
     root: Option<PathBuf>,
     store: OnceCell<JobStore>,
     gateway: Weak<Gateway>,
@@ -19,6 +20,7 @@ pub(crate) struct JobOwner {
 impl JobOwner {
     pub(crate) fn new(root: Option<PathBuf>, gateway: Weak<Gateway>) -> Self {
         Self {
+            contexts: Default::default(),
             root,
             store: OnceCell::new(),
             gateway,
@@ -87,8 +89,9 @@ impl JobOwner {
     pub(crate) async fn classify(
         &self,
         conversation: &ConversationIdentity,
+        created_at_ms: Option<i64>,
     ) -> Result<Option<Origin>> {
-        self.store().await?.classify(conversation.clone()).await
+        self.store().await?.classify(conversation.clone(), created_at_ms).await
     }
 
     pub(crate) async fn list(&self, request: ListParams) -> Result<ListPage> {
@@ -146,12 +149,13 @@ impl JobOwner {
             agent_id: request.job_id.as_str().into(),
             job_id: request.job_id,
             request_fingerprint: Some(request_fingerprint),
-            created_at_ms: at_ms,
+            created_at_ms: Some(at_ms),
             updated_at_ms: at_ms,
             revision: 0,
             previous_job_id: None,
             source: JobSource::Runtime,
             admission_origin: Some(origin),
+            unconfirmed_result: None,
             spec: SpecEvidence::Known { spec: request.spec },
             recipient,
             execution: ExecutionState::Admitted,
@@ -168,8 +172,35 @@ impl JobOwner {
         caller: Origin,
     ) -> Result<AdmissionReceipt> {
         let store = self.store().await?;
+        let current_recipient = match &request.recipient {
+            ContinueRecipient::Previous => None,
+            ContinueRecipient::Current => Some(recipient(&caller)),
+        };
+        let request_fingerprint = fingerprint(&serde_json::to_vec(&(
+            &request.agent_id,
+            &request.prompt,
+            &request.settings,
+            &request.recipient,
+            &current_recipient,
+        ))?);
+        if let Some(job) = store
+            .existing_request(request.job_id.clone(), request_fingerprint.clone())
+            .await?
+        {
+            return Ok(AdmissionReceipt {
+                job,
+                duplicate: true,
+            });
+        }
         let agent = store.agent(request.agent_id.clone()).await?;
-        let previous = store.read(agent.latest_job_id.clone()).await?;
+        let previous = store
+            .read(
+                agent
+                    .latest_job_id
+                    .clone()
+                    .context("conversation's latest job is unresolved")?,
+            )
+            .await?;
         let (cwd, original_settings, tool_scope, title) = match &previous.spec {
             SpecEvidence::Known { spec } => (
                 spec.cwd.clone(),
@@ -208,6 +239,10 @@ impl JobOwner {
             .settings
             .unwrap_or_else(|| original_settings.clone());
         ensure!(
+            agent.tool_scope.as_ref() == Some(&tool_scope),
+            "conversation's permission scope is unresolved or conflicts with its latest job"
+        );
+        ensure!(
             settings.provider() == original_settings.provider(),
             "Continue cannot change provider"
         );
@@ -242,22 +277,18 @@ impl JobOwner {
             tool_scope,
             title,
         };
-        let request_fingerprint = fingerprint(&serde_json::to_vec(&(
-            &request.agent_id,
-            &spec,
-            &recipient,
-        ))?);
         let at_ms = now_ms();
         let job = JobRecord {
             job_id: request.job_id,
             agent_id: request.agent_id,
             request_fingerprint: Some(request_fingerprint),
-            created_at_ms: at_ms,
+            created_at_ms: Some(at_ms),
             updated_at_ms: at_ms,
             revision: 0,
             previous_job_id: Some(previous.job_id),
             source: JobSource::Runtime,
             admission_origin: None,
+            unconfirmed_result: None,
             spec: SpecEvidence::Known { spec },
             recipient,
             execution: ExecutionState::Admitted,

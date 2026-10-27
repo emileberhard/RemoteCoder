@@ -251,8 +251,8 @@ pub(crate) enum CompletionPayload {
     },
     HistoricalUnreplayable {
         #[serde(rename = "deliveryId")]
-        delivery_id: String,
-        fingerprint: String,
+        delivery_id: Option<String>,
+        fingerprint: Option<String>,
         reason: String,
     },
     Expired {
@@ -345,12 +345,13 @@ pub(crate) struct JobRecord {
     pub job_id: JobId,
     pub agent_id: String,
     pub request_fingerprint: Option<String>,
-    pub created_at_ms: i64,
+    pub created_at_ms: Option<i64>,
     pub updated_at_ms: i64,
     pub revision: u64,
     pub previous_job_id: Option<JobId>,
     pub source: JobSource,
     pub admission_origin: Option<Origin>,
+    pub unconfirmed_result: Option<JobResult>,
     pub spec: SpecEvidence,
     pub recipient: Recipient,
     pub execution: ExecutionState,
@@ -377,7 +378,21 @@ pub(crate) struct AgentRecord {
     pub agent_id: String,
     pub conversation: ConversationBinding,
     pub origin: Origin,
-    pub tool_scope: ToolScope,
-    pub origin_job_id: JobId,
-    pub latest_job_id: JobId,
+    pub tool_scope: Option<ToolScope>,
+    pub origin_job_id: Option<JobId>,
+    pub latest_job_id: Option<JobId>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ImportedUncertainty {
+    pub evidence_id: String,
+    pub source_run_id: String,
+    pub provider: Option<Provider>,
+    pub provider_home: Option<PathBuf>,
+    pub thread_id: Option<String>,
+    pub parent_home: Option<PathBuf>,
+    pub parent_thread_id: Option<String>,
+    pub latest_possible_creation_ms: Option<i64>,
+    pub reason: String,
 }

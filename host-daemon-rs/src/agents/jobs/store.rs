@@ -28,6 +28,7 @@ struct Inner {
     _lease: File,
     jobs: BTreeMap<JobId, JobRecord>,
     agents: BTreeMap<String, AgentRecord>,
+    uncertainties: Vec<ImportedUncertainty>,
 }
 
 pub(crate) enum Selection {
@@ -51,8 +52,8 @@ impl JobStore {
                 .open(root.join("owner.lock"))?;
             lease.try_lock().context("another process owns the delegated-job store")?;
             ensure!(tree_bytes(&root)? <= MAX_STORE_BYTES, "delegated-job store exceeds its 512 MiB budget; admission remains closed");
-            let mut inner = Inner { root, _lease: lease, jobs: BTreeMap::new(), agents: BTreeMap::new() };
-            for name in ["jobs", "agents", "evidence"] {
+            let mut inner = Inner { root, _lease: lease, jobs: BTreeMap::new(), agents: BTreeMap::new(), uncertainties: Vec::new() };
+            for name in ["jobs", "agents", "evidence", "uncertainties"] {
                 private_state::ensure_private_directory(&inner.root.join(name))?;
             }
             File::open(&inner.root)?.sync_all()?;
@@ -76,6 +77,14 @@ impl JobStore {
                 ensure!(inner.agents.insert(agent.agent_id.clone(), agent).is_none(), "duplicate persisted agent identity");
             }
             inner.recover_agents()?;
+            for entry in std::fs::read_dir(inner.root.join("uncertainties"))? {
+                let entry = entry?;
+                if entry.path().extension().is_none_or(|extension| extension != "json") { continue; }
+                let evidence: ImportedUncertainty = read(&entry.path(), MAX_AGENT_BYTES)?;
+                ensure!(!evidence.evidence_id.is_empty() && evidence.evidence_id.len() <= 512, "invalid historical uncertainty identity");
+                ensure!(entry.path().file_stem().and_then(|name| name.to_str()) == Some(fingerprint(evidence.evidence_id.as_bytes()).as_str()), "historical uncertainty filename differs from its identity");
+                inner.uncertainties.push(evidence);
+            }
             inner.validate_slots()?;
             ensure!(inner.accounted_bytes()? + MUTATION_RESERVE <= MAX_STORE_BYTES, "delegated-job state cannot preserve its mutation reservations; admission remains closed");
             Ok(Self { inner: Arc::new(Mutex::new(inner)) })
@@ -101,6 +110,15 @@ impl JobStore {
         self.access(move |inner| inner.job(&id).cloned()).await
     }
 
+    pub(crate) async fn existing_request(
+        &self,
+        id: JobId,
+        fingerprint: String,
+    ) -> Result<Option<JobRecord>> {
+        self.access(move |inner| inner.existing_request(&id, &fingerprint))
+            .await
+    }
+
     pub(crate) async fn agent(&self, agent_id: String) -> Result<AgentRecord> {
         self.access(move |inner| inner.agent_view(&agent_id)).await
     }
@@ -124,12 +142,21 @@ impl JobStore {
     pub(crate) async fn classify(
         &self,
         conversation: ConversationIdentity,
+        created_at_ms: Option<i64>,
     ) -> Result<Option<Origin>> {
         self.access(move |inner| {
             let mut found = inner.agents.values().filter(|agent| matches!(&agent.conversation, ConversationBinding::Known { conversation: known } if known == &conversation));
             let origin = found.next().map(|agent| agent.origin.clone());
             ensure!(found.next().is_none(), "multiple agents claim the same provider conversation");
             if origin.is_some() { return Ok(origin); }
+            if let Some(evidence) = inner.uncertainties.iter().find(|evidence| {
+                evidence.provider.is_none_or(|provider| provider == conversation.provider)
+                    && evidence.provider_home.as_ref().is_none_or(|home| matches!(&conversation.provider_home, ProviderHome::Known { path } if path == home))
+                    && evidence.thread_id.as_ref().is_none_or(|thread| thread == &conversation.thread_id)
+                    && (evidence.thread_id.is_some() || created_at_ms.zip(evidence.latest_possible_creation_ms).is_none_or(|(created, latest)| created <= latest))
+            }) {
+                return Ok(Some(Origin::Unknown { reason: format!("historical ancestry is unresolved: {}", evidence.reason) }));
+            }
             let unresolved = inner.jobs.values().any(|job| execution_conversation(&job.execution).is_some_and(|known| {
                 known.provider == conversation.provider && known.thread_id == conversation.thread_id && (known.provider_home == conversation.provider_home || matches!(known.provider_home, ProviderHome::Unknown { .. }))
             }));
@@ -214,9 +241,8 @@ impl JobStore {
         self.access(move |inner| {
             validate_job(&job)?;
             ensure!(job.source == JobSource::Runtime && job.revision == 0, "new admission requires an initial runtime job");
-            if let Some(previous) = inner.jobs.get(&job.job_id) {
-                ensure!(previous.request_fingerprint.is_some() && previous.request_fingerprint == job.request_fingerprint, "jobId was already used for a different or unverifiable request");
-                return Ok((previous.clone(), true));
+            if let Some(previous) = inner.existing_request(&job.job_id, job.request_fingerprint.as_deref().context("new admission requires its request fingerprint")?)? {
+                return Ok((previous, true));
             }
             ensure!(matches!(job.execution, ExecutionState::Admitted), "new admission must start admitted");
             ensure!(serde_json::to_vec(&job)?.len() as u64 <= MAX_JOB_BYTES - MAX_RESULT_BYTES as u64 - 64 * 1024, "encoded job input leaves insufficient room for its terminal result; shorten the prompt or reference a file");
@@ -225,13 +251,13 @@ impl JobStore {
             if let Some(previous_id) = &job.previous_job_id {
                 let previous = inner.job(previous_id)?;
                 ensure!(previous.agent_id == job.agent_id && is_terminal(previous), "Continue must name a terminal job in this conversation");
-                ensure!(inner.agent_view(&job.agent_id)?.latest_job_id == *previous_id, "Continue was based on a superseded job");
+                ensure!(inner.agent_view(&job.agent_id)?.latest_job_id.as_ref() == Some(previous_id), "Continue was based on a superseded job");
                 ensure!(job.admission_origin.is_none(), "Continue cannot replace original ancestry");
             } else {
                 ensure!(job.admission_origin.is_some(), "initial admission requires immutable ancestry");
                 ensure!(!inner.agents.contains_key(&job.agent_id), "agent identity already exists");
             }
-            inner.reclaim(job.created_at_ms, RUNTIME_RESERVATION)?;
+            inner.reclaim(job.created_at_ms.context("runtime admission requires creation time")?, RUNTIME_RESERVATION)?;
             ensure!(inner.accounted_bytes()? + RUNTIME_RESERVATION + MUTATION_RESERVE <= MAX_STORE_BYTES, "delegated-job storage is pinned at its cap; settle pending work before admitting more");
             inner.write_job(&job)?;
             inner.jobs.insert(job.job_id.clone(), job.clone());
@@ -318,7 +344,7 @@ impl JobStore {
                 bail!("job has no completion recipient")
             };
             ensure!(
-                !delivery_settled(delivery) || *delivery == next,
+                !delivery_settled(delivery) || *delivery == next || matches!((&*delivery, &next), (DeliveryState::Accepted { .. }, DeliveryState::Recorded { .. })),
                 "settled completion cannot be changed or resent"
             );
             *delivery = next;
@@ -329,6 +355,18 @@ impl JobStore {
 }
 
 impl Inner {
+    fn existing_request(&self, id: &JobId, fingerprint: &str) -> Result<Option<JobRecord>> {
+        self.jobs
+            .get(id)
+            .map(|previous| {
+                ensure!(
+                    previous.request_fingerprint.as_deref() == Some(fingerprint),
+                    "jobId was already used for a different or unverifiable request"
+                );
+                Ok(previous.clone())
+            })
+            .transpose()
+    }
     fn summary(&self, job: &JobRecord) -> Result<JobSummary> {
         let (cwd, title, settings) = match &job.spec {
             SpecEvidence::Known { spec } => (
@@ -418,14 +456,16 @@ impl Inner {
             .get(id)
             .context("delegated agent does not exist")?
             .clone();
-        let mut latest = &agent.origin_job_id;
+        let Some(mut latest) = agent.origin_job_id.as_ref() else {
+            return Ok(agent);
+        };
         for _ in 0..=self.jobs.len() {
             let mut successors = self
                 .jobs
                 .values()
                 .filter(|job| job.agent_id == id && job.previous_job_id.as_ref() == Some(latest));
             let Some(next) = successors.next() else {
-                agent.latest_job_id = latest.clone();
+                agent.latest_job_id = Some(latest.clone());
                 return Ok(agent);
             };
             ensure!(
@@ -461,9 +501,9 @@ impl Inner {
                 reason: "provider conversation is not yet bound".into(),
             },
             origin,
-            tool_scope: spec.tool_scope.clone(),
-            origin_job_id: job.job_id.clone(),
-            latest_job_id: job.job_id.clone(),
+            tool_scope: Some(spec.tool_scope.clone()),
+            origin_job_id: Some(job.job_id.clone()),
+            latest_job_id: Some(job.job_id.clone()),
         };
         self.write_agent(&agent)?;
         self.agents.insert(agent.agent_id.clone(), agent);
@@ -654,6 +694,10 @@ fn live_reservation(job: &JobRecord) -> bool {
 }
 
 fn validate_job(job: &JobRecord) -> Result<()> {
+    ensure!(job.source == JobSource::Imported || job.created_at_ms.is_some(), "runtime job requires its creation time");
+    if let Some(result) = &job.unconfirmed_result {
+        ensure!(serde_json::to_vec(result)?.len() <= MAX_RESULT_BYTES, "encoded unconfirmed result exceeds 256 KiB");
+    }
     ensure!(
         !job.agent_id.is_empty() && job.agent_id.len() <= 200,
         "invalid agent identity"
@@ -759,7 +803,11 @@ fn validate_transition(job: &JobRecord, next: &ExecutionState) -> Result<()> {
 
 fn execution_conversation(execution: &ExecutionState) -> Option<&ConversationIdentity> {
     match execution {
-        ExecutionState::Admitted | ExecutionState::Terminal { .. } => None,
+        ExecutionState::Admitted => None,
+        ExecutionState::Terminal { terminal } => terminal
+            .execution
+            .as_ref()
+            .map(|binding| &binding.conversation),
         ExecutionState::Bound { conversation }
         | ExecutionState::Dispatching { conversation, .. } => Some(conversation),
         ExecutionState::Running { binding } | ExecutionState::Recovering { binding, .. } => {
