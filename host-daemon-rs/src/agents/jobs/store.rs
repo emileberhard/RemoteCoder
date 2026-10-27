@@ -260,7 +260,7 @@ impl JobStore {
             ensure!(matches!(job.execution, ExecutionState::Admitted), "new admission must start admitted");
             ensure!(serde_json::to_vec(&job)?.len() as u64 <= MAX_JOB_BYTES - MAX_RESULT_BYTES as u64 - 64 * 1024, "encoded job input leaves insufficient room for its terminal result; shorten the prompt or reference a file");
             ensure!(inner.jobs.values().filter(|existing| live_reservation(existing)).count() < MAX_UNSETTLED_JOBS, "delegated-job admission capacity reached; settle or dismiss existing work");
-            ensure!(!inner.jobs.values().any(|existing| existing.agent_id == job.agent_id && !is_terminal(existing)), "conversation already has an unresolved job");
+            ensure!(!inner.jobs.values().any(|existing| existing.agent_id == job.agent_id && existing.source == JobSource::Runtime && !is_terminal(existing)), "conversation already has an unresolved runtime job");
             if let Some(previous_id) = &job.previous_job_id {
                 let previous = inner.job(previous_id)?;
                 ensure!(previous.agent_id == job.agent_id && matches!(&previous.execution, ExecutionState::Terminal { terminal } if terminal.cleanup == CleanupState::Complete), "Continue waits until the previous terminal result is acknowledged by its provider");
