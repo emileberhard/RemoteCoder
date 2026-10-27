@@ -8,15 +8,65 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 SCRIPTS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SCRIPTS))
+import build_support as build
 from build_support import Timings, atomic_json, build_environment
 from process_group import process_identity, terminate_group
 
 
 class BuildAdmissionTests(unittest.TestCase):
+    def test_cancellation_reaps_a_group_that_exits_before_signal_delivery(self):
+        exited = SimpleNamespace(si_code=os.CLD_KILLED, si_status=signal.SIGTERM)
+        for last_signal in (signal.SIGTERM, signal.SIGKILL):
+            with self.subTest(last_signal=last_signal):
+                child = SimpleNamespace(pid=43210, wait=Mock(return_value=0))
+                denied = PermissionError(1, "Operation not permitted")
+                before_exit = [None] if last_signal == signal.SIGTERM else [None, None]
+                delivery = [denied] if last_signal == signal.SIGTERM else [None, denied]
+                clock = SimpleNamespace(now=0)
+
+                def advance(_seconds):
+                    clock.now += 1
+
+                with (
+                    patch.object(build.subprocess, "Popen", return_value=child),
+                    patch.object(build.os, "waitid", side_effect=[*before_exit, exited]),
+                    patch.object(build.os, "killpg", side_effect=delivery),
+                    patch.object(build, "_group_has_live_members", return_value=False),
+                    patch.object(build.time, "monotonic", side_effect=lambda: clock.now),
+                    patch.object(build.time, "sleep", side_effect=advance),
+                    self.assertRaises(SystemExit) as cancellation,
+                ):
+                    build.run_owned(
+                        ["fixture"], Path.cwd(), {}, None,
+                        cancellation=SimpleNamespace(is_set=lambda: True),
+                        termination_grace_seconds=0.2,
+                    )
+                self.assertEqual(cancellation.exception.code, 128 + signal.SIGHUP)
+                child.wait.assert_called_once_with()
+
+    def test_signal_permission_failure_for_a_live_group_is_not_hidden(self):
+        child = SimpleNamespace(pid=43210, wait=Mock(return_value=0))
+        denied = PermissionError(1, "Operation not permitted")
+        with (
+            patch.object(build.subprocess, "Popen", return_value=child),
+            patch.object(build.os, "waitid", return_value=None),
+            patch.object(build.os, "killpg", side_effect=[denied, None]),
+            patch.object(build, "_group_has_live_members", side_effect=[True, True, False]),
+            patch.object(build.time, "sleep"),
+            self.assertRaises(PermissionError) as failure,
+        ):
+            build.run_owned(
+                ["fixture"], Path.cwd(), {}, None,
+                cancellation=SimpleNamespace(is_set=lambda: True),
+            )
+        self.assertIs(failure.exception, denied)
+        child.wait.assert_called_once_with()
+
     def test_workers_keep_job_caps_without_inheriting_retired_qos(self):
         caps = {
             "EMIL_BUILD_JOBS": "4",
