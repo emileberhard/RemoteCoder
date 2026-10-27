@@ -396,3 +396,11 @@ pub(crate) struct ImportedUncertainty {
     pub latest_possible_creation_ms: Option<i64>,
     pub reason: String,
 }
+
+pub(crate) enum Inspection {
+    Prepared,
+    Running { binding: ExecutionBinding },
+    Recoverable { binding: ExecutionBinding },
+    Unknown { reason: String },
+    Finished { outcome: JobOutcome, result: ResultEvidence },
+}
