@@ -423,7 +423,8 @@ entrypoint linked above.
   outbox through typed `conversation/metadata/read|update` RPCs. Its one task
   retains separate refresh and flush demand; unchanged reads still reconcile
   observations and pending edits. The memory-only snapshot validator covers the
-  exact acknowledged map and is invalidated by changes to it. The gateway owns
+  exact acknowledged map. Incremental changes go through `acknowledge(_:for:)`,
+  which invalidates the validator; a full refresh replaces both together. The gateway owns
   `~/.remote-coder/session-metadata-v2.json`, content validators, revisions,
   idempotency and cross-process locking. Stale edits need explicit conflict
   resolution; [Metadata authority](../docs/owned-operations.md#metadata-authority)

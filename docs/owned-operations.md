@@ -60,6 +60,8 @@ The client keeps the validator in memory and clears it when an acknowledged
 mutation or conflict readback changes its retained map. Full reads replace that
 map authoritatively. Unchanged reads still reconcile observed settings and drain
 the outbox; they must match both the requested token and the retained snapshot.
+`ConversationMetadataService.acknowledge(_:for:)` owns incremental map changes
+and validator invalidation; a full refresh installs its map and validator together.
 Older gateways return full records without a token, as registered in
 [Compatibility](compatibility-register.md).
 
