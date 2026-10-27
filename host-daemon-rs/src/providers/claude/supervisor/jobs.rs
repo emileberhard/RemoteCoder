@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, ensure};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 use super::{ClaudeSupervisor, TurnOrigin, TurnStartError, process::ReapState};
 use crate::agents::jobs::model::{
@@ -10,7 +11,7 @@ use crate::agents::jobs::model::{
     JobSpec, Provider, ProviderHome, ToolScope,
 };
 use crate::providers::claude::conversation_index::job::{
-    Candidate, JobEvidence, JobHandle, JobPhase, ProcessOwner,
+    Candidate, JobEvidence, JobHandle, JobInput, JobPhase, ProcessOwner,
 };
 use crate::providers::claude::{
     ClaudeSelection, ClaudeTurnRequest, ClaudeUserInput, session_uuid_from_thread_id,
@@ -95,8 +96,8 @@ pub(crate) enum ClaudeJobInspection {
     Running {
         binding: ExecutionBinding,
     },
-    Recovering {
-        binding: Option<ExecutionBinding>,
+    Recoverable {
+        binding: ExecutionBinding,
     },
     Unknown {
         reason: String,
@@ -164,14 +165,18 @@ impl ClaudeSupervisor {
                 JobEvidence {
                     job_id: job_id.clone(),
                     conversation: conversation.clone(),
-                    input_id: input_id.to_owned(),
-                    recovery_input_id: None,
+                    input: JobInput {
+                        id: input_id.to_owned(),
+                        fingerprint: format!("{:x}", Sha256::digest(spec.prompt.as_bytes())),
+                    },
+                    recovery_input: None,
                     tool_scope: spec.tool_scope.clone(),
                     coordination_socket: coordination_socket.to_owned(),
                     stop_generation: generation,
                     turn_id: None,
                     owner: None,
                     input_consumed: false,
+                    input_recorded: false,
                     ordinary_result_seen: false,
                     nonambient_tasks: Vec::new(),
                     candidate: None,
@@ -285,6 +290,9 @@ impl ClaudeSupervisor {
             evidence.conversation == *conversation,
             "Claude job conversation identity conflicts"
         );
+        let evidence = self
+            .reconcile_job_input(&conversation.thread_id, &handle, evidence)
+            .await?;
         if let JobPhase::Finished { outcome } = evidence.phase {
             return Ok(ClaudeJobInspection::Finished {
                 outcome,
@@ -306,14 +314,23 @@ impl ClaudeSupervisor {
             });
         }
         if let Some(owner) = &evidence.owner {
-            let owner = owner.clone();
-            if tokio::task::spawn_blocking(move || owner.alive()).await?? {
+            let exact = owner.clone();
+            if tokio::task::spawn_blocking(move || exact.alive()).await?? {
                 return Ok(ClaudeJobInspection::Unknown { reason: "Claude's exact execution process is still alive without its stream owner; a second process is blocked".into() });
             }
+            if super::group_exists(nix::unistd::Pid::from_raw(owner.pid)) {
+                return Ok(ClaudeJobInspection::Unknown { reason: "Claude's leader is gone but its execution process group still exists; a second process is blocked".into() });
+            }
+        }
+        if (evidence.input_consumed || evidence.input_recorded)
+            && evidence.owner.is_some()
+            && !matches!(evidence.phase, JobPhase::Stopping)
+            && let Some(binding) = binding(&evidence)
+        {
+            return Ok(ClaudeJobInspection::Recoverable { binding });
         }
         Ok(match evidence.phase {
             JobPhase::Prepared if evidence.owner.is_none() => ClaudeJobInspection::Prepared,
-            JobPhase::Interrupted => ClaudeJobInspection::Recovering { binding: binding(&evidence) },
             _ => ClaudeJobInspection::Unknown { reason: "Claude execution ended without final EOF and reap evidence; exact recovery must inspect history and state".into() },
         })
     }
@@ -328,6 +345,13 @@ impl ClaudeSupervisor {
         evidence_path: &Path,
     ) -> Result<super::ResumeDelivery> {
         self.validate_job_conversation(conversation)?;
+        match self
+            .inspect_job(job_id, conversation, evidence_path)
+            .await?
+        {
+            ClaudeJobInspection::Recoverable { .. } => {}
+            _ => anyhow::bail!("Claude job has no exact recoverable execution evidence"),
+        }
         let ExecutionSettings::Claude {
             model,
             effort,
@@ -348,6 +372,7 @@ impl ClaudeSupervisor {
                     !matches!(saved.phase, JobPhase::Stopping | JobPhase::Finished { .. }),
                     "Claude job cannot recover after Stop or finalization"
                 );
+                ensure!((saved.input_consumed || saved.input_recorded) && saved.owner.is_some(), "Claude job has no positive input evidence; uncertain original input cannot be resumed");
                 saved.coordination_socket = socket;
                 Ok(saved.clone())
             })
@@ -428,15 +453,15 @@ impl ClaudeSupervisor {
             .conversation_index
             .update_job(&conversation.thread_id, &handle, |saved| {
                 if matches!(saved.phase, JobPhase::Finished { .. }) {
-                    return Ok(false);
+                    return Ok(None);
                 }
                 saved.phase = JobPhase::Stopping;
-                Ok(true)
+                Ok(Some(saved.clone()))
             })
             .await?;
-        if !stopping {
+        let Some(evidence) = stopping else {
             return Ok(());
-        }
+        };
         self.stop_parent(&conversation.thread_id).await?;
         if let Some(owner) = evidence.owner.clone() {
             let exact = owner.clone();
@@ -447,11 +472,11 @@ impl ClaudeSupervisor {
                     self.terminate_group(nix::unistd::Pid::from_raw(owner.pid))
                         .await;
                 }
-                ensure!(
-                    !owner.alive()? && !super::group_exists(nix::unistd::Pid::from_raw(owner.pid)),
-                    "Claude's exact execution has not stopped; Stop stays pending"
-                );
             }
+            ensure!(
+                !owner.alive()? && !super::group_exists(nix::unistd::Pid::from_raw(owner.pid)),
+                "Claude's exact execution or its process group has not stopped; Stop stays pending"
+            );
         }
         let effects = if evidence.owner.is_some() {
             EffectEvidence::MayHaveRun
@@ -592,7 +617,12 @@ impl ClaudeSupervisor {
                 "Claude job needs exact recovery with a history/state inspection notice; its original input will not be replayed",
             ));
         }
-        let input = request.input.client_id.clone();
+        let input = JobInput {
+            id: request.input.client_id.clone().ok_or_else(|| {
+                TurnStartError::internal("Claude recovery input identity is missing")
+            })?,
+            fingerprint: format!("{:x}", Sha256::digest(request.input.text.as_bytes())),
+        };
         self.conversation_index
             .update_job(&request.thread_id, handle, move |saved| {
                 ensure!(
@@ -601,8 +631,9 @@ impl ClaudeSupervisor {
                 );
                 saved.owner = None;
                 saved.phase = JobPhase::Prepared;
-                saved.recovery_input_id = input;
+                saved.recovery_input = Some(input);
                 saved.input_consumed = false;
+                saved.input_recorded = false;
                 saved.ordinary_result_seen = false;
                 saved.nonambient_tasks.clear();
                 Ok(())
@@ -640,6 +671,59 @@ impl ClaudeSupervisor {
                     "Claude job turn binding could not be saved: {error:#}"
                 ))
             })
+    }
+
+    async fn reconcile_job_input(
+        &self,
+        thread: &str,
+        handle: &JobHandle,
+        evidence: JobEvidence,
+    ) -> Result<JobEvidence> {
+        if evidence.input_consumed
+            || evidence.input_recorded
+            || matches!(evidence.phase, JobPhase::Finished { .. })
+        {
+            return Ok(evidence);
+        }
+        let session =
+            session_uuid_from_thread_id(thread).context("Claude session identity is missing")?;
+        let parent = self.conversation_index.parent(thread).await?;
+        let Some(selection) = parent.selection else {
+            return Ok(evidence);
+        };
+        let Some(path) = self.session_history(&selection.cwd, session) else {
+            return Ok(evidence);
+        };
+        let expected = evidence.current_input().clone();
+        let input = expected.id.clone();
+        let synthetic = evidence.recovery_input.is_some();
+        let actual = tokio::task::spawn_blocking(move || {
+            if synthetic {
+                crate::providers::claude::delivery_evidence::recorded_fingerprint(&path, &input)
+            } else {
+                crate::providers::claude::delivery_evidence::recorded_plain_fingerprint(
+                    &path, &input,
+                )
+            }
+        })
+        .await??;
+        let Some(Some(actual)) = actual else {
+            return Ok(evidence);
+        };
+        ensure!(
+            actual == expected.fingerprint,
+            "Claude job input UUID is recorded with different payload content"
+        );
+        self.conversation_index
+            .update_job(thread, handle, move |saved| {
+                if saved.current_input() == &expected
+                    && !matches!(saved.phase, JobPhase::Finished { .. })
+                {
+                    saved.input_recorded = true;
+                }
+                Ok(saved.clone())
+            })
+            .await
     }
 
     pub(super) async fn record_job_process(
@@ -901,11 +985,7 @@ impl ClaudeSupervisor {
 fn binding(evidence: &JobEvidence) -> Option<ExecutionBinding> {
     Some(ExecutionBinding {
         conversation: evidence.conversation.clone(),
-        input_id: evidence
-            .recovery_input_id
-            .as_ref()
-            .unwrap_or(&evidence.input_id)
-            .clone(),
+        input_id: evidence.current_input().id.clone(),
         turn_id: evidence.turn_id.clone()?,
     })
 }

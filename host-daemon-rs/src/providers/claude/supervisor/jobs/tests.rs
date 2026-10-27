@@ -109,6 +109,11 @@ save('ordinary.jsonl', {{'ready':True}})
 while not (state / 'release').exists():
     time.sleep(0.005)
 emit({{'type':'system','subtype':'background_tasks_changed','tasks':[]}})
+emit({{'type':'assistant','session_id':session,'message':{{'content':[{{'type':'text','text':'child answer'}}]}}}})
+save('child-answer.jsonl', {{'ready':True}})
+while not (state / 'child-result').exists():
+    time.sleep(0.005)
+emit({{'type':'result','session_id':session,'subtype':'success','is_error':False,'num_turns':0,'origin':{{'kind':'task-notification'}},'result':'child answer'}})
 for line in sys.stdin:
     save('unexpected-input.jsonl', json.loads(line))
 emit({{'type':'result','session_id':session,'subtype':'success','is_error':False,'num_turns':0,'origin':{{'kind':'task-notification'}},'result':'latest child finish'}})
@@ -154,6 +159,35 @@ async fn final_result_waits_for_background_work_eof_and_reap_and_survives_replac
     assert_eq!(launches[0]["jobId"], fixture.job_id.as_str());
     let mut changes = fixture.agent.subscribe_job_changes();
     fs::write(fixture.stub.state.join("release"), "ready").unwrap();
+    fixture.stub.wait_for_log("child-answer.jsonl", 1).await;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let opened = fixture
+                .agent
+                .runtimes
+                .lock()
+                .await
+                .get(THREAD)
+                .is_some_and(|runtime| {
+                    runtime
+                        .active_turn
+                        .as_ref()
+                        .is_some_and(|turn| turn.agent_initiated)
+                        && runtime.background_tasks.is_empty()
+                });
+            if opened {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let evidence: JobEvidence =
+        serde_json::from_slice(&fs::read(&fixture.evidence).unwrap()).unwrap();
+    assert!(matches!(evidence.phase, JobPhase::Executing));
+    assert!(fixture.stub.log("eof.jsonl").is_empty());
+    fs::write(fixture.stub.state.join("child-result"), "ready").unwrap();
     let candidate = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             if let ClaudeJobInspection::Finished { outcome, candidate } = fixture.inspect().await {
@@ -280,4 +314,95 @@ async fn continuation_without_exact_history_cannot_start_fresh_under_the_old_ses
             .contains("continuation history is missing")
     );
     assert_eq!(fixture.stub.log("launches.jsonl").len(), 1);
+}
+
+#[tokio::test]
+async fn canonical_input_identity_recovers_a_missing_receipt_without_claiming_consumption() {
+    let fixture = Fixture::new();
+    let binding = fixture.start().await;
+    fixture.stub.wait_for_log("received.jsonl", 1).await;
+    assert!(fixture.agent.suspend(THREAD).await);
+    let handle = JobHandle {
+        job_id: fixture.job_id.clone(),
+        evidence_path: fixture.evidence.clone(),
+    };
+    fixture
+        .agent
+        .conversation_index
+        .update_job(THREAD, &handle, |saved| {
+            saved.input_consumed = false;
+            saved.input_recorded = false;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    assert!(matches!(
+        fixture.inspect().await,
+        ClaudeJobInspection::Unknown { .. }
+    ));
+    fixture.stub.write_history(
+        SESSION,
+        &format!(
+            "{}\n",
+            json!({
+                "type":"user", "uuid":binding.input_id,
+                "message":{"role":"user","content":fixture.spec.prompt}
+            })
+        ),
+    );
+    assert!(
+        matches!(fixture.inspect().await, ClaudeJobInspection::Recoverable { binding: saved } if saved == binding)
+    );
+    let evidence = fixture
+        .agent
+        .conversation_index
+        .job(THREAD, &handle)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(evidence.input_recorded);
+    assert!(!evidence.input_consumed);
+    assert!(!evidence.eligible());
+}
+
+#[tokio::test]
+async fn an_unproven_owner_with_a_live_group_cannot_be_declared_stopped() {
+    let fixture = Fixture::new();
+    fixture.start().await;
+    fixture.stub.wait_for_log("received.jsonl", 1).await;
+    let handle = JobHandle {
+        job_id: fixture.job_id.clone(),
+        evidence_path: fixture.evidence.clone(),
+    };
+    fixture
+        .agent
+        .conversation_index
+        .update_job(THREAD, &handle, |saved| {
+            saved.owner.as_mut().unwrap().started_micros += 1;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let (sender, _events) = mpsc::channel(256);
+    let replacement = ClaudeSupervisor::new(
+        fixture.stub.settings.clone(),
+        sender,
+        Journal::disabled(),
+        McpTokens::default(),
+    );
+    let error = replacement
+        .stop_job(&fixture.job_id, &fixture.conversation, &fixture.evidence)
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("Stop stays pending"));
+    let evidence = fixture
+        .agent
+        .conversation_index
+        .job(THREAD, &handle)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(evidence.phase, JobPhase::Stopping));
+    assert!(fixture.agent.has_runtime(THREAD).await);
+    assert!(fixture.agent.suspend(THREAD).await);
 }

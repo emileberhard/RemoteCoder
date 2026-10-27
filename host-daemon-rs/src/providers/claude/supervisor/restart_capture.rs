@@ -203,6 +203,7 @@ impl ClaudeSupervisor {
             if !self.has_runtime(&item.thread_id).await
                 && let Some(owner) = saved.owner
             {
+                let group = owner.pid;
                 let alive = tokio::task::spawn_blocking(move || owner.alive())
                     .await
                     .map_err(|error| resume_error(error.to_string()))?
@@ -214,6 +215,11 @@ impl ClaudeSupervisor {
                 if alive {
                     return Err(TurnStartError::unresponsive(
                         "Claude's exact job process still lives; refusing a second execution",
+                    ));
+                }
+                if super::group_exists(nix::unistd::Pid::from_raw(group)) {
+                    return Err(TurnStartError::unresponsive(
+                        "Claude's execution process group still exists; refusing a second execution",
                     ));
                 }
             }

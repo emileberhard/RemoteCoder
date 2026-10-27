@@ -351,10 +351,6 @@ impl ClaudeSupervisor {
                     break format!("Claude job execution evidence could not be saved: {error:#}");
                 }
             };
-            if let Err(error) = self.close_quiescent_job(&thread_id, process_group_id).await {
-                break format!("Claude job input could not be closed safely: {error:#}");
-            }
-
             self.wait_for_finishing_turn(&thread_id).await;
             let mut opened: Option<Value> = None;
             let translated = {

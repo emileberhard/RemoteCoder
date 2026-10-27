@@ -95,17 +95,25 @@ pub(crate) enum JobPhase {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct JobInput {
+    pub id: String,
+    pub fingerprint: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct JobEvidence {
     pub job_id: JobId,
     pub conversation: ConversationIdentity,
-    pub input_id: String,
-    pub recovery_input_id: Option<String>,
+    pub input: JobInput,
+    pub recovery_input: Option<JobInput>,
     pub tool_scope: ToolScope,
     pub coordination_socket: PathBuf,
     pub stop_generation: u64,
     pub turn_id: Option<String>,
     pub owner: Option<ProcessOwner>,
     pub input_consumed: bool,
+    pub input_recorded: bool,
     pub ordinary_result_seen: bool,
     pub nonambient_tasks: Vec<String>,
     pub candidate: Option<Candidate>,
@@ -113,6 +121,9 @@ pub(crate) struct JobEvidence {
 }
 
 impl JobEvidence {
+    pub(crate) fn current_input(&self) -> &JobInput {
+        self.recovery_input.as_ref().unwrap_or(&self.input)
+    }
     pub(crate) fn eligible(&self) -> bool {
         self.input_consumed && self.ordinary_result_seen && self.nonambient_tasks.is_empty()
     }
@@ -124,8 +135,7 @@ impl JobEvidence {
         nonambient_tasks: Vec<String>,
     ) -> Result<()> {
         let mut next = self.clone();
-        next.input_consumed |=
-            consumed.contains(self.recovery_input_id.as_ref().unwrap_or(&self.input_id));
+        next.input_consumed |= consumed.contains(&self.current_input().id);
         next.nonambient_tasks = nonambient_tasks;
         if frame.get("type").and_then(Value::as_str) == Some("result")
             && frame.get("parent_tool_use_id").is_none_or(Value::is_null)
@@ -181,7 +191,7 @@ impl Store {
             if let Some(saved) = saved {
                 ensure!(
                     saved.conversation == expected.conversation
-                        && saved.input_id == expected.input_id
+                        && saved.input == expected.input
                         && saved.tool_scope == expected.tool_scope,
                     "Claude job identity conflicts with its prepared execution"
                 );

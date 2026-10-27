@@ -23,14 +23,30 @@ fn user_payload(text: &str) -> &str {
 }
 
 pub(super) fn recorded_ids<'a>(path: &Path, ids: &[&'a str]) -> Result<HashSet<&'a str>> {
-    Ok(recorded_inputs(path, ids)?.into_keys().collect())
+    Ok(recorded_inputs(path, ids, Payload::Callback)?
+        .into_keys()
+        .collect())
 }
 
 pub(super) fn recorded_fingerprint(path: &Path, id: &str) -> Result<Option<Option<String>>> {
-    Ok(recorded_inputs(path, &[id])?.remove(id))
+    Ok(recorded_inputs(path, &[id], Payload::Callback)?.remove(id))
 }
 
-fn recorded_inputs<'a>(path: &Path, ids: &[&'a str]) -> Result<HashMap<&'a str, Option<String>>> {
+pub(super) fn recorded_plain_fingerprint(path: &Path, id: &str) -> Result<Option<Option<String>>> {
+    Ok(recorded_inputs(path, &[id], Payload::Plain)?.remove(id))
+}
+
+#[derive(Clone, Copy)]
+enum Payload {
+    Plain,
+    Callback,
+}
+
+fn recorded_inputs<'a>(
+    path: &Path,
+    ids: &[&'a str],
+    payload: Payload,
+) -> Result<HashMap<&'a str, Option<String>>> {
     let file =
         std::fs::File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
     let mut reader = BufReader::new(file);
@@ -79,7 +95,7 @@ fn recorded_inputs<'a>(path: &Path, ids: &[&'a str]) -> Result<HashMap<&'a str, 
             found.insert(
                 *id,
                 text.map(|text| {
-                    let text = if record["type"] == "user" {
+                    let text = if record["type"] == "user" && matches!(payload, Payload::Callback) {
                         user_payload(text)
                     } else {
                         text
