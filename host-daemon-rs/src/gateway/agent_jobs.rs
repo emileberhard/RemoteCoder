@@ -368,6 +368,36 @@ impl Gateway {
         }
     }
 
+    async fn running_job_conversation(
+        &self,
+        job_id: &JobId,
+    ) -> Result<ConversationIdentity, RpcError> {
+        let view = self.jobs.read(job_id).await?;
+        let agent = view.agent.context("target conversation is unresolved")?;
+        if agent.latest_job_id.as_ref() != Some(job_id) {
+            return Err(RpcError::new(
+                RpcCode::Conflict,
+                "target job has been superseded; use its latest job",
+            ));
+        }
+        if !matches!(
+            view.job.execution,
+            ExecutionState::Running { .. } | ExecutionState::Recovering { .. }
+        ) {
+            return Err(RpcError::new(
+                RpcCode::InvalidRequest,
+                "target job is not running; resolve unknown work or use explicit Continue",
+            ));
+        }
+        match agent.conversation {
+            ConversationBinding::Known { conversation } => Ok(conversation),
+            ConversationBinding::Unknown { .. } => Err(RpcError::new(
+                RpcCode::InvalidRequest,
+                "target provider identity is unresolved",
+            )),
+        }
+    }
+
     async fn job_message(&self, request: MessageParams) -> RpcResult {
         let _operation = self.jobs.operations.read().await;
         if self.is_draining() {
@@ -397,35 +427,18 @@ impl Gateway {
             .map_err(|error| RpcError::new(RpcCode::Conflict, error.to_string()))?;
         let caller = self.resolve_job_caller(&request.caller).await?;
         let target = match &request.target {
-            MessageTarget::Conversation { conversation } => conversation.clone(),
-            MessageTarget::Job { job_id } => {
-                let view = self.jobs.read(job_id).await?;
-                let agent = view.agent.context("target conversation is unresolved")?;
-                if agent.latest_job_id.as_ref() != Some(job_id) {
-                    return Err(RpcError::new(
-                        RpcCode::Conflict,
-                        "target job has been superseded; use its latest job",
-                    ));
-                }
-                if !matches!(
-                    view.job.execution,
-                    ExecutionState::Running { .. } | ExecutionState::Recovering { .. }
-                ) {
-                    return Err(RpcError::new(
-                        RpcCode::InvalidRequest,
-                        "target job is not running; resolve unknown work or use explicit Continue",
-                    ));
-                }
-                match agent.conversation {
-                    ConversationBinding::Known { conversation } => conversation,
-                    _ => {
-                        return Err(RpcError::new(
-                            RpcCode::InvalidRequest,
-                            "target provider identity is unresolved",
-                        ));
+            MessageTarget::Conversation { conversation } => {
+                match self.jobs.agent_for_conversation(conversation).await? {
+                    Some(agent) => {
+                        let latest = agent
+                            .latest_job_id
+                            .context("target conversation's current job is unresolved")?;
+                        self.running_job_conversation(&latest).await?
                     }
+                    None => conversation.clone(),
                 }
             }
+            MessageTarget::Job { job_id } => self.running_job_conversation(job_id).await?,
             MessageTarget::Parent => {
                 let Origin::Parent { conversation } = &caller else {
                     return Err(RpcError::new(
