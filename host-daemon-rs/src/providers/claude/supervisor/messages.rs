@@ -66,49 +66,6 @@ impl ClaudeSupervisor {
             .await
     }
 
-    pub(crate) async fn parent_message_recorded(
-        &self,
-        conversation: &crate::agents::jobs::model::ConversationIdentity,
-        delivery_id: &str,
-        fingerprint: &str,
-    ) -> anyhow::Result<bool> {
-        anyhow::ensure!(
-            conversation.provider == crate::agents::jobs::model::Provider::Claude
-                && conversation.provider_home
-                    == crate::agents::jobs::model::ProviderHome::Known {
-                        path: self.settings.claude_home.clone()
-                    },
-            "Claude parent evidence belongs to a different provider scope"
-        );
-        let session = session_uuid_from_thread_id(&conversation.thread_id)
-            .ok_or_else(|| anyhow::anyhow!("Claude parent thread identity is invalid"))?
-            .to_owned();
-        let input = delivery_uuid(&conversation.thread_id, delivery_id);
-        let home = self.settings.claude_home.clone();
-        let recorded = tokio::task::spawn_blocking(move || {
-            let Some(path) =
-                crate::providers::claude::timeline::find_session_path(&session, &home)?
-            else {
-                return Ok(None);
-            };
-            crate::providers::claude::delivery_evidence::recorded_fingerprint(&path, &input)
-        })
-        .await??;
-        match recorded {
-            None => Ok(false),
-            Some(Some(actual)) => {
-                anyhow::ensure!(
-                    actual == fingerprint,
-                    "Claude parent input UUID is recorded with a different payload fingerprint"
-                );
-                Ok(true)
-            }
-            Some(None) => anyhow::bail!(
-                "Claude parent input UUID is recorded without verifiable payload evidence"
-            ),
-        }
-    }
-
     pub(super) async fn remember_parent(
         &self,
         request: &ClaudeTurnRequest,
@@ -1119,17 +1076,6 @@ mod tests {
             .unwrap();
         assert_eq!(receipt["delivery_state"], "recorded");
         assert_eq!(receipt["duplicate"], true);
-        assert!(
-            fixture
-                .agent
-                .parent_message_recorded(
-                    &conversation,
-                    "native-lost",
-                    &format!("{:x}", Sha256::digest(b"completed work"))
-                )
-                .await
-                .unwrap()
-        );
         assert!(
             fixture
                 .agent

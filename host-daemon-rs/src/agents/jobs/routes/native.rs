@@ -58,16 +58,9 @@ impl NativeMessage {
     pub(crate) fn conversation(&self) -> &ConversationIdentity {
         &self.0.conversation
     }
-    pub(crate) fn delivery_id(&self) -> &str {
-        &self.0.delivery_id
-    }
     pub(crate) fn input_id(&self) -> &str {
         &self.0.input_id
     }
-    pub(crate) fn fingerprint(&self) -> &str {
-        &self.0.fingerprint
-    }
-
     pub(crate) fn frame(&self) -> Result<Vec<u8>> {
         let mut bytes = serde_json::to_vec(&serde_json::json!({
             "type":"user", "uuid":self.input_id(),

@@ -379,21 +379,10 @@ async fn final_result(gateway: &Gateway, binding: &ExecutionBinding) -> Result<R
             items.len() <= RESULT_PAGE_SIZE,
             "native result page exceeds its bound"
         );
-        for entry in items {
-            ensure!(
-                entry["turnId"].as_str() == Some(binding.turn_id.as_str()),
-                "native result page contains a different turn"
-            );
-            if entry["item"]["type"] == "agentMessage"
-                && (entry["item"]["phase"] == "final_answer" || entry["item"]["phase"].is_null())
-            {
-                let text = entry["item"]["text"]
-                    .as_str()
-                    .context("final answer has no text")?;
-                return Ok(ResultEvidence::Available {
-                    result: bounded_result(text.to_owned(), false)?,
-                });
-            }
+        if let Some(text) = final_text(items, &binding.turn_id)? {
+            return Ok(ResultEvidence::Available {
+                result: bounded_result(text.to_owned(), false)?,
+            });
         }
         cursor = page["nextCursor"].as_str().map(str::to_owned);
         match &cursor {
@@ -410,46 +399,36 @@ async fn final_result(gateway: &Gateway, binding: &ExecutionBinding) -> Result<R
     })
 }
 
+fn final_text<'a>(items: &'a [Value], turn: &str) -> Result<Option<&'a str>> {
+    for entry in items {
+        ensure!(
+            entry["turnId"].as_str() == Some(turn),
+            "native result page contains a different turn"
+        );
+        if entry["item"]["type"] == "agentMessage"
+            && (entry["item"]["phase"].is_null() || entry["item"]["phase"] == "final_answer")
+        {
+            return Ok(Some(
+                entry["item"]["text"]
+                    .as_str()
+                    .context("final answer has no text")?,
+            ));
+        }
+    }
+    Ok(None)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::notifications::history::NotificationOrigin;
-    use crate::test_support::{FakeControl, TestGateway};
 
-    #[tokio::test]
-    async fn terminal_result_retains_legacy_unclassified_assistant_text() {
-        let gateway = TestGateway::new();
-        let mut control = FakeControl::attach(&gateway, 1).await.requests;
-        let binding = ExecutionBinding {
-            conversation: ConversationIdentity {
-                provider: Provider::Codex,
-                provider_home: ProviderHome::Known {
-                    path: "/native".into(),
-                },
-                thread_id: "thread".into(),
-            },
-            input_id: "input".into(),
-            turn_id: "turn".into(),
-        };
-        let owner = gateway.clone();
-        let reading = tokio::spawn(async move { final_result(&owner, &binding).await });
-        let request: Value = serde_json::from_str(&control.recv().await.unwrap()).unwrap();
-        assert_eq!(request["params"]["turnId"], "turn");
-        gateway.handle_control_text(json!({
-            "id":request["id"],
-            "result":{"data":[
-                {"turnId":"turn","item":{"type":"agentMessage","phase":"commentary","text":"still working"}},
-                {"turnId":"turn","item":{"type":"agentMessage","phase":null,"text":"The result"}}
-            ],"nextCursor":null}
-        }).to_string(), NotificationOrigin::Control { opened_after: 0 }).await;
-        assert_eq!(
-            reading.await.unwrap().unwrap(),
-            ResultEvidence::Available {
-                result: JobResult {
-                    text: "The result".into(),
-                    truncated: false
-                }
-            }
-        );
+    #[test]
+    fn terminal_result_retains_unclassified_native_model_text() {
+        let items = [
+            json!({"turnId":"turn","item":{"type":"agentMessage","phase":"commentary","text":"still working"}}),
+            json!({"turnId":"turn","item":{"type":"agentMessage","phase":null,"text":"The result"}}),
+        ];
+        assert_eq!(final_text(&items, "turn").unwrap(), Some("The result"));
+        assert!(final_text(&items, "another-turn").is_err());
     }
 }

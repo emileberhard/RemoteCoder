@@ -182,11 +182,7 @@ impl InputWriter {
 
     #[cfg(test)]
     pub(super) async fn send_input(&self, input: &ClaudeUserInput) -> std::io::Result<()> {
-        self.send_prepared(Self::prepare_input(input)?).await
-    }
-
-    pub(super) async fn send_prepared(&self, input: Arc<PreparedInput>) -> std::io::Result<()> {
-        self.submit(Frame::Input(input)).await
+        self.submit(Frame::Input(Self::prepare_input(input)?)).await
     }
 
     pub(super) async fn close(&self) -> std::io::Result<()> {

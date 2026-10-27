@@ -263,27 +263,33 @@ impl Gateway {
         response
     }
 
-    pub(crate) async fn job_stop_codex_input(
-        &self,
-        thread: &str,
-        input: &str,
-    ) -> RpcResult {
+    pub(crate) async fn job_stop_codex_input(&self, thread: &str, input: &str) -> RpcResult {
         let changed = self.core.lock().await.turns.hold_queue(thread);
         if changed {
             self.commit_turn_state().await.map_err(RpcError::from)?;
         }
-        let response = self.call_control("thread/input/stop", json!({
-            "threadId":thread,"clientUserMessageId":input,
-        })).await.map_err(RpcError::from)?;
-        let accepted: Option<NativeInputAcceptance> = serde_json::from_value(
-            response.get("acceptance").cloned().ok_or_else(|| {
-                RpcError::new(RpcCode::Internal, "native input Stop has no fence acknowledgement")
-            })?
-        ).map_err(|error| RpcError::new(RpcCode::Internal, error.to_string()))?;
+        let response = self
+            .call_control(
+                "thread/input/stop",
+                json!({
+                    "threadId":thread,"clientUserMessageId":input,
+                }),
+            )
+            .await
+            .map_err(RpcError::from)?;
+        let accepted: Option<NativeInputAcceptance> =
+            serde_json::from_value(response.get("acceptance").cloned().ok_or_else(|| {
+                RpcError::new(
+                    RpcCode::Internal,
+                    "native input Stop has no fence acknowledgement",
+                )
+            })?)
+            .map_err(|error| RpcError::new(RpcCode::Internal, error.to_string()))?;
         if let Some(accepted) = accepted {
             if !accepted.has(NativeInputFact::Terminal) {
                 return Err(RpcError::new(
-                    RpcCode::Internal, "native input Stop did not acknowledge a terminal fence",
+                    RpcCode::Internal,
+                    "native input Stop did not acknowledge a terminal fence",
                 ));
             }
             return if accepted.has(NativeInputFact::Stopped) {

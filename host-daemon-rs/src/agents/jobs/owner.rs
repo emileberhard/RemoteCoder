@@ -83,10 +83,6 @@ impl JobOwner {
         Ok(JobView { job, agent })
     }
 
-    pub(crate) async fn agent(&self, id: &str) -> Result<AgentRecord> {
-        self.store().await?.agent(id.into()).await
-    }
-
     pub(crate) async fn ensure_new_message_id(&self, id: &str) -> Result<()> {
         self.store().await?.ensure_new_message_id(id.into()).await
     }
