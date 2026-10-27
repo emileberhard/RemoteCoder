@@ -15,6 +15,11 @@ enum HTMLVisualOpenRequest {
 @MainActor
 final class HTMLVisualWebContent {
     private let websiteDataStore = WKWebsiteDataStore.nonPersistent()
+    private let resourceHandlers: [URLScheme: any URLSchemeHandler]
+
+    init(resourceHandlers: [URLScheme: any URLSchemeHandler] = [:]) {
+        self.resourceHandlers = resourceHandlers
+    }
 
     func make(reference: HTMLVisualReference, theme: HTMLVisualTheme,
               onEvent: @escaping @MainActor (HTMLVisualEvent) -> Void,
@@ -29,6 +34,7 @@ final class HTMLVisualWebContent {
         let origin = try Self.baseURL(for: reference)
         var configuration = WebPage.Configuration()
         configuration.websiteDataStore = websiteDataStore
+        configuration.urlSchemeHandlers = resourceHandlers
         configuration.deviceSensorAuthorization = .init(decision: .deny)
         configuration.allowsAirPlayForMediaPlayback = false
         #if os(iOS)
@@ -100,12 +106,14 @@ final class HTMLVisualWebContent {
     nonisolated private static let probeCSS = ""
     #endif
 
-    static func load(_ page: WebPage, html: String, reference: HTMLVisualReference) async throws {
-        let origin = try baseURL(for: reference)
+    func load(_ page: WebPage, html: String, reference: HTMLVisualReference) async throws {
+        let origin = try Self.baseURL(for: reference)
+        let schemes = resourceHandlers.keys.map { $0.rawValue + ":" }.sorted().joined(separator: " ")
+        let policy = Self.contentSecurityPolicy.replacing("default-src *", with: "default-src * \(schemes)")
         guard let response = HTTPURLResponse(url: origin, statusCode: 200, httpVersion: nil,
-            headerFields: ["Content-Type": "text/html; charset=utf-8", "Content-Security-Policy": contentSecurityPolicy]
+            headerFields: ["Content-Type": "text/html; charset=utf-8", "Content-Security-Policy": policy]
         ) else { throw URLError(.badServerResponse) }
-        let data = await prepareData(html)
+        let data = await Self.prepareData(html)
         try Task.checkCancellation()
         for try await event in page.load(simulatedRequest: URLRequest(url: origin), response: response, responseData: data)
             where event == .committed { break }

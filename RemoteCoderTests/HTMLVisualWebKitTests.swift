@@ -40,7 +40,7 @@ struct HTMLVisualWebKitTests {
         let page = try await webContent.make(reference: reference, theme: theme, onEvent: { _ in }, open: { _ in Issue.record("Resource loading must never open a native link") })
         let hosted = try await host(page, opacity: 1)
         defer { hosted.close(); page.stopLoading() }
-        try await HTMLVisualWebContent.load(page, html: source, reference: reference)
+        try await webContent.load(page, html: source, reference: reference)
         let marks = ["eval": "42", "wasm": "ok", "worker": "42"]
         let onlyObjectViolations = { (observed: [String: String]) in
             Set(observed["violations", default: ""].split(separator: " ")) == ["object-src"]
@@ -69,7 +69,7 @@ struct HTMLVisualWebKitTests {
         let page = try await webContent.make(reference: reference, theme: theme, onEvent: { _ in }, open: { _ in })
         let hosted = try await host(page, opacity: 1)
         defer { hosted.close(); page.stopLoading() }
-        try await HTMLVisualWebContent.load(page, html: source, reference: reference)
+        try await webContent.load(page, html: source, reference: reference)
         #expect(!server.paths.contains("/slow-image-sent"))
         try await wait { server.paths.contains("/slow-image-sent") }
         try await wait { try await page.callJavaScript("return document.getElementById('late').naturalWidth;", contentWorld: .defaultClient) as? Int == 1 }
@@ -98,7 +98,7 @@ struct HTMLVisualWebKitTests {
         let page = try await webContent.make(reference: reference, theme: theme, onEvent: { _ in }, open: { links.append($0) })
         let hosted = try await host(page, opacity: 1)
         defer { hosted.close(); page.stopLoading() }
-        try await HTMLVisualWebContent.load(page, html: source, reference: reference)
+        try await webContent.load(page, html: source, reference: reference)
         _ = try await page.callJavaScript("""
             document.getElementById('external').click();
             document.getElementById('image').click();
@@ -134,7 +134,7 @@ struct HTMLVisualWebKitTests {
         let page = try await webContent.make(reference: reference, theme: theme, onEvent: { _ in }, open: { requests.append($0) })
         let hosted = try await host(page, opacity: 1)
         defer { hosted.close(); page.stopLoading() }
-        try await HTMLVisualWebContent.load(page, html: source, reference: reference)
+        try await webContent.load(page, html: source, reference: reference)
         _ = try await page.callJavaScript("""
             const image = document.getElementById('data'), generated = document.getElementById('blob');
             await rcVisualEmbed(image.src, 'Pixel', image);
@@ -173,7 +173,7 @@ struct HTMLVisualWebKitTests {
         }, open: { _ in })
         let hosted = try await host(page, opacity: 1)
         defer { hosted.close(); page.stopLoading() }
-        try await HTMLVisualWebContent.load(page, html: source, reference: reference)
+        try await webContent.load(page, html: source, reference: reference)
         try await wait { !heights.isEmpty }
         let initial = try #require(heights.last)
         _ = try await page.callJavaScript("document.getElementById('content').style.height='240px';", contentWorld: .page)
@@ -216,7 +216,7 @@ struct HTMLVisualWebKitTests {
         }, open: { _ in })
         let hosted = try await host(page, opacity: 0)
         defer { hosted.close(); page.stopLoading() }
-        try await HTMLVisualWebContent.load(page, html: source, reference: reference)
+        try await webContent.load(page, html: source, reference: reference)
         try await wait { height == 80 }
         _ = try await page.callJavaScript("globalThis.requestAnimationFrame=()=>{throw new Error('Animation frames unavailable')};", contentWorld: .defaultClient)
         _ = try await page.callJavaScript("document.querySelector('div').style.height='210px';", contentWorld: .page)
@@ -238,7 +238,7 @@ struct HTMLVisualWebKitTests {
         let controller = UIHostingController(rootView: WebView(page).frame(width: 320, height: 600))
         window.show(controller)
         defer { window.close(); page.stopLoading() }
-        try await HTMLVisualWebContent.load(page, html: source, reference: reference)
+        try await webContent.load(page, html: source, reference: reference)
         try await wait { webView(in: controller.view) != nil }
         let native = try #require(webView(in: controller.view))
         #expect(native.bounds.height == 600)
@@ -257,7 +257,7 @@ struct HTMLVisualWebKitTests {
         let reference = try reference(source)
         let page = try await webContent.make(reference: reference, theme: theme, onEvent: { _ in }, open: { _ in })
         defer { page.stopLoading() }
-        try await HTMLVisualWebContent.load(page, html: source, reference: reference)
+        try await webContent.load(page, html: source, reference: reference)
         let values = try #require(try await page.callJavaScript("""
             const results = {};
             for (const name of ['localStorage','sessionStorage']) {
@@ -290,13 +290,13 @@ struct HTMLVisualWebKitTests {
         let otherReference = try self.reference(otherSource)
         let other = try await webContent.make(reference: otherReference, theme: theme, onEvent: { _ in }, open: { _ in })
         defer { other.stopLoading() }
-        try await HTMLVisualWebContent.load(other, html: otherSource, reference: otherReference)
+        try await webContent.load(other, html: otherSource, reference: otherReference)
         #expect(try await other.callJavaScript("return localStorage.getItem('visual-test') === null;", contentWorld: .page) as? Bool == true)
 
         await webContent.discardStorage()
         let reopened = try await webContent.make(reference: reference, theme: theme, onEvent: { _ in }, open: { _ in })
         defer { reopened.stopLoading() }
-        try await HTMLVisualWebContent.load(reopened, html: source, reference: reference)
+        try await webContent.load(reopened, html: source, reference: reference)
         #expect(try await reopened.callJavaScript("return localStorage.getItem('visual-test') === null;", contentWorld: .page) as? Bool == true)
     }
 
@@ -306,7 +306,7 @@ struct HTMLVisualWebKitTests {
         let reference = try reference(source)
         let page = try await webContent.make(reference: reference, theme: theme, onEvent: { _ in }, open: { _ in })
         defer { page.stopLoading() }
-        try await HTMLVisualWebContent.load(page, html: source, reference: reference)
+        try await webContent.load(page, html: source, reference: reference)
         let error = try await page.callJavaScript("return document.body.dataset.error;", contentWorld: .page) as? String
         #expect(error?.contains("missingFunction") == true && error?.hasSuffix("@4") == true, "\(error ?? "none")")
     }
