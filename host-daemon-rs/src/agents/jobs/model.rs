@@ -290,7 +290,7 @@ pub(crate) enum Completion {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct Terminal {
-    pub at_ms: i64,
+    pub at_ms: Option<i64>,
     pub execution: Option<ExecutionBinding>,
     pub git: GitSnapshot,
     pub outcome: JobOutcome,

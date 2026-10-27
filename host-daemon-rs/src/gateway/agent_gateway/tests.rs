@@ -485,7 +485,7 @@ fn seed_origin(
         recipient: Recipient::None,
         execution: ExecutionState::Terminal {
             terminal: Terminal {
-                at_ms: 1,
+                at_ms: Some(1),
                 outcome: JobOutcome::Completed,
                 result: ResultEvidence::Unavailable {
                     reason: "No fixture output".into(),

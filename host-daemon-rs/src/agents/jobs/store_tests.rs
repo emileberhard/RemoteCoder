@@ -150,7 +150,7 @@ async fn runnerless_stop_survives_reopen_and_fences_late_execution_evidence() {
             .is_err()
     );
     let terminal = Terminal {
-        at_ms: 105,
+        at_ms: Some(105),
         execution: None,
         git: GitSnapshot::Unknown {
             reason: "not a Git checkout".into(),
@@ -222,7 +222,7 @@ async fn continuation_order_uses_identity_chain_instead_of_wall_clock() {
             0,
             ExecutionState::Terminal {
                 terminal: Terminal {
-                    at_ms: 101,
+                    at_ms: Some(101),
                     execution: None,
                     git: GitSnapshot::Unknown {
                         reason: "not a Git checkout".into(),
