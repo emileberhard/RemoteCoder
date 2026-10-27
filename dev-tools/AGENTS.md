@@ -188,7 +188,11 @@ compact JSON event per line.
 
 `perf-sim` runs repeatable performance windows against a `RC_PERF_HARNESS` build
 (`build`, then `install`) in its own simulator on the Mac that runs it or, with
-`--device`, on an explicitly selected physical test device paired with that Mac. A device build is the Release
+`--device`, on an explicitly selected physical test device paired with that Mac.
+The argument must exactly match a UDID in the private maintainer configuration's
+`testDeviceUDIDs` list; names, aliases and unlisted devices are rejected before
+device work. A missing or invalid list fails closed. Fresh runs uninstall the
+app, so this list must never include the daily phone. A device build is the Release
 configuration signed with the release lane's ad hoc profiles, so it measures
 what ships; Debug adds `#if DEBUG` work, testability and unoptimized C.
 `build --signing development` keeps Release optimization but uses development

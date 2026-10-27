@@ -5,8 +5,8 @@ configuration, signed with the release lane's ad hoc profiles, so it measures wh
 Debug optimized (-O, whole module). Both compile `RC_PERF_HARNESS`, which compiles the
 harness in and keeps the build from enrolling push, VoIP, Live Activity or
 live-navigation registrations with the shared gateways, however it is launched.
-It is installed into a dedicated simulator, or with `--device <name|UDID>` onto
-a physical perf device. Commands reach the app through a JSON file in its data
+It is installed into a dedicated simulator, or with `--device <UDID>` onto
+a configured physical test device. Commands reach the app through a JSON file in its data
 container plus a Darwin notification; results come back as JSON lines.
 """
 
@@ -189,6 +189,13 @@ class Device:
 
     @staticmethod
     def resolve(name: str) -> str:
+        from maintainer_config import load
+
+        allowed = load().get("testDeviceUDIDs", [])
+        if not isinstance(allowed, list) or not allowed or not all(isinstance(value, str) and value.strip() for value in allowed):
+            raise SystemExit("physical perf targets require a nonempty testDeviceUDIDs list in the maintainer configuration")
+        if name not in allowed:
+            raise SystemExit("--device must be an exact UDID from the maintainer configuration's testDeviceUDIDs")
         with tempfile.NamedTemporaryFile(suffix=".json") as handle:
             run(["xcrun", "devicectl", "list", "devices", "--json-output", handle.name, "--quiet"])
             devices = json.loads(Path(handle.name).read_text())["result"]["devices"]
@@ -196,7 +203,7 @@ class Device:
             hardware = device.get("hardwareProperties", {})
             if hardware.get("reality") != "physical":
                 continue
-            if name in {device.get("identifier"), hardware.get("udid"), device.get("deviceProperties", {}).get("name")}:
+            if name == hardware.get("udid"):
                 if device.get("connectionProperties", {}).get("tunnelState") in (None, "unavailable"):
                     raise SystemExit(f"{name} is paired but not reachable; connect and unlock it")
                 return hardware["udid"]
@@ -1128,7 +1135,7 @@ def configure_identity() -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--device", help="physical perf device name or UDID instead of the perf simulator")
+    parser.add_argument("--device", help="exact physical test UDID from maintainer testDeviceUDIDs instead of the perf simulator")
     parser.add_argument("--disable", help="comma-separated costs the harness build switches off for an A/B run, e.g. growth")
     commands = parser.add_subparsers(dest="command", required=True)
     from .config import add_connection_arguments
