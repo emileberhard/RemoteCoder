@@ -67,6 +67,7 @@ enum TurnErrorData {
     Capacity(super::capacity::CapacityExceeded),
     Unresponsive,
     DeliveryUncertain,
+    ParentUnreachable,
 }
 
 #[derive(Debug)]
@@ -77,6 +78,17 @@ pub(crate) struct TurnStartError {
 }
 
 impl TurnStartError {
+    pub(crate) fn parent_not_submitted(&self) -> bool {
+        matches!(self.data, Some(TurnErrorData::ParentUnreachable))
+    }
+
+    fn parent_unreachable(message: impl Into<String>) -> Self {
+        Self {
+            code: RpcCode::Unavailable,
+            message: message.into(),
+            data: Some(TurnErrorData::ParentUnreachable),
+        }
+    }
     fn internal(message: impl Into<String>) -> Self {
         Self {
             code: RpcCode::Internal,
@@ -167,6 +179,11 @@ impl From<TurnStartError> for crate::rpc::error::RpcError {
             Some(TurnErrorData::DeliveryUncertain) => {
                 result.with_data(crate::rpc::error::RpcData::Kind(
                     crate::rpc::error::ErrorKind::InputDeliveryUncertain,
+                ))
+            }
+            Some(TurnErrorData::ParentUnreachable) => {
+                result.with_data(crate::rpc::error::RpcData::Raw(
+                    serde_json::json!({"kind":"parentUnreachable","notSubmitted":true}),
                 ))
             }
             None => result,

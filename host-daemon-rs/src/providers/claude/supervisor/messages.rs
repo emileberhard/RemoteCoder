@@ -372,7 +372,7 @@ impl ClaudeSupervisor {
             ParentTransport::Native(_) => ParentDeliveryRoute::Native,
         };
         if parent.delivery_route != expected_route {
-            return Err(rejected(
+            return Err(TurnStartError::parent_unreachable(
                 "Claude parent has no proven owner for this delivery transport; history and prior selection do not authorize taking over a terminal session",
             ));
         }
@@ -552,11 +552,11 @@ impl ClaudeSupervisor {
         .await?;
         match state {
             DeliveryState::Submitted => Ok(receipt),
-            DeliveryState::Rejected => {
-                Err(rejected(reason.as_deref().unwrap_or(
-                    "Claude native parent is unreachable before input submission",
-                )))
-            }
+            DeliveryState::Rejected => Err(TurnStartError::parent_unreachable(
+                reason
+                    .as_deref()
+                    .unwrap_or("Claude native parent is unreachable before input submission"),
+            )),
             _ => Err(uncertain(reason.unwrap_or_else(|| {
                 "Claude native delivery remains uncertain; do not resend it".into()
             }))),
@@ -1087,7 +1087,9 @@ mod tests {
                 drop(request.reply);
             }
         );
-        assert!(result.unwrap_err().message.contains("not confirm"));
+        let uncertain = result.unwrap_err();
+        assert!(!uncertain.parent_not_submitted());
+        assert!(uncertain.message.contains("not confirm"));
         assert!(
             fixture
                 .agent
@@ -1145,12 +1147,16 @@ mod tests {
         let fixture = Fixture::new();
         fixture.agent.record_native_parent(THREAD).await.unwrap();
         let routes = NativeRoutes::default();
-        assert!(
-            fixture
-                .agent
-                .deliver_native_parent_message(message("native-retry", "completed work"), &routes)
-                .await
-                .is_err()
+        let unreachable = fixture
+            .agent
+            .deliver_native_parent_message(message("native-retry", "completed work"), &routes)
+            .await
+            .unwrap_err();
+        assert!(unreachable.parent_not_submitted());
+        let wire: crate::rpc::error::RpcError = unreachable.into();
+        assert_eq!(
+            wire.response(&Value::Null)["error"]["data"],
+            json!({"kind":"parentUnreachable","notSubmitted":true})
         );
         assert_eq!(
             fixture
