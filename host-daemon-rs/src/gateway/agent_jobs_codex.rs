@@ -267,30 +267,26 @@ impl Gateway {
         &self,
         thread: &str,
         input: &str,
-        accepted: &NativeInputAcceptance,
     ) -> RpcResult {
-        let current = self
-            .job_read_codex_acceptance(thread, input)
-            .await
-            .map_err(RpcError::from)?
-            .ok_or_else(|| {
-                RpcError::new(
-                    RpcCode::Conflict,
-                    "native acceptance is unresolved; Stop remains pending",
-                )
-            })?;
-        if current.turn_id != accepted.turn_id || current.fingerprint != accepted.fingerprint {
-            return Err(RpcError::new(
-                RpcCode::Conflict,
-                "native input acceptance changed",
-            ));
-        }
         let changed = self.core.lock().await.turns.hold_queue(thread);
         if changed {
             self.commit_turn_state().await.map_err(RpcError::from)?;
         }
-        if current.has(NativeInputFact::Terminal) {
-            return if current.has(NativeInputFact::Stopped) {
+        let response = self.call_control("thread/input/stop", json!({
+            "threadId":thread,"clientUserMessageId":input,
+        })).await.map_err(RpcError::from)?;
+        let accepted: Option<NativeInputAcceptance> = serde_json::from_value(
+            response.get("acceptance").cloned().ok_or_else(|| {
+                RpcError::new(RpcCode::Internal, "native input Stop has no fence acknowledgement")
+            })?
+        ).map_err(|error| RpcError::new(RpcCode::Internal, error.to_string()))?;
+        if let Some(accepted) = accepted {
+            if !accepted.has(NativeInputFact::Terminal) {
+                return Err(RpcError::new(
+                    RpcCode::Internal, "native input Stop did not acknowledge a terminal fence",
+                ));
+            }
+            return if accepted.has(NativeInputFact::Stopped) {
                 CodexStop::new(self)
                     .cleanup_accepted(thread, &accepted.turn_id)
                     .await
@@ -298,9 +294,7 @@ impl Gateway {
                 Ok(json!({}))
             };
         }
-        CodexStop::new(self)
-            .run_accepted(thread, json!({"threadId":thread,"turnId":accepted.turn_id}))
-            .await
+        Ok(json!({}))
     }
 }
 

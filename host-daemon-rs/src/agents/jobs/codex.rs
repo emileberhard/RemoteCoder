@@ -263,12 +263,8 @@ pub(crate) async fn stop(gateway: &Arc<Gateway>, job: &JobRecord) -> Result<()> 
     let target = conversation(job)?;
     verify_home(gateway, target)?;
     let input_id = job.initial_input_id();
-    let accepted = gateway
-        .job_read_codex_acceptance(&target.thread_id, &input_id)
-        .await?
-        .context("the dispatched native input is unresolved; Stop remains pending")?;
     gateway
-        .job_stop_codex_input(&target.thread_id, &input_id, &accepted)
+        .job_stop_codex_input(&target.thread_id, &input_id)
         .await
         .map_err(|error| anyhow::anyhow!("{}", error.message))?;
     Ok(())
