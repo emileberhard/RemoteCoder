@@ -105,6 +105,8 @@ jobs:
     env:
       RC_COMPILATION_OWNER: '1'
       RC_DERIVED_DATA: ${{ github.workspace }}/.local/app-build
+      RC_BUILD_PROVENANCE: ${{ github.workspace }}/.local/ci/source.json
+      RC_BUILD_STAGES: ${{ github.workspace }}/.local/ci/stages.jsonl
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -113,6 +115,11 @@ jobs:
       - uses: extractions/setup-just@f8a3cce218d9f83db3a2ecd90e41ac3de6cdfd9b # v3
         with:
           just-version: '1.59.0'
+      - name: Record this CI build's source
+        run: |
+          mkdir -p "$(dirname "$RC_BUILD_PROVENANCE")"
+          jq -n --arg commit "$GITHUB_SHA" --arg run "$GITHUB_RUN_ID" \
+            '{sourceCommit:$commit,buildId:$run}' > "$RC_BUILD_PROVENANCE"
       - run: just ios-build-local
       - run: just mac-build-local
       - run: just mac-harness-build-local
