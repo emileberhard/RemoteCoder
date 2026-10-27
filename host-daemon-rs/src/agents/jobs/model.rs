@@ -377,7 +377,7 @@ pub(crate) struct JobRecord {
 
 impl JobRecord {
     pub(crate) fn initial_input_id(&self) -> String {
-        format!("{}:input", self.job_id.as_str())
+        crate::ids::hash_uuid("remotecoder-agent-input", &[self.job_id.as_str()])
     }
 }
 

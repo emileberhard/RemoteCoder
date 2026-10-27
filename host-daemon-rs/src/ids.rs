@@ -52,6 +52,21 @@ pub(crate) fn format_uuid(id: UuidBytes) -> String {
     )
 }
 
+pub(crate) fn hash_uuid(scope: &str, fields: &[&str]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut digest = Sha256::new().chain_update(scope.as_bytes());
+    for field in fields {
+        digest.update(b"\0");
+        digest.update(field.as_bytes());
+    }
+    let digest = digest.finalize();
+    let mut bytes = [0u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    bytes[6] = (bytes[6] & 0x0f) | 0x80;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    format_uuid(UuidBytes(bytes))
+}
+
 /// Generates the session id the daemon hands to `claude --session-id`.
 ///
 /// The CLI rejects anything that is not a v4 UUID, so the version and variant

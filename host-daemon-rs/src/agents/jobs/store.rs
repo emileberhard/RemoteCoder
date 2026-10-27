@@ -619,7 +619,7 @@ impl Inner {
         let initial: Vec<_> = self
             .jobs
             .values()
-            .filter(|job| job.previous_job_id.is_none())
+            .filter(|job| job.source == JobSource::Runtime && job.previous_job_id.is_none())
             .cloned()
             .collect();
         for job in initial {
