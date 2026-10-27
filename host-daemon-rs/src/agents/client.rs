@@ -1,5 +1,6 @@
 mod automations;
 mod models;
+pub(crate) mod native_parent;
 mod transport;
 
 use std::io::Read;
@@ -54,6 +55,7 @@ pub(crate) enum AgentCommand {
         caller: CallerArgs,
     },
     Capture,
+    NativeParent,
     Items {
         target: String,
         #[arg(long)]
@@ -892,6 +894,31 @@ async fn items(endpoint: &GatewayEndpoint, target: &str) -> Result<Value> {
 }
 
 async fn execute(command: AgentCommand, env_file: Option<&Path>) -> Result<Value> {
+    if matches!(&command, AgentCommand::NativeParent) {
+        if std::env::var_os(SCOPED_SOCKET_ENV).is_some() {
+            let view: ContextView =
+                serde_json::from_value(scoped(ScopedRequest::ReadSelf {}).await?)?;
+            ensure!(
+                view.job_id.is_some(),
+                "Scoped native holder route has no proven gateway job; no operator fallback is allowed"
+            );
+            return Ok(json!({"kind":"gatewayOwned"}));
+        }
+        let paths = HostPaths::from_env()?;
+        let default_file = paths.state("codex-gateway.env");
+        let sources = ConfigSources::load(
+            env_file.or_else(|| default_file.exists().then_some(default_file.as_path())),
+        )?;
+        let endpoint = GatewayEndpoint::load(&sources)?;
+        let claude = crate::providers::claude::settings::ClaudeSettings::load(
+            &sources,
+            &paths,
+            endpoint.port(),
+            None,
+        )?;
+        native_parent::run(endpoint, &claude.claude_home).await?;
+        return Ok(json!({"kind":"closed"}));
+    }
     if let AgentCommand::List(arguments) = &command {
         if arguments.automations {
             ensure!(
@@ -1114,6 +1141,9 @@ async fn execute(command: AgentCommand, env_file: Option<&Path>) -> Result<Value
         }
         AgentCommand::Capture => Ok(serde_json::to_value(capture(&endpoint).await?)?),
         AgentCommand::Items { target, .. } => items(&endpoint, &target).await,
+        AgentCommand::NativeParent => {
+            unreachable!("native holder was handled before operator credential loading")
+        }
     }
 }
 

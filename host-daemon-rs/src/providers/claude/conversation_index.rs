@@ -140,6 +140,8 @@ pub(crate) enum DeliveryState {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct Parent {
     pub selection: Option<ParentSelection>,
+    #[serde(default)]
+    pub delivery_route: ParentDeliveryRoute,
     pub stopped: bool,
     #[serde(default)]
     pub stop_generation: u64,
@@ -150,6 +152,15 @@ pub(crate) struct Parent {
     deliveries: VecDeque<Delivery>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     delivery_fingerprints: HashMap<String, String>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum ParentDeliveryRoute {
+    #[default]
+    Unknown,
+    Gateway,
+    Native,
 }
 
 impl Parent {

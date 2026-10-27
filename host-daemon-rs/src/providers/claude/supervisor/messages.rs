@@ -1,6 +1,7 @@
 use super::{ClaudeSupervisor, TurnOrigin, TurnStartError};
+use crate::agents::jobs::routes::{NativeDeliveryState, NativeMessage, NativeRoutes};
 use crate::providers::claude::conversation_index::{
-    Delivery, DeliveryState, ParentSelection, delivery_uuid,
+    Delivery, DeliveryState, ParentDeliveryRoute, ParentSelection, delivery_uuid,
 };
 use crate::providers::claude::{
     ClaudeSelection, ClaudeTurnRequest, ClaudeUserInput, session_uuid_from_thread_id,
@@ -10,6 +11,11 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use tracing::error;
+
+enum ParentTransport<'a> {
+    Gateway,
+    Native(&'a NativeRoutes),
+}
 
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -25,6 +31,84 @@ enum DispatchFailure {
 }
 
 impl ClaudeSupervisor {
+    pub(crate) async fn job_parent_gateway_owned(&self, thread: &str) -> anyhow::Result<bool> {
+        Ok(self.has_runtime(thread).await
+            || self.conversation_index.parent(thread).await?.delivery_route
+                == ParentDeliveryRoute::Gateway)
+    }
+
+    pub(crate) async fn record_native_parent(&self, thread: &str) -> anyhow::Result<()> {
+        let _lifecycle = self.lifecycles.lock(thread).await;
+        anyhow::ensure!(
+            !self.has_runtime(thread).await,
+            "Claude parent has a live gateway execution owner"
+        );
+        anyhow::ensure!(
+            !self
+                .starting
+                .lock()
+                .expect("Claude start reservations poisoned")
+                .contains(thread),
+            "Claude parent is starting a gateway execution"
+        );
+        self.conversation_index
+            .transact_parent(thread, |parent| {
+                if parent.delivery_route != ParentDeliveryRoute::Native {
+                    parent.stop_generation =
+                        parent.stop_generation.checked_add(1).ok_or_else(|| {
+                            anyhow::anyhow!("Claude parent Stop generation exhausted")
+                        })?;
+                    parent.stopped = false;
+                    parent.delivery_route = ParentDeliveryRoute::Native;
+                }
+                Ok(())
+            })
+            .await
+    }
+
+    pub(crate) async fn parent_message_recorded(
+        &self,
+        conversation: &crate::agents::jobs::model::ConversationIdentity,
+        delivery_id: &str,
+        fingerprint: &str,
+    ) -> anyhow::Result<bool> {
+        anyhow::ensure!(
+            conversation.provider == crate::agents::jobs::model::Provider::Claude
+                && conversation.provider_home
+                    == crate::agents::jobs::model::ProviderHome::Known {
+                        path: self.settings.claude_home.clone()
+                    },
+            "Claude parent evidence belongs to a different provider scope"
+        );
+        let session = session_uuid_from_thread_id(&conversation.thread_id)
+            .ok_or_else(|| anyhow::anyhow!("Claude parent thread identity is invalid"))?
+            .to_owned();
+        let input = delivery_uuid(&conversation.thread_id, delivery_id);
+        let home = self.settings.claude_home.clone();
+        let recorded = tokio::task::spawn_blocking(move || {
+            let Some(path) =
+                crate::providers::claude::timeline::find_session_path(&session, &home)?
+            else {
+                return Ok(None);
+            };
+            crate::providers::claude::delivery_evidence::recorded_fingerprint(&path, &input)
+        })
+        .await??;
+        match recorded {
+            None => Ok(false),
+            Some(Some(actual)) => {
+                anyhow::ensure!(
+                    actual == fingerprint,
+                    "Claude parent input UUID is recorded with a different payload fingerprint"
+                );
+                Ok(true)
+            }
+            Some(None) => anyhow::bail!(
+                "Claude parent input UUID is recorded without verifiable payload evidence"
+            ),
+        }
+    }
+
     pub(super) async fn remember_parent(
         &self,
         request: &ClaudeTurnRequest,
@@ -43,6 +127,7 @@ impl ClaudeSupervisor {
                 return;
             }
             parent.selection = Some(selection);
+            parent.delivery_route = ParentDeliveryRoute::Gateway;
             if user_turn {
                 parent.stopped = false;
             }
@@ -145,6 +230,24 @@ impl ClaudeSupervisor {
         self: &Arc<Self>,
         message: ParentMessage,
     ) -> Result<Value, TurnStartError> {
+        self.deliver_message(message, ParentTransport::Gateway)
+            .await
+    }
+
+    pub(crate) async fn deliver_native_parent_message(
+        self: &Arc<Self>,
+        message: ParentMessage,
+        routes: &NativeRoutes,
+    ) -> Result<Value, TurnStartError> {
+        self.deliver_message(message, ParentTransport::Native(routes))
+            .await
+    }
+
+    async fn deliver_message(
+        self: &Arc<Self>,
+        message: ParentMessage,
+        transport: ParentTransport<'_>,
+    ) -> Result<Value, TurnStartError> {
         if message.delivery_id.is_empty()
             || message.delivery_id.len() > 256
             || message.text.trim().is_empty()
@@ -176,30 +279,24 @@ impl ClaudeSupervisor {
             ));
         }
         let prior = parent.delivery(&message.delivery_id);
-        let recorded = match self.session_history(
-            parent
-                .selection
-                .as_ref()
-                .map_or("", |selection| selection.cwd.as_str()),
-            &session_uuid,
-        ) {
-            Some(path) => {
-                let id = input_id.clone();
-                tokio::task::spawn_blocking(move || {
-                    crate::providers::claude::delivery_evidence::recorded_fingerprint(&path, &id)
-                })
-                .await
-                .map_err(|error| {
-                    uncertain(format!("Claude input evidence could not be read: {error}"))
-                })?
-                .map_err(|error| {
-                    uncertain(format!(
-                        "Claude input evidence could not be read: {error:#}"
-                    ))
-                })?
-            }
-            None => None,
-        };
+        let home = self.settings.claude_home.clone();
+        let session = session_uuid.clone();
+        let id = input_id.clone();
+        let recorded = tokio::task::spawn_blocking(move || {
+            let Some(path) =
+                crate::providers::claude::timeline::find_session_path(&session, &home)?
+            else {
+                return Ok(None);
+            };
+            crate::providers::claude::delivery_evidence::recorded_fingerprint(&path, &id)
+        })
+        .await
+        .map_err(|error| uncertain(format!("Claude input evidence could not be read: {error}")))?
+        .map_err(|error| {
+            uncertain(format!(
+                "Claude input evidence could not be read: {error:#}"
+            ))
+        })?;
         if let Some(recorded_fingerprint) = recorded {
             if recorded_fingerprint
                 .as_deref()
@@ -270,7 +367,21 @@ impl ClaudeSupervisor {
                 "Claude parent was interrupted by the user, so this message will not wake it",
             ));
         }
+        let expected_route = match transport {
+            ParentTransport::Gateway => ParentDeliveryRoute::Gateway,
+            ParentTransport::Native(_) => ParentDeliveryRoute::Native,
+        };
+        if parent.delivery_route != expected_route {
+            return Err(rejected(
+                "Claude parent has no proven owner for this delivery transport; history and prior selection do not authorize taking over a terminal session",
+            ));
+        }
         let stop_generation = parent.stop_generation;
+        if let ParentTransport::Native(routes) = transport {
+            return self
+                .submit_native_message(message, fingerprint, stop_generation, routes)
+                .await;
+        }
         let selection = parent.selection.ok_or_else(|| {
             rejected("Claude parent has not run a turn through this gateway, so this message cannot wake it")
         })?;
@@ -369,6 +480,87 @@ impl ClaudeSupervisor {
         )
         .await?;
         Ok(receipt)
+    }
+
+    async fn submit_native_message(
+        &self,
+        message: ParentMessage,
+        fingerprint: String,
+        stop_generation: u64,
+        routes: &NativeRoutes,
+    ) -> Result<Value, TurnStartError> {
+        let conversation = crate::agents::jobs::model::ConversationIdentity {
+            provider: crate::agents::jobs::model::Provider::Claude,
+            provider_home: crate::agents::jobs::model::ProviderHome::Known {
+                path: self.settings.claude_home.clone(),
+            },
+            thread_id: message.thread_id.clone(),
+        };
+        let native = NativeMessage::new(
+            conversation.clone(),
+            message.delivery_id.clone(),
+            message.text.clone(),
+        )
+        .map_err(|error| {
+            rejected(&format!(
+                "Claude native input could not be prepared: {error:#}"
+            ))
+        })?;
+        self.prepare_delivery(
+            &message.thread_id,
+            Delivery {
+                id: message.delivery_id.clone(),
+                fingerprint: fingerprint.clone(),
+                state: DeliveryState::Prepared,
+                receipt: Value::Null,
+            },
+            stop_generation,
+        )
+        .await?;
+        let thread = message.thread_id.clone();
+        let input = native.input_id().to_owned();
+        self.conversation_index
+            .transact_parent(&message.thread_id, move |parent| {
+                anyhow::ensure!(
+                    !parent.stopped && parent.stop_generation == stop_generation,
+                    "Claude parent was interrupted before native submission"
+                );
+                parent.mark_delivery_sending(&thread, &input)
+            })
+            .await
+            .map_err(|error| {
+                rejected(&format!(
+                    "Claude native input could not enter submission: {error:#}"
+                ))
+            })?;
+        let result = routes.deliver(&conversation, native).await;
+        let (state, reason) = match result {
+            NativeDeliveryState::Submitted => (DeliveryState::Submitted, None),
+            NativeDeliveryState::Uncertain { reason } => (DeliveryState::Uncertain, Some(reason)),
+            NativeDeliveryState::Unreachable { reason } => (DeliveryState::Rejected, Some(reason)),
+        };
+        let receipt = receipt(&message, state, "native-submitted", None);
+        self.save_delivery(
+            &message.thread_id,
+            Delivery {
+                id: message.delivery_id,
+                fingerprint,
+                state,
+                receipt: receipt.clone(),
+            },
+        )
+        .await?;
+        match state {
+            DeliveryState::Submitted => Ok(receipt),
+            DeliveryState::Rejected => {
+                Err(rejected(reason.as_deref().unwrap_or(
+                    "Claude native parent is unreachable before input submission",
+                )))
+            }
+            _ => Err(uncertain(reason.unwrap_or_else(|| {
+                "Claude native delivery remains uncertain; do not resend it".into()
+            }))),
+        }
     }
 
     async fn prepare_delivery(
@@ -780,6 +972,243 @@ mod tests {
             delivery_id: id.to_owned(),
             text: text.to_owned(),
         }
+    }
+
+    #[tokio::test]
+    async fn current_delivery_ownership_never_defaults_from_history_minted_or_old_selection() {
+        let mut fixture = Fixture::new();
+        fixture
+            .agent
+            .conversation_index
+            .record_minted(THREAD)
+            .await
+            .unwrap();
+        let cwd = fixture.root.root_path().to_string_lossy().into_owned();
+        fixture
+            .agent
+            .conversation_index
+            .update_parent(THREAD, move |parent| {
+                parent.selection = Some(ParentSelection {
+                    cwd,
+                    model: "sonnet".into(),
+                    effort: None,
+                    fast: false,
+                });
+            })
+            .await
+            .unwrap();
+        assert!(
+            !fixture
+                .agent
+                .job_parent_gateway_owned(THREAD)
+                .await
+                .unwrap()
+        );
+        assert!(
+            fixture
+                .agent
+                .deliver_parent_message(message("unknown-owner", "completed work"))
+                .await
+                .is_err()
+        );
+        fixture.agent.record_native_parent(THREAD).await.unwrap();
+        let (replacement, _) = Fixture::agent(&fixture.root);
+        assert!(!replacement.job_parent_gateway_owned(THREAD).await.unwrap());
+        fixture.initial_turn().await;
+        assert!(
+            fixture
+                .agent
+                .job_parent_gateway_owned(THREAD)
+                .await
+                .unwrap()
+        );
+        assert!(fixture.agent.record_native_parent(THREAD).await.is_err());
+        fixture.agent.stop_all().await;
+        let (replacement, _) = Fixture::agent(&fixture.root);
+        assert!(replacement.job_parent_gateway_owned(THREAD).await.unwrap());
+        replacement.record_native_parent(THREAD).await.unwrap();
+        assert!(!replacement.job_parent_gateway_owned(THREAD).await.unwrap());
+        assert!(
+            replacement
+                .deliver_parent_message(message("native-owner", "completed work"))
+                .await
+                .is_err()
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn native_lost_receipt_cannot_replay_through_either_transport_and_reconciles_exact_history()
+     {
+        let fixture = Fixture::new();
+        fixture.agent.record_native_parent(THREAD).await.unwrap();
+        let conversation = crate::agents::jobs::model::ConversationIdentity {
+            provider: crate::agents::jobs::model::Provider::Claude,
+            provider_home: crate::agents::jobs::model::ProviderHome::Known {
+                path: fixture.root.root_path().into(),
+            },
+            thread_id: THREAD.into(),
+        };
+        let pid = std::process::id() as i32;
+        let started_micros = crate::platform::process::identify(pid)
+            .unwrap()
+            .unwrap()
+            .started_micros;
+        let routes = NativeRoutes::default();
+        let (_lease, mut receiver) = routes
+            .register(
+                conversation.clone(),
+                crate::platform::process::ProcessInstance {
+                    pid,
+                    started_micros,
+                },
+            )
+            .unwrap();
+        let (result, ()) = tokio::join!(
+            fixture
+                .agent
+                .deliver_native_parent_message(message("native-lost", "completed work"), &routes),
+            async {
+                let request = receiver.recv().await.unwrap();
+                assert_eq!(
+                    request.message.input_id(),
+                    delivery_uuid(THREAD, "native-lost")
+                );
+                let saved = fixture
+                    .agent
+                    .conversation_index
+                    .parent(THREAD)
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    saved.delivery("native-lost").unwrap().state,
+                    DeliveryState::Sending
+                );
+                drop(request.reply);
+            }
+        );
+        assert!(result.unwrap_err().message.contains("not confirm"));
+        assert!(
+            fixture
+                .agent
+                .deliver_native_parent_message(message("native-lost", "completed work"), &routes)
+                .await
+                .unwrap_err()
+                .message
+                .contains("will not be resent")
+        );
+        assert!(
+            fixture
+                .agent
+                .deliver_parent_message(message("native-lost", "completed work"))
+                .await
+                .unwrap_err()
+                .message
+                .contains("will not be resent")
+        );
+        assert!(receiver.try_recv().is_err());
+        let mut history = fs::read_to_string(&fixture.history).unwrap();
+        history.push_str(&format!("{}\n",json!({"type":"user","uuid":delivery_uuid(THREAD,"native-lost"),"message":{"content":"completed work"}})));
+        fs::write(&fixture.history, history).unwrap();
+        let receipt = fixture
+            .agent
+            .deliver_native_parent_message(message("native-lost", "completed work"), &routes)
+            .await
+            .unwrap();
+        assert_eq!(receipt["delivery_state"], "recorded");
+        assert_eq!(receipt["duplicate"], true);
+        assert!(
+            fixture
+                .agent
+                .parent_message_recorded(
+                    &conversation,
+                    "native-lost",
+                    &format!("{:x}", Sha256::digest(b"completed work"))
+                )
+                .await
+                .unwrap()
+        );
+        assert!(
+            fixture
+                .agent
+                .deliver_native_parent_message(message("native-lost", "changed work"), &routes)
+                .await
+                .is_err()
+        );
+        assert!(fixture.launches().is_empty());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn native_definite_unreachable_can_retry_but_submitted_never_becomes_recorded_without_evidence()
+     {
+        let fixture = Fixture::new();
+        fixture.agent.record_native_parent(THREAD).await.unwrap();
+        let routes = NativeRoutes::default();
+        assert!(
+            fixture
+                .agent
+                .deliver_native_parent_message(message("native-retry", "completed work"), &routes)
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            fixture
+                .agent
+                .conversation_index
+                .parent(THREAD)
+                .await
+                .unwrap()
+                .delivery("native-retry")
+                .unwrap()
+                .state,
+            DeliveryState::Rejected
+        );
+        let pid = std::process::id() as i32;
+        let started_micros = crate::platform::process::identify(pid)
+            .unwrap()
+            .unwrap()
+            .started_micros;
+        let conversation = crate::agents::jobs::model::ConversationIdentity {
+            provider: crate::agents::jobs::model::Provider::Claude,
+            provider_home: crate::agents::jobs::model::ProviderHome::Known {
+                path: fixture.root.root_path().into(),
+            },
+            thread_id: THREAD.into(),
+        };
+        let (_lease, mut receiver) = routes
+            .register(
+                conversation,
+                crate::platform::process::ProcessInstance {
+                    pid,
+                    started_micros,
+                },
+            )
+            .unwrap();
+        let (result, ()) = tokio::join!(
+            fixture
+                .agent
+                .deliver_native_parent_message(message("native-retry", "completed work"), &routes),
+            async {
+                receiver
+                    .recv()
+                    .await
+                    .unwrap()
+                    .reply
+                    .send(NativeDeliveryState::Submitted)
+                    .unwrap();
+            }
+        );
+        assert_eq!(result.unwrap()["delivery_state"], "submitted");
+        let duplicate = fixture
+            .agent
+            .deliver_parent_message(message("native-retry", "completed work"))
+            .await
+            .unwrap();
+        assert_eq!(duplicate["delivery_state"], "submitted");
+        assert_eq!(duplicate["duplicate"], true);
+        assert!(receiver.try_recv().is_err());
+        assert!(fixture.launches().is_empty());
     }
 
     #[tokio::test]
