@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronLeft, Menu as MenuLines, PanelRight } from "lucide-react";
+import { ChevronDown, ChevronLeft, Menu as MenuLines, PanelLeft, PanelRight } from "lucide-react";
 import type { HostState } from "../../workspace/host-services";
 import { NewChatButton } from "../conversations/new-chat-button";
 import { IconButton } from "../design-system/icon-button";
@@ -19,23 +19,36 @@ export function ChatHeader({
   const cwd = workspace.draft.cwd;
   return (
     <header className="chat-header">
-      {actions.isEnabled("returnToParent") ? (
-        <IconButton
-          label="Return to parent conversation"
-          className="return-to-parent glass-button"
-          onClick={() => actions.run("returnToParent")}
-        >
-          <ChevronLeft size={20} />
-        </IconButton>
-      ) : (
-        <IconButton
-          label="Conversations"
-          className="sidebar-toggle glass-button"
-          onClick={() => actions.run("toggleSidebar")}
-        >
-          <MenuLines size={20} />
-        </IconButton>
-      )}
+      <div className="header-leading">
+        {!compact && (
+          <IconButton
+            label={actions.title("toggleSidebar")}
+            className="glass-button"
+            onClick={() => actions.run("toggleSidebar")}
+          >
+            <PanelLeft size={19} />
+          </IconButton>
+        )}
+        {actions.isEnabled("returnToParent") ? (
+          <IconButton
+            label="Return to parent conversation"
+            className="glass-button"
+            onClick={() => actions.run("returnToParent")}
+          >
+            <ChevronLeft size={20} />
+          </IconButton>
+        ) : (
+          compact && (
+            <IconButton
+              label="Conversations"
+              className="glass-button"
+              onClick={() => actions.run("toggleSidebar")}
+            >
+              <MenuLines size={20} />
+            </IconButton>
+          )
+        )}
+      </div>
       <button
         type="button"
         className="directory-button"

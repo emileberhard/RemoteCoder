@@ -553,14 +553,11 @@ button.primary:hover:not(:disabled) {
 .toolbar-spacer {
   flex: 1;
 }
-.sidebar-toggle {
+.header-leading {
   grid-column: 1;
   justify-self: start;
-  display: none;
-}
-.return-to-parent {
-  grid-column: 1;
-  justify-self: start;
+  display: flex;
+  gap: 8px;
 }
 .banners {
   position: absolute;
@@ -2016,9 +2013,6 @@ li.selected .directory-name > svg:first-child,
 .sidebar-collapsed .sidebar {
   display: none;
 }
-.sidebar-collapsed .sidebar-toggle {
-  display: flex;
-}
 .inspector-header {
   display: flex;
   align-items: center;
@@ -2183,9 +2177,6 @@ li.selected .directory-name > svg:first-child,
     border: 0;
     border-radius: 32px 0 0 32px;
     background: color-mix(in srgb, var(--foreground) 10%, transparent);
-  }
-  .sidebar-toggle {
-    display: flex;
   }
   .chat-header {
     padding: 10px 12px;
