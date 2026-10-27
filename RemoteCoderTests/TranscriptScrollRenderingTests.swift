@@ -389,16 +389,19 @@ struct TranscriptScrollRenderingTests {
         hosted.show(controller)
         defer { hosted.close() }
 
-        let answers = (0..<40).map { ChatMessage(role: .codex, text: "Answer \($0) is short.") }
+        let answers = (0..<40).map { ChatMessage(role: .codex, text: String(repeating: "Answer \($0).\n", count: 8)) }
         await fixture.show(answers)
         let scroll = try await waitForScroll(in: controller.view)
         try await settle(scroll)
         try await Task.sleep(for: .milliseconds(400))
+        try #require(scroll.contentSize.height > scroll.bounds.height * 2)
         #expect(try darkPixelsInJumpControlCorner(in: controller.view, scroll: scroll) == 0, "A follower at the latest answer needs no jump")
 
         fixture.request = TranscriptRowRequest(rowID: ChatStreamItem.message(answers[2]).id, token: 1, anchor: .top, motion: .instant)
         try await settle(scroll)
         try await Task.sleep(for: .milliseconds(400))
+        try #require(scroll.contentOffset.y + scroll.bounds.height < scroll.contentSize.height - scroll.bounds.height / 2)
+        recordScreenshot(in: controller.view, named: "jump-control-above-latest.png")
         #expect(try darkPixelsInJumpControlCorner(in: controller.view, scroll: scroll) > 40)
     }
 

@@ -145,7 +145,7 @@ struct ChatHistoryReadTests {
         await chat.target.conversationList.record(try fixture.thread(threadID, updatedAt: 1))
         workspace.selectConversation(at: .init(hostID: fixture.mini.id, threadID: threadID))
         try #require(workspace.selectedScreen === chat)
-        Task { await chat.target.prepareIfNeeded() }
+        await chat.target.prepareIfNeeded()
         return chat
     }
 
