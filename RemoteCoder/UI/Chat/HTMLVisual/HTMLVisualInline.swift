@@ -51,6 +51,9 @@ struct HTMLVisualInline: View {
     @Environment(\.openURL) private var openURL
     @Environment(\.chatImageSource) private var files
     @State private var instance = HTMLVisualInstance(surface: .inline)
+    #if os(iOS)
+    @State private var occurrenceVisible = false
+    #endif
     @State private var inlineAnchor = HTMLVisualFrameAnchor()
     @State private var expandedAnchor = HTMLVisualFrameAnchor()
     @State private var expandedScope = UUID()
@@ -90,8 +93,16 @@ struct HTMLVisualInline: View {
     private static let activationSettle = Duration.milliseconds(150)
 
     private var active: Bool {
-        (rowVisibility?.isVisible == true || instance.pinned) && visible && scenePhase == .active && (!snapshotsOnly || instance.userSelected)
+        (rowVisibility?.isVisible == true || instance.pinned) && firstAdmissionAllowed
+            && visible && scenePhase == .active && (!snapshotsOnly || instance.userSelected)
             && (rowVisibility?.isScrolling != true || instance.pinned || instance.status == .live)
+    }
+    private var firstAdmissionAllowed: Bool {
+        #if os(iOS)
+        occurrenceVisible || instance.pinned || instance.userSelected || instance.status == .loading || instance.status == .live
+        #else
+        true
+        #endif
     }
     private var showsLivePage: Bool {
         rowVisibility?.isMoving != true || instance.pinned || Self.keepsLiveSurfaceDuringMotion
@@ -207,6 +218,10 @@ struct HTMLVisualInline: View {
                 .accessibilityLabel("Expand \(title)")
             }
         }
+        #if os(iOS)
+        .modifier(HTMLVisualOccurrenceVisibility(isVisible: $occurrenceVisible))
+        .onChange(of: occurrenceVisible, initial: true) { _, value in instance.occurrenceVisible = value }
+        #endif
         .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) {
             width = max(1, $0)
             let next = max(1, Int(width.rounded()))

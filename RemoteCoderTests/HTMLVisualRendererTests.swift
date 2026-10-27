@@ -62,13 +62,15 @@ struct HTMLVisualRendererTests {
             let visibility = TranscriptVisibility()
             visibility.setVisibleRowIDs(["first", "second"])
             let controller = UIHostingController(rootView:
-                VStack(spacing: 12) {
-                    HTMLVisualInline(url: fixture.url, title: "First")
-                        .environment(\.transcriptRowVisibility, TranscriptRowVisibility(rowID: "first", visibility: visibility))
-                    HTMLVisualInline(url: fixture.url, title: "Second")
-                        .environment(\.transcriptRowVisibility, TranscriptRowVisibility(rowID: "second", visibility: visibility))
+                ScrollView {
+                    VStack(spacing: 12) {
+                        HTMLVisualInline(url: fixture.url, title: "First")
+                            .environment(\.transcriptRowVisibility, TranscriptRowVisibility(rowID: "first", visibility: visibility))
+                        HTMLVisualInline(url: fixture.url, title: "Second")
+                            .environment(\.transcriptRowVisibility, TranscriptRowVisibility(rowID: "second", visibility: visibility))
+                    }
+                    .frame(width: 320)
                 }
-                .frame(width: 320)
                 .environment(\.htmlVisualSource, source)
                 .environment(\.htmlVisualTheme, theme)
                 .environment(\.htmlVisualCaptureAllowed, false)
@@ -883,6 +885,77 @@ struct HTMLVisualRendererTests {
         return try #require(HTMLVisualReference(url: url))
     }
 
+    @Test(.timeLimit(.minutes(1)), .enabled { await MainActor.run { UIDevice.current.userInterfaceIdiom == .phone } }, arguments: [80, 6_000])
+    func occurrenceVisibilityGatesFirstAdmissionWhileNearPreparationAndAdmittedStateSurvive(height: Int) async throws {
+        try await withFixture { fixture in
+            let html = "<body style='margin:0'><div style='height:\(height)px'><input id='input'><span id='selection'>Retained selection</span></div></body>"
+            let reference = try Self.reference(html)
+            let url = try #require(URL(string: "rc-visual:" + reference.digest))
+            let hostID = UUID()
+            let documents = HTMLVisualDocumentCache(directory: fixture.directory.appending(path: "documents"),
+                writer: HTMLVisualDocumentFileWriter())
+            let file = fixture.directory.appending(path: "occurrence.html")
+            try await Self.write(html, to: file)
+            _ = try await documents.store(hostID: hostID, reference: reference, source: file)
+            let store = HTMLVisualDocumentStore(hostID: hostID, access: RendererCacheOnlyAccess(), cache: documents)
+            let source = HTMLVisualSource(hostID: hostID, documents: store, renderer: fixture.renderer,
+                preparation: HTMLVisualPreparation(renderer: fixture.renderer))
+            let scroll = InlineOccurrenceFixture()
+            scroll.visibility.setVisibleRowIDs(["same-message"])
+            let controller = UIHostingController(rootView: InlineOccurrenceView(fixture: scroll, url: url)
+                .environment(\.htmlVisualSource, source)
+                .environment(\.htmlVisualTheme, theme)
+                .environment(\.htmlVisualCaptureAllowed, false)
+                .environment(\.scenePhase, .active)
+                .environment(AppThemeStore())
+                .overlay { preparationHost(source) })
+            fixture.window.show(controller)
+            do {
+                try await wait { source.preparation.layoutContext.displayScale != nil && scroll.scroll != nil }
+                source.preparation.updateLayoutContext { $0.width = 320 }
+                let key = HTMLVisualLayoutKey(digest: reference.digest, width: 320, theme: theme)
+                source.preparation.updateNear([reference], documents: store)
+                try await wait { source.preparation.isPresentable(reference) && source.preparation.surface.instance == nil }
+                #expect(fixture.renderer.height(for: key) == Double(height))
+                #expect(webViews(in: controller.view).isEmpty)
+                try await Task.sleep(for: .milliseconds(250))
+                #expect(webViews(in: controller.view).isEmpty)
+
+                scroll.scroll?("visual")
+                try await wait {
+                    webViews(in: controller.view).first?.bounds.height == CGFloat(height)
+                        && webViews(in: controller.view).first.map { effectiveOpacity(of: $0) > 0.99 } == true
+                }
+                let original = try #require(webViews(in: controller.view).first)
+                let viewport = try #require(transcriptScrollView(in: controller.view))
+                _ = try await original.evaluateJavaScript("document.getElementById('input').value='Retained form';window.retainedToken='retained';")
+                scroll.scroll?("top")
+                try await wait { !original.convert(original.bounds, to: viewport).intersects(viewport.bounds) }
+                try await Task.sleep(for: .milliseconds(250))
+                #expect(webViews(in: controller.view).first === original)
+                #expect(try await original.evaluateJavaScript("document.getElementById('input').value") as? String == "Retained form")
+                #expect(try await original.evaluateJavaScript("window.retainedToken") as? String == "retained")
+
+                scroll.width = 670
+                scroll.scroll?("visual")
+                try await wait { original.bounds.width == 670 && original.convert(original.bounds, to: viewport).intersects(viewport.bounds) }
+                #expect(webViews(in: controller.view).first === original)
+                #expect(try await original.evaluateJavaScript("document.getElementById('input').value") as? String == "Retained form")
+                #expect(try await original.evaluateJavaScript("window.retainedToken") as? String == "retained")
+                scroll.visibility.setVisibleRowIDs([])
+                try await wait { webViews(in: controller.view).isEmpty }
+            } catch {
+                source.preparation.cancelDemand()
+                fixture.window.close()
+                await store.retire()
+                throw error
+            }
+            source.preparation.cancelDemand()
+            fixture.window.close()
+            await store.retire()
+        }
+    }
+
     @Test(.timeLimit(.minutes(1)))
     func inlineSuspensionPreservesRowHeight() async throws {
         try await withFixture { fixture in
@@ -897,9 +970,13 @@ struct HTMLVisualRendererTests {
                 preparation: HTMLVisualPreparation(renderer: fixture.renderer))
             let visibility = TranscriptVisibility()
             visibility.setVisibleRowIDs(["visual"])
+            let geometry = InlineGeometryFixture()
             let controller = UIHostingController(rootView:
-                HTMLVisualInline(url: fixture.url, title: "Height continuity")
-                    .frame(width: 320)
+                ScrollView {
+                    HTMLVisualInline(url: fixture.url, title: "Height continuity")
+                        .frame(width: 320)
+                        .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { geometry.height = $0 }
+                }
                     .environment(\.transcriptRowVisibility, TranscriptRowVisibility(rowID: "visual", visibility: visibility))
                     .environment(\.htmlVisualSource, source)
                     .environment(\.htmlVisualTheme, theme)
@@ -912,14 +989,14 @@ struct HTMLVisualRendererTests {
                     webViews(in: controller.view).first?.bounds.height == 80
                         && fixture.renderer.snapshot(for: key).image != nil
                 }
-                let proposedSize = CGSize(width: 320, height: 1000)
-                let liveHeight = controller.sizeThatFits(in: proposedSize).height
+                let liveHeight = geometry.height
+                #expect(liveHeight == 80)
                 visibility.setVisibleRowIDs([])
                 try await wait { webViews(in: controller.view).isEmpty }
-                #expect(abs(controller.sizeThatFits(in: proposedSize).height - liveHeight) < 1)
+                #expect(abs(geometry.height - liveHeight) < 1)
                 visibility.setVisibleRowIDs(["visual"])
                 try await wait { webViews(in: controller.view).first?.bounds.height == 80 }
-                #expect(abs(controller.sizeThatFits(in: proposedSize).height - liveHeight) < 1)
+                #expect(abs(geometry.height - liveHeight) < 1)
             } catch {
                 visibility.setVisibleRowIDs([])
                 fixture.window.close()
@@ -1557,6 +1634,45 @@ private struct RendererLifecycleView: View {
 
 @MainActor
 @Observable
+private final class InlineGeometryFixture {
+    var height: CGFloat = 0
+}
+
+@MainActor
+@Observable
+private final class InlineOccurrenceFixture {
+    let visibility = TranscriptVisibility()
+    var width: CGFloat = 320
+    @ObservationIgnored var scroll: ((String) -> Void)?
+}
+
+private struct InlineOccurrenceView: View {
+    let fixture: InlineOccurrenceFixture
+    let url: URL
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(spacing: 0) {
+                    Color.clear.frame(height: 1_200).id("top")
+                    HTMLVisualInline(url: url, title: "Occurrence")
+                        .environment(\.transcriptRowVisibility,
+                            TranscriptRowVisibility(rowID: "same-message", visibility: fixture.visibility))
+                        .id("visual")
+                    Color.clear.frame(height: 1_200)
+                }
+                .frame(width: fixture.width)
+            }
+            .frame(width: fixture.width, height: 240)
+            .onAppear { fixture.scroll = { proxy.scrollTo($0, anchor: .top) } }
+            .onDisappear { fixture.scroll = nil }
+        }
+        .dynamicTypeSize(.accessibility3)
+    }
+}
+
+@MainActor
+@Observable
 private final class InlineMotionFixture {
     let visibility = TranscriptVisibility()
     var showSecond = false
@@ -1575,17 +1691,19 @@ private struct InlineMotionView: View {
     }
 
     var body: some View {
-        VStack(spacing: 12) {
-            HTMLVisualInline(url: url, title: "First")
-                .environment(\.transcriptRowVisibility, firstVisibility)
-            if fixture.showSecond {
-                HTMLVisualInline(url: url, title: "Second")
-                    .environment(\.transcriptRowVisibility,
-                        TranscriptRowVisibility(rowID: "second", visibility: fixture.visibility))
-                    .onAppear { fixture.secondAppeared = true }
+        ScrollView {
+            VStack(spacing: 12) {
+                HTMLVisualInline(url: url, title: "First")
+                    .environment(\.transcriptRowVisibility, firstVisibility)
+                if fixture.showSecond {
+                    HTMLVisualInline(url: url, title: "Second")
+                        .environment(\.transcriptRowVisibility,
+                            TranscriptRowVisibility(rowID: "second", visibility: fixture.visibility))
+                        .onAppear { fixture.secondAppeared = true }
+                }
             }
+            .frame(width: fixture.width)
         }
-        .frame(width: fixture.width)
         .onChange(of: firstVisibility.isMoving, initial: true) { _, moving in fixture.observedMoving = moving }
         .onChange(of: firstVisibility.isScrolling, initial: true) { _, scrolling in fixture.observedScrolling = scrolling }
     }
