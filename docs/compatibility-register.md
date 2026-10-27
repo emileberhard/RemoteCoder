@@ -108,3 +108,9 @@ PR must introduce the reader before enabling its writer.
 | Path | Owner | Reason | Removal condition |
 |---|---|---|---|
 | Planned schema-2 checkpoint reader with a schema-1 writer, followed by schema-2 writes in a later release | `CheckpointDatabase` | Rollback, preview and branch builds must read every canonical checkpoint without stranding unique local records in recovery | Enable schema-2 writes only after every supported rollback/install consumer reads schema 2; remove schema-1 migration only after all retained databases are migrated or explicitly retired and no supported writer creates schema 1 |
+
+## Release cache
+
+| Path | Owner | Reason | Removal condition |
+|---|---|---|---|
+| Semver-derived build numbers for releases through 3.73.0 | `scripts/release-cache.py`, `release_build_number` | Existing signed release caches and rollback references predate ASC-reserved build receipts | Neither host retains a release or symbol reference at 3.73.0 or earlier; then require a build-number receipt for every retained release |
