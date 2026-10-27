@@ -472,7 +472,8 @@ fn seed_origin(
         job_id: job_id.clone(),
         agent_id: agent_id.clone(),
         request_fingerprint: None,
-        created_at_ms: 1,
+        unconfirmed_result: None,
+        created_at_ms: Some(1),
         updated_at_ms: 1,
         revision: 0,
         previous_job_id: None,
@@ -502,9 +503,9 @@ fn seed_origin(
         agent_id: agent_id.clone(),
         conversation: ConversationBinding::Known { conversation },
         origin,
-        tool_scope: ToolScope::Full,
-        origin_job_id: job_id.clone(),
-        latest_job_id: job_id.clone(),
+        tool_scope: Some(ToolScope::Full),
+        origin_job_id: Some(job_id.clone()),
+        latest_job_id: Some(job_id.clone()),
     };
     for directory in [root.to_owned(), root.join("jobs"), root.join("agents")] {
         private_state::ensure_private_directory(&directory).unwrap();

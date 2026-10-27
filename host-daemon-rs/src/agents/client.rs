@@ -422,7 +422,8 @@ async fn resolve(endpoint: &GatewayEndpoint, target: &str) -> Result<JobId> {
                     .context(
                         "Conversation history has no resolved agent identity; use an exact run ID",
                     )?
-                    .latest_job_id);
+                    .latest_job_id
+                    .context("Conversation latest job is unresolved; use an exact run ID")?);
             }
             return match matches.as_slice() {
                 [] => Err(NoMatchingJob.into()),

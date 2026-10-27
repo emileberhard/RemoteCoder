@@ -77,7 +77,8 @@ impl AgentService<'_> {
 
     pub(in crate::gateway) async fn thread_relation(&self, thread: &str) -> Result<ThreadRelation> {
         let identity = self.gateway.agent_conversation(thread)?;
-        match self.gateway.jobs.classify(&identity).await? {
+        let exact = self.gateway.jobs.agent_for_conversation(&identity).await?;
+        match exact.map(|agent| agent.origin) {
             Some(Origin::TopLevel) => return Ok(ThreadRelation::Root),
             Some(Origin::Parent { conversation }) => {
                 return Ok(ThreadRelation::Child(Some(conversation)));
@@ -86,16 +87,6 @@ impl AgentService<'_> {
             None => {}
         }
         if identity.provider == Provider::Claude {
-            use crate::providers::claude::conversation_index::SessionOrigin;
-            if let Some(runtime) = self.gateway.claude_agent() {
-                match runtime.creation_origin(thread)? {
-                    Some(SessionOrigin::TopLevel) => return Ok(ThreadRelation::Root),
-                    Some(SessionOrigin::Job { .. } | SessionOrigin::Unknown) => {
-                        bail!("Claude session has no resolved runtime origin");
-                    }
-                    None => {}
-                }
-            }
             let uuid = crate::providers::claude::session_uuid_from_thread_id(thread)
                 .context("Claude conversation identity is invalid")?;
             let header = self
@@ -107,6 +98,24 @@ impl AgentService<'_> {
                 header["id"] == thread,
                 "Claude history returned another conversation"
             );
+            if let Some(origin) = self
+                .gateway
+                .jobs
+                .classify(&identity, created_at_ms(&header))
+                .await?
+            {
+                return origin_relation(origin);
+            }
+            use crate::providers::claude::conversation_index::SessionOrigin;
+            if let Some(runtime) = self.gateway.claude_agent() {
+                match runtime.creation_origin(thread)? {
+                    Some(SessionOrigin::TopLevel) => return Ok(ThreadRelation::Root),
+                    Some(SessionOrigin::Job { .. } | SessionOrigin::Unknown) => {
+                        bail!("Claude session has no resolved runtime origin");
+                    }
+                    None => {}
+                }
+            }
             return Ok(ThreadRelation::Root);
         }
         let header = self
@@ -116,6 +125,14 @@ impl AgentService<'_> {
                 json!({"threadId":thread,"includeTurns":false}),
             )
             .await?;
+        if let Some(origin) = self
+            .gateway
+            .jobs
+            .classify(&identity, created_at_ms(&header["thread"]))
+            .await?
+        {
+            return origin_relation(origin);
+        }
         if super::super::native_agent_relation(&header, thread)? {
             let parent = super::native_parent(&header["thread"])
                 .map(|parent| self.gateway.agent_conversation(parent))
@@ -157,10 +174,13 @@ impl AgentService<'_> {
         let mut views = stream::iter(selected.into_values())
             .map(|job_id| async move {
                 let view = self.gateway.jobs.read(&job_id).await?;
-                if let Some(agent) = &view.agent
-                    && agent.latest_job_id != view.job.job_id
+                if let Some(latest) = view
+                    .agent
+                    .as_ref()
+                    .and_then(|agent| agent.latest_job_id.as_ref())
+                    && latest != &view.job.job_id
                 {
-                    return self.gateway.jobs.read(&agent.latest_job_id).await;
+                    return self.gateway.jobs.read(latest).await;
                 }
                 Ok(view)
             })
@@ -236,6 +256,9 @@ impl AgentService<'_> {
                 SpecEvidence::Unknown { .. } => (None, None, false),
             };
             let state = state(&view.job.execution);
+            let continuation_known = view.agent.as_ref().is_some_and(|agent| {
+                agent.latest_job_id.as_ref() == Some(&view.job.job_id) && agent.tool_scope.is_some()
+            });
             projected.push(Agent {
                 id: format!("job:{}", view.job.agent_id),
                 parent_id,
@@ -254,7 +277,10 @@ impl AgentService<'_> {
                     inspect: true,
                     open_conversation: thread.is_some(),
                     message: thread.is_some() && state.is_running(),
-                    continue_work: thread.is_some() && settings_known && !state.may_be_running(),
+                    continue_work: thread.is_some()
+                        && settings_known
+                        && continuation_known
+                        && !state.may_be_running(),
                     stop: state.may_be_running(),
                     ..Capabilities::default()
                 },
@@ -309,7 +335,7 @@ impl AgentService<'_> {
         ensure!(
             view.agent
                 .as_ref()
-                .is_none_or(|agent| agent.latest_job_id == job_id),
+                .is_none_or(|agent| agent.latest_job_id.as_ref() == Some(&job_id)),
             "Agent execution changed; refresh before acting"
         );
         let mutation_id = params
@@ -375,5 +401,20 @@ fn state(execution: &ExecutionState) -> State {
             JobOutcome::Stopped { .. } => State::Interrupted,
         },
         _ => State::Working,
+    }
+}
+
+fn created_at_ms(header: &Value) -> Option<i64> {
+    header
+        .get("createdAt")
+        .and_then(Value::as_i64)
+        .and_then(|seconds| seconds.checked_mul(1000))
+}
+
+fn origin_relation(origin: Origin) -> Result<ThreadRelation> {
+    match origin {
+        Origin::TopLevel => Ok(ThreadRelation::Root),
+        Origin::Parent { conversation } => Ok(ThreadRelation::Child(Some(conversation))),
+        Origin::Unknown { reason } => bail!("Recorded agent origin is unknown: {reason}"),
     }
 }
