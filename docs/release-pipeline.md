@@ -32,12 +32,13 @@ run independently. The private GitHub release joins both delivery paths and the
 public processing result. An install, upload, processed build, store preparation,
 fleet catch-up and user acceptance remain separate outcomes.
 
-A same-run retry restores the build reservation. Before upload, an immutable
-artifact records the attempt's exact identity. A later attempt first checks ASC;
-when the fence exists but Apple exposes no matching build, it stops for
-reconciliation instead of uploading again. Artifacts expire after bounded
-retention; an expired reservation/fence is not permission to upload that release
-again. A code change requires the next patch tag. Published tags never move.
+A same-run retry restores the build reservation. The template's upload fence
+checks whether any earlier run attempt started the platform's upload step. A
+later attempt checks ASC for the exact reserved identity; when an upload started
+but Apple exposes no matching build, it stops for reconciliation instead of
+uploading again. Artifacts expire after bounded retention; an expired reservation
+is not permission to upload that release again. A code change requires the next
+patch tag. Published tags never move.
 
 RemoteCoder has never been submitted to the App Store. Its editable iOS and Mac
 1.0 drafts become the tag version with manual release. Noneditable versions are preserved. Existing screenshots and internal TestFlight distribution

@@ -205,8 +205,8 @@ without changing the host's default Xcode.
 The public tag workflow reserves the next two global App Store Connect build
 numbers, retains the exact reservation for retries, archives iOS and macOS on
 hosted runners and cloud-signs checked App Store exports. `Config/entitlements-*.json`
-covers every shipped bundle. An upload fence is persisted before an upload; a
-retry queries Apple and refuses a second uncertain upload. Each platform then
+covers every shipped bundle. The upload fence checks earlier attempts' upload
+steps; a retry queries Apple and refuses a second uncertain upload. Each platform then
 waits for processing, updates What to Test under the existing internal distribution
 policy and prepares its App Store version, preserving screenshots. A version in
 review or pending release is left untouched. App Review and release stay with Emil.

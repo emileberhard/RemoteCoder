@@ -176,27 +176,32 @@ jobs:
           path: ${{ runner.temp }}/archive-${{ matrix.platform }}.tar
           retention-days: 7
           compression-level: 0
-      - name: Restore the upload fence
-        run: scripts/release-state upload-${{ matrix.platform }} "$RUNNER_TEMP/fence"
+      - name: Check whether an earlier attempt started uploading
+        id: fence
+        run: |
+          set -euo pipefail
+          fenced=false
+          for ((attempt = 1; attempt < GITHUB_RUN_ATTEMPT; attempt++)); do
+            started=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$attempt/jobs?per_page=100" \
+              --jq "[.jobs[] | select(.name == \"apps ($PLATFORM)\") | .steps[] | select(.name == \"Upload once to TestFlight\" and .conclusion != \"skipped\" and .started_at != null)] | length")
+            (( started == 0 )) || fenced=true
+          done
+          echo "fenced=$fenced" >> "$GITHUB_OUTPUT"
       - name: Reconcile any earlier upload
         id: upload
+        env:
+          FENCED: ${{ steps.fence.outputs.fenced }}
         run: |
           set -euo pipefail
           state=$(scripts/app-store-connect upload-state "$ASC_PLATFORM" "$VERSION" "$BUILD_NUMBER")
           if [[ "$state" == present ]]; then
             echo "needed=false" >> "$GITHUB_OUTPUT"
-          elif [[ -f "$RUNNER_TEMP/fence/identity.json" ]]; then
+          elif [[ "$FENCED" == true ]]; then
             echo "::error::An earlier attempt may have uploaded this exact build; Apple has not exposed it yet. Rerun after reconciling App Store Connect."
             exit 1
           else
             echo "needed=true" >> "$GITHUB_OUTPUT"
           fi
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        if: steps.upload.outputs.needed == 'true'
-        with:
-          name: upload-${{ matrix.platform }}
-          path: ${{ runner.temp }}/archive/identity.json
-          retention-days: 30
       - name: Upload once to TestFlight
         if: steps.upload.outputs.needed == 'true'
         run: scripts/release-apps upload "$PLATFORM" "$RUNNER_TEMP/archive"
