@@ -116,7 +116,7 @@ pub(crate) enum ExecutionSettings {
     },
     Claude {
         model: String,
-        effort: String,
+        effort: Option<String>,
         fast: bool,
     },
 }
@@ -296,6 +296,8 @@ pub(crate) struct JobRecord {
     pub agent_id: String,
     pub request_fingerprint: Option<String>,
     pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+    pub revision: u64,
     pub previous_job_id: Option<JobId>,
     pub spec: SpecEvidence,
     pub recipient: Recipient,
