@@ -36,7 +36,7 @@ jobs:
         run: |
           started=$SECONDS
           while :; do
-            state=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --event push --commit "$GITHUB_SHA" --json status,conclusion \
+            state=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --branch main --event push --commit "$GITHUB_SHA" --json status,conclusion \
               --jq 'if any(.[]; .conclusion == "success") then "passed" elif any(.[]; .status != "completed") then "running" elif length > 0 then "failed" else "missing" end') \
               || state=unknown
             case $state in
@@ -65,7 +65,8 @@ jobs:
           : "${DEPLOY_REPOSITORY:?}" "${GH_TOKEN:?}"
           jq -n --arg version "$VERSION" --arg commit "$COMMIT" --arg run "$GITHUB_RUN_ID" \
             '{ref:"main",inputs:{version:$version,commit:$commit,public_run:$run}}' |
-            gh api --method POST "repos/$DEPLOY_REPOSITORY/actions/workflows/release.yml/dispatches" --input - >"$RUNNER_TEMP/dispatch.json"
+            gh api --method POST -H "X-GitHub-Api-Version: 2026-03-10" \
+              "repos/$DEPLOY_REPOSITORY/actions/workflows/release.yml/dispatches" --input - >"$RUNNER_TEMP/dispatch.json"
           jq -er '.html_url' "$RUNNER_TEMP/dispatch.json" >> "$GITHUB_STEP_SUMMARY"
 
   numbers:
@@ -85,6 +86,7 @@ jobs:
       COMMIT: ${{ github.sha }}
       APP_BUNDLE_ID: ${{ vars.APP_BUNDLE_ID }}
       ASC_PLATFORM: IOS
+      APP_STORE_CONNECT_KEY_PATH: ${{ github.workspace }}/.local/AuthKey.p8
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -97,7 +99,6 @@ jobs:
           APP_STORE_CONNECT_KEY: ${{ secrets.APP_STORE_CONNECT_KEY }}
           APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
           APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
-          APP_STORE_CONNECT_KEY_PATH: ${{ github.workspace }}/.local/AuthKey.p8
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/numbers"
@@ -105,7 +106,7 @@ jobs:
             echo "restored=true" >> "$GITHUB_OUTPUT"
           else
             mkdir -p .local
-          umask 077
+            umask 077
             printf '%s' "$APP_STORE_CONNECT_KEY" > "$APP_STORE_CONNECT_KEY_PATH"
             number=$(scripts/app-store-connect build-number)
             jq -n --arg version "$VERSION" --arg commit "$COMMIT" --arg ios "$number" --arg mac "$((number + 1))" \
