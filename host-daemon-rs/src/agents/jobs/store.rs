@@ -119,6 +119,24 @@ impl JobStore {
             .await
     }
 
+    pub(crate) async fn ensure_new_message_id(&self, delivery_id: String) -> Result<()> {
+        self.access(move |inner| {
+            let matches = |payload: &CompletionPayload| match payload {
+                CompletionPayload::Prepared { delivery_id: retained, .. }
+                | CompletionPayload::Expired { delivery_id: retained, .. } => retained == &delivery_id,
+                CompletionPayload::HistoricalUnreplayable { delivery_id: retained, .. } => retained.as_ref() == Some(&delivery_id),
+            };
+            for job in inner.jobs.values() {
+                ensure!(!job.notices.iter().any(|notice| matches(&notice.payload)), "delivery ID belongs to a retained job notice; inspect its receipt instead of resending it");
+                if let ExecutionState::Terminal { terminal } = &job.execution
+                    && let Completion::Required { payload, .. } = &terminal.completion {
+                    ensure!(!matches(payload), "delivery ID belongs to a retained completion; inspect its receipt instead of resending it");
+                }
+            }
+            Ok(())
+        }).await
+    }
+
     pub(crate) async fn agent(&self, agent_id: String) -> Result<AgentRecord> {
         self.access(move |inner| inner.agent_view(&agent_id)).await
     }
@@ -721,22 +739,30 @@ impl Inner {
             if let ExecutionState::Terminal { terminal } = &mut job.execution {
                 terminal.result = ResultEvidence::Expired;
                 if let Completion::Required { payload, .. } = &mut terminal.completion {
-                    if let CompletionPayload::Prepared {
-                        delivery_id,
-                        fingerprint,
-                        ..
-                    } = payload
-                    {
-                        *payload = CompletionPayload::Expired {
-                            delivery_id: delivery_id.clone(),
-                            fingerprint: fingerprint.clone(),
-                        };
-                    }
+                    expire_payload(payload);
                 }
+            }
+            job.unconfirmed_result = None;
+            for notice in &mut job.notices {
+                expire_payload(&mut notice.payload);
             }
             self.commit(job, at)?;
         }
         Ok(())
+    }
+}
+
+fn expire_payload(payload: &mut CompletionPayload) {
+    if let CompletionPayload::Prepared {
+        delivery_id,
+        fingerprint,
+        ..
+    } = payload
+    {
+        *payload = CompletionPayload::Expired {
+            delivery_id: delivery_id.clone(),
+            fingerprint: fingerprint.clone(),
+        };
     }
 }
 

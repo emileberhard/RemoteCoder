@@ -373,6 +373,10 @@ impl Gateway {
         }
         crate::agents::envelope::validate_message_text(&request.text)
             .map_err(|error| RpcError::new(RpcCode::InvalidParams, error.to_string()))?;
+        self.jobs
+            .ensure_new_message_id(&request.delivery_id)
+            .await
+            .map_err(|error| RpcError::new(RpcCode::Conflict, error.to_string()))?;
         let caller = self.resolve_job_caller(&request.caller).await?;
         let target = match &request.target {
             MessageTarget::Conversation { conversation } => conversation.clone(),

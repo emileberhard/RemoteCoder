@@ -255,3 +255,110 @@ async fn continuation_order_uses_identity_chain_instead_of_wall_clock() {
         Some(admitted.job_id)
     );
 }
+
+#[tokio::test]
+async fn historical_delivery_ids_remain_reserved_without_replayable_payloads() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = JobStore::open(directory.path().into()).await.unwrap();
+    drop(store);
+    let mut imported = job(8);
+    imported.source = JobSource::Imported;
+    imported.admission_origin = None;
+    imported.notices.push(JobNotice {
+        at_ms: None,
+        payload: CompletionPayload::HistoricalUnreplayable {
+            delivery_id: Some("legacy-delivery".into()),
+            fingerprint: None,
+            reason: "old sender retained only its delivery receipt".into(),
+        },
+        delivery: DeliveryState::Accepted {
+            receipt: "historical receipt".into(),
+        },
+    });
+    std::fs::write(
+        directory
+            .path()
+            .join("jobs")
+            .join(format!("{}.json", imported.job_id.as_str())),
+        serde_json::to_vec(&imported).unwrap(),
+    )
+    .unwrap();
+    let store = JobStore::open(directory.path().into()).await.unwrap();
+    assert!(
+        store
+            .ensure_new_message_id("legacy-delivery".into())
+            .await
+            .is_err()
+    );
+    store
+        .ensure_new_message_id("new-delivery".into())
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn settled_notice_payload_expires_but_its_identity_survives() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = JobStore::open(directory.path().into()).await.unwrap();
+    let original = job(9);
+    store.admit(original.clone()).await.unwrap();
+    let uncertain = store
+        .record_uncertainty(
+            original.job_id.clone(),
+            0,
+            "unknown".into(),
+            Some("interim text".into()),
+            101,
+        )
+        .await
+        .unwrap();
+    let notice_id = format!("{}:notice:observation", original.job_id.as_str());
+    let accepted = store
+        .notice_delivery(
+            original.job_id.clone(),
+            uncertain.revision,
+            notice_id.clone(),
+            DeliveryState::Accepted {
+                receipt: "fixture receipt".into(),
+            },
+            102,
+        )
+        .await
+        .unwrap();
+    store
+        .advance(
+            original.job_id.clone(),
+            accepted.revision,
+            ExecutionState::Terminal {
+                terminal: Terminal {
+                    at_ms: Some(103),
+                    execution: None,
+                    git: GitSnapshot::Unknown {
+                        reason: "fixture".into(),
+                    },
+                    outcome: JobOutcome::Completed,
+                    result: ResultEvidence::Available {
+                        result: JobResult {
+                            text: "result".into(),
+                            truncated: false,
+                        },
+                    },
+                    completion: Completion::NotRequired,
+                    cleanup: CleanupState::Complete,
+                },
+            },
+            103,
+        )
+        .await
+        .unwrap();
+    let mut later = job(10);
+    later.created_at_ms = Some(31 * 24 * 60 * 60 * 1000);
+    store.admit(later).await.unwrap();
+    drop(store);
+    let store = JobStore::open(directory.path().into()).await.unwrap();
+    let retained = store.read(original.job_id).await.unwrap();
+    assert!(
+        matches!(&retained.notices[0].payload, CompletionPayload::Expired { delivery_id, .. } if delivery_id == &notice_id)
+    );
+    assert!(store.ensure_new_message_id(notice_id).await.is_err());
+}

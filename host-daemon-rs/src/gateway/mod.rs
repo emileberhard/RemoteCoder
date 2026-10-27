@@ -3,6 +3,7 @@ mod agent_actions;
 mod agent_delivery;
 mod agent_gateway;
 mod agent_jobs;
+pub(crate) mod agent_jobs_codex;
 mod agent_routes;
 mod question_gateway;
 

@@ -41,7 +41,7 @@ impl JobOwner {
                         .await?;
                     continue;
                 }
-                return self.deliver_completion(&job, terminal).await;
+                return Ok(self.deliver_completion(&job, terminal).await? || notices_pending);
             }
             if matches!(job.stop, StopState::Requested { .. }) {
                 self.stop_execution(&gateway, &job).await?;
