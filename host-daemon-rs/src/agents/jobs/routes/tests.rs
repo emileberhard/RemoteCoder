@@ -185,6 +185,7 @@ async fn scoped_endpoint_supplies_kernel_peer_identity_and_closes_its_readers() 
     });
     let lease = ScopedEndpoints::default()
         .bind(&path, job_id, handler)
+        .await
         .unwrap();
     let mut stream = UnixStream::connect(&path).await.unwrap();
     stream
@@ -208,4 +209,41 @@ async fn scoped_endpoint_supplies_kernel_peer_identity_and_closes_its_readers() 
     )
     .await;
     assert!(closed.is_ok());
+}
+
+#[tokio::test]
+async fn scoped_endpoint_reclaims_only_a_definitely_stale_socket_and_preserves_live_or_unowned_paths()
+ {
+    let directory = tempfile::tempdir_in("/tmp").unwrap();
+    let path = directory.path().join("scoped");
+    let listener = UnixListener::bind(&path).unwrap();
+    drop(listener);
+    let job_id = JobId::try_from("agent-claude-2026102720000000000-abcdef12".to_owned()).unwrap();
+    let handler: ScopedHandler = Arc::new(|_, _, _| Box::pin(async { Ok(json!({})) }));
+    let endpoints = ScopedEndpoints::default();
+    let lease = endpoints
+        .bind(&path, job_id.clone(), Arc::clone(&handler))
+        .await
+        .unwrap();
+    assert!(
+        endpoints
+            .bind(&path, job_id.clone(), Arc::clone(&handler))
+            .await
+            .is_err()
+    );
+    assert!(UnixStream::connect(&path).await.is_ok());
+    lease.close().await;
+    std::fs::write(&path, "unowned file").unwrap();
+    assert!(
+        endpoints
+            .bind(&path, job_id.clone(), Arc::clone(&handler))
+            .await
+            .is_err()
+    );
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "unowned file");
+    std::fs::remove_file(&path).unwrap();
+    let target = directory.path().join("target");
+    std::os::unix::fs::symlink(&target, &path).unwrap();
+    assert!(endpoints.bind(&path, job_id, handler).await.is_err());
+    assert_eq!(std::fs::read_link(&path).unwrap(), target);
 }

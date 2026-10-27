@@ -1,4 +1,4 @@
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -47,7 +47,7 @@ struct SocketOwner {
 }
 
 impl ScopedEndpoints {
-    pub(crate) fn bind(
+    pub(crate) async fn bind(
         &self,
         path: &Path,
         job_id: JobId,
@@ -64,7 +64,16 @@ impl ScopedEndpoints {
             path.parent()
                 .context("scoped coordination socket has no parent")?,
         )?;
-        let listener = UnixListener::bind(path).context("scoped coordination socket could not be bound; existing sockets require their owning lease to close")?;
+        match std::fs::symlink_metadata(path) {
+            Ok(_) => reclaim_stale_socket(path).await?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error)
+                    .context("scoped endpoint path could not be inspected before binding");
+            }
+        }
+        let listener =
+            UnixListener::bind(path).context("scoped coordination socket could not be bound")?;
         let metadata = std::fs::symlink_metadata(path)?;
         let owner = SocketOwner {
             path: path.into(),
@@ -95,6 +104,30 @@ impl ScopedEndpoints {
         });
         Ok(ScopedEndpointLease { task: Some(task) })
     }
+}
+
+async fn reclaim_stale_socket(path: &Path) -> Result<()> {
+    let before = std::fs::symlink_metadata(path)
+        .context("existing scoped socket metadata is unavailable")?;
+    ensure!(
+        before.file_type().is_socket() && before.uid() == nix::unistd::Uid::current().as_raw(),
+        "existing scoped endpoint is not a socket owned by this user; refusing replacement"
+    );
+    let probe = tokio::time::timeout(Duration::from_millis(250), UnixStream::connect(path)).await;
+    ensure!(
+        matches!(probe,Ok(Err(ref error)) if error.kind() == std::io::ErrorKind::ConnectionRefused),
+        "existing scoped coordination socket is live or its owner is uncertain; refusing replacement"
+    );
+    let current = std::fs::symlink_metadata(path)
+        .context("scoped socket changed during stale-owner probe")?;
+    ensure!(
+        current.file_type().is_socket()
+            && current.uid() == before.uid()
+            && current.dev() == before.dev()
+            && current.ino() == before.ino(),
+        "scoped socket identity changed during stale-owner probe; refusing replacement"
+    );
+    std::fs::remove_file(path).context("stale scoped socket could not be reclaimed")
 }
 
 async fn serve(mut stream: UnixStream, job_id: JobId, handler: ScopedHandler) -> Result<()> {
