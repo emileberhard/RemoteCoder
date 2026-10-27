@@ -13,6 +13,7 @@ from unittest.mock import patch
 SCRIPTS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SCRIPTS))
 from build_support import Timings, atomic_json, build_environment
+from process_group import process_identity, terminate_group
 
 
 class BuildAdmissionTests(unittest.TestCase):
@@ -350,18 +351,19 @@ if mode == 'child': time.sleep(600)
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
             owner = self.leased_job(root, "child")
-            group = None
+            job = None
             try:
                 deadline = time.monotonic() + 60
                 while not (root / "descendant.pid").exists():
                     self.assertIsNone(owner.poll(), (root / "owner.err").read_text())
                     self.assertLess(time.monotonic(), deadline)
                     time.sleep(0.01)
-                group = int((root / "leader.pid").read_text())
+                job = process_identity(int((root / "leader.pid").read_text()))
+                self.assertIsNotNone(job)
                 owner.kill()
                 owner.wait(timeout=60)
                 self.assert_lease_available(root / "build.lock", False)
-                os.killpg(group, signal.SIGKILL)
+                terminate_group(job, 0.2)
                 deadline = time.monotonic() + 10
                 while True:
                     try:
@@ -373,11 +375,8 @@ if mode == 'child': time.sleep(600)
             finally:
                 if owner.poll() is None:
                     owner.kill()
-                if group is not None:
-                    try:
-                        os.killpg(group, signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
+                if job is not None:
+                    terminate_group(job, 0.2)
 
     def test_waiting_worktree_does_not_reserve_an_interactive_slot(self):
         with tempfile.TemporaryDirectory() as temporary:
