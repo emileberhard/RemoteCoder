@@ -97,7 +97,8 @@ impl JobOwner {
     }
 
     pub(super) async fn close_endpoint(&self, id: &JobId) {
-        if let Some(endpoint) = self.endpoints.lock().await.remove(id) {
+        let endpoint = self.endpoints.lock().await.remove(id);
+        if let Some(endpoint) = endpoint {
             endpoint.close().await;
         }
     }
@@ -110,7 +111,7 @@ impl JobOwner {
         let view = self.read(id).await?;
         let proven = self.gateway()?.job_process_context(peer).await?;
         ensure!(
-            super::execution::conversation(&view.job.execution) == Some(&proven.conversation),
+            view.job.execution.conversation() == Some(&proven.conversation),
             "scoped socket does not belong to the actual calling provider process; capture context before detaching"
         );
         ensure!(

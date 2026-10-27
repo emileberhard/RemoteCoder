@@ -336,11 +336,33 @@ pub(crate) enum ExecutionState {
     },
     Unknown {
         conversation: Option<ConversationIdentity>,
+        binding: Option<ExecutionBinding>,
         reason: String,
     },
     Terminal {
         terminal: Terminal,
     },
+}
+
+impl ExecutionState {
+    pub(crate) fn binding(&self) -> Option<&ExecutionBinding> {
+        match self {
+            Self::Running { binding } | Self::Recovering { binding, .. } => Some(binding),
+            Self::Unknown { binding, .. } => binding.as_ref(),
+            Self::Terminal { terminal } => terminal.execution.as_ref(),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn conversation(&self) -> Option<&ConversationIdentity> {
+        match self {
+            Self::Bound { conversation } | Self::Dispatching { conversation, .. } => {
+                Some(conversation)
+            }
+            Self::Unknown { conversation, .. } => conversation.as_ref(),
+            _ => self.binding().map(|binding| &binding.conversation),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]

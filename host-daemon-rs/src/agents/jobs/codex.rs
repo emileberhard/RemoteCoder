@@ -168,11 +168,7 @@ pub(crate) async fn inspect(gateway: &Arc<Gateway>, job: &JobRecord) -> Result<I
         input_id,
         turn_id: accepted.turn_id.clone(),
     };
-    if let ExecutionState::Running { binding: retained }
-    | ExecutionState::Recovering {
-        binding: retained, ..
-    } = &job.execution
-    {
+    if let Some(retained) = job.execution.binding() {
         ensure!(
             retained == &binding,
             "native input acceptance changed its binding"

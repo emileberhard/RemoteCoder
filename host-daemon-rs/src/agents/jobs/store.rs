@@ -192,7 +192,7 @@ impl JobStore {
             }) {
                 return Ok(Some(Origin::Unknown { reason: format!("historical ancestry is unresolved: {}", evidence.reason) }));
             }
-            let unresolved = inner.jobs.values().any(|job| execution_conversation(&job.execution).is_some_and(|known| {
+            let unresolved = inner.jobs.values().any(|job| job.execution.conversation().is_some_and(|known| {
                 known.provider == conversation.provider && known.thread_id == conversation.thread_id && (known.provider_home == conversation.provider_home || matches!(known.provider_home, ProviderHome::Unknown { .. }))
             }));
             Ok(unresolved.then(|| Origin::Unknown { reason: "recorded job ancestry or provider scope is unresolved".into() }))
@@ -374,7 +374,7 @@ impl JobStore {
     ) -> Result<JobRecord> {
         self.access(move |inner| {
             let mut job = inner.current(&id, revision)?;
-            let next = ExecutionState::Unknown { conversation: execution_conversation(&job.execution).cloned(), reason };
+            let next = ExecutionState::Unknown { conversation: job.execution.conversation().cloned(), binding: job.execution.binding().cloned(), reason };
             validate_transition(&job, &next)?;
             job.execution = next;
             let delivery_id = format!("{}:notice:observation", id.as_str());
@@ -840,6 +840,17 @@ fn live_reservation(job: &JobRecord) -> bool {
 }
 
 fn validate_job(job: &JobRecord) -> Result<()> {
+    if let ExecutionState::Unknown {
+        conversation,
+        binding: Some(binding),
+        ..
+    } = &job.execution
+    {
+        ensure!(
+            conversation.as_ref() == Some(&binding.conversation),
+            "unknown execution changed its proven conversation binding"
+        );
+    }
     ensure!(
         job.source == JobSource::Imported || job.created_at_ms.is_some(),
         "runtime job requires its creation time"
@@ -961,10 +972,7 @@ fn validate_transition(job: &JobRecord, next: &ExecutionState) -> Result<()> {
         !is_terminal(job),
         "terminal outcome and result are immutable"
     );
-    if let (Some(before), Some(after)) = (
-        execution_conversation(&job.execution),
-        execution_conversation(next),
-    ) {
+    if let (Some(before), Some(after)) = (job.execution.conversation(), next.conversation()) {
         ensure!(
             before == after,
             "job execution cannot switch its exact provider conversation"
@@ -1019,20 +1027,4 @@ fn validate_transition(job: &JobRecord, next: &ExecutionState) -> Result<()> {
     );
     ensure!(valid, "invalid delegated-job execution transition");
     Ok(())
-}
-
-fn execution_conversation(execution: &ExecutionState) -> Option<&ConversationIdentity> {
-    match execution {
-        ExecutionState::Admitted => None,
-        ExecutionState::Terminal { terminal } => terminal
-            .execution
-            .as_ref()
-            .map(|binding| &binding.conversation),
-        ExecutionState::Bound { conversation }
-        | ExecutionState::Dispatching { conversation, .. } => Some(conversation),
-        ExecutionState::Running { binding } | ExecutionState::Recovering { binding, .. } => {
-            Some(&binding.conversation)
-        }
-        ExecutionState::Unknown { conversation, .. } => conversation.as_ref(),
-    }
 }

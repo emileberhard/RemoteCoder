@@ -264,6 +264,11 @@ async fn historical_delivery_ids_remain_reserved_without_replayable_payloads() {
     let mut imported = job(8);
     imported.source = JobSource::Imported;
     imported.admission_origin = None;
+    imported.execution = ExecutionState::Unknown {
+        conversation: None,
+        binding: None,
+        reason: "historical runner interruption".into(),
+    };
     imported.notices.push(JobNotice {
         at_ms: None,
         payload: CompletionPayload::HistoricalUnreplayable {
@@ -302,16 +307,49 @@ async fn settled_notice_payload_expires_but_its_identity_survives() {
     let store = JobStore::open(directory.path().into()).await.unwrap();
     let original = job(9);
     store.admit(original.clone()).await.unwrap();
+    let bound = store
+        .bind(original.job_id.clone(), 0, conversation(), 100)
+        .await
+        .unwrap();
+    let dispatched = store
+        .advance(
+            original.job_id.clone(),
+            bound.revision,
+            ExecutionState::Dispatching {
+                conversation: conversation(),
+                input_id: original.initial_input_id(),
+            },
+            100,
+        )
+        .await
+        .unwrap();
+    let binding = ExecutionBinding {
+        conversation: conversation(),
+        input_id: original.initial_input_id(),
+        turn_id: "original-turn".into(),
+    };
+    let running = store
+        .advance(
+            original.job_id.clone(),
+            dispatched.revision,
+            ExecutionState::Running {
+                binding: binding.clone(),
+            },
+            100,
+        )
+        .await
+        .unwrap();
     let uncertain = store
         .record_uncertainty(
             original.job_id.clone(),
-            0,
+            running.revision,
             "unknown".into(),
             Some("interim text".into()),
             101,
         )
         .await
         .unwrap();
+    assert_eq!(uncertain.execution.binding(), Some(&binding));
     let notice_id = format!("{}:notice:observation", original.job_id.as_str());
     let accepted = store
         .notice_delivery(

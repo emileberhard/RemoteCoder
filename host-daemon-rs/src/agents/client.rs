@@ -554,18 +554,11 @@ fn execution_status(job: &JobRecord) -> &'static str {
 }
 
 fn receipt(receipt: AdmissionReceipt) -> Value {
-    let provider_session_id = match &receipt.job.execution {
-        ExecutionState::Bound { conversation }
-        | ExecutionState::Dispatching { conversation, .. } => Some(conversation.thread_id.as_str()),
-        ExecutionState::Running { binding } | ExecutionState::Recovering { binding, .. } => {
-            Some(binding.conversation.thread_id.as_str())
-        }
-        ExecutionState::Unknown {
-            conversation: Some(conversation),
-            ..
-        } => Some(conversation.thread_id.as_str()),
-        _ => None,
-    };
+    let provider_session_id = receipt
+        .job
+        .execution
+        .conversation()
+        .map(|conversation| conversation.thread_id.as_str());
     json!({"run_id":receipt.job.job_id,"agent_id":receipt.job.agent_id,
         "provider_session_id":provider_session_id,"status":execution_status(&receipt.job),"duplicate":receipt.duplicate,"job":receipt.job})
 }

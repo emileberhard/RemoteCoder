@@ -153,7 +153,9 @@ impl JobOwner {
                     let evidence = self.inspect(&gateway, &job).await?;
                     match evidence {
                         Inspection::PreparedRecovery { recovery_input_id } => {
-                            let identity = conversation(&job.execution)
+                            let identity = job
+                                .execution
+                                .conversation()
                                 .context("prepared recovery has no conversation")?;
                             anyhow::ensure!(
                                 identity.provider == Provider::Claude,
@@ -176,7 +178,7 @@ impl JobOwner {
                             input_id: retained,
                         } => {
                             anyhow::ensure!(
-                                conversation(&job.execution) == Some(&target)
+                                job.execution.conversation() == Some(&target)
                                     && retained == input_id(&job)?
                                     && target.provider == Provider::Codex,
                                 "retryable input proof does not match the retained job"
@@ -192,7 +194,7 @@ impl JobOwner {
                                 .await?;
                         }
                         Inspection::Prepared => {
-                            let Some(conversation) = conversation(&job.execution) else {
+                            let Some(conversation) = job.execution.conversation() else {
                                 return Ok(false);
                             };
                             let binding = match conversation.provider {
@@ -301,8 +303,10 @@ impl JobOwner {
     }
 
     async fn inspect(&self, gateway: &Arc<Gateway>, job: &JobRecord) -> Result<Inspection> {
-        let identity =
-            conversation(&job.execution).context("job has no exact provider conversation")?;
+        let identity = job
+            .execution
+            .conversation()
+            .context("job has no exact provider conversation")?;
         match identity.provider {
             Provider::Codex => super::codex::inspect(gateway, job).await,
             Provider::Claude => Ok(
@@ -352,7 +356,7 @@ impl JobOwner {
         ) {
             return Ok(());
         }
-        let Some(identity) = conversation(&job.execution) else {
+        let Some(identity) = job.execution.conversation() else {
             if job.source == JobSource::Imported {
                 return Ok(());
             }
@@ -377,12 +381,15 @@ impl JobOwner {
         if self.root.is_none() {
             return Ok(());
         }
+        let _operations = self.operations.write().await;
         let store = self.store().await?;
         let gateway = self.gateway()?;
         for id in store.pending_ids().await? {
             let job = store.read(id).await?;
             if matches!(job.stop, StopState::Requested { .. })
-                && conversation(&job.execution)
+                && job
+                    .execution
+                    .conversation()
                     .is_some_and(|identity| identity.provider == provider)
             {
                 self.stop_execution(&gateway, &job).await?;
@@ -464,14 +471,11 @@ impl JobOwner {
                 }
             }
         };
-        let execution = match &job.execution {
-            ExecutionState::Running { binding } | ExecutionState::Recovering { binding, .. } => {
-                Some(binding.clone())
-            }
-            _ => None,
-        };
+        let execution = job.execution.binding().cloned();
         let cleanup = if job.source == JobSource::Runtime
-            && conversation(&job.execution)
+            && job
+                .execution
+                .conversation()
                 .is_some_and(|identity| identity.provider == Provider::Claude)
             && !matches!(
                 job.execution,
@@ -504,22 +508,6 @@ impl JobOwner {
     }
 }
 
-pub(super) fn conversation(execution: &ExecutionState) -> Option<&ConversationIdentity> {
-    match execution {
-        ExecutionState::Admitted => None,
-        ExecutionState::Bound { conversation }
-        | ExecutionState::Dispatching { conversation, .. } => Some(conversation),
-        ExecutionState::Running { binding } | ExecutionState::Recovering { binding, .. } => {
-            Some(&binding.conversation)
-        }
-        ExecutionState::Unknown { conversation, .. } => conversation.as_ref(),
-        ExecutionState::Terminal { terminal } => terminal
-            .execution
-            .as_ref()
-            .map(|binding| &binding.conversation),
-    }
-}
-
 fn input_id(job: &JobRecord) -> Result<String> {
     match &job.execution {
         ExecutionState::Dispatching { input_id, .. } => Ok(input_id.clone()),
@@ -535,7 +523,9 @@ fn provider(job: &JobRecord) -> Result<Provider> {
     match &job.spec {
         SpecEvidence::Known { spec } => Ok(spec.settings.provider()),
         SpecEvidence::Expired { settings, .. } => Ok(settings.provider()),
-        SpecEvidence::Unknown { .. } => conversation(&job.execution)
+        SpecEvidence::Unknown { .. } => job
+            .execution
+            .conversation()
             .map(|identity| identity.provider)
             .context("job provider is unresolved"),
     }
