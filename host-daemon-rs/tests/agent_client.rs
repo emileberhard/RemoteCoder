@@ -261,3 +261,68 @@ async fn agent_client_stale_scoped_socket_never_falls_back_to_bearer() {
     );
     server.await.unwrap();
 }
+
+#[tokio::test]
+async fn agent_client_explicit_context_uses_authenticated_owner_despite_stale_socket() {
+    let root = tempfile::Builder::new()
+        .prefix("rc-agent-client-")
+        .tempdir_in("/tmp")
+        .unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    configuration(root.path(), listener.local_addr().unwrap().port());
+    let path = root.path().join("other-job.sock");
+    let stale = UnixListener::bind(&path).unwrap();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+        initialize(&mut socket).await;
+        let Message::Text(text) = socket.next().await.unwrap().unwrap() else {
+            panic!("No message request");
+        };
+        let request: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(request["method"], "agent/jobs/message");
+        assert_eq!(
+            request["params"]["caller"],
+            json!({"kind":"captured","contextId":"explicit-captured-origin"})
+        );
+        assert_eq!(request["params"]["deliveryId"], "stable-detached-message");
+        socket
+            .send(Message::Text(
+                json!({"id":1,"result":{"accepted":true}}).to_string(),
+            ))
+            .await
+            .unwrap();
+    });
+    let tmux = PrivateTmux::start(root.path());
+    assert!(
+        tmux.command()
+            .args(["set-environment", "-g", "RC_AGENT_JOB_SOCKET"])
+            .arg(&path)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let (exit, payload) = tmux
+        .run(
+            root.path(),
+            &[
+                "message",
+                "parent",
+                "Detached callback",
+                "--caller-context",
+                "explicit-captured-origin",
+                "--delivery-id",
+                "stable-detached-message",
+                "--json",
+            ],
+        )
+        .await;
+    assert_eq!(exit, 0);
+    assert_eq!(payload["accepted"], true);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), stale.accept())
+            .await
+            .is_err()
+    );
+    server.await.unwrap();
+}
