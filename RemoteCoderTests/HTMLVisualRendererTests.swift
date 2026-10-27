@@ -915,9 +915,11 @@ struct HTMLVisualRendererTests {
                 source.preparation.updateLayoutContext { $0.width = 320 }
                 let key = HTMLVisualLayoutKey(digest: reference.digest, width: 320, theme: theme)
                 source.preparation.updateNear([reference], documents: store)
-                try await wait { source.preparation.isPresentable(reference) && source.preparation.surface.instance == nil }
+                try await wait {
+                    source.preparation.isPresentable(reference) && source.preparation.surface.instance == nil
+                        && webViews(in: controller.view).isEmpty
+                }
                 #expect(fixture.renderer.height(for: key) == Double(height))
-                #expect(webViews(in: controller.view).isEmpty)
                 try await Task.sleep(for: .milliseconds(250))
                 #expect(webViews(in: controller.view).isEmpty)
 
@@ -1379,9 +1381,10 @@ struct HTMLVisualRendererTests {
             let replacement = try #require(instance.page)
             #expect(replacement !== oldPage)
             let pinEvents = fixture.pins[ObjectIdentifier(instance)]?.count
+            #expect(try await oldPage.callJavaScript("return typeof window.webkit?.messageHandlers?.rcVisual === 'undefined';",
+                contentWorld: .defaultClient) as? Bool == true)
             _ = try await oldPage.callJavaScript("""
                 document.getElementById('content').style.height='420px';
-                globalThis.rcVisualMeasure(true);
                 const range=document.createRange();range.selectNodeContents(document.getElementById('content'));
                 document.getSelection().removeAllRanges();document.getSelection().addRange(range);
                 return new Promise(resolve=>setTimeout(()=>resolve(true),100));
