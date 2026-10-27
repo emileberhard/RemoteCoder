@@ -274,6 +274,37 @@ class RemoteBuildTests(unittest.TestCase):
                 snapshot.assert_not_called()
                 transfer.assert_not_called()
 
+    def test_gateway_release_uses_the_local_source_and_cargo_cache_owner(self):
+        import fcntl
+
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary).resolve()
+            source = home / "source"
+            init_repository(source)
+            cargo = source / "host-daemon-rs/target"
+            cargo.mkdir(parents=True)
+            cache = home / "Library/Caches/RemoteCoder-Build"
+            commands = []
+
+            def compile(command, cwd, environment, output, leases):
+                commands.append(command)
+                self.assertEqual((cwd / environment["CARGO_TARGET_DIR"]).resolve(), cargo)
+                with module.source_lease_path(source).open("a") as competing:
+                    with self.assertRaises(BlockingIOError):
+                        fcntl.flock(competing, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return 0
+
+            with patch.dict(os.environ, {}, clear=True), patch.object(module, "ROOT", source), \
+                patch.object(module.Path, "home", return_value=home), \
+                patch.object(module, "load_policy", return_value=CachePolicy(
+                    512, 259200, 172800, 7200, 80 * 1024**3, 2, 0, True, 86400)), \
+                patch.object(module, "local_worktrees", return_value=[]), \
+                patch.object(module, "run_owned", side_effect=compile):
+                self.assertEqual(module.local_build("gateway-release", []), 0)
+            self.assertEqual(commands, [["just", "gateway-release-local"]])
+            receipt = json.loads(next((cache / "runs").glob("*/receipt.json")).read_text())
+            self.assertEqual(receipt["exitCode"], 0)
+
     def test_failed_seed_clean_is_recorded_and_worker_builds_unseeded(self):
         with tempfile.TemporaryDirectory() as temporary:
             home = Path(temporary).resolve()

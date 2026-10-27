@@ -110,6 +110,7 @@ SIMULATOR_KINDS = frozenset(
     ("ios-simulator-test", "ios-ui-test", "verify-all")
 )
 GATEWAY_ARTIFACT_KINDS = frozenset(("gateway", "gateway-release"))
+CARGO_KINDS = GATEWAY_ARTIFACT_KINDS | {"gateway-check", "gateway-test", "verify", "verify-all"}
 IOS_KINDS = frozenset(
     (
         "ios-install",
@@ -619,8 +620,7 @@ def worker(run: Path) -> dict:
             cargo = Path(environment["CARGO_TARGET_DIR"])
             cargo_key = (
                 cargo_seed_key(source, environment)
-                if manifest["kind"]
-                in {"gateway", "gateway-check", "gateway-test", "verify", "verify-all"}
+                if manifest["kind"] in CARGO_KINDS
                 else None
             )
             cargo_seed = seed_cargo(
@@ -816,7 +816,7 @@ def compiler_paths(kind: str, environment: dict[str, str]) -> list[Path]:
         paths.append(derived)
     if kind in {"core-test", "verify", "verify-all"}:
         paths.append(Path(environment["RC_SWIFT_BUILD_PATH"]))
-    if kind in {"gateway", "gateway-release", "gateway-check", "gateway-test", "verify", "verify-all"}:
+    if kind in CARGO_KINDS:
         paths.append(Path(environment["CARGO_TARGET_DIR"]))
     return [canonical_path(path) for path in paths]
 
@@ -866,6 +866,7 @@ def local_build(kind: str, arguments: list[str]) -> int:
         "gateway-check",
         "gateway-test",
         "gateway",
+        "gateway-release",
     }:
         raise ValueError(f"Unsupported local compiler lane: {kind}")
     root = canonical_path(Path.home() / "Library/Caches/RemoteCoder-Build")
