@@ -1,10 +1,9 @@
 use super::{
-    ActionParams, AgentRef, AgentViewSnapshot, ClassifyParams, ClaudeHistorySnapshot,
-    InventoryCoverage, LauncherInventory, LauncherPurpose, ListParams, NativeCoverage,
-    NativeExecution, NativeExecutionSnapshot, NativeInventory, ParentSnapshot, decode,
-    native_parent,
+    ActionParams, AgentRef, AgentViewSnapshot, ClassifyParams, ClaudeHistorySnapshot, ListParams,
+    NativeCoverage, NativeExecution, NativeExecutionSnapshot, NativeInventory, ParentSnapshot,
+    decode, native_parent,
 };
-use crate::agents::{Agent, Capabilities, Output, State, claude, launcher};
+use crate::agents::{Agent, Capabilities, Output, State, claude};
 use crate::gateway::Gateway;
 use crate::gateway::agent_gateway::stop::CodexStop;
 use crate::rpc::error::RpcCode;
@@ -14,15 +13,14 @@ use futures_util::{FutureExt, StreamExt};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 pub(in crate::gateway) struct AgentService<'a> {
     gateway: &'a Gateway,
 }
 
-pub(super) mod classification;
-pub(super) mod inventory;
+mod runtime;
+pub(in crate::gateway) use runtime::ThreadRelation;
 
 pub(in crate::gateway) struct AgentOwners {
     pub(in crate::gateway) owners: HashMap<String, String>,
@@ -47,17 +45,6 @@ impl Gateway {
 }
 
 impl AgentService<'_> {
-    async fn launcher_agents(&self, selection: Value) -> Result<Arc<LauncherInventory>> {
-        let mut homes = self.gateway.agent_homes()?;
-        homes.sort();
-        homes.dedup();
-        self.gateway
-            .agents
-            .launcher
-            .inventory(self, selection, homes)
-            .await
-    }
-
     pub(in crate::gateway) async fn agents_rpc(&self, method: &str, params: Value) -> RpcResult {
         let result = match method {
             "conversation/agents/classify" => self.classify_agents(decode(params)?).await,
@@ -95,11 +82,7 @@ impl AgentService<'_> {
             ids.len() <= 200,
             "At most 200 conversations per classification"
         );
-        self.gateway
-            .agents
-            .classifications
-            .classify(self, ids)
-            .await
+        self.classify_runtime(ids).await
     }
 
     pub(in crate::gateway) async fn native_codex_agents_with_freshness(
@@ -429,7 +412,6 @@ impl AgentService<'_> {
             "conversation/agents/list",
             "nativeInventory",
         );
-        let homes = self.gateway.agent_homes()?;
         let (mut native, mut warnings) = match self.native_agents(root, deadline).await {
             Ok(inventory) => (inventory.agents, inventory.coverage.warnings()),
             Err(error) => (
@@ -446,28 +428,15 @@ impl AgentService<'_> {
                 warnings.push("Agent discovery incomplete: inventory deadline exceeded".into());
                 break;
             }
-            let ancestors: Vec<&str> = std::iter::once(root)
-                .chain(native.iter().filter_map(|node| node.thread_id.as_deref()))
-                .take(512)
-                .collect();
-            let inventory = match tokio::time::timeout_at(
-                deadline,
-                self.launcher_agents(json!({"ancestorThreadIds":ancestors})),
-            )
-            .await
-            {
-                Ok(Ok(result)) => result,
-                Ok(Err(error)) => {
-                    warnings.push(format!("External agents unavailable: {error}"));
-                    break;
-                }
-                Err(_) => {
-                    warnings.push("Agent discovery incomplete: inventory deadline exceeded".into());
+            let (projected, runtime_warnings) = match self.runtime_agents(root, &native).await {
+                Ok(result) => result,
+                Err(error) => {
+                    warnings.push(format!("Runtime agents unavailable: {error:#}"));
                     break;
                 }
             };
-            warnings.extend(inventory.warnings.iter().cloned());
-            external = launcher::project(&inventory.runs, root, &homes, &native);
+            external = projected;
+            warnings.extend(runtime_warnings);
             let mut expanded = false;
             let external_count = external.len();
             for agent in &mut external {
@@ -478,18 +447,6 @@ impl AgentService<'_> {
                 let Some(thread) = &agent.thread_id else {
                     continue;
                 };
-                if !inventory.runs.iter().any(|run| {
-                    run.thread_id == *thread
-                        && run.run_id == agent.execution_id.as_deref().unwrap_or("")
-                        && run
-                            .provider_home
-                            .as_ref()
-                            .is_some_and(|home| homes.contains(home))
-                }) {
-                    warnings
-                        .push("Agent provider home is outside this host's default homes".into());
-                    continue;
-                }
                 if inspected.len() >= 16 {
                     warnings.push("Additional agent subtrees are outside this view's limit".into());
                     break;
@@ -612,14 +569,8 @@ impl AgentService<'_> {
 
     async fn read_agent(&self, target: &AgentRef) -> Result<Value> {
         let node = self.resolve_agent(target).await?;
-        if node.source == "launcher" {
-            return self
-                .gateway
-                .call_agent_launcher(
-                    LauncherPurpose::Inventory,
-                    json!({"operation":"read","homes":self.gateway.agent_homes()?,"runId":node.execution_id}),
-                )
-                .await;
+        if node.source == "runtime" {
+            return self.read_runtime_agent(&node).await;
         }
         if node.provider == "claude" {
             let (projection, _) = self.native_claude_agents(&node.owner_thread_id).await?;
@@ -702,36 +653,8 @@ impl AgentService<'_> {
             params.execution_id == node.execution_id,
             "Agent execution changed; refresh before acting"
         );
-        if node.source == "launcher" {
-            let homes = self.gateway.agent_homes()?;
-            let inventory = self
-                .gateway
-                .agent_service()
-                .launcher_agents(json!({"threadIds":[node.thread_id]}))
-                .await?;
-            ensure!(
-                inventory.runs.iter().any(|run| Some(run.run_id.as_str())
-                    == node.execution_id.as_deref()
-                    && run
-                        .provider_home
-                        .as_ref()
-                        .is_some_and(|home| homes.contains(home))),
-                "Agent does not belong to a host-default provider home"
-            );
-            let _target_admission = self
-                .gateway
-                .admit_launcher_action_target(action, node.thread_id.as_deref())?;
-            let result = self
-                .gateway
-                .call_agent_launcher(LauncherPurpose::Mutation, json!({"operation":action,"homes":self.gateway.agent_homes()?,"runId":node.execution_id,"text":params.text,"mutationId":params.mutation_id}))
-                .await;
-            self.gateway.agents.launcher.invalidate();
-            let result = result?;
-            ensure!(
-                result["delivery"] != "unknown",
-                "Action outcome is unknown; inspect executions before retrying"
-            );
-            return Ok(result);
+        if node.source == "runtime" {
+            return self.act_on_runtime_agent(&node, params).await;
         }
         if action == "stop" && node.provider == "claude" && node.capabilities.stop {
             let execution = node
@@ -787,9 +710,6 @@ impl AgentService<'_> {
         &self,
         threads: &[String],
     ) -> HashMap<String, String> {
-        let Ok(homes) = self.gateway.agent_homes() else {
-            return HashMap::new();
-        };
         let mut parents = self.gateway.agents.parents.lock().await.clone();
         let mut pending: Vec<String> = threads.iter().take(128).cloned().collect();
         for _ in 0..8 {
@@ -812,79 +732,18 @@ impl AgentService<'_> {
                 .cloned()
                 .collect();
             if !missing.is_empty() {
-                let inventory = self.launcher_agents(json!({"threadIds":missing})).await;
-                let plans: Vec<_> = missing
-                    .into_iter()
+                let reads = futures_util::stream::iter(missing)
                     .map(|thread| {
-                        let external = inventory.as_ref().ok().and_then(|inventory| {
-                            inventory
-                                .runs
-                                .iter()
-                                .rev()
-                                .find(|run| {
-                                    run.relationship_known
-                                        && run.thread_id == thread
-                                        && run.resumed_from_run.is_none()
-                                        && run
-                                            .provider_home
-                                            .as_ref()
-                                            .is_some_and(|home| homes.contains(home))
-                                        && run
-                                            .parent_home
-                                            .as_ref()
-                                            .is_some_and(|home| homes.contains(home))
-                                })
-                                .and_then(|run| run.parent_thread_id.clone())
-                        });
-                        let known = inventory.as_ref().is_ok_and(|inventory| {
-                            inventory.coverage == InventoryCoverage::Complete
-                                && !inventory.runs.iter().any(|run| {
-                                    run.thread_id.contains("unknown:")
-                                        || run.thread_id == thread && !run.relationship_known
-                                })
-                        });
-                        (thread, external, known)
-                    })
-                    .collect();
-                let gateway = self.gateway;
-                let reads = futures_util::stream::iter(plans)
-                    .map(|(thread, external, known)| {
                         async move {
-                            let parent: Result<Option<String>> = if external.is_some() {
-                                Ok(external)
-                            } else if thread.starts_with("claude_") {
-                                if known {
-                                    Ok(None)
-                                } else {
-                                    Err(anyhow::anyhow!("Launcher ancestry unavailable"))
-                                }
-                            } else {
-                                match tokio::time::timeout(
-                                    Duration::from_millis(500),
-                                    gateway.call_control(
-                                        "thread/read",
-                                        json!({"threadId":thread,"includeTurns":false}),
-                                    ),
-                                )
+                            let parent = self
+                                .parent_for_thread(&thread)
                                 .await
-                                {
-                                    Ok(Ok(value)) => {
-                                        let parent =
-                                            native_parent(&value["thread"]).map(str::to_owned);
-                                        if parent.is_some() || known {
-                                            Ok(parent)
-                                        } else {
-                                            Err(anyhow::anyhow!("Launcher ancestry unavailable"))
-                                        }
-                                    }
-                                    _ => Err(anyhow::anyhow!("Native ancestry unavailable")),
-                                }
-                            };
+                                .map(|parent| parent.map(|parent| parent.thread_id));
                             (thread, parent)
                         }
                         .boxed()
                     })
-                    .buffer_unordered(4)
+                    .buffer_unordered(32)
                     .collect::<Vec<_>>()
                     .await;
                 for (thread, parent) in reads {

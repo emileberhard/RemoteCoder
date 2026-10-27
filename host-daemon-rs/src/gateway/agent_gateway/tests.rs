@@ -7,32 +7,6 @@ use crate::providers::codex::daemon::CodexAppServer;
 use std::collections::HashSet;
 use tokio::sync::mpsc;
 
-fn install_launcher_fixture(gateway: &Gateway, directory: &std::path::Path, responses: Value) {
-    use std::os::unix::fs::PermissionsExt;
-    let program = directory.join("agent-work-fixture");
-    std::fs::write(program.with_extension("json"), responses.to_string()).unwrap();
-    std::fs::write(
-        &program,
-        r#"#!/usr/bin/python3
-import json,pathlib,sys
-request=json.load(sys.stdin)
-assert request['schemaVersion']==2
-responses=json.loads(pathlib.Path(__file__).with_suffix('.json').read_text())
-if request['operation']=='status':
-    response=responses['status']
-else:
-    assert request['operation']=='classify'
-    assert len(request['threadIds'])==1 and len(request['homes'])==1
-    response=responses[request['threadIds'][0]]
-    assert response['coverage']['subjects'][0]['providerHome']==request['homes'][0]
-print(json.dumps(response))
-"#,
-    )
-    .unwrap();
-    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
-    gateway.use_agent_launcher(program);
-}
-
 async fn respond_control(
     gateway: &Arc<Gateway>,
     count: usize,
@@ -348,151 +322,6 @@ async fn stopping_an_agent_card_also_stops_that_agents_descendants() {
     );
 }
 
-#[tokio::test]
-async fn preflight_updates_state_but_journals_only_transitions() {
-    let claude_test = crate::providers::claude::settings::ClaudeSettings::isolated_for_test();
-    let directory = tempfile::tempdir().unwrap();
-    let gateway = crate::test_support::TestGateway::with_journal(
-        Arc::new(CodexAppServer::new(
-            PathBuf::from("/bin/true"),
-            HashMap::new(),
-        )),
-        claude_test.settings.clone(),
-        Arc::new(claude_test),
-        Journal::open_in(directory.path().to_path_buf(), 1),
-    );
-    for (status, time) in [("available", 1), ("available", 2), ("unavailable", 3)] {
-        gateway
-            .record_notification_ancestry_preflight(json!({"status":status,
-            "reasonCodes":if status == "available" { vec![] } else { vec!["indexBuilding"] },
-            "checkedAtUnixSeconds":time}))
-            .await;
-        let index = gateway
-            .agents
-            .notification_health
-            .lock()
-            .await
-            .index
-            .clone();
-        assert_eq!(index.unwrap()["checkedAtUnixSeconds"], time);
-    }
-    tokio::time::timeout(Duration::from_secs(30), async {
-        loop {
-            let records: Vec<Value> = std::fs::read_dir(directory.path())
-                .unwrap()
-                .flatten()
-                .filter_map(|entry| std::fs::read_to_string(entry.path()).ok())
-                .flat_map(|text| {
-                    text.lines()
-                        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-                        .collect::<Vec<_>>()
-                })
-                .filter(|record| record["event"] == "ancestryPreflight")
-                .collect();
-            if records
-                .last()
-                .is_some_and(|record| record["status"] == "unavailable")
-            {
-                assert_eq!(records.len(), 2);
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .unwrap();
-}
-
-#[tokio::test]
-async fn minted_claude_thread_is_a_root_while_a_launch_in_its_home_is_unresolved() {
-    let claude_test = crate::providers::claude::settings::ClaudeSettings::isolated_for_test();
-    let directory = tempfile::tempdir().unwrap();
-    let gateway = gateway();
-    let (notifications, _receiver) = mpsc::channel(1);
-    let agent = ClaudeSupervisor::new(
-        claude_test.settings.clone(),
-        notifications,
-        Journal::disabled(),
-        crate::agents::mcp::McpTokens::default(),
-    );
-    let minted = crate::providers::claude::claude_thread_id(&agent.mint_session().await.unwrap());
-    let resumed = crate::providers::claude::claude_thread_id(&crate::ids::new_session_uuid());
-    gateway.set_claude_agent(agent);
-    let home = gateway.agent_home_for_thread(&minted).unwrap();
-    let pending = |thread: &str| {
-        json!({"schemaVersion":2,"coverage":{"status":"incomplete","reasonCodes":["identityPending"],
-        "subjects":[{"providerHome":home,"threadId":thread,"status":"incomplete",
-        "reasonCodes":["identityPending"],"relation":{"kind":"unknown"}}]}})
-    };
-    let mut responses = serde_json::Map::new();
-    responses.insert(minted.clone(), pending(&minted));
-    responses.insert(resumed.clone(), pending(&resumed));
-    install_launcher_fixture(&gateway, directory.path(), Value::Object(responses));
-
-    assert!(!gateway.is_agent_thread(&minted).await.unwrap());
-    let error = gateway.is_agent_thread(&resumed).await.unwrap_err();
-    assert_eq!(coverage_failure_codes(&error), ["identityPending"]);
-}
-
-#[tokio::test]
-async fn launcher_preflight_is_visible_bounded_telemetry_and_has_an_owned_task() {
-    let directory = tempfile::tempdir().unwrap();
-    let gateway = gateway();
-    install_launcher_fixture(
-        &gateway,
-        directory.path(),
-        json!({"status":{
-            "schemaVersion":2,"supportedVersions":[1,2],"supportedOperations":["status","classify","reindex"],
-            "coverage":{"status":"unavailable","reasonCodes":["indexBuilding"]}
-        }}),
-    );
-    assert!(
-        gateway
-            .agents
-            .notification_health
-            .lock()
-            .await
-            .index
-            .is_none()
-    );
-    gateway.start_notification_ancestry_preflight().await;
-    tokio::time::timeout(Duration::from_secs(30), async {
-        loop {
-            let index = gateway
-                .agents
-                .notification_health
-                .lock()
-                .await
-                .index
-                .clone();
-            if index.is_some_and(|index| index["status"] == "unavailable") {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .unwrap();
-    let index = gateway
-        .agents
-        .notification_health
-        .lock()
-        .await
-        .index
-        .clone();
-    assert_eq!(index.unwrap()["reasonCodes"], json!(["indexBuilding"]));
-    assert!(!gateway.is_draining());
-    gateway.stop_notification_ancestry_preflight().await;
-    assert!(
-        gateway
-            .agents
-            .notification_preflight_task
-            .lock()
-            .await
-            .is_none()
-    );
-}
-
 #[test]
 fn native_non_child_proof_requires_a_valid_exact_thread_header() {
     for source in [
@@ -567,47 +396,8 @@ fn native_agent(state: State) -> Agent {
     }
 }
 
-#[test]
-fn launcher_action_admits_its_actual_target_thread() {
-    let gateway = gateway();
-    let _compaction = gateway.admission.admit_compaction("child").unwrap();
-    for action in ["message", "continue"] {
-        assert!(
-            gateway
-                .admit_launcher_action_target(action, Some("child"))
-                .is_err()
-        );
-        assert!(
-            gateway
-                .admit_launcher_action_target(action, Some("unrelated"))
-                .is_ok()
-        );
-        assert!(gateway.admit_launcher_action_target(action, None).is_err());
-    }
-    assert!(
-        gateway
-            .admit_launcher_action_target("stop", Some("child"))
-            .is_ok()
-    );
-}
-
 fn gateway() -> crate::test_support::TestGateway {
     crate::test_support::TestGateway::new()
-}
-
-#[test]
-fn discovery_round_two_stale_launcher_projection_is_incomplete() {
-    assert_eq!(
-        InventoryCoverage::read(
-            false,
-            &["Launcher list coverage incomplete: indexStale".into()]
-        ),
-        InventoryCoverage::Incomplete
-    );
-    assert_eq!(
-        InventoryCoverage::read(false, &[]),
-        InventoryCoverage::Complete
-    );
 }
 
 #[tokio::test]
@@ -668,6 +458,69 @@ async fn native_inventory_uses_ancestry_and_exact_execution_state() {
     assert!(!agents[0].capabilities.message);
 }
 
+fn seed_origin(
+    root: &std::path::Path,
+    conversation: crate::agents::jobs::model::ConversationIdentity,
+    origin: crate::agents::jobs::model::Origin,
+    index: usize,
+) {
+    use crate::agents::jobs::model::*;
+    use crate::storage::private_state;
+    let job_id = JobId::for_mutation(conversation.provider, &format!("fixture-{index}")).unwrap();
+    let agent_id = job_id.as_str().to_owned();
+    let job = JobRecord {
+        job_id: job_id.clone(),
+        agent_id: agent_id.clone(),
+        request_fingerprint: None,
+        created_at_ms: 1,
+        updated_at_ms: 1,
+        revision: 0,
+        previous_job_id: None,
+        source: JobSource::Imported,
+        admission_origin: Some(origin.clone()),
+        spec: SpecEvidence::Unknown {
+            reason: "No execution fixture".into(),
+        },
+        recipient: Recipient::None,
+        execution: ExecutionState::Terminal {
+            terminal: Terminal {
+                at_ms: 1,
+                outcome: JobOutcome::Completed,
+                result: ResultEvidence::Unavailable {
+                    reason: "No fixture output".into(),
+                },
+                completion: Completion::NotRequired,
+                execution: None,
+            },
+        },
+        stop: StopState::NotRequested,
+    };
+    let agent = AgentRecord {
+        agent_id: agent_id.clone(),
+        conversation: ConversationBinding::Known { conversation },
+        origin,
+        tool_scope: ToolScope::Full,
+        origin_job_id: job_id.clone(),
+        latest_job_id: job_id.clone(),
+    };
+    for directory in [root.to_owned(), root.join("jobs"), root.join("agents")] {
+        private_state::ensure_private_directory(&directory).unwrap();
+    }
+    private_state::replace(
+        &root.join("jobs").join(format!("{}.json", job_id.as_str())),
+        &serde_json::to_vec(&job).unwrap(),
+    )
+    .unwrap();
+    private_state::replace(
+        &root.join("agents").join(format!(
+            "{}.json",
+            crate::agents::jobs::store::fingerprint(agent_id.as_bytes())
+        )),
+        &serde_json::to_vec(&agent).unwrap(),
+    )
+    .unwrap();
+}
+
 #[tokio::test]
 async fn user_alert_gate_preserves_roots_and_silences_all_child_events() {
     let claude_test = crate::providers::claude::settings::ClaudeSettings::isolated_for_test();
@@ -696,16 +549,16 @@ async fn user_alert_gate_preserves_roots_and_silences_all_child_events() {
         )
         .await,
     );
+    let home = directory.path().join("codex-home");
+    std::fs::create_dir_all(&home).unwrap();
+    let state_path = directory.path().join("state/turn-state.json");
     let gateway = Gateway::construct_with_apns(
         GatewayConstruction {
             user_name: None,
-            codex: Arc::new(CodexAppServer::new(
-                PathBuf::from("/bin/true"),
-                HashMap::new(),
-            )),
+            codex: Arc::new(CodexAppServer::new_for_test_socket(home)),
             claude_settings: claude_test.settings.clone(),
             journal,
-            turn_state_path: None,
+            turn_state_path: Some(state_path.clone()),
             recovery_path: None,
             call_delivery: None,
 
@@ -714,40 +567,56 @@ async fn user_alert_gate_preserves_roots_and_silences_all_child_events() {
         },
         notifier,
     );
-    // Exercise the real subprocess wire against an isolated fixture; never
-    // call an installed launcher or alter shared process environment.
     let cases = [
-        ("native-child", false, false),
-        ("codex-child", true, false),
-        ("claude_child", true, false),
-        ("codex-root", false, true),
-        ("claude_root", false, true),
-        ("same-id-other-home", true, true),
-        ("unknown-coverage", false, false),
-        ("wrong-native-identity", false, false),
-        ("missing-native-identity", false, false),
-        ("missing-native-source", false, false),
-        ("native-review-child", false, false),
+        ("native-child", None, false),
+        ("codex-child", Some(true), false),
+        (
+            "claude_11111111-2222-4333-8444-555555555555",
+            Some(true),
+            false,
+        ),
+        ("codex-root", Some(false), true),
+        (
+            "claude_aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+            Some(false),
+            true,
+        ),
+        ("same-id-other-home", Some(true), true),
+        ("unknown-coverage", None, false),
+        ("wrong-native-identity", None, false),
+        ("missing-native-identity", None, false),
+        ("missing-native-source", None, false),
+        ("native-review-child", None, false),
     ];
-    let mut responses = serde_json::Map::new();
-    for (thread, launcher_child, _) in cases {
-        let home = gateway.agent_home_for_thread(thread).unwrap();
-        let mut subject = json!({"providerHome":home,"threadId":thread,"status":"complete","reasonCodes":[],
-            "relation":{"kind":if launcher_child && thread != "same-id-other-home" {"child"} else {"root"},
-                "parentHome":null,"parentThreadId":null}});
-        if thread == "unknown-coverage" {
-            subject["status"] = json!("incomplete");
-            subject["reasonCodes"] = json!(["unscopedLaunchAttempt"]);
-            subject["relation"]["kind"] = json!("unknown");
+    let job_root = state_path.parent().unwrap().join("agent-jobs/v1");
+    for (index, (thread, child, _)) in cases.iter().enumerate() {
+        if let Some(child) = child {
+            let mut identity = gateway.agent_conversation(thread).unwrap();
+            if *thread == "same-id-other-home" {
+                identity.provider_home = crate::agents::jobs::model::ProviderHome::Known {
+                    path: directory.path().join("other-provider-home"),
+                };
+            }
+            let origin = if *child {
+                crate::agents::jobs::model::Origin::Parent {
+                    conversation: gateway.agent_conversation("parent").unwrap(),
+                }
+            } else {
+                crate::agents::jobs::model::Origin::TopLevel
+            };
+            seed_origin(&job_root, identity, origin, index);
+        } else if *thread == "unknown-coverage" {
+            seed_origin(
+                &job_root,
+                gateway.agent_conversation(thread).unwrap(),
+                crate::agents::jobs::model::Origin::Unknown {
+                    reason: "Historical origin is unresolved".into(),
+                },
+                index,
+            );
         }
-        responses.insert(thread.into(), json!({"schemaVersion":2,
-            // Unrelated incomplete/malformed records cannot poison proof.
-            "data":[{"threadId":"unknown:unrelated"}],"warnings":["Unrelated legacy warning"],
-            "coverage":{"status":"incomplete","reasonCodes":["lineageUnknown"],"subjects":[subject,
-                {"providerHome":"/another-provider-home","threadId":thread,"status":"complete","reasonCodes":[],"relation":{"kind":"child"}},
-                {"providerHome":home,"threadId":"unrelated","status":"futureStatus","reasonCodes":["futureReason"]}]}}));
     }
-    install_launcher_fixture(&gateway, directory.path(), Value::Object(responses));
+    gateway.jobs.initialize().await.unwrap();
     let mut control_rx = crate::test_support::FakeControl::attach(&gateway, 32)
         .await
         .requests;
