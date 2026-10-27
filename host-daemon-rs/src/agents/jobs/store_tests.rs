@@ -23,6 +23,7 @@ fn job(sequence: u8) -> JobRecord {
                     model_provider: "openai".into(),
                     effort: "xhigh".into(),
                     service_tier: None,
+                    cyber_access_program: None,
                 },
                 tool_scope: ToolScope::Full,
                 title: None,

@@ -136,12 +136,20 @@ pub(crate) enum ExecutionSettings {
         effort: String,
         #[serde(rename = "serviceTier")]
         service_tier: Option<String>,
+        #[serde(rename = "cyberAccessProgram")]
+        cyber_access_program: Option<CyberAccessProgram>,
     },
     Claude {
         model: String,
         effort: Option<String>,
         fast: bool,
     },
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum CyberAccessProgram {
+    DaybreakBlue,
 }
 
 impl ExecutionSettings {
