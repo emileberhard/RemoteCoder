@@ -15,7 +15,16 @@ actor ConversationMetadataService {
     private var savedRevision: UInt64 = 0
     private var writing: (id: UUID, task: Task<Void, Error>)?
     private var syncTask: Task<Void, Never>?
-    private var syncRequested = false
+    private enum RefreshDemand: Equatable {
+        case context(ConversationMetadataRefreshContext)
+        case explicit
+    }
+    private var refreshRequested: RefreshDemand?
+    private var refreshing: RefreshDemand?
+    private var satisfiedContext: ConversationMetadataRefreshContext?
+    private var flushRequested = false
+    private var knownRevision: String?
+    private var refreshError: String?
     private var isRetired = false
     private var settingsObservationRevision: UInt64 = 0
     private(set) var status = SessionMetadataStatus()
@@ -45,18 +54,39 @@ actor ConversationMetadataService {
     }
 
     func bootstrap() async {
-        do { try await load(); syncInBackground() } catch { failed(error) }
+        do {
+            try await load()
+            if !document.pending.isEmpty { requestFlush() }
+        } catch { failed(error) }
     }
 
-    func syncInBackground() {
+    func refreshInBackground(context: ConversationMetadataRefreshContext) {
+        guard !isRetired, satisfiedContext != context,
+              refreshing != .context(context), refreshRequested != .context(context) else { return }
+        refreshRequested = .context(context)
+        startSyncIfNeeded()
+    }
+
+    private func requestFlush() {
         guard !isRetired else { return }
-        syncRequested = true
+        flushRequested = true
+        startSyncIfNeeded()
+    }
+
+    private func startSyncIfNeeded() {
         guard syncTask == nil else { return }
         syncTask = Task { await performSync() }
     }
 
     func sync() async {
-        syncInBackground()
+        guard !isRetired else { return }
+        refreshRequested = .explicit
+        startSyncIfNeeded()
+        await syncTask?.value
+    }
+
+    func flushPendingChanges() async {
+        requestFlush()
         await syncTask?.value
     }
 
@@ -113,7 +143,7 @@ actor ConversationMetadataService {
             guard !selection.modelID.isEmpty, !selection.reasoningSelectionID.isEmpty else { return }
             if document.pending[sessionID]?.mutation.selection == selection {
                 try await persist()
-                syncInBackground()
+                requestFlush()
                 return
             }
             if document.pending[sessionID] == nil, document.observed?[sessionID] == nil,
@@ -124,7 +154,7 @@ actor ConversationMetadataService {
             status.conflicts.remove(sessionID)
             revision += 1
             try await persist()
-            syncInBackground()
+            requestFlush()
         } catch { failed(error) }
     }
 
@@ -142,7 +172,7 @@ actor ConversationMetadataService {
         status.conflicts.remove(sessionID)
         revision += 1
         publishStatus()
-        do { try await persist(); syncInBackground() } catch { failed(error) }
+        do { try await persist(); requestFlush() } catch { failed(error) }
     }
 
     func retire() async {
@@ -206,58 +236,37 @@ actor ConversationMetadataService {
     }
 
     private func performSync() async {
-        defer { syncTask = nil }
-        while syncRequested, !isRetired, !Task.isCancelled {
-            syncRequested = false
+        defer { syncTask = nil; refreshing = nil }
+        while (refreshRequested != nil || flushRequested), !isRetired, !Task.isCancelled {
+            let refresh = refreshRequested
+            let flush = flushRequested
+            refreshRequested = nil
+            refreshing = refresh
+            flushRequested = false
             do {
                 try await load()
-                let observedSettings = settingsObservationRevision
-                let received = try await remote.fetchRemoteMetadata()
                 try Task.checkCancellation()
                 guard !isRetired else { return }
-                let previous = document
-                if let legacy = document.legacy {
-                    for (id, entry) in legacy where document.pending[id] == nil
-                        && document.invalidated?.contains(id) != true && document.observed?[id] == nil
-                        && received[id]?.selection != entry.selection {
-                        document.pending[id] = SessionMetadataPending(mutation: ConversationMetadataMutation(selection: entry.selection,
-                            expectedRevision: entry.serverRevision ?? 0, mutationID: UUID().uuidString), createdAt: entry.updatedAt)
-                    }
-                    document.legacy = nil
+                if let refresh {
+                    try await refreshSnapshot()
+                    refreshError = nil
+                    if case .context(let context) = refresh { satisfiedContext = context }
                 }
-                document.acknowledged = received
-                if observedSettings == settingsObservationRevision {
-                    document.invalidated = nil
-                    if var observations = document.observed {
-                        for (id, var observed) in observations {
-                            guard let current = received[id] else { continue }
-                            if let baseline = observed.acknowledgedRevision, let revision = current.serverRevision,
-                               revision > baseline {
-                                observations[id] = nil
-                            } else if current.modelID == observed.metadata.modelID
-                                && current.reasoningSelectionID == observed.metadata.reasoningSelectionID
-                                && current.fastModeEnabled == observed.metadata.fastModeEnabled {
-                                observations[id] = nil
-                            } else if observed.acknowledgedRevision == nil, let revision = current.serverRevision {
-                                observed.acknowledgedRevision = revision
-                                observations[id] = observed
-                            }
-                        }
-                        document.observed = observations
-                    }
-                }
-                if document != previous { revision += 1 }
+                refreshing = nil
                 try await persist()
                 // Snapshot identifiers, not values. A newer local edit can arrive
                 // at any await and must not be acknowledged by an older response.
                 for id in document.pending.keys.sorted() {
                     try Task.checkCancellation()
                     guard !isRetired else { return }
+                    try await persist()
                     guard let pending = document.pending[id], !status.conflicts.contains(id) else { continue }
                     do {
                         let observed = document.observed?[id]
                         let applied = try await remote.updateRemoteMetadata(pending.mutation)
+                        try Task.checkCancellation()
                         guard !isRetired else { return }
+                        if document.acknowledged[id] != applied { knownRevision = nil }
                         document.acknowledged[id] = applied
                         if document.observed?[id] == observed { document.observed?[id] = nil }
                         if document.pending[id]?.mutation.mutationID == pending.mutation.mutationID {
@@ -265,13 +274,13 @@ actor ConversationMetadataService {
                         } else if document.pending[id]?.mutation.expectedRevision == pending.mutation.expectedRevision {
                             // Rebase only over this owner's successful predecessor.
                             document.pending[id]?.mutation.expectedRevision = applied.serverRevision ?? 0
-                            syncRequested = true
+                            flushRequested = true
                         }
                         revision += 1
                         try await persist()
                     } catch let conflict as GatewayRPCFailure where conflict.kind == .metadataConflict {
-                        if let current = conflict.currentMetadata { document.acknowledged[id] = current }
-                        else { document.acknowledged[id] = nil }
+                        if document.acknowledged[id] != conflict.currentMetadata { knownRevision = nil }
+                        document.acknowledged[id] = conflict.currentMetadata
                         if document.pending[id]?.mutation.selection == conflict.currentMetadata?.selection {
                             document.pending[id] = nil
                         } else { status.conflicts.insert(id) }
@@ -279,10 +288,70 @@ actor ConversationMetadataService {
                         try await persist()
                     }
                 }
-                status.error = nil
+                status.error = refreshError
                 publishStatus()
             } catch is CancellationError { return }
-            catch { failed(error); return }
+            catch {
+                let failedRefresh = refreshing != nil
+                refreshing = nil
+                failed(error)
+                if failedRefresh {
+                    refreshError = status.error
+                    flushRequested = flushRequested || flush
+                }
+            }
         }
+    }
+
+    private func refreshSnapshot() async throws {
+        let observedSettings = settingsObservationRevision
+        let requestedRevision = knownRevision
+        let snapshot = try await remote.fetchRemoteMetadata(knownRevision: requestedRevision)
+        try Task.checkCancellation()
+        guard !isRetired else { return }
+        let received: [String: ConversationMetadata]
+        switch snapshot {
+        case .full(let entries, let revision):
+            received = entries
+            knownRevision = revision
+        case .unchanged(let revision):
+            guard let requestedRevision, revision == requestedRevision, knownRevision == requestedRevision else {
+                throw GatewayClient.ClientError.invalidMessage
+            }
+            received = document.acknowledged
+        }
+        let previous = document
+        if let legacy = document.legacy {
+            for (id, entry) in legacy where document.pending[id] == nil
+                && document.invalidated?.contains(id) != true && document.observed?[id] == nil
+                && received[id]?.selection != entry.selection {
+                document.pending[id] = SessionMetadataPending(mutation: ConversationMetadataMutation(selection: entry.selection,
+                    expectedRevision: entry.serverRevision ?? 0, mutationID: UUID().uuidString), createdAt: entry.updatedAt)
+            }
+            document.legacy = nil
+        }
+        document.acknowledged = received
+        if observedSettings == settingsObservationRevision {
+            document.invalidated = nil
+            if var observations = document.observed {
+                for (id, var observed) in observations {
+                    guard let current = received[id] else { continue }
+                    if let baseline = observed.acknowledgedRevision, let revision = current.serverRevision,
+                       revision > baseline {
+                        observations[id] = nil
+                    } else if current.modelID == observed.metadata.modelID
+                        && current.reasoningSelectionID == observed.metadata.reasoningSelectionID
+                        && current.fastModeEnabled == observed.metadata.fastModeEnabled {
+                        observations[id] = nil
+                    } else if observed.acknowledgedRevision == nil, let revision = current.serverRevision {
+                        observed.acknowledgedRevision = revision
+                        observations[id] = observed
+                    }
+                }
+                document.observed = observations
+            }
+        }
+        if document != previous { revision += 1 }
+        try await persist()
     }
 }

@@ -1,16 +1,12 @@
 import Foundation
 
 extension GatewayClient: ConversationMetadataRemote {
-    func fetchRemoteMetadata() async throws -> [String: ConversationMetadata] {
-        struct Response: Decodable, Sendable { let entries: [ConversationMetadataRecord] }
-        let data = try await callRaw(method: "conversation/metadata/read", params: encodeToJSONValue(GatewayRequestParams.Empty()), timeout: timeouts.request)
-        let entries = try await GatewayFrameDecoder.decodeResult(Response.self, from: data, dateDecodingStrategy: .deferredToDate).entries
-        var result: [String: ConversationMetadata] = [:]
-        for entry in entries {
-            guard (entry.serverRevision ?? 0) > 0, result[entry.sessionID] == nil else { throw ClientError.invalidMessage }
-            result[entry.sessionID] = ConversationMetadata(entry)
-        }
-        return result
+    func fetchRemoteMetadata(knownRevision: String?) async throws -> ConversationMetadataSnapshot {
+        struct Request: Encodable { let knownRevision: String? }
+        let data = try await callRaw(method: "conversation/metadata/read",
+            params: encodeToJSONValue(Request(knownRevision: knownRevision)), timeout: timeouts.request)
+        return try await GatewayFrameDecoder.decodeResult(ConversationMetadataSnapshot.self, from: data,
+            dateDecodingStrategy: .deferredToDate)
     }
 
     func updateRemoteMetadata(_ mutation: ConversationMetadataMutation) async throws -> ConversationMetadata {

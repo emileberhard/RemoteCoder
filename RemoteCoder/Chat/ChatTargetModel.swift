@@ -72,7 +72,6 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
     @ObservationIgnored private(set) var pendingTerminationOperation: String?
     @ObservationIgnored private var retirementTask: Task<Void, Never>?
     @ObservationIgnored private let preparation = TargetPreparation()
-    @ObservationIgnored private var metadataConnectionID: UUID?
     @ObservationIgnored private var routeMoveLoop: Task<Void, Never>?
     @ObservationIgnored private var routeMoveRunning = false
     @ObservationIgnored private var routeMoveRequested = false
@@ -531,6 +530,8 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
         let metadataStarted = ContinuousClock.now
         await metadataService.bootstrap()
         guard acceptsWork else { return }
+        await refreshMetadataForCurrentConnection()
+        guard acceptsWork else { return }
         let metadataMs = metadataStarted.duration(to: .now) / .milliseconds(1)
         let historyStarted = ContinuousClock.now
         await conversationList.bootstrap()
@@ -617,7 +618,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
         // Discover active turns before the transcript refreshes below depend on them.
         await fetchActiveTurnsOnce()
         guard isLive() else { return }
-        await metadataService.syncInBackground()
+        await refreshMetadataForCurrentConnection()
         await refreshActiveConversationAfterDisconnectIfNeeded()
         guard isLive() else { return }
         await refreshTranscriptOnForegroundIfNeeded()
@@ -629,6 +630,13 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
         if isVisible { await directories.triggerForegroundRefresh() }
         guard !Task.isCancelled, lifecycle.isCurrent(generation) else { return }
         for screen in screens { screen.adoptRemoteHomeAsWorkingDirectoryIfUnset() }
+    }
+
+    private func refreshMetadataForCurrentConnection() async {
+        let generation = lifecycle.generation
+        guard let connection = await gateway.connectionIdentity,
+              acceptsConnectionReports, lifecycle.isCurrent(generation) else { return }
+        await metadataService.refreshInBackground(context: .init(connectionID: connection, foregroundGeneration: generation))
     }
 
     // MARK: - Screens
@@ -1386,10 +1394,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
             refreshQuestionScopes()
             if codexModels.hasFetched == false { startCodexModelRefresh() }
             ownedTasks.start(.marksSync) { [weak self] in await self?.conversationList.syncMarks() }
-            if metadataConnectionID != connection {
-                metadataConnectionID = connection
-                await metadataService.syncInBackground()
-            }
+            await refreshMetadataForCurrentConnection()
         }
         else {
             markActivityUnavailable()
@@ -1967,7 +1972,8 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
             guard let self else { return }
             defer { isResolvingMetadata = false }
             await metadataService.resolveConflict(sessionID: threadID, keepLocal: keepLocal)
-            await metadataService.sync()
+            if keepLocal { await metadataService.flushPendingChanges() }
+            else { await metadataService.sync() }
             guard acceptsWork, !Task.isCancelled, !keepLocal,
                   let shown = screenShowing(threadID), let thread = shown.activeConversation else { return }
             let saved = await metadataService.metadata(for: threadID)

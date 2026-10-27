@@ -3,6 +3,180 @@ import Testing
 @testable import RemoteCoderCore
 
 struct SessionMetadataTests {
+    @Test func gatewayTransportSendsTheValidatorAndAcceptsBothLegacyAndConditionalReplies() async throws {
+        let peer = try DeviceToolSocketFixture(declarationReply: .accepted)
+        let port = try await peer.start()
+        let gateway = GatewayClient(config: .init(url: try #require(URL(string: "ws://127.0.0.1:\(port)")),
+            authToken: "fixture", hostLabel: "Metadata fixture"), routes: nil)
+        defer { await gateway.retire(); await peer.stop() }
+        await peer.setResult(.object(["entries": .array([])]), method: "conversation/metadata/read")
+        guard case .full(let entries, let revision) = try await gateway.fetchRemoteMetadata(knownRevision: nil) else {
+            Issue.record("Expected an older gateway's full snapshot"); return
+        }
+        #expect(entries.isEmpty)
+        #expect(revision == nil)
+        await peer.setResult(.object(["unchanged": .bool(true), "revision": .string("opaque")]), method: "conversation/metadata/read")
+        guard case .unchanged(let token) = try await gateway.fetchRemoteMetadata(knownRevision: "opaque") else {
+            Issue.record("Expected an unchanged snapshot"); return
+        }
+        #expect(token == "opaque")
+        let requests = await peer.recordedRequests.filter { $0.method == "conversation/metadata/read" }
+        #expect(requests.count == 2)
+        #expect(requests.first?.params?.objectValue?["knownRevision"] == nil)
+        #expect(requests.last?.params?.objectValue?["knownRevision"]?.stringValue == "opaque")
+    }
+
+    @Test func bootstrapAndRepeatedConnectionRequestsJoinTheSameRefreshButRetainANewGeneration() async throws {
+        let fixture = Fixture()
+        defer { await fixture.close() }
+        let saved = record("chat", model: "saved", revision: 1)
+        await fixture.remote.configure(entries: ["chat": saved], holdRead: true)
+        let connection = UUID()
+        let first = ConversationMetadataRefreshContext(connectionID: connection, foregroundGeneration: 0)
+        let next = ConversationMetadataRefreshContext(connectionID: connection, foregroundGeneration: 1)
+        await fixture.service.refreshInBackground(context: first)
+        await fixture.remote.waitForRead()
+        await fixture.service.bootstrap()
+        await fixture.service.refreshInBackground(context: first)
+        await fixture.service.refreshInBackground(context: next)
+        await fixture.remote.releaseRead()
+        await fixture.service.flushPendingChanges()
+        #expect(await fixture.remote.requestedRevisions == [nil, "snapshot-1"])
+        #expect(await fixture.service.metadata(for: "chat") == saved)
+        await fixture.service.refreshInBackground(context: next)
+        await fixture.service.flushPendingChanges()
+        #expect(await fixture.remote.readCount == 2)
+        await fixture.service.refreshInBackground(context: .init(connectionID: UUID(), foregroundGeneration: 1))
+        await fixture.service.flushPendingChanges()
+        #expect(await fixture.remote.readCount == 3)
+    }
+
+    @Test func unchangedSnapshotsStillReconcileRuntimeSettingsAndFlushAnEditWithoutAnotherRead() async throws {
+        let fixture = Fixture()
+        defer { await fixture.close() }
+        let saved = record("chat", model: "saved", revision: 1)
+        await fixture.remote.configure(entries: ["chat": saved])
+        await fixture.service.sync()
+        let observation = try JSONDecoder().decode(CodexAppServerV2.ThreadSettingsUpdatedNotification.self,
+            from: Data(#"{"threadId":"chat","threadSettings":{"model":"saved","effort":"high","serviceTier":"default"}}"#.utf8))
+        await fixture.service.observeSettings(observation, observedAt: .now)
+        #expect(try await fixture.store.load().observed?["chat"] != nil)
+        await fixture.remote.holdReads()
+        let refresh = Task { await fixture.service.sync() }
+        await fixture.remote.waitForRead(count: 2)
+        await fixture.service.upsert(sessionID: "other", modelID: "local", reasoningSelectionID: "effort-high",
+            fastModeEnabled: false, source: .selection)
+        await fixture.remote.releaseRead()
+        await refresh.value
+        #expect(try await fixture.store.load().observed?["chat"] == nil)
+        #expect(try await fixture.store.load().pending.isEmpty)
+        #expect(await fixture.remote.entries["other"]?.modelID == "local")
+        #expect(await fixture.remote.requestedRevisions == [nil, "snapshot-1"])
+        await fixture.service.sync()
+        #expect(await fixture.remote.requestedRevisions == [nil, "snapshot-1", nil])
+    }
+
+    @Test func editsArrivingDuringAnAcknowledgementAreDurableAndRebasedWithoutFetching() async throws {
+        let fixture = Fixture()
+        defer { await fixture.close() }
+        await fixture.remote.holdUpdates()
+        await fixture.service.upsert(sessionID: "chat", modelID: "first", reasoningSelectionID: "effort-high",
+            fastModeEnabled: false, source: .selection)
+        await fixture.remote.waitForUpdate()
+        #expect(try await fixture.store.load().pending["chat"]?.mutation.selection.modelID == "first")
+        await fixture.service.upsert(sessionID: "chat", modelID: "second", reasoningSelectionID: "effort-high",
+            fastModeEnabled: false, source: .selection)
+        #expect(try await fixture.store.load().pending["chat"]?.mutation.selection.modelID == "second")
+        await fixture.remote.releaseUpdates()
+        await fixture.service.flushPendingChanges()
+        #expect(await fixture.remote.readCount == 0)
+        #expect(await fixture.remote.appliedCount == 2)
+        #expect(await fixture.remote.entries["chat"]?.modelID == "second")
+        #expect(await fixture.remote.entries["chat"]?.serverRevision == 2)
+        #expect(try await fixture.store.load().pending.isEmpty)
+    }
+
+    @Test func failedRefreshesCanRetryTheSameContextAndRejectAnUnrelatedUnchangedToken() async throws {
+        let fixture = Fixture()
+        defer { await fixture.close() }
+        let saved = record("chat", model: "saved", revision: 1)
+        try await fixture.store.save(.init(acknowledged: ["chat": saved]))
+        await fixture.remote.configure(entries: ["chat": saved])
+        let context = ConversationMetadataRefreshContext(connectionID: UUID(), foregroundGeneration: 1)
+        await fixture.remote.forceSnapshot(.unchanged(revision: "unrequested"))
+        await fixture.service.refreshInBackground(context: context)
+        await fixture.service.flushPendingChanges()
+        #expect(await fixture.service.status.error != nil)
+        #expect(try await fixture.store.load().acknowledged["chat"] == saved)
+        await fixture.service.upsert(sessionID: "other", modelID: "local", reasoningSelectionID: "effort-high",
+            fastModeEnabled: false, source: .selection)
+        await fixture.service.flushPendingChanges()
+        #expect(await fixture.remote.entries["other"]?.modelID == "local")
+        #expect(await fixture.remote.readCount == 1)
+        #expect(await fixture.service.status.error != nil)
+        await fixture.remote.forceSnapshot(nil)
+        await fixture.service.refreshInBackground(context: context)
+        await fixture.service.flushPendingChanges()
+        #expect(await fixture.service.status.error == nil)
+        #expect(await fixture.remote.readCount == 2)
+        await fixture.remote.forceSnapshot(.unchanged(revision: "different"))
+        await fixture.service.sync()
+        #expect(await fixture.service.status.error != nil)
+        #expect(try await fixture.store.load().acknowledged["chat"] == saved)
+    }
+
+    @Test func anOutboxRequestSurvivesTheConcurrentRefreshFailing() async throws {
+        let fixture = Fixture()
+        defer { await fixture.close() }
+        await fixture.remote.configure(entries: [:], holdRead: true)
+        let refresh = Task { await fixture.service.sync() }
+        await fixture.remote.waitForRead()
+        await fixture.service.upsert(sessionID: "chat", modelID: "local", reasoningSelectionID: "effort-high",
+            fastModeEnabled: false, source: .selection)
+        await fixture.remote.failReads(true)
+        await fixture.remote.releaseRead()
+        await refresh.value
+        #expect(await fixture.remote.readCount == 1)
+        #expect(await fixture.remote.entries["chat"]?.modelID == "local")
+        #expect(try await fixture.store.load().pending.isEmpty)
+        #expect(await fixture.service.status.error != nil)
+    }
+
+    @Test func legacyFullResponsesNeverCreateAValidatorAndRestoredEmptySnapshotsReplaceTheMap() async throws {
+        let fixture = Fixture()
+        defer { await fixture.close() }
+        await fixture.remote.useLegacyResponses()
+        let saved = record("chat", model: "saved", revision: 9)
+        await fixture.remote.configure(entries: ["chat": saved])
+        await fixture.service.sync()
+        await fixture.service.sync()
+        await fixture.remote.configure(entries: [:])
+        await fixture.service.sync()
+        #expect(await fixture.remote.requestedRevisions == [nil, nil, nil])
+        #expect(await fixture.service.metadata(for: "chat") == nil)
+        #expect(try await fixture.store.load().acknowledged.isEmpty)
+    }
+
+    @Test(arguments: [
+        #"{"unchanged":true}"#,
+        #"{"unchanged":true,"revision":""}"#,
+        #"{"unchanged":true,"revision":"token","entries":[]}"#,
+        #"{"revision":"token"}"#,
+        #"{"entries":[],"revision":5}"#,
+    ])
+    func malformedSnapshotsDoNotDecodeAsEmpty(_ wire: String) {
+        #expect(throws: (any Error).self) {
+            try JSONDecoder().decode(ConversationMetadataSnapshot.self, from: Data(wire.utf8))
+        }
+    }
+
+    @Test(arguments: [#"{"entries":[]}"#, #"{"entries":[],"revision":"token"}"#])
+    func fullEmptyResponsesRemainDistinctFromUnchanged(_ wire: String) throws {
+        let snapshot = try JSONDecoder().decode(ConversationMetadataSnapshot.self, from: Data(wire.utf8))
+        guard case .full(let entries, _) = snapshot else { Issue.record("Expected an empty full snapshot"); return }
+        #expect(entries.isEmpty)
+    }
+
     @Test func carriedSettingsSurviveOlderReadsAndRelaunchWithoutReadingTheMetadataDocument() async throws {
         let fixture = Fixture()
         defer { await fixture.close() }
@@ -221,11 +395,16 @@ struct SessionMetadataTests {
     @Test func anotherClientsNewerRevisionRequiresAnExplicitConflictDecision() async throws {
         let fixture = Fixture()
         defer { await fixture.close() }
-        try await fixture.store.save(SessionMetadataLocalState(acknowledged: ["chat": record("chat", model: "old", revision: 1)]))
+        let initial = record("chat", model: "old", revision: 1)
+        try await fixture.store.save(SessionMetadataLocalState(acknowledged: ["chat": initial]))
+        await fixture.remote.configure(entries: ["chat": initial])
+        await fixture.service.sync()
         await fixture.remote.configure(entries: ["chat": record("chat", model: "other-client", revision: 2)])
         await fixture.service.upsert(sessionID: "chat", modelID: "local", reasoningSelectionID: "effort-high",
             fastModeEnabled: true, source: .selection)
+        await fixture.service.flushPendingChanges()
         await fixture.service.sync()
+        #expect(await fixture.remote.requestedRevisions == [nil, nil])
         #expect(await fixture.remote.entries["chat"]?.modelID == "other-client")
         #expect(await fixture.service.status.conflicts == ["chat"])
         #expect(try await fixture.store.load().pending["chat"]?.mutation.selection.modelID == "local")
@@ -288,6 +467,7 @@ struct SessionMetadataTests {
         }
         func close() async {
             await remote.releaseRead()
+            await remote.releaseUpdates()
             await service.retire()
             temporary.cleanUp()
         }
@@ -301,30 +481,53 @@ private actor MetadataRemoteFixture: ConversationMetadataRemote {
     private var readsFail = false
     private var loseAcknowledgement = false
     private var isHoldingRead = false
-    private var readStarted = false
-    private var readWaiters: [CheckedContinuation<Void, Never>] = []
+    private var snapshotRevision = 0
+    private var supportsValidator = true
+    private var forcedSnapshot: ConversationMetadataSnapshot?
+    private(set) var requestedRevisions: [String?] = []
+    private var isHoldingUpdate = false
+    private var updateStarted = false
+    private var updateWaiters: [CheckedContinuation<Void, Never>] = []
+    private var pendingUpdates: [CheckedContinuation<Void, Never>] = []
+    private var readWaiters: [(count: Int, continuation: CheckedContinuation<Void, Never>)] = []
     private var pendingReads: [CheckedContinuation<Void, Never>] = []
 
     func configure(entries: [String: ConversationMetadata], holdRead: Bool = false) {
         self.entries = entries
+        snapshotRevision += 1
         isHoldingRead = holdRead
     }
     func loseNextAcknowledgement() { loseAcknowledgement = true }
     func failReads(_ value: Bool) { readsFail = value }
 
-    func fetchRemoteMetadata() async throws -> [String: ConversationMetadata] {
+    func useLegacyResponses() { supportsValidator = false }
+    func forceSnapshot(_ snapshot: ConversationMetadataSnapshot?) { forcedSnapshot = snapshot }
+    func holdUpdates() { isHoldingUpdate = true }
+    func holdReads() { isHoldingRead = true }
+
+    func fetchRemoteMetadata(knownRevision: String?) async throws -> ConversationMetadataSnapshot {
+        requestedRevisions.append(knownRevision)
         readCount += 1
         if readsFail { throw URLError(.networkConnectionLost) }
-        let snapshot = entries
-        readStarted = true
-        let waiters = readWaiters
-        readWaiters.removeAll()
-        waiters.forEach { $0.resume() }
+        let revision = supportsValidator ? "snapshot-\(snapshotRevision)" : nil
+        let snapshot: ConversationMetadataSnapshot
+        if let forcedSnapshot { snapshot = forcedSnapshot }
+        else if let revision, knownRevision == revision { snapshot = .unchanged(revision: revision) }
+        else { snapshot = .full(entries: entries, revision: revision) }
+        let waiters = readWaiters.filter { $0.count <= readCount }
+        readWaiters.removeAll { $0.count <= readCount }
+        waiters.forEach { $0.continuation.resume() }
         if isHoldingRead { await withCheckedContinuation { pendingReads.append($0) } }
+        if readsFail { throw URLError(.networkConnectionLost) }
         return snapshot
     }
 
-    func updateRemoteMetadata(_ mutation: ConversationMetadataMutation) throws -> ConversationMetadata {
+    func updateRemoteMetadata(_ mutation: ConversationMetadataMutation) async throws -> ConversationMetadata {
+        updateStarted = true
+        let waiters = updateWaiters
+        updateWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+        if isHoldingUpdate { await withCheckedContinuation { pendingUpdates.append($0) } }
         let current = entries[mutation.selection.sessionID]
         if let current, current.mutationID == mutation.mutationID { return current }
         guard (current?.serverRevision ?? 0) == mutation.expectedRevision else {
@@ -338,13 +541,23 @@ private actor MetadataRemoteFixture: ConversationMetadataRemote {
         record.serverRevision = mutation.expectedRevision + 1
         record.mutationID = mutation.mutationID
         entries[record.sessionID] = record
+        snapshotRevision += 1
         appliedCount += 1
         if loseAcknowledgement { loseAcknowledgement = false; throw URLError(.networkConnectionLost) }
         return record
     }
 
-    func waitForRead() async {
-        if !readStarted { await withCheckedContinuation { readWaiters.append($0) } }
+    func waitForRead(count: Int = 1) async {
+        if readCount < count { await withCheckedContinuation { readWaiters.append((count, $0)) } }
+    }
+    func waitForUpdate() async {
+        if !updateStarted { await withCheckedContinuation { updateWaiters.append($0) } }
+    }
+    func releaseUpdates() {
+        isHoldingUpdate = false
+        let pending = pendingUpdates
+        pendingUpdates.removeAll()
+        pending.forEach { $0.resume() }
     }
     func releaseRead() {
         isHoldingRead = false

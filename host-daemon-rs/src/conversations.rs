@@ -84,6 +84,23 @@ pub(crate) enum UpdateResult {
     Conflict(Option<Record>),
 }
 
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct Read {
+    pub known_revision: Option<String>,
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) enum Snapshot {
+    Full {
+        entries: Vec<Record>,
+        revision: String,
+    },
+    Unchanged {
+        revision: String,
+    },
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Document {
@@ -116,9 +133,20 @@ impl ConversationMetadataStore {
         }
     }
 
-    pub(crate) async fn read(&self) -> Result<Vec<Record>> {
-        self.transaction(|document| Ok((document.records.values().cloned().collect(), false)))
-            .await
+    pub(crate) async fn read(&self, known_revision: Option<String>) -> Result<Snapshot> {
+        self.transaction(move |document| {
+            let entries: Vec<_> = document.records.values().cloned().collect();
+            let revision = blake3::hash(&serde_json::to_vec(&entries)?)
+                .to_hex()
+                .to_string();
+            let snapshot = if known_revision.as_deref() == Some(revision.as_str()) {
+                Snapshot::Unchanged { revision }
+            } else {
+                Snapshot::Full { entries, revision }
+            };
+            Ok((snapshot, false))
+        })
+        .await
     }
 
     pub(crate) async fn update(&self, request: Update) -> Result<UpdateResult> {
@@ -304,7 +332,12 @@ mod tests {
         );
         assert!(matches!(a.unwrap(), UpdateResult::Applied(_)));
         assert!(matches!(b.unwrap(), UpdateResult::Applied(_)));
-        let records = first.read().await.unwrap();
+        let Snapshot::Full {
+            entries: records, ..
+        } = first.read(None).await.unwrap()
+        else {
+            panic!("an unconditional read must return the snapshot");
+        };
         assert_eq!(records.len(), 2);
         assert_eq!(records[0].selection.model_id, "a");
         assert_eq!(records[1].selection.model_id, "b");
@@ -322,7 +355,10 @@ mod tests {
             store.update(update("chat", "stale", 0)).await.unwrap(),
             UpdateResult::Conflict(Some(_))
         ));
-        assert_eq!(store.read().await.unwrap()[0].server_revision, 1);
+        let Snapshot::Full { entries, .. } = store.read(None).await.unwrap() else {
+            panic!("an unconditional read must return the snapshot");
+        };
+        assert_eq!(entries[0].server_revision, 1);
         assert!(matches!(
             store.update(update("chat", "second", 1)).await.unwrap(),
             UpdateResult::Applied(_)
@@ -343,6 +379,91 @@ mod tests {
         assert_eq!(store.update(initial).await.unwrap(), first);
 
         assert_eq!(fs::metadata(&path).unwrap().ino(), written);
+    }
+
+    #[tokio::test]
+    async fn validators_follow_the_complete_snapshot_across_forks_and_restores() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("session-metadata-v2.json");
+        let store = ConversationMetadataStore::new(Some(path.clone()));
+        let peer = ConversationMetadataStore::new(Some(path.clone()));
+        let Snapshot::Full {
+            entries,
+            revision: empty,
+        } = store.read(None).await.unwrap()
+        else {
+            panic!("an unconditional read must return the snapshot");
+        };
+        assert!(entries.is_empty());
+        assert_eq!(
+            peer.read(Some(empty.clone())).await.unwrap(),
+            Snapshot::Unchanged { revision: empty }
+        );
+
+        store.update(update("high", "first", 0)).await.unwrap();
+        store.update(update("high", "second", 1)).await.unwrap();
+        let original = fs::read(&path).unwrap();
+        let Snapshot::Full {
+            revision: before_fork,
+            ..
+        } = store.read(None).await.unwrap()
+        else {
+            panic!("an unconditional read must return the snapshot");
+        };
+        peer.fork("high".into(), "fork".into()).await.unwrap();
+        let Snapshot::Full {
+            entries,
+            revision: after_fork,
+        } = store.read(Some(before_fork.clone())).await.unwrap()
+        else {
+            panic!("a lower-revision fork must invalidate the snapshot");
+        };
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].server_revision, 1);
+        peer.update(update("fork", "changed", 1)).await.unwrap();
+        let Snapshot::Full {
+            revision: before_restore,
+            ..
+        } = store.read(Some(after_fork)).await.unwrap()
+        else {
+            panic!("changing a fork must invalidate the snapshot");
+        };
+
+        fs::write(&path, original).unwrap();
+        let Snapshot::Full { entries, revision } = peer.read(Some(before_restore)).await.unwrap()
+        else {
+            panic!("a restore must return its authoritative replacement");
+        };
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].selection.session_id, "high");
+        assert_eq!(revision, before_fork);
+        assert_eq!(
+            store.read(Some(revision.clone())).await.unwrap(),
+            Snapshot::Unchanged { revision }
+        );
+    }
+
+    #[tokio::test]
+    async fn restored_content_changes_invalidate_a_validator_even_when_maximum_revision_is_unchanged()
+     {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("session-metadata-v2.json");
+        let store = ConversationMetadataStore::new(Some(path.clone()));
+        store.update(update("high", "original", 0)).await.unwrap();
+        store.update(update("high", "current", 1)).await.unwrap();
+        store.update(update("low", "first", 0)).await.unwrap();
+        let Snapshot::Full { revision, .. } = store.read(None).await.unwrap() else {
+            panic!("an unconditional read must return the snapshot");
+        };
+        let mut restored = load(&path).unwrap();
+        restored.records.get_mut("low").unwrap().selection.model_id = "restored".into();
+        fs::write(&path, serde_json::to_vec(&restored).unwrap()).unwrap();
+        let Snapshot::Full { entries, .. } = store.read(Some(revision)).await.unwrap() else {
+            panic!("content changes must invalidate a validator regardless of revisions");
+        };
+        assert_eq!(entries[0].server_revision, 2);
+        assert_eq!(entries[1].server_revision, 1);
+        assert_eq!(entries[1].selection.model_id, "restored");
     }
 
     #[tokio::test]
