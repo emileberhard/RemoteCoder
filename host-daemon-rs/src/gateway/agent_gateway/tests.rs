@@ -489,6 +489,9 @@ fn seed_origin(
                 result: ResultEvidence::Unavailable {
                     reason: "No fixture output".into(),
                 },
+                git: GitSnapshot::Unknown {
+                    reason: "No Git fixture".into(),
+                },
                 completion: Completion::NotRequired,
                 execution: None,
             },

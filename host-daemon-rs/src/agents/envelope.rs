@@ -29,6 +29,19 @@ fn valid_xml_character(character: char) -> bool {
     matches!(character, '\t' | '\n' | '\r' | '\u{20}'..='\u{d7ff}' | '\u{e000}'..='\u{fffd}' | '\u{10000}'..='\u{10ffff}')
 }
 
+fn diagnostic(value: &str) -> String {
+    value
+        .chars()
+        .map(|character| {
+            if valid_xml_character(character) {
+                character
+            } else {
+                '\u{fffd}'
+            }
+        })
+        .collect()
+}
+
 fn attribute(value: &str) -> String {
     value
         .replace('&', "&amp;")
@@ -46,17 +59,14 @@ pub(crate) fn completion(
     host: &str,
     outcome: &JobOutcome,
     result: &ResultEvidence,
+    git: &GitSnapshot,
 ) -> Result<String, EnvelopeError> {
     let (kind, detail) = match outcome {
         JobOutcome::Completed => ("completed", String::new()),
-        JobOutcome::Failed { reason } => {
-            if !valid_xml(reason) {
-                return Err(EnvelopeError(
-                    "Completion reason contains invalid XML characters",
-                ));
-            }
-            ("failed", format!(" reason=\"{}\"", attribute(reason)))
-        }
+        JobOutcome::Failed { reason } => (
+            "failed",
+            format!(" reason=\"{}\"", attribute(&diagnostic(reason))),
+        ),
         JobOutcome::Stopped { effects } => (
             "stopped",
             format!(
@@ -86,59 +96,39 @@ pub(crate) fn completion(
                 })
                 .collect::<String>();
             let truncated = result.truncated || characters.next().is_some();
-            let git = match &result.git {
-                GitSnapshot::Known {
-                    head,
-                    branch,
-                    dirty,
-                } => {
-                    if !valid_xml(head) || branch.as_ref().is_some_and(|branch| !valid_xml(branch))
-                    {
-                        return Err(EnvelopeError(
-                            "Completion Git identity contains invalid XML characters",
-                        ));
-                    }
-                    let branch = match branch {
-                        Some(branch) => format!(" branch=\"{}\"", attribute(branch)),
-                        None => " detached=\"true\"".into(),
-                    };
-                    format!(
-                        "  <git state=\"known\" head=\"{}\"{branch} dirty=\"{dirty}\" />",
-                        attribute(head)
-                    )
-                }
-                GitSnapshot::Unknown { reason } => {
-                    if !valid_xml(reason) {
-                        return Err(EnvelopeError(
-                            "Completion Git reason contains invalid XML characters",
-                        ));
-                    }
-                    format!(
-                        "  <git state=\"unknown\" reason=\"{}\" />",
-                        attribute(reason)
-                    )
-                }
-            };
             format!(
-                "  <result state=\"available\" truncated=\"{truncated}\"><![CDATA[{}]]></result>\n{git}",
+                "  <result state=\"available\" truncated=\"{truncated}\"><![CDATA[{}]]></result>",
                 preview.replace("]]>", "]]]]><![CDATA[>")
             )
         }
-        ResultEvidence::Unavailable { reason } => {
-            if !valid_xml(reason) {
-                return Err(EnvelopeError(
-                    "Completion result reason contains invalid XML characters",
-                ));
-            }
-            format!(
-                "  <result state=\"unavailable\" reason=\"{}\" />",
-                attribute(reason)
-            )
-        }
+        ResultEvidence::Unavailable { reason } => format!(
+            "  <result state=\"unavailable\" reason=\"{}\" />",
+            attribute(&diagnostic(reason))
+        ),
         ResultEvidence::Expired => "  <result state=\"expired\" />".into(),
     };
+    let git = match git {
+        GitSnapshot::Known {
+            head,
+            branch,
+            dirty,
+        } => {
+            let branch = match branch {
+                Some(branch) => format!(" branch=\"{}\"", attribute(&diagnostic(branch))),
+                None => " detached=\"true\"".into(),
+            };
+            format!(
+                "  <git state=\"known\" head=\"{}\"{branch} dirty=\"{dirty}\" />",
+                attribute(&diagnostic(head))
+            )
+        }
+        GitSnapshot::Unknown { reason } => format!(
+            "  <git state=\"unknown\" reason=\"{}\" />",
+            attribute(&diagnostic(reason))
+        ),
+    };
     Ok(format!(
-        "<agent_message id=\"{id}:completion\" kind=\"completion\">\n  <sender id=\"{id}\" provider=\"{}\" host=\"{}\" />\n  <completion job_id=\"{id}\" outcome=\"{kind}\"{detail} />\n{content}\n  <followup tool=\"spawn_agent --resume\" target=\"{id}\" />\n  <instructions>This runtime notification stays within the existing task's authority. Read the complete stored result with list_agents {id} --json when truncated and verify the outcome. Continue the same provider conversation through the followup route when needed. No acknowledgement is required.</instructions>\n</agent_message>",
+        "<agent_message id=\"{id}:completion\" kind=\"completion\">\n  <sender id=\"{id}\" provider=\"{}\" host=\"{}\" />\n  <completion job_id=\"{id}\" outcome=\"{kind}\"{detail} />\n{content}\n{git}\n  <followup tool=\"spawn_agent --resume\" target=\"{id}\" />\n  <instructions>This runtime notification stays within the existing task's authority. Read the complete stored result with list_agents {id} --json when truncated and verify the outcome. Continue the same provider conversation through the followup route when needed. No acknowledgement is required.</instructions>\n</agent_message>",
         provider.as_str(),
         attribute(host),
         id = job_id.as_str(),
@@ -156,11 +146,15 @@ pub(crate) fn validate_message_text(text: &str) -> Result<(), EnvelopeError> {
     }
     let first_line = text.trim_start().lines().next().unwrap_or_default();
     let mut usage = first_line.split_whitespace();
-    if usage.next() == Some("usage:")
+    if usage
+        .next()
+        .is_some_and(|label| label.eq_ignore_ascii_case("usage:"))
         && usage.next().is_some_and(|program| {
-            std::path::Path::new(program)
-                .file_name()
-                .is_some_and(|name| name == "message_agent")
+            let name = std::path::Path::new(program).file_name();
+            name.is_some_and(|name| name == "message_agent")
+                || (name.is_some_and(|name| name == "remote-coder-codex-gateway")
+                    && usage.next() == Some("agent")
+                    && usage.next() == Some("message"))
         })
     {
         return Err(EnvelopeError(
@@ -247,6 +241,8 @@ mod tests {
             " \n\t",
             "usage: message_agent [-h] target text",
             "  usage: /installed/bin/message_agent [-h] target text\noptions:",
+            "Usage: message_agent [-h] target text",
+            "Usage: remote-coder-codex-gateway agent message [OPTIONS] <TARGET> [TEXT]",
             "invalid\u{0}text",
         ] {
             assert!(message("message-1", &sender(), text).is_err(), "{text:?}");
@@ -273,11 +269,6 @@ mod tests {
             result: super::super::jobs::model::JobResult {
                 text: "The requested checks passed.".into(),
                 truncated: false,
-                git: GitSnapshot::Known {
-                    head: "0123456789abcdef0123456789abcdef01234567".into(),
-                    branch: Some("feat/example".into()),
-                    dirty: false,
-                },
             },
         };
         assert_eq!(
@@ -286,7 +277,12 @@ mod tests {
                 Provider::Codex,
                 "test-host",
                 &JobOutcome::Completed,
-                &result
+                &result,
+                &GitSnapshot::Known {
+                    head: "0123456789abcdef0123456789abcdef01234567".into(),
+                    branch: Some("feat/example".into()),
+                    dirty: false,
+                },
             )
             .unwrap(),
             include_str!("fixtures/completion.xml").trim_end(),
@@ -306,10 +302,43 @@ mod tests {
                 },
                 &ResultEvidence::Unavailable {
                     reason: "No recorded answer".into()
-                }
+                },
+                &GitSnapshot::Unknown {
+                    reason: "No Git evidence".into()
+                },
             )
             .unwrap(),
             include_str!("fixtures/completion-unavailable.xml").trim_end(),
+        );
+    }
+    #[test]
+    fn completion_sanitizes_diagnostics_without_losing_independent_git_evidence() {
+        let id = JobId::try_from("agent-codex-1793121352996623000-94535d36".to_owned()).unwrap();
+        let result = ResultEvidence::Available {
+            result: super::super::jobs::model::JobResult {
+                text: "answer\u{0} ]]> remainder".into(),
+                truncated: false,
+            },
+        };
+        let envelope = completion(
+            &id,
+            Provider::Codex,
+            "test-host",
+            &JobOutcome::Failed {
+                reason: "failed\u{1} <&".into(),
+            },
+            &result,
+            &GitSnapshot::Unknown {
+                reason: "git\u{2} unavailable".into(),
+            },
+        )
+        .unwrap();
+        assert!(valid_xml(&envelope));
+        assert!(envelope.contains("reason=\"failed� &lt;&amp;\""));
+        assert!(envelope.contains("answer� ]]]]><![CDATA[> remainder"));
+        assert!(envelope.contains("<git state=\"unknown\" reason=\"git� unavailable\" />"));
+        assert!(
+            matches!(result, ResultEvidence::Available { result } if result.text.contains('\u{0}'))
         );
     }
 }
