@@ -408,6 +408,7 @@ pub(crate) struct ImportedUncertainty {
 
 pub(crate) enum Inspection {
     Prepared,
+    RetryableInput { conversation: ConversationIdentity, input_id: String },
     Running { binding: ExecutionBinding },
     Recoverable { binding: ExecutionBinding },
     Unknown { reason: String },
