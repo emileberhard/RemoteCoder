@@ -68,9 +68,14 @@ has no remaining consumer and is retained unused until separately authorized rem
 
 Every resumable signing, upload, store-update and release-publication boundary
 rechecks remote tag identity, main ancestry and highest-version ordering. Full
-public reruns find the existing private dispatch by its version/public-run title;
-private failures are retried in that existing run. Main CI never cancels an
-admitted commit when a newer push arrives. The gateway release builds its binary
+public reruns restore the private run ID returned by dispatch from a same-run artifact,
+paired with version, commit and the explicit public-run input;
+private failures are retried in that existing run. An earlier dispatch attempt
+without a receipt requires reconciliation and cannot dispatch again blindly. Run
+titles are presentation only. The receipt reuses the existing release-state
+artifact owner and needs no additional cross-repository token permission. Main
+CI uses a distinct group per pushed SHA and never cancels an admitted commit
+when a newer push arrives. The explicit `gateway-release` build kind builds its binary
 and checks runtime approval without repeating green CI fmt, clippy or tests.
 Retained gateway copies are signature/identity checked before reuse; new copies
 are verified under a .partial sibling and renamed before deployment.

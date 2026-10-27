@@ -51,6 +51,9 @@ jobs:
     needs: admit
     runs-on: ubuntu-24.04
     environment: deployment-handoff
+    permissions:
+      contents: read
+      actions: read
     timeout-minutes: 10
     env:
       VERSION: ${{ github.ref_name }}
@@ -62,25 +65,60 @@ jobs:
           persist-credentials: false
       - name: Re-admit before handoff
         run: python3 scripts/release_tag.py "$VERSION" "$COMMIT"
+      - name: Restore this run's private dispatch receipt
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/release-state deployment-handoff "$RUNNER_TEMP/handoff"
+      - name: Check earlier handoff attempts
+        id: fence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          fenced=false
+          for ((attempt = 1; attempt < GITHUB_RUN_ATTEMPT; attempt++)); do
+            started=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$attempt/jobs?per_page=100" \
+              --jq '[.jobs[] | select(.name == "dispatch") | .steps[] | select(.name == "Hand off the exact release to private deployment" and .conclusion != "skipped" and .started_at != null)] | length')
+            (( started == 0 )) || fenced=true
+          done
+          echo "fenced=$fenced" >> "$GITHUB_OUTPUT"
       - name: Hand off the exact release to private deployment
+        id: dispatch
         env:
           GH_TOKEN: ${{ secrets.RC_DEPLOY_TOKEN }}
           DEPLOY_REPOSITORY: ${{ vars.RC_DEPLOY_REPOSITORY }}
+          FENCED: ${{ steps.fence.outputs.fenced }}
         run: |
           set -euo pipefail
           : "${DEPLOY_REPOSITORY:?}" "${GH_TOKEN:?}"
-          title="$VERSION (public $GITHUB_RUN_ID)"
-          existing=$(gh api --paginate "repos/$DEPLOY_REPOSITORY/actions/workflows/release.yml/runs?event=workflow_dispatch&per_page=100" \
-            --jq ".workflow_runs[] | select(.display_title == \"$title\") | .html_url")
-          if [[ -n "$existing" ]]; then
-            printf '%s\n' "$existing" >> "$GITHUB_STEP_SUMMARY"
+          receipt="$RUNNER_TEMP/handoff/dispatch.json"
+          if [[ -f "$receipt" ]]; then
+            jq -e --arg version "$VERSION" --arg commit "$COMMIT" --arg public "$GITHUB_RUN_ID" --arg repo "$DEPLOY_REPOSITORY" \
+              '.version == $version and .commit == $commit and .public_run == $public and .repository == $repo' "$receipt"
+            run=$(jq -er '.workflow_run_id | numbers' "$receipt")
+            gh api "repos/$DEPLOY_REPOSITORY/actions/runs/$run" \
+              --jq 'select(.event == "workflow_dispatch" and .head_branch == "main" and .path == ".github/workflows/release.yml") | .html_url' > "$RUNNER_TEMP/private-run-url"
+            [[ -s "$RUNNER_TEMP/private-run-url" ]]
+            cat "$RUNNER_TEMP/private-run-url" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
+          [[ "$FENCED" == false ]] || { echo "::error::An earlier handoff may have dispatched. Reconcile the private run; do not dispatch again blindly."; exit 1; }
+          mkdir -p "$(dirname "$receipt")"
           jq -n --arg version "$VERSION" --arg commit "$COMMIT" --arg run "$GITHUB_RUN_ID" \
             '{ref:"main",inputs:{version:$version,commit:$commit,public_run:$run}}' |
             gh api --method POST -H "X-GitHub-Api-Version: 2026-03-10" \
-              "repos/$DEPLOY_REPOSITORY/actions/workflows/release.yml/dispatches" --input - >"$RUNNER_TEMP/dispatch.json"
-          jq -er '.html_url' "$RUNNER_TEMP/dispatch.json" >> "$GITHUB_STEP_SUMMARY"
+              "repos/$DEPLOY_REPOSITORY/actions/workflows/release.yml/dispatches" --input - > "$RUNNER_TEMP/dispatched.json"
+          jq -e --arg version "$VERSION" --arg commit "$COMMIT" --arg public "$GITHUB_RUN_ID" --arg repo "$DEPLOY_REPOSITORY" \
+            '. + {version:$version,commit:$commit,public_run:$public,repository:$repo} | select(.workflow_run_id | numbers)' \
+            "$RUNNER_TEMP/dispatched.json" > "$receipt"
+          jq -er '.html_url' "$receipt" >> "$GITHUB_STEP_SUMMARY"
+          echo "created=true" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: steps.dispatch.outputs.created == 'true'
+        with:
+          name: deployment-handoff
+          path: ${{ runner.temp }}/handoff/dispatch.json
+          retention-days: 30
 
   numbers:
     needs: admit
@@ -264,9 +302,7 @@ jobs:
           printf '%s' "$APP_STORE_CONNECT_KEY" > "$APP_STORE_CONNECT_KEY_PATH"
           tag=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$VERSION" --jq .object.sha)
           gh api "repos/$GITHUB_REPOSITORY/git/tags/$tag" --jq .message > "$RUNNER_TEMP/notes.md"
-          python3 scripts/release_tag.py "$VERSION" "$GITHUB_SHA"
           scripts/app-store-connect testflight "$ASC_PLATFORM" "$VERSION" "$BUILD_NUMBER" "$RUNNER_TEMP/notes.md"
-          python3 scripts/release_tag.py "$VERSION" "$GITHUB_SHA"
           scripts/app-store-connect app-store "$ASC_PLATFORM" "$VERSION" "$BUILD_NUMBER" "$RUNNER_TEMP/notes.md"
       - name: Remove credentials
         if: always()
