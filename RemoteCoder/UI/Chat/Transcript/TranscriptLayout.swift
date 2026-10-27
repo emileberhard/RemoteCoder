@@ -62,6 +62,10 @@ struct TranscriptLayout: Layout {
         return sizes
     }
 
+    static func isFarFromLatest(latestEnd: CGFloat, visibleBottom: CGFloat, viewportHeight: CGFloat) -> Bool {
+        latestEnd - visibleBottom > viewportHeight / 2
+    }
+
     static func tailPadding(heights: [CGFloat], latestTurnIndex: Int?, minimumTurnHeight: CGFloat) -> CGFloat {
         guard let start = latestTurnIndex, start < heights.count - 1 else { return 0 }
         let turn = heights[start..<(heights.count - 1)]
