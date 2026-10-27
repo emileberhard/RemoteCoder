@@ -1,4 +1,6 @@
 pub mod claude;
+pub(crate) mod client;
+pub(crate) mod envelope;
 pub(crate) mod jobs;
 pub mod launcher;
 pub mod mcp;

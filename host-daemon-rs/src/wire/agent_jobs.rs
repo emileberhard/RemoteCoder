@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::agents::jobs::model::{
-    AgentRecord, ConversationBinding, ExecutionSettings, JobId, JobRecord, JobSpec, Provider,
+    AgentRecord, ConversationBinding, ConversationIdentity, ExecutionSettings, JobId, JobRecord, JobSpec, Provider,
 };
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -70,6 +70,9 @@ pub(crate) struct ListParams {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) enum MessageTarget {
+    Conversation {
+        conversation: ConversationIdentity,
+    },
     Job {
         #[serde(rename = "jobId")]
         job_id: JobId,

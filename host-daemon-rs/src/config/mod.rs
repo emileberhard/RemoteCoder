@@ -46,6 +46,10 @@ pub(crate) struct Args {
 
 #[derive(Clone, Debug, Subcommand)]
 pub(crate) enum Command {
+    Agent {
+        #[command(subcommand)]
+        command: crate::agents::client::AgentCommand,
+    },
     CheckConfig,
     #[command(hide = true)]
     ClaudeNotificationHook {
