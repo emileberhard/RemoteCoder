@@ -1330,7 +1330,7 @@ final class TranscriptVisibility {
 
     private func updateFarFromLatest() {
         guard let latestEnd, let readingEdge else { return }
-        let isFar = latestEnd - readingEdge.bottom > readingEdge.height / 2
+        let isFar = TranscriptLayout.isFarFromLatest(latestEnd: latestEnd, visibleBottom: readingEdge.bottom, viewportHeight: readingEdge.height)
         setFarFromLatest(isFar)
     }
 
@@ -1338,7 +1338,7 @@ final class TranscriptVisibility {
         guard let latestEnd else { return nil }
         let bottom = geometry.visibleRect.maxY - geometry.contentInsets.bottom
         let height = geometry.containerSize.height - geometry.contentInsets.top - geometry.contentInsets.bottom
-        return latestEnd - bottom > height / 2
+        return TranscriptLayout.isFarFromLatest(latestEnd: latestEnd, visibleBottom: bottom, viewportHeight: height)
     }
 
     fileprivate func setFarFromLatest(_ isFar: Bool) {

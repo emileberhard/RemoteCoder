@@ -1266,7 +1266,8 @@ final class AppKitTranscriptContainer: NSScrollView, TranscriptReadingPositionCa
         let visible = index.visibility(in: viewport)
         let geometry = TranscriptNativeGeometry(height: viewport.height, columnWidth: columnWidth.map { Int($0.rounded()) },
             isNearTop: viewport.minY - transcriptDocument.bounds.minY < viewport.height * 1.5, isAtBottom: atBottom,
-            isFarFromLatest: index.latestEnd.map { $0 - viewport.maxY > viewport.height / 2 },
+            isFarFromLatest: index.latestEnd.map { TranscriptLayout.isFarFromLatest(
+                latestEnd: $0, visibleBottom: viewport.maxY, viewportHeight: viewport.height) },
             isRunwayShort: visible.isRunwayShort)
         if geometry != lastGeometry {
             lastGeometry = geometry
