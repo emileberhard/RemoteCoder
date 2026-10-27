@@ -113,4 +113,4 @@ PR must introduce the reader before enabling its writer.
 
 | Path | Owner | Reason | Removal condition |
 |---|---|---|---|
-| Semver-derived build numbers for releases through 3.73.0 | `scripts/release-cache.py`, `release_build_number` | Existing signed release caches and rollback references predate ASC-reserved build receipts | Neither host retains a release or symbol reference at 3.73.0 or earlier; then require a build-number receipt for every retained release |
+| Mac App Store package as completion marker through 3.73.0 | `scripts/release-cache.py`, `mac_completion` | Retained direct releases predate the independent direct completion marker | Neither host retains a release reference at 3.73.0 or earlier; then use the direct marker for every retained release |

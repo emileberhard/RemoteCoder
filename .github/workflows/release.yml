@@ -174,7 +174,7 @@ jobs:
         run: scripts/release-apps archive "$PLATFORM" "$RUNNER_TEMP/archive"
       - name: Export and verify cloud-signed entitlements
         run: scripts/release-apps check "$PLATFORM" "$RUNNER_TEMP/archive"
-      - name: Retain the exact archive and checked export for direct delivery
+      - name: Retain the exact archive and checked export for diagnosis
         run: tar -cf "$RUNNER_TEMP/archive-$PLATFORM.tar" -C "$RUNNER_TEMP/archive" .
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:

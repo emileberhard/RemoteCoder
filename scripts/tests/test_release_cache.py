@@ -140,6 +140,17 @@ class PublishedMacReleaseTests(unittest.TestCase):
             ):
                 fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
 
+    def test_direct_release_completion_is_independent_of_an_app_store_package(self):
+        newer = self.release('3.73.1')
+        with module.reference() as reference:
+            self.assertEqual(reference['version'], '3.34.0')
+        module.mac_completion(newer.parent).touch()
+        with module.reference() as reference:
+            self.assertEqual(reference['version'], '3.73.1')
+        shutil.rmtree(newer)
+        with self.assertRaises(FileNotFoundError), module.reference():
+            self.fail('fell back from a corrupt completed direct release')
+
     def test_copies_signing_inputs_without_reading_the_installed_bench_app(self):
         installed = install_mac.TARGET
         (installed / "Contents/Resources").mkdir(parents=True)
@@ -393,7 +404,6 @@ class ReleasePublicationTests(unittest.TestCase):
                 "gateway": Path(plan["gatewayBundle"]),
                 "codex-package": directory / "codex-package",
                 "mac-app": directory / module.MAC_APP,
-                "mac-package": directory / module.MAC_PACKAGE,
                 "mac-symbols": module.symbol_directory("mac", "3.45.0"),
             }
             for name, copy in copies.items():
@@ -451,30 +461,6 @@ class ReleasePublicationTests(unittest.TestCase):
             self.assertTrue(module.symbol_directory("mac", "3.45.0").is_dir())
         plan = self.catch_up({"gateway": "3.44.1", "app": "3.44.1"})
         self.assertEqual((plan["version"], plan["gateway"], plan["app"]), ("3.45.0", "deliver", "deliver"))
-
-    def test_new_gateway_can_catch_up_before_hosted_app_receipts_arrive(self):
-        with self.on("mini"):
-            directory = module.admit("3.73.1", self.commit)
-            gateway = directory / module.gateway_bundle.NAME
-            package = directory / "codex-package"
-            write(gateway / "Contents/MacOS/gateway", b"gateway")
-            write(package / "bin/codex", b"codex")
-            module.publish("3.73.1", gateway, package)
-        plan = self.catch_up({"gateway": "3.73.0", "app": "3.73.0"})
-        self.assertEqual((plan["gateway"], plan["app"]), ("deliver", "unpublished"))
-
-    def test_new_release_requires_its_exact_reserved_build_receipt(self):
-        with self.on("mini"):
-            directory = module.admit("3.73.1", self.commit)
-            with self.assertRaises(FileNotFoundError):
-                module.release_build_number("3.73.1", "ios")
-            record = {"version": "3.73.1", "commit": self.commit, "ios": "3073001", "mac": "3073002"}
-            write(directory / "build-numbers.json", json.dumps(record).encode())
-            self.assertEqual(module.release_build_number("3.73.1", "mac"), "3073002")
-            record["commit"] = "f" * 40
-            write(directory / "build-numbers.json", json.dumps(record).encode())
-            with self.assertRaisesRegex(ValueError, "does not match its source"):
-                module.release_build_number("3.73.1", "mac")
 
     def test_nothing_published_plans_nothing(self):
         self.assertEqual(self.catch_up({"gateway": "3.44.1", "app": "3.44.1"}), {"version": None})

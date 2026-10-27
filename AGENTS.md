@@ -219,9 +219,10 @@ enter release bundles. `scripts/release-config.py` validates this boundary.
 The public workflow also hands the exact tag, commit and run ID to the private
 [operations entrypoint](https://github.com/emileberhard/RemoteCoder-deploy/blob/main/AGENTS.md).
 It independently admits the tag and successful public CI before running the
-Mini's gateway build and planned restart/recovery. It exports hosted archives
-locally only for ad hoc iPhone and Developer ID Mac delivery, retains symbols and
-build-number receipts, publishes fleet catch-up and creates the GitHub release
+Mini's gateway build and planned restart/recovery. It independently archives the
+same commit locally for ad hoc iPhone and Developer ID Mac delivery, preserving
+the existing semver-derived direct build numbers, cache/capacity leases and host
+job cap. It retains symbols, publishes fleet catch-up and creates the GitHub release
 from the annotated notes after public processing completes. Apps and gateway
 preserve their existing protocol compatibility, so upload has no gateway-version
 ordering dependency. Public contributions never execute on personal runners.

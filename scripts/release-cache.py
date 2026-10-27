@@ -38,7 +38,7 @@ TEAM = maintainer_config().get("xcodeSettings", {}).get("DEVELOPMENT_TEAM", "")
 APP_IDENTIFIER = maintainer_config().get("xcodeSettings", {}).get("RC_BUNDLE_ID", "com.example.RemoteCoder")
 MAC_APP = "RemoteCoderMac-direct.app"
 MAC_PACKAGE = "RemoteCoderMac.pkg"
-MIRRORED = ("build-numbers", "gateway", "mac-app", "mac-package", "ios-symbols", "mac-symbols")
+MIRRORED = ("gateway", "mac-app", "mac-package", "mac-receipt", "ios-symbols", "mac-symbols")
 COMPONENTS = ("gateway", "app")
 SYMBOL_DIRECTORY = rf"testflight-(?:ios|mac)-({VERSION})-[0-9]+"
 SYMBOL_WINDOW_SECONDS = 7 * 24 * 3600
@@ -58,18 +58,13 @@ def version_key(version: str) -> tuple[int, ...]:
     return tuple(map(int, version.split(".")))
 
 
-def release_build_number(version: str, platform: str) -> str:
-    key = version_key(version)
-    if key <= (3, 73, 0):
-        major, minor, patch = key
-        return str(major * 1000000 + minor * 1000 + patch)
-    directory = RELEASES / version
-    record = json.loads((directory / "build-numbers.json").read_text())
-    if (set(record) != {"version", "commit", "ios", "mac"}
-        or record["version"] != version or record["commit"] != (directory / "commit").read_text().strip()
-        or any(not isinstance(record[name], str) or re.fullmatch(r"[1-9][0-9]*", record[name]) is None for name in ("ios", "mac"))):
-        raise ValueError("The release build-number receipt does not match its source")
-    return record[platform]
+def build_number(version: str) -> str:
+    major, minor, patch = version_key(version)
+    return str(major * 1000000 + minor * 1000 + patch)
+
+
+def mac_completion(directory: Path) -> Path:
+    return directory / (MAC_PACKAGE if version_key(directory.name) <= (3, 73, 0) else 'mac-direct-complete')
 
 
 def git(*arguments: str) -> str:
@@ -243,15 +238,14 @@ def publish(version: str, gateway: Path, package: Path) -> dict:
 
 
 def symbol_directory(platform: str, version: str) -> Path:
-    return DEPLOYMENTS / f"testflight-{platform}-{version}-{release_build_number(version, platform)}"
+    return DEPLOYMENTS / f"testflight-{platform}-{version}-{build_number(version)}"
 
 
 def attach(version: str, platform: str) -> dict:
     directory = RELEASES / version
-    required = {"mac-app": directory / MAC_APP, "mac-package": directory / MAC_PACKAGE} if platform == "mac" else {}
-    if version_key(version) > (3, 73, 0):
-        release_build_number(version, platform)
-        required["build-numbers"] = directory / "build-numbers.json"
+    required = {"mac-app": directory / MAC_APP} if platform == "mac" else {}
+    if platform == "mac" and version_key(version) > (3, 73, 0):
+        required["mac-receipt"] = mac_completion(directory)
     artifacts = {name: entry(path) for name, path in required.items()}
     symbols = symbol_directory(platform, version)
     if symbols.is_dir():
@@ -348,8 +342,7 @@ def installed_app(app: Path) -> str:
     if (
         isinstance(version, str)
         and re.fullmatch(VERSION, version)
-        and isinstance(info.get("CFBundleVersion"), str)
-        and re.fullmatch(r"[1-9][0-9]*", info["CFBundleVersion"])
+        and info.get("CFBundleVersion") == build_number(version)
         and info.get("RemoteCoderSourceModified") == "false"
     ):
         return version
@@ -431,8 +424,6 @@ def catch_up(host: str) -> dict:
         return {"version": None}
     version, artifacts = record["version"], record["artifacts"]
     directory = admit(version, record["commit"])
-    if "build-numbers" in artifacts:
-        mirror(host, "build-numbers", artifacts["build-numbers"], directory / "build-numbers.json")
     facts, done = installed(), settled(directory)
     plan = {name: decision(facts[name], version, name in done) for name in COMPONENTS}
     if plan["app"] == "deliver" and "mac-app" not in artifacts:
@@ -441,11 +432,10 @@ def catch_up(host: str) -> dict:
         "gateway": directory / gateway_bundle.NAME,
         "mac-app": directory / MAC_APP,
         "mac-package": directory / MAC_PACKAGE,
+        "mac-receipt": mac_completion(directory),
+        "ios-symbols": symbol_directory("ios", version),
+        "mac-symbols": symbol_directory("mac", version),
     }
-    for platform in ("ios", "mac"):
-        name = f"{platform}-symbols"
-        if name in artifacts:
-            targets[name] = symbol_directory(platform, version)
     for name, target in targets.items():
         if name in artifacts:
             mirror(host, name, artifacts[name], target)
@@ -476,13 +466,13 @@ def verify(directory: Path) -> dict:
         or re.fullmatch(COMMIT, commit) is None
     ):
         raise ValueError(f"{directory} has an invalid release version or commit")
-    if not (directory / MAC_PACKAGE).is_file():
+    if not mac_completion(directory).is_file():
         raise ValueError(f"{directory} has no completed Mac release publication")
     info = plistlib.loads((app / "Contents/Info.plist").read_bytes())
     expected = {
         "CFBundleIdentifier": APP_IDENTIFIER,
         "CFBundleShortVersionString": directory.name,
-        "CFBundleVersion": release_build_number(directory.name, "mac"),
+        "CFBundleVersion": build_number(directory.name),
         "RemoteCoderSourceCommit": commit,
         "RemoteCoderSourceModified": "false",
     }
@@ -522,7 +512,7 @@ def reference():
         complete = [
             directory
             for directory in release_directories()
-            if (directory / MAC_PACKAGE).is_file()
+            if mac_completion(directory).is_file()
         ]
         if not complete:
             raise ValueError(
@@ -556,6 +546,8 @@ def main() -> None:
     admission = operations.add_parser("admit-tag", help="admit the checked-out release tag and print its release directory")
     admission.add_argument("version")
     admission.add_argument("commit")
+    numbering = operations.add_parser("build-number", help="print the monotonic direct-delivery build number")
+    numbering.add_argument("version")
     preparation = operations.add_parser("prepare-package", help="retain the exact approved build package for a release")
     preparation.add_argument("version")
     publication = operations.add_parser("publish", help="record the release this Mac's gateway now runs")
@@ -578,6 +570,8 @@ def main() -> None:
     args = parser.parse_args()
     if args.operation == "admit-tag":
         print(admit_tag(args.version, args.commit))
+    elif args.operation == "build-number":
+        print(build_number(args.version))
     elif args.operation == "prepare-package":
         print(prepare_package(args.version))
     elif args.operation == "publish":

@@ -20,11 +20,17 @@ runners and avoids billed hosted builds in the private deployment repository.
 The private workflow independently checks tag identity, main ancestry, ordering,
 the public release run and green main CI. Only it may use the Mini. Gateway
 build/deploy uses the existing installer and exact-turn recovery. A separate job
-fetches the public run's archives, checks their source/version/build receipts,
-exports ad hoc and Developer ID artifacts and publishes them through the existing
-release cache and fleet catch-up. It does no app compilation. ASC-reserved build
-numbers travel with cache receipts. Releases through 3.73.0 retain their historical
-semver-derived numbers so existing signed cache entries remain readable.
+archives the same admitted commit locally for ad hoc iOS and Developer ID Mac
+delivery, using the local signing keychain, existing cache/capacity leases and
+four-job host cap. The tag is the version in both paths. Direct delivery keeps
+the existing monotonic semver-derived build numbers; hosted App Store builds use
+the ASC reservation. Neither path depends on the other's build numbers.
+
+The release cache publishes the direct artifacts and dSYMs for fleet catch-up.
+The Mac direct completion marker replaces the old App Store package as the
+publication boundary. Existing releases through 3.73.0 keep their old package
+marker so retained signed cache entries remain readable. Both paths verify
+source/version/build stamps, signatures and required entitlements before delivery.
 
 The app has no minimum gateway release-version gate. The existing protocol and
 capability compatibility remains authoritative, so app upload and gateway deploy
@@ -35,8 +41,8 @@ fleet catch-up and user acceptance remain separate outcomes.
 A same-run retry restores the build reservation. The template's upload fence
 checks whether any earlier run attempt started the platform's upload step. A
 later attempt checks ASC for the exact reserved identity for up to 15 minutes;
-when an upload started but Apple exposes no matching build, it stops for reconciliation instead of
-uploading again. Artifacts expire after bounded retention; an expired reservation
+when an upload started but Apple exposes no matching build, it stops for
+reconciliation instead of uploading again. Artifacts expire after bounded retention; an expired reservation
 is not permission to upload that release again. A code change requires the next
 patch tag. Published tags never move.
 
@@ -48,6 +54,10 @@ presses Release.
 
 Rejected alternatives: putting cloud signing on the Mini uses its installed
 Distribution certificate and defeats cloud signing; putting hosted archives in
-the private repository multiplies billed minutes; rebuilding on the Mini wastes
-the hosted artifacts and splits provenance. New cross-repository publishing
-infrastructure and changes to the runtime protocol are unnecessary.
+the private repository multiplies billed minutes. Transferring hosted archives
+would avoid the local archives, but GitHub artifact downloads require an Actions
+read credential for the public repository. The existing public-release token has
+Contents write only, and extending a fine-grained PAT requires Emil in GitHub's
+UI. Keep the established independent direct builds; revisit archive transfer only
+if measured Mini build time justifies that credential boundary. No new token,
+permission or runtime protocol change is required.
