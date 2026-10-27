@@ -18,6 +18,25 @@ struct Fixture {
     socket: PathBuf,
 }
 
+#[tokio::test]
+async fn a_stopped_job_before_provider_preparation_does_not_interrupt_the_conversation() {
+    let fixture = Fixture::new();
+    let before = fixture.agent.stop_generation(THREAD).await.unwrap();
+    fixture
+        .agent
+        .stop_job(&fixture.job_id, &fixture.conversation, &fixture.evidence)
+        .await
+        .unwrap();
+    fixture
+        .agent
+        .acknowledge_job_terminal(&fixture.job_id, &fixture.conversation, &fixture.evidence)
+        .await
+        .unwrap();
+    assert_eq!(fixture.agent.stop_generation(THREAD).await.unwrap(), before);
+    assert!(!fixture.evidence.exists());
+    assert!(!fixture.stub.state.join("launches.jsonl").exists());
+}
+
 impl Fixture {
     fn new() -> Self {
         let stub = StubClaude::new();

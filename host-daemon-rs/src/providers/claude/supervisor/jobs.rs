@@ -445,6 +445,14 @@ impl ClaudeSupervisor {
             job_id: job_id.clone(),
             evidence_path: evidence_path.to_owned(),
         };
+        if self
+            .conversation_index
+            .job(&conversation.thread_id, &handle)
+            .await?
+            .is_none()
+        {
+            return Ok(());
+        }
         self.conversation_index
             .update_job(&conversation.thread_id, &handle, |saved| {
                 ensure!(
@@ -469,11 +477,13 @@ impl ClaudeSupervisor {
             job_id: job_id.clone(),
             evidence_path: evidence_path.to_owned(),
         };
-        let evidence = self
+        let Some(evidence) = self
             .conversation_index
             .job(&conversation.thread_id, &handle)
             .await?
-            .context("Claude job execution evidence is missing")?;
+        else {
+            return Ok(());
+        };
         if matches!(evidence.phase, JobPhase::Finished { .. }) {
             return Ok(());
         }
