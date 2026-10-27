@@ -34,22 +34,23 @@ class StorePreparationTests(unittest.TestCase):
             self.assertEqual(asc.next_build_number('app'), 3073003)
 
     def test_upload_reconciliation_uses_exact_version_number_and_platform(self):
-        upload = {'attributes': {'cfBundleVersion': '3073001', 'cfBundleShortVersionString': '3.73.1', 'platform': 'IOS'}}
+        upload = {'attributes': {'cfBundleVersion': '3073001', 'state': {'state': 'PROCESSING'}}}
         with patch.dict(os.environ, {'APP_STORE_CONNECT_KEY_ID': 'fixture', 'APP_STORE_CONNECT_ISSUER_ID': 'fixture',
                 'APP_STORE_CONNECT_KEY_PATH': 'fixture', 'APP_BUNDLE_ID': 'example', 'ASC_PLATFORM': 'IOS'}), \
                 patch.object(asc, 'api', side_effect=[[{'id': 'app'}], [], [upload]]), patch('builtins.print') as output:
             asc.main('upload-state', 'IOS', '3.73.1', '3073001', 'open')
             output.assert_called_once_with('present')
 
-    def test_uncertain_upload_waits_for_apple_before_reporting_absence(self):
+    def test_uncertain_upload_waits_for_apple_before_refusing_another_upload(self):
         with patch.dict(os.environ, {'APP_STORE_CONNECT_KEY_ID': 'fixture', 'APP_STORE_CONNECT_ISSUER_ID': 'fixture',
                 'APP_STORE_CONNECT_KEY_PATH': 'fixture', 'APP_BUNDLE_ID': 'example'}), \
                 patch.object(asc, 'api', side_effect=[[{'id': 'app'}], [], [], [], []]), \
                 patch.object(asc.time, 'monotonic', side_effect=[0, 0, 901]), \
                 patch.object(asc.time, 'sleep') as sleep, patch('builtins.print') as output:
-            asc.main('upload-state', 'MAC_OS', '3.73.1', '3073002', 'fenced')
+            with self.assertRaisesRegex(SystemExit, 'do not upload again blindly'):
+                asc.main('upload-state', 'MAC_OS', '3.73.1', '3073002', 'fenced')
             sleep.assert_called_once_with(20)
-            output.assert_called_once_with('absent')
+            output.assert_not_called()
 
     def test_unrecognized_historical_build_number_stops_reservation(self):
         with patch.object(asc, 'api', side_effect=[[{'attributes': {'version': '1.2b3'}}], []]):

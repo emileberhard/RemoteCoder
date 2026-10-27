@@ -108,6 +108,28 @@ def wait(description, check):
     return result
 
 
+def uploaded_build_numbers(app, version, number, platform):
+    builds = api("GET", "builds", **{"filter[app]": app, "filter[preReleaseVersion.version]": version,
+                 "filter[preReleaseVersion.platform]": platform, "filter[version]": number, "fields[builds]": "version", "limit": 200})
+    uploads = api("GET", f"apps/{app}/buildUploads", **{"filter[cfBundleShortVersionString]": version, "filter[platform]": platform,
+                  "filter[cfBundleVersion]": number, "fields[buildUploads]": "cfBundleVersion,state", "limit": 200})
+    return [b["attributes"]["version"] for b in builds] + [u["attributes"]["cfBundleVersion"] for u in uploads
+                                                           if u["attributes"]["state"]["state"] in {"PROCESSING", "COMPLETE"}]
+
+
+def reconcile_upload(app, version, number, platform, fenced):
+    deadline = time.monotonic() + (15 * 60 if fenced else 0)
+    while number not in uploaded_build_numbers(app, version, number, platform):
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(20)
+    else:
+        return True
+    if fenced:
+        sys.exit(f"An earlier attempt started uploading {version} ({number}, {platform}), but App Store Connect shows no build for it after 15 minutes. Inspect App Store Connect; do not upload again blindly.")
+    return False
+
+
 def build_components(number):
     if not isinstance(number, str) or not re.fullmatch(r"[0-9]+(?:\.[0-9]+){0,2}", number):
         sys.exit(f"App Store Connect contains an unrecognized CFBundleVersion: {number!r}.")
@@ -178,19 +200,8 @@ def main(command, *arguments):
         platform, version, number, fence = arguments
         if fence not in {"fenced", "open"}:
             sys.exit("The upload fence must be fenced or open.")
-        deadline = time.monotonic() + (15 * 60 if fence == "fenced" else 0)
-        while True:
-            builds = api("GET", "builds", **{"filter[app]": app, "filter[preReleaseVersion.version]": version,
-                "filter[preReleaseVersion.platform]": platform, "filter[version]": number})
-            uploads = api("GET", f"apps/{app}/buildUploads", limit=200, **{"filter[cfBundleVersion]": number,
-                "filter[cfBundleShortVersionString]": version, "filter[platform]": platform})
-            if builds or uploads:
-                print("present")
-                return
-            if time.monotonic() >= deadline:
-                print("absent")
-                return
-            time.sleep(20)
+        print("present" if reconcile_upload(app, version, number, platform, fence == "fenced") else "absent")
+        return
     platform, version, number, notes = arguments
     text = Path(notes).read_text().strip()
     if command == "testflight":
