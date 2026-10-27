@@ -56,6 +56,10 @@ pub(super) fn codex(
     } else {
         models.iter().find(|model| model.model_provider.is_some() && model.id == input)
     }.with_context(|| format!("Model {input:?} is not available in the gateway catalog; use codex-luna, codex-sol, codex-astra or an exact external model ID"))?;
+    ensure!(
+        selected.model_provider.as_deref() != Some("claude"),
+        "Claude catalog entries require spawn_agent claude MODEL; they cannot run through the native Codex adapter"
+    );
     let external = selected.model_provider.is_some();
     ensure!(
         !external || service_tier.is_none_or(|tier| tier == "standard"),
@@ -154,5 +158,12 @@ mod tests {
                 cyber_access_program: Some(CyberAccessProgram::DaybreakBlue),
             }
         );
+    }
+    #[test]
+    fn claude_catalog_entry_never_becomes_native_codex_execution() {
+        let models: Vec<Model> = serde_json::from_value(serde_json::json!([
+            {"id":"claude/opus","model":"opus","modelProvider":"claude","supportedReasoningEfforts":[{"reasoningEffort":"high"}],"defaultReasoningEffort":"high"}
+        ])).unwrap();
+        assert!(codex("claude/opus", None, None, &models).is_err());
     }
 }
