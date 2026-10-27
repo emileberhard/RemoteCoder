@@ -161,6 +161,7 @@ impl ClaudeSupervisor {
             return Err(other_turn(turn_id, active.translator.turn_id()).into());
         }
         active.phase = TurnPhase::Stopping;
+        runtime.input.stop_inputs();
         runtime.lifecycle_generation = runtime.lifecycle_generation.wrapping_add(1);
         Ok(Some(group))
     }

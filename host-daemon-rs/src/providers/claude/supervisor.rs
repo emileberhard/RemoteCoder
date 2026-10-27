@@ -32,6 +32,7 @@ mod controls;
 mod finishing;
 mod idle;
 mod input_writer;
+mod jobs;
 mod lifecycle;
 mod messages;
 mod process;
@@ -42,6 +43,7 @@ mod stream;
 mod suspend;
 mod turns;
 
+pub(crate) use jobs::ClaudeJobInspection;
 pub(crate) use messages::ParentMessage;
 pub(crate) use restart_capture::ResumeDelivery;
 
@@ -318,6 +320,9 @@ struct ClaudeRuntime {
     input: InputWriter,
     pending_controls: HashMap<String, oneshot::Sender<Result<Value, String>>>,
     process_group_id: i32,
+    process_started_micros: Option<u64>,
+    reaped: tokio::sync::watch::Receiver<process::ReapState>,
+    launch: jobs::LaunchPolicy,
     session_uuid: String,
     settings: Option<ClaudeRuntimeSettings>,
     cwd: String,
@@ -453,6 +458,7 @@ pub(crate) struct ClaudeSupervisor {
     live_prefix_budget: Arc<crate::providers::claude::translate::live::LivePrefixBudget>,
     turn_settled: tokio::sync::Notify,
     conversation_index: crate::providers::claude::conversation_index::Store,
+    job_changes: tokio::sync::watch::Sender<()>,
 }
 
 impl ClaudeSupervisor {
@@ -485,6 +491,7 @@ impl ClaudeSupervisor {
             next_turn_sequence: AtomicU64::new(1),
             live_prefix_budget: Arc::default(),
             turn_settled: tokio::sync::Notify::new(),
+            job_changes: tokio::sync::watch::channel(()).0,
         })
     }
 

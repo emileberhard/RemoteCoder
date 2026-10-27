@@ -23,11 +23,35 @@ const INPUT_STALL_LIMIT: Duration = Duration::from_secs(10);
 const MAX_UNCONSUMED_INPUTS: usize = 32;
 
 #[derive(Clone, Default)]
-pub(super) struct UnconsumedInputs(Arc<StdMutex<VecDeque<ClaudeUserInput>>>);
+pub(super) struct UnconsumedInputs(Arc<StdMutex<InputState>>);
+
+struct InputState {
+    inputs: VecDeque<ClaudeUserInput>,
+    accepts_input: bool,
+}
+
+impl Default for InputState {
+    fn default() -> Self {
+        Self {
+            inputs: VecDeque::new(),
+            accepts_input: true,
+        }
+    }
+}
 
 impl UnconsumedInputs {
-    pub(super) fn queue(&self, input: Option<ClaudeUserInput>, send: impl FnOnce()) {
-        let mut inputs = self.0.lock().expect("Claude input record poisoned");
+    pub(super) fn queue(
+        &self,
+        input: Option<ClaudeUserInput>,
+        send: impl FnOnce(),
+    ) -> std::io::Result<()> {
+        let mut state = self.0.lock().expect("Claude input record poisoned");
+        if input.is_some() && !state.accepts_input {
+            return Err(std::io::Error::other(
+                "Claude input was stopped before submission",
+            ));
+        }
+        let inputs = &mut state.inputs;
         if let Some(input) = input {
             if inputs.len() == MAX_UNCONSUMED_INPUTS
                 && let Some(dropped) = inputs.pop_front()
@@ -37,12 +61,14 @@ impl UnconsumedInputs {
             inputs.push_back(input);
         }
         send();
+        Ok(())
     }
 
     pub(super) fn remove(&self, id: &str) {
         self.0
             .lock()
             .expect("Claude input record poisoned")
+            .inputs
             .retain(|input| input.client_id.as_deref() != Some(id));
     }
 
@@ -50,7 +76,8 @@ impl UnconsumedInputs {
         if consumed.is_empty() {
             return Vec::new();
         }
-        let mut inputs = self.0.lock().expect("Claude input record poisoned");
+        let mut state = self.0.lock().expect("Claude input record poisoned");
+        let inputs = &mut state.inputs;
         let Some(last) = inputs.iter().rposition(|input| {
             input
                 .client_id
@@ -69,6 +96,7 @@ impl UnconsumedInputs {
         self.0
             .lock()
             .expect("Claude input record poisoned")
+            .inputs
             .iter()
             .cloned()
             .collect()
@@ -78,6 +106,7 @@ impl UnconsumedInputs {
 enum Frame {
     Input(Arc<PreparedInput>),
     Control(PreparedControl),
+    Close,
 }
 
 struct Submission {
@@ -160,6 +189,19 @@ impl InputWriter {
         self.submit(Frame::Input(input)).await
     }
 
+    pub(super) async fn close(&self) -> std::io::Result<()> {
+        self.stop_inputs();
+        self.submit(Frame::Close).await
+    }
+
+    pub(super) fn stop_inputs(&self) {
+        self.unconsumed
+            .0
+            .lock()
+            .expect("Claude input record poisoned")
+            .accepts_input = false;
+    }
+
     pub(super) fn prepare_control(
         request_id: &str,
         request: &Value,
@@ -206,7 +248,7 @@ impl InputWriter {
     }
 
     async fn submit(&self, frame: Frame) -> std::io::Result<()> {
-        self.reserve().await?.send(frame).written().await
+        self.reserve().await?.send(frame)?.written().await
     }
 
     pub(super) async fn reserve(&self) -> std::io::Result<InputSlot> {
@@ -238,25 +280,26 @@ pub(super) struct InputSlot {
 }
 
 impl InputSlot {
-    pub(super) fn send_input(self, input: Arc<PreparedInput>) -> PendingWrite {
+    pub(super) fn send_input(self, input: Arc<PreparedInput>) -> std::io::Result<PendingWrite> {
         self.send(Frame::Input(input))
     }
 
-    fn send(self, frame: Frame) -> PendingWrite {
+    fn send(self, frame: Frame) -> std::io::Result<PendingWrite> {
         let (written, outcome) = oneshot::channel();
         let input = match &frame {
             Frame::Input(prepared) => Some(prepared.input.clone()),
             Frame::Control(_) => None,
+            Frame::Close => None,
         };
         let permit = self.permit;
         self.unconsumed.queue(input, || {
             permit.send(Submission { frame, written });
-        });
-        PendingWrite {
+        })?;
+        Ok(PendingWrite {
             outcome,
             deadline: self.deadline,
             limit: self.limit,
-        }
+        })
     }
 }
 
@@ -343,6 +386,12 @@ pub(super) struct PreparedInput {
     raw: Vec<u8>,
 }
 
+impl PreparedInput {
+    pub(super) fn input_id(&self) -> Option<&str> {
+        self.input.client_id.as_deref()
+    }
+}
+
 #[derive(Serialize)]
 struct InputFrame<'a> {
     #[serde(rename = "type")]
@@ -406,7 +455,7 @@ async fn write_until_failure<W: AsyncWrite + Unpin>(
         };
         let failed = result.is_err();
         let _ = submission.written.send(result);
-        if failed {
+        if failed || matches!(submission.frame, Frame::Close) {
             return;
         }
     }
@@ -425,6 +474,7 @@ impl<W: AsyncWrite + Unpin> FramedInput<W> {
                 written
             }
             Frame::Control(prepared) => self.write_raw(&prepared.raw).await,
+            Frame::Close => self.writer.shutdown().await,
         }
     }
 
@@ -472,6 +522,22 @@ mod capacity_tests {
     use super::*;
     use crate::providers::claude::input::ClaudeImage;
     use serde_json::json;
+
+    #[tokio::test]
+    async fn a_reserved_slot_cannot_enqueue_after_stop_claims_input() {
+        use tokio::io::AsyncReadExt;
+        let (writer, mut reader) = tokio::io::duplex(1024);
+        let input = InputWriter::spawn(writer);
+        let reserved = input.reserve().await.unwrap();
+        let prepared = InputWriter::prepare_input(&ClaudeUserInput::text("late callback")).unwrap();
+        input.stop_inputs();
+        assert!(reserved.send_input(prepared).is_err());
+        assert!(input.unconsumed().pending().is_empty());
+        input.close().await.unwrap();
+        let mut bytes = Vec::new();
+        reader.read_to_end(&mut bytes).await.unwrap();
+        assert!(bytes.is_empty());
+    }
 
     #[tokio::test]
     async fn input_frame_capacity_rejects_image_expansion_before_the_queue_and_keeps_writer_usable()

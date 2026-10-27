@@ -23,6 +23,8 @@ use crate::storage::private_state::{self, Creation};
 use crate::wire::gateway::TerminalError;
 use tokio::sync::{Mutex, OwnedMutexGuard};
 
+pub(crate) mod job;
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ItemIdentity {
@@ -72,6 +74,19 @@ enum Record {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct MintedSession {
     thread_id: String,
+    #[serde(default)]
+    origin: SessionOrigin,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) enum SessionOrigin {
+    TopLevel,
+    Job {
+        job_id: crate::agents::jobs::model::JobId,
+    },
+    #[default]
+    Unknown,
 }
 
 const MAX_PARENT_RECORD_BYTES: u64 = 512 * 1024;
@@ -128,6 +143,10 @@ pub(crate) struct Parent {
     pub stopped: bool,
     #[serde(default)]
     pub stop_generation: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_scope: Option<crate::agents::jobs::model::ToolScope>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_job: Option<job::JobHandle>,
     deliveries: VecDeque<Delivery>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     delivery_fingerprints: HashMap<String, String>,
@@ -146,6 +165,27 @@ impl Parent {
                     .get(&format!("{:x}", Sha256::digest(id.as_bytes())))
                     .map(String::as_str)
             })
+    }
+
+    pub(crate) fn delivery_for_input(&self, thread: &str, input: &str) -> Option<&Delivery> {
+        self.deliveries
+            .iter()
+            .find(|delivery| delivery_uuid(thread, &delivery.id) == input)
+    }
+
+    pub(crate) fn mark_delivery_sending(&mut self, thread: &str, input: &str) -> Result<()> {
+        if let Some(delivery) = self
+            .deliveries
+            .iter_mut()
+            .find(|delivery| delivery_uuid(thread, &delivery.id) == input)
+        {
+            ensure!(
+                matches!(delivery.state, DeliveryState::Prepared),
+                "Claude callback input is not prepared for submission"
+            );
+            delivery.state = DeliveryState::Sending;
+        }
+        Ok(())
     }
 
     pub(crate) fn record_delivery(&mut self, delivery: Delivery) {
@@ -169,6 +209,31 @@ impl Parent {
             }
         }
     }
+}
+
+pub(crate) fn delivery_uuid(thread_id: &str, delivery_id: &str) -> String {
+    let digest = Sha256::new()
+        .chain_update(b"remotecoder-claude-message\0")
+        .chain_update(thread_id.as_bytes())
+        .chain_update(b"\0")
+        .chain_update(delivery_id.as_bytes())
+        .finalize();
+    let mut bytes = [0_u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    bytes[6] = (bytes[6] & 0x0f) | 0x80;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    let hex = bytes
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    format!(
+        "{}-{}-{}-{}-{}",
+        &hex[..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..]
+    )
 }
 
 #[derive(Serialize, Deserialize)]
@@ -299,7 +364,7 @@ fn read_no_follow(path: &Path) -> Result<Option<Vec<u8>>> {
     Ok(Some(data))
 }
 
-fn check_minted(data: &[u8], thread_id: &str, file: &Path) -> Result<()> {
+fn check_minted(data: &[u8], thread_id: &str, file: &Path) -> Result<SessionOrigin> {
     let record: MintedSession =
         serde_json::from_slice(data).context("invalid Claude creation record")?;
     ensure!(
@@ -307,7 +372,7 @@ fn check_minted(data: &[u8], thread_id: &str, file: &Path) -> Result<()> {
         "Claude creation record {} belongs to another thread",
         file.display()
     );
-    Ok(())
+    Ok(record.origin)
 }
 
 fn fork(home: &Path, source_id: &str, target_id: &str, turns: &HashSet<String>) -> Result<()> {
@@ -402,28 +467,61 @@ impl Store {
     }
 
     pub(crate) async fn record_minted(&self, thread_id: &str) -> Result<()> {
+        self.record_creation(thread_id, SessionOrigin::TopLevel)
+            .await
+    }
+
+    pub(crate) async fn record_job_session(
+        &self,
+        thread_id: &str,
+        job_id: &crate::agents::jobs::model::JobId,
+    ) -> Result<()> {
+        self.record_creation(
+            thread_id,
+            SessionOrigin::Job {
+                job_id: job_id.clone(),
+            },
+        )
+        .await
+    }
+
+    async fn record_creation(&self, thread_id: &str, origin: SessionOrigin) -> Result<()> {
         let file = minted_path(&self.home, thread_id);
         let mut encoded = serde_json::to_vec(&MintedSession {
             thread_id: thread_id.to_owned(),
+            origin: origin.clone(),
         })?;
         encoded.push(b'\n');
-        let creation =
-            tokio::task::spawn_blocking(move || private_state::create_new(&file, &encoded))
-                .await??;
-        ensure!(
-            creation == Creation::Created,
-            "Claude thread {thread_id} already has a creation record"
-        );
-        Ok(())
+        let thread = thread_id.to_owned();
+        tokio::task::spawn_blocking(move || match private_state::create_new(&file, &encoded)? {
+            Creation::Created => Ok(()),
+            Creation::AlreadyExists => {
+                ensure!(
+                    matches!(origin, SessionOrigin::Job { .. }),
+                    "Claude thread {thread} already has a creation record"
+                );
+                let saved = read_record(&file, MAX_MINTED_RECORD_BYTES)?
+                    .context("Claude creation record disappeared")?;
+                ensure!(
+                    check_minted(&saved, &thread, &file)? == origin,
+                    "Claude thread {thread} already has a different creation origin"
+                );
+                Ok(())
+            }
+        })
+        .await?
     }
 
     pub(crate) fn is_minted(&self, thread_id: &str) -> Result<bool> {
+        Ok(self.creation_origin(thread_id)?.is_some())
+    }
+
+    pub(crate) fn creation_origin(&self, thread_id: &str) -> Result<Option<SessionOrigin>> {
         let file = minted_path(&self.home, thread_id);
         let Some(data) = read_record(&file, MAX_MINTED_RECORD_BYTES)? else {
-            return Ok(false);
+            return Ok(None);
         };
-        check_minted(&data, thread_id, &file)?;
-        Ok(true)
+        check_minted(&data, thread_id, &file).map(Some)
     }
 
     pub(crate) async fn parent(&self, thread_id: &str) -> Result<Parent> {

@@ -1,5 +1,7 @@
 use super::{ClaudeSupervisor, TurnOrigin, TurnStartError};
-use crate::providers::claude::conversation_index::{Delivery, DeliveryState, ParentSelection};
+use crate::providers::claude::conversation_index::{
+    Delivery, DeliveryState, ParentSelection, delivery_uuid,
+};
 use crate::providers::claude::{
     ClaudeSelection, ClaudeTurnRequest, ClaudeUserInput, session_uuid_from_thread_id,
 };
@@ -20,20 +22,6 @@ pub(crate) struct ParentMessage {
 enum DispatchFailure {
     Rejected(TurnStartError),
     Uncertain(TurnStartError),
-}
-
-impl DispatchFailure {
-    fn from_start(error: TurnStartError) -> Self {
-        if matches!(
-            error.code,
-            RpcCode::InvalidParams | RpcCode::ServerBusy | RpcCode::Capacity
-        ) || error.is_unanswered()
-        {
-            Self::Rejected(error)
-        } else {
-            Self::Uncertain(error)
-        }
-    }
 }
 
 impl ClaudeSupervisor {
@@ -83,6 +71,29 @@ impl ClaudeSupervisor {
     }
 
     pub(crate) async fn stop_parent(&self, thread_id: &str) -> anyhow::Result<()> {
+        let job = self
+            .runtimes
+            .lock()
+            .await
+            .get(thread_id)
+            .and_then(|runtime| {
+                runtime.input.stop_inputs();
+                runtime.launch.job().cloned()
+            });
+        if let Some(handle) = job {
+            self.conversation_index
+                .update_job(thread_id, &handle, |saved| {
+                    if !matches!(
+                        saved.phase,
+                        crate::providers::claude::conversation_index::job::JobPhase::Finished { .. }
+                    ) {
+                        saved.phase =
+                            crate::providers::claude::conversation_index::job::JobPhase::Stopping;
+                    }
+                    Ok(())
+                })
+                .await?;
+        }
         self.conversation_index
             .update_parent(thread_id, |parent| {
                 parent.stopped = true;
@@ -165,28 +176,6 @@ impl ClaudeSupervisor {
             ));
         }
         let prior = parent.delivery(&message.delivery_id);
-        if known.is_some()
-            && prior.is_none_or(|delivery| {
-                matches!(
-                    delivery.state,
-                    DeliveryState::Submitted | DeliveryState::Recorded
-                )
-            })
-        {
-            let mut receipt = prior.map_or_else(
-                || {
-                    receipt(
-                        &message,
-                        DeliveryState::Submitted,
-                        "gateway-submitted",
-                        None,
-                    )
-                },
-                |delivery| delivery.receipt.clone(),
-            );
-            receipt["duplicate"] = json!(true);
-            return Ok(receipt);
-        }
         let recorded = match self.session_history(
             parent
                 .selection
@@ -220,12 +209,18 @@ impl ClaudeSupervisor {
                     "Delivery id is recorded in Claude history with different message content",
                 ));
             }
-            if known.is_none() && recorded_fingerprint.is_none() {
+            if recorded_fingerprint.is_none() {
                 return Err(uncertain(
                     "Claude history records this input UUID, but its original payload cannot be verified".to_owned(),
                 ));
             }
-            let receipt = receipt(&message, DeliveryState::Recorded, "gateway-recorded", None);
+            let mut receipt = receipt(
+                &message,
+                DeliveryState::Recorded,
+                "gateway-recorded",
+                prior.and_then(|delivery| delivery.receipt["turn_id"].as_str()),
+            );
+            receipt["duplicate"] = json!(true);
             self.save_delivery(
                 &message.thread_id,
                 Delivery {
@@ -236,6 +231,28 @@ impl ClaudeSupervisor {
                 },
             )
             .await?;
+            return Ok(receipt);
+        }
+        if known.is_some()
+            && prior.is_none_or(|delivery| {
+                matches!(
+                    delivery.state,
+                    DeliveryState::Submitted | DeliveryState::Recorded
+                )
+            })
+        {
+            let mut receipt = prior.map_or_else(
+                || {
+                    receipt(
+                        &message,
+                        DeliveryState::Submitted,
+                        "gateway-submitted",
+                        None,
+                    )
+                },
+                |delivery| delivery.receipt.clone(),
+            );
+            receipt["duplicate"] = json!(true);
             return Ok(receipt);
         }
         if prior.is_some_and(|delivery| {
@@ -289,10 +306,6 @@ impl ClaudeSupervisor {
                 })
             })
         };
-        let mut sending = prepared;
-        sending.state = DeliveryState::Sending;
-        self.prepare_delivery(&message.thread_id, sending, stop_generation)
-            .await?;
         let dispatched = if let Some((turn_id, input, group)) = active {
             let prepared = super::input_writer::InputWriter::prepare_input(&request.input)
                 .map_err(TurnStartError::from)?;
@@ -303,15 +316,27 @@ impl ClaudeSupervisor {
             self.start_turn_locked(request, TurnOrigin::Callback { stop_generation })
                 .await
                 .map(|turn_id| (turn_id, "gateway-started"))
-                .map_err(DispatchFailure::from_start)
+                .map_err(DispatchFailure::Uncertain)
         };
         let (turn_id, delivery) = match dispatched {
             Ok(delivery) => delivery,
             Err(failure) => {
-                let (state, error) = match failure {
+                let (mut state, error) = match failure {
                     DispatchFailure::Rejected(error) => (DeliveryState::Rejected, error),
                     DispatchFailure::Uncertain(error) => (DeliveryState::Uncertain, error),
                 };
+                if let Ok(current) = self.conversation_index.parent(&message.thread_id).await
+                    && current
+                        .delivery(&message.delivery_id)
+                        .is_some_and(|delivery| {
+                            matches!(
+                                delivery.state,
+                                DeliveryState::Prepared | DeliveryState::Rejected
+                            )
+                        })
+                {
+                    state = DeliveryState::Rejected;
+                }
                 self.save_delivery(
                     &message.thread_id,
                     Delivery {
@@ -419,17 +444,29 @@ impl ClaudeSupervisor {
                 "Claude parent was interrupted by the user, so this message will not wake it",
             )));
         }
-        let pending = {
+        let policy = {
             let runtimes = self.runtimes.lock().await;
-            if !runtimes.get(thread).is_some_and(|runtime| {
+            let Some(runtime) = runtimes.get(thread).filter(|runtime| {
                 runtime.process_group_id == group && runtime.running_turn().is_some()
-            }) {
+            }) else {
                 return Err(DispatchFailure::Rejected(rejected(
                     "Claude parent execution changed before this message was submitted",
                 )));
-            }
-            slot.send_input(prepared)
+            };
+            runtime.launch.clone()
         };
+        let pending = self
+            .submit_callback_input(
+                thread,
+                &policy,
+                TurnOrigin::Callback {
+                    stop_generation: generation,
+                },
+                slot,
+                prepared,
+            )
+            .await
+            .map_err(DispatchFailure::Rejected)?;
         if let Err(error) = pending.written().await {
             if super::InputWriter::is_stalled(&error) {
                 return Err(DispatchFailure::Uncertain(self.input_stalled(
@@ -449,6 +486,53 @@ impl ClaudeSupervisor {
         self.ensure_runtime_current(thread, group)
             .await
             .map_err(DispatchFailure::Uncertain)
+    }
+
+    pub(super) async fn submit_callback_input(
+        &self,
+        thread: &str,
+        policy: &super::jobs::LaunchPolicy,
+        origin: TurnOrigin,
+        slot: super::input_writer::InputSlot,
+        prepared: Arc<super::input_writer::PreparedInput>,
+    ) -> Result<super::input_writer::PendingWrite, TurnStartError> {
+        let TurnOrigin::Callback { stop_generation } = origin else {
+            return self.submit_job_input(thread, policy, slot, prepared).await;
+        };
+        let input = prepared
+            .input_id()
+            .ok_or_else(|| rejected("Claude callback has no exact input identity"))?
+            .to_owned();
+        let saved_input = input.clone();
+        let saved_thread = thread.to_owned();
+        self.conversation_index
+            .transact_parent(thread, move |parent| {
+                anyhow::ensure!(
+                    !parent.stopped && parent.stop_generation == stop_generation,
+                    "Claude parent was interrupted before submission"
+                );
+                parent.mark_delivery_sending(&saved_thread, &saved_input)
+            })
+            .await
+            .map_err(|error| {
+                rejected(&format!(
+                    "Claude callback could not enter submission: {error:#}"
+                ))
+            })?;
+        match self.submit_job_input(thread, policy, slot, prepared).await {
+            Ok(pending) => Ok(pending),
+            Err(error) => {
+                let saved_thread = thread.to_owned();
+                self.conversation_index.transact_parent(thread, move |parent| {
+                    if let Some(mut delivery) = parent.delivery_for_input(&saved_thread, &input).cloned() {
+                        delivery.state = DeliveryState::Rejected;
+                        parent.record_delivery(delivery);
+                    }
+                    Ok(())
+                }).await.map_err(|saved| uncertain(format!("Claude input was not queued, but that outcome could not be saved: {saved:#}")))?;
+                Err(error)
+            }
+        }
     }
 
     pub(super) async fn check_callback_generation(
@@ -496,31 +580,6 @@ fn receipt(
 
 fn uncertain(message: String) -> TurnStartError {
     TurnStartError::delivery_uncertain(message)
-}
-
-fn delivery_uuid(thread_id: &str, delivery_id: &str) -> String {
-    let digest = Sha256::new()
-        .chain_update(b"remotecoder-claude-message\0")
-        .chain_update(thread_id.as_bytes())
-        .chain_update(b"\0")
-        .chain_update(delivery_id.as_bytes())
-        .finalize();
-    let mut bytes = [0_u8; 16];
-    bytes.copy_from_slice(&digest[..16]);
-    bytes[6] = (bytes[6] & 0x0f) | 0x80;
-    bytes[8] = (bytes[8] & 0x3f) | 0x80;
-    let hex = bytes
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
-    format!(
-        "{}-{}-{}-{}-{}",
-        &hex[..8],
-        &hex[8..12],
-        &hex[12..16],
-        &hex[16..20],
-        &hex[20..]
-    )
 }
 
 fn rejected(message: &str) -> TurnStartError {
@@ -1134,6 +1193,7 @@ mod tests {
 
         assert_eq!(receipt["delivery"], "gateway-started");
         assert_eq!(retried["duplicate"], true);
+        assert_eq!(retried["delivery_state"], "recorded");
         assert_eq!(retried["turn_id"], receipt["turn_id"]);
         assert_eq!(launches.len(), 2);
         let args = launches[1]["argv"].as_array().unwrap();

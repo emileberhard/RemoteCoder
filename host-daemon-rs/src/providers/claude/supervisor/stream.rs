@@ -1,7 +1,7 @@
 use super::{
     ClaudeRuntime, ClaudeRuntimeSettings, ClaudeSupervisor, RuntimeTurn, STDERR_RING_CAPACITY,
-    TurnPhase, TurnStartError, annotate_agent_initiated, consumed_input_ids,
-    is_background_tasks_change, opens_turn, wake_reason,
+    TurnPhase, TurnStartError, annotate_agent_initiated, is_background_tasks_change, opens_turn,
+    wake_reason,
 };
 use crate::ids::new_session_uuid;
 use crate::providers::claude::capacity::{CapacityExceeded, read_stream_line};
@@ -261,7 +261,13 @@ impl ClaudeSupervisor {
             };
             match read {
                 Ok(true) => {}
-                Ok(false) => break "Claude stream ended unexpectedly".to_string(),
+                Ok(false) => match self.finish_job_eof(&thread_id, process_group_id).await {
+                    Ok(true) => return,
+                    Ok(false) => break "Claude stream ended unexpectedly".to_string(),
+                    Err(error) => {
+                        break format!("Claude job EOF evidence could not be finalized: {error:#}");
+                    }
+                },
                 Err(error) => {
                     if let Some(capacity) = error
                         .get_ref()
@@ -336,6 +342,19 @@ impl ClaudeSupervisor {
                     .await;
             }
 
+            let evidence = match self
+                .observe_job_frame(&thread_id, process_group_id, &value)
+                .await
+            {
+                Ok(evidence) => evidence,
+                Err(error) => {
+                    break format!("Claude job execution evidence could not be saved: {error:#}");
+                }
+            };
+            if let Err(error) = self.close_quiescent_job(&thread_id, process_group_id).await {
+                break format!("Claude job input could not be closed safely: {error:#}");
+            }
+
             self.wait_for_finishing_turn(&thread_id).await;
             let mut opened: Option<Value> = None;
             let translated = {
@@ -346,13 +365,7 @@ impl ClaudeSupervisor {
                 if runtime.process_group_id != process_group_id {
                     return;
                 }
-                let consumed = consumed_input_ids(&value);
-                let taken = runtime.input.unconsumed().take(&consumed);
-                let evidence = consumed
-                    .iter()
-                    .copied()
-                    .chain(taken.iter().map(String::as_str))
-                    .collect::<Vec<_>>();
+                let evidence = evidence.iter().map(String::as_str).collect::<Vec<_>>();
                 if value.get("type").and_then(Value::as_str) == Some("control_response") {
                     let response = &value["response"];
                     if let Some(sender) = response["request_id"]
@@ -425,6 +438,9 @@ impl ClaudeSupervisor {
 
             if let Some(result) = translated.result {
                 self.finish_turn(&thread_id, process_group_id, result).await;
+            }
+            if let Err(error) = self.close_quiescent_job(&thread_id, process_group_id).await {
+                break format!("Claude job input could not be closed safely: {error:#}");
             }
         };
 
