@@ -197,6 +197,20 @@ impl ClaudeSupervisor {
             );
             return Ok(bound);
         }
+        let first_turn = self
+            .session_history(&spec.cwd.to_string_lossy(), &session_uuid)
+            .is_none();
+        if first_turn {
+            ensure!(
+                self.creation_origin(&conversation.thread_id)?
+                    == Some(
+                        crate::providers::claude::conversation_index::SessionOrigin::Job {
+                            job_id: job_id.clone()
+                        }
+                    ),
+                "Claude continuation history is missing; only the exact job that created an unexecuted session may launch it fresh"
+            );
+        }
         let scope = spec.tool_scope.clone();
         let parent_handle = handle.clone();
         self.conversation_index
@@ -216,13 +230,7 @@ impl ClaudeSupervisor {
         let request = ClaudeTurnRequest {
             thread_id: conversation.thread_id.clone(),
             session_uuid,
-            first_turn: self
-                .session_history(
-                    &spec.cwd.to_string_lossy(),
-                    session_uuid_from_thread_id(&conversation.thread_id)
-                        .context("Claude session is missing")?,
-                )
-                .is_none(),
+            first_turn,
             input: ClaudeUserInput {
                 client_id: Some(input_id.to_owned()),
                 ..ClaudeUserInput::text(spec.prompt.clone())

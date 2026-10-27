@@ -248,3 +248,36 @@ async fn an_exact_orphan_process_blocks_a_second_process_and_stop_keeps_final_ev
         }
     ));
 }
+
+#[tokio::test]
+async fn continuation_without_exact_history_cannot_start_fresh_under_the_old_session_uuid() {
+    let fixture = Fixture::new();
+    fixture.start().await;
+    fixture.stub.wait_for_log("received.jsonl", 1).await;
+    fixture
+        .agent
+        .stop_job(&fixture.job_id, &fixture.conversation, &fixture.evidence)
+        .await
+        .unwrap();
+    fs::remove_file(fixture.stub.history(SESSION)).unwrap();
+    let continued =
+        JobId::try_from("agent-claude-2026102720000000001-abcdef12".to_owned()).unwrap();
+    let error = fixture
+        .agent
+        .start_job(
+            &continued,
+            &fixture.conversation,
+            &fixture.spec,
+            "33333333-2222-4333-8444-666666666666",
+            &fixture.socket,
+            &fixture.evidence.with_file_name("continued.json"),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("continuation history is missing")
+    );
+    assert_eq!(fixture.stub.log("launches.jsonl").len(), 1);
+}
