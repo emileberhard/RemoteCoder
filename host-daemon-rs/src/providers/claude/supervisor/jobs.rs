@@ -11,7 +11,7 @@ use crate::agents::jobs::model::{
     JobSpec, Provider, ProviderHome, ToolScope,
 };
 use crate::providers::claude::conversation_index::job::{
-    Candidate, JobEvidence, JobHandle, JobInput, JobPhase, ProcessOwner,
+    Candidate, JobEvidence, JobHandle, JobInput, JobPhase, ProcessOwner, RecoveryInput,
 };
 use crate::providers::claude::{
     ClaudeSelection, ClaudeTurnRequest, ClaudeUserInput, session_uuid_from_thread_id,
@@ -93,6 +93,9 @@ impl LaunchPolicy {
 
 pub(crate) enum ClaudeJobInspection {
     Prepared,
+    PreparedRecovery {
+        recovery_input_id: String,
+    },
     Running {
         binding: ExecutionBinding,
     },
@@ -185,6 +188,12 @@ impl ClaudeSupervisor {
                 &handle,
             )
             .await?;
+        ensure!(
+            !(matches!(evidence.phase, JobPhase::Prepared)
+                && evidence.owner.is_none()
+                && evidence.recovery_input.is_some()),
+            "Claude job has prepared recovery input; retry its exact recovery UUID instead of replaying the original prompt"
+        );
         if evidence.turn_id.is_some()
             || evidence.owner.is_some()
             || !matches!(evidence.phase, JobPhase::Prepared)
@@ -330,7 +339,13 @@ impl ClaudeSupervisor {
             return Ok(ClaudeJobInspection::Recoverable { binding });
         }
         Ok(match evidence.phase {
-            JobPhase::Prepared if evidence.owner.is_none() => ClaudeJobInspection::Prepared,
+            JobPhase::Prepared if evidence.owner.is_none() && !evidence.input_recorded && !evidence.input_consumed => {
+                match evidence.recovery_input {
+                    Some(recovery) => ClaudeJobInspection::PreparedRecovery { recovery_input_id: recovery.input.id },
+                    None if evidence.turn_id.is_none() => ClaudeJobInspection::Prepared,
+                    None => ClaudeJobInspection::Unknown { reason:"Claude initial preparation unexpectedly retains a prior turn binding".into() },
+                }
+            }
             _ => ClaudeJobInspection::Unknown { reason: "Claude execution ended without final EOF and reap evidence; exact recovery must inspect history and state".into() },
         })
     }
@@ -350,6 +365,9 @@ impl ClaudeSupervisor {
             .await?
         {
             ClaudeJobInspection::Recoverable { .. } => {}
+            ClaudeJobInspection::PreparedRecovery {
+                recovery_input_id: saved,
+            } if saved == recovery_input_id => {}
             _ => anyhow::bail!("Claude job has no exact recoverable execution evidence"),
         }
         let ExecutionSettings::Claude {
@@ -365,6 +383,7 @@ impl ClaudeSupervisor {
             evidence_path: evidence_path.to_owned(),
         };
         let socket = coordination_socket.to_owned();
+        let expected_recovery = recovery_input_id.to_owned();
         let evidence = self
             .conversation_index
             .update_job(&conversation.thread_id, &handle, move |saved| {
@@ -372,7 +391,9 @@ impl ClaudeSupervisor {
                     !matches!(saved.phase, JobPhase::Stopping | JobPhase::Finished { .. }),
                     "Claude job cannot recover after Stop or finalization"
                 );
-                ensure!((saved.input_consumed || saved.input_recorded) && saved.owner.is_some(), "Claude job has no positive input evidence; uncertain original input cannot be resumed");
+                let prepared_recovery = matches!(saved.phase,JobPhase::Prepared) && saved.owner.is_none()
+                    && saved.recovery_input.as_ref().is_some_and(|recovery| recovery.input.id == expected_recovery);
+                ensure!(prepared_recovery || ((saved.input_consumed || saved.input_recorded) && saved.owner.is_some()), "Claude job has no positive input evidence; uncertain original input cannot be resumed");
                 saved.coordination_socket = socket;
                 Ok(saved.clone())
             })
@@ -395,7 +416,14 @@ impl ClaudeSupervisor {
             queued_inputs: Vec::new(),
             earlier_events: Vec::new(),
             stop_generation: Some(evidence.stop_generation),
-            captured_at_unix_ms: crate::time::unix_millis() as u64,
+            captured_at_unix_ms: evidence
+                .recovery_input
+                .as_ref()
+                .filter(|recovery| recovery.input.id == recovery_input_id)
+                .map_or_else(
+                    || crate::time::unix_millis() as u64,
+                    |recovery| recovery.captured_at_unix_ms,
+                ),
             status: crate::providers::claude::restart::ItemStatus::Captured,
             attempts: 0,
             resumed_turn_id: None,
@@ -478,7 +506,7 @@ impl ClaudeSupervisor {
                 "Claude's exact execution or its process group has not stopped; Stop stays pending"
             );
         }
-        let effects = if evidence.owner.is_some() {
+        let effects = if evidence.owner.is_some() || evidence.recovery_input.is_some() {
             EffectEvidence::MayHaveRun
         } else {
             EffectEvidence::NotStarted
@@ -580,8 +608,24 @@ impl ClaudeSupervisor {
                 ))
             })?
             .ok_or_else(|| TurnStartError::internal("Claude job evidence is missing"))?;
+        let input =
+            JobInput {
+                id: request.input.client_id.clone().ok_or_else(|| {
+                    TurnStartError::internal("Claude job input identity is missing")
+                })?,
+                fingerprint: format!("{:x}", Sha256::digest(request.input.text.as_bytes())),
+            };
         if matches!(saved.phase, JobPhase::Prepared) && saved.owner.is_none() {
-            return Ok(());
+            if saved.current_input() == &input
+                && saved.recovery_input.is_some() == request.input.notice.is_some()
+                && !saved.input_consumed
+                && !saved.input_recorded
+            {
+                return Ok(());
+            }
+            return Err(TurnStartError::delivery_uncertain(
+                "Claude prepared input identity conflicts; the original prompt or another recovery payload will not be replayed",
+            ));
         }
         let live = self
             .runtimes
@@ -597,7 +641,21 @@ impl ClaudeSupervisor {
                 "Claude job is stopped or finished and cannot resume",
             ));
         }
-        if let Some(owner) = saved.owner {
+        let saved = self
+            .reconcile_job_input(&request.thread_id, handle, saved)
+            .await
+            .map_err(|error| {
+                TurnStartError::delivery_uncertain(format!(
+                    "Claude input evidence could not be reconciled before recovery: {error:#}"
+                ))
+            })?;
+        if !saved.input_consumed && !saved.input_recorded {
+            return Err(TurnStartError::delivery_uncertain(
+                "Claude original input has no positive canonical evidence; recovery cannot replay uncertain work",
+            ));
+        }
+        if let Some(owner) = saved.owner.clone() {
+            let group = owner.pid;
             let alive = tokio::task::spawn_blocking(move || owner.alive())
                 .await
                 .map_err(|error| TurnStartError::internal(error.to_string()))?
@@ -611,27 +669,32 @@ impl ClaudeSupervisor {
                     "Claude's exact job process still lives; refusing a second execution",
                 ));
             }
+            if super::group_exists(nix::unistd::Pid::from_raw(group)) {
+                return Err(TurnStartError::unresponsive(
+                    "Claude's execution process group still exists; refusing a second execution",
+                ));
+            }
         }
-        if request.input.notice.is_none() {
-            return Err(TurnStartError::delivery_uncertain(
-                "Claude job needs exact recovery with a history/state inspection notice; its original input will not be replayed",
-            ));
-        }
-        let input = JobInput {
-            id: request.input.client_id.clone().ok_or_else(|| {
-                TurnStartError::internal("Claude recovery input identity is missing")
-            })?,
-            fingerprint: format!("{:x}", Sha256::digest(request.input.text.as_bytes())),
+        let notice = request.input.notice.as_ref().ok_or_else(|| TurnStartError::delivery_uncertain("Claude job needs exact recovery with a history/state inspection notice; its original input will not be replayed"))?;
+        let recovery = RecoveryInput {
+            input,
+            captured_at_unix_ms: notice.captured_at_unix_ms,
         };
+        let previous = saved.current_input().clone();
         self.conversation_index
             .update_job(&request.thread_id, handle, move |saved| {
                 ensure!(
                     !matches!(saved.phase, JobPhase::Stopping | JobPhase::Finished { .. }),
                     "Claude job was stopped before recovery"
                 );
+                ensure!(
+                    saved.current_input() == &previous
+                        && (saved.input_consumed || saved.input_recorded),
+                    "Claude job input evidence changed before recovery preparation"
+                );
                 saved.owner = None;
                 saved.phase = JobPhase::Prepared;
-                saved.recovery_input = Some(input);
+                saved.recovery_input = Some(recovery);
                 saved.input_consumed = false;
                 saved.input_recorded = false;
                 saved.ordinary_result_seen = false;

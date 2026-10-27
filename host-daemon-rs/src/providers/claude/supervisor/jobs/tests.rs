@@ -406,3 +406,107 @@ async fn an_unproven_owner_with_a_live_group_cannot_be_declared_stopped() {
     assert!(fixture.agent.has_runtime(THREAD).await);
     assert!(fixture.agent.suspend(THREAD).await);
 }
+
+#[tokio::test]
+async fn prepared_recovery_retries_only_its_frozen_input_and_never_the_original_prompt() {
+    let fixture = Fixture::new();
+    let original = fixture.start().await;
+    fixture.stub.wait_for_log("received.jsonl", 1).await;
+    assert!(fixture.agent.suspend(THREAD).await);
+    let mut item = fixture.stub.item(SESSION, ItemStatus::Captured);
+    item.recovery_id = "22222222-2222-4333-8444-666666666666".into();
+    item.interrupted_turn_id = Some(original.turn_id.clone());
+    item.captured_at_unix_ms = 1_700_000_000_000;
+    let handle = JobHandle {
+        job_id: fixture.job_id.clone(),
+        evidence_path: fixture.evidence.clone(),
+    };
+    let policy = LaunchPolicy::Job {
+        handle: handle.clone(),
+        scope: fixture.spec.tool_scope.clone(),
+        coordination_socket: fixture.socket.clone(),
+    };
+    let request = ClaudeTurnRequest {
+        thread_id: THREAD.into(),
+        session_uuid: SESSION.into(),
+        first_turn: false,
+        input: ClaudeUserInput::recovery_notice(&item),
+        selection: ClaudeSelection {
+            model: "opus".into(),
+            effort: Some("max".into()),
+            fast: false,
+        },
+        cwd: fixture.stub.cwd.clone(),
+    };
+    fixture
+        .agent
+        .prepare_job_resume(&request, &policy)
+        .await
+        .unwrap();
+    assert!(
+        matches!(fixture.inspect().await,ClaudeJobInspection::PreparedRecovery { recovery_input_id } if recovery_input_id == item.recovery_id)
+    );
+    let original_retry = fixture
+        .agent
+        .start_job(
+            &fixture.job_id,
+            &fixture.conversation,
+            &fixture.spec,
+            &original.input_id,
+            &fixture.socket,
+            &fixture.evidence,
+        )
+        .await
+        .unwrap_err();
+    assert!(original_retry.to_string().contains("prepared recovery"));
+    let (sender, _events) = mpsc::channel(256);
+    let replacement = ClaudeSupervisor::new(
+        fixture.stub.settings.clone(),
+        sender,
+        Journal::disabled(),
+        McpTokens::default(),
+    );
+    assert!(
+        replacement
+            .recover_job(
+                &fixture.job_id,
+                &fixture.conversation,
+                &fixture.spec,
+                "33333333-2222-4333-8444-666666666666",
+                &fixture.socket,
+                &fixture.evidence
+            )
+            .await
+            .is_err()
+    );
+    replacement
+        .recover_job(
+            &fixture.job_id,
+            &fixture.conversation,
+            &fixture.spec,
+            &item.recovery_id,
+            &fixture.socket,
+            &fixture.evidence,
+        )
+        .await
+        .unwrap();
+    let received = fixture.stub.wait_for_log("received.jsonl", 2).await;
+    assert_eq!(received.len(), 2);
+    assert_eq!(received[1]["uuid"], item.recovery_id);
+    assert_eq!(received[1]["message"]["content"], request.input.text);
+    assert_ne!(received[1]["message"]["content"], fixture.spec.prompt);
+    let evidence = replacement
+        .conversation_index
+        .job(THREAD, &handle)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        evidence.recovery_input.unwrap().captured_at_unix_ms,
+        item.captured_at_unix_ms
+    );
+    replacement
+        .stop_job(&fixture.job_id, &fixture.conversation, &fixture.evidence)
+        .await
+        .unwrap();
+}

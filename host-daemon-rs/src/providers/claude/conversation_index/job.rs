@@ -102,11 +102,18 @@ pub(crate) struct JobInput {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct RecoveryInput {
+    pub input: JobInput,
+    pub captured_at_unix_ms: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct JobEvidence {
     pub job_id: JobId,
     pub conversation: ConversationIdentity,
     pub input: JobInput,
-    pub recovery_input: Option<JobInput>,
+    pub recovery_input: Option<RecoveryInput>,
     pub tool_scope: ToolScope,
     pub coordination_socket: PathBuf,
     pub stop_generation: u64,
@@ -122,7 +129,9 @@ pub(crate) struct JobEvidence {
 
 impl JobEvidence {
     pub(crate) fn current_input(&self) -> &JobInput {
-        self.recovery_input.as_ref().unwrap_or(&self.input)
+        self.recovery_input
+            .as_ref()
+            .map_or(&self.input, |saved| &saved.input)
     }
     pub(crate) fn eligible(&self) -> bool {
         self.input_consumed && self.ordinary_result_seen && self.nonambient_tasks.is_empty()
