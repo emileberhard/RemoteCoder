@@ -265,7 +265,9 @@ measurably beat SwiftUI.
   blocks' opacity only (`.contentTransition(.identity)`).
 - Each observation has one owner. Transcript visibility comes from a single
   `onScrollTargetVisibilityChange` on iOS and `AppKitTranscriptContainer`'s
-  bounded native row index on Mac; do not add per-row visibility tracking. The
+  bounded native row index on Mac; do not add per-row visibility tracking.
+  iPhone HTML occurrences track visibility only for first live-page admission;
+  transcript visibility and already-live page retention remain row-owned. The
   iOS transcript stays eager and windowed. Mac virtualizes separate row hosts
   over bounded logical geometry, with native estimate correction and stable
   coordinates. Cached-height placement must not remeasure or replace unchanged

@@ -673,9 +673,8 @@ timeout is a recovery path: rows then mount with the cached height and the
 live page or placeholder, as before. Each wait reports whether it suspended,
 and its caller re-reads its snapshot or row state afterwards.
 
-`ConversationWarmer` selects the first five ranked eligible conversations before
-filtering completed coverage, so successive passes cannot walk deeper through
-all history. The first two retain their existing hot-session policy. For a
+`ConversationWarmer` processes eligible conversations in drawer rank order,
+filtering completed coverage. The first two retain their existing hot-session policy. For a
 selected conversation, it first stores the opening tail. If no claimed, active,
 fully laid-out preparation surface permits background work, that history-only
 coverage completes without scanning visual references or retrying an impossible

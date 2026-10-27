@@ -508,13 +508,13 @@ entrypoint linked above.
     bounds and comparison contract live in `docs/system-architecture.md`,
     *History and live state*.
   - After 1 s of continuous drawer visibility, the same loop requests warming
-    of the first five unsettled drawer conversations in rank order
+    of unsettled drawer conversations in rank order
     (`ConversationDrawerRank`; delegated agent threads, and probe threads the
     drawer hides while they are not running, excluded) at background
     priority, running turns included, so a visual an agent posts in a
-    shortlisted conversation that is not shown is prepared after its header
-    revision moves; there is no per-item hook. Apply the shortlist before
-    filtering completed coverage. Each gets its opening tail
+    conversation that is not shown is prepared after its header
+    revision moves; there is no per-item hook. Completed coverage is filtered
+    before each pass. Each gets its opening tail
     in the history page cache, trusted while `HistoryWarmLedger` holds a read of
     that exact header revision, or without a ledger entry while the stored tail
     is newer than the thread's `updatedAt`. History coverage completes even when
@@ -529,10 +529,10 @@ entrypoint linked above.
     `RecentConversationCache`, but only into free slots, so warming never
     evicts a conversation the user opened, and their agent lists are read
     without a cached agents model, running turns included, so the subagents
-    pill is there on open. Keep the limit well below `HistoryWarmLedger`'s
-    capacity and the page cache budget: an all-unsettled pass (about 160 chats)
-    rewarmed evicted ledger entries in a circle and filled the 64 MiB page
-    cache.
+    pill is there on open. Keep retained coverage within `HistoryWarmLedger`'s
+    capacity and the page cache budget: eviction must not cause repeated warming
+    of unchanged history. Reducing speculative coverage must pass the same
+    ahead-of-opening visual readiness checks as the existing coverage.
 
 ## Conversation state and transcript
 

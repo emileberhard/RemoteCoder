@@ -1073,8 +1073,8 @@ counts without requiring transcript owners and merge records into existing owner
 Broker notifications and `ExternalEventRouter` retain completion delivery and
 navigation ownership. Voice preparation acquires its exact conversation explicitly.
 `HistoryWarmLedger` owns dirty and successful-read coverage for as many threads as
-`ConversationHeaderRetention` retains. The warmer selects the first five ranked
-eligible conversations before filtering completed coverage, with the existing
+`ConversationHeaderRetention` retains. The warmer processes unsettled eligible
+conversations in drawer rank order, with the existing
 top-two hot-session policy. History-only completion remains valid while visual
 preparation is unavailable; a newly usable preparation context explicitly
 requests the missing work from stored tails. A request arriving during an active
