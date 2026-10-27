@@ -36,10 +36,10 @@ struct ChatHistoryReadTests {
         preparation.setActive(true, conservesEnergy: false)
         preparation.setActive(false, conservesEnergy: false)
         preparation.setActive(true, conservesEnergy: false)
+        let warm = try #require(target.warmConversationsIfIdle())
         await gateway.releaseHeldTailPage()
-        #expect(await waitUntil {
-            !target.conversationWarmer.needsWarm(first) && !target.conversationWarmer.needsWarm(second)
-        })
+        await warm.value
+        #expect(!target.conversationWarmer.needsWarm(first) && !target.conversationWarmer.needsWarm(second))
         #expect(await gateway.tailReads == 2)
     }
 

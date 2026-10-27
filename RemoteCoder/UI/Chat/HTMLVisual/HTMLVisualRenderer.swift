@@ -32,6 +32,11 @@ final class HTMLVisualSnapshot {
 @MainActor
 final class HTMLVisualInstance: Identifiable {
     enum Surface: String { case inline, expanded }
+    struct AdmissionDemand: Equatable {
+        let active: Bool
+        let rowVisible: Bool
+        let occurrenceVisible: Bool?
+    }
     let surface: Surface
     var page: WebPage?
     @ObservationIgnored var userContentController: WKUserContentController?
@@ -63,9 +68,11 @@ final class HTMLVisualInstance: Identifiable {
     @ObservationIgnored var onSnapshotStored: () -> Void = {}
     @ObservationIgnored var captureAllowed = false
     @ObservationIgnored var onPinChange: (Bool) -> Void = { _ in }
-    @ObservationIgnored var rowVisible = false
-    @ObservationIgnored var occurrenceVisible: Bool?
+    @ObservationIgnored var admissionDemand: AdmissionDemand?
     @ObservationIgnored var activity: HTMLVisualPageActivity?
+
+    var rowVisible: Bool { admissionDemand?.rowVisible == true }
+    var occurrenceVisible: Bool? { admissionDemand?.occurrenceVisible }
 
     var pinned: Bool { interacting || surface == .expanded }
 

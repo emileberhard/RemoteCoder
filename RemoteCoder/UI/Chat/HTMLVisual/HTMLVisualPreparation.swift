@@ -68,6 +68,7 @@ final class HTMLVisualPreparation {
     private(set) var layoutContext = HTMLVisualLayoutContext()
     var onBackgroundPreparationReady: (@MainActor () -> Void)?
     private let renderer: HTMLVisualRenderer
+    private let pageTimeout: @Sendable () async -> Void
     private var active = false
     private var conservesEnergy = false
     private var waiters: [Waiter] = []
@@ -83,7 +84,6 @@ final class HTMLVisualPreparation {
     private static let maximumRequests = 16
     private static let maximumUnpreparable = 64
     private static let pinnedPixels = HTMLVisualRasterBudget.maximumPixels - HTMLVisualRasterBudget.maximumImagePixels
-    private static let pageTimeout = Duration.seconds(4)
     #if os(iOS)
     private static let preparesInBackground = true
     #else
@@ -91,8 +91,11 @@ final class HTMLVisualPreparation {
     #endif
     private static let logger = AppLogger(category: "HTMLVisual")
 
-    init(renderer: HTMLVisualRenderer) {
+    init(renderer: HTMLVisualRenderer, pageTimeout: @escaping @Sendable () async -> Void = {
+        try? await Task.sleep(for: .seconds(4))
+    }) {
         self.renderer = renderer
+        self.pageTimeout = pageTimeout
     }
 
     isolated deinit {
@@ -403,7 +406,7 @@ final class HTMLVisualPreparation {
         }
         await withTaskGroup(of: Void.self) { group in
             group.addTask { for await _ in stored { return } }
-            group.addTask { try? await Task.sleep(for: Self.pageTimeout) }
+            group.addTask { await self.pageTimeout() }
             await group.next()
             group.cancelAll()
         }

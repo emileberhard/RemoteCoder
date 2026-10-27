@@ -1063,11 +1063,12 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
     /// Prefetches the opening tails of every unsettled conversation in rank order
     /// at background priority and queues their HTML visuals; the top two also get
     /// a session, rendered Markdown and agent lists, so opening one paints from cache.
-    func warmConversationsIfIdle() {
-        guard shouldWarmConversations() else { return }
+    @discardableResult
+    func warmConversationsIfIdle() -> Task<Void, Never>? {
+        guard shouldWarmConversations() else { return nil }
         warmingRequested = true
-        guard !ownedTasks.isRunning(.warmConversations) else { return }
-        ownedTasks.startBackground(.warmConversations) { [weak self] in
+        if let running = ownedTasks.task(.warmConversations) { return running }
+        return ownedTasks.startBackground(.warmConversations) { [weak self] in
             guard let self else { return }
             while !Task.isCancelled, self.shouldWarmConversations(), self.warmingRequested {
                 self.warmingRequested = false

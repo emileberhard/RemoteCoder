@@ -23,11 +23,6 @@ holds the detailed history, recovery, voice and persistence contracts.
   that already has several gateways with cached conversations, so it has its
   own scheme and stays out of the default Mac-native suite. `just ios-simulator-test` runs the
   remaining app-hosted integration tests only when the root policy calls for them.
-  HTML visual fault tests that spin WebContent processes are opt-in through
-  `RC_HTML_VISUAL_FAULT_TESTS=1` in the hosted test process environment (for
-  example its test scheme), only on an isolated GUI test host. Never enable
-  them on a live service host. Select that host explicitly with
-  `RC_IOS_BUILD_HOST=<configured-gui-test-host>`.
 - App layout: `App/` (scenes, `RemoteCoderAppModel`, `ExternalEventRouter`,
   intents), `Workspace/` (workspace, `ChatWindowModel`, per-target registry and
   flows), `Chat/` (`ChatTargetModel`, `ChatScreenModel` and their owners), `UI/`

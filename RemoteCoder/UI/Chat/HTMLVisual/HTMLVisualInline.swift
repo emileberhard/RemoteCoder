@@ -50,7 +50,7 @@ struct HTMLVisualInline: View {
     #endif
     @Environment(\.openURL) private var openURL
     @Environment(\.chatImageSource) private var files
-    @State private var instance = HTMLVisualInstance(surface: .inline)
+    @State var instance = HTMLVisualInstance(surface: .inline)
     #if os(iOS)
     @State private var occurrenceVisible = false
     #endif
@@ -103,6 +103,14 @@ struct HTMLVisualInline: View {
         #else
         true
         #endif
+    }
+    private var admissionDemand: HTMLVisualInstance.AdmissionDemand {
+        #if os(iOS)
+        let occurrence: Bool? = occurrenceVisible
+        #else
+        let occurrence: Bool? = nil
+        #endif
+        return .init(active: active, rowVisible: rowVisibility?.isVisible == true, occurrenceVisible: occurrence)
     }
     private var showsLivePage: Bool {
         rowVisibility?.isMoving != true || instance.pinned || Self.keepsLiveSurfaceDuringMotion
@@ -220,8 +228,8 @@ struct HTMLVisualInline: View {
         }
         #if os(iOS)
         .modifier(HTMLVisualOccurrenceVisibility(isVisible: $occurrenceVisible))
-        .onChange(of: occurrenceVisible, initial: true) { _, value in instance.occurrenceVisible = value }
         #endif
+        .onChange(of: admissionDemand, initial: true) { _, value in instance.admissionDemand = value }
         .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) {
             width = max(1, $0)
             let next = max(1, Int(width.rounded()))
@@ -290,7 +298,6 @@ struct HTMLVisualInline: View {
             Self.logger.notice("html visual visible ready=\(ready) digest=\(reference.digest.prefix(8)) scrolling=\(rowVisibility?.isScrolling == true)")
         }
         #endif
-        .onChange(of: rowVisibility?.isVisible == true, initial: true) { _, value in instance.rowVisible = value }
         .onChange(of: canCapture, initial: true) { _, value in source?.renderer.setCaptureAllowed(instance, value) }
         .onChange(of: energyPolicy, initial: true) { _, value in source?.renderer.setEnergyPolicy(value) }
         .onChange(of: interfaceScale, initial: true) { _, scale in

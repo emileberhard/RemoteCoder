@@ -42,6 +42,8 @@ actor FakeGatewayServer {
     private var listedThreads: [JSONValue]?
     private var holdsThreadList = false
     private var heldThreadList: CheckedContinuation<Void, Never>?
+    private var heldVisualResource: NWConnection?
+    private var visualResourceArrival: CheckedContinuation<Void, Never>?
     private var threadListArrival: CheckedContinuation<Void, Never>?
     private var peers: [ObjectIdentifier: Peer] = [:]
     private var ready: CheckedContinuation<Int, Error>?
@@ -140,6 +142,24 @@ actor FakeGatewayServer {
     }
 
     func notifyAfterInitialize(_ method: String) { initializedNotification = method }
+
+    func waitForHeldVisualResource() async {
+        if heldVisualResource != nil { return }
+        await withCheckedContinuation { visualResourceArrival = $0 }
+    }
+
+    func releaseHeldVisualResource() async {
+        guard let connection = heldVisualResource else { return }
+        heldVisualResource = nil
+        let body = Data("globalThis.resourceFinished = true;".utf8)
+        let head = "HTTP/1.1 200 OK\r\nContent-Type: application/javascript\r\nContent-Length: \(body.count)\r\nConnection: close\r\n\r\n"
+        await withCheckedContinuation { continuation in
+            connection.send(content: Data(head.utf8) + body, completion: .contentProcessed { _ in
+                connection.cancel()
+                continuation.resume()
+            })
+        }
+    }
 
     func waitForSubscribe() async {
         await waitForSubscribes(1)
@@ -454,6 +474,11 @@ actor FakeGatewayServer {
             claudeHTTPRequests.append((request.method, path, request.body))
         }
         switch (request.method, request.url?.path) {
+        case ("GET", "/held-visual.js"):
+            heldVisualResource = connection
+            visualResourceArrival?.resume()
+            visualResourceArrival = nil
+            return
         case ("GET", "/claude/accounts"), ("POST", "/claude/accounts/refresh"):
             if request.method == "GET", holdsClaudeRead {
                 await withCheckedContinuation { heldClaudeRead = $0; claudeReadArrival?.resume(); claudeReadArrival = nil }
