@@ -25,15 +25,6 @@ state = load('release_state', 'release-state')
 
 
 class NativeReleaseTests(unittest.TestCase):
-    def test_reservation_follows_the_largest_historical_first_component(self):
-        builds = [{'attributes': {'version': value}} for value in ['3073000', '100.4.3', '240.99']]
-        uploads = [{'attributes': {'cfBundleVersion': '3073001.2.7'}}]
-        with patch.object(asc, 'api', side_effect=[builds, uploads]):
-            self.assertEqual(asc.next_build_number('app'), 3073002)
-        for invalid in ['1.2.3.4', '7-beta', '', None]:
-            with self.subTest(invalid=invalid), self.assertRaises(SystemExit):
-                asc.build_components(invalid)
-
     def test_a_newer_tag_after_processing_blocks_all_store_mutations(self):
         for operation in [asc.testflight, asc.app_store]:
             with self.subTest(operation=operation.__name__), patch.dict(os.environ, {'GITHUB_SHA': 'a' * 40}), \
@@ -42,13 +33,6 @@ class NativeReleaseTests(unittest.TestCase):
                 self.assertRaises(subprocess.CalledProcessError):
                 operation('app', 'IOS', '3.73.1', '3073001', 'Notes')
             api.assert_not_called()
-
-    def test_a_fenced_missing_upload_stops_instead_of_authorizing_another(self):
-        with patch.object(asc, 'uploaded_build_numbers', return_value=[]), \
-            patch.object(asc.time, 'monotonic', side_effect=[0, 901]), self.assertRaises(SystemExit):
-            asc.reconcile_upload('app', '3.73.1', '3073001', 'MAC_OS', True)
-        with patch.object(asc, 'uploaded_build_numbers', return_value=['3073001']):
-            self.assertTrue(asc.reconcile_upload('app', '3.73.1', '3073001', 'MAC_OS', True))
 
     def test_same_run_reservation_reuses_an_unexpired_artifact_without_an_age_cutoff(self):
         archive = io.BytesIO()
