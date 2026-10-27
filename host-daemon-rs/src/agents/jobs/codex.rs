@@ -53,6 +53,9 @@ pub(crate) async fn create(
             )
             .await?;
     }
+    gateway
+        .job_native_call("thread/persist", json!({"threadId":conversation.thread_id}))
+        .await?;
     Ok(conversation)
 }
 
