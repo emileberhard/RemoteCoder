@@ -104,7 +104,21 @@ impl ParentSelection {
 pub(crate) struct Delivery {
     pub id: String,
     pub fingerprint: String,
+    #[serde(default)]
+    pub state: DeliveryState,
     pub receipt: Value,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum DeliveryState {
+    Prepared,
+    Sending,
+    #[default]
+    Submitted,
+    Recorded,
+    Rejected,
+    Uncertain,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -115,6 +129,8 @@ pub(crate) struct Parent {
     #[serde(default)]
     pub stop_generation: u64,
     deliveries: VecDeque<Delivery>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    delivery_fingerprints: HashMap<String, String>,
 }
 
 impl Parent {
@@ -122,12 +138,35 @@ impl Parent {
         self.deliveries.iter().find(|delivery| delivery.id == id)
     }
 
+    pub(crate) fn delivery_fingerprint(&self, id: &str) -> Option<&str> {
+        self.delivery(id)
+            .map(|delivery| delivery.fingerprint.as_str())
+            .or_else(|| {
+                self.delivery_fingerprints
+                    .get(&format!("{:x}", Sha256::digest(id.as_bytes())))
+                    .map(String::as_str)
+            })
+    }
+
     pub(crate) fn record_delivery(&mut self, delivery: Delivery) {
         self.deliveries
             .retain(|recorded| recorded.id != delivery.id);
         self.deliveries.push_back(delivery);
         while self.deliveries.len() > MAX_PARENT_DELIVERIES {
-            self.deliveries.pop_front();
+            let Some(position) = self.deliveries.iter().position(|delivery| {
+                matches!(
+                    delivery.state,
+                    DeliveryState::Submitted | DeliveryState::Recorded
+                )
+            }) else {
+                break;
+            };
+            if let Some(delivery) = self.deliveries.remove(position) {
+                self.delivery_fingerprints.insert(
+                    format!("{:x}", Sha256::digest(delivery.id.as_bytes())),
+                    delivery.fingerprint,
+                );
+            }
         }
     }
 }
@@ -456,24 +495,46 @@ impl Store {
         thread_id: &str,
         update: impl FnOnce(&mut Parent) + Send + 'static,
     ) -> Result<()> {
+        self.transact_parent(thread_id, move |parent| {
+            update(parent);
+            Ok(())
+        })
+        .await
+    }
+
+    pub(crate) async fn transact_parent<T: Send + 'static>(
+        &self,
+        thread_id: &str,
+        update: impl FnOnce(&mut Parent) -> Result<T> + Send + 'static,
+    ) -> Result<T> {
         let thread = self.thread(thread_id).await.lock_owned().await;
         let (home, id) = (self.home.clone(), thread_id.to_owned());
         under_guards(thread, move |_| {
-            let current = read_parent(&home, &id)?;
-            let mut parent = current.clone();
-            update(&mut parent);
-            if parent == current {
-                return Ok(());
-            }
-            let encoded = serde_json::to_vec(&ParentRecord {
-                thread_id: id.clone(),
-                parent,
-            })?;
-            ensure!(
-                encoded.len() as u64 <= MAX_PARENT_RECORD_BYTES,
-                "Claude parent record for {id} is full"
-            );
-            private_state::replace(&parent_path(&home, &id), &encoded)
+            private_state::transaction(
+                &parent_path(&home, &id),
+                "Claude parent record has no parent directory",
+                |_| read_parent(&home, &id),
+                |parent| {
+                    let current = parent.clone();
+                    let result = update(parent)?;
+                    ensure!(
+                        parent.deliveries.len() <= MAX_PARENT_DELIVERIES,
+                        "Claude parent has too many unresolved deliveries"
+                    );
+                    Ok((result, *parent != current))
+                },
+                |file, parent| {
+                    let encoded = serde_json::to_vec(&ParentRecord {
+                        thread_id: id.clone(),
+                        parent: parent.clone(),
+                    })?;
+                    ensure!(
+                        encoded.len() as u64 <= MAX_PARENT_RECORD_BYTES,
+                        "Claude parent record for {id} is full; retained delivery identities cannot be discarded"
+                    );
+                    private_state::replace(file, &encoded)
+                },
+            )
         })
         .await?
     }

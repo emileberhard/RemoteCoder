@@ -1,5 +1,5 @@
 use super::{ClaudeSupervisor, TurnOrigin, TurnStartError};
-use crate::providers::claude::conversation_index::{Delivery, ParentSelection};
+use crate::providers::claude::conversation_index::{Delivery, DeliveryState, ParentSelection};
 use crate::providers::claude::{
     ClaudeSelection, ClaudeTurnRequest, ClaudeUserInput, session_uuid_from_thread_id,
 };
@@ -15,6 +15,25 @@ pub(crate) struct ParentMessage {
     pub thread_id: String,
     pub delivery_id: String,
     pub text: String,
+}
+
+enum DispatchFailure {
+    Rejected(TurnStartError),
+    Uncertain(TurnStartError),
+}
+
+impl DispatchFailure {
+    fn from_start(error: TurnStartError) -> Self {
+        if matches!(
+            error.code,
+            RpcCode::InvalidParams | RpcCode::ServerBusy | RpcCode::Capacity
+        ) || error.is_unanswered()
+        {
+            Self::Rejected(error)
+        } else {
+            Self::Uncertain(error)
+        }
+    }
 }
 
 impl ClaudeSupervisor {
@@ -138,21 +157,103 @@ impl ClaudeSupervisor {
                     "Claude parent record could not be read: {error:#}"
                 ))
             })?;
+        let input_id = delivery_uuid(&message.thread_id, &message.delivery_id);
+        let known = parent.delivery_fingerprint(&message.delivery_id);
+        if known.is_some_and(|known| known != fingerprint) {
+            return Err(rejected(
+                "Delivery id was already used for a different message or sender",
+            ));
+        }
+        let prior = parent.delivery(&message.delivery_id);
+        if known.is_some()
+            && prior.is_none_or(|delivery| {
+                matches!(
+                    delivery.state,
+                    DeliveryState::Submitted | DeliveryState::Recorded
+                )
+            })
+        {
+            let mut receipt = prior.map_or_else(
+                || {
+                    receipt(
+                        &message,
+                        DeliveryState::Submitted,
+                        "gateway-submitted",
+                        None,
+                    )
+                },
+                |delivery| delivery.receipt.clone(),
+            );
+            receipt["duplicate"] = json!(true);
+            return Ok(receipt);
+        }
+        let recorded = match self.session_history(
+            parent
+                .selection
+                .as_ref()
+                .map_or("", |selection| selection.cwd.as_str()),
+            &session_uuid,
+        ) {
+            Some(path) => {
+                let id = input_id.clone();
+                tokio::task::spawn_blocking(move || {
+                    crate::providers::claude::delivery_evidence::recorded_fingerprint(&path, &id)
+                })
+                .await
+                .map_err(|error| {
+                    uncertain(format!("Claude input evidence could not be read: {error}"))
+                })?
+                .map_err(|error| {
+                    uncertain(format!(
+                        "Claude input evidence could not be read: {error:#}"
+                    ))
+                })?
+            }
+            None => None,
+        };
+        if let Some(recorded_fingerprint) = recorded {
+            if recorded_fingerprint
+                .as_deref()
+                .is_some_and(|saved| saved != fingerprint)
+            {
+                return Err(rejected(
+                    "Delivery id is recorded in Claude history with different message content",
+                ));
+            }
+            if known.is_none() && recorded_fingerprint.is_none() {
+                return Err(uncertain(
+                    "Claude history records this input UUID, but its original payload cannot be verified".to_owned(),
+                ));
+            }
+            let receipt = receipt(&message, DeliveryState::Recorded, "gateway-recorded", None);
+            self.save_delivery(
+                &message.thread_id,
+                Delivery {
+                    id: message.delivery_id,
+                    fingerprint,
+                    state: DeliveryState::Recorded,
+                    receipt: receipt.clone(),
+                },
+            )
+            .await?;
+            return Ok(receipt);
+        }
+        if prior.is_some_and(|delivery| {
+            matches!(
+                delivery.state,
+                DeliveryState::Sending | DeliveryState::Uncertain
+            )
+        }) {
+            return Err(uncertain(
+                "Claude parent message delivery is unresolved; canonical input evidence does not yet confirm it, so it will not be resent".to_owned(),
+            ));
+        }
         if parent.stopped {
             return Err(rejected(
                 "Claude parent was interrupted by the user, so this message will not wake it",
             ));
         }
-        if let Some(delivery) = parent.delivery(&message.delivery_id) {
-            if delivery.fingerprint != fingerprint {
-                return Err(rejected(
-                    "Delivery id was already used for a different message or sender",
-                ));
-            }
-            let mut receipt = delivery.receipt.clone();
-            receipt["duplicate"] = json!(true);
-            return Ok(receipt);
-        }
+        let stop_generation = parent.stop_generation;
         let selection = parent.selection.ok_or_else(|| {
             rejected("Claude parent has not run a turn through this gateway, so this message cannot wake it")
         })?;
@@ -161,13 +262,21 @@ impl ClaudeSupervisor {
             session_uuid,
             first_turn: false,
             input: ClaudeUserInput {
-                client_id: Some(delivery_uuid(&message.thread_id, &message.delivery_id)),
+                client_id: Some(input_id),
                 is_synthetic: true,
-                ..ClaudeUserInput::text(message.text)
+                ..ClaudeUserInput::text(message.text.clone())
             },
             cwd: selection.cwd.clone(),
             selection: selection.selection(),
         };
+        let prepared = Delivery {
+            id: message.delivery_id.clone(),
+            fingerprint: fingerprint.clone(),
+            state: DeliveryState::Prepared,
+            receipt: Value::Null,
+        };
+        self.prepare_delivery(&message.thread_id, prepared.clone(), stop_generation)
+            .await?;
         let active = {
             let runtimes = self.runtimes.lock().await;
             runtimes.get(&message.thread_id).and_then(|runtime| {
@@ -180,70 +289,213 @@ impl ClaudeSupervisor {
                 })
             })
         };
-        let (turn_id, delivery) = if let Some((turn_id, input, group)) = active {
+        let mut sending = prepared;
+        sending.state = DeliveryState::Sending;
+        self.prepare_delivery(&message.thread_id, sending, stop_generation)
+            .await?;
+        let dispatched = if let Some((turn_id, input, group)) = active {
             let prepared = super::input_writer::InputWriter::prepare_input(&request.input)
                 .map_err(TurnStartError::from)?;
-            if let Err(error) = input.send_prepared(prepared).await {
-                if super::InputWriter::stall_was_queued(&error) {
-                    self.input_stalled(&request.thread_id, group, "claude/message", error);
-                } else if super::InputWriter::is_stalled(&error) {
-                    return Err(self.input_stalled(
-                        &request.thread_id,
-                        group,
-                        "claude/message",
-                        error,
-                    ));
-                } else {
-                    let failure = format!("Failed writing Claude parent message: {error}");
-                    self.retire_after_write_failure(&request.thread_id, group, &failure)
-                        .await;
-                    return Err(TurnStartError {
-                        data: None,
-                        code: RpcCode::Internal,
-                        message: failure,
-                    });
-                }
-            }
-            self.ensure_runtime_current(&request.thread_id, group)
-                .await?;
-            (turn_id, "gateway-steered")
+            self.write_parent_message(&request.thread_id, group, input, prepared, stop_generation)
+                .await
+                .map(|()| (turn_id, "gateway-steered"))
         } else {
-            let turn_id = match self.start_turn_locked(request, TurnOrigin::Callback).await {
-                Ok(turn_id) => turn_id,
-                Err(error) if error.is_queued_stall() => {
-                    self.active_turn_id(&message.thread_id).await.ok_or(error)?
-                }
-                Err(error) => return Err(error),
-            };
-            (turn_id, "gateway-started")
+            self.start_turn_locked(request, TurnOrigin::Callback { stop_generation })
+                .await
+                .map(|turn_id| (turn_id, "gateway-started"))
+                .map_err(DispatchFailure::from_start)
         };
-        let receipt = json!({
-            "delivery": delivery,
-            "delivery_id": message.delivery_id,
-            "delivery_confirmed": false,
-            "parent": "claude",
-            "thread_id": message.thread_id,
-            "turn_id": turn_id,
-        });
-        let recorded = Delivery {
-            id: message.delivery_id,
-            fingerprint,
-            receipt: receipt.clone(),
+        let (turn_id, delivery) = match dispatched {
+            Ok(delivery) => delivery,
+            Err(failure) => {
+                let (state, error) = match failure {
+                    DispatchFailure::Rejected(error) => (DeliveryState::Rejected, error),
+                    DispatchFailure::Uncertain(error) => (DeliveryState::Uncertain, error),
+                };
+                self.save_delivery(
+                    &message.thread_id,
+                    Delivery {
+                        id: message.delivery_id,
+                        fingerprint,
+                        state,
+                        receipt: Value::Null,
+                    },
+                )
+                .await?;
+                return Err(if state == DeliveryState::Rejected {
+                    error
+                } else {
+                    uncertain(format!(
+                        "Claude parent message delivery is unconfirmed; do not resend it: {}",
+                        error.message
+                    ))
+                });
+            }
         };
-        self.conversation_index
-            .update_parent(&message.thread_id, move |parent| {
-                parent.record_delivery(recorded)
-            })
-            .await
-            .map_err(|error| TurnStartError {
-                data: None,
-                code: RpcCode::Internal,
-                message: format!(
-                    "Claude parent message was delivered, but its delivery record could not be saved; do not resend it: {error:#}"
-                ),
-            })?;
+        let receipt = receipt(&message, DeliveryState::Submitted, delivery, Some(&turn_id));
+        self.save_delivery(
+            &message.thread_id,
+            Delivery {
+                id: message.delivery_id,
+                fingerprint,
+                state: DeliveryState::Submitted,
+                receipt: receipt.clone(),
+            },
+        )
+        .await?;
         Ok(receipt)
     }
+
+    async fn prepare_delivery(
+        &self,
+        thread: &str,
+        delivery: Delivery,
+        generation: u64,
+    ) -> Result<(), TurnStartError> {
+        self.conversation_index
+            .transact_parent(thread, move |parent| {
+                anyhow::ensure!(
+                    !parent.stopped && parent.stop_generation == generation,
+                    "Claude parent was interrupted by the user, so this message will not wake it"
+                );
+                anyhow::ensure!(
+                    parent
+                        .delivery_fingerprint(&delivery.id)
+                        .is_none_or(|known| known == delivery.fingerprint),
+                    "Delivery id was already used for a different message or sender"
+                );
+                anyhow::ensure!(
+                    parent.delivery(&delivery.id).is_none_or(|saved| matches!(
+                        saved.state,
+                        DeliveryState::Prepared | DeliveryState::Rejected
+                    )),
+                    "Claude parent message already has an unresolved or submitted delivery"
+                );
+                parent.record_delivery(delivery);
+                Ok(())
+            })
+            .await
+            .map_err(|error| {
+                TurnStartError::internal(format!(
+                    "Claude parent message intent could not be saved: {error:#}"
+                ))
+            })
+    }
+
+    async fn save_delivery(&self, thread: &str, delivery: Delivery) -> Result<(), TurnStartError> {
+        self.conversation_index
+            .update_parent(thread, move |parent| parent.record_delivery(delivery))
+            .await
+            .map_err(|error| {
+                uncertain(format!(
+                    "Claude parent message outcome could not be saved; do not resend it: {error:#}"
+                ))
+            })
+    }
+
+    async fn write_parent_message(
+        &self,
+        thread: &str,
+        group: i32,
+        input: super::InputWriter,
+        prepared: Arc<super::input_writer::PreparedInput>,
+        generation: u64,
+    ) -> Result<(), DispatchFailure> {
+        let slot = input
+            .reserve()
+            .await
+            .map_err(|error| DispatchFailure::Rejected(error.into()))?;
+        let parent = self
+            .conversation_index
+            .parent(thread)
+            .await
+            .map_err(|error| {
+                DispatchFailure::Rejected(TurnStartError::internal(format!(
+                    "Claude Stop state could not be checked: {error:#}"
+                )))
+            })?;
+        if parent.stopped || parent.stop_generation != generation {
+            return Err(DispatchFailure::Rejected(rejected(
+                "Claude parent was interrupted by the user, so this message will not wake it",
+            )));
+        }
+        let pending = {
+            let runtimes = self.runtimes.lock().await;
+            if !runtimes.get(thread).is_some_and(|runtime| {
+                runtime.process_group_id == group && runtime.running_turn().is_some()
+            }) {
+                return Err(DispatchFailure::Rejected(rejected(
+                    "Claude parent execution changed before this message was submitted",
+                )));
+            }
+            slot.send_input(prepared)
+        };
+        if let Err(error) = pending.written().await {
+            if super::InputWriter::is_stalled(&error) {
+                return Err(DispatchFailure::Uncertain(self.input_stalled(
+                    thread,
+                    group,
+                    "claude/message",
+                    error,
+                )));
+            }
+            let failure = format!("Failed writing Claude parent message: {error}");
+            self.retire_after_write_failure(thread, group, &failure)
+                .await;
+            return Err(DispatchFailure::Uncertain(TurnStartError::internal(
+                failure,
+            )));
+        }
+        self.ensure_runtime_current(thread, group)
+            .await
+            .map_err(DispatchFailure::Uncertain)
+    }
+
+    pub(super) async fn check_callback_generation(
+        &self,
+        thread: &str,
+        origin: TurnOrigin,
+    ) -> Result<(), TurnStartError> {
+        let TurnOrigin::Callback { stop_generation } = origin else {
+            return Ok(());
+        };
+        let parent = self
+            .conversation_index
+            .parent(thread)
+            .await
+            .map_err(|error| {
+                TurnStartError::internal(format!(
+                    "Claude Stop state could not be checked: {error:#}"
+                ))
+            })?;
+        if parent.stopped || parent.stop_generation != stop_generation {
+            return Err(rejected(
+                "Claude parent was interrupted by the user, so this message will not wake it",
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn receipt(
+    message: &ParentMessage,
+    state: DeliveryState,
+    delivery: &str,
+    turn_id: Option<&str>,
+) -> Value {
+    json!({
+        "delivery": delivery,
+        "delivery_state": state,
+        "delivery_id": message.delivery_id,
+        "delivery_confirmed": false,
+        "parent": "claude",
+        "thread_id": message.thread_id,
+        "turn_id": turn_id,
+    })
+}
+
+fn uncertain(message: String) -> TurnStartError {
+    TurnStartError::delivery_uncertain(message)
 }
 
 fn delivery_uuid(thread_id: &str, delivery_id: &str) -> String {
@@ -691,6 +943,7 @@ mod tests {
             .expect("restore parent ledger permissions");
         let error = outcome.expect_err("delivery must not be acknowledged");
         assert_eq!(error.code, RpcCode::Internal);
+        assert_eq!(fixture.received(1).await.len(), 1);
         let parent = fixture
             .agent
             .conversation_index
@@ -698,6 +951,88 @@ mod tests {
             .await
             .expect("parent record");
         assert!(parent.delivery("write-failed").is_none());
+    }
+
+    #[tokio::test]
+    async fn a_lost_message_receipt_is_reconciled_without_resending_or_guessing_absence() {
+        let mut fixture = Fixture::new();
+        fixture.initial_turn().await;
+        fixture.expire().await;
+        for id in ["recorded", "unresolved"] {
+            let id = id.to_owned();
+            fixture
+                .agent
+                .conversation_index
+                .update_parent(THREAD, move |parent| {
+                    parent.record_delivery(Delivery {
+                        id,
+                        fingerprint: format!("{:x}", Sha256::digest(b"completed work")),
+                        state: DeliveryState::Sending,
+                        receipt: Value::Null,
+                    });
+                })
+                .await
+                .unwrap();
+        }
+        let mut history = fs::read_to_string(&fixture.history).unwrap();
+        history.push_str(&format!(
+            "{}\n",
+            json!({
+                "type":"user", "uuid":delivery_uuid(THREAD, "recorded"),
+                "message":{"content":"completed work"}
+            })
+        ));
+        fs::write(&fixture.history, history).unwrap();
+        let (restarted, _) = Fixture::agent(&fixture.root);
+        let receipt = restarted
+            .deliver_parent_message(message("recorded", "completed work"))
+            .await
+            .unwrap();
+        let unresolved = restarted
+            .deliver_parent_message(message("unresolved", "completed work"))
+            .await
+            .unwrap_err();
+        assert_eq!(receipt["delivery_state"], "recorded");
+        assert!(unresolved.is_queued_stall());
+        assert_eq!(fixture.launches().len(), 1);
+        assert_eq!(fixture.received(1).await.len(), 1);
+        restarted.stop_all().await;
+    }
+
+    #[tokio::test]
+    async fn compacted_receipts_keep_message_identity_and_conflict_protection() {
+        let mut fixture = Fixture::new();
+        fixture.initial_turn().await;
+        fixture
+            .agent
+            .conversation_index
+            .update_parent(THREAD, |parent| {
+                for index in 0..300 {
+                    parent.record_delivery(Delivery {
+                        id: format!("saved-{index}"),
+                        fingerprint: format!("{:x}", Sha256::digest(b"completed work")),
+                        state: DeliveryState::Submitted,
+                        receipt: json!({"delivery":"gateway-steered"}),
+                    });
+                }
+            })
+            .await
+            .unwrap();
+        let receipt = fixture
+            .agent
+            .deliver_parent_message(message("saved-0", "completed work"))
+            .await
+            .unwrap();
+        let conflict = fixture
+            .agent
+            .deliver_parent_message(message("saved-0", "changed content"))
+            .await
+            .unwrap_err();
+        assert_eq!(receipt["duplicate"], true);
+        assert_eq!(receipt["delivery_state"], "submitted");
+        assert!(conflict.message.contains("different message or sender"));
+        assert_eq!(fixture.received(1).await.len(), 1);
+        fixture.agent.stop_all().await;
     }
 
     #[tokio::test]

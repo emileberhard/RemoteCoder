@@ -177,14 +177,14 @@ impl ClaudeSupervisor {
         item: &Item,
     ) -> Result<ResumeDelivery, TurnStartError> {
         let _lifecycle = self.lifecycles.lock(&item.thread_id).await;
+        let stop_generation = self
+            .stop_generation(&item.thread_id)
+            .await
+            .map_err(|error| {
+                resume_error(format!("the Stop state could not be read: {error:#}"))
+            })?;
         if let Some(captured) = item.stop_generation {
-            let current = self
-                .stop_generation(&item.thread_id)
-                .await
-                .map_err(|error| {
-                    resume_error(format!("the Stop state could not be read: {error:#}"))
-                })?;
-            if current > captured {
+            if stop_generation > captured {
                 return Ok(ResumeDelivery::Stopped);
             }
         }
@@ -237,7 +237,7 @@ impl ClaudeSupervisor {
                     cwd: item.cwd.clone(),
                 };
                 let turn_id = self
-                    .start_turn_locked(request, TurnOrigin::Callback)
+                    .start_turn_locked(request, TurnOrigin::Callback { stop_generation })
                     .await?;
                 let (input, group) = self
                     .runtimes

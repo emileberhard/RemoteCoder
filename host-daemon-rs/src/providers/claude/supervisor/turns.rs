@@ -89,6 +89,8 @@ impl ClaudeSupervisor {
                 code: RpcCode::Internal,
                 message: format!("the Stop state could not be read: {error:#}"),
             })?;
+        self.check_callback_generation(&request.thread_id, origin)
+            .await?;
         self.wait_for_finishing_turn(&request.thread_id).await;
         if self
             .runtimes
@@ -145,7 +147,7 @@ impl ClaudeSupervisor {
         }
         if request.input.text != "/compact" {
             let folded = self
-                .fold_into_agent_initiated_turn(&request, &prepared)
+                .fold_into_agent_initiated_turn(&request, &prepared, origin)
                 .await;
             if matches!(&folded, Ok(Some(_)))
                 || matches!(&folded, Err(error) if error.is_queued_stall())
@@ -163,7 +165,7 @@ impl ClaudeSupervisor {
         if request.input.text == "/compact" {
             translator.expect_manual_compaction();
         }
-        let agent_initiated = matches!(origin, TurnOrigin::Callback);
+        let agent_initiated = matches!(origin, TurnOrigin::Callback { .. });
         let mut started_notification = translator.turn_started();
         if agent_initiated {
             annotate_agent_initiated(&mut started_notification, None);
@@ -199,6 +201,8 @@ impl ClaudeSupervisor {
 
         let warm = self
             .reserve_warm_input(&request.thread_id, "turn/start")
+            .await?;
+        self.check_callback_generation(&request.thread_id, origin)
             .await?;
         let (slot, process_group_id, mut process_admission) = {
             let mut runtimes = self.runtimes.lock().await;
@@ -265,7 +269,20 @@ impl ClaudeSupervisor {
 
         self.emit(started_notification).await;
 
-        if let Err(err) = slot.send_input(Arc::clone(&prepared)).written().await {
+        self.check_callback_generation(&request.thread_id, origin)
+            .await?;
+        let pending = {
+            let runtimes = self.runtimes.lock().await;
+            if !runtimes.get(&request.thread_id).is_some_and(|runtime| {
+                runtime.process_group_id == process_group_id && runtime.running_turn().is_some()
+            }) {
+                return Err(TurnStartError::internal(
+                    "Claude runtime stopped before its input was submitted",
+                ));
+            }
+            slot.send_input(Arc::clone(&prepared))
+        };
+        if let Err(err) = pending.written().await {
             if InputWriter::is_stalled(&err) {
                 process_admission.accept();
                 self.remember_parent(&request, origin, stop_generation)
@@ -344,6 +361,7 @@ impl ClaudeSupervisor {
         self: &Arc<Self>,
         request: &ClaudeTurnRequest,
         prepared: &Arc<super::input_writer::PreparedInput>,
+        origin: TurnOrigin,
     ) -> Result<Option<String>, TurnStartError> {
         // Cheap first: building a translator reads Claude's settings files, so
         // ordinary dispatch must not pay for it twice.
@@ -428,7 +446,20 @@ impl ClaudeSupervisor {
         self.publish(completed).await;
         self.emit(started).await;
 
-        if let Err(err) = slot.send_input(Arc::clone(prepared)).written().await {
+        self.check_callback_generation(&request.thread_id, origin)
+            .await?;
+        let pending = {
+            let runtimes = self.runtimes.lock().await;
+            if !runtimes.get(&request.thread_id).is_some_and(|runtime| {
+                runtime.process_group_id == process_group_id && runtime.running_turn().is_some()
+            }) {
+                return Err(TurnStartError::internal(
+                    "Claude runtime stopped before its input was submitted",
+                ));
+            }
+            slot.send_input(Arc::clone(prepared))
+        };
+        if let Err(err) = pending.written().await {
             if InputWriter::is_stalled(&err) {
                 process_admission.accept();
                 return Err(self.input_stalled(

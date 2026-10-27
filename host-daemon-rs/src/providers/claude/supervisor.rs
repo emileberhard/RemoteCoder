@@ -193,7 +193,7 @@ pub(crate) enum SessionRename {
 #[derive(Clone, Copy)]
 enum TurnOrigin {
     Dispatched,
-    Callback,
+    Callback { stop_generation: u64 },
 }
 
 struct RuntimeTurn {

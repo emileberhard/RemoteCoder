@@ -1,19 +1,28 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io::BufReader;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 use crate::providers::claude::records::{LineKind, read_bounded_line};
 
 const MAX_RECORD_BYTES: u64 = 16 << 20;
 
 pub(super) fn recorded_ids<'a>(path: &Path, ids: &[&'a str]) -> Result<HashSet<&'a str>> {
+    Ok(recorded_inputs(path, ids)?.into_keys().collect())
+}
+
+pub(super) fn recorded_fingerprint(path: &Path, id: &str) -> Result<Option<Option<String>>> {
+    Ok(recorded_inputs(path, &[id])?.remove(id))
+}
+
+fn recorded_inputs<'a>(path: &Path, ids: &[&'a str]) -> Result<HashMap<&'a str, Option<String>>> {
     let file =
         std::fs::File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
     let mut reader = BufReader::new(file);
-    let mut found = HashSet::new();
+    let mut found = HashMap::new();
     let mut line = Vec::new();
     while found.len() < ids.len() {
         line.clear();
@@ -32,20 +41,33 @@ pub(super) fn recorded_ids<'a>(path: &Path, ids: &[&'a str]) -> Result<HashSet<&
         }
         let record: Value = serde_json::from_slice(&line)
             .with_context(|| format!("failed to parse {}", path.display()))?;
-        let recorded_id = match record.get("type").and_then(Value::as_str) {
-            Some("user") => record.get("uuid"),
+        let (recorded_id, content) = match record.get("type").and_then(Value::as_str) {
+            Some("user") => (record.get("uuid"), record.pointer("/message/content")),
             Some("attachment")
                 if record.pointer("/attachment/type").and_then(Value::as_str)
                     == Some("queued_command") =>
             {
-                record.pointer("/attachment/source_uuid")
+                (
+                    record.pointer("/attachment/source_uuid"),
+                    record.pointer("/attachment/prompt"),
+                )
             }
-            _ => None,
+            _ => (None, None),
         };
         if let Some(recorded_id) = recorded_id.and_then(Value::as_str)
             && let Some(id) = ids.iter().find(|id| **id == recorded_id)
         {
-            found.insert(*id);
+            let text = match content {
+                Some(Value::String(text)) => Some(text.as_str()),
+                Some(Value::Array(parts)) if parts.len() == 1 && parts[0]["type"] == "text" => {
+                    parts[0]["text"].as_str()
+                }
+                _ => None,
+            };
+            found.insert(
+                *id,
+                text.map(|text| format!("{:x}", Sha256::digest(text.as_bytes()))),
+            );
         }
     }
     Ok(found)
