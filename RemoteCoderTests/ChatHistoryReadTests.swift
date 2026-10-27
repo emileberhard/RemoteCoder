@@ -6,7 +6,7 @@ import Testing
 struct ChatHistoryReadTests {
     private let threadID = "claude_44444444-0000-0000-0000-000000000004"
 
-    @Test func aLatePageFromAnInvalidatedOwnerCannotPopulateItsReplacement() async throws {
+    @Test(.timeLimit(.minutes(1))) func aLatePageFromAnInvalidatedOwnerCannotPopulateItsReplacement() async throws {
         let fixture = TargetModelFixture()
         defer { await fixture.cleanUp() }
         let target = fixture.target
