@@ -151,7 +151,7 @@ def app_store(app, platform, version, number, notes):
                 "id": localization['id'], "attributes": {"whatsNew": notes}})
     build = wait(f"The {version} build", lambda: processed_build(app, version, number, platform))
     api("PATCH", f"appStoreVersions/{version_id}/relationships/build", {"type": "builds", "id": build})
-    print(f"App Store version {version} is ready to submit for review; existing screenshots are preserved.", file=sys.stderr)
+    print(f"App Store version {version} for {platform} is prepared with build {number} and manual release.", file=sys.stderr)
 
 
 def main(command, *arguments):
