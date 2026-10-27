@@ -37,7 +37,12 @@ observation and off-main bounded rendering from the earlier performance pass.
 
 ## Metadata authority
 
-`conversation/metadata/read` returns acknowledged records. The
+`conversation/metadata/read` returns acknowledged records and an opaque snapshot
+revision. A caller with a retained snapshot can send `knownRevision`; an exact
+match returns `unchanged: true` and that revision without entries. The gateway
+hashes the ordered serialized records inside the same file transaction as the
+read, so changes to any record, deletions and restores invalidate the token.
+An empty snapshot remains a full response, not an unchanged response. The
 `conversation/metadata/update` request identifies a single session, desired
 selection, expected server revision and mutation ID. The host owns the compound
 read/modify/write operation; a file lock also protects two gateway processes during
@@ -50,6 +55,20 @@ A lost acknowledgement retries the same mutation ID. A newer local edit may reba
 over its own successfully acknowledged predecessor, but not over an unrelated
 writer. Conflicts expose explicit keep-local/use-remote controls. Corrupt stores
 remain errors, and persistence failures remain pending.
+
+The client keeps the validator in memory and clears it when an acknowledged
+mutation or conflict readback changes its retained map. Full reads replace that
+map authoritatively. Unchanged reads still reconcile observed settings and drain
+the outbox; they must match both the requested token and the retained snapshot.
+Older gateways return full records without a token, as registered in
+[Compatibility](compatibility-register.md).
+
+One service task owns separate refresh and outbox demands. Bootstrap, foreground
+and connection requests join by actual connection identity and lifecycle
+generation; only a successful refresh satisfies that context. Explicit retry,
+fork and invalidation reads remain fresh requests. Work arriving across an await
+is retained for the next pass. Sending an edit does not require another full-map
+read, and a successful outbox flush cannot clear a failed-refresh error.
 
 The per-device `codex-session-metadata.json` cache uses schema 3. Dates are
 Foundation Date numeric values in seconds since 2001-01-01 UTC, preserving the

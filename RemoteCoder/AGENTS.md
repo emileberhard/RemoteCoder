@@ -425,10 +425,14 @@ entrypoint linked above.
   local conversation UUIDs, so resumes and completion routing never rely on
   heuristics.
 - `ConversationMetadataService` owns acknowledged metadata and a durable local
-  outbox, through typed `conversation/metadata/read|update` RPCs that replaced
-  the remote Python whole-map writer. The gateway
-  owns `~/.remote-coder/session-metadata-v2.json`, revisions, idempotency and
-  cross-process locking. Stale edits need explicit conflict resolution.
+  outbox through typed `conversation/metadata/read|update` RPCs. Its one task
+  retains separate refresh and flush demand; unchanged reads still reconcile
+  observations and pending edits. The memory-only snapshot validator covers the
+  exact acknowledged map and is invalidated by changes to it. The gateway owns
+  `~/.remote-coder/session-metadata-v2.json`, content validators, revisions,
+  idempotency and cross-process locking. Stale edits need explicit conflict
+  resolution; [Metadata authority](../docs/owned-operations.md#metadata-authority)
+  owns refresh coalescing and compatibility.
 - `ConversationHeaderStore` is the actor-backed, per-host cache of known
   `ConversationHeader` values and the last successful refresh. Its retained window
   holds at most 1,024 root conversations; a delegated agent thread is admitted
@@ -503,22 +507,24 @@ entrypoint linked above.
     provider comparison coverage after a cancelled aggregate read. The discovery
     bounds and comparison contract live in `docs/system-architecture.md`,
     *History and live state*.
-  - After 1 s of continuous drawer visibility, the same loop warms every
-    unsettled drawer conversation in rank order
+  - After 1 s of continuous drawer visibility, the same loop requests warming
+    of the first five unsettled drawer conversations in rank order
     (`ConversationDrawerRank`; delegated agent threads, and probe threads the
     drawer hides while they are not running, excluded) at background
     priority, running turns included, so a visual an agent posts in a
-    conversation that is not shown is prepared by the next pass that sees its
-    header revision move; there is no per-item hook. Each gets its opening tail
+    shortlisted conversation that is not shown is prepared after its header
+    revision moves; there is no per-item hook. Apply the shortlist before
+    filtering completed coverage. Each gets its opening tail
     in the history page cache, trusted while `HistoryWarmLedger` holds a read of
     that exact header revision, or without a ledger entry while the stored tail
-    is newer than the thread's `updatedAt`. The warmer then awaits preparation
-    of the tail's HTML visuals in chunks of at most 16, and the conversation is
-    warm only once every visual is stored or recorded unpreparable for the
-    current width and theme. An incomplete attempt is retried from the stored
-    tail on the next pass; an interrupted one ends the pass. The Mac prepares no
-    visuals ahead, so there preparation reports unsupported and the warm covers
-    history only, with no preparation context. The top two, while
+    is newer than the thread's `updatedAt`. History coverage completes even when
+    visual preparation is unavailable. A newly usable preparation context
+    explicitly requests missing visual work from stored tails; the target
+    retains requests arriving during an active pass. Incomplete renders wait
+    for another legitimate request, and cancellation never marks success.
+    Background warming must not cancel near-viewport preparation demand.
+    [HTML visuals](../docs/html-visuals.md#readiness-and-background-preparation)
+    owns capability, coverage and rendering completion. The top two, while
     no turn runs there, also get a session and pre-rendered Markdown in
     `RecentConversationCache`, but only into free slots, so warming never
     evicts a conversation the user opened, and their agent lists are read
@@ -784,6 +790,9 @@ entrypoint linked above.
   owns one `HTMLVisualPreparation` with its layout context, demand, lane, waits
   and preparation surface, so window and conversation state never leak into
   another window's preparation.
+  - On iPhone, occurrence visibility gates first live admission only. Preserve
+    near-viewport preparation and the existing lifetime of loading/live pages;
+    earlier retirement can reset arbitrary JavaScript and form state.
   - A `WebPage` backs at most one `WebView`. Only the host that claimed a
     preparation surface renders it; never render a shared page from a second
     view.
