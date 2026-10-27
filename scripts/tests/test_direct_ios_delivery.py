@@ -324,6 +324,7 @@ class ArtifactDeliveryTests(unittest.TestCase):
 
 
 class DirectFreshnessTests(unittest.TestCase):
+    @unittest.skipUnless((module.CONFIGS / 'skills/simplemdm/scripts/ios-mdm-install').is_file(), 'Operator MDM coordinator is not installed')
     def test_inventory_must_advance_and_pending_or_newer_catalog_cannot_be_ignored(
         self,
     ):

@@ -38,6 +38,8 @@ class SourceIdentityTests(unittest.TestCase):
         self.enterContext(patch.object(Path, "home", return_value=self.root))
         self.cache = self.root / "Library/Caches/RemoteCoder-Build"
         subprocess.run(["git", "init", "-q", str(self.source)], check=True)
+        subprocess.run(["git", "-C", str(self.source), "config", "maintenance.auto", "false"], check=True)
+        subprocess.run(["git", "-C", str(self.source), "config", "gc.auto", "0"], check=True)
         (self.source / ".xcode-version").write_text("27.0")
         subprocess.run(
             ["git", "-C", str(self.source), "add", ".xcode-version"], check=True

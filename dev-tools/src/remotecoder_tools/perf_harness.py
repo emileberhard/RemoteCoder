@@ -214,6 +214,8 @@ class Device:
         suffix = "Development" if self.signing == "development" else "AdHoc"
         return ["-configuration", "Release", "-destination", "generic/platform=iOS",
                 f"DEVELOPMENT_TEAM={TEAM_ID}", f"OTHER_CODE_SIGN_FLAGS=--keychain {keychain}",
+                "CODE_SIGN_STYLE=Manual", "CODE_SIGN_IDENTITY=" + ("Apple Development" if self.signing == "development" else "Apple Distribution"),
+                "RC_APP_ENTITLEMENTS=RemoteCoder/Entitlements/RemoteCoder." + ("Debug" if self.signing == "development" else "Release") + ".entitlements",
                 *(f"{setting}={bundle} {suffix}" for setting, bundle in DEVICE_BUNDLES.items())]
 
     def prepare(self) -> None:
@@ -286,12 +288,12 @@ def target(args) -> Simulator | Device:
 
 def build_commands(device: Simulator | Device) -> list[list[str]]:
     return [
-        ["tuist", "generate", "--no-open"],
+        ["python3", "scripts/maintainer_config.py", "configure"],
         [
             "xcodebuild", "-jobs", os.environ.get("EMIL_BUILD_JOBS", "6"),
-            "-workspace", "RemoteCoder.xcworkspace", "-scheme", "RemoteCoder",
+            "-project", "RemoteCoder.xcodeproj", "-scheme", "RemoteCoder",
             *device.build_settings(),
-            "-derivedDataPath", str(device.derived), "-onlyUsePackageVersionsFromResolvedFile",
+            "-derivedDataPath", str(device.derived), "-disableAutomaticPackageResolution", "-onlyUsePackageVersionsFromResolvedFile", "-skipPackageUpdates",
             "-skipPackagePluginValidation", "-skipMacroValidation",
             "COMPILER_INDEX_STORE_ENABLE=NO", "SWIFT_ACTIVE_COMPILATION_CONDITIONS=$(inherited) RC_PERF_HARNESS",
             "build",
@@ -301,8 +303,7 @@ def build_commands(device: Simulator | Device) -> list[list[str]]:
 
 def build(args) -> None:
     device = target(args)
-    env = {**ENV, "TUIST_REMOTE_CODER_BUNDLE_LOCAL_CONFIG": "1",
-           "TUIST_REMOTE_CODER_PERF_SIGNING": getattr(device, "signing", "distribution")}
+    env = dict(ENV)
     log = ROOT / f"build/{device.derived.name}-build.log"
     log.parent.mkdir(parents=True, exist_ok=True)
     status = 0
@@ -313,7 +314,6 @@ def build(args) -> None:
         compile_command = commands[1]
         settings = compile_command[compile_command.index("-scheme") + 2:compile_command.index("-derivedDataPath")]
         settings += compile_command[compile_command.index("-derivedDataPath") + 2:]
-        env["TUIST_REMOTE_CODER_PERF_HARNESS_SHA256"] = "0" * 64
         try:
             require_build_space(ROOT)
         except ValueError as error:
@@ -325,8 +325,13 @@ def build(args) -> None:
                 effective = effective_compiler_settings(rows, device.derived)
                 settings = {"command": settings, "effective": effective}
                 harness = harness_source_identity(settings, toolchain)
-                env["TUIST_REMOTE_CODER_PERF_HARNESS_SHA256"] = harness["harnessSHA256"]
-                for command in commands:
+                info = plistlib.loads((ROOT / "Config/InfoPlists/RemoteCoder-Info.plist").read_bytes())
+                info["RemoteCoderPerfHarnessSHA256"] = harness["harnessSHA256"]
+                device.derived.mkdir(parents=True, exist_ok=True)
+                harness_info = device.derived / "PerfHarness-Info.plist"
+                harness_info.write_bytes(plistlib.dumps(info))
+                compile_command.insert(-1, "RC_IOS_INFOPLIST_FILE=" + str(harness_info))
+                for command in commands[1:]:
                     status = run_owned(command, ROOT, env, handle, (lease, capacity))
                     if status != 0:
                         break

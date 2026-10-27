@@ -45,7 +45,6 @@ def inputs(source, optimized, compilation_mode):
         "compilationMode": compilation_mode,
         "developerDirectory": developer,
         "xcode": subprocess.check_output(["xcodebuild", "-version"], text=True).strip(),
-        "tuist": subprocess.check_output(["tuist", "version"], text=True).strip(),
         "privateConfigSHA256": hashlib.sha256(
             Path("RemoteCoder/Resources/RemoteCoderLocalConfig.json").read_bytes()
         ).hexdigest(),

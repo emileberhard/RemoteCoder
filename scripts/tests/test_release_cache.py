@@ -140,6 +140,17 @@ class PublishedMacReleaseTests(unittest.TestCase):
             ):
                 fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
 
+    def test_direct_release_completion_is_independent_of_an_app_store_package(self):
+        newer = self.release('3.73.1')
+        with module.reference() as reference:
+            self.assertEqual(reference['version'], '3.34.0')
+        module.mac_completion(newer.parent).touch()
+        with module.reference() as reference:
+            self.assertEqual(reference['version'], '3.73.1')
+        shutil.rmtree(newer)
+        with self.assertRaises(FileNotFoundError), module.reference():
+            self.fail('fell back from a corrupt completed direct release')
+
     def test_copies_signing_inputs_without_reading_the_installed_bench_app(self):
         installed = install_mac.TARGET
         (installed / "Contents/Resources").mkdir(parents=True)
@@ -247,7 +258,8 @@ class SymbolRetentionTests(unittest.TestCase):
             os.utime(directory, (stamp, stamp))
 
     def present(self):
-        return sorted({module.re.fullmatch(module.SYMBOL_DIRECTORY, p.name)[1] for p in self.deployments.glob("testflight-*")})
+        return sorted({match[1] for p in self.deployments.glob("*")
+            if (match := module.re.fullmatch(module.SYMBOL_DIRECTORY, p.name))})
 
     def test_versions_retained_within_seven_days_the_newest_older_one_and_the_published_one_stay(self):
         self.retain("3.40.0", 30)
@@ -393,7 +405,6 @@ class ReleasePublicationTests(unittest.TestCase):
                 "gateway": Path(plan["gatewayBundle"]),
                 "codex-package": directory / "codex-package",
                 "mac-app": directory / module.MAC_APP,
-                "mac-package": directory / module.MAC_PACKAGE,
                 "mac-symbols": module.symbol_directory("mac", "3.45.0"),
             }
             for name, copy in copies.items():

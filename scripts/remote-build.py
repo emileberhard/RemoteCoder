@@ -88,12 +88,12 @@ KINDS = (
     "ios-ui-test",
     "core-test",
     "gateway",
+    "gateway-release",
     "gateway-check",
     "gateway-test",
     "tools-test",
     "verify",
     "verify-all",
-    "release-gate",
 )
 SSH = [
     "ssh",
@@ -107,9 +107,10 @@ SSH = [
     "ServerAliveCountMax=3",
 ]
 SIMULATOR_KINDS = frozenset(
-    ("ios-simulator-test", "ios-ui-test", "verify-all", "release-gate")
+    ("ios-simulator-test", "ios-ui-test", "verify-all")
 )
-GATEWAY_ARTIFACT_KINDS = frozenset(("gateway", "release-gate"))
+GATEWAY_ARTIFACT_KINDS = frozenset(("gateway", "gateway-release"))
+CARGO_KINDS = GATEWAY_ARTIFACT_KINDS | {"gateway-check", "gateway-test", "verify", "verify-all"}
 IOS_KINDS = frozenset(
     (
         "ios-install",
@@ -123,7 +124,6 @@ IOS_KINDS = frozenset(
         "core-test",
         "verify",
         "verify-all",
-        "release-gate",
     )
 )
 UNSIGNED_WORKER_KINDS = frozenset(KINDS) - {"ios-install"}
@@ -133,7 +133,7 @@ MAC_APP_KINDS = frozenset(("mac-install", "mac-bench"))
 def selected_build_host(kind: str, environment) -> str:
     variable = (
         "RC_IOS_BUILD_HOST"
-        if kind.startswith("ios-") or kind in ("verify-all", "release-gate")
+        if kind.startswith("ios-") or kind == "verify-all"
         else "RC_GATEWAY_BUILD_HOST"
     )
     default = build_hosts.MAC_GUI_HOST if kind in MAC_APP_KINDS else build_hosts.build_host(ROOT)
@@ -273,9 +273,11 @@ def build_command(kind: str, arguments: list[str]) -> list[str]:
         return ["./scripts/install-mac", "--bench", *arguments]
     if kind == "gateway":
         return ["just", "gateway-candidate-local"]
+    if kind == "gateway-release":
+        return ["just", "gateway-release-local"]
     if kind in ("core-test", "gateway-check", "gateway-test", "tools-test"):
         return ["just", kind + "-local", *arguments]
-    if kind in ("verify-all", "release-gate"):
+    if kind == "verify-all":
         return ["just", kind + "-local"]
     if kind == "verify":
         return ["just", "verify-local"]
@@ -516,9 +518,6 @@ def mirror_source_command(source: Path, repository: Path) -> list[str]:
     return source_sync_command(
         [
             "--delete",
-            "--exclude=/RemoteCoder.xcodeproj/",
-            "--exclude=/RemoteCoder.xcworkspace/",
-            "--exclude=/Derived/",
             str(source) + "/",
             str(repository) + "/",
         ]
@@ -557,11 +556,6 @@ def worker(run: Path) -> dict:
             + ".app/Contents/Developer"
         )
     environment["DEVELOPER_DIR"] = developer
-    tuist_version = source / ".tuist-version"
-    if tuist_version.is_file():
-        tuist = Path("/opt/homebrew/opt/tuist@" + tuist_version.read_text().strip()) / "bin"
-        if tuist.is_dir():
-            environment["PATH"] = str(tuist) + os.pathsep + environment.get("PATH", "")
     environment.setdefault("COMPILATION_CACHE_ENABLE_CACHING_DEFAULT", "YES")
     environment.setdefault("SWIFT_ENABLE_PREFIX_MAPPING", "YES")
     environment.setdefault("SWIFT_ENABLE_PROJECT_PREFIX_MAPPING", "YES")
@@ -626,8 +620,7 @@ def worker(run: Path) -> dict:
             cargo = Path(environment["CARGO_TARGET_DIR"])
             cargo_key = (
                 cargo_seed_key(source, environment)
-                if manifest["kind"]
-                in {"gateway", "gateway-check", "gateway-test", "verify", "verify-all", "release-gate"}
+                if manifest["kind"] in CARGO_KINDS
                 else None
             )
             cargo_seed = seed_cargo(
@@ -821,9 +814,9 @@ def compiler_paths(kind: str, environment: dict[str, str]) -> list[Path]:
         if kind in {"mac-install", "mac-bench"}:
             derived = derived.with_name(derived.name + "-mac-optimized")
         paths.append(derived)
-    if kind in {"core-test", "verify", "verify-all", "release-gate"}:
+    if kind in {"core-test", "verify", "verify-all"}:
         paths.append(Path(environment["RC_SWIFT_BUILD_PATH"]))
-    if kind in {"gateway", "gateway-check", "gateway-test", "verify", "verify-all", "release-gate"}:
+    if kind in CARGO_KINDS:
         paths.append(Path(environment["CARGO_TARGET_DIR"]))
     return [canonical_path(path) for path in paths]
 
@@ -873,6 +866,7 @@ def local_build(kind: str, arguments: list[str]) -> int:
         "gateway-check",
         "gateway-test",
         "gateway",
+        "gateway-release",
     }:
         raise ValueError(f"Unsupported local compiler lane: {kind}")
     root = canonical_path(Path.home() / "Library/Caches/RemoteCoder-Build")

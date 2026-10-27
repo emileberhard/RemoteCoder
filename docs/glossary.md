@@ -106,7 +106,7 @@ One line per term, with the type that owns it and the document that holds its co
 
 | Term | Meaning | Owner | Contract |
 |---|---|---|---|
-| Build identity | Release version or Dev, full source commit and recorded modification state, shared by app and gateway displays | `BuildIdentity` | [Build stamps](../Project.swift) |
+| Build identity | Release version or Dev, full source commit and recorded modification state, shared by app and gateway displays | `BuildIdentity` | [Build stamps](../Config/InfoPlists/RemoteCoder-Info.plist) |
 | Gateway scheduling | Best-effort macOS thread QoS, agent child preparation and Darwin-background guard | `platform/macos/scheduling.rs` | [Owned operations](owned-operations.md#gateway-scheduling) |
 | Candidate | A built gateway or Codex artifact that has not yet been approved or installed | `just gateway-candidate` | [Owned operations](owned-operations.md) |
 | Receipt | The recorded evidence of one build, install or probe run; it proves only what it recorded | `scripts/build_support.py` | [Owned operations](owned-operations.md) |
