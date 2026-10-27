@@ -123,7 +123,7 @@ jobs:
       - run: just ios-build-local
       - run: just mac-build-local
       - run: just mac-harness-build-local
-      - name: Select an available iPhone simulator
+      - name: Select an available iPhone on iOS 27.0
         run: |
           python3 - <<'PY'
           import json, os, subprocess
@@ -133,11 +133,11 @@ jobs:
               if '.iOS-' not in runtime:
                   continue
               version = tuple(map(int, runtime.rsplit('.iOS-', 1)[1].split('-')))
-              if version < (27, 0):
+              if version[:2] != (27, 0):
                   continue
               candidates.extend((version, device) for device in devices if device['isAvailable'] and device['name'].startswith('iPhone'))
           if not candidates:
-              raise SystemExit('No available iPhone simulator runs iOS 27 or newer.')
+              raise SystemExit('No available iPhone simulator runs the iOS 27.0 baseline.')
           version, device = max(candidates, key=lambda candidate: candidate[0])
           with open(os.environ['GITHUB_ENV'], 'a') as environment:
               environment.write('RC_IOS_SIMULATOR=' + device['udid'] + '\n')

@@ -11,8 +11,10 @@ files. Shared subsets compiled by extensions retain explicit membership. Plists
 live in Config/InfoPlists; private local configuration stays ignored by filename.
 
 Public CI compiles every shipping platform and test target and runs the existing
-product gates. The public tag workflow admits the exact green main commit before
-exposing signing credentials, reserves per-platform ASC build numbers and persists
+70 product checks on an available iPhone running iOS 27.0. This preserves the
+existing worker's iPhone 17 Pro / iOS 27.0 baseline. The public tag workflow admits
+the exact green main commit before exposing signing credentials, reserves
+per-platform ASC build numbers and persists
 one reservation artifact per run. Archives, verified exports and signed entitlement
 checks run on hosted macOS. This keeps public repositories free of personal
 runners and avoids billed hosted builds in the private deployment repository.
@@ -61,3 +63,17 @@ Contents write only, and extending a fine-grained PAT requires Emil in GitHub's
 UI. Keep the established independent direct builds; revisit archive transfer only
 if measured Mini build time justifies that credential boundary. No new token,
 permission or runtime protocol change is required.
+
+## Deferred product observation
+
+On iPhone Duo / iOS 27.1,
+`RemoteCoderTests/TranscriptScrollRenderingTests/aShortReplyUnderATallComposerShowsNoJumpControl()`
+renders a jump-to-latest control beneath a short reply when the fixture's composer
+is 400 points tall. The view is 466 × 678 points and its adjusted transcript
+viewport is 175.67 points tall. The control is visible in the
+[captured screenshot](images/duo-27.1-short-reply-jump-control.png) from
+[the hosted test failure](https://github.com/emileberhard/RemoteCoder/actions/runs/40565329077).
+Product Swift is unchanged from 3.73.0; the old Tuist project has not been tested
+on this device/runtime combination. Keep this as separate product work after
+the migration. The migration retains all 70 checks on the existing iOS 27.0
+baseline rather than changing jump-control behavior.
