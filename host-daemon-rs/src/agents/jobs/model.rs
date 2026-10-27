@@ -143,7 +143,9 @@ pub(crate) struct JobSpec {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) enum SpecEvidence {
-    Known { spec: JobSpec },
+    Known {
+        spec: JobSpec,
+    },
     Expired {
         cwd: PathBuf,
         settings: ExecutionSettings,
@@ -151,7 +153,9 @@ pub(crate) enum SpecEvidence {
         tool_scope: ToolScope,
         title: Option<String>,
     },
-    Unknown { reason: String },
+    Unknown {
+        reason: String,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -257,6 +261,7 @@ pub(crate) enum Completion {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct Terminal {
     pub at_ms: i64,
+    pub execution: Option<ExecutionBinding>,
     pub outcome: JobOutcome,
     pub result: ResultEvidence,
     pub completion: Completion,

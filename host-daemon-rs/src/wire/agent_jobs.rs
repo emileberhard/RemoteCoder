@@ -1,7 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::agents::jobs::model::{
-    AgentRecord, ConversationBinding, ConversationIdentity, ExecutionSettings, JobId, JobRecord, JobSpec, Provider,
+    AgentRecord, ConversationBinding, ConversationIdentity, ExecutionSettings, JobId, JobRecord,
+    JobSpec, Provider,
 };
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
