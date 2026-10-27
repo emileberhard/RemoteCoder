@@ -88,7 +88,7 @@ the private [operations entrypoint](https://github.com/emileberhard/RemoteCoder-
   never silently retries through another transport. Do not run `xcodebuild` directly.
 - `scripts/build-host` defaults to the local builder; private configuration can
   select an operator build host.
-  `RC_IOS_BUILD_HOST` (iOS kinds, `verify-all` and `release-gate`)
+  `RC_IOS_BUILD_HOST` (iOS kinds, `verify-all`)
   or `RC_GATEWAY_BUILD_HOST` (the other kinds) selects another host, such as
   `<gui-test-host>` or `local`, through the same capacity and source leases.
   `just install-phone` selects this machine; a failed builder never silently falls back.
@@ -112,10 +112,9 @@ the private [operations entrypoint](https://github.com/emileberhard/RemoteCoder-
   device; ambiguous matches fail. There is no TestFlight fallback. It syncs the Google Maps
   key into the ignored local config, and `scripts/release-config.py
   verify-development` fails on any field beyond the public ones plus
-  `codexGatewayAuthToken`. It skips `tuist generate` when manifests, the local
-  config bundling choice and globbed paths are unchanged (a fingerprint in the
-  derived data dir; `RC_FORCE_GENERATE=1` forces it), and builds with pinned
-  packages and no index store.
+  `codexGatewayAuthToken`. The committed `RemoteCoder.xcodeproj/project.xcproj`
+  owns every target, synchronized source folders and shared schemes. Builds use
+  its committed package lock and never resolve newer versions.
 - Shared ad hoc packaging and managed-app onboarding belong to the
   `apple-devops` skill's iPhone iteration workflow. The repository adapter strips
   private local configuration, sets production APNs for the ad hoc copy, and
@@ -157,7 +156,7 @@ the private [operations entrypoint](https://github.com/emileberhard/RemoteCoder-
     only for a change spanning that coverage or an explicit user request. State
     the reason and select the smallest relevant suite; it is never a routine
     prerequisite for a gateway change, cleanup, merge, or release.
-  - **Releases:** the release workflow runs the `verify-all` checks itself (see
+  - **Releases:** the release workflow requires green main CI on the exact tagged commit (see
     [Releasing](#releasing)). Run any relevant targeted iOS tests and live
     probes according to the changed behavior above before tagging.
 - `scripts/build_cache.py` owns the total RemoteCoder-Build cap, including pinned
@@ -178,9 +177,8 @@ the private [operations entrypoint](https://github.com/emileberhard/RemoteCoder-
 - Local setup needs no bundled runtime seed. Add a gateway in the app's host
   settings, or optionally copy `RemoteCoder/Resources/RemoteCoderLocalConfig.example.json`
   to ignored `RemoteCoderLocalConfig.json`. Maps needs its own optional key;
-  basic chat does not. A generated project includes the local file only with
-  `TUIST_REMOTE_CODER_BUNDLE_LOCAL_CONFIG=1`; `just generate` selects it when
-  the file exists. Provider keys never enter the app. Public identity defaults
+  basic chat does not. The synchronized Resources folder includes the ignored
+  local configuration when present; its example template is excluded. Provider keys never enter the app. Public identity defaults
   live in `Config/RemoteCoder.xcconfig`, with ignored `Config/Local.xcconfig`
   overrides; see [`docs/self-hosting.md`](docs/self-hosting.md).
 - Optional maintainer settings are loaded by `scripts/maintainer_config.py`;
@@ -194,17 +192,46 @@ the private [operations entrypoint](https://github.com/emileberhard/RemoteCoder-
 
 ## Releasing
 
-A release is one annotated stable `X.Y.Z` tag (each part 0–999, no leading zeros), on the
-pushed default branch and higher than every existing stable version. The tag is
-the version of every artifact; build numbers may count separately. Tags are
-immutable: fixes ship with the next patch. Public CI uses hosted workers and no
-personal-network access; it is deliberately gated while the source repository
-is private. Private release admission independently requires the exact tag/main
-identity. The private run's `verify-all` is the release gate; public CI provides
-hosted contributor feedback. Signing, gateway deployment, device installation and
-fleet catch-up belong to the private
-[RemoteCoder-deploy operations entrypoint](https://github.com/emileberhard/RemoteCoder-deploy/blob/main/AGENTS.md).
-[`fastlane/README.md`](fastlane/README.md) describes the public/private boundary.
+A release is one annotated stable `X.Y.Z` tag (each part 0–999, no leading zeros),
+on pushed `main` and higher than every stable tag. The tag is every artifact's
+marketing version. Tags are immutable; fixes use the next patch.
+
+Public hosted CI compiles both apps, their extensions, hosted tests and the Mac
+performance harness, runs the existing logic/tooling/gateway checks and targeted
+hosted rendering/history suites. Release admission waits for that exact main CI
+commit; releases do not rerun it. `scripts/select-xcode` selects `.xcode-version`
+without changing the host's default Xcode.
+
+The public tag workflow reserves the next global App Store Connect build
+number shared by both platforms, retains the exact reservation for retries, archives iOS and macOS on
+hosted runners and cloud-signs checked App Store exports. `Config/entitlements-*.json`
+covers every shipped bundle. The upload fence checks earlier attempts' upload
+steps; a retry queries Apple and refuses a second uncertain upload. Each platform then
+waits for processing, updates What to Test under the existing internal distribution
+policy and prepares its App Store version, preserving screenshots. A version in
+review or pending release is left untouched. App Review and release stay with Emil.
+
+The protected `testflight` environment supplies `APP_BUNDLE_ID`, the ASC key,
+`RC_RELEASE_CONFIGURATION` (the operator's nonsecret xcodeSettings and public
+releaseConfig) and the optional Maps key. Provider and gateway credentials never
+enter release bundles. `scripts/release-config.py` validates this boundary.
+
+The public workflow also hands the exact tag, commit and run ID to the private
+[operations entrypoint](https://github.com/emileberhard/RemoteCoder-deploy/blob/main/AGENTS.md).
+It independently admits the tag and successful public CI before running the
+Mini's gateway build and planned restart/recovery. It independently archives the
+same commit locally for ad hoc iPhone and Developer ID Mac delivery, preserving
+the existing semver-derived direct build numbers, cache/capacity leases and host
+job cap. Direct builds never upload to ASC. It retains direct-delivery symbols
+and publishes fleet catch-up when its own delivery completes. The public workflow
+publishes the annotated GitHub release after store preparation, independently of
+direct delivery. Every resumable mutation rechecks current tag admission. Apps and gateway
+preserve their existing protocol compatibility, so upload has no gateway-version
+ordering dependency. Public contributions never execute on personal runners.
+
+`just setup` prepares optional local identity overrides; it generates no project.
+Local development/install commands retain their source, cache and device leases.
+`docs/release-pipeline.md` records the ownership decision and retry contracts.
 
 ## Engineering invariants
 

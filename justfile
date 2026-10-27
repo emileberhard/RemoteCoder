@@ -56,17 +56,8 @@ install-target $target $selected_device $optimization $delivery_mode $compilatio
     fi
     "${cmd[@]}"
 
-generate:
-    #!/usr/bin/env bash
-    set -euo pipefail
+setup:
     python3 scripts/maintainer_config.py configure
-    export TUIST_RC_LIVE_GATEWAY="${RC_LIVE_GATEWAY:-0}"
-    [[ "$(tuist version)" == "$(cat .tuist-version)" ]] || { echo "Tuist version does not match .tuist-version" >&2; exit 1; }
-    if [[ -f RemoteCoder/Resources/RemoteCoderLocalConfig.json ]]; then
-        TUIST_REMOTE_CODER_BUNDLE_LOCAL_CONFIG=1 tuist generate --no-open
-    else
-        env -u TUIST_REMOTE_CODER_BUNDLE_LOCAL_CONFIG tuist generate --no-open
-    fi
 
 codex-schema:
     ./scripts/update-codex-app-server-protocol
@@ -159,7 +150,23 @@ gateway-candidate-local:
     if [[ "${RC_COMPILATION_OWNER:-}" != 1 ]]; then
         exec python3 scripts/remote-build.py local-build gateway
     fi
-    env -u RC_RELEASE_VERSION just gateway-check-local
+    just gateway-check-local
+    just gateway-bundle-local
+
+[private]
+gateway-release-local:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ "${RC_COMPILATION_OWNER:-}" != 1 ]]; then
+        exec python3 scripts/remote-build.py local-build gateway-release
+    fi
+    scripts/codex-runtime-approval check --json
+    just gateway-bundle-local
+
+[private]
+gateway-bundle-local:
+    #!/usr/bin/env bash
+    set -euo pipefail
     if [[ -n "${RC_BUILD_PROVENANCE:-}" ]]; then
         export RC_SOURCE_COMMIT="$(jq -r .sourceCommit "$RC_BUILD_PROVENANCE")"
         export RC_SOURCE_MODIFIED="$(jq -r .sourceModified "$RC_BUILD_PROVENANCE")"
@@ -253,15 +260,15 @@ ios-build-local:
     if [[ "${RC_COMPILATION_OWNER:-}" != 1 ]]; then
         exec python3 scripts/remote-build.py local-build ios-build
     fi
-    just generate
-    python3 scripts/xcode_build.py ios-build xcodebuild -workspace RemoteCoder.xcworkspace -scheme RemoteCoder -configuration Debug \
+    just setup
+    python3 scripts/xcode_build.py ios-build xcodebuild -project RemoteCoder.xcodeproj -scheme RemoteCoder -configuration Debug \
         -derivedDataPath "${RC_DERIVED_DATA:-$PWD/build/ios-build-derived}" \
         -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO \
-        COMPILER_INDEX_STORE_ENABLE=NO ARCHS=arm64 build-for-testing
-    python3 scripts/xcode_build.py ios-build xcodebuild -workspace RemoteCoder.xcworkspace -scheme RemoteCoderUITests -configuration Debug \
+        -disableAutomaticPackageResolution -onlyUsePackageVersionsFromResolvedFile -skipPackageUpdates COMPILER_INDEX_STORE_ENABLE=NO ARCHS=arm64 build-for-testing
+    python3 scripts/xcode_build.py ios-build xcodebuild -project RemoteCoder.xcodeproj -scheme RemoteCoderUITests -configuration Debug \
         -derivedDataPath "${RC_DERIVED_DATA:-$PWD/build/ios-build-derived}" \
         -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO \
-        COMPILER_INDEX_STORE_ENABLE=NO ARCHS=arm64 build-for-testing
+        -disableAutomaticPackageResolution -onlyUsePackageVersionsFromResolvedFile -skipPackageUpdates COMPILER_INDEX_STORE_ENABLE=NO ARCHS=arm64 build-for-testing
 
 # Build-only check of the macOS app; nothing is launched, signed or tested.
 mac-build:
@@ -279,11 +286,11 @@ mac-build-local *build_settings:
     if [[ "${RC_COMPILATION_OWNER:-}" != 1 ]]; then
         exec python3 scripts/remote-build.py local-build mac-build "$@"
     fi
-    just generate
-    python3 scripts/xcode_build.py mac-build xcodebuild -workspace RemoteCoder.xcworkspace -scheme RemoteCoderMac -configuration Debug \
+    just setup
+    python3 scripts/xcode_build.py mac-build xcodebuild -project RemoteCoder.xcodeproj -scheme RemoteCoderMac -configuration Debug \
         -derivedDataPath "${RC_DERIVED_DATA:-$PWD/build/mac-build-derived}" \
         -destination 'generic/platform=macOS' CODE_SIGNING_ALLOWED=NO \
-        COMPILER_INDEX_STORE_ENABLE=NO "$@" build
+        -disableAutomaticPackageResolution -onlyUsePackageVersionsFromResolvedFile -skipPackageUpdates COMPILER_INDEX_STORE_ENABLE=NO "$@" build
 
 mac-harness-build:
     python3 scripts/remote-build.py mac-harness-build
@@ -301,15 +308,19 @@ ios-simulator-test *test_ids:
 
 [positional-arguments]
 [private]
-ios-simulator-test-local *test_ids: generate
+ios-simulator-test-local *test_ids: setup
     #!/usr/bin/env bash
     set -euo pipefail
     derived_data="${RC_DERIVED_DATA:-$PWD/build/ios-test-derived}"
+    destination="platform=iOS Simulator,name=${RC_IOS_SIMULATOR:?},OS=latest"
+    if [[ "$RC_IOS_SIMULATOR" =~ ^[0-9a-fA-F-]{36}$ ]]; then
+        destination="platform=iOS Simulator,id=$RC_IOS_SIMULATOR"
+    fi
     build_command=(xcodebuild
-        -workspace RemoteCoder.xcworkspace -scheme "{{ scheme }}"
-        -configuration Debug -derivedDataPath "$derived_data"
-        -destination "platform=iOS Simulator,name=${RC_IOS_SIMULATOR:?},OS=latest"
-        -collect-test-diagnostics never CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=-)
+        -project RemoteCoder.xcodeproj -scheme "{{ scheme }}"
+        -configuration Debug "RC_LIVE_GATEWAY=${RC_LIVE_GATEWAY:-0}" -derivedDataPath "$derived_data"
+        -destination "$destination"
+        -disableAutomaticPackageResolution -onlyUsePackageVersionsFromResolvedFile -skipPackageUpdates -collect-test-diagnostics never CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=-)
     ./scripts/run-logged ios-simulator-build python3 scripts/xcode_build.py ios-build "${build_command[@]}" build-for-testing
     xcodebuild -project RemoteCoder.xcodeproj -alltargets -configuration Debug \
         -sdk iphonesimulator CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- \
@@ -330,14 +341,14 @@ ios-ui-test *test_ids:
 
 [positional-arguments]
 [private]
-ios-ui-test-local *test_ids: generate
+ios-ui-test-local *test_ids: setup
     #!/usr/bin/env bash
     set -euo pipefail
     command=(./scripts/run-logged ios-ui-tests python3 scripts/hosted-tests.py xcodebuild
-        -workspace RemoteCoder.xcworkspace -scheme "RemoteCoderUITests"
+        -project RemoteCoder.xcodeproj -scheme "RemoteCoderUITests"
         -derivedDataPath "${RC_DERIVED_DATA:-$PWD/build/ios-test-derived}"
         -destination "platform=iOS Simulator,name=${RC_IOS_SIMULATOR:?},OS=latest"
-        -collect-test-diagnostics never test CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=-)
+        -disableAutomaticPackageResolution -onlyUsePackageVersionsFromResolvedFile -skipPackageUpdates -collect-test-diagnostics never test CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=-)
     for test_id in "$@"; do
         [[ -z "$test_id" ]] || command+=("-only-testing:$test_id")
     done
@@ -554,12 +565,6 @@ verify-local:
 verify-all-local:
     python3 scripts/concurrent_lanes.py \
         --lane gateway 'just gateway-check-local' 'bun test dev-tools/tests/isolated-probes.test.mjs' \
-        --lane apps 'just verify-apps-local' 'just verify-simulator-local'
-
-[private]
-release-gate-local:
-    python3 scripts/concurrent_lanes.py \
-        --lane gateway 'just gateway-candidate-local' 'bun test dev-tools/tests/isolated-probes.test.mjs' \
         --lane apps 'just verify-apps-local' 'just verify-simulator-local'
 
 [private]

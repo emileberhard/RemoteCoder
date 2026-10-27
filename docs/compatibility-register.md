@@ -110,3 +110,10 @@ PR must introduce the reader before enabling its writer.
 | Path | Owner | Reason | Removal condition |
 |---|---|---|---|
 | Planned schema-2 checkpoint reader with a schema-1 writer, followed by schema-2 writes in a later release | `CheckpointDatabase` | Rollback, preview and branch builds must read every canonical checkpoint without stranding unique local records in recovery | Enable schema-2 writes only after every supported rollback/install consumer reads schema 2; remove schema-1 migration only after all retained databases are migrated or explicitly retired and no supported writer creates schema 1 |
+
+## Release cache
+
+| Path | Owner | Reason | Removal condition |
+|---|---|---|---|
+| Mac App Store package as completion marker through 3.73.0 | `scripts/release-cache.py`, `mac_completion` | Retained direct releases predate the independent direct completion marker | Neither host retains a release reference at 3.73.0 or earlier; then use the direct marker for every retained release |
+| `testflight-` symbol directory names through 3.73.0 | `scripts/release-cache.py`, `symbol_directory` | Retained pre-migration direct dSYMs use the former TestFlight label | Neither host retains a release reference at 3.73.0 or earlier; then use `direct-` for every retained symbol directory |

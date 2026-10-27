@@ -38,9 +38,9 @@ TEAM = maintainer_config().get("xcodeSettings", {}).get("DEVELOPMENT_TEAM", "")
 APP_IDENTIFIER = maintainer_config().get("xcodeSettings", {}).get("RC_BUNDLE_ID", "com.example.RemoteCoder")
 MAC_APP = "RemoteCoderMac-direct.app"
 MAC_PACKAGE = "RemoteCoderMac.pkg"
-MIRRORED = ("gateway", "mac-app", "mac-package", "ios-symbols", "mac-symbols")
+MIRRORED = ("gateway", "mac-app", "mac-package", "mac-receipt", "ios-symbols", "mac-symbols")
 COMPONENTS = ("gateway", "app")
-SYMBOL_DIRECTORY = rf"testflight-(?:ios|mac)-({VERSION})-[0-9]+"
+SYMBOL_DIRECTORY = rf"(?:testflight|direct)-(?:ios|mac)-({VERSION})-[0-9]+"
 SYMBOL_WINDOW_SECONDS = 7 * 24 * 3600
 SYMBOL_BYTE_CAP = 5 * 1024**3
 
@@ -61,6 +61,10 @@ def version_key(version: str) -> tuple[int, ...]:
 def build_number(version: str) -> str:
     major, minor, patch = version_key(version)
     return str(major * 1000000 + minor * 1000 + patch)
+
+
+def mac_completion(directory: Path) -> Path:
+    return directory / (MAC_PACKAGE if version_key(directory.name) <= (3, 73, 0) else 'mac-direct-complete')
 
 
 def git(*arguments: str) -> str:
@@ -234,12 +238,15 @@ def publish(version: str, gateway: Path, package: Path) -> dict:
 
 
 def symbol_directory(platform: str, version: str) -> Path:
-    return DEPLOYMENTS / f"testflight-{platform}-{version}-{build_number(version)}"
+    kind = "testflight" if version_key(version) <= (3, 73, 0) else "direct"
+    return DEPLOYMENTS / f"{kind}-{platform}-{version}-{build_number(version)}"
 
 
 def attach(version: str, platform: str) -> dict:
     directory = RELEASES / version
-    required = {"mac-app": directory / MAC_APP, "mac-package": directory / MAC_PACKAGE} if platform == "mac" else {}
+    required = {"mac-app": directory / MAC_APP} if platform == "mac" else {}
+    if platform == "mac" and version_key(version) > (3, 73, 0):
+        required["mac-receipt"] = mac_completion(directory)
     artifacts = {name: entry(path) for name, path in required.items()}
     symbols = symbol_directory(platform, version)
     if symbols.is_dir():
@@ -264,7 +271,7 @@ def allocated_bytes(path: Path) -> int:
 
 def prune_symbols(published: str | None) -> dict:
     by_version: dict[str, list[Path]] = {}
-    for path in DEPLOYMENTS.glob("testflight-*"):
+    for path in DEPLOYMENTS.glob("*"):
         if match := re.fullmatch(SYMBOL_DIRECTORY, path.name):
             by_version.setdefault(match[1], []).append(path)
     newest_first = sorted(by_version, key=version_key, reverse=True)
@@ -426,6 +433,7 @@ def catch_up(host: str) -> dict:
         "gateway": directory / gateway_bundle.NAME,
         "mac-app": directory / MAC_APP,
         "mac-package": directory / MAC_PACKAGE,
+        "mac-receipt": mac_completion(directory),
         "ios-symbols": symbol_directory("ios", version),
         "mac-symbols": symbol_directory("mac", version),
     }
@@ -459,7 +467,7 @@ def verify(directory: Path) -> dict:
         or re.fullmatch(COMMIT, commit) is None
     ):
         raise ValueError(f"{directory} has an invalid release version or commit")
-    if not (directory / MAC_PACKAGE).is_file():
+    if not mac_completion(directory).is_file():
         raise ValueError(f"{directory} has no completed Mac release publication")
     info = plistlib.loads((app / "Contents/Info.plist").read_bytes())
     expected = {
@@ -505,7 +513,7 @@ def reference():
         complete = [
             directory
             for directory in release_directories()
-            if (directory / MAC_PACKAGE).is_file()
+            if mac_completion(directory).is_file()
         ]
         if not complete:
             raise ValueError(
@@ -539,6 +547,8 @@ def main() -> None:
     admission = operations.add_parser("admit-tag", help="admit the checked-out release tag and print its release directory")
     admission.add_argument("version")
     admission.add_argument("commit")
+    numbering = operations.add_parser("build-number", help="print the monotonic direct-delivery build number")
+    numbering.add_argument("version")
     preparation = operations.add_parser("prepare-package", help="retain the exact approved build package for a release")
     preparation.add_argument("version")
     publication = operations.add_parser("publish", help="record the release this Mac's gateway now runs")
@@ -561,6 +571,8 @@ def main() -> None:
     args = parser.parse_args()
     if args.operation == "admit-tag":
         print(admit_tag(args.version, args.commit))
+    elif args.operation == "build-number":
+        print(build_number(args.version))
     elif args.operation == "prepare-package":
         print(prepare_package(args.version))
     elif args.operation == "publish":

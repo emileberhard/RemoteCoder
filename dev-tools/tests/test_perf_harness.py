@@ -250,6 +250,10 @@ class BuildTests(unittest.TestCase):
             self.events.append(("capacity", background))
             yield 12
 
+        info = Path(self.directory.name) / "Config/InfoPlists/RemoteCoder-Info.plist"
+        info.parent.mkdir(parents=True)
+        info.write_bytes(b'<plist version="1.0"><dict/></plist>')
+
         self.patches = [
             patch.object(perf_harness, "ENV", {}),
             patch.object(perf_harness, "ROOT", Path(self.directory.name)),
@@ -284,14 +288,13 @@ class BuildTests(unittest.TestCase):
 
     def test_generation_and_build_run_under_source_lease_then_capacity_with_both_inherited(self) -> None:
         with tempfile.TemporaryDirectory() as caller, contextlib.chdir(caller):
-            self.run_build([0, 0, 0])
+            self.run_build([0, 0])
         query = perf_harness.subprocess.check_output.call_args
         self.assertEqual(query.kwargs["cwd"], Path(self.directory.name))
-        self.assertEqual(query.kwargs["env"]["TUIST_REMOTE_CODER_PERF_SIGNING"], "distribution")
         self.assertIn("-showBuildSettings", query.args[0])
         self.assertEqual(
             self.events,
-            ["source", ("capacity", True), "space", ("tuist", (11, 12)), ("tuist", (11, 12)), ("xcodebuild", (11, 12))],
+            ["source", ("capacity", True), "space", ("python3", (11, 12)), ("xcodebuild", (11, 12))],
         )
 
     def test_failed_generation_stops_before_xcodebuild_and_propagates_its_status(self) -> None:

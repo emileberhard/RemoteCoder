@@ -1,0 +1,110 @@
+#!/usr/bin/env python3
+import argparse
+import json
+import os
+import plistlib
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def run(*args):
+    subprocess.run(args, check=True)
+
+
+def configure():
+    config = json.loads(os.environ['RC_RELEASE_CONFIGURATION'])
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.json') as file:
+        json.dump(config, file)
+        file.flush()
+        env = os.environ | {'RC_MAINTAINER_CONFIG': file.name}
+        subprocess.run(['python3', 'scripts/maintainer_config.py', 'configure', '--required'], env=env, check=True)
+    destination = ROOT / 'RemoteCoder/Resources/RemoteCoderLocalConfig.json'
+    destination.write_text(json.dumps(config['releaseConfig']) + '\n')
+    run('python3', 'scripts/google-maps-config.py', 'sync', str(destination))
+    run('python3', 'scripts/release-config.py', 'verify', str(destination))
+
+
+def archive(platform, directory):
+    scheme = 'RemoteCoder' if platform == 'ios' else 'RemoteCoderMac'
+    destination = 'generic/platform=iOS' if platform == 'ios' else 'generic/platform=macOS'
+    path = directory / f'{scheme}.xcarchive'
+    run('xcodebuild', 'archive', '-quiet', '-project', 'RemoteCoder.xcodeproj', '-scheme', scheme,
+        '-configuration', 'Release', '-destination', destination, '-archivePath', str(path),
+        '-disableAutomaticPackageResolution', '-onlyUsePackageVersionsFromResolvedFile', '-skipPackageUpdates',
+        'MARKETING_VERSION=' + os.environ['VERSION'], 'CURRENT_PROJECT_VERSION=' + os.environ['BUILD_NUMBER'],
+        'RC_SOURCE_COMMIT=' + os.environ['COMMIT'], 'RC_SOURCE_MODIFIED=false',
+        'CODE_SIGNING_ALLOWED=NO', 'COMPILER_INDEX_STORE_ENABLE=NO')
+    config = json.loads(os.environ['RC_RELEASE_CONFIGURATION'])
+    env = os.environ | config['xcodeSettings'] | {'RC_APNS_ENVIRONMENT': 'production'}
+    app = path / 'Products/Applications/RemoteCoder.app'
+    run(sys.executable, 'scripts/release_tag.py', os.environ['VERSION'], os.environ['COMMIT'])
+    subprocess.run(['scripts/sign-bundles', 'sign', str(app), platform], env=env, check=True)
+    info = app / ('Contents/Info.plist' if platform == 'mac' else 'Info.plist')
+    stamp = plistlib.loads(info.read_bytes())
+    for key, value in {'CFBundleShortVersionString': os.environ['VERSION'], 'CFBundleVersion': os.environ['BUILD_NUMBER'],
+                       'RemoteCoderSourceCommit': os.environ['COMMIT'], 'RemoteCoderSourceModified': 'false'}.items():
+        if stamp.get(key) != value:
+            raise SystemExit(f'Archive does not match its {key}.')
+    (directory / 'identity.json').write_text(json.dumps({'version': os.environ['VERSION'], 'commit': os.environ['COMMIT'],
+        'platform': platform, 'build': os.environ['BUILD_NUMBER']}) + '\n')
+
+
+def export(platform, directory, mode):
+    scheme = 'RemoteCoder' if platform == 'ios' else 'RemoteCoderMac'
+    config = json.loads(os.environ['RC_RELEASE_CONFIGURATION'])
+    options = plistlib.loads((ROOT / 'Config/ExportOptions.plist').read_bytes())
+    options |= {'teamID': config['xcodeSettings']['DEVELOPMENT_TEAM'], 'destination': 'export' if mode == 'check' else 'upload'}
+    plist = directory / f'{mode}.plist'
+    plist.write_bytes(plistlib.dumps(options))
+    output = directory / mode
+    run('xcodebuild', '-exportArchive', '-archivePath', str(directory / f'{scheme}.xcarchive'), '-exportPath', str(output),
+        '-exportOptionsPlist', str(plist), '-allowProvisioningUpdates',
+        '-authenticationKeyPath', os.environ['APP_STORE_CONNECT_KEY_PATH'],
+        '-authenticationKeyID', os.environ['APP_STORE_CONNECT_KEY_ID'], '-authenticationKeyIssuerID', os.environ['APP_STORE_CONNECT_ISSUER_ID'])
+    if mode != 'check':
+        return
+    if platform == 'ios':
+        run('ditto', '-x', '-k', str(output / 'RemoteCoder.ipa'), str(output / 'expanded'))
+        app = output / 'expanded/Payload/RemoteCoder.app'
+        run('python3', 'scripts/release-config.py', 'verify-ipa', str(output / 'RemoteCoder.ipa'))
+    else:
+        packages = list(output.glob('*.pkg'))
+        if len(packages) != 1:
+            raise SystemExit('The Mac export must contain one package.')
+        run('pkgutil', '--check-signature', str(packages[0]))
+        run('pkgutil', '--expand-full', str(packages[0]), str(output / 'expanded'))
+        apps = list((output / 'expanded').rglob('RemoteCoder.app'))
+        if len(apps) != 1:
+            raise SystemExit('The Mac package must contain one app.')
+        app = apps[0]
+    run('codesign', '--verify', '--deep', '--strict', str(app))
+    env = os.environ | config['xcodeSettings'] | {'RC_APNS_ENVIRONMENT': 'production'}
+    subprocess.run(['scripts/sign-bundles', 'check', str(app), platform], env=env, check=True)
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.json') as file:
+        json.dump(config, file)
+        file.flush()
+        subprocess.run(['python3', 'scripts/verify-release-entitlements.py', '--platform', platform,
+                        '--distribution', 'app-store', '--app', str(app)], env=env | {'RC_MAINTAINER_CONFIG': file.name}, check=True)
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('action', choices=['configure', 'archive', 'check', 'upload'])
+    parser.add_argument('platform', choices=['ios', 'mac'])
+    parser.add_argument('directory', type=Path)
+    args = parser.parse_args()
+    args.directory.mkdir(parents=True, exist_ok=True)
+    if args.action == 'configure':
+        configure()
+    elif args.action == 'archive':
+        archive(args.platform, args.directory)
+    else:
+        export(args.platform, args.directory, args.action)
+
+
+if __name__ == '__main__':
+    main()

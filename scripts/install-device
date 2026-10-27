@@ -33,10 +33,6 @@ if [[ "$SWIFT_TOOLCHAIN_VERSION" != *"Apple Swift version 6.4"* ]]; then
     echo "RemoteCoder requires Swift 6.4; selected toolchain reports: $SWIFT_TOOLCHAIN_VERSION" >&2
     exit 1
 fi
-if [[ "$(tuist version)" != "$(cat .tuist-version)" ]]; then
-    echo "Tuist version does not match .tuist-version" >&2
-    exit 1
-fi
 
 SCHEME="RemoteCoder"
 PROJECT="RemoteCoder.xcodeproj"
@@ -157,55 +153,6 @@ prepare_signing_keychain() {
     "$helper"
 }
 
-# Generation depends on manifests, the local-config bundling choice and paths
-# matched by explicit globs. Buildable folders handle their own file changes.
-GENERATE_FINGERPRINT_FILE="$DERIVED_DATA/tuist-generate.fingerprint"
-
-project_generate_fingerprint() {
-    {
-        shasum -a 256 Project.swift Tuist.swift .package.resolved Core/Package.swift .tuist-version scripts/install-device
-        find Config -name '*.xcconfig' -type f -exec shasum -a 256 {} + 2>/dev/null || true
-        tuist version
-        if [[ -f RemoteCoder/Resources/RemoteCoderLocalConfig.json ]]; then
-            printf '%s\n' bundle-local-config
-        fi
-        find Shared RemoteCoder/Resources RemoteCoder/Assets.xcassets \
-            RemoteCoderLiveActivities RemoteCoderLocationPushService \
-            RemoteCoderNotificationService RemoteCoderShareExtension RemoteCoderCaptureExtension protocol-fixtures \
-            -type f -not -name .DS_Store 2>/dev/null | LC_ALL=C sort
-    } | shasum -a 256 | awk '{ print $1 }'
-}
-
-project_generate() {
-    [[ -f Project.swift ]] || return 0
-    local fingerprint
-    fingerprint="$(project_generate_fingerprint)"
-    if [[ "${RC_FORCE_GENERATE:-}" != "1" \
-        && -f "$PROJECT/project.pbxproj" \
-        && -f "$GENERATE_FINGERPRINT_FILE" \
-        && "$(cat "$GENERATE_FINGERPRINT_FILE")" == "$fingerprint" ]]; then
-        echo -e "${GREEN}Xcode project is current; skipping Tuist generate${NC}"
-        return 0
-    fi
-    echo -e "${GREEN}Generating Xcode project with Tuist...${NC}"
-    if [[ -f RemoteCoder/Resources/RemoteCoderLocalConfig.json ]]; then
-        TUIST_REMOTE_CODER_BUNDLE_LOCAL_CONFIG=1 tuist generate --no-open
-    else
-        env -u TUIST_REMOTE_CODER_BUNDLE_LOCAL_CONFIG tuist generate --no-open
-    fi
-    settle_generated_project_files
-    mkdir -p "$DERIVED_DATA"
-    project_generate_fingerprint >"$GENERATE_FINGERPRINT_FILE"
-}
-
-settle_generated_project_files() {
-    # Tuist writes generated project support files immediately before xcodebuild.
-    # Give the filesystem timestamp window a chance to close so Xcode does not
-    # misclassify generated signing inputs as modified during the build.
-    [[ -d Derived ]] || return 0
-    sleep 1
-}
-
 xcode_auth_flags() {
     if [[ -f "$HOME/configs/shared-env.sh" ]]; then
         bash --noprofile --norc -c 'source "$HOME/configs/shared-env.sh" >/dev/null; [[ -n "${APP_STORE_CONNECT_KEY_ID:-}" && -n "${APP_STORE_CONNECT_ISSUER_ID:-}" && -f "${APP_STORE_CONNECT_KEY_PATH:-}" ]] || exit 0; printf "%s\0" -authenticationKeyIssuerID "$APP_STORE_CONNECT_ISSUER_ID" -authenticationKeyID "$APP_STORE_CONNECT_KEY_ID" -authenticationKeyPath "$APP_STORE_CONNECT_KEY_PATH"'
@@ -225,8 +172,7 @@ xcode_auth_flags() {
 }
 
 run_xcodebuild_build() {
-    local allow_entitlements_modification="${1:-false}"
-    local allow_provisioning_updates="${2:-false}"
+    local allow_provisioning_updates="${1:-false}"
     local auth_flags=()
     while IFS= read -r -d '' flag; do
         auth_flags+=("$flag")
@@ -234,12 +180,14 @@ run_xcodebuild_build() {
 
     local xcodebuild_args=(
         -jobs "${EMIL_BUILD_JOBS:-4}"
-        -workspace RemoteCoder.xcworkspace
+        -project RemoteCoder.xcodeproj
         -scheme "$SCHEME"
         -destination "generic/platform=iOS"
         -derivedDataPath "$DERIVED_DATA"
         # Pinned packages need no re-resolution or plugin/macro trust prompts,
         # and a device build never reads the index store.
+        -disableAutomaticPackageResolution
+        -skipPackageUpdates
         -onlyUsePackageVersionsFromResolvedFile
         -skipPackagePluginValidation
         -skipMacroValidation
@@ -262,10 +210,6 @@ run_xcodebuild_build() {
         )
         xcodebuild_args+=(${auth_flags[@]+"${auth_flags[@]}"})
     fi
-    if [[ "$allow_entitlements_modification" == "true" ]]; then
-        xcodebuild_args+=("CODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION=YES")
-    fi
-
     local settings="${BUILD_LOG%.log}-settings.json"
     local settings_started
     settings_started="$(phase_start)"
@@ -285,10 +229,7 @@ run_xcodebuild_build() {
 
 build_app() {
     echo -e "${GREEN}Building $SCHEME...${NC}"
-    local generate_started
-    generate_started="$(phase_start)"
-    project_generate
-    phase_finish generation "$generate_started"
+    python3 scripts/maintainer_config.py configure
     prepare_signing_keychain
     BUILD_IDENTITY="${BUILD_LOG%.log}-identity.json"
     export RC_BUILD_SETTINGS_EVIDENCE="${BUILD_LOG%.log}-verified-settings.json"
@@ -299,7 +240,7 @@ build_app() {
     BUILD_IDENTITY_FLAGS=()
     while IFS= read -r flag; do BUILD_IDENTITY_FLAGS+=("$flag"); done <<<"$flags"
 
-    if run_xcodebuild_build false false; then
+    if run_xcodebuild_build false; then
         echo -e "${GREEN}Build succeeded!${NC}"
         return 0
     fi
@@ -310,17 +251,8 @@ build_app() {
         # Only signing errors: a compile error would fail identically with portal access.
         cp "$BUILD_LOG" "${BUILD_LOG%.log}-attempt1.log"
         echo -e "${YELLOW}Signing needs a provisioning update; retrying once with portal access.${NC}" >&2
-        if run_xcodebuild_build false true; then
+        if run_xcodebuild_build true; then
             echo -e "${GREEN}Build succeeded after provisioning update!${NC}"
-            return 0
-        fi
-    fi
-
-    if rg -q 'Entitlements file ".*" was modified during the build' "$BUILD_LOG" 2>/dev/null; then
-        echo -e "${YELLOW}Xcode reported generated entitlements changed during build; retrying once with Xcode's local-build override.${NC}" >&2
-        project_generate
-        if run_xcodebuild_build true true; then
-            echo -e "${GREEN}Build succeeded on entitlements-race retry!${NC}"
             return 0
         fi
     fi

@@ -14,7 +14,7 @@ uses a same-origin bridge that keeps gateway credentials on its host.
 
 You need a Mac, the [matched Codex runtime](docs/codex/runtime.md),
 Rust/Cargo, Python 3 and `just`. Native builds also need Xcode 27, Swift 6.4
-and Tuist. Device installs require your own Apple signing configuration.
+and `just`. Device installs require your own Apple signing configuration.
 
 1. Follow the [gateway setup](host-daemon-rs/README.md) to build the gateway,
    install the matched Codex package, generate a random operator token and start
@@ -64,7 +64,7 @@ and [dictation contract](docs/unified-dictation.md) describe their data flows.
 ## Development
 
 ```sh
-just generate       # generate the native Xcode project
+just setup          # prepare optional local configuration
 just ios-build      # compile without installing or running a simulator
 just mac-build      # compile the Mac target
 just test           # Mac-native Swift logic tests

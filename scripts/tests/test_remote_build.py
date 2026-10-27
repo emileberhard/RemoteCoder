@@ -131,18 +131,17 @@ class RemoteBuildTests(unittest.TestCase):
             with (patch.object(module, "ROOT", root),
                   patch.object(module.build_hosts, "load", return_value={}),
                   patch.object(module.build_hosts, "MAC_GUI_HOST", "laptop")):
-                for kind in ("ios-install", "ios-build", "verify", "verify-all", "release-gate", "gateway", "core-test"):
+                for kind in ("ios-install", "ios-build", "verify", "verify-all", "gateway", "core-test"):
                     self.assertEqual(module.selected_build_host(kind, {}), "fixture-builder")
                 for kind in ("mac-install", "mac-bench"):
                     self.assertEqual(module.selected_build_host(kind, {}), module.build_hosts.MAC_GUI_HOST)
                 explicit = {"RC_IOS_BUILD_HOST": "fixture-phone-builder", "RC_GATEWAY_BUILD_HOST": "fixture-other"}
                 self.assertEqual(module.selected_build_host("ios-install", explicit), "fixture-phone-builder")
                 self.assertEqual(module.selected_build_host("verify-all", explicit), "fixture-phone-builder")
-                self.assertEqual(module.selected_build_host("release-gate", explicit), "fixture-phone-builder")
                 self.assertEqual(module.selected_build_host("verify", explicit), "fixture-other")
                 self.assertEqual(module.selected_build_host("mac-install", explicit), "fixture-other")
 
-    def test_mirror_retains_only_generated_outputs_and_deletes_removed_sources(self):
+    def test_mirror_deletes_removed_sources_and_stale_generated_outputs(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             source, mirror = root / "source", root / "mirror"
@@ -150,14 +149,14 @@ class RemoteBuildTests(unittest.TestCase):
             mirror.mkdir()
             (source / "new.swift").write_text("source")
             (mirror / "removed.swift").write_text("stale")
-            for name in ("RemoteCoder.xcodeproj", "RemoteCoder.xcworkspace", "Derived"):
+            for name in ("RemoteCoder.xcworkspace", "Derived"):
                 (mirror / name).mkdir()
                 (mirror / name / "generated").write_text("retained")
             subprocess.run(module.mirror_source_command(source, mirror), check=True)
             self.assertFalse((mirror / "removed.swift").exists())
             self.assertEqual((mirror / "new.swift").read_text(), "source")
-            for name in ("RemoteCoder.xcodeproj", "RemoteCoder.xcworkspace", "Derived"):
-                self.assertEqual((mirror / name / "generated").read_text(), "retained")
+            for name in ("RemoteCoder.xcworkspace", "Derived"):
+                self.assertFalse((mirror / name).exists())
 
 
     def test_gateway_return_preserves_the_bundle_and_rejects_a_changed_resource_seal(self):
@@ -274,6 +273,37 @@ class RemoteBuildTests(unittest.TestCase):
                     module.main()
                 snapshot.assert_not_called()
                 transfer.assert_not_called()
+
+    def test_gateway_release_uses_the_local_source_and_cargo_cache_owner(self):
+        import fcntl
+
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary).resolve()
+            source = home / "source"
+            init_repository(source)
+            cargo = source / "host-daemon-rs/target"
+            cargo.mkdir(parents=True)
+            cache = home / "Library/Caches/RemoteCoder-Build"
+            commands = []
+
+            def compile(command, cwd, environment, output, leases):
+                commands.append(command)
+                self.assertEqual((cwd / environment["CARGO_TARGET_DIR"]).resolve(), cargo)
+                with module.source_lease_path(source).open("a") as competing:
+                    with self.assertRaises(BlockingIOError):
+                        fcntl.flock(competing, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return 0
+
+            with patch.dict(os.environ, {}, clear=True), patch.object(module, "ROOT", source), \
+                patch.object(module.Path, "home", return_value=home), \
+                patch.object(module, "load_policy", return_value=CachePolicy(
+                    512, 259200, 172800, 7200, 80 * 1024**3, 2, 0, True, 86400)), \
+                patch.object(module, "local_worktrees", return_value=[]), \
+                patch.object(module, "run_owned", side_effect=compile):
+                self.assertEqual(module.local_build("gateway-release", []), 0)
+            self.assertEqual(commands, [["just", "gateway-release-local"]])
+            receipt = json.loads(next((cache / "runs").glob("*/receipt.json")).read_text())
+            self.assertEqual(receipt["exitCode"], 0)
 
     def test_failed_seed_clean_is_recorded_and_worker_builds_unseeded(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -736,13 +766,12 @@ class RemoteBuildTests(unittest.TestCase):
             ("tools-test", [], ["just", "tools-test-local"]),
             ("verify", [], ["just", "verify-local"]),
             ("verify-all", [], ["just", "verify-all-local"]),
-            ("release-gate", [], ["just", "release-gate-local"]),
         ):
             with self.subTest(kind=kind, arguments=arguments):
                 self.assertEqual(module.build_command(kind, arguments), command)
         self.assertEqual(
             module.SIMULATOR_KINDS,
-            {"ios-simulator-test", "ios-ui-test", "verify-all", "release-gate"},
+            {"ios-simulator-test", "ios-ui-test", "verify-all"},
         )
 
     def test_fingerprint_checks_file_contents_and_symlink_target(self):

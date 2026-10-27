@@ -1,0 +1,60 @@
+#!/usr/bin/env python3
+import json
+import os
+import plistlib
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+
+
+def run(*args):
+    return subprocess.run(args, capture_output=True, check=True).stdout
+
+
+def main(mode, app, platform):
+    bundles = json.loads((ROOT / f"Config/entitlements-{platform}.json").read_text())
+    shipped = {"."} | {str(p.relative_to(app)) for pattern in ("*.app", "*.appex") for p in app.rglob(pattern)}
+    if set(bundles) != shipped:
+        raise SystemExit(f"The entitlement map must cover exactly the app bundles: {sorted(shipped)}")
+    if mode == "sign":
+        for framework in sorted(app.rglob("*.framework"), key=lambda path: len(path.parts), reverse=True):
+            run("codesign", "--force", "--sign", "-", str(framework))
+    else:
+        for framework in app.rglob("*.framework"):
+            signature = subprocess.run(["codesign", "-dvv", str(framework)], capture_output=True, check=True).stderr.decode()
+            if "TeamIdentifier=" + os.environ["DEVELOPMENT_TEAM"] not in signature.splitlines():
+                raise SystemExit(f"Exported {framework.relative_to(app)} belongs to another signing team.")
+    for bundle, source in sorted(bundles.items(), key=lambda item: len(Path(item[0]).parts), reverse=True):
+        path = app / bundle
+        wanted = {}
+        if source is not None:
+            text = (ROOT / source).read_text()
+            for name in ("RC_BUNDLE_ID", "RC_APP_GROUP", "RC_ICLOUD_CONTAINER", "RC_APNS_ENVIRONMENT"):
+                text = text.replace("$(" + name + ")", os.environ[name])
+            if "$(" in text:
+                raise SystemExit(f"Resolve unsupported build-setting substitutions in {source}.")
+            wanted = plistlib.loads(text.encode())
+        if mode == "sign":
+            with tempfile.NamedTemporaryFile(suffix=".entitlements") as file:
+                file.write(plistlib.dumps(wanted))
+                file.flush()
+                run("codesign", "--force", "--sign", "-", "--entitlements", file.name, str(path))
+        else:
+            actual = plistlib.loads(run("codesign", "-d", "--entitlements", "-", "--xml", str(path)))
+            if "aps-environment" in wanted:
+                wanted["aps-environment"] = "production"
+            missing = {key: value for key, value in wanted.items() if actual.get(key) != value}
+            if missing:
+                raise SystemExit(f"Exported {bundle} lost required entitlements: {missing}")
+
+
+if __name__ == "__main__":
+    if len(sys.argv) != 4 or sys.argv[1] not in {"sign", "check"}:
+        raise SystemExit("Usage: scripts/sign-bundles sign|check APP ios|mac")
+    try:
+        main(sys.argv[1], Path(sys.argv[2]), sys.argv[3])
+    except subprocess.CalledProcessError as error:
+        raise SystemExit(error.stderr.decode())

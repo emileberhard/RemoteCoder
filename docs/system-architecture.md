@@ -165,7 +165,7 @@ Rules:
   its selection is mirrored into `activeHostID`, the persisted last-used host,
   which workspace navigation, Shortcuts and direct exec follow.
 - **Windows.** The iPad app runs one window
-  (`UIApplicationSupportsMultipleScenes` is false in `Project.swift`). The Mac
+  (`UIApplicationSupportsMultipleScenes` is false in `Config/InfoPlists/RemoteCoder-Info.plist`). The Mac
   app's `WindowGroup` is keyed by `ConversationWindowValue`: New Window,
   Open in New Window and native tabs (`WindowTabbing`) each present their own
   conversation, and the focused window is the key window. Send, the model

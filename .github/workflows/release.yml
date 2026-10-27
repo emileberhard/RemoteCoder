@@ -2,7 +2,7 @@ name: Release
 
 on:
   push:
-    tags: ['*']
+    tags: ['**']
 
 permissions:
   contents: read
@@ -12,9 +12,48 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  admit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    permissions:
+      actions: read
+      contents: read
+    env:
+      VERSION: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Admit the newest annotated release on main
+        run: python3 scripts/release_tag.py "$VERSION" "$GITHUB_SHA"
+
+      - name: Wait for CI to pass on this commit
+        timeout-minutes: 35
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          started=$SECONDS
+          while :; do
+            state=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --branch main --event push --commit "$GITHUB_SHA" --json status,conclusion \
+              --jq 'if any(.[]; .conclusion == "success") then "passed" elif any(.[]; .status != "completed") then "running" elif length > 0 then "failed" else "missing" end') \
+              || state=unknown
+            case $state in
+              passed) exit 0 ;;
+              failed) echo "::error::CI failed on $GITHUB_SHA."; exit 1 ;;
+              missing) (( SECONDS - started < 120 )) || { echo "::error::No CI run exists for $GITHUB_SHA; tag the commit a push to main ended on."; exit 1; } ;;
+            esac
+            sleep 10
+          done
+
   dispatch:
+    needs: admit
     runs-on: ubuntu-24.04
     environment: deployment-handoff
+    permissions:
+      contents: read
+      actions: read
     timeout-minutes: 10
     env:
       VERSION: ${{ github.ref_name }}
@@ -24,17 +63,275 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Admit the newest annotated release on main
+      - name: Re-admit before handoff
         run: python3 scripts/release_tag.py "$VERSION" "$COMMIT"
+      - name: Restore this run's private dispatch receipt
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/release-state deployment-handoff "$RUNNER_TEMP/handoff"
+      - name: Check earlier handoff attempts
+        id: fence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          fenced=false
+          for ((attempt = 1; attempt < GITHUB_RUN_ATTEMPT; attempt++)); do
+            started=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$attempt/jobs?per_page=100" \
+              --jq '[.jobs[] | select(.name == "dispatch") | .steps[] | select(.name == "Hand off the exact release to private deployment" and .conclusion != "skipped" and .started_at != null)] | length')
+            (( started == 0 )) || fenced=true
+          done
+          echo "fenced=$fenced" >> "$GITHUB_OUTPUT"
       - name: Hand off the exact release to private deployment
+        id: dispatch
         env:
           GH_TOKEN: ${{ secrets.RC_DEPLOY_TOKEN }}
           DEPLOY_REPOSITORY: ${{ vars.RC_DEPLOY_REPOSITORY }}
+          FENCED: ${{ steps.fence.outputs.fenced }}
         run: |
           set -euo pipefail
-          [[ -n "$DEPLOY_REPOSITORY" && -n "$GH_TOKEN" ]]
-          jq -n --arg version "$VERSION" --arg commit "$COMMIT" \
-            '{ref:"main",inputs:{version:$version,commit:$commit}}' |
+          : "${DEPLOY_REPOSITORY:?}" "${GH_TOKEN:?}"
+          receipt="$RUNNER_TEMP/handoff/dispatch.json"
+          if [[ -f "$receipt" ]]; then
+            jq -e --arg version "$VERSION" --arg commit "$COMMIT" --arg public "$GITHUB_RUN_ID" --arg repo "$DEPLOY_REPOSITORY" \
+              '.version == $version and .commit == $commit and .public_run == $public and .repository == $repo' "$receipt"
+            run=$(jq -er '.workflow_run_id | numbers' "$receipt")
+            gh api "repos/$DEPLOY_REPOSITORY/actions/runs/$run" \
+              --jq 'select(.event == "workflow_dispatch" and .head_branch == "main" and .path == ".github/workflows/release.yml") | .html_url' > "$RUNNER_TEMP/private-run-url"
+            [[ -s "$RUNNER_TEMP/private-run-url" ]]
+            cat "$RUNNER_TEMP/private-run-url" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          [[ "$FENCED" == false ]] || { echo "::error::An earlier handoff may have dispatched. Reconcile the private run; do not dispatch again blindly."; exit 1; }
+          mkdir -p "$(dirname "$receipt")"
+          jq -n --arg version "$VERSION" --arg commit "$COMMIT" --arg run "$GITHUB_RUN_ID" \
+            '{ref:"main",inputs:{version:$version,commit:$commit,public_run:$run}}' |
             gh api --method POST -H "X-GitHub-Api-Version: 2026-03-10" \
-              "repos/$DEPLOY_REPOSITORY/actions/workflows/release.yml/dispatches" --input - >"$RUNNER_TEMP/dispatch.json"
-          jq -er '.html_url' "$RUNNER_TEMP/dispatch.json" | tee -a "$GITHUB_STEP_SUMMARY"
+              "repos/$DEPLOY_REPOSITORY/actions/workflows/release.yml/dispatches" --input - > "$RUNNER_TEMP/dispatched.json"
+          jq -e --arg version "$VERSION" --arg commit "$COMMIT" --arg public "$GITHUB_RUN_ID" --arg repo "$DEPLOY_REPOSITORY" \
+            '. + {version:$version,commit:$commit,public_run:$public,repository:$repo} | select(.workflow_run_id | numbers)' \
+            "$RUNNER_TEMP/dispatched.json" > "$receipt"
+          jq -er '.html_url' "$receipt" >> "$GITHUB_STEP_SUMMARY"
+          echo "created=true" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: steps.dispatch.outputs.created == 'true'
+        with:
+          name: deployment-handoff
+          path: ${{ runner.temp }}/handoff/dispatch.json
+          retention-days: 30
+
+  numbers:
+    needs: admit
+    runs-on: ubuntu-24.04
+    environment: testflight
+    permissions:
+      contents: read
+      actions: read
+    timeout-minutes: 10
+    outputs:
+      build: ${{ steps.numbers.outputs.build }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ github.ref_name }}
+      COMMIT: ${{ github.sha }}
+      APP_BUNDLE_ID: ${{ vars.APP_BUNDLE_ID }}
+      APP_STORE_CONNECT_KEY_PATH: ${{ github.workspace }}/.local/AuthKey.p8
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Restore this run's build reservation
+        run: scripts/release-state release-numbers "$RUNNER_TEMP/numbers"
+      - name: Reserve the next build number once for both platforms
+        id: numbers
+        env:
+          APP_STORE_CONNECT_KEY: ${{ secrets.APP_STORE_CONNECT_KEY }}
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          python3 scripts/release_tag.py "$VERSION" "$COMMIT"
+          mkdir -p "$RUNNER_TEMP/numbers"
+          if [[ -f "$RUNNER_TEMP/numbers/build-number.json" ]]; then
+            echo "restored=true" >> "$GITHUB_OUTPUT"
+          else
+            mkdir -p .local
+            umask 077
+            printf '%s' "$APP_STORE_CONNECT_KEY" > "$APP_STORE_CONNECT_KEY_PATH"
+            number=$(scripts/app-store-connect build-number)
+            jq -n --arg version "$VERSION" --arg commit "$COMMIT" --arg build "$number" \
+              '{version:$version,commit:$commit,build:$build}' > "$RUNNER_TEMP/numbers/build-number.json"
+          fi
+          jq -e --arg version "$VERSION" --arg commit "$COMMIT" \
+            '.version == $version and .commit == $commit and (.build | test("^[1-9][0-9]*$"))' \
+            "$RUNNER_TEMP/numbers/build-number.json"
+          jq -r '"build=\(.build)"' "$RUNNER_TEMP/numbers/build-number.json" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: steps.numbers.outputs.restored != 'true'
+        with:
+          name: release-numbers
+          path: ${{ runner.temp }}/numbers/build-number.json
+          retention-days: 30
+      - name: Remove credentials
+        if: always()
+        run: rm -f "$APP_STORE_CONNECT_KEY_PATH"
+
+  apps:
+    needs: [admit, numbers]
+    runs-on: xcode-27
+    environment: testflight
+    timeout-minutes: 60
+    permissions:
+      actions: read
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [ios, mac]
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ github.ref_name }}
+      COMMIT: ${{ github.sha }}
+      BUILD_NUMBER: ${{ needs.numbers.outputs.build }}
+      RC_RELEASE_CONFIGURATION: ${{ secrets.RC_RELEASE_CONFIGURATION }}
+      REMOTE_CODER_GOOGLE_MAPS_API_KEY: ${{ secrets.REMOTE_CODER_GOOGLE_MAPS_API_KEY }}
+      APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+      APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+      APP_STORE_CONNECT_KEY_PATH: ${{ github.workspace }}/.local/AuthKey.p8
+      APP_BUNDLE_ID: ${{ vars.APP_BUNDLE_ID }}
+      ASC_PLATFORM: ${{ matrix.platform == 'ios' && 'IOS' || 'MAC_OS' }}
+      PLATFORM: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Write the App Store Connect key
+        env:
+          APP_STORE_CONNECT_KEY: ${{ secrets.APP_STORE_CONNECT_KEY }}
+        run: |
+          mkdir -p .local
+          umask 077
+          printf '%s' "$APP_STORE_CONNECT_KEY" > "$APP_STORE_CONNECT_KEY_PATH"
+      - name: Check whether an earlier attempt started uploading
+        id: fence
+        run: |
+          set -euo pipefail
+          fenced=false
+          for ((attempt = 1; attempt < GITHUB_RUN_ATTEMPT; attempt++)); do
+            started=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$attempt/jobs?per_page=100" \
+              --jq "[.jobs[] | select(.name == \"apps ($PLATFORM)\") | .steps[] | select(.name == \"Upload once to TestFlight\" and .conclusion != \"skipped\" and .started_at != null)] | length")
+            (( started == 0 )) || fenced=true
+          done
+          echo "fenced=$fenced" >> "$GITHUB_OUTPUT"
+      - name: Reconcile any earlier upload
+        id: upload
+        env:
+          FENCED: ${{ steps.fence.outputs.fenced }}
+        run: |
+          set -euo pipefail
+          state=$(scripts/app-store-connect upload-state "$ASC_PLATFORM" "$VERSION" "$BUILD_NUMBER" "$([[ $FENCED == true ]] && echo fenced || echo open)")
+          if [[ "$state" == present ]]; then
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "needed=true" >> "$GITHUB_OUTPUT"
+          fi
+      - run: scripts/select-xcode
+        if: steps.upload.outputs.needed == 'true'
+      - name: Configure public app inputs
+        if: steps.upload.outputs.needed == 'true'
+        run: |
+          set -euo pipefail
+          python3 scripts/release_tag.py "$VERSION" "$COMMIT"
+          scripts/release-apps configure "$PLATFORM" "$RUNNER_TEMP/archive"
+      - name: Fetch the locked packages
+        if: steps.upload.outputs.needed == 'true'
+        timeout-minutes: 15
+        run: |
+          scheme=RemoteCoder
+          [[ "$PLATFORM" != mac ]] || scheme=RemoteCoderMac
+          xcodebuild -resolvePackageDependencies -project RemoteCoder.xcodeproj -scheme "$scheme" -onlyUsePackageVersionsFromResolvedFile
+      - name: Archive
+        if: steps.upload.outputs.needed == 'true'
+        run: scripts/release-apps archive "$PLATFORM" "$RUNNER_TEMP/archive"
+      - name: Export and verify cloud-signed entitlements
+        if: steps.upload.outputs.needed == 'true'
+        run: |
+          python3 scripts/release_tag.py "$VERSION" "$COMMIT"
+          scripts/release-apps check "$PLATFORM" "$RUNNER_TEMP/archive"
+      - name: Upload once to TestFlight
+        if: steps.upload.outputs.needed == 'true'
+        run: |
+          python3 scripts/release_tag.py "$VERSION" "$COMMIT"
+          scripts/release-apps upload "$PLATFORM" "$RUNNER_TEMP/archive"
+      - name: Remove credentials and private inputs
+        if: always()
+        run: rm -f "$APP_STORE_CONNECT_KEY_PATH" Config/Local.xcconfig RemoteCoder/Resources/RemoteCoderLocalConfig.json
+
+  app-store:
+    needs: [numbers, apps]
+    runs-on: ubuntu-24.04
+    environment: testflight
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [ios, mac]
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ github.ref_name }}
+      BUILD_NUMBER: ${{ needs.numbers.outputs.build }}
+      APP_BUNDLE_ID: ${{ vars.APP_BUNDLE_ID }}
+      ASC_PLATFORM: ${{ matrix.platform == 'ios' && 'IOS' || 'MAC_OS' }}
+      APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+      APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+      APP_STORE_CONNECT_KEY_PATH: ${{ github.workspace }}/.local/AuthKey.p8
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Wait for processing, set What to Test and prepare the store version
+        env:
+          APP_STORE_CONNECT_KEY: ${{ secrets.APP_STORE_CONNECT_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p .local
+          umask 077
+          printf '%s' "$APP_STORE_CONNECT_KEY" > "$APP_STORE_CONNECT_KEY_PATH"
+          tag=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$VERSION" --jq .object.sha)
+          gh api "repos/$GITHUB_REPOSITORY/git/tags/$tag" --jq .message > "$RUNNER_TEMP/notes.md"
+          scripts/app-store-connect testflight "$ASC_PLATFORM" "$VERSION" "$BUILD_NUMBER" "$RUNNER_TEMP/notes.md"
+          scripts/app-store-connect app-store "$ASC_PLATFORM" "$VERSION" "$BUILD_NUMBER" "$RUNNER_TEMP/notes.md"
+      - name: Remove credentials
+        if: always()
+        run: rm -f "$APP_STORE_CONNECT_KEY_PATH"
+
+  github-release:
+    needs: app-store
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      VERSION: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Publish the annotated tag message verbatim
+        run: |
+          set -euo pipefail
+          python3 scripts/release_tag.py "$VERSION" "$GITHUB_SHA"
+          object=$(gh api "repos/$GH_REPO/git/ref/tags/$VERSION" --jq .object.sha)
+          gh api "repos/$GH_REPO/git/tags/$object" | jq -j .message > "$RUNNER_TEMP/notes.md"
+          [[ -s "$RUNNER_TEMP/notes.md" ]] || { echo "::error::The tag has no release notes."; exit 1; }
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            gh release edit "$VERSION" --title "$VERSION" --notes-file "$RUNNER_TEMP/notes.md" --latest
+          else
+            gh release create "$VERSION" --verify-tag --title "$VERSION" --notes-file "$RUNNER_TEMP/notes.md" --latest
+          fi
