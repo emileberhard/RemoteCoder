@@ -10,6 +10,7 @@ use sha2::{Digest, Sha256};
 
 use super::model::*;
 use crate::storage::private_state::{self, ReadError};
+use crate::wire::agent_jobs::{JobSummary, ListPage};
 
 const MAX_AGENT_BYTES: u64 = 16 * 1024;
 const MAX_EVIDENCE_BYTES: u64 = 1024 * 1024;
@@ -27,6 +28,13 @@ struct Inner {
     _lease: File,
     jobs: BTreeMap<JobId, JobRecord>,
     agents: BTreeMap<String, AgentRecord>,
+}
+
+pub(crate) enum Selection {
+    Recent,
+    Agent(String),
+    Children(ConversationIdentity),
+    Descendants(ConversationIdentity),
 }
 
 impl JobStore {
@@ -100,6 +108,84 @@ impl JobStore {
     pub(crate) async fn snapshot(&self) -> Result<Vec<JobRecord>> {
         self.access(|inner| Ok(inner.jobs.values().cloned().collect()))
             .await
+    }
+
+    pub(crate) async fn classify(
+        &self,
+        conversation: ConversationIdentity,
+    ) -> Result<Option<Origin>> {
+        self.access(move |inner| {
+            let mut found = inner.agents.values().filter(|agent| matches!(&agent.conversation, ConversationBinding::Known { conversation: known } if known == &conversation));
+            let origin = found.next().map(|agent| agent.origin.clone());
+            ensure!(found.next().is_none(), "multiple agents claim the same provider conversation");
+            if origin.is_some() { return Ok(origin); }
+            let unresolved = inner.jobs.values().any(|job| execution_conversation(&job.execution).is_some_and(|known| {
+                known.provider == conversation.provider && known.thread_id == conversation.thread_id && (known.provider_home == conversation.provider_home || matches!(known.provider_home, ProviderHome::Unknown { .. }))
+            }));
+            Ok(unresolved.then(|| Origin::Unknown { reason: "recorded job ancestry or provider scope is unresolved".into() }))
+        }).await
+    }
+
+    pub(crate) async fn agent_for_conversation(
+        &self,
+        conversation: ConversationIdentity,
+    ) -> Result<Option<AgentRecord>> {
+        self.access(move |inner| {
+            let mut found = inner.agents.values().filter(|agent| matches!(&agent.conversation, ConversationBinding::Known { conversation: known } if known == &conversation));
+            let id = found.next().map(|agent| agent.agent_id.clone());
+            ensure!(found.next().is_none(), "multiple agents claim the same provider conversation");
+            id.map(|id| inner.agent_view(&id)).transpose()
+        }).await
+    }
+
+    pub(crate) async fn list(
+        &self,
+        selection: Selection,
+        limit: u32,
+        cursor: Option<String>,
+    ) -> Result<ListPage> {
+        self.access(move |inner| {
+            ensure!((1..=256).contains(&limit), "job page limit must be between 1 and 256");
+            let before = cursor.map(|id| {
+                let id = JobId::try_from(id).map_err(anyhow::Error::msg)?;
+                let job = inner.job(&id)?;
+                Ok::<_, anyhow::Error>((job.created_at_ms, id))
+            }).transpose()?;
+            let included = match &selection {
+                Selection::Children(parent) | Selection::Descendants(parent) => {
+                    let mut parents = std::collections::HashSet::from([parent.clone()]);
+                    let mut included = std::collections::HashSet::new();
+                    loop {
+                        let mut changed = false;
+                        for agent in inner.agents.values() {
+                            if matches!(&agent.origin, Origin::Parent { conversation } if parents.contains(conversation)) && included.insert(agent.agent_id.clone()) {
+                                changed = true;
+                                if matches!(selection, Selection::Descendants(_)) {
+                                    if let ConversationBinding::Known { conversation } = &agent.conversation { parents.insert(conversation.clone()); }
+                                }
+                            }
+                        }
+                        if !changed || matches!(selection, Selection::Children(_)) { break; }
+                    }
+                    Some(included)
+                }
+                _ => None,
+            };
+            let mut records: Vec<_> = inner.jobs.values().filter(|job| {
+                let matches = match &selection {
+                    Selection::Recent => true,
+                    Selection::Agent(id) => &job.agent_id == id,
+                    _ => included.as_ref().is_some_and(|ids| ids.contains(&job.agent_id)),
+                };
+                matches && before.as_ref().is_none_or(|before| (job.created_at_ms, &job.job_id) < (before.0, &before.1))
+            }).collect();
+            records.sort_by(|left, right| (right.created_at_ms, &right.job_id).cmp(&(left.created_at_ms, &left.job_id)));
+            let more = records.len() > limit as usize;
+            records.truncate(limit as usize);
+            let next_cursor = more.then(|| records.last().expect("nonempty bounded page").job_id.as_str().to_owned());
+            let jobs = records.into_iter().map(|job| inner.summary(job)).collect::<Result<Vec<_>>>()?;
+            Ok(ListPage { jobs, next_cursor })
+        }).await
     }
 
     pub(crate) async fn evidence_root(&self, id: JobId) -> Result<PathBuf> {
@@ -232,6 +318,68 @@ impl JobStore {
 }
 
 impl Inner {
+    fn summary(&self, job: &JobRecord) -> Result<JobSummary> {
+        let (cwd, title, settings) = match &job.spec {
+            SpecEvidence::Known { spec } => (
+                Some(spec.cwd.clone()),
+                spec.title.clone(),
+                Some(&spec.settings),
+            ),
+            SpecEvidence::Expired {
+                cwd,
+                settings,
+                title,
+                ..
+            } => (Some(cwd.clone()), title.clone(), Some(settings)),
+            SpecEvidence::Unknown { .. } => (None, None, None),
+        };
+        let provider = if job.job_id.as_str().starts_with("agent-codex-") {
+            Provider::Codex
+        } else {
+            Provider::Claude
+        };
+        let model = settings.map(|settings| match settings {
+            ExecutionSettings::Codex { model, .. } | ExecutionSettings::Claude { model, .. } => {
+                model.clone()
+            }
+        });
+        let conversation = self
+            .agents
+            .get(&job.agent_id)
+            .map(|agent| agent.conversation.clone())
+            .unwrap_or_else(|| ConversationBinding::Unknown {
+                reason: "historical provider conversation is unresolved".into(),
+            });
+        let state = match &job.execution {
+            ExecutionState::Admitted | ExecutionState::Bound { .. } => {
+                crate::agents::State::Waiting
+            }
+            ExecutionState::Running { .. } | ExecutionState::Recovering { .. } => {
+                crate::agents::State::Working
+            }
+            ExecutionState::Dispatching { .. } | ExecutionState::Unknown { .. } => {
+                crate::agents::State::Unknown
+            }
+            ExecutionState::Terminal { terminal } => match terminal.outcome {
+                JobOutcome::Completed => crate::agents::State::Completed,
+                JobOutcome::Failed { .. } => crate::agents::State::Failed,
+                JobOutcome::Stopped { .. } => crate::agents::State::Interrupted,
+            },
+        };
+        Ok(JobSummary {
+            job_id: job.job_id.clone(),
+            agent_id: job.agent_id.clone(),
+            conversation,
+            provider,
+            cwd,
+            title,
+            model,
+            state,
+            created_at_ms: job.created_at_ms,
+            updated_at_ms: job.updated_at_ms,
+        })
+    }
+
     fn job_path(&self, id: &JobId) -> PathBuf {
         self.root.join("jobs").join(format!("{}.json", id.as_str()))
     }
