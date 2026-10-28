@@ -159,6 +159,21 @@ pub(crate) fn fetch(store: &Store, host: &str, request: Fetch) -> Result<Value> 
 pub(crate) type Call =
     std::sync::Arc<dyn Fn(&'static str, Value) -> BoxFuture<'static, Result<Value>> + Send + Sync>;
 
+fn mirror_origin(root: &Path, host: &str, provider: String, provider_home: PathBuf) -> Origin {
+    let scope = blake3::hash(provider_home.as_os_str().as_encoded_bytes())
+        .to_hex()
+        .to_string();
+    Origin {
+        host: host.into(),
+        provider: provider.clone(),
+        provider_home,
+        local_home: root
+            .join(blake3::hash(host.as_bytes()).to_hex().as_str())
+            .join(provider)
+            .join(&scope[..16]),
+    }
+}
+
 pub(crate) async fn sync(
     store: &Store,
     host: &str,
@@ -196,6 +211,18 @@ async fn sync_owned(
     let mut cursor = None;
     let storage = &store.storage;
     let mut origins = BTreeMap::new();
+    let known: Vec<(String, String)> = store
+        .reader()?
+        .prepare("SELECT DISTINCT provider,provider_home FROM source WHERE origin_host=?1")?
+        .query_map([host], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    for (provider, home) in known {
+        let origin = mirror_origin(&root, host, provider, PathBuf::from(home));
+        origins.insert(
+            (origin.provider.clone(), origin.provider_home.clone()),
+            origin,
+        );
+    }
     let mut retained = std::collections::BTreeSet::new();
     let mut complete = true;
     let mut total_files = 0;
@@ -230,13 +257,17 @@ async fn sync_owned(
                     .all(|c| matches!(c, Component::Normal(_))),
                 "Invalid mirror evidence path"
             );
-            let scope = blake3::hash(entry.provider_home.as_os_str().as_encoded_bytes())
-                .to_hex()
-                .to_string();
-            let home = root
-                .join(blake3::hash(host.as_bytes()).to_hex().as_str())
-                .join(&entry.provider)
-                .join(&scope[..16]);
+            let origin = mirror_origin(
+                &root,
+                host,
+                entry.provider.clone(),
+                entry.provider_home.clone(),
+            );
+            let home = origin.local_home.clone();
+            origins.insert(
+                (origin.provider.clone(), origin.provider_home.clone()),
+                origin,
+            );
             let target = home.join(relative);
             if entry.present {
                 retained.insert(target.clone());
@@ -270,15 +301,6 @@ async fn sync_owned(
                 )
                 .optional()?;
             if cached.as_deref() == Some(&entry.revision) && target.exists() {
-                origins.insert(
-                    format!("{}:{scope}", entry.provider),
-                    Origin {
-                        host: host.into(),
-                        provider: entry.provider,
-                        provider_home: entry.provider_home,
-                        local_home: home,
-                    },
-                );
                 total_files += 1;
                 continue;
             }
@@ -374,15 +396,6 @@ async fn sync_owned(
                 Ok(std::fs::rename(&temporary, &target)?)
             })?;
             store.writer()?.execute("INSERT INTO mirror_file VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(origin_host,path) DO UPDATE SET identity=excluded.identity,size=excluded.size,received=excluded.received,local_path=excluded.local_path",params![host,entry.path.to_string_lossy(),entry.revision,i64::try_from(entry.size)?,i64::try_from(offset)?,target.to_string_lossy()])?;
-            origins.insert(
-                format!("{}:{scope}", entry.provider),
-                Origin {
-                    host: host.into(),
-                    provider: entry.provider,
-                    provider_home: entry.provider_home,
-                    local_home: home,
-                },
-            );
             total_files += 1;
         }
         cursor = page["cursor"].as_str().map(str::to_owned);

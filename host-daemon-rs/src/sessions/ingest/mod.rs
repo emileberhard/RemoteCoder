@@ -40,7 +40,7 @@ pub(crate) fn files(origin: &Origin) -> Result<Vec<PathBuf>> {
             files.push(entry.into_path());
         }
     }
-    files.sort_by_key(|path| std::fs::metadata(path).and_then(|m| m.modified()).ok());
+    files.sort_by_cached_key(|path| std::fs::metadata(path).and_then(|m| m.modified()).ok());
     Ok(files)
 }
 
@@ -68,44 +68,140 @@ fn companions(path: &Path) -> Result<Vec<PathBuf>> {
 }
 
 pub(crate) fn scan(store: &Store, origins: &[Origin], stop: &AtomicBool) -> Result<Value> {
+    scan_scope(store, origins, Scope::Full, stop)
+}
+
+pub(crate) enum Scope<'a> {
+    Full,
+    Changed(&'a [PathBuf]),
+}
+
+fn selected(store: &Store, origin: &Origin, scope: &Scope<'_>) -> Result<BTreeSet<PathBuf>> {
+    let root = origin.path();
+    let paths = match scope {
+        Scope::Full => vec![root.clone()],
+        Scope::Changed(paths) => paths
+            .iter()
+            .filter_map(|path| {
+                if path.starts_with(&root) {
+                    Some(path.clone())
+                } else if root.starts_with(path) {
+                    Some(root.clone())
+                } else {
+                    None
+                }
+            })
+            .collect(),
+    };
+    let mut selected = BTreeSet::new();
+    if paths.is_empty() {
+        return Ok(selected);
+    }
+    let db = store.reader()?;
+    for path in paths {
+        match std::fs::symlink_metadata(&path) {
+            Ok(metadata)
+                if metadata.is_file() && path.extension().is_some_and(|e| e == "jsonl") =>
+            {
+                selected.insert(path.clone());
+            }
+            Ok(metadata) if metadata.is_dir() => {
+                for entry in WalkDir::new(&path).follow_links(false) {
+                    let entry = entry?;
+                    if entry.file_type().is_file()
+                        && entry.path().extension().is_some_and(|e| e == "jsonl")
+                    {
+                        selected.insert(entry.into_path());
+                        ensure!(
+                            selected.len() <= 100_000,
+                            "capacity: more than 100000 session sources"
+                        );
+                    }
+                }
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+        let original = origin.original(&path)?.to_string_lossy().into_owned();
+        let low = format!("{original}/");
+        let high = format!("{original}0");
+        let known: Vec<String> = db.prepare("SELECT path FROM source WHERE origin_host=?1 AND (path=?2 OR (path>=?3 AND path<?4)) UNION SELECT s.path FROM dependency d JOIN source s USING(source_id) WHERE s.origin_host=?1 AND s.present=1 AND (d.path=?2 OR (d.path>=?3 AND d.path<?4))")?.query_map(params![origin.host,original,low,high],|r|r.get(0))?.collect::<rusqlite::Result<_>>()?;
+        for path in known {
+            selected.insert(origin.local(Path::new(&path))?);
+            ensure!(
+                selected.len() <= 100_000,
+                "capacity: more than 100000 session sources"
+            );
+        }
+    }
+    Ok(selected)
+}
+
+pub(crate) fn scan_scope(
+    store: &Store,
+    origins: &[Origin],
+    scope: Scope<'_>,
+    stop: &AtomicBool,
+) -> Result<Value> {
     let mut ingested = 0;
     let mut failures = 0;
-    let mut hosts = BTreeMap::<String, (bool, usize, bool)>::new();
+    let mut changed_hosts = BTreeSet::new();
     let at = super::now();
     for origin in origins {
-        let status = hosts.entry(origin.host.clone()).or_default();
-        status.0 |= origin.local_home == origin.provider_home;
-        let mut paths = BTreeSet::new();
-
-        for path in files(origin)? {
-            if stop.load(Ordering::Acquire) {
-                return Ok(serde_json::json!({"cancelled":true}));
-            }
-            let original = origin.original(&path)?.to_string_lossy().into_owned();
-            paths.insert(original.clone());
+        let paths: Vec<_> = selected(store, origin, &scope)?.into_iter().collect();
+        if paths.is_empty() && !matches!(scope, Scope::Full) {
+            continue;
+        }
+        changed_hosts.insert(origin.host.clone());
+        for batch in paths.chunks(32) {
             let mut db = store.writer()?;
-            match ingest(&mut db, origin, &path, stop) {
-                Ok(changed) => ingested += usize::from(changed),
-                Err(error) => {
-                    failures += 1;
-                    status.1 += 1;
-                    db.execute("INSERT INTO source(origin_host,provider,provider_home,path,local_path,file_identity,size,mtime_ns,ingested_offset,revision,present,prefix_hash,parser_state,failure) VALUES(?1,?2,?3,?4,?5,'',0,0,0,0,1,'','{}',?6) ON CONFLICT(origin_host,path) DO UPDATE SET failure=excluded.failure",params![origin.host,origin.provider,origin.provider_home.to_string_lossy(),original,path.to_string_lossy(),format!("{error:#}")])?;
+            for path in batch {
+                if stop.load(Ordering::Acquire) {
+                    return Ok(serde_json::json!({"cancelled":true}));
+                }
+                let original = origin.original(path)?.to_string_lossy().into_owned();
+                let gone = match std::fs::symlink_metadata(path) {
+                    Ok(metadata) => !metadata.is_file(),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+                    Err(error) => return Err(error.into()),
+                };
+                if gone {
+                    let tx =
+                        db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+                    tx.execute("DELETE FROM session WHERE source_id IN (SELECT source_id FROM source WHERE origin_host=?1 AND path=?2)",params![origin.host,original])?;
+                    tx.execute(
+                        "DELETE FROM source WHERE origin_host=?1 AND path=?2",
+                        params![origin.host, original],
+                    )?;
+                    tx.commit()?;
+                    continue;
+                }
+                match ingest(&mut db, origin, path, stop) {
+                    Ok(changed) => ingested += usize::from(changed),
+                    Err(error) => {
+                        failures += 1;
+                        db.execute("INSERT INTO source(origin_host,provider,provider_home,path,local_path,file_identity,size,mtime_ns,ingested_offset,revision,present,prefix_hash,parser_state,failure) VALUES(?1,?2,?3,?4,?5,'',0,0,0,0,1,'','{}',?6) ON CONFLICT(origin_host,path) DO UPDATE SET failure=excluded.failure",params![origin.host,origin.provider,origin.provider_home.to_string_lossy(),original,path.to_string_lossy(),format!("{error:#}")])?;
+                    }
                 }
             }
         }
-        let db = store.writer()?;
-        let missing:Vec<(i64,String)>=db.prepare("SELECT source_id,path FROM source WHERE origin_host=?1 AND provider=?2 AND provider_home=?3 AND present=1")?.query_map(params![origin.host,origin.provider,origin.provider_home.to_string_lossy()],|r|Ok((r.get(0)?,r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
-        for (id, path) in missing {
-            if !paths.contains(&path) && !origin.local(Path::new(&path))?.exists() {
-                db.execute("UPDATE source SET present=0,revision=revision+1,failure='source deleted' WHERE source_id=?1",[id])?;
-            }
-        }
-        status.2 |= !origin.path().exists();
+    }
+    if changed_hosts.is_empty() {
+        return Ok(serde_json::json!({"ingested":0,"parseFailures":0}));
     }
     let db = store.writer()?;
-    for (host, (local, failures, absent)) in hosts {
-        let unavailable: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM source s WHERE s.origin_host=?1 AND s.failure IS NOT NULL) OR EXISTS(SELECT 1 FROM dependency d JOIN source s USING(source_id) WHERE s.origin_host=?1 AND d.present=0)",[&host],|r|r.get(0))?;
-        let reason = if failures > 0 {
+    for host in changed_hosts {
+        let local = origins
+            .iter()
+            .any(|o| o.host == host && o.local_home == o.provider_home);
+        let absent = origins
+            .iter()
+            .filter(|o| o.host == host)
+            .any(|o| !o.path().exists());
+        let errors:i64=db.query_row("SELECT count(*) FROM source WHERE origin_host=?1 AND failure IS NOT NULL AND failure<>'partial_record'",[&host],|r|r.get(0))?;
+        let unavailable:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM source WHERE origin_host=?1 AND failure IS NOT NULL) OR EXISTS(SELECT 1 FROM dependency d JOIN source s USING(source_id) WHERE s.origin_host=?1 AND d.present=0)",[&host],|r|r.get(0))?;
+        let reason = if errors > 0 {
             Some("parse_failure")
         } else if absent {
             Some("provider_unavailable")
@@ -114,7 +210,7 @@ pub(crate) fn scan(store: &Store, origins: &[Origin], stop: &AtomicBool) -> Resu
         } else {
             None
         };
-        db.execute("INSERT INTO coverage(origin_host,mode,indexed_through,complete_through,stale_reason,parse_failures) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(origin_host) DO UPDATE SET indexed_through=excluded.indexed_through,complete_through=CASE WHEN excluded.stale_reason IS NULL AND excluded.mode='local' THEN excluded.complete_through ELSE coverage.complete_through END,stale_reason=excluded.stale_reason,parse_failures=excluded.parse_failures",params![host,if local {"local"} else {"mirror"},at,if local && reason.is_none() {Some(&at)} else {None},reason,failures as i64])?;
+        db.execute("INSERT INTO coverage(origin_host,mode,indexed_through,complete_through,stale_reason,parse_failures) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(origin_host) DO UPDATE SET indexed_through=excluded.indexed_through,complete_through=CASE WHEN excluded.stale_reason IS NULL AND excluded.mode='local' THEN excluded.complete_through ELSE coverage.complete_through END,stale_reason=excluded.stale_reason,parse_failures=excluded.parse_failures",params![host,if local {"local"}else{"mirror"},at,if local&&reason.is_none(){Some(&at)}else{None},reason,errors])?;
     }
     changes::prune(&db)?;
     db.execute_batch("PRAGMA wal_checkpoint(PASSIVE);")?;

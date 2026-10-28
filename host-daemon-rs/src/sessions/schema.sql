@@ -71,3 +71,7 @@ CREATE TABLE IF NOT EXISTS mirror_file (
  origin_host TEXT NOT NULL, path TEXT NOT NULL, identity TEXT NOT NULL,
  size INTEGER NOT NULL, received INTEGER NOT NULL, local_path TEXT NOT NULL,
  PRIMARY KEY(origin_host,path));
+
+CREATE INDEX IF NOT EXISTS dependency_path ON dependency(path,source_id);
+CREATE INDEX IF NOT EXISTS source_failures ON source(origin_host) WHERE failure IS NOT NULL;
+CREATE INDEX IF NOT EXISTS dependency_missing ON dependency(source_id) WHERE present=0;

@@ -144,3 +144,6 @@ pub(crate) fn exit_code(data: &serde_json::Value) -> i32 {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod idle_measurement;

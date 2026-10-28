@@ -596,6 +596,27 @@ async fn sessions_mirror_preserves_sidecars_and_refuses_over_budget() {
         .unwrap();
     assert!(watermark.is_some());
     assert_eq!(watermark, previous);
+    std::fs::remove_dir_all(f.origins[1].path()).unwrap();
+    scan(&f);
+    mirror::sync(
+        &target,
+        "fixture",
+        call,
+        tokio_util::sync::CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    let remaining: i64 = target
+        .reader()
+        .unwrap()
+        .query_row(
+            "SELECT count(*) FROM session WHERE provider='claude'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(remaining, 0);
+
     assert!(super::storage::admit(64 << 30, 1, 100 << 30).is_err());
     assert!(super::storage::admit(0, 1, 19 << 30).is_err());
     assert!(super::storage::admit(0, 1, 30 << 30).is_ok());
@@ -688,6 +709,9 @@ fn sessions_measure_corpus() -> Result<()> {
     let manifest = std::env::var("RC_SESSIONS_MEASURE_ORIGINS")?;
     let origins: Vec<Origin> = serde_json::from_slice(&std::fs::read(manifest)?)?;
     let store = Store::open(PathBuf::from(std::env::var("RC_SESSIONS_MEASURE_DB")?))?;
+    if let Ok(mode) = std::env::var("RC_SESSIONS_MEASURE_IDLE") {
+        return super::idle_measurement::run(&store, &origins, &mode);
+    }
     let started = Instant::now();
     let outcome = ingest::scan(&store, &origins, &AtomicBool::new(false))?;
     let ingest_seconds = started.elapsed().as_secs_f64();
@@ -1008,4 +1032,83 @@ fn sessions_measure_populated_mirror() -> Result<()> {
     )?;
     println!("{report}");
     Ok(())
+}
+
+#[test]
+fn sessions_scoped_reconcile_reclaims_deleted_sources_and_updates_sidecars() {
+    let f = fixture();
+    scan(&f);
+    std::fs::remove_file(&f.codex).unwrap();
+    std::fs::write(&f.sidecar, "changedsidecarevidence").unwrap();
+    let paths = [f.codex.clone(), f.sidecar.parent().unwrap().to_owned()];
+    let result = ingest::scan_scope(
+        &f.store,
+        &f.origins,
+        ingest::Scope::Changed(&paths),
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+    assert_eq!(result["parseFailures"], 0);
+    assert!(
+        search(&f.store, "codexmiddle")["hits"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        search(&f.store, "changedsidecarevidence")["hits"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    let db = f.store.reader().unwrap();
+    let remaining: i64 = db
+        .query_row("SELECT count(*) FROM session", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(remaining, 3);
+    let deleted: i64 = db
+        .query_row(
+            "SELECT count(*) FROM source WHERE local_path=?1",
+            [f.codex.to_string_lossy().as_ref()],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(deleted, 0);
+    let tombstones: i64 = db
+        .query_row(
+            "SELECT count(*) FROM change WHERE entity='session' AND op='tombstone'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(tombstones > 0);
+    drop(db);
+    std::fs::write(&f.codex, "malformed outside the scoped subtree\n").unwrap();
+    std::fs::write(&f.sidecar, "anotherchangedsidecar").unwrap();
+    ingest::scan_scope(
+        &f.store,
+        &f.origins,
+        ingest::Scope::Changed(&[f.claude.parent().unwrap().to_owned()]),
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+    assert_eq!(
+        search(&f.store, "anotherchangedsidecar")["hits"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    let count: i64 = f
+        .store
+        .reader()
+        .unwrap()
+        .query_row(
+            "SELECT count(*) FROM source WHERE local_path=?1",
+            [f.codex.to_string_lossy().as_ref()],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(count, 0);
 }

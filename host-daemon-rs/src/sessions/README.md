@@ -19,8 +19,16 @@ item timestamps and unobserved execution outcomes remain NULL. Claude historical
 prompt UUIDs use the `record:` namespace when no provider turn ID was recorded;
 these are analytical references and never control identities.
 
-The ingest worker is independent of jobs, polls every two seconds, and retains
-one bounded provider record at a time. It reuses the provider bounded-line reader
+The ingest worker is independent of jobs and retains one bounded provider record
+at a time. notify 8.2.1 uses FSEvents on macOS. The watcher is armed before the
+initial scan, stays armed through reconciliation, and queues at most 512
+deduplicated paths per origin. Overflow collapses to a common subtree within
+that origin; rescan flags recursively reconcile the affected subtree. Quiet
+waits touch neither the filesystem nor the database. A full reconciliation runs
+every ten minutes, and pending events survive scans. One storage writer serves
+each batch of at most 32 sources. Missing sources reclaim their catalog rows
+and emit feed tombstones through this same ingest owner. Source/dependency path
+indexes bound incremental discovery; unchanged history is not walked per event. It reuses the provider bounded-line reader
 and FileRevision. Changed prefixes rebuild one source transactionally; verified
 append prefixes continue at the last complete record. Malformed or oversized
 records retain accepted data and surface incomplete coverage. Missing dependencies
@@ -66,3 +74,10 @@ The installed skill catalog uses the user roots `.agents/skills` for Codex and
 `.claude/skills` for Claude. Resolved paths deduplicate symlinks. The catalog
 contains at most 10,000 skills; first_seen is the first catalog observation, so
 newly discovered skills are excluded from claims about an earlier unused period.
+
+The idle-cost decision keeps native events rather than directory-mtime polling:
+resuming an old conversation appends without changing its parent directory mtime.
+No debouncer or hot-file cache is needed. The manual corpus probe also accepts
+`RC_SESSIONS_MEASURE_IDLE=after` to measure a quiet minute and cold-append/new-file
+latency on a prepared private full-history catalog. Full reconcile CPU is
+reported separately and amortized over its ten-minute interval.
