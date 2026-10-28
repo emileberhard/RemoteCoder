@@ -11,12 +11,10 @@ pub(super) fn is_transient(error: &Value) -> bool {
             | "responseStreamConnectionFailed"
             | "responseStreamDisconnected"
             | "responseTooManyFailedAttempts",
-        ) => {
-            matches!(
-                error["httpStatusCode"].as_u64(),
-                Some(408 | 429 | 500..=599)
-            )
-        }
+        ) => match error.get("httpStatusCode") {
+            None | Some(Value::Null) => true,
+            Some(status) => matches!(status.as_u64(), Some(408 | 429 | 500..=599)),
+        },
         _ => false,
     }
 }
@@ -57,7 +55,13 @@ mod tests {
                     &json!({"codexErrorInfo":code,"httpStatusCode":status})
                 ));
             }
-            assert!(!is_transient(&json!({"codexErrorInfo":code})));
+            assert!(is_transient(&json!({"codexErrorInfo":code})));
+            assert!(is_transient(
+                &json!({"codexErrorInfo":code,"httpStatusCode":null})
+            ));
+            assert!(!is_transient(
+                &json!({"codexErrorInfo":code,"httpStatusCode":"503"})
+            ));
         }
         for code in [
             "unauthorized",

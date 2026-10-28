@@ -63,8 +63,8 @@ the original binding and reject changed payloads; they cannot bypass planned
 suspension, Stop or the exact restart owner. The existing turn ledger retains
 pending custody even before the user item appears. Canonical acceptance, turn
 inspection and exact-turn items determine progress and the final answer.
-Typed capacity, rate-limit and server errors, and HTTP 408/429/5xx failures
-qualify for retry. Authentication, quota, refusal, Stop and untyped errors do not.
+Typed capacity, rate-limit, server and statusless transport errors, and HTTP
+408/429/5xx failures qualify for retry. Authentication, quota, refusal, Stop and untyped errors do not.
 Claude requires its failed result's authoritative `api_error_status` on a normal
 or execution-error result; a known terminal reason must identify an API error. Its preceding
 process must have reached the existing EOF/reap fence, and exact session history
