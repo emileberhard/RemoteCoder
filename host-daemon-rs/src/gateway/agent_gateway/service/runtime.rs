@@ -421,6 +421,7 @@ fn settings_model(settings: &crate::agents::jobs::model::ExecutionSettings) -> &
 
 fn state(execution: &ExecutionState) -> State {
     match execution {
+        ExecutionState::WaitingForProvider { .. } => State::Waiting,
         ExecutionState::Unknown { .. } => State::Unknown,
         ExecutionState::Terminal { terminal } => match terminal.outcome {
             JobOutcome::Completed => State::Completed,
