@@ -168,7 +168,8 @@ old socket explicitly. Before any action, that listener proves the old path
 belongs to a retained job in its own store and to the actual caller's exact
 conversation. This prevents an isolated instance from falling into the default
 host. Existing, refused and denied routes never try another endpoint. No scoped
-failure falls back to the operator bearer. Full-access clients use the existing
+failure falls back to the operator bearer. Remove this narrow migration once
+retained provider environments no longer name per-job sockets. Full-access clients use the existing
 credential owner for other operations. This preserves the current same-user
 trust boundary, not a hostile same-UID security sandbox.
 

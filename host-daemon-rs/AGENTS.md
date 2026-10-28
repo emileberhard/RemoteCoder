@@ -56,6 +56,9 @@ Agent/Job/execution model, exact process attribution, durable Stop, result and
 delivery invariants. The installed binary's `agent` subcommand is the client;
 no launcher process, second ancestry registry or runtime legacy reader exists.
 Native terminal Claude holders own only their process-lifetime inbox route.
+Scoped caller coordination belongs to the gateway lifetime, namespaced by its
+job-store root; it proves the actual provider process and resolves the current
+job from the conversation. Finishing a job must not remove that shared route.
 
 Manual message receipts share `JobStore` and its cap. Their frozen sender,
 requested target, envelope, resolved conversation and target job survive retries;
