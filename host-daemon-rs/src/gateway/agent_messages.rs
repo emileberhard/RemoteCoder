@@ -26,12 +26,16 @@ fn bounded_reason(reason: &str) -> String {
 
 impl Gateway {
     pub(super) async fn job_message(&self, request: MessageParams) -> RpcResult {
+        let claim = self.jobs.claim_message(&request.delivery_id).await?;
         let gateway = self.jobs.gateway()?;
-        tokio::spawn(async move { gateway.admit_job_message(request).await })
-            .await
-            .map_err(|error| {
-                RpcError::from(anyhow::anyhow!("message admission task failed: {error}"))
-            })?
+        tokio::spawn(async move {
+            let _claim = claim;
+            gateway.admit_job_message(request).await
+        })
+        .await
+        .map_err(|error| {
+            RpcError::from(anyhow::anyhow!("message admission task failed: {error}"))
+        })?
     }
 
     async fn admit_job_message(&self, request: MessageParams) -> RpcResult {
@@ -52,7 +56,6 @@ impl Gateway {
             &serde_json::to_vec(&(&sender, &request.target, &request.text))
                 .map_err(anyhow::Error::from)?,
         );
-        let _claim = self.jobs.claim_message(&request.delivery_id).await?;
         let operation = self.jobs.operations.read().await;
         if self.is_draining() {
             return Err(RpcError::draining());
