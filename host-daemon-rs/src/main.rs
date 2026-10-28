@@ -25,6 +25,7 @@ mod push;
 mod questions;
 mod rpc;
 mod runtime;
+mod sessions;
 mod storage;
 mod tasks;
 #[cfg(test)]
@@ -63,6 +64,17 @@ fn main() -> Result<()> {
     if args.version {
         println!("{}", serde_json::to_string(&build_identity::IDENTITY)?);
         return Ok(());
+    }
+    if let Some(config::Command::Sessions(command)) = args.command.clone() {
+        std::process::exit(
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?
+                .block_on(agents::client::sessions::run(
+                    *command,
+                    args.env_file.as_deref(),
+                ))?,
+        );
     }
     if let Some(config::Command::Agent { command }) = args.command.clone() {
         let code = tokio::runtime::Builder::new_current_thread()

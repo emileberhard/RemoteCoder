@@ -101,6 +101,7 @@ pub(crate) enum OwnedRoute {
     NativeCompaction,
     Agents,
     AgentJobs,
+    Sessions,
     AgentRoutes,
     Calls,
     Voice,
@@ -741,6 +742,13 @@ const METHOD_SPECS: &[MethodSpec] = &[
         Some(RequestLifetime::Command),
         ADMISSION
     ),
+    spec!(
+        "sessions/mirror/set",
+        Sessions,
+        Some(RequestLifetime::Command),
+        0
+    ),
+    prefix_spec!("sessions/", Sessions, Some(RequestLifetime::Query)),
     prefix_spec!("conversation/agents/", Agents, None),
     prefix_spec!(
         "conversation/metadata/",

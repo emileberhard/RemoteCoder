@@ -1,6 +1,7 @@
 mod automations;
 mod models;
 pub(crate) mod native_parent;
+pub(crate) mod sessions;
 mod transport;
 
 use std::io::Read;

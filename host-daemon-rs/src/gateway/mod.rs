@@ -7,6 +7,7 @@ pub(crate) mod agent_jobs_codex;
 mod agent_messages;
 mod agent_routes;
 mod question_gateway;
+mod sessions;
 
 use crate::agents::mcp::McpTokens;
 use crate::navigation::NavigationManager;
@@ -311,6 +312,7 @@ pub(crate) struct Gateway {
     tool_media: Option<crate::storage::tool_media::ToolMediaStore>,
     preferences: Option<crate::user_preferences::UserPreferencesStore>,
     projects: Arc<crate::conversation_projects::ProjectResolver>,
+    session_runtime: tokio::sync::OnceCell<Arc<sessions::Runtime>>,
     request_budgets: Arc<transport::RequestBudgets>,
     review: conversation_review::Runtime,
     renames: renames::Renames,
@@ -543,6 +545,7 @@ impl Gateway {
             tool_media,
             preferences,
             projects,
+            session_runtime: tokio::sync::OnceCell::new(),
             request_budgets,
             device_tools,
             tool_claims: crate::agents::tools::claims::ToolClaims::default(),
@@ -587,6 +590,9 @@ impl Gateway {
         *self.control_task.lock().await = Some(control_task);
 
         self.start_activity_publisher().await;
+        if let Err(error) = self.start_sessions().await {
+            warn!(%error, "Session history is unavailable");
+        }
 
         if self.claude_settings.enabled {
             let claude_auth_task = {
@@ -858,6 +864,7 @@ impl Gateway {
             let _ = task.await;
         }
         self.stop_activity_publisher().await;
+        self.stop_sessions().await;
         let task = self.apns_completion_task.lock().await.take();
         if let Some(task) = task {
             task.abort();
