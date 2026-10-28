@@ -447,7 +447,7 @@ impl Indexes {
 }
 
 impl Inner {
-    fn conversation_agent(
+    pub(super) fn conversation_agent(
         &self,
         conversation: &ConversationIdentity,
     ) -> Result<Option<AgentRecord>> {

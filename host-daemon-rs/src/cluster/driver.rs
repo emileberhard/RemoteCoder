@@ -119,7 +119,7 @@ async fn member_worker(
     let Some(owner) = gateway.upgrade() else {
         return Ok(());
     };
-    let store = owner.jobs.store().await?;
+    let store = owner.jobs.store().await?.clone();
     let mut changes = store.member_changes(member.host.clone()).await?;
     let link = owner.cluster_link().await?;
     let mut membership_changes = link.store.changes().await;
