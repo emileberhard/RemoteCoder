@@ -16,7 +16,6 @@ mod codex;
 mod dispatch;
 mod registry;
 
-#[cfg(test)]
 pub(crate) use codex::codex_dynamic_tools;
 pub(crate) use codex::{CodexToolCall, codex_tool_call, declare_on_codex_request};
 pub(crate) use dispatch::{Caller, ToolContent, ToolOutcome, dispatch};

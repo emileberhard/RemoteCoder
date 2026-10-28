@@ -177,16 +177,63 @@ impl ClaudeSupervisor {
         item: &Item,
     ) -> Result<ResumeDelivery, TurnStartError> {
         let _lifecycle = self.lifecycles.lock(&item.thread_id).await;
-        if let Some(captured) = item.stop_generation {
-            let current = self
-                .stop_generation(&item.thread_id)
+        let parent = self
+            .conversation_index
+            .parent(&item.thread_id)
+            .await
+            .map_err(|error| {
+                resume_error(format!("Claude job ownership could not be read: {error:#}"))
+            })?;
+        if let Some(handle) = parent.active_job {
+            let saved = self
+                .conversation_index
+                .job(&item.thread_id, &handle)
                 .await
                 .map_err(|error| {
-                    resume_error(format!("the Stop state could not be read: {error:#}"))
-                })?;
-            if current > captured {
+                    resume_error(format!("Claude job evidence could not be read: {error:#}"))
+                })?
+                .ok_or_else(|| resume_error("Claude job evidence is missing".into()))?;
+            if matches!(
+                saved.phase,
+                crate::providers::claude::conversation_index::job::JobPhase::Stopping
+                    | crate::providers::claude::conversation_index::job::JobPhase::Finished { .. }
+            ) {
                 return Ok(ResumeDelivery::Stopped);
             }
+            if !self.has_runtime(&item.thread_id).await
+                && let Some(owner) = saved.owner
+            {
+                let group = owner.pid;
+                let alive = tokio::task::spawn_blocking(move || owner.alive())
+                    .await
+                    .map_err(|error| resume_error(error.to_string()))?
+                    .map_err(|error| {
+                        resume_error(format!(
+                            "Claude's exact execution owner is unknown: {error:#}"
+                        ))
+                    })?;
+                if alive {
+                    return Err(TurnStartError::unresponsive(
+                        "Claude's exact job process still lives; refusing a second execution",
+                    ));
+                }
+                if super::group_exists(nix::unistd::Pid::from_raw(group)) {
+                    return Err(TurnStartError::unresponsive(
+                        "Claude's execution process group still exists; refusing a second execution",
+                    ));
+                }
+            }
+        }
+        let stop_generation = self
+            .stop_generation(&item.thread_id)
+            .await
+            .map_err(|error| {
+                resume_error(format!("the Stop state could not be read: {error:#}"))
+            })?;
+        if let Some(captured) = item.stop_generation
+            && stop_generation > captured
+        {
+            return Ok(ResumeDelivery::Stopped);
         }
         let mut frames = self
             .undelivered(item)
@@ -223,7 +270,7 @@ impl ClaudeSupervisor {
             });
         let (delivery, input, group) = match active {
             Some((turn_id, input, group)) => {
-                self.write_resumed(&item.thread_id, group, &input, &first)
+                self.write_resumed(&item.thread_id, group, &input, &first, stop_generation)
                     .await?;
                 (ResumeDelivery::Steered(turn_id), input, group)
             }
@@ -237,7 +284,7 @@ impl ClaudeSupervisor {
                     cwd: item.cwd.clone(),
                 };
                 let turn_id = self
-                    .start_turn_locked(request, TurnOrigin::Callback)
+                    .start_turn_locked(request, TurnOrigin::Callback { stop_generation })
                     .await?;
                 let (input, group) = self
                     .runtimes
@@ -264,7 +311,7 @@ impl ClaudeSupervisor {
             }
         };
         for frame in frames {
-            self.write_resumed(&item.thread_id, group, &input, &frame)
+            self.write_resumed(&item.thread_id, group, &input, &frame, stop_generation)
                 .await?;
         }
         Ok(delivery)
@@ -309,10 +356,31 @@ impl ClaudeSupervisor {
         group: i32,
         input: &InputWriter,
         frame: &ClaudeUserInput,
+        stop_generation: u64,
     ) -> Result<(), TurnStartError> {
         let prepared =
             super::input_writer::InputWriter::prepare_input(frame).map_err(TurnStartError::from)?;
-        let Err(error) = input.send_prepared(prepared).await else {
+        let slot = input.reserve().await.map_err(TurnStartError::from)?;
+        let policy = self
+            .runtimes
+            .lock()
+            .await
+            .get(thread_id)
+            .filter(|runtime| runtime.process_group_id == group && runtime.running_turn().is_some())
+            .map(|runtime| runtime.launch.clone())
+            .ok_or_else(|| {
+                resume_error("Claude's recovery runtime stopped before input submission".into())
+            })?;
+        let pending = self
+            .submit_callback_input(
+                thread_id,
+                &policy,
+                TurnOrigin::Callback { stop_generation },
+                slot,
+                prepared,
+            )
+            .await?;
+        let Err(error) = pending.written().await else {
             return self.ensure_runtime_current(thread_id, group).await;
         };
         if InputWriter::stall_was_queued(&error) {

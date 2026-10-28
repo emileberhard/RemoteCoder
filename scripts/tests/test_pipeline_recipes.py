@@ -1,9 +1,11 @@
+import fcntl
 import json
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
+import textwrap
 import unittest
 from pathlib import Path
 
@@ -11,26 +13,60 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class PipelineRecipesTests(unittest.TestCase):
-    def test_fork_noop_command_refreshes_usage_and_preserves_exit_status(self):
-        recipe = (ROOT / "justfile").read_text().split("<<'OWNED'\n", 1)[1].split("    OWNED", 1)[0]
+    def test_fork_noop_command_records_active_and_terminal_compilation(self):
+        recipe = textwrap.dedent((ROOT / "justfile").read_text().split("<<'OWNED'\n", 1)[1].split("    OWNED", 1)[0])
         for status in (0, 7):
             with self.subTest(status=status), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
+                cache = root / "build-cache/codex-fork-check"
                 tools = root / "tools"
                 tools.mkdir()
                 for name in ("rsync-source.py", "codex-cache.py", "rusty-v8-artifacts.py"):
                     (tools / name).write_text("")
-                (root / "src/codex-rs").mkdir(parents=True)
-                lock = root / "build.lock"
+                for name in ("build_cache.py", "build_support.py", "job_power.py", "process_group.py"):
+                    shutil.copy2(ROOT / "scripts" / name, tools / name)
+                (cache / "src/codex-rs").mkdir(parents=True)
+                lock = cache / "build.lock"
                 lock.touch()
-                result = subprocess.run(
-                    ["bash", "-s", "--", str(root), str(tools), "run", sys.executable,
-                     "-c", "import os,sys; os.utime(sys.argv[1], (1,1)); sys.exit(int(sys.argv[2]))",
-                     str(lock), str(status)],
-                    input=recipe, capture_output=True, text=True, check=False,
-                )
+                active_path = root / "active.json"
+                command = """import fcntl,json,os,sys
+from pathlib import Path
+with Path(sys.argv[1]).open('a') as lease:
+    try:
+        fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        pass
+    else:
+        raise AssertionError('compilation lost build.lock ownership')
+records = list(Path(sys.argv[2]).glob('*.json'))
+assert len(records) == 1
+record = json.loads(records[0].read_text())
+assert record['active'] is True and record['completedAt'] is None
+Path(sys.argv[3]).write_text(json.dumps(record))
+os.utime(sys.argv[1], (1,1))
+sys.exit(int(sys.argv[4]))
+"""
+                with lock.open("a") as lease:
+                    fcntl.flock(lease, fcntl.LOCK_EX)
+                    result = subprocess.run(
+                        ["bash", "-s", "--", str(cache), str(tools), "runs/fixture-run", "1" * 40, str(int(status != 0)), sys.executable,
+                         "-c", command, str(lock), str(cache.parent / "leases/compilation"), str(active_path), str(status)],
+                        input=recipe, capture_output=True, text=True, check=False,
+                    )
                 self.assertEqual(result.returncode, status, result.stderr)
                 self.assertGreater(lock.stat().st_mtime, 1)
+                active = json.loads(active_path.read_text())
+                records = list((cache.parent / "leases/compilation").glob("*.json"))
+                self.assertEqual(len(records), 1)
+                terminal = json.loads(records[0].read_text())
+                self.assertFalse(terminal["active"])
+                self.assertGreaterEqual(terminal["completedAt"], active["lastUsed"])
+                for record in (active, terminal):
+                    self.assertEqual(record["schemaVersion"], 2)
+                    self.assertEqual(record["buildId"], "fixture-run")
+                    self.assertEqual(record["path"], str((cache / "target").resolve()))
+                    self.assertEqual(record["sourceCommit"], "1" * 40)
+                    self.assertEqual(record["sourceModified"], status != 0)
 
     def test_fork_command_runs_locally_without_ssh(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -39,12 +75,17 @@ class PipelineRecipesTests(unittest.TestCase):
                 shutil.copy2(ROOT / name, root / name)
             tools = root / "scripts"
             tools.mkdir()
-            for name in ("build-host", "build_hosts.py", "maintainer_config.py", "build_support.py", "job_power.py", "process_group.py", "codex-cache.py", "rsync-source.py"):
+            for name in ("build-host", "build_hosts.py", "maintainer_config.py", "build_support.py", "job_power.py", "process_group.py", "build_cache.py", "codex-cache.py", "rsync-source.py"):
                 shutil.copy2(ROOT / "scripts" / name, tools / name)
             (tools / "rusty-v8-artifacts.py").write_text("")
             source = root / "fork/codex-rs"
             source.mkdir(parents=True)
             (source / "fixture.txt").write_text("local fork source")
+            subprocess.run(["git", "init", "-q", str(source.parent)], check=True)
+            subprocess.run(["git", "-C", str(source.parent), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(source.parent), "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "Fixture source"], check=True)
+            commit = subprocess.check_output(["git", "-C", str(source.parent), "rev-parse", "HEAD"], text=True).strip()
+            (source / "fixture.txt").write_text("local fork source with changes")
             home = root / "home"
             home.mkdir()
             result_path = root / "result.txt"
@@ -60,10 +101,18 @@ class PipelineRecipesTests(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertTrue(result_path.is_file(), result.stdout + result.stderr)
-            self.assertEqual(result_path.read_text(), "local fork source")
+            self.assertEqual(result_path.read_text(), "local fork source with changes")
             cache = home / "Library/Caches/RemoteCoder-Build/codex-fork-check"
             self.assertTrue((cache / "build.lock").is_file())
             self.assertEqual(list((cache / "runs").iterdir()), [])
+            records = list((cache.parent / "leases/compilation").glob("*.json"))
+            self.assertEqual(len(records), 1)
+            record = json.loads(records[0].read_text())
+            self.assertEqual(record["schemaVersion"], 2)
+            self.assertFalse(record["active"])
+            self.assertIsNotNone(record["completedAt"])
+            self.assertEqual(record["sourceCommit"], commit)
+            self.assertTrue(record["sourceModified"])
 
     def test_build_gates_preserve_architecture_status_and_per_invocation_evidence(self):
         fixture = ROOT / "scripts/tests/fixtures/xcode/exit-zero.txt"

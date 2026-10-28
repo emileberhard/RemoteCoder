@@ -24,6 +24,14 @@ impl<'a> CodexStop<'a> {
         interrupt: Value,
     ) -> RpcResult {
         self.confirm_running(thread, turn).await?;
+        self.run_accepted(thread, interrupt).await
+    }
+
+    pub(in crate::gateway) async fn run_accepted(
+        &self,
+        thread: &str,
+        interrupt: Value,
+    ) -> RpcResult {
         let ((parent, commands), descendants) = tokio::join!(
             async {
                 let parent = self.gateway.call_control("turn/interrupt", interrupt).await;
@@ -60,6 +68,42 @@ impl<'a> CodexStop<'a> {
                     ),
                 ))
             }
+        }
+    }
+
+    pub(in crate::gateway) async fn cleanup_accepted(&self, thread: &str, turn: &str) -> RpcResult {
+        if let Some(latest) = self
+            .gateway
+            .latest_codex_turn(thread, Some(TURN_CHECK_WAIT))
+            .await
+            .map_err(|error| native_error(&error))?
+            && latest["id"].as_str() != Some(turn)
+        {
+            return Err(RpcError::new(
+                RpcCode::Conflict,
+                "the accepted turn is stopped, but a newer turn prevents safe command cleanup",
+            ));
+        }
+        let (commands, descendants) = tokio::join!(
+            self.end_commands(thread),
+            tokio::time::timeout(DESCENDANT_STOP_WAIT, self.descendants(thread)),
+        );
+        let mut missed = commands.err().into_iter().collect::<Vec<_>>();
+        missed.extend(
+            descendants.unwrap_or_else(|_| {
+                vec!["its agents did not all answer the Stop in time".to_owned()]
+            }),
+        );
+        if missed.is_empty() {
+            Ok(json!({}))
+        } else {
+            Err(RpcError::new(
+                RpcCode::Internal,
+                format!(
+                    "some stopped work may still be running: {}",
+                    missed.join("; ")
+                ),
+            ))
         }
     }
 

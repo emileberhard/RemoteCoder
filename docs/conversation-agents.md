@@ -12,15 +12,14 @@ working directories, titles nor `agentInitiated` establish ancestry.
 - Native Codex: account-scoped thread ancestry and native turn/item pagination.
 - Native Claude: attributed complete messages, Agent tool results, task lifecycle,
   and the root session's `subagents` transcripts. Shell tasks are excluded.
-- External workers: the agents skill's public `agent-work` JSON interface.
-  RemoteCoder never opens the launcher's private registry.
+- External workers: the gateway-owned `agents::jobs::JobOwner`, shared with the
+  installed `agent` client. Its records supply exact origin, current job,
+  immutable result and delivery state; there is no launcher subprocess or registry.
 
-A launcher run is an execution, not a conversation. Original delegation supplies
-stable membership; a later caller resuming that session can reference it without
-changing its original parent. IDs include provider ownership; a thread ID alone
-never joins records from different provider homes or accounts. Historical
-launcher homes are inferred only when the history has exactly one owner.
-Explicitly recorded homes must still contain the recorded session.
+An agent is a conversation and a job is one invocation. Continue creates a new
+job without changing origin or provider scope. Exact identities include the
+provider home; historical missing or conflicting evidence stays unknown.
+[Delegated jobs](delegated-jobs.md) defines the execution and cutover contracts.
 
 Claude task, invocation and agent IDs remain distinct. Its projection stores
 bounded terminal evidence under the owning Claude home, with atomic writes and a
@@ -50,47 +49,21 @@ provider/source, title/model, independently observed state, current execution,
 account, available capabilities and `lastActiveAt`: the newest observed
 activity in Unix seconds, or null when unknown. Codex reports the thread's
 `updatedAt`; Claude the newer of its latest event and its `subagents/`
-transcript write; launcher runs the newest write of any of the session's runs
-(`agent-work`'s `lastActiveAt`, in milliseconds). List and read do not resume
-execution.
-A missing provider or launcher produces explicit incomplete coverage.
+transcript write; external jobs use their authoritative record's mutation time.
+List and read do not resume execution. An unavailable provider or job store
+produces explicit incomplete coverage.
 
-The list is capped at 512 agents, native subtree expansion at 16 roots, and
-launcher pages at 200 entries. Classification retains up to 4,096 exact
-provider-home/thread identities and 4 MiB of payload strings per gateway.
-Definitive ancestry has no short TTL; unknown coverage retries after 30 seconds.
-One owner batches new misses through the public v2 launcher interface. Exact
-identities share in-flight results; up to 1,024 identities and 256 waiting
-readers per identity are retained. Cache locks never cover launcher I/O, and
-owner cancellation releases readers with explicit unknown coverage. Cross-home
-parent accounts outside the verified gateway/default scope use the public v1
-identity projection. V1 inventory selections share in-flight results by
-normalized selector and exact account/provider homes. One host owner has separate
-process pools: inventory admits two processes, alert classification one and
-mutations two, for at most five processes across default/account gateways.
-UI classification and its cross-account V1 identity projection use the inventory
-pool. The classification pool serves only the completion-alert gate and its
-readiness preflight; purpose is explicit at every launcher call. Each pool admits
-at most 32 callers independently, so UI reads and long mutations
-cannot exhaust alert classification capacity. Inventory retains at most 32
-pending selections and 64 readers per selection. Its owned task has one second
-for queue wait and all 50 pages; callers only wait on that task, and cancelling
-one caller never cancels shared work or poisons the cache. The inventory owner
-cancels and joins these tasks when its host gateway shuts down. Failures and timeouts
-are cached for two seconds. Up to 16 immutable selections are shared without
-copying their rows; each is bounded to 2 MiB across pages and expires after five
-seconds, or nine for ancestors. Invalidation prevents earlier in-flight reads
-from repopulating the cache or being joined by post-action refreshes; old
-completion cannot remove current-generation work.
-The entire list shares a two-second deadline across native inventory and all
-subtree expansion. Expiry returns known native agents and explicit incomplete
-coverage. Collected native headers survive execution-enrichment timeouts, whose
-unfinished state remains unknown; an unavailable external inventory never proves
-there are no workers.
-The launcher's `Launcher list coverage incomplete:` warning also marks a stale
-projection incomplete. When a requested agent is absent from an incomplete list,
-read/action returns retryable `agentDiscoveryIncomplete`; it does not prove the
-agent is gone.
+The list is capped at 512 agents. Native subtree expansion retains its existing
+bounded reads. External descendant selection includes at most 32 native roots,
+reads at most 256 jobs per root, deduplicates agents and reports omitted pages.
+Exact canonical origins are checked before provider ancestry; scoped historical
+uncertainty cannot silently become root. Classification reads the in-process
+job owner and provider headers, never an external launcher or a second cache of
+launcher projections. The whole list shares a two-second deadline; already
+collected native headers survive optional execution-enrichment failure, with
+unfinished state reported as unknown. A missing agent in an incomplete list
+returns retryable `agentDiscoveryIncomplete`, not proof that it is gone.
+
 Native child execution snapshots retain at most 16
 roots and reuse terminal results for up to 30 seconds while the provider's
 header revision and status match; active children are read each refresh. Claude history projections
@@ -133,9 +106,9 @@ arrival never moves a top-anchored turn.
 | Native Codex Stop | Exact current `turn/interrupt` through `CodexStop`, the path the parent's Stop uses: it also interrupts the child's running descendants and ends their background terminals |
 | Native Claude Stop | Installed CLI `stop_task`, checked against runtime, task and execution revision |
 | Native follow-up | Adds an explicit agent reference to the parent's composer draft |
-| External Send | Live runner's existing message transport |
-| External Continue | New launcher execution, same verified provider session/home |
-| External Stop | Runner-owned Codex interrupt or owned Claude process-group termination |
+| External Send | Gateway delivery to the exact current running job |
+| External Continue | Durable new job in the same exact provider conversation |
+| External Stop | Persisted job Stop, then the existing exact provider interrupt/cleanup owner |
 
 The conversation's own Stop on a Codex parent, once the gateway confirms it
 names the running turn, also interrupts every running native descendant,
@@ -143,12 +116,11 @@ ends the shell commands of each stopped thread, and fails visibly when it
 cannot reach one of them; a refused Stop interrupts nothing
 (`host-daemon-rs/AGENTS.md`, *Gateway RPCs*).
 
-A stop receipt means requested, not completed. Terminal state comes from the
-provider/runner. Stale execution controls fail and require refresh. Continuation
-mutation receipts and a provider-session file lock prevent a retried or concurrent
-operation from launching a second execution. An indeterminate admission is persisted
-before launching and blocks another launch until its actual outcome is established. Continued Claude sessions use the
-recorded account home and never fall through to another login.
+A stop receipt means requested, not completed. Terminal state requires provider
+or fenced Stop evidence. Stale execution controls require refresh. Job admission
+fingerprints and the single current-job invariant prevent a repeated Continue
+from starting duplicate work. Unknown holds the slot until evidence or an
+explicit Stop resolves it. Provider scope and read-only permissions remain fixed.
 
 Native Claude Stop was verified against CLI 2.1.280 with a disposable background
 agent: the selected task emitted `killed`, then `stopped`, and disappeared from
@@ -195,6 +167,6 @@ A native Codex child's completion does not wake an idle root: upstream delivers
 it with `trigger_turn: false`, so the root reads it on its next turn. The gateway
 forwards any turn the app-server starts itself, so a missing wake is upstream
 policy, not a gateway defect.
-Cross-account launcher children can be inspected and controlled from the parent;
+Recorded cross-home children can be inspected and controlled from the parent;
 their native descendants are inspected through that child account's own Agents sheet,
 with this coverage boundary shown explicitly.

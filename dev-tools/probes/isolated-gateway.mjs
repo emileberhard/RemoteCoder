@@ -5,10 +5,12 @@ import { join, resolve } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 
 const routerCodexAccount = "probe-account";
+const routerCodexUser = "probe-user";
 
 function syntheticCodexToken() {
     const expiry = Math.floor(Date.now() / 1000) + 7200;
-    const claims = { exp: expiry, "https://api.openai.com/auth": { chatgpt_account_id: routerCodexAccount } };
+    const claims = { exp: expiry, jti: randomBytes(8).toString("hex"),
+        "https://api.openai.com/auth": { chatgpt_account_id: routerCodexAccount, chatgpt_user_id: routerCodexUser } };
     const access = `e30.${Buffer.from(JSON.stringify(claims)).toString("base64url")}.probe`;
     return {
         access_token: access, account_id: routerCodexAccount, plan_type: "pro",
@@ -17,12 +19,21 @@ function syntheticCodexToken() {
     };
 }
 
-function startStubRouter() {
+export function startStubRouter(inference) {
     const server = Bun.serve({
-        hostname: "127.0.0.1", port: 0,
-        fetch: (request) => ["/codex/token", "/codex/renew"].includes(new URL(request.url).pathname)
-            ? Response.json(syntheticCodexToken())
-            : Response.json({ error: { code: "not_found" } }, { status: 404 }),
+        hostname: "127.0.0.1", port: 0, idleTimeout: 0,
+        fetch: async (request) => {
+            const url = new URL(request.url);
+            if (["/codex/token", "/codex/renew"].includes(url.pathname)) return Response.json(syntheticCodexToken());
+            if (!inference) return Response.json({ error: { code: "not_found" } }, { status: 404 });
+            const headers = new Headers(request.headers);
+            headers.delete("host");
+            headers.set("authorization", `Bearer ${inference.key}`);
+            if (headers.has("x-api-key")) headers.set("x-api-key", inference.key);
+            return fetch(inference.url + url.pathname + url.search, {
+                method: request.method, headers, body: request.body, duplex: "half",
+            });
+        },
     });
     server.unref();
     return server;

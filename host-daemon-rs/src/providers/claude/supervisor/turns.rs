@@ -75,10 +75,21 @@ impl ClaudeSupervisor {
 
     pub(super) async fn start_turn_locked(
         self: &Arc<Self>,
-        mut request: ClaudeTurnRequest,
+        request: ClaudeTurnRequest,
         origin: TurnOrigin,
     ) -> Result<String, TurnStartError> {
+        let policy = self.conversation_launch_policy(&request.thread_id).await?;
+        self.start_turn_with_policy(request, origin, policy).await
+    }
+
+    pub(super) async fn start_turn_with_policy(
+        self: &Arc<Self>,
+        mut request: ClaudeTurnRequest,
+        origin: TurnOrigin,
+        policy: super::jobs::LaunchPolicy,
+    ) -> Result<String, TurnStartError> {
         request.input.client_id.get_or_insert_with(new_session_uuid);
+        self.prepare_job_resume(&request, &policy).await?;
         let prepared = super::input_writer::InputWriter::prepare_input(&request.input)
             .map_err(TurnStartError::from)?;
         let stop_generation = self
@@ -89,6 +100,8 @@ impl ClaudeSupervisor {
                 code: RpcCode::Internal,
                 message: format!("the Stop state could not be read: {error:#}"),
             })?;
+        self.check_callback_generation(&request.thread_id, origin)
+            .await?;
         self.wait_for_finishing_turn(&request.thread_id).await;
         if self
             .runtimes
@@ -145,7 +158,7 @@ impl ClaudeSupervisor {
         }
         if request.input.text != "/compact" {
             let folded = self
-                .fold_into_agent_initiated_turn(&request, &prepared)
+                .fold_into_agent_initiated_turn(&request, &prepared, origin, &policy)
                 .await;
             if matches!(&folded, Ok(Some(_)))
                 || matches!(&folded, Err(error) if error.is_queued_stall())
@@ -160,10 +173,12 @@ impl ClaudeSupervisor {
         let _admission = self.reserve_start(&request).await?;
 
         let (turn_id, mut translator) = self.new_turn(&request.thread_id, &request.cwd);
+        self.record_job_turn(&request.thread_id, &policy, &turn_id)
+            .await?;
         if request.input.text == "/compact" {
             translator.expect_manual_compaction();
         }
-        let agent_initiated = matches!(origin, TurnOrigin::Callback);
+        let agent_initiated = matches!(origin, TurnOrigin::Callback { .. });
         let mut started_notification = translator.turn_started();
         if agent_initiated {
             annotate_agent_initiated(&mut started_notification, None);
@@ -172,7 +187,7 @@ impl ClaudeSupervisor {
         let stale_group = {
             let mut runtimes = self.runtimes.lock().await;
             match runtimes.get(&request.thread_id) {
-                Some(runtime) if runtime.matches(&request) => None,
+                Some(runtime) if runtime.matches(&request) && runtime.launch == policy => None,
                 Some(runtime) => {
                     let group = runtime.process_group_id;
                     runtimes.remove(&request.thread_id);
@@ -200,6 +215,8 @@ impl ClaudeSupervisor {
         let warm = self
             .reserve_warm_input(&request.thread_id, "turn/start")
             .await?;
+        self.check_callback_generation(&request.thread_id, origin)
+            .await?;
         let (slot, process_group_id, mut process_admission) = {
             let mut runtimes = self.runtimes.lock().await;
             if let Some(runtime) = runtimes.get_mut(&request.thread_id) {
@@ -224,7 +241,7 @@ impl ClaudeSupervisor {
                 )
             } else {
                 drop(runtimes);
-                let spawned = self.spawn_runtime(&request)?;
+                let spawned = self.spawn_runtime(&request, &policy)?;
                 let slot = spawned.runtime.input.reserve().await?;
                 let process_admission = spawned.admission;
                 let process_group_id = spawned.process_group_id;
@@ -232,6 +249,7 @@ impl ClaudeSupervisor {
                 let stderr = spawned.stderr;
 
                 let mut runtime = spawned.runtime;
+                self.record_job_process(&runtime).await?;
                 runtime.active_turn = Some(RuntimeTurn::new(
                     translator,
                     agent_initiated,
@@ -265,7 +283,42 @@ impl ClaudeSupervisor {
 
         self.emit(started_notification).await;
 
-        if let Err(err) = slot.send_input(Arc::clone(&prepared)).written().await {
+        if let Err(error) = self
+            .check_callback_generation(&request.thread_id, origin)
+            .await
+        {
+            self.fail_runtime(&request.thread_id, process_group_id, "interrupted", None)
+                .await;
+            return Err(error);
+        }
+        {
+            let runtimes = self.runtimes.lock().await;
+            if !runtimes.get(&request.thread_id).is_some_and(|runtime| {
+                runtime.process_group_id == process_group_id && runtime.running_turn().is_some()
+            }) {
+                return Err(TurnStartError::internal(
+                    "Claude runtime stopped before its input was submitted",
+                ));
+            }
+        }
+        let pending = match self
+            .submit_callback_input(
+                &request.thread_id,
+                &policy,
+                origin,
+                slot,
+                Arc::clone(&prepared),
+            )
+            .await
+        {
+            Ok(pending) => pending,
+            Err(error) => {
+                self.fail_runtime(&request.thread_id, process_group_id, "interrupted", None)
+                    .await;
+                return Err(error);
+            }
+        };
+        if let Err(err) = pending.written().await {
             if InputWriter::is_stalled(&err) {
                 process_admission.accept();
                 self.remember_parent(&request, origin, stop_generation)
@@ -344,6 +397,8 @@ impl ClaudeSupervisor {
         self: &Arc<Self>,
         request: &ClaudeTurnRequest,
         prepared: &Arc<super::input_writer::PreparedInput>,
+        origin: TurnOrigin,
+        policy: &super::jobs::LaunchPolicy,
     ) -> Result<Option<String>, TurnStartError> {
         // Cheap first: building a translator reads Claude's settings files, so
         // ordinary dispatch must not pay for it twice.
@@ -351,6 +406,7 @@ impl ClaudeSupervisor {
             let runtimes = self.runtimes.lock().await;
             runtimes
                 .get(&request.thread_id)
+                .filter(|runtime| runtime.launch == *policy)
                 .and_then(ClaudeRuntime::running_turn)
                 .is_some_and(|active| active.agent_initiated)
         };
@@ -365,6 +421,8 @@ impl ClaudeSupervisor {
         };
 
         let (turn_id, translator) = self.new_turn(&request.thread_id, &request.cwd);
+        self.record_job_turn(&request.thread_id, policy, &turn_id)
+            .await?;
         let started = translator.turn_started();
         let dispatched = RuntimeTurn::new(translator, false, request.input.client_id.clone());
 
@@ -428,7 +486,42 @@ impl ClaudeSupervisor {
         self.publish(completed).await;
         self.emit(started).await;
 
-        if let Err(err) = slot.send_input(Arc::clone(prepared)).written().await {
+        if let Err(error) = self
+            .check_callback_generation(&request.thread_id, origin)
+            .await
+        {
+            self.fail_runtime(&request.thread_id, process_group_id, "interrupted", None)
+                .await;
+            return Err(error);
+        }
+        {
+            let runtimes = self.runtimes.lock().await;
+            if !runtimes.get(&request.thread_id).is_some_and(|runtime| {
+                runtime.process_group_id == process_group_id && runtime.running_turn().is_some()
+            }) {
+                return Err(TurnStartError::internal(
+                    "Claude runtime stopped before its input was submitted",
+                ));
+            }
+        }
+        let pending = match self
+            .submit_callback_input(
+                &request.thread_id,
+                policy,
+                origin,
+                slot,
+                Arc::clone(prepared),
+            )
+            .await
+        {
+            Ok(pending) => pending,
+            Err(error) => {
+                self.fail_runtime(&request.thread_id, process_group_id, "interrupted", None)
+                    .await;
+                return Err(error);
+            }
+        };
+        if let Err(err) = pending.written().await {
             if InputWriter::is_stalled(&err) {
                 process_admission.accept();
                 return Err(self.input_stalled(
@@ -474,7 +567,7 @@ impl ClaudeSupervisor {
         input: &ClaudeUserInput,
     ) -> Result<(), TurnControlError> {
         let lifecycle = self.lifecycles.lock(thread_id).await;
-        let (writer, process_group_id) = {
+        let (writer, process_group_id, policy) = {
             let mut runtimes = self.runtimes.lock().await;
             let Some(runtime) = runtimes.get_mut(thread_id) else {
                 return Err(TurnControlError::NotRunning {
@@ -489,13 +582,19 @@ impl ClaudeSupervisor {
                     message: format!("thread {thread_id} has no active turn to steer"),
                 });
             };
-            (runtime.input.clone(), runtime.process_group_id)
+            (
+                runtime.input.clone(),
+                runtime.process_group_id,
+                runtime.launch.clone(),
+            )
         };
 
         let prepared = InputWriter::prepare_input(input).map_err(TurnStartError::from)?;
         let delivered = match writer.reserve().await {
             Ok(slot) => {
-                let pending = slot.send_input(prepared);
+                let pending = self
+                    .submit_job_input(thread_id, &policy, slot, prepared)
+                    .await?;
                 drop(lifecycle);
                 pending.written().await
             }
@@ -636,6 +735,23 @@ impl ClaudeSupervisor {
 
     pub(crate) fn is_minted(&self, thread_id: &str) -> anyhow::Result<bool> {
         self.conversation_index.is_minted(thread_id)
+    }
+
+    pub(crate) async fn record_job_session(
+        &self,
+        thread_id: &str,
+        job_id: &crate::agents::jobs::model::JobId,
+    ) -> anyhow::Result<()> {
+        self.conversation_index
+            .record_job_session(thread_id, job_id)
+            .await
+    }
+
+    pub(crate) fn creation_origin(
+        &self,
+        thread_id: &str,
+    ) -> anyhow::Result<Option<crate::providers::claude::conversation_index::SessionOrigin>> {
+        self.conversation_index.creation_origin(thread_id)
     }
 
     pub(crate) async fn fork_thread_records(

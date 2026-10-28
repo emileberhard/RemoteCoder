@@ -227,7 +227,7 @@ impl Item {
         }
         notice.push("Agents you started with spawn_agent run separately, keep running and still report back here.".to_owned());
         notice.push(format!(
-            "Otherwise continue where you left off. Recovery id: {}",
+            "Inspect the session history and current workspace state first. Do not repeat side effects already completed; continue only the remaining work. Recovery id: {}",
             self.recovery_id
         ));
         notice.join(" ")

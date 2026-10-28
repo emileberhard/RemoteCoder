@@ -1,9 +1,5 @@
 use super::Gateway;
-use super::agent_gateway::{
-    CodexStop, LauncherPurpose, NOTIFICATION_ANCESTRY_BUDGET, coverage_failure_codes,
-    native_agent_relation,
-};
-use crate::agents::launcher;
+use super::agent_gateway::{CodexStop, NOTIFICATION_ANCESTRY_BUDGET, coverage_failure_codes};
 use crate::rpc::error::RpcCode;
 use crate::rpc::{RpcError, RpcResult};
 use anyhow::Result;
@@ -49,48 +45,9 @@ impl Gateway {
     }
 
     async fn lookup_agent_thread(&self, thread: &str) -> Result<bool> {
-        let claude = crate::providers::claude::is_claude_thread_id(thread);
-        if claude && self.claude_thread_is_minted(thread).await? {
-            return Ok(false);
-        }
-        let native = if !claude {
-            self.call_control(
-                "thread/read",
-                json!({"threadId":thread,"includeTurns":false}),
-            )
+        self.agent_service()
+            .thread_relation(thread)
             .await
-            .and_then(|header| native_agent_relation(&header, thread))
-            .map_err(|_| launcher::unavailable("nativeAncestryUnavailable"))
-        } else {
-            Ok(false)
-        };
-        if native.as_ref().is_ok_and(|child| *child) {
-            return Ok(true);
-        }
-        let home = self.agent_home_for_thread(thread)?;
-        // Fresh indexed coverage is cheap and must not borrow the UI's cached
-        // inventory. A newly admitted unresolved launch can invalidate a prior
-        // negative root proof. Read only this exact provider home and thread.
-        let response = self
-            .call_agent_launcher(
-                LauncherPurpose::Classification,
-                json!({"operation":"classify","schemaVersion":2,
-            "homes":[home],"threadIds":[thread]}),
-            )
-            .await
-            .map_err(launcher::call_failure)?;
-        if launcher::subject_relation(&response, &home, thread)? {
-            return Ok(true);
-        }
-        native
-    }
-
-    async fn claude_thread_is_minted(&self, thread: &str) -> Result<bool> {
-        let Some(agent) = self.claude_agent() else {
-            return Ok(false);
-        };
-        agent
-            .is_minted(thread)
-            .map_err(|_| launcher::unavailable("creationRecordUnreadable"))
+            .map(|relation| matches!(relation, super::agent_gateway::ThreadRelation::Child(_)))
     }
 }

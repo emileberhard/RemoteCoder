@@ -85,31 +85,48 @@ impl ClaudeSupervisor {
             .ok_or_else(|| std::io::Error::other("claude exited before it could be tracked"))?
             as i32;
         let admission = ProcessAdmission::new(process_group_id, Arc::clone(&self.process_registry));
-        let group = OwnedGroup {
-            admission,
-            process_group_id,
-            stdin: child.stdin.take(),
-            stdout: child.stdout.take(),
-            stderr: child.stderr.take(),
-        };
+        #[cfg(target_os = "macos")]
+        let identity = crate::platform::process::identify(process_group_id)
+            .map(|identity| identity.map(|identity| identity.started_micros));
+        #[cfg(not(target_os = "macos"))]
+        let identity: anyhow::Result<Option<u64>> = Ok(None);
+        let (reaped, reap_state) = tokio::sync::watch::channel(ReapState::Running);
+        let stdin = child.stdin.take();
+        let stdout = child.stdout.take();
+        let stderr = child.stderr.take();
         registry.groups.insert(process_group_id);
         let processes = Arc::clone(&self.process_registry);
         self.reapers.spawn(async move {
-            if let Err(error) = child.wait().await {
-                warn!(process_group_id, %error, "reaping Claude child failed");
-            }
+            let outcome = match child.wait().await {
+                Ok(status) => ReapState::Exited(status),
+                Err(error) => {
+                    warn!(process_group_id, %error, "reaping Claude child failed");
+                    ReapState::Failed(error.to_string())
+                }
+            };
+            reaped.send_replace(outcome);
             processes
                 .lock()
                 .expect("Claude process registry poisoned")
                 .groups
                 .remove(&process_group_id);
         });
+        let group = OwnedGroup {
+            admission,
+            process_group_id,
+            process_started_micros: identity.map_err(std::io::Error::other)?,
+            reaped: reap_state,
+            stdin,
+            stdout,
+            stderr,
+        };
         Ok(group)
     }
 
     pub(super) fn spawn_runtime(
         &self,
         request: &ClaudeTurnRequest,
+        launch: &super::jobs::LaunchPolicy,
     ) -> Result<SpawnedRuntime, TurnStartError> {
         if let Some(message) = self.session_launch_error(request) {
             self.journal.runtime(
@@ -128,14 +145,19 @@ impl ClaudeSupervisor {
                 message,
             });
         }
-        self.spawn_process(request).map_err(|err| TurnStartError {
-            data: None,
-            code: RpcCode::Internal,
-            message: format!("failed to spawn claude: {err}"),
-        })
+        self.spawn_process(request, launch)
+            .map_err(|err| TurnStartError {
+                data: None,
+                code: RpcCode::Internal,
+                message: format!("failed to spawn claude: {err}"),
+            })
     }
 
-    fn spawn_process(&self, request: &ClaudeTurnRequest) -> std::io::Result<SpawnedRuntime> {
+    fn spawn_process(
+        &self,
+        request: &ClaudeTurnRequest,
+        launch: &super::jobs::LaunchPolicy,
+    ) -> std::io::Result<SpawnedRuntime> {
         let wakes = if request.first_turn {
             WakeHold::default()
         } else {
@@ -154,12 +176,17 @@ impl ClaudeSupervisor {
         }
         // Tools ride each spawn: nothing is written to Claude's own config, so
         // they follow the runtime's dimensions and vanish when it retires.
-        let mcp = self.prepare_mcp_access(request);
-        let args = claude_stream_args(
+        let mcp = match launch.scope() {
+            crate::agents::jobs::model::ToolScope::Full => self.prepare_mcp_access(request),
+            crate::agents::jobs::model::ToolScope::ReadOnly { .. } => None,
+        };
+        let mut args = claude_stream_args(
             request,
             mcp.as_ref().map(|access| access.config_path.as_path()),
         );
+        launch.apply_args(&mut args);
         let mut command = claude_exec::command(&self.settings, &args)?;
+        launch.apply_env(&mut command);
         command.env(SEND_USER_MESSAGE_ENV, "1");
         if !self.settings.mcp_endpoint.is_empty() {
             let endpoint =
@@ -184,6 +211,8 @@ impl ClaudeSupervisor {
         let OwnedGroup {
             admission,
             process_group_id,
+            process_started_micros,
+            reaped,
             stdin,
             stdout,
             stderr,
@@ -198,6 +227,9 @@ impl ClaudeSupervisor {
                 input: InputWriter::spawn(stdin),
                 pending_controls: HashMap::new(),
                 process_group_id,
+                process_started_micros,
+                reaped,
+                launch: launch.clone(),
                 session_uuid: request.session_uuid.clone(),
                 settings: Some(ClaudeRuntimeSettings::requested(request)),
                 cwd: request.cwd.clone(),
@@ -323,7 +355,16 @@ impl ClaudeSupervisor {
 pub(super) struct OwnedGroup {
     pub(super) admission: ProcessAdmission,
     pub(super) process_group_id: i32,
+    pub(super) process_started_micros: Option<u64>,
+    pub(super) reaped: tokio::sync::watch::Receiver<ReapState>,
     pub(super) stdin: Option<ChildStdin>,
     pub(super) stdout: Option<ChildStdout>,
     pub(super) stderr: Option<ChildStderr>,
+}
+
+#[derive(Clone, Debug)]
+pub(super) enum ReapState {
+    Running,
+    Exited(std::process::ExitStatus),
+    Failed(String),
 }

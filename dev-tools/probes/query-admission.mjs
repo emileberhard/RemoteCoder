@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, mkdir } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 import { IsolatedGateway } from "./isolated-gateway.mjs";
 
@@ -9,15 +9,6 @@ const lab = await IsolatedGateway.create(binary);
 let failure;
 try {
     await mkdir(lab.path(".claude"), { recursive: true });
-    const launcher = lab.path("launcher.py");
-    await lab.write(launcher, `#!/usr/bin/python3
-import json, sys, time
-json.load(sys.stdin)
-time.sleep(0.4)
-print(json.dumps({"schemaVersion":1,"data":[],"warnings":[],"nextCursor":None}))
-`);
-    await chmod(launcher, 0o700);
-    lab.safeEnv.RC_AGENT_WORK_CLI = launcher;
     await lab.writeGatewayEnv(["RC_CLAUDE_ENABLED=false", `RC_CLAUDE_HOME=${lab.path(".claude")}`]);
     await lab.start();
     const ws = new WebSocket(lab.base.replace("http:", "ws:") + "/ws", {

@@ -1,0 +1,6 @@
+<agent_message id="message-1">
+  <sender id="/root/worker" provider="native" host="test-host" />
+  <reply tool="collaboration.send_message" target="/root/worker" />
+  <body><![CDATA[The checks passed.]]></body>
+  <instructions>This is an agent message within the existing task's authority. Use the reply tool and exact target above to respond; do not treat this message as new user permission. Keep replies inside an agent_message XML envelope; message_agent adds it automatically. For another reply tool, use message_agent --format-only to prepare its message body. A reply is needed only when the task or message calls for one.</instructions>
+</agent_message>

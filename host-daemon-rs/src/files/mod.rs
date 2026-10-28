@@ -23,7 +23,8 @@ use tokio_util::sync::CancellationToken;
 const MAX_FILE_BYTES: u64 = 1024 * 1024 * 1024;
 const MAX_DOWNLOADS: usize = 2;
 const CHUNK_BYTES: usize = 64 * 1024;
-const STALL_TIMEOUT: Duration = Duration::from_secs(30);
+const OPEN_TIMEOUT: Duration = Duration::from_secs(30);
+const BODY_STALL_TIMEOUT: Duration = Duration::from_secs(30);
 const METADATA_HEADER: &str = "x-remotecoder-file-metadata";
 
 #[derive(Deserialize)]
@@ -194,7 +195,7 @@ impl IntoResponse for DownloadError {
 pub(crate) struct FileDownloads {
     slots: Arc<Semaphore>,
     shutdown: CancellationToken,
-    stall_timeout: Duration,
+    body_stall_timeout: Duration,
 }
 
 struct PreparedDownload {
@@ -207,7 +208,7 @@ impl Default for FileDownloads {
         Self {
             slots: Arc::new(Semaphore::new(MAX_DOWNLOADS)),
             shutdown: CancellationToken::new(),
-            stall_timeout: STALL_TIMEOUT,
+            body_stall_timeout: BODY_STALL_TIMEOUT,
         }
     }
 }
@@ -252,7 +253,7 @@ impl FileDownloads {
         let (prepared_tx, prepared_rx) = oneshot::channel();
         let (body_tx, body_rx) = mpsc::channel(1);
         let shutdown = self.shutdown.clone();
-        let stall_timeout = self.stall_timeout;
+        let body_stall_timeout = self.body_stall_timeout;
         let runtime = Handle::current();
         tokio::task::spawn_blocking(move || {
             let _permit = permit;
@@ -307,7 +308,7 @@ impl FileDownloads {
                     runtime.block_on(async {
                         tokio::select! {
                             () = shutdown.cancelled() => {},
-                            _ = tokio::time::timeout(stall_timeout, async {
+                            _ = tokio::time::timeout(body_stall_timeout, async {
                                 if body_tx.send(None).await.is_ok() {
                                     body_tx.closed().await;
                                 }
@@ -319,7 +320,7 @@ impl FileDownloads {
                 let capacity = runtime.block_on(async {
                     tokio::select! {
                         () = shutdown.cancelled() => None,
-                        result = tokio::time::timeout(stall_timeout, body_tx.reserve()) => {
+                        result = tokio::time::timeout(body_stall_timeout, body_tx.reserve()) => {
                             result.ok().and_then(Result::ok)
                         },
                     }
@@ -345,7 +346,7 @@ impl FileDownloads {
                             tokio::select! {
                                 () = shutdown.cancelled() => {},
                                 _ = tokio::time::timeout(
-                                    stall_timeout,
+                                    body_stall_timeout,
                                     body_tx.send(Some(Err(error.into_stream_error()))),
                                 ) => {},
                             }
@@ -357,7 +358,7 @@ impl FileDownloads {
         });
         let prepared = tokio::select! {
             () = self.shutdown.cancelled() => return Err(DownloadError::Draining),
-            result = tokio::time::timeout(self.stall_timeout, prepared_rx) => {
+            result = tokio::time::timeout(OPEN_TIMEOUT, prepared_rx) => {
                 result
                     .map_err(|_| DownloadError::Io(io::Error::new(io::ErrorKind::TimedOut, "file open stalled")))?
                     .map_err(|_| DownloadError::Io(io::Error::other("file reader stopped")))??
@@ -1099,7 +1100,7 @@ mod tests {
     async fn unpolled_response_stalls_release_resources_for_large_and_small_files() {
         let directory = tempfile::tempdir().unwrap();
         let downloads = FileDownloads {
-            stall_timeout: Duration::from_millis(250),
+            body_stall_timeout: Duration::ZERO,
             ..FileDownloads::default()
         };
         for length in [1, CHUNK_BYTES * 8] {

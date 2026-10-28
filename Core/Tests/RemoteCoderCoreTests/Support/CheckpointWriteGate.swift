@@ -117,8 +117,6 @@ final class CheckpointWriteGate: Sendable {
 
     fileprivate func close() {
         release()
-        precondition(sqlite3_vfs_register(checkpointWriteVFS.original, 1) == SQLITE_OK)
-        precondition(sqlite3_vfs_unregister(checkpointWriteVFS.wrapped) == SQLITE_OK)
         checkpointWriteGate.withLock { $0 = nil }
         arrivals.continuation.finish()
     }

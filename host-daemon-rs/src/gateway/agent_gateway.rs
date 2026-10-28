@@ -1,5 +1,5 @@
 use super::Gateway;
-use crate::agents::{Agent, State, claude, launcher};
+use crate::agents::{Agent, State, claude};
 use crate::rpc::RpcError;
 use crate::rpc::error::RpcCode;
 use anyhow::{Context, Result, ensure};
@@ -7,37 +7,19 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
-use tokio::task::JoinHandle;
 
 pub(super) use service::AgentOwners;
+pub(super) use service::ThreadRelation;
 pub(super) use stop::CodexStop;
-
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub(super) enum LauncherPurpose {
-    Inventory,
-    Classification,
-    Mutation,
-}
 
 #[derive(Default)]
 pub(super) struct Runtime {
-    launcher: Arc<service::inventory::LauncherReads>,
-    classifications: service::classification::Classifications,
     pub(super) parents: Mutex<HashMap<String, ParentSnapshot>>,
     claude_history: Mutex<VecDeque<ClaudeHistorySnapshot>>,
     native_executions: Mutex<VecDeque<NativeExecutionSnapshot>>,
     views: Mutex<VecDeque<AgentViewSnapshot>>,
-    notification_health: Mutex<NotificationHealth>,
-    notification_preflight_task: Mutex<Option<JoinHandle<()>>>,
-    launcher_program: std::sync::OnceLock<PathBuf>,
-}
-
-#[derive(Default)]
-struct NotificationHealth {
-    index: Option<Value>,
 }
 
 pub(super) const NOTIFICATION_ANCESTRY_BUDGET: Duration = Duration::from_secs(2);
@@ -104,10 +86,7 @@ pub(super) fn coverage_failure_codes(error: &anyhow::Error) -> Vec<&'static str>
     if error.is::<tokio::time::error::Elapsed>() {
         return vec!["ancestryTimeout"];
     }
-    error
-        .downcast_ref::<launcher::CoverageUnavailable>()
-        .map(|error| error.0.clone())
-        .unwrap_or_else(|| vec!["ancestryUnavailable"])
+    vec!["ancestryUnavailable"]
 }
 
 struct NativeExecutionSnapshot {
@@ -141,37 +120,6 @@ pub(super) struct ParentSnapshot {
     pub(super) at: Instant,
     pub(super) parent: Option<String>,
     pub(super) available: bool,
-}
-
-const LAUNCHER_PAGING_WARNING: &str = "Launcher history is incomplete";
-const LAUNCHER_LIMIT_WARNING: &str = "Launcher history exceeds the inventory limit";
-const LAUNCHER_INCOMPLETE_WARNING: &str = "Launcher list coverage incomplete:";
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum InventoryCoverage {
-    Complete,
-    Incomplete,
-}
-
-impl InventoryCoverage {
-    fn read(paged_out: bool, warnings: &[String]) -> Self {
-        if paged_out
-            || warnings.iter().any(|warning| {
-                warning == LAUNCHER_LIMIT_WARNING
-                    || warning.starts_with(LAUNCHER_INCOMPLETE_WARNING)
-            })
-        {
-            Self::Incomplete
-        } else {
-            Self::Complete
-        }
-    }
-}
-
-pub(super) struct LauncherInventory {
-    pub(super) runs: Vec<launcher::Run>,
-    pub(super) coverage: InventoryCoverage,
-    pub(super) warnings: Vec<String>,
 }
 
 #[derive(Default)]
@@ -249,89 +197,6 @@ pub(super) fn native_agent_relation(header: &Value, requested: &str) -> Result<b
 }
 
 impl Gateway {
-    #[cfg(test)]
-    pub(crate) fn use_agent_launcher(&self, program: PathBuf) {
-        self.agents.launcher_program.set(program).unwrap();
-    }
-
-    fn agent_launcher_program(&self) -> Result<PathBuf> {
-        match self.agents.launcher_program.get() {
-            Some(program) => Ok(program.clone()),
-            None => launcher::default_program(),
-        }
-    }
-
-    pub(super) async fn call_agent_launcher(
-        &self,
-        purpose: LauncherPurpose,
-        request: Value,
-    ) -> Result<Value> {
-        let program = self.agent_launcher_program()?;
-        self.agents.launcher.call(purpose, request, &program).await
-    }
-
-    pub(super) async fn stop_agent_inventory(&self) {
-        self.agents.launcher.stop().await;
-    }
-
-    pub(super) async fn start_notification_ancestry_preflight(self: &Arc<Self>) {
-        let weak = Arc::downgrade(self);
-        let task = tokio::spawn(async move {
-            loop {
-                let Some(gateway) = weak.upgrade() else { break };
-                let started = Instant::now();
-                let result = tokio::time::timeout(
-                    NOTIFICATION_ANCESTRY_BUDGET,
-                    gateway.call_agent_launcher(
-                        LauncherPurpose::Classification,
-                        json!({"operation":"status","schemaVersion":2}),
-                    ),
-                )
-                .await
-                .map_err(anyhow::Error::from)
-                .and_then(|result| result.map_err(launcher::call_failure))
-                .and_then(|response| launcher::readiness(&response));
-                let snapshot = json!({"status":if result.is_ok() { "available" } else { "unavailable" },
-                    "reasonCodes":result.as_ref().err().map(coverage_failure_codes).unwrap_or_default(),
-                    "checkedAtUnixSeconds":crate::time::unix_seconds(),"elapsedMs":started.elapsed().as_millis()});
-                gateway
-                    .record_notification_ancestry_preflight(snapshot)
-                    .await;
-                drop(gateway);
-                tokio::time::sleep(Duration::from_secs(60)).await;
-            }
-        });
-        let previous = self
-            .agents
-            .notification_preflight_task
-            .lock()
-            .await
-            .replace(task);
-        if let Some(previous) = previous {
-            previous.abort();
-            let _ = previous.await;
-        }
-    }
-
-    async fn record_notification_ancestry_preflight(&self, snapshot: Value) {
-        let mut health = self.agents.notification_health.lock().await;
-        if health.index.as_ref().is_none_or(|previous| {
-            previous["status"] != snapshot["status"]
-                || previous["reasonCodes"] != snapshot["reasonCodes"]
-        }) {
-            self.journal.push("ancestryPreflight", snapshot.clone());
-        }
-        health.index = Some(snapshot);
-    }
-
-    pub(super) async fn stop_notification_ancestry_preflight(&self) {
-        let task = self.agents.notification_preflight_task.lock().await.take();
-        if let Some(task) = task {
-            task.abort();
-            let _ = task.await;
-        }
-    }
-
     pub(super) async fn latest_codex_turn(
         &self,
         thread: &str,
@@ -363,39 +228,34 @@ impl Gateway {
             self.claude_settings.claude_home.clone()
         } else {
             self.codex_home()
-                .ok_or_else(|| launcher::unavailable("providerHomeUnavailable"))?
+                .context("Codex provider home is unavailable")?
                 .to_path_buf()
         };
         let home = home.canonicalize().unwrap_or(home);
         ensure!(
             home.is_absolute() && home.to_str().is_some(),
-            launcher::CoverageUnavailable(vec!["providerHomeUnavailable"])
+            "Provider home is unavailable"
         );
         Ok(home)
     }
 
-    pub(super) fn admit_launcher_action_target(
+    pub(super) fn agent_conversation(
         &self,
-        action: &str,
-        thread: Option<&str>,
-    ) -> Result<Option<crate::gateway::admission::Admission>> {
-        if action == "stop" {
-            return Ok(None);
-        }
-        let target = thread.context("Agent thread is unavailable")?;
-        self.admission.admit(target).map(Some)
-    }
-
-    pub(super) fn agent_homes(&self) -> Result<Vec<PathBuf>> {
-        let codex = self.codex_home().context("Codex home is unavailable")?;
-        let homes = vec![
-            codex.to_path_buf(),
-            self.claude_settings.claude_home.clone(),
-        ];
-        Ok(homes
-            .into_iter()
-            .map(|home| home.canonicalize().unwrap_or(home))
-            .collect())
+        thread: &str,
+    ) -> Result<crate::agents::jobs::model::ConversationIdentity> {
+        use crate::agents::jobs::model::{ConversationIdentity, Provider, ProviderHome};
+        crate::questions::validate_id(thread)?;
+        Ok(ConversationIdentity {
+            provider: if crate::providers::claude::is_claude_thread_id(thread) {
+                Provider::Claude
+            } else {
+                Provider::Codex
+            },
+            provider_home: ProviderHome::Known {
+                path: self.agent_home_for_thread(thread)?,
+            },
+            thread_id: thread.to_owned(),
+        })
     }
 }
 

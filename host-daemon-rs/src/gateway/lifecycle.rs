@@ -59,6 +59,7 @@ impl Gateway {
         if self.draining.swap(true, Ordering::AcqRel) {
             return;
         }
+        self.jobs.quiesce().await;
         let active_turns = self.active_turn_count().await;
         info!(
             active_turns,
@@ -147,6 +148,9 @@ impl Gateway {
     }
 
     pub(super) async fn recover_restart_tasks(&self) -> Result<()> {
+        self.jobs
+            .apply_pending_stops(crate::agents::jobs::model::Provider::Codex)
+            .await?;
         let Some(store) = self.recovery_store.clone() else {
             self.core.lock().await.recovered_turn_keys.clear();
             return Ok(());

@@ -64,6 +64,13 @@ fn main() -> Result<()> {
         println!("{}", serde_json::to_string(&build_identity::IDENTITY)?);
         return Ok(());
     }
+    if let Some(config::Command::Agent { command }) = args.command.clone() {
+        let code = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?
+            .block_on(agents::client::run(*command, args.env_file.as_deref()))?;
+        std::process::exit(code);
+    }
     if let Some(config::Command::ClaudeNotificationHook {
         mcp_config,
         session_id,

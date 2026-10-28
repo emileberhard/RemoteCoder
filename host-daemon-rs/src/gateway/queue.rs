@@ -1,4 +1,5 @@
 use super::Gateway;
+use super::agent_jobs_codex::NativeInputAcceptance;
 use super::native_mutations::NativeMutationError;
 use super::turn_state::prompt_preview;
 use crate::rpc::error::{RpcCode, RpcData};
@@ -68,8 +69,75 @@ impl Gateway {
     async fn queue_add(&self, client_id: u64, params: Value) -> RpcResult {
         let thread = codex_thread(&params)?;
         let client_user_message_id = required_str(&params, "clientUserMessageId")?.to_owned();
+        if let Some(accepted) = self
+            .job_read_codex_acceptance(&thread, &client_user_message_id)
+            .await
+            .map_err(RpcError::from)?
+        {
+            return Err(accepted_queue_conflict(
+                &thread,
+                &client_user_message_id,
+                &accepted,
+            ));
+        }
+        if let Some(queued) = self
+            .native_queued_input(&thread, &client_user_message_id)
+            .await
+            .map_err(RpcError::from)?
+        {
+            if !same_codex_input(&queued["input"], &params["input"]) {
+                return Err(RpcError::new(
+                    RpcCode::Conflict,
+                    "this clientUserMessageId already identifies different queued input",
+                ));
+            }
+            let id = required_str(&queued, "id")?;
+            let changed = {
+                let mut core = self.core.lock().await;
+                if core
+                    .turns
+                    .queued_input(&thread, &client_user_message_id)
+                    .is_some()
+                {
+                    core.turns
+                        .queue_accepted(&thread, &client_user_message_id, id)
+                } else {
+                    core.turns
+                        .enqueue(
+                            &thread,
+                            QueuedSubmission {
+                                client_user_message_id: client_user_message_id.clone(),
+                                queued_submission_id: Some(id.to_owned()),
+                                context: PromptContext {
+                                    compaction: false,
+                                    preview: prompt_preview(&thread, queued.get("input")),
+                                    cwd: None,
+                                    owner_client_id: 0,
+                                },
+                                created_at_unix_seconds: unix_seconds(),
+                            },
+                        )
+                        .map_err(|error| RpcError::new(RpcCode::Capacity, error.to_string()))?;
+                    true
+                }
+            };
+            if changed {
+                self.commit_turn_state().await.map_err(RpcError::from)?;
+            }
+            return Ok(json!({"queuedSubmission":queued}));
+        }
         {
             let mut core = self.core.lock().await;
+            if core
+                .turns
+                .queued_input(&thread, &client_user_message_id)
+                .is_some()
+            {
+                return Err(RpcError::queue_change_uncertain(
+                    &thread,
+                    &anyhow::anyhow!("the original queue admission has no settled native receipt"),
+                ));
+            }
             let submission = QueuedSubmission {
                 client_user_message_id: client_user_message_id.clone(),
                 queued_submission_id: None,
@@ -195,6 +263,46 @@ impl Gateway {
         bail!("thread/queue/list exceeded {MAX_QUEUE_LIST_PAGES} pages")
     }
 
+    pub(super) async fn native_queued_input(
+        &self,
+        thread: &str,
+        input: &str,
+    ) -> Result<Option<Value>> {
+        let mut cursor: Option<String> = None;
+        let mut seen = HashSet::new();
+        for _ in 0..MAX_QUEUE_LIST_PAGES {
+            let page = self
+                .call_control(
+                    "thread/queue/list",
+                    json!({
+                        "threadId":thread,"limit":QUEUE_LIST_PAGE_SIZE,"cursor":cursor,
+                    }),
+                )
+                .await?;
+            let entries = page["data"]
+                .as_array()
+                .context("native queue page has no submissions")?;
+            anyhow::ensure!(
+                entries.len() <= QUEUE_LIST_PAGE_SIZE as usize,
+                "native queue page exceeds its bound"
+            );
+            if let Some(queued) = entries
+                .iter()
+                .find(|entry| entry["clientUserMessageId"].as_str() == Some(input))
+            {
+                return Ok(Some(queued.clone()));
+            }
+            cursor = page["nextCursor"].as_str().map(str::to_owned);
+            match &cursor {
+                None => return Ok(None),
+                Some(cursor) => {
+                    anyhow::ensure!(seen.insert(cursor.clone()), "native queue cursor repeated")
+                }
+            }
+        }
+        bail!("native queue evidence exceeds the bounded queue owner");
+    }
+
     async fn settle_queue(&self, thread: &str, hold: bool) -> Result<()> {
         anyhow::ensure!(
             !self.native_mutations.contains(thread).await,
@@ -224,6 +332,45 @@ impl Gateway {
             }
         }
     }
+}
+
+fn accepted_queue_conflict(
+    thread: &str,
+    input: &str,
+    accepted: &NativeInputAcceptance,
+) -> RpcError {
+    RpcError::new(
+        RpcCode::Conflict,
+        "this input has already left the queue and has durable native acceptance",
+    )
+    .with_data(RpcData::Raw(json!({
+        "kind":"inputAlreadyAccepted",
+        "threadId":thread,
+        "clientUserMessageId":input,
+        "acceptance":accepted,
+    })))
+}
+
+pub(super) fn same_codex_input(left: &Value, right: &Value) -> bool {
+    if !left.is_array() || !right.is_array() {
+        return false;
+    }
+    fn normalize(value: &Value) -> Value {
+        let mut value = value.clone();
+        if let Some(inputs) = value.as_array_mut() {
+            for input in inputs {
+                if let Some(input) = input.as_object_mut()
+                    && input
+                        .get("text_elements")
+                        .is_some_and(|value| value.as_array().is_some_and(Vec::is_empty))
+                {
+                    input.remove("text_elements");
+                }
+            }
+        }
+        value
+    }
+    normalize(left) == normalize(right)
 }
 
 #[cfg(test)]
@@ -262,6 +409,20 @@ mod tests {
             "clientUserMessageId": client_user_message_id,
             "input": [{"type": "text", "text": "Run the tests"}],
         })
+    }
+
+    async fn answer_unaccepted_preflight(
+        gateway: &Arc<Gateway>,
+        control: &mut mpsc::Receiver<String>,
+    ) {
+        for (method, result) in [
+            ("thread/input/acceptance/read", json!({"acceptance":null})),
+            ("thread/queue/list", json!({"data":[],"nextCursor":null})),
+        ] {
+            let request: Value = serde_json::from_str(&control.recv().await.unwrap()).unwrap();
+            assert_eq!(request["method"], method);
+            answer(gateway, &request, json!({"result":result})).await;
+        }
     }
 
     async fn queued(gateway: &Gateway) -> Vec<(String, Option<String>)> {
@@ -434,10 +595,12 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let gateway = TestGateway::with_native_runtime(directory.path());
         let mut native = attach_native_transport(&gateway).await;
+        let mut preflight = FakeControl::attach(&gateway, 2).await.requests;
         let transport_guard = gateway.native_mutation_transport.lock().await;
         let owner = gateway.clone();
         let adding =
             tokio::spawn(async move { owner.queue_rpc(12, "thread/queue/add", add("q1")).await });
+        answer_unaccepted_preflight(&gateway, &mut preflight).await;
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
             while queued(&gateway).await.is_empty() {
                 tokio::task::yield_now().await;
@@ -479,6 +642,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let gateway = TestGateway::with_native_runtime(directory.path());
         let mut native = attach_native_transport(&gateway).await;
+        let mut control = FakeControl::attach(&gateway, 2).await.requests;
         let (client_tx, _client_rx) = mpsc::channel(1);
         gateway.clients.insert(
             12,
@@ -495,6 +659,7 @@ mod tests {
         let owner = Arc::clone(&gateway);
         let accepted =
             tokio::spawn(async move { owner.queue_rpc(12, "thread/queue/add", add("q1")).await });
+        answer_unaccepted_preflight(&gateway, &mut control).await;
         let request: Value = serde_json::from_str(&native.recv().await.unwrap()).unwrap();
         assert_eq!(request["method"], "thread/queue/add");
         assert_eq!(request["params"]["clientUserMessageId"], "q1");
@@ -516,6 +681,7 @@ mod tests {
         let owner = Arc::clone(&gateway);
         let refused =
             tokio::spawn(async move { owner.queue_rpc(12, "thread/queue/add", add("q2")).await });
+        answer_unaccepted_preflight(&gateway, &mut control).await;
         let request: Value = serde_json::from_str(&native.recv().await.unwrap()).unwrap();
         answer(
             &gateway,
@@ -536,6 +702,7 @@ mod tests {
         let owner = Arc::clone(&gateway);
         let uncertain =
             tokio::spawn(async move { owner.queue_rpc(12, "thread/queue/add", add("q3")).await });
+        answer_unaccepted_preflight(&gateway, &mut control).await;
         let _: Value = serde_json::from_str(&native.recv().await.unwrap()).unwrap();
         gateway.control_requests.lock().unwrap().clear();
         let error = uncertain.await.unwrap().unwrap_err();
@@ -728,6 +895,74 @@ mod tests {
                 .await
                 .is_ok()
         );
+    }
+
+    #[tokio::test]
+    async fn a_retried_queue_add_reuses_its_real_row_and_original_owner() {
+        let directory = tempfile::tempdir().unwrap();
+        let gateway = TestGateway::with_native_runtime(directory.path());
+        gateway
+            .core
+            .lock()
+            .await
+            .turns
+            .enqueue(THREAD, submission("q1", 12))
+            .unwrap();
+        let mut control = FakeControl::attach(&gateway, 2).await.requests;
+        let owner = gateway.clone();
+        let retry = tokio::spawn(async move { owner.queue_add(24, add("q1")).await });
+        let request: Value = serde_json::from_str(&control.recv().await.unwrap()).unwrap();
+        assert_eq!(request["method"], "thread/input/acceptance/read");
+        answer(&gateway, &request, json!({"result":{"acceptance":null}})).await;
+        let request: Value = serde_json::from_str(&control.recv().await.unwrap()).unwrap();
+        assert_eq!(request["method"], "thread/queue/list");
+        answer(
+            &gateway,
+            &request,
+            json!({"result":{"data":[{
+            "id":"native-q1","clientUserMessageId":"q1",
+            "input":[{"type":"text","text":"Run the tests","text_elements":[]}]
+        }],"nextCursor":null}}),
+        )
+        .await;
+        assert_eq!(
+            retry.await.unwrap().unwrap()["queuedSubmission"]["id"],
+            "native-q1"
+        );
+        let core = gateway.core.lock().await;
+        let queued = core.turns.queued_input(THREAD, "q1").unwrap();
+        assert_eq!(queued.context.owner_client_id, 12);
+        assert_eq!(
+            core.turns.durable().queued_submissions[THREAD]
+                .submissions
+                .len(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn a_dispatched_queue_input_returns_acceptance_without_a_fake_row() {
+        let gateway = TestGateway::new();
+        let mut control = FakeControl::attach(&gateway, 1).await.requests;
+        let owner = gateway.clone();
+        let retry = tokio::spawn(async move { owner.queue_add(24, add("q1")).await });
+        let request: Value = serde_json::from_str(&control.recv().await.unwrap()).unwrap();
+        answer(
+            &gateway,
+            &request,
+            json!({"result":{"acceptance":{
+                "turnId":"accepted-turn","rootTurnId":"accepted-turn",
+                "fingerprint":"a".repeat(64),"facts":[]
+            }}}),
+        )
+        .await;
+        let error = retry.await.unwrap().unwrap_err();
+        assert_eq!(error.code, RpcCode::Conflict);
+        assert_eq!(
+            error.response(&json!(1))["error"]["data"]["acceptance"]["turnId"],
+            "accepted-turn"
+        );
+        assert!(queued(&gateway).await.is_empty());
     }
 
     #[test]

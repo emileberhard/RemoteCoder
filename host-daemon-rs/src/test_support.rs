@@ -236,6 +236,8 @@ impl TestGateway {
         journal: Journal,
     ) -> Self {
         let claude_settings = Arc::new(ClaudeSettings::isolated_for_test());
+        let turn_state_path = turn_state_path
+            .or_else(|| Some(claude_settings.root_path().join("active-codex-turns.json")));
         let gateway = Gateway::with_turn_state(
             codex,
             claude_settings.settings.clone(),
@@ -285,7 +287,12 @@ impl TestGateway {
         claude_settings: Arc<ClaudeTestSettings>,
         journal: Journal,
     ) -> Self {
-        let gateway = Gateway::with_turn_state(codex, settings, journal, None);
+        let gateway = Gateway::with_turn_state(
+            codex,
+            settings,
+            journal,
+            Some(claude_settings.root_path().join("active-codex-turns.json")),
+        );
         Self {
             gateway,
             _claude_settings: claude_settings,
