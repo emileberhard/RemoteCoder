@@ -236,6 +236,14 @@ pub(crate) async fn inspect(gateway: &Arc<Gateway>, job: &JobRecord) -> Result<I
         Some("running") if !accepted.has(NativeInputFact::Terminal) => {
             Inspection::Running { binding }
         }
+        Some("recovering" | "unknown") => Inspection::Pending {
+            reason: format!(
+                "exact Codex activity is not yet observable: {}",
+                inspected["outcome"]["reason"]
+                    .as_str()
+                    .unwrap_or("unrecognized native inspection")
+            ),
+        },
         _ => Inspection::Unknown {
             reason: format!(
                 "exact Codex terminal evidence is unavailable: {}",

@@ -128,7 +128,10 @@ Healthy running work is not polled for completion; retryable failures and
 unsettled delivery use bounded backoff. Existing gateway admission and shutdown
 own the drain. In-flight job operations quiesce before provider suspension;
 `prepare-shutdown` must fail when its preservation contract cannot be met.
-Normal restart recovery and ordinary progress use the same job owner.
+Normal restart recovery and ordinary progress use the same job owner. While a
+Codex turn's activity is not yet observable, such as pending restart recovery
+or an unbootstrapped inventory, reads report the job unknown and the driver
+retries without an interim notice.
 
 ## Historical cutover
 

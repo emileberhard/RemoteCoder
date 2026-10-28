@@ -279,6 +279,10 @@ impl JobOwner {
                                 }
                             }
                         }
+                        Inspection::Pending { reason } => {
+                            self.record_pending(&job, reason).await?;
+                            return Ok(true);
+                        }
                         Inspection::Unknown { reason } => {
                             self.record_unknown(&job, reason).await?;
                             return Ok(false);
@@ -395,6 +399,19 @@ impl JobOwner {
                 self.stop_execution(&gateway, &job).await?;
             }
         }
+        Ok(())
+    }
+
+    async fn record_pending(&self, job: &JobRecord, reason: String) -> Result<()> {
+        if matches!(&job.execution, ExecutionState::Unknown { reason: current, .. } if current == &reason)
+        {
+            return Ok(());
+        }
+        self.store()
+            .await?
+            .record_uncertainty(job.job_id.clone(), job.revision, reason, None, now_ms())
+            .await?;
+        self.dirty();
         Ok(())
     }
 

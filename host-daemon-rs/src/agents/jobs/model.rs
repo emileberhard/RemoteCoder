@@ -457,6 +457,9 @@ pub(crate) enum Inspection {
     Recoverable {
         binding: ExecutionBinding,
     },
+    Pending {
+        reason: String,
+    },
     Unknown {
         reason: String,
     },
