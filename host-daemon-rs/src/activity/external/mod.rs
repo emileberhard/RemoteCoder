@@ -285,12 +285,18 @@ async fn output(command: Command) -> Result<Vec<u8>> {
 async fn bounded_output(mut command: Command) -> Result<std::process::Output> {
     command
         .kill_on_drop(true)
+        .process_group(0)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let mut child = command
         .spawn()
         .context("activity command failed to start")?;
+    let group = child
+        .id()
+        .and_then(|pid| i32::try_from(pid).ok())
+        .map(nix::unistd::Pid::from_raw)
+        .context("activity command has no process id")?;
     let stdout = child
         .stdout
         .take()
@@ -299,7 +305,7 @@ async fn bounded_output(mut command: Command) -> Result<std::process::Output> {
         .stderr
         .take()
         .context("activity command has no stderr")?;
-    let (stdout, stderr, status) = tokio::time::timeout(Duration::from_secs(3), async {
+    let collected = tokio::time::timeout(Duration::from_secs(3), async {
         tokio::try_join!(
             read_bounded(stdout, MAXIMUM_STDOUT_BYTES, "inventory"),
             read_bounded(stderr, MAXIMUM_STDERR_BYTES, "diagnostics"),
@@ -307,7 +313,11 @@ async fn bounded_output(mut command: Command) -> Result<std::process::Output> {
         )
     })
     .await
-    .context("activity command timed out")??;
+    .context("activity command timed out")
+    .and_then(|collected| collected);
+    let (stdout, stderr, status) = collected.inspect_err(|_| {
+        let _ = nix::sys::signal::killpg(group, nix::sys::signal::Signal::SIGKILL);
+    })?;
     anyhow::ensure!(
         stderr.is_empty(),
         "activity command reported incomplete coverage"
