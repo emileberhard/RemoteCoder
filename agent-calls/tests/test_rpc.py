@@ -138,7 +138,7 @@ async def test_call_worker_handoff_verifies_the_origin_pin_before_bearer_or_rpc(
         await socket.wait_closed()
 
     async with serve(gateway, "127.0.0.1", 0, ssl=context) as server:
-        port = server.sockets[0].getsockname()[1]
+        port = next(iter(server.sockets)).getsockname()[1]
         payload = {"wsUrl": f"wss://127.0.0.1:{port}/ws?accountId=owned&accountGeneration=7",
                    "bearer": "synthetic", "tlsIdentity": {"serverName": "origin.fixture.local",
                    "spkiSha256": base64.b64encode(bytes(32)).decode()}}

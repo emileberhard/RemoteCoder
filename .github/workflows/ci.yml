@@ -20,6 +20,7 @@ jobs:
     outputs:
       gateway: ${{ steps.scope.outputs.gateway }}
       swift: ${{ steps.scope.outputs.swift }}
+      agent_calls: ${{ steps.scope.outputs.agent_calls }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: ${{ github.event_name == 'pull_request' }}
@@ -35,9 +36,11 @@ jobs:
         run: |
           gateway=false
           swift=false
+          agent_calls=false
           if [[ "$EVENT_NAME" == push ]]; then
             gateway=true
             swift=true
+            agent_calls=true
           else
             git diff --no-renames --name-only -z "$BASE_SHA...$HEAD_SHA" > "$RUNNER_TEMP/changed-paths"
             while IFS= read -r -d '' path; do
@@ -47,9 +50,32 @@ jobs:
               case "$path" in
                 *.swift|protocol-fixtures/*|Core/*|RemoteCoder/*|RemoteCoderMac/*|RemoteCoderTests/*|RemoteCoderUITests/*|RemoteCoderLiveActivities/*|RemoteCoderNotificationService/*|RemoteCoderLocationPushService/*|RemoteCoderShareExtension/*|RemoteCoderCaptureExtension/*|Shared/*|Config/*|RemoteCoder.xcodeproj/*|scripts/*|.xcode-version|.swift-version|.github/workflows/ci.yml) swift=true ;;
               esac
+              case "$path" in
+                agent-calls/*|dev-tools/*|.github/workflows/ci.yml) agent_calls=true ;;
+              esac
             done < "$RUNNER_TEMP/changed-paths"
           fi
-          printf 'gateway=%s\nswift=%s\n' "$gateway" "$swift" >> "$GITHUB_OUTPUT"
+          printf 'gateway=%s\nswift=%s\nagent_calls=%s\n' "$gateway" "$swift" "$agent_calls" >> "$GITHUB_OUTPUT"
+
+  agent-calls:
+    needs: changes
+    if: ${{ needs.changes.outputs.agent_calls == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: agent-calls
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+        with:
+          version: '0.13.4'
+          python-version: '3.14'
+      - run: uv run --locked ruff check agent_calls tests
+      - run: uv run --locked ty check
+      - run: uv run --locked pytest -q
 
   gateway:
     needs: changes

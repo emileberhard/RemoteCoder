@@ -195,8 +195,8 @@ uv run ty check
 uv run pytest -q
 ```
 
-`just gateway-check` and `just verify` run the pytest suite; ruff and ty stay
-manual. Run gateway and iOS tests through the root recipes, and broker tests in
-AgenTTY.
+Public CI runs pytest, Ruff and ty on Ubuntu when the worker or its shared
+Python tools change. `just gateway-check` and `just verify` also run pytest.
+Run gateway and iOS tests through the root recipes, and broker tests in AgenTTY.
 Real dialing requires explicit recipient/attempt authorization. Use synthetic
 audio and fake carrier sockets for routine regression tests.
