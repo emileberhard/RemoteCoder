@@ -767,10 +767,15 @@ actor DeviceToolSocketFixture {
             }
             receive(connection)
         } catch {
-            if !stopped { Issue.record(error) }
+            if !stopped, !Self.isPeerDisconnect(error) { Issue.record(error) }
             connection.cancel()
             requestStream.continuation.finish()
         }
+    }
+
+    private static func isPeerDisconnect(_ error: Error) -> Bool {
+        guard case .posix(let code) = error as? NWError else { return false }
+        return [.ENOTCONN, .ECONNRESET, .EPIPE, .ECANCELED].contains(code)
     }
 
     func send(_ message: CodexAppServerV2.JSONRPC.Message) async throws {
