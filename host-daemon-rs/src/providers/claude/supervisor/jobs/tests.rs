@@ -78,6 +78,26 @@ impl Fixture {
         }
     }
 
+    async fn wait_for_consumed_input(&self) {
+        let handle = JobHandle {
+            job_id: self.job_id.clone(),
+            evidence_path: self.evidence.clone(),
+        };
+        for _ in 0..1000 {
+            let saved = self
+                .agent
+                .conversation_index
+                .job(THREAD, &handle)
+                .await
+                .unwrap();
+            if saved.is_some_and(|saved| saved.input_consumed) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("the gateway never recorded the job input as consumed");
+    }
+
     async fn start(&self) -> ExecutionBinding {
         self.agent
             .record_job_session(THREAD, &self.job_id)
@@ -431,6 +451,7 @@ async fn prepared_recovery_retries_only_its_frozen_input_and_never_the_original_
     let fixture = Fixture::new();
     let original = fixture.start().await;
     fixture.stub.wait_for_log("received.jsonl", 1).await;
+    fixture.wait_for_consumed_input().await;
     assert!(fixture.agent.suspend(THREAD).await);
     let mut item = fixture.stub.item(SESSION, ItemStatus::Captured);
     item.recovery_id = "22222222-2222-4333-8444-666666666666".into();
