@@ -146,7 +146,11 @@ async fn scoped_route_outlives_jobs_and_legacy_title_proves_current_process_and_
         }
     });
     let current = request(&path, ScopedRequest::ReadSelf {}).await;
-    assert_eq!(current["result"]["jobId"], second.job_id.as_str());
+    assert_eq!(
+        current["result"]["jobId"],
+        second.job_id.as_str(),
+        "scoped ReadSelf response: {current}"
+    );
     let result = request(
         &path,
         ScopedRequest::Legacy {
