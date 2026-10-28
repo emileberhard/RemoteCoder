@@ -54,6 +54,15 @@ pub(super) fn run(store: &Store, origins: &[Origin], mode: &str) -> Result<()> {
     let stop = AtomicBool::new(false);
     let cpu = cpu_seconds();
     let started = Instant::now();
+    let initial = ingest::scan(store, origins, &stop)?;
+    let initial_seconds = started.elapsed().as_secs_f64();
+    let initial_cpu = cpu_seconds() - cpu;
+    println!(
+        "{}",
+        json!({"phase":"initial","elapsedSeconds":initial_seconds,"cpuSeconds":initial_cpu,"outcome":initial})
+    );
+    let cpu = cpu_seconds();
+    let started = Instant::now();
     let reconcile = ingest::scan(store, origins, &stop)?;
     let reconcile_seconds = started.elapsed().as_secs_f64();
     let reconcile_cpu = cpu_seconds() - cpu;
@@ -95,13 +104,28 @@ pub(super) fn run(store: &Store, origins: &[Origin], mode: &str) -> Result<()> {
         std::thread::sleep(Duration::from_millis(20));
     }
     std::thread::sleep(Duration::from_secs(2));
-    let before = std::fs::metadata(&store.path)?.modified()?;
+    let catalog_files = [
+        store.path.clone(),
+        store.path.with_extension("sqlite3-wal"),
+        store.path.with_extension("sqlite3-shm"),
+    ];
+    let revisions = || -> Result<Vec<_>> {
+        catalog_files
+            .iter()
+            .map(|path| match std::fs::metadata(path) {
+                Ok(meta) => Ok(Some((meta.len(), meta.modified()?))),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+                Err(error) => Err(error.into()),
+            })
+            .collect()
+    };
+    let before = revisions()?;
     let started = Instant::now();
     let cpu = cpu_seconds();
     std::thread::sleep(Duration::from_secs(60));
     let elapsed = started.elapsed().as_secs_f64();
     let idle_cpu = cpu_seconds() - cpu;
-    let after = std::fs::metadata(&store.path)?.modified()?;
+    let after = revisions()?;
     ensure!(before == after, "Quiet catalog was written");
     let started = Instant::now();
     append(&cold, "fleetidleappendprobe")?;
@@ -124,7 +148,7 @@ pub(super) fn run(store: &Store, origins: &[Origin], mode: &str) -> Result<()> {
     append(&new, "fleetidlenewprobe")?;
     let new_seconds = wait_text(store, "fleet-idle-new", "fleetidlenewprobe", started)?;
     worker.stop()?;
-    let report = json!({"phase":mode,"reconcileSeconds":reconcile_seconds,"reconcileCpuSeconds":reconcile_cpu,"outcome":reconcile,"cpuSeconds":idle_cpu,"elapsedSeconds":elapsed,"cpuSecondsPerMinute":idle_cpu*60.0/elapsed,"amortizedReconcileCpuSecondsPerMinute":reconcile_cpu/10.0,"databaseWrittenDuringQuiet":false,"coldAppendSeconds":append_seconds,"newFileSeconds":new_seconds});
+    let report = json!({"phase":mode,"initialSeconds":initial_seconds,"initialCpuSeconds":initial_cpu,"initial":initial,"reconcileSeconds":reconcile_seconds,"reconcileCpuSeconds":reconcile_cpu,"outcome":reconcile,"cpuSeconds":idle_cpu,"elapsedSeconds":elapsed,"cpuSecondsPerMinute":idle_cpu*60.0/elapsed,"amortizedReconcileCpuSecondsPerMinute":reconcile_cpu/10.0,"databaseWrittenDuringQuiet":false,"coldAppendSeconds":append_seconds,"newFileSeconds":new_seconds});
     std::fs::write(
         std::env::var("RC_SESSIONS_MEASURE_REPORT")?,
         serde_json::to_vec_pretty(&report)?,
