@@ -63,7 +63,7 @@ async function worker(binary, runtimePackage) {
                         assert(/^claude_[0-9a-f-]{36}$/.test(params.thread));
                         const rows = [];
                         for await (const path of new Bun.Glob(`**/${params.thread.slice(7)}.jsonl`).scan({ cwd: lab.path(".claude/projects"), absolute: true })) {
-                            for (const line of (await readFile(path, "utf8")).split("\n").filter(Boolean)) {
+                            for (const line of (await readFile(path, "utf8")).split("\n").slice(0, -1).filter(Boolean)) {
                                 const row = JSON.parse(line);
                                 if (row.type === "user" && JSON.stringify(row.message).includes(params.needle)) {
                                     rows.push({ id: row.uuid, source: "claudeTranscript" });
