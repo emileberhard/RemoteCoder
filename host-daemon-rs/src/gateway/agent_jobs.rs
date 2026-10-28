@@ -55,6 +55,13 @@ impl Gateway {
         ))
     }
 
+    pub(crate) async fn job_provider_ready(&self, provider: Provider) -> bool {
+        match provider {
+            Provider::Codex => self.codex_ready().await,
+            Provider::Claude => self.claude_agent().is_some(),
+        }
+    }
+
     pub(crate) async fn job_provider_recovery_complete(&self, provider: Provider) -> Result<bool> {
         match provider {
             Provider::Codex => Ok(!self.codex_recovery_pending().await),

@@ -336,6 +336,9 @@ pub(crate) struct JobNotice {
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) enum ExecutionState {
     Admitted,
+    WaitingForProvider {
+        provider: Provider,
+    },
     Bound {
         conversation: ConversationIdentity,
     },

@@ -405,7 +405,7 @@ impl JobStore {
     ) -> Result<JobRecord> {
         self.access(move |inner| {
             let mut job = inner.current(&id, revision)?;
-            ensure!(matches!(job.execution, ExecutionState::Admitted), "only an admitted job can acquire a provider conversation");
+            ensure!(matches!(job.execution, ExecutionState::Admitted | ExecutionState::WaitingForProvider { .. }), "only an admitted job can acquire a provider conversation");
             ensure!(matches!(conversation.provider_home, ProviderHome::Known { .. }), "new execution needs an exact provider home");
             ensure!(!conversation.thread_id.is_empty(), "provider thread identity is empty");
             ensure!(!inner.agents.values().any(|other| other.agent_id != job.agent_id && matches!(&other.conversation, ConversationBinding::Known { conversation: existing } if existing == &conversation)), "provider conversation already belongs to another delegated agent");
@@ -674,6 +674,7 @@ impl Inner {
             });
         let state = match &job.execution {
             ExecutionState::Admitted
+            | ExecutionState::WaitingForProvider { .. }
             | ExecutionState::Bound { .. }
             | ExecutionState::RetryWaiting { .. } => crate::agents::State::Waiting,
             ExecutionState::Running { .. } | ExecutionState::Recovering { .. } => {
@@ -742,6 +743,7 @@ impl Inner {
                 && matches!(
                     job.execution,
                     ExecutionState::Admitted
+                        | ExecutionState::WaitingForProvider { .. }
                         | ExecutionState::Bound { .. }
                         | ExecutionState::Dispatching { .. }
                         | ExecutionState::Running { .. }
@@ -1222,6 +1224,9 @@ fn validate_transition(job: &JobRecord, next: &ExecutionState) -> Result<()> {
     let valid = matches!(
         (&job.execution, next),
         (
+            ExecutionState::Admitted,
+            ExecutionState::WaitingForProvider { .. }
+        ) | (
             ExecutionState::Bound { .. },
             ExecutionState::Dispatching { .. }
         ) | (

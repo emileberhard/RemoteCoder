@@ -428,6 +428,7 @@ async fn read(endpoint: &Endpoint, target: &str) -> Result<JobView> {
 fn execution_status(job: &JobRecord) -> &'static str {
     match &job.execution {
         ExecutionState::Admitted => "admitted",
+        ExecutionState::WaitingForProvider { .. } => "waitingForProvider",
         ExecutionState::Bound { .. } => "bound",
         ExecutionState::Dispatching { .. } => "dispatchUncertain",
         ExecutionState::Running { .. } => "running",

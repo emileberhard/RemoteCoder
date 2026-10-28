@@ -190,6 +190,7 @@ fn job_state(job: &crate::agents::jobs::model::JobRecord) -> crate::agents::Stat
             crate::agents::State::Working
         }
         ExecutionState::Admitted
+        | ExecutionState::WaitingForProvider { .. }
         | ExecutionState::Bound { .. }
         | ExecutionState::RetryWaiting { .. } => crate::agents::State::Waiting,
         _ => crate::agents::State::Unknown,

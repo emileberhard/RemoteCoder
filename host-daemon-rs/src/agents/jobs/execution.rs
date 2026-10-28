@@ -63,7 +63,9 @@ impl JobOwner {
                 self.stop_execution(&gateway, &job).await?;
                 let effects = if matches!(
                     job.execution,
-                    ExecutionState::Admitted | ExecutionState::Bound { .. }
+                    ExecutionState::Admitted
+                        | ExecutionState::WaitingForProvider { .. }
+                        | ExecutionState::Bound { .. }
                 ) {
                     EffectEvidence::NotStarted
                 } else {
@@ -88,7 +90,21 @@ impl JobOwner {
             let retry_spec = (!job.provider_retries.is_empty()).then(|| continuation_spec(spec));
             let spec = retry_spec.as_ref().unwrap_or(spec);
             match &job.execution {
-                ExecutionState::Admitted => {
+                ExecutionState::Admitted | ExecutionState::WaitingForProvider { .. } => {
+                    let provider = spec.settings.provider();
+                    if !gateway.job_provider_ready(provider).await {
+                        if matches!(job.execution, ExecutionState::Admitted) {
+                            store
+                                .advance(
+                                    id.clone(),
+                                    job.revision,
+                                    ExecutionState::WaitingForProvider { provider },
+                                    now_ms(),
+                                )
+                                .await?;
+                        }
+                        return Ok(true);
+                    }
                     let agent = store.agent(job.agent_id.clone()).await?;
                     let conversation = match agent.conversation {
                         ConversationBinding::Known { conversation } => conversation,
@@ -465,6 +481,7 @@ impl JobOwner {
         if matches!(
             job.execution,
             ExecutionState::Admitted
+                | ExecutionState::WaitingForProvider { .. }
                 | ExecutionState::Bound { .. }
                 | ExecutionState::RetryWaiting { .. }
         ) {
@@ -609,7 +626,9 @@ impl JobOwner {
                 .is_some_and(|identity| identity.provider == Provider::Claude)
             && !matches!(
                 job.execution,
-                ExecutionState::Admitted | ExecutionState::Bound { .. }
+                ExecutionState::Admitted
+                    | ExecutionState::WaitingForProvider { .. }
+                    | ExecutionState::Bound { .. }
             ) {
             CleanupState::Pending
         } else {

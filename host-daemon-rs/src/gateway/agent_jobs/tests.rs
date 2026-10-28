@@ -237,3 +237,99 @@ async fn scoped_route_outlives_jobs_and_legacy_title_proves_current_process_and_
     assert!(!path.exists());
     responder.abort();
 }
+
+#[tokio::test]
+async fn provider_wait_is_visible_while_another_provider_proceeds() {
+    use crate::agents::mcp::McpTokens;
+    use crate::observability::journal::Journal;
+    use crate::providers::claude::ClaudeSupervisor;
+    use crate::providers::claude::restart::test_support::StubClaude;
+    use crate::providers::codex::daemon::CodexAppServer;
+    use tokio::sync::mpsc;
+
+    let stub = StubClaude::new();
+    let gateway = Gateway::with_turn_state(
+        Arc::new(CodexAppServer::new_for_test_socket(
+            stub.state.join("codex"),
+        )),
+        stub.settings.clone(),
+        Journal::disabled(),
+        Some(stub.turn_state_path()),
+    );
+    let (sender, mut events) = mpsc::channel(256);
+    let notifications = tokio::spawn(async move { while events.recv().await.is_some() {} });
+    gateway.set_claude_agent(ClaudeSupervisor::new(
+        stub.settings.clone(),
+        sender,
+        Journal::disabled(),
+        McpTokens::default(),
+    ));
+    let mut ids = Vec::new();
+    for settings in [
+        ExecutionSettings::Codex {
+            model: "fixture".into(),
+            model_provider: "openai".into(),
+            effort: "medium".into(),
+            service_tier: None,
+            cyber_access_program: None,
+        },
+        ExecutionSettings::Claude {
+            model: "opus".into(),
+            effort: Some("max".into()),
+            fast: false,
+        },
+    ] {
+        let id = JobId::for_mutation(settings.provider(), "provider-readiness").unwrap();
+        let params = json!(StartParams {
+            job_id: id.clone(),
+            spec: JobSpec {
+                prompt: "Read this fixture".into(),
+                cwd: stub.cwd.clone().into(),
+                settings,
+                tool_scope: ToolScope::Full,
+                title: None,
+            },
+            caller: Caller::Operator
+        });
+        gateway
+            .validate_dispatch(
+                "agent/jobs/start",
+                json!({"params":params}).as_object().unwrap(),
+            )
+            .await
+            .unwrap();
+        gateway
+            .agent_jobs_rpc("agent/jobs/start", params)
+            .await
+            .unwrap();
+        ids.push(id);
+    }
+    gateway.jobs.start_driver().unwrap();
+    let (codex, claude) = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            let codex = gateway.jobs.read(&ids[0]).await.unwrap();
+            let claude = gateway.jobs.read(&ids[1]).await.unwrap();
+            if matches!(
+                codex.job.execution,
+                ExecutionState::WaitingForProvider {
+                    provider: Provider::Codex
+                }
+            ) && matches!(claude.job.execution, ExecutionState::Running { .. })
+            {
+                break (codex, claude);
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    stub.wait_for_log("received.jsonl", 1).await;
+    assert!(codex.job.execution.conversation().is_none());
+    assert_eq!(
+        serde_json::to_value(codex.job).unwrap()["execution"],
+        json!({"kind":"waitingForProvider","provider":"codex"})
+    );
+    assert!(claude.job.execution.conversation().is_some());
+    gateway.stop().await.unwrap();
+    notifications.await.unwrap();
+}

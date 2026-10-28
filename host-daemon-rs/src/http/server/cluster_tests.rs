@@ -128,13 +128,9 @@ async fn cluster_peer_search_stays_local_without_recursive_coverage() {
         .await
         .unwrap();
     assert_eq!(result["schemaVersion"], 1);
-    assert!(
-        result["coverage"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|row| row.get("hostId").is_none())
-    );
+    assert!(result["coverage"].is_object(), "{result}");
+    assert_eq!(result["coverage"]["columns"][0], "origin_host");
+    assert!(result["coverage"]["rows"].is_array());
     a.stop().await;
     b.stop().await;
 }

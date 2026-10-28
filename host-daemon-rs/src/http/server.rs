@@ -458,9 +458,10 @@ mod tests {
         )
         .await;
         assert_eq!(status, 500);
+        let identity = lan.gateway.host_identity().await.unwrap();
         assert_eq!(
             serde_json::from_slice::<Value>(&body).unwrap(),
-            json!({"status": "error", "message": "codex unavailable"})
+            json!({"status": "error", "message": "codex unavailable", "hostId": identity.host_id, "incarnation": identity.incarnation})
         );
 
         let segment = [0x1f, 0x8b, 0x08, 0x00];

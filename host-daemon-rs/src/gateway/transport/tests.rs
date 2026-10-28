@@ -175,10 +175,10 @@ async fn bounded_preview_codex_opt_in_is_consumed_and_only_changes_the_list_payl
             let prefix = format!("{}{}", "a".repeat(2_047), grapheme);
             let preview = format!("{prefix}tail");
             let response = json!({"id":7,"result":{"data":[
-                {"id":"codex","preview":preview,"name":"Full title"},
-                {"id":"short","preview":"short"},
-                {"id":"marked","preview":format!("{}<remotecoder_literal_text_v2 bytes=\"4\">\ntext\n</remotecoder_literal_text_v2>", "a".repeat(3_000))}
-            ],"nextCursor":"next","completionTimes":{"codex":42}}});
+                {"id":"019e0b6a-b5cb-7b62-bd89-4c58f82fd1a2","preview":preview,"name":"Full title"},
+                {"id":"019e0b6a-b5cb-7b62-bd89-4c58f82fd1a3","preview":"019e0b6a-b5cb-7b62-bd89-4c58f82fd1a3"},
+                {"id":"019e0b6a-b5cb-7b62-bd89-4c58f82fd1a4","preview":format!("{}<remotecoder_literal_text_v2 bytes=\"4\">\ntext\n</remotecoder_literal_text_v2>", "a".repeat(3_000))}
+            ],"nextCursor":"next","completionTimes":{"019e0b6a-b5cb-7b62-bd89-4c58f82fd1a2":42}}});
             let raw_response = serde_json::to_string_pretty(&response).unwrap();
             let stream = buffered_codex_texts(vec![raw_response.clone()]).await;
             gateway
