@@ -344,7 +344,7 @@ async function messageFlows(lab, finishedJob) {
     assert.equal(afterCompletion.resolved.continuation.jobId, successor, "Retry after completion followed the newer job");
     const stored = await agent(lab, ["receipt", deliveryId, "--json"]);
     assert.deepEqual(stored, first, "Stored accepted message receipt changed after duplicate requests");
-    const list = await agent(lab, ["list", successor, "--json", "--last", "20"]);
+    const list = await agent(lab, ["list", "--json", "--last", "20"]);
     const related = list.agents.filter(row => row.run_id === successor);
     assert.equal(related.length, 1, "The continuation was missing or duplicated in the real list");
 
