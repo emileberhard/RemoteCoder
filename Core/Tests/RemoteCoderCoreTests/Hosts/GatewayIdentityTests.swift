@@ -155,6 +155,69 @@ struct GatewayIdentityTests {
         #expect(defaults.persistentDomain(forName: suite)?[newKey] == nil)
     }
 
+    @Test func restartAfterCanonicalPersistenceCompletesEveryVerifiedAliasWithoutReimporting() async throws {
+        let temporary = TemporaryHostStorage()
+        defer { temporary.cleanUp() }
+        let suite = "GatewayIdentityTests.\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let source = host("Source"), target = UUID(), older = UUID()
+        var duplicate = host("Duplicate")
+        duplicate.gatewayID = target
+        duplicate.legacyIDs = [older]
+        let credentials = MemoryGatewayCredentials()
+        let before = HostStore(hosts: [source, duplicate], activeHostID: source.id,
+                               defaults: defaults, credentials: credentials, defaultsDomain: suite)
+        let sources = try before.identityMigrationSources(.init(hostId: target, incarnation: UUID()), for: source)
+        #expect(sources == [source.id, duplicate.id, older])
+        let originalDirectory = temporary.storage.directory(for: .host(source.id))
+        let drafts = ComposerDraftStore(directory: originalDirectory.appending(path: "drafts"))
+        let draft = try #require(await drafts.draft(for: .thread("thread")))
+        drafts.document(for: draft).edit(.insert(.init(runs: [.text("Saved draft")])))
+        #expect(await drafts.flush())
+        await drafts.retire()
+        let conversationID = UUID()
+        let originalCheckpoints = ConversationCheckpointStore(hostID: source.id, storage: temporary.storage, primaryBudgetBytes: 512 * 1_024 * 1_024)
+        var state = ConversationState(conversationID: conversationID, threadID: "thread")
+        state.appendLocal(ChatMessage(role: .codex, text: "Saved answer"), turnID: "turn")
+        try await originalCheckpoints.save(state.checkpoint, conversationID: conversationID)
+        defaults.set(["thread": "Pinned"], forKey: ConversationPinStore.storageKey(hostID: source.id))
+        defaults.set(["host": source.id.uuidString, "thread": "thread"], forKey: "workspace.open-conversation.v1")
+        let recording = temporary.storage.root.appending(path: "dictation-recordings/recording/recording.json")
+        try FileManager.default.createDirectory(at: recording.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try JSONSerialization.data(withJSONObject: ["owner": ["hostID": source.id.uuidString]]).write(to: recording)
+        let migration = GatewayIdentityMigration(storage: temporary.storage)
+        for id in sources { try await migration.migrate(from: id, to: target) }
+        var canonical = source
+        canonical.id = target
+        canonical.gatewayID = target
+        canonical.legacyIDs = Array(sources)
+        let reopened = HostStore(hosts: [canonical], activeHostID: target,
+                                 defaults: defaults, credentials: credentials, defaultsDomain: suite)
+        let restarted = GatewayIdentityMigration(storage: temporary.storage)
+        #expect(await restarted.unfinishedImports(hosts: [canonical]) == [target])
+        var unverified = canonical
+        unverified.gatewayID = nil
+        #expect(await restarted.unfinishedImports(hosts: [unverified]).isEmpty)
+        try await reopened.resumeIdentityMigration(for: target, using: restarted)
+        #expect(await restarted.unfinishedImports(hosts: [canonical]).isEmpty)
+        #expect(ConversationPinStore.scoped(hostID: target, defaults: defaults).load() == ["thread": "Pinned"])
+        #expect(defaults.persistentDomain(forName: suite)?[ConversationPinStore.storageKey(hostID: source.id)] == nil)
+        #expect(defaults.dictionary(forKey: "workspace.open-conversation.v1")?["host"] as? String == target.uuidString)
+        let destinationDrafts = ComposerDraftStore(directory: temporary.storage.directory(for: .host(target)).appending(path: "drafts"))
+        let restoredDraft = try #require(await destinationDrafts.draft(for: .thread("thread")))
+        #expect(destinationDrafts.document(for: restoredDraft).content.expandedText == "Saved draft")
+        await destinationDrafts.retire()
+        let destinationCheckpoints = ConversationCheckpointStore(hostID: target, storage: temporary.storage, primaryBudgetBytes: 512 * 1_024 * 1_024)
+        #expect(try await destinationCheckpoints.load(conversationID, threadID: "thread")?.threadID == "thread")
+        let manifest = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: recording)) as? [String: Any])
+        #expect((manifest["owner"] as? [String: String])?["hostID"] == target.uuidString)
+        #expect(!FileManager.default.fileExists(atPath: originalDirectory.path))
+        defaults.removeObject(forKey: ConversationPinStore.storageKey(hostID: target))
+        try await reopened.resumeIdentityMigration(for: target, using: restarted)
+        #expect(ConversationPinStore.scoped(hostID: target, defaults: defaults).load().isEmpty)
+    }
+
     private func host(_ name: String) -> GatewayHostConfiguration {
         .init(id: UUID(), name: name, hostname: "\(name.lowercased()).example", port: 443, authToken: "fixture")
     }

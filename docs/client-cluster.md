@@ -22,6 +22,12 @@ than reassigning existing data to another gateway. After protected identity
 persistence, completed imports reclaim their source stores and remap recovery
 recordings. Legacy aliases remain; rollback must retain the canonical identity
 and stores. A host that was unreachable can be verified from its Hosts menu.
+On restart, canonical hosts check only their alias import receipts. Unfinished
+receipts resume preference migration and cleanup through the existing identity
+retry task after launch; only that host's stores remain closed until completion.
+Completed receipts skip all imports and preference scans. Preference completion
+is recorded after renamed values are written and old keys removed. Adoption and
+both verification paths share the exact set of matching configurations and aliases.
 
 `ConversationAgentsModel` owns the shared cluster refresh for a parent address.
 It queries configured hosts through `BoundedFanOut.hostLimit` (three), shares
@@ -70,7 +76,7 @@ changed. Refreshes do not sort the full result set.
 
 | Owner | Main actor | Background work and bounds |
 | --- | --- | --- |
-| Launch identity | O(M) configuration filtering and result application; no network for canonical hosts | At most three health reads, one shared two-second deadline; unresolved hosts retry after launch |
+| Launch identity | O(M) configuration filtering and result application; no network for canonical hosts | Canonical aliases read only receipt markers, O(R) receipts; unfinished work resumes after launch. At most three health reads, one shared two-second deadline; unresolved hosts retry after launch |
 | Cluster refresh | O(M) host metadata, O(1) response application | O(R) member indexing and union; R is at most M times the cluster size; one shared refresh and deadline |
 | Agent refresh | O(M) host metadata, O(1) response and prepared snapshot application | O(M + R + A) per coalesced projection; R ≤ 512M; O(M + R + A) retained storage; badge and detail lookups O(1) |
 | Parent picker | O(M) header snapshots | O(R) filtering per query; cancelled queries cannot publish; preserves source order |

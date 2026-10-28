@@ -88,9 +88,12 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
     @ObservationIgnored private var isDiscoveringRetiredState = true
     @ObservationIgnored private var migratingHosts: Set<UUID> = []
     @ObservationIgnored private var admittedHosts: Set<UUID> = []
+    @ObservationIgnored private var pendingIdentityResumes: Set<UUID> = []
+    private var identityResumeFailures: [UUID: String] = [:]
     private var accountMigrationIssues: [String] = []
     var accountMigrationIssue: String? {
-        accountMigrationIssues.isEmpty ? nil : accountMigrationIssues.joined(separator: "\n")
+        let issues = accountMigrationIssues + Array(identityResumeFailures.values)
+        return issues.isEmpty ? nil : issues.joined(separator: "\n")
     }
 
     init(
@@ -201,6 +204,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
     private func resolveGatewayIdentities() async {
         let migration = GatewayIdentityMigration(storage: storage)
         let candidates = settings.hosts.map(\.configuration).filter { !admittedHosts.contains($0.id) }
+        pendingIdentityResumes.formUnion(await migration.unfinishedImports(hosts: candidates))
         let resolved = await GatewayIdentityLaunch.read(hosts: candidates, budget: .seconds(2)) { host in
             let routes = GatewayRoutes(host: host, directory: self.storage.directory(for: .host(host.id)),
                 relayStorage: KeychainGatewayCredentials(scope: .relayRoute(hostID: host.id)),
@@ -216,14 +220,15 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         }
         for (host, identity) in resolved {
             do {
-                try self.settings.verifyIdentity(identity, for: host)
-                let sources = Set([host.id] + host.legacyIDs).sorted { $0.uuidString < $1.uuidString }
+                let sources = try self.settings.identityMigrationSources(identity, for: host).sorted { $0.uuidString < $1.uuidString }
                 for source in sources {
                     try await migration.migrate(from: source, to: identity.hostId)
                 }
                 try Task.checkCancellation()
+                self.pendingIdentityResumes.insert(identity.hostId)
                 try await self.settings.adoptIdentity(identity, for: host)
                 for source in sources { try await migration.finish(from: source, to: identity.hostId) }
+                self.pendingIdentityResumes.remove(identity.hostId)
             } catch is CancellationError {
             } catch {
                 self.logger.notice("Gateway identity unresolved host=\(host.displayName): \(error.localizedDescription)")
@@ -233,16 +238,36 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
 
     private func retryGatewayIdentities() {
         guard !isQuiescing, hasBootstrapped, accountMigration == nil, identityRetryTask == nil else { return }
-        let hosts = settings.hosts.filter { $0.configuration.gatewayID != $0.id }.map(\.id)
+        let configured = Set(settings.hosts.map(\.id))
+        pendingIdentityResumes.formIntersection(configured)
+        identityResumeFailures = identityResumeFailures.filter { configured.contains($0.key) }
+        let hosts = settings.hosts.filter { $0.configuration.gatewayID != $0.id || pendingIdentityResumes.contains($0.id) }.map(\.id)
         guard !hosts.isEmpty else { return }
         identityRetryTask = Task { [weak self] in
             guard let self else { return }
             defer { self.identityRetryTask = nil }
+            let migration = GatewayIdentityMigration(storage: self.storage)
             for hostID in hosts {
                 guard !Task.isCancelled else { return }
-                do { try await self.verifyGatewayIdentity(hostID: hostID) }
+                do {
+                    if self.pendingIdentityResumes.contains(hostID) {
+                        try await self.settings.resumeIdentityMigration(for: hostID, using: migration)
+                        try Task.checkCancellation()
+                        self.pendingIdentityResumes.remove(hostID)
+                        self.identityResumeFailures[hostID] = nil
+                        self.reconcileHosts()
+                        self.launchRestore.reloadPendingLocation()
+                        self.launchRestore.restore(using: self)
+                        self.refreshCluster()
+                    } else { try await self.verifyGatewayIdentity(hostID: hostID) }
+                }
                 catch is CancellationError { return }
-                catch { self.logger.notice("Gateway identity unresolved host=\(hostID): \(error.localizedDescription)") }
+                catch {
+                    if self.pendingIdentityResumes.contains(hostID) {
+                        self.identityResumeFailures[hostID] = "Saved gateway state could not finish importing: \(error.localizedDescription)"
+                    }
+                    self.logger.notice("Gateway identity unresolved host=\(hostID): \(error.localizedDescription)")
+                }
             }
         }
     }
@@ -275,12 +300,14 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         let ledger = AccountRetirementMigration.Ledger(defaults: defaults)
         _ = await ledger.run(hosts: Array(ids), excluding: admittedHosts, storage: storage, discovered: { _ in }, finishedHost: { _ in })
         let migration = GatewayIdentityMigration(storage: storage)
-        let sources = ids.union(host.legacyIDs)
+        let sources = try settings.identityMigrationSources(identity, for: host)
         for old in sources { try await migration.migrate(from: old, to: identity.hostId) }
         try Task.checkCancellation()
+        pendingIdentityResumes.insert(identity.hostId)
         try await settings.adoptIdentity(identity, for: host)
         launchRestore.reloadPendingLocation()
         for old in sources { try await migration.finish(from: old, to: identity.hostId) }
+        pendingIdentityResumes.remove(identity.hostId)
     }
 
     private func finishAccountMigration(_ outcome: AccountRetirementMigration.Outcome) {
@@ -626,7 +653,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
                 }
                 retire(existing, reason: "reconfigured")
             }
-            if isDiscoveringRetiredState || migratingHosts.contains(host.id) { continue }
+            if isDiscoveringRetiredState || migratingHosts.contains(host.id) || pendingIdentityResumes.contains(host.id) { continue }
             // Flush the predecessor before loading the same host-scoped files.
             if targets.hasRunningRetirement(hostID: host.id) || targets.isRetiring(ExecutionTarget(hostID: host.id)) { continue }
             admittedHosts.insert(host.id)

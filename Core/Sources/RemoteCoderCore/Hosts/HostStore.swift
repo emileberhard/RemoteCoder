@@ -244,9 +244,17 @@ final class HostStore {
         if let known = current.gatewayID, known != identity.hostId { throw AgentIncomingCallError.hostIdentityChanged }
     }
 
-    func adoptIdentity(_ identity: GatewayIdentity, for captured: GatewayHostConfiguration) async throws {
+    private func identityConfigurations(_ identity: GatewayIdentity, for captured: GatewayHostConfiguration) throws -> [GatewayHostConfiguration] {
         try verifyIdentity(identity, for: captured)
-        let matching = configurations.filter { $0.id == captured.id || $0.gatewayID == identity.hostId || $0.id == identity.hostId }
+        return configurations.filter { $0.id == captured.id || $0.gatewayID == identity.hostId || $0.id == identity.hostId }
+    }
+
+    func identityMigrationSources(_ identity: GatewayIdentity, for captured: GatewayHostConfiguration) throws -> Set<UUID> {
+        Set(try identityConfigurations(identity, for: captured).flatMap { [$0.id] + $0.legacyIDs }).subtracting([identity.hostId])
+    }
+
+    func adoptIdentity(_ identity: GatewayIdentity, for captured: GatewayHostConfiguration) async throws {
+        let matching = try identityConfigurations(identity, for: captured)
         var host = matching.first { $0.id == identity.hostId } ?? captured
         if host.usesInstallationCredential, let operatorHost = matching.first(where: { !$0.usesInstallationCredential }) {
             host = operatorHost
@@ -263,6 +271,13 @@ final class HostStore {
         try persist(configurations.filter { !matchingIDs.contains($0.id) } + [host], activeHostID: active, directory: directory)
         for old in host.legacyIDs { try await GatewayIdentityPreferences.migrate(from: old, to: host.id, domainName: defaultsDomain) }
         requestSync()
+    }
+
+    func resumeIdentityMigration(for hostID: UUID, using migration: GatewayIdentityMigration) async throws {
+        guard let host = configurations.first(where: { $0.id == hostID }), host.gatewayID == hostID else { return }
+        for source in host.legacyIDs {
+            try await migration.resume(from: source, to: hostID, preferencesDomain: defaultsDomain)
+        }
     }
 
     private func commit(_ configurations: [GatewayHostConfiguration], activeHostID: UUID?, directory: HostDirectory) -> Bool {

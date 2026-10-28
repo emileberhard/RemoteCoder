@@ -6,6 +6,28 @@ actor GatewayIdentityMigration {
 
     init(storage: HostStorage) { self.storage = storage }
 
+    func unfinishedImports(hosts: [GatewayHostConfiguration]) -> Set<UUID> {
+        let files = FileManager.default
+        return Set(hosts.filter { host in
+            guard host.gatewayID == host.id else { return false }
+            let receipts = storage.directory(for: .host(host.id)).appending(path: "identity-imports")
+            return host.legacyIDs.contains { source in
+                files.fileExists(atPath: receipts.appending(path: "\(source).complete").path)
+                    && !files.fileExists(atPath: receipts.appending(path: "\(source).complete.finished").path)
+            }
+        }.map(\.id))
+    }
+
+    func resume(from source: UUID, to target: UUID, preferencesDomain: String) async throws {
+        let marker = storage.directory(for: .host(target)).appending(path: "identity-imports/\(source).complete")
+        guard FileManager.default.fileExists(atPath: marker.path),
+              !FileManager.default.fileExists(atPath: marker.appendingPathExtension("finished").path) else { return }
+        try Task.checkCancellation()
+        try await GatewayIdentityPreferences.migrate(from: source, to: target, domainName: preferencesDomain)
+        try Task.checkCancellation()
+        try finish(from: source, to: target)
+    }
+
     func migrate(from sourceID: UUID, to gatewayID: UUID) async throws {
         let previous = pending[gatewayID]?.1
         let id = UUID()
@@ -164,31 +186,28 @@ enum GatewayIdentityPreferences {
         let sourceText = source.uuidString
         let targetText = target.uuidString
         let marker = "gateway.identityPreferences.v1.\(sourceText)"
+        guard defaults.string(forKey: marker) != targetText else { return }
         let domain = defaults.persistentDomain(forName: domainName) ?? [:]
-        let completed = domain[marker] as? String == targetText
         var migrated = domain
-        if !completed {
-            for (key, value) in domain where key != "gateway.hosts" {
-                migrated[key] = remap(value, source: source, target: target)
-            }
+        for (key, value) in domain where key != "gateway.hosts" {
+            migrated[key] = remap(value, source: source, target: target)
         }
         for key in domain.keys where key != "gateway.hosts" {
             let renamed = key.replacingOccurrences(of: sourceText, with: targetText, options: .caseInsensitive)
             guard renamed != key else { continue }
             let incoming = migrated.removeValue(forKey: key)
-            guard !completed else { continue }
             if let incoming = incoming as? [String: Any], let current = migrated[renamed] as? [String: Any] {
                 migrated[renamed] = incoming.merging(current) { _, current in current }
             } else if migrated[renamed] == nil {
                 migrated[renamed] = incoming
             }
         }
-        migrated[marker] = targetText
-        for (key, value) in migrated {
+        for (key, value) in migrated where key != marker {
             if let previous = domain[key], NSDictionary(dictionary: ["value": previous]).isEqual(to: ["value": value]) { continue }
             defaults.set(value, forKey: key)
         }
         for key in domain.keys where migrated[key] == nil { defaults.removeObject(forKey: key) }
+        defaults.set(targetText, forKey: marker)
     }
 
     private static func remap(_ value: Any, source: UUID, target: UUID) -> Any {
