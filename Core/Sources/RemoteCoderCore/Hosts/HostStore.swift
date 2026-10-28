@@ -10,6 +10,8 @@ final class HostStore {
     private(set) var errorMessage: String?
     private(set) var syncFailure: String?
     private(set) var configurationIssue: String?
+    private(set) var identityMigration: GatewayIdentityImport?
+    @ObservationIgnored private var completingIdentityMigration = false
     private(set) var localConfiguration = LocalConfiguration()
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let defaultsDomain: String
@@ -32,6 +34,7 @@ final class HostStore {
         var hosts: [GatewayHostConfiguration]
         var activeHostID: UUID?
         var directory: HostDirectory?
+        var identityMigration: GatewayIdentityImport?
     }
 
     struct SavedHosts {
@@ -39,6 +42,7 @@ final class HostStore {
         let activeHostID: UUID?
         let directory: HostDirectory
         let isSaved: Bool
+        let identityMigration: GatewayIdentityImport?
         var hosts: [ValidatedGatewayHost] { configurations.compactMap(ValidatedGatewayHost.init) }
         var invalidHosts: [GatewayHostConfiguration] { configurations.filter { ValidatedGatewayHost($0) == nil } }
     }
@@ -83,6 +87,7 @@ final class HostStore {
     func reload() {
         do {
             let saved = try HostStore.load(defaults: defaults, credentials: credentials, seedHosts: seedHosts)
+            identityMigration = saved.identityMigration
             apply(saved.configurations, activeHostID: saved.activeHostID, directory: saved.directory)
             isSaved = saved.isSaved
             loadFailed = false
@@ -129,12 +134,12 @@ final class HostStore {
         directory.adopt(snapshot.hosts)
         let configurations = directory.configurations(updating: snapshot.hosts)
         return SavedHosts(configurations: configurations,
-            activeHostID: activeHostID(snapshot.activeHostID, in: configurations), directory: directory, isSaved: isSaved)
+            activeHostID: activeHostID(snapshot.activeHostID, in: configurations), directory: directory, isSaved: isSaved, identityMigration: snapshot.identityMigration)
     }
 
     static func save(hosts: [GatewayHostConfiguration], activeHostID: UUID?, directory: HostDirectory,
-                     defaults: UserDefaults, credentials: any GatewayCredentialStorage) throws {
-        let data = try JSONEncoder().encode(Snapshot(hosts: hosts, activeHostID: activeHostID, directory: directory))
+                     defaults: UserDefaults, credentials: any GatewayCredentialStorage, identityMigration: GatewayIdentityImport? = nil) throws {
+        let data = try JSONEncoder().encode(Snapshot(hosts: hosts, activeHostID: activeHostID, directory: directory, identityMigration: identityMigration))
         try credentials.write(data)
         guard try credentials.read() == data else { throw GatewayCredentialFailure.verificationFailed }
         // Only verified protected persistence retires the old migration source.
@@ -170,13 +175,13 @@ final class HostStore {
         let installationID = defaults.string(forKey: Self.installationIDKey) ?? UUID().uuidString.lowercased()
         defaults.set(installationID, forKey: Self.installationIDKey)
         for captured in hosts where !captured.configuration.usesInstallationCredential {
-            guard canReplaceHost(captured.id) else { continue }
+            guard !identityMigrationHostIDs.contains(captured.id), canReplaceHost(captured.id) else { continue }
             do {
                 try Task.checkCancellation()
                 let token = try await client.enroll(host: captured.configuration,
                     installationID: installationID + "-" + captured.id.uuidString.lowercased())
                 try Task.checkCancellation()
-                guard canReplaceHost(captured.id), let current = hosts.first(where: { $0.id == captured.id }),
+                guard !identityMigrationHostIDs.contains(captured.id), canReplaceHost(captured.id), let current = hosts.first(where: { $0.id == captured.id }),
                       current.hasSameConnection(as: captured.configuration) else { continue }
                 var enrolled = current.configuration
                 enrolled.authToken = token
@@ -194,6 +199,10 @@ final class HostStore {
 
     @discardableResult
     func upsert(_ host: GatewayHostConfiguration) -> Bool {
+        guard !identityMigrationHostIDs.contains(host.id) else {
+            errorMessage = "Saved gateway state is importing. Retry after the import finishes."
+            return false
+        }
         guard host.isValid else {
             errorMessage = "A valid hostname, port (1–65535), and authorization token are required."
             return false
@@ -216,13 +225,15 @@ final class HostStore {
 
     @discardableResult
     func delete(_ host: GatewayHostConfiguration) -> Bool {
-        guard invalidHosts.contains(where: { $0.id == host.id }) || hosts.count > 1 else { return false }
+        guard !identityMigrationHostIDs.contains(host.id),
+              invalidHosts.contains(where: { $0.id == host.id }) || hosts.count > 1 else { return false }
         var directory = directory
         directory.remove(host.id, at: .now)
         return commit(configurations.filter { $0.id != host.id }, activeHostID: activeHostID, directory: directory)
     }
 
     func enrollIncomingCalls(host: GatewayHostConfiguration, serverHostID: UUID) throws {
+        guard !identityMigrationHostIDs.contains(host.id) else { throw GatewayIdentityMigration.MigrationFailure.verificationInProgress }
         guard let index = configurations.firstIndex(where: { $0.id == host.id }),
               hosts.contains(where: { $0.id == host.id }),
               configurations[index].hasSameConnection(as: host) else { throw AgentIncomingCallError.unavailable }
@@ -249,11 +260,14 @@ final class HostStore {
         return configurations.filter { $0.id == captured.id || $0.gatewayID == identity.hostId || $0.id == identity.hostId }
     }
 
-    func identityMigrationSources(_ identity: GatewayIdentity, for captured: GatewayHostConfiguration) throws -> Set<UUID> {
-        Set(try identityConfigurations(identity, for: captured).flatMap { [$0.id] + $0.legacyIDs }).subtracting([identity.hostId])
+    func identityMigrationHosts(_ identity: GatewayIdentity, for captured: GatewayHostConfiguration) throws -> Set<UUID> {
+        Set(try identityConfigurations(identity, for: captured).flatMap { [$0.id] + $0.legacyIDs }).union([identity.hostId])
     }
 
-    func adoptIdentity(_ identity: GatewayIdentity, for captured: GatewayHostConfiguration) async throws {
+    var identityMigrationHostIDs: Set<UUID> { identityMigration?.fencedHostIDs ?? [] }
+
+    func beginIdentityMigration(_ identity: GatewayIdentity, for captured: GatewayHostConfiguration) throws {
+        guard identityMigration == nil, !completingIdentityMigration else { throw GatewayIdentityMigration.MigrationFailure.verificationInProgress }
         let matching = try identityConfigurations(identity, for: captured)
         var host = matching.first { $0.id == identity.hostId } ?? captured
         if host.usesInstallationCredential, let operatorHost = matching.first(where: { !$0.usesInstallationCredential }) {
@@ -263,20 +277,39 @@ final class HostStore {
         host.gatewayID = identity.hostId
         host.legacyIDs = Array(Set(matching.flatMap { [$0.id] + $0.legacyIDs }).subtracting([identity.hostId]))
             .sorted { $0.uuidString < $1.uuidString }
-        var directory = directory
-        for old in matching where old.id != host.id { directory.remove(old.id, at: .now) }
-        directory.record(host, at: .now)
-        let matchingIDs = Set(matching.map(\.id))
-        let active = activeHostID.map { matchingIDs.contains($0) ? host.id : $0 }
-        try persist(configurations.filter { !matchingIDs.contains($0.id) } + [host], activeHostID: active, directory: directory)
-        for old in host.legacyIDs { try await GatewayIdentityPreferences.migrate(from: old, to: host.id, domainName: defaultsDomain) }
-        requestSync()
+        identityMigration = .init(id: UUID(), host: host, replacedIDs: Set(matching.map(\.id)))
+        do { try persist(configurations, activeHostID: activeHostID, directory: directory) }
+        catch { errorMessage = error.localizedDescription; throw error }
     }
 
-    func resumeIdentityMigration(for hostID: UUID, using migration: GatewayIdentityMigration) async throws {
-        guard let host = configurations.first(where: { $0.id == hostID }), host.gatewayID == hostID else { return }
-        for source in host.legacyIDs {
-            try await migration.resume(from: source, to: hostID, preferencesDomain: defaultsDomain)
+    func completeIdentityMigration(using migration: GatewayIdentityMigration) async throws {
+        guard let journal = identityMigration else { return }
+        guard !completingIdentityMigration else { throw GatewayIdentityMigration.MigrationFailure.verificationInProgress }
+        completingIdentityMigration = true
+        defer { completingIdentityMigration = false }
+        do {
+            try persist(configurations, activeHostID: activeHostID, directory: directory)
+            try await migration.migrate(journal)
+            try Task.checkCancellation()
+            var directory = directory
+            for id in journal.replacedIDs where id != journal.host.id { directory.remove(id, at: .now) }
+            directory.record(journal.host, at: .now)
+            let active = activeHostID.map { journal.replacedIDs.contains($0) ? journal.host.id : $0 }
+            try persist(configurations.filter { !journal.replacedIDs.contains($0.id) && $0.id != journal.host.id } + [journal.host],
+                        activeHostID: active, directory: directory)
+            for source in journal.host.legacyIDs {
+                try await GatewayIdentityPreferences.migrate(from: source, to: journal.host.id, domainName: defaultsDomain)
+            }
+            try Task.checkCancellation()
+            try await migration.finish(journal)
+            identityMigration = nil
+            do { try persist(configurations, activeHostID: activeHostID, directory: directory) }
+            catch { identityMigration = journal; throw error }
+            errorMessage = nil
+            requestSync()
+        } catch {
+            errorMessage = "Saved gateway state could not finish importing: \(error.localizedDescription)"
+            throw error
         }
     }
 
@@ -297,7 +330,7 @@ final class HostStore {
         guard !loadFailed else { throw GatewayCredentialFailure.configurationUnavailable }
         let activeHostID = Self.activeHostID(activeHostID, in: configurations)
         try HostStore.save(hosts: configurations, activeHostID: activeHostID, directory: directory, defaults: defaults,
-            credentials: credentials)
+            credentials: credentials, identityMigration: identityMigration)
         isSaved = true
         apply(configurations, activeHostID: activeHostID, directory: directory)
     }
@@ -326,10 +359,10 @@ final class HostStore {
     }
 
     private func runSync() async {
-        guard let sharedDirectory, !loadFailed else { return }
+        guard let sharedDirectory, !loadFailed, identityMigration == nil else { return }
         do {
             let shared = try await sharedDirectory.read()
-            guard !loadFailed, shared != nil || isSaved else { return }
+            guard !loadFailed, identityMigration == nil, shared != nil || isSaved else { return }
             var merged = shared.map { directory.merged(with: $0) } ?? directory
             merged.fillEnrollmentCredentials(from: seedHosts)
             let synced = merged.configurations(updating: configurations)

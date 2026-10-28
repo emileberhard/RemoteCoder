@@ -2,52 +2,20 @@ import Foundation
 
 actor GatewayIdentityMigration {
     private let storage: HostStorage
-    private var pending: [UUID: (UUID, Task<Void, Error>)] = [:]
-
     init(storage: HostStorage) { self.storage = storage }
 
-    func unfinishedImports(hosts: [GatewayHostConfiguration]) -> Set<UUID> {
-        let files = FileManager.default
-        return Set(hosts.filter { host in
-            guard host.gatewayID == host.id else { return false }
-            let receipts = storage.directory(for: .host(host.id)).appending(path: "identity-imports")
-            return host.legacyIDs.contains { source in
-                files.fileExists(atPath: receipts.appending(path: "\(source).complete").path)
-                    && !files.fileExists(atPath: receipts.appending(path: "\(source).complete.finished").path)
-            }
-        }.map(\.id))
-    }
-
-    func resume(from source: UUID, to target: UUID, preferencesDomain: String) async throws {
-        let marker = storage.directory(for: .host(target)).appending(path: "identity-imports/\(source).complete")
-        guard FileManager.default.fileExists(atPath: marker.path),
-              !FileManager.default.fileExists(atPath: marker.appendingPathExtension("finished").path) else { return }
-        try Task.checkCancellation()
-        try await GatewayIdentityPreferences.migrate(from: source, to: target, domainName: preferencesDomain)
-        try Task.checkCancellation()
-        try finish(from: source, to: target)
-    }
-
-    func migrate(from sourceID: UUID, to gatewayID: UUID) async throws {
-        let previous = pending[gatewayID]?.1
-        let id = UUID()
-        let task = Task {
-            if let previous { _ = await previous.result }
-            try await performMigration(from: sourceID, to: gatewayID)
+    func migrate(_ journal: GatewayIdentityImport) async throws {
+        for source in journal.host.legacyIDs {
+            try await performMigration(from: source, to: journal.host.id, importID: journal.id)
         }
-        pending[gatewayID] = (id, task)
-        defer { if pending[gatewayID]?.0 == id { pending[gatewayID] = nil } }
-        try await withTaskCancellationHandler {
-            try await task.value
-        } onCancel: { task.cancel() }
     }
 
-    private func performMigration(from sourceID: UUID, to gatewayID: UUID) async throws {
+    private func performMigration(from sourceID: UUID, to gatewayID: UUID, importID: UUID) async throws {
         try Task.checkCancellation()
         guard sourceID != gatewayID else { return }
         let files = FileManager.default
         let target = storage.directory(for: .host(gatewayID))
-        let marker = target.appending(path: "identity-imports/\(sourceID).complete")
+        let marker = target.appending(path: "identity-imports/\(importID)-\(sourceID).complete")
         guard !files.fileExists(atPath: marker.path) else { return }
         let source = storage.directory(for: .host(sourceID))
         let accounts = source.appending(path: "accounts")
@@ -71,13 +39,17 @@ actor GatewayIdentityMigration {
         try Data().write(to: marker, options: .atomic)
     }
 
-    func finish(from sourceID: UUID, to gatewayID: UUID) throws {
-        guard sourceID != gatewayID else { return }
+    func finish(_ journal: GatewayIdentityImport) throws {
         let files = FileManager.default
-        let marker = storage.directory(for: .host(gatewayID)).appending(path: "identity-imports/\(sourceID).complete")
-        guard files.fileExists(atPath: marker.path) else { return }
-        let finished = marker.appendingPathExtension("finished")
-        guard !files.fileExists(atPath: finished.path) else { return }
+        let gatewayID = journal.host.id
+        let sources = Set(journal.host.legacyIDs).subtracting([gatewayID])
+        guard !sources.isEmpty else { return }
+        let receipts = storage.directory(for: .host(gatewayID)).appending(path: "identity-imports")
+        for source in sources {
+            guard files.fileExists(atPath: receipts.appending(path: "\(journal.id)-\(source).complete").path) else {
+                throw MigrationFailure.recovery
+            }
+        }
         let recordings = storage.root.appending(path: "dictation-recordings")
         if files.fileExists(atPath: recordings.path) {
             for directory in try files.contentsOfDirectory(at: recordings, includingPropertiesForKeys: nil) {
@@ -85,18 +57,19 @@ actor GatewayIdentityMigration {
                 guard files.fileExists(atPath: manifest.path) else { continue }
                 var json = try JSONSerialization.jsonObject(with: Data(contentsOf: manifest)) as? [String: Any]
                 guard var owner = json?["owner"] as? [String: Any],
-                      let value = owner["hostID"] as? String, UUID(uuidString: value) == sourceID else { continue }
+                      let value = owner["hostID"] as? String, let source = UUID(uuidString: value), sources.contains(source) else { continue }
                 owner["hostID"] = gatewayID.uuidString
                 json?["owner"] = owner
                 if let json { try JSONSerialization.data(withJSONObject: json).write(to: manifest, options: .atomic) }
             }
         }
-        for source in [storage.directory(for: .host(sourceID)),
-                       storage.root.appending(path: "conversations-v1/\(sourceID)"),
-                       storage.root.appending(path: "codex-thread-history/\(sourceID).json")] {
-            if files.fileExists(atPath: source.path) { try files.removeItem(at: source) }
+        for sourceID in sources {
+            for source in [storage.directory(for: .host(sourceID)),
+                           storage.root.appending(path: "conversations-v1/\(sourceID)"),
+                           storage.root.appending(path: "codex-thread-history/\(sourceID).json")] {
+                if files.fileExists(atPath: source.path) { try files.removeItem(at: source) }
+            }
         }
-        try Data().write(to: finished, options: .atomic)
     }
 
     private func merge(from source: URL, into target: URL, replacements: [UUID: UUID]) throws {

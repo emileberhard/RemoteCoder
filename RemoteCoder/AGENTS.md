@@ -210,11 +210,18 @@ entrypoint linked above.
   coalesce matching inputs and fence replaced generations. Agent rows, hierarchy
   and lookup indexes are prepared off the main actor, bounded to 512 rows per
   host and published at most once per 80 ms with generation/revision fences.
-- Verified gateway identity imports finish only after canonical configuration
-  persistence and preference migration. Canonical launch checks only per-alias
-  receipts; unfinished imports resume through the owned identity retry task,
-  keeping that host's stores closed until cleanup completes. HostStore owns the
-  matching configurations and alias set for every identity adoption path.
+- HostStore persists a verified source-to-target identity journal in its protected
+  snapshot before importing. The journal fences source and target stores and
+  connection edits until one serialized operation imports, persists canonical
+  configuration, migrates preferences and recordings, and retires source files.
+  Launch completes the journal offline before opening model stores; local I/O
+  failure retains the fence and a visible error. Foreground/reconnect retries the
+  same owner. Receipt markers belong to that journal, never authorize adoption
+  alone, and canonical hosts without a journal do no identity I/O at launch.
+- Placement acknowledgements admit the exact header through ConversationList,
+  including children outside recent history. Visible agents models refresh both
+  parents; an in-flight read coalesces acknowledgements into one trailing refresh
+  and cannot publish its pre-acknowledgement rows.
 - `ConversationAddress` (host UUID + thread id) addresses everything, because
   thread ids are unique only within one gateway. Every row, selection check, pin
   command and action route carries the host. The pure

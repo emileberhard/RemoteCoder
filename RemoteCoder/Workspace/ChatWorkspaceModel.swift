@@ -88,7 +88,6 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
     @ObservationIgnored private var isDiscoveringRetiredState = true
     @ObservationIgnored private var migratingHosts: Set<UUID> = []
     @ObservationIgnored private var admittedHosts: Set<UUID> = []
-    @ObservationIgnored private var pendingIdentityResumes: Set<UUID> = []
     private var identityResumeFailures: [UUID: String] = [:]
     private var accountMigrationIssues: [String] = []
     var accountMigrationIssue: String? {
@@ -156,16 +155,6 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
             return { execution.release() }
         }) { [targets] in targets.routes(for: $0) }
         self.accountDirectory = accountDirectory
-        // Before the first model exists: the session index, pin store and
-        // working-directory default are all read once at construction, so a
-        // migration that ran later would be overwritten by its own consumers.
-        HostScopedStateMigration.runIfNeeded(
-            hosts: settings.hosts.map(\.configuration),
-            activeHostID: settings.activeHostID ?? settings.hosts.first?.id,
-            bundledWorkingDirectory: settings.localConfiguration.codexWorkdir,
-            defaults: defaults,
-            storage: storage
-        )
         modelPickerPreferences.onChange = { [weak self] provider, previous in
             self?.applyModelPickerPreferences(for: provider, previousModelVisibility: previous)
         }
@@ -181,15 +170,20 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         let storage = storage
         accountMigration = Task { [weak self] in
             guard let self else { return }
-            let originalIDs = self.settings.hosts.map(\.id)
-            let previous = await ledger.run(hosts: originalIDs, excluding: admittedHosts,
+            do { try await self.completeGatewayIdentityMigration() }
+            catch { self.logger.notice("Gateway identity import pending: \(error.localizedDescription)") }
+            guard !Task.isCancelled else { return }
+            let initialFence = self.settings.identityMigrationHostIDs
+            let originalIDs = self.settings.hosts.filter { !initialFence.contains($0.id) }.map(\.id)
+            let previous = await ledger.run(hosts: originalIDs, excluding: admittedHosts.union(initialFence),
                 storage: storage, discovered: { _ in }, finishedHost: { _ in })
             await self.resolveGatewayIdentities()
             guard !Task.isCancelled else { return }
-            let hostIDs = self.settings.hosts.map(\.id)
+            let identityFence = self.settings.identityMigrationHostIDs
+            let hostIDs = self.settings.hosts.filter { !identityFence.contains($0.id) }.map(\.id)
             self.launchRestore.reloadPendingLocation()
             if Set(hostIDs) == Set(originalIDs) { self.finishAccountMigration(previous); return }
-            let outcome = await ledger.run(hosts: hostIDs, excluding: admittedHosts, storage: storage, discovered: { [weak self] hosts in
+            let outcome = await ledger.run(hosts: hostIDs, excluding: admittedHosts.union(identityFence), storage: storage, discovered: { [weak self] hosts in
                 self?.isDiscoveringRetiredState = false
                 self?.migratingHosts = hosts
                 self?.reconcileHosts()
@@ -202,9 +196,10 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
     }
 
     private func resolveGatewayIdentities() async {
-        let migration = GatewayIdentityMigration(storage: storage)
-        let candidates = settings.hosts.map(\.configuration).filter { !admittedHosts.contains($0.id) }
-        pendingIdentityResumes.formUnion(await migration.unfinishedImports(hosts: candidates))
+        let identityFence = settings.identityMigrationHostIDs
+        let candidates = settings.hosts.map(\.configuration).filter {
+            !admittedHosts.contains($0.id) && !identityFence.contains($0.id)
+        }
         let resolved = await GatewayIdentityLaunch.read(hosts: candidates, budget: .seconds(2)) { host in
             let routes = GatewayRoutes(host: host, directory: self.storage.directory(for: .host(host.id)),
                 relayStorage: KeychainGatewayCredentials(scope: .relayRoute(hostID: host.id)),
@@ -220,15 +215,8 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         }
         for (host, identity) in resolved {
             do {
-                let sources = try self.settings.identityMigrationSources(identity, for: host).sorted { $0.uuidString < $1.uuidString }
-                for source in sources {
-                    try await migration.migrate(from: source, to: identity.hostId)
-                }
-                try Task.checkCancellation()
-                self.pendingIdentityResumes.insert(identity.hostId)
-                try await self.settings.adoptIdentity(identity, for: host)
-                for source in sources { try await migration.finish(from: source, to: identity.hostId) }
-                self.pendingIdentityResumes.remove(identity.hostId)
+                try self.settings.beginIdentityMigration(identity, for: host)
+                try await self.completeGatewayIdentityMigration()
             } catch is CancellationError {
             } catch {
                 self.logger.notice("Gateway identity unresolved host=\(host.displayName): \(error.localizedDescription)")
@@ -236,43 +224,57 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         }
     }
 
+    private func completeGatewayIdentityMigration() async throws {
+        if let journal = settings.identityMigration {
+            do {
+                try await settings.completeIdentityMigration(using: GatewayIdentityMigration(storage: storage))
+                identityResumeFailures[journal.host.id] = nil
+            } catch {
+                identityResumeFailures[journal.host.id] = "Saved gateway state could not finish importing: \(error.localizedDescription)"
+                throw error
+            }
+        }
+        // Before the first model exists: the session index, pin store and
+        // working-directory default are all read once at construction, so a
+        // migration that ran later would be overwritten by its own consumers.
+        HostScopedStateMigration.runIfNeeded(
+            hosts: settings.hosts.map(\.configuration),
+            activeHostID: settings.activeHostID ?? settings.hosts.first?.id,
+            bundledWorkingDirectory: settings.localConfiguration.codexWorkdir,
+            defaults: defaults,
+            storage: storage
+        )
+    }
+
     private func retryGatewayIdentities() {
         guard !isQuiescing, hasBootstrapped, accountMigration == nil, identityRetryTask == nil else { return }
-        let configured = Set(settings.hosts.map(\.id))
-        pendingIdentityResumes.formIntersection(configured)
-        identityResumeFailures = identityResumeFailures.filter { configured.contains($0.key) }
-        let hosts = settings.hosts.filter { $0.configuration.gatewayID != $0.id || pendingIdentityResumes.contains($0.id) }.map(\.id)
-        guard !hosts.isEmpty else { return }
+        guard settings.identityMigration != nil || settings.hosts.contains(where: { $0.configuration.gatewayID != $0.id }) else { return }
         identityRetryTask = Task { [weak self] in
             guard let self else { return }
             defer { self.identityRetryTask = nil }
-            let migration = GatewayIdentityMigration(storage: self.storage)
+            do {
+                try await self.completeGatewayIdentityMigration()
+                try Task.checkCancellation()
+                self.reconcileHosts()
+                self.launchRestore.reloadPendingLocation()
+                self.launchRestore.restore(using: self)
+                self.refreshCluster()
+            } catch {
+                self.logger.notice("Gateway identity import pending: \(error.localizedDescription)")
+                return
+            }
+            let hosts = self.settings.hosts.filter { $0.configuration.gatewayID != $0.id }.map(\.id)
             for hostID in hosts {
                 guard !Task.isCancelled else { return }
-                do {
-                    if self.pendingIdentityResumes.contains(hostID) {
-                        try await self.settings.resumeIdentityMigration(for: hostID, using: migration)
-                        try Task.checkCancellation()
-                        self.pendingIdentityResumes.remove(hostID)
-                        self.identityResumeFailures[hostID] = nil
-                        self.reconcileHosts()
-                        self.launchRestore.reloadPendingLocation()
-                        self.launchRestore.restore(using: self)
-                        self.refreshCluster()
-                    } else { try await self.verifyGatewayIdentity(hostID: hostID) }
-                }
+                do { try await self.verifyGatewayIdentity(hostID: hostID) }
                 catch is CancellationError { return }
-                catch {
-                    if self.pendingIdentityResumes.contains(hostID) {
-                        self.identityResumeFailures[hostID] = "Saved gateway state could not finish importing: \(error.localizedDescription)"
-                    }
-                    self.logger.notice("Gateway identity unresolved host=\(hostID): \(error.localizedDescription)")
-                }
+                catch { self.logger.notice("Gateway identity unresolved host=\(hostID): \(error.localizedDescription)") }
             }
         }
     }
 
     func verifyGatewayIdentity(hostID: UUID) async throws {
+        try await completeGatewayIdentityMigration()
         guard let host = settings.hosts.first(where: { $0.id == hostID })?.configuration else { return }
         guard host.gatewayID != host.id else { return }
         guard !isVerifyingIdentity else { throw GatewayIdentityMigration.MigrationFailure.verificationInProgress }
@@ -286,8 +288,8 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         guard !refusesSwitchWhileDictating, !voiceCalls.call.isActive else {
             throw VoiceCallUnavailable(message: "Finish dictation or Voice Mode before migrating this host.")
         }
-        let ids = Set(settings.hosts.filter { $0.id == hostID || $0.configuration.gatewayID == identity.hostId }.map(\.id))
-        let fenced = ids.union([identity.hostId])
+        let fenced = try settings.identityMigrationHosts(identity, for: host)
+        let ids = Set(settings.hosts.map(\.id)).intersection(fenced)
         migratingHosts.formUnion(fenced)
         defer {
             migratingHosts.subtract(fenced)
@@ -299,15 +301,9 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         admittedHosts.subtract(ids)
         let ledger = AccountRetirementMigration.Ledger(defaults: defaults)
         _ = await ledger.run(hosts: Array(ids), excluding: admittedHosts, storage: storage, discovered: { _ in }, finishedHost: { _ in })
-        let migration = GatewayIdentityMigration(storage: storage)
-        let sources = try settings.identityMigrationSources(identity, for: host)
-        for old in sources { try await migration.migrate(from: old, to: identity.hostId) }
-        try Task.checkCancellation()
-        pendingIdentityResumes.insert(identity.hostId)
-        try await settings.adoptIdentity(identity, for: host)
+        try settings.beginIdentityMigration(identity, for: host)
+        try await completeGatewayIdentityMigration()
         launchRestore.reloadPendingLocation()
-        for old in sources { try await migration.finish(from: old, to: identity.hostId) }
-        pendingIdentityResumes.remove(identity.hostId)
     }
 
     private func finishAccountMigration(_ outcome: AccountRetirementMigration.Outcome) {
@@ -634,9 +630,10 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         guard !isQuiescing else { return }
         let hosts = settings.hosts
         let configuredIDs = Set(hosts.map(\.id))
-        accountDirectory.reconcile(hosts.map(\.configuration))
+        let identityFence = settings.identityMigrationHostIDs
+        accountDirectory.reconcile(hosts.filter { !identityFence.contains($0.id) }.map(\.configuration))
         for model in models {
-            guard let current = hosts.first(where: { $0.id == model.hostID }), model.host.hasSameConnection(as: current.configuration) else {
+            guard !identityFence.contains(model.hostID), let current = hosts.first(where: { $0.id == model.hostID }), model.host.hasSameConnection(as: current.configuration) else {
                 retire(model, reason: "host removed or reconfigured")
                 continue
             }
@@ -645,6 +642,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         var reconciled: [ChatTargetModel] = []
         var installedHostIDs: Set<UUID> = []
         for host in hosts {
+            if identityFence.contains(host.id) { continue }
             if let existing = model(for: host.id) {
                 if existing.host.hasSameConnection(as: host.configuration) {
                     existing.applyHostRename(host.name)
@@ -653,7 +651,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
                 }
                 retire(existing, reason: "reconfigured")
             }
-            if isDiscoveringRetiredState || migratingHosts.contains(host.id) || pendingIdentityResumes.contains(host.id) { continue }
+            if isDiscoveringRetiredState || migratingHosts.contains(host.id) { continue }
             // Flush the predecessor before loading the same host-scoped files.
             if targets.hasRunningRetirement(hostID: host.id) || targets.isRetiring(ExecutionTarget(hostID: host.id)) { continue }
             admittedHosts.insert(host.id)

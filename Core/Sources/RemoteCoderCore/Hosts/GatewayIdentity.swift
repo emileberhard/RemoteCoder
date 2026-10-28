@@ -5,6 +5,13 @@ struct GatewayIdentity: Decodable, Equatable, Sendable {
     let incarnation: UUID
 }
 
+struct GatewayIdentityImport: Codable, Equatable, Sendable {
+    let id: UUID
+    let host: GatewayHostConfiguration
+    let replacedIDs: Set<UUID>
+    var fencedHostIDs: Set<UUID> { Set(host.legacyIDs).union([host.id]) }
+}
+
 extension HostStore {
     func canonicalHostID(_ id: UUID) -> UUID {
         hosts.first { $0.id == id || $0.configuration.legacyIDs.contains(id) }?.id ?? id
