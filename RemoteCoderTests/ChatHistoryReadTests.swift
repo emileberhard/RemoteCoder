@@ -30,14 +30,14 @@ struct ChatHistoryReadTests {
         }
         let now = Int64(Date.now.timeIntervalSince1970)
         let first = try fixture.thread("first", updatedAt: now)
-        await target.conversationList.record(first)
         _ = target.agents(threadID: first.id)
+        await target.conversationList.record(first)
         let warm = try #require(target.warmConversationsIfIdle())
         await gateway.waitForHeldRead()
 
         let second = try fixture.thread("second", updatedAt: now - 1)
-        await target.conversationList.record(second)
         _ = target.agents(threadID: second.id)
+        await target.conversationList.record(second)
         #expect(target.conversationWarmer.needsWarm(first) && target.conversationWarmer.needsWarm(second))
         preparation.setActive(true, conservesEnergy: false)
         preparation.setActive(false, conservesEnergy: false)
