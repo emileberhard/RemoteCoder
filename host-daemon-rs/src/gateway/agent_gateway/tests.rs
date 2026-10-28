@@ -1098,6 +1098,7 @@ async fn current_parent_tag_overrides_native_provenance_in_headers_and_classific
     assert_eq!(header["thread"]["parent"], json!(address));
     assert!(header["thread"]["parentThreadId"].is_null());
     assert!(header["thread"].get("parentHostID").is_none());
+    assert!(!gateway.apply_parent_tags(&mut header).await.unwrap());
     assert!(
         gateway
             .is_agent_thread("0e1a0399-0e3d-5aa4-ace7-0ed28835d55f")

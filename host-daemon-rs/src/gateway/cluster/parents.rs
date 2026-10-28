@@ -185,20 +185,30 @@ impl Gateway {
                     host_id: host.clone(),
                     thread_id: thread.to_owned(),
                 });
-            let parent = tags
-                .get(&conversation)
-                .map(Option::as_ref)
-                .unwrap_or(native_parent.as_ref());
-            thread["parent"] = json!(parent);
-            thread["parentThreadId"] = json!(
-                parent
-                    .filter(|parent| parent.host_id == host)
-                    .map(|parent| &parent.thread_id)
-            );
-            if let Some(fields) = thread.as_object_mut() {
-                fields.remove("parentHostID");
+            let parent = match tags.get(&conversation) {
+                Some(parent) => parent.as_ref(),
+                None if native_parent.is_none() => return,
+                None => native_parent.as_ref(),
+            };
+            for (field, value) in [
+                ("parent", json!(parent)),
+                (
+                    "parentThreadId",
+                    json!(
+                        parent
+                            .filter(|parent| parent.host_id == host)
+                            .map(|parent| &parent.thread_id)
+                    ),
+                ),
+            ] {
+                if thread.get(field) != Some(&value) {
+                    thread[field] = value;
+                    changed = true;
+                }
             }
-            changed = true;
+            if let Some(fields) = thread.as_object_mut() {
+                changed |= fields.remove("parentHostID").is_some();
+            }
         };
         if let Some(thread) = response.get_mut("thread") {
             apply(thread);

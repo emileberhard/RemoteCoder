@@ -371,7 +371,7 @@ return unsupported (exit 7). Unrecognized conversation IDs never route to Codex.
 
 Every agent row includes `ownerHostId`, the current nullable `parent` address
 and its turn's `recipient`. Native ancestry stays immutable provenance. Thread
-headers expose `parent: {hostId, threadId} | null`; relation JSON exposes
+headers with a current tag or native parent expose `parent: {hostId, threadId} | null`; untagged native roots preserve their provider response bytes. Relation JSON exposes
 `parentHostID` and `parentThreadId`. Promotion classifies the conversation as a
 root. Parent changes invalidate ancestry and agent-view caches. Remote-intent
 stub rows use `lastActiveAt` in epoch seconds, matching real rows, and every

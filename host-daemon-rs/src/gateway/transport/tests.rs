@@ -176,7 +176,7 @@ async fn bounded_preview_codex_opt_in_is_consumed_and_only_changes_the_list_payl
             let preview = format!("{prefix}tail");
             let response = json!({"id":7,"result":{"data":[
                 {"id":"019e0b6a-b5cb-7b62-bd89-4c58f82fd1a2","preview":preview,"name":"Full title"},
-                {"id":"019e0b6a-b5cb-7b62-bd89-4c58f82fd1a3","preview":"019e0b6a-b5cb-7b62-bd89-4c58f82fd1a3"},
+                {"id":"019e0b6a-b5cb-7b62-bd89-4c58f82fd1a3","preview":"short"},
                 {"id":"019e0b6a-b5cb-7b62-bd89-4c58f82fd1a4","preview":format!("{}<remotecoder_literal_text_v2 bytes=\"4\">\ntext\n</remotecoder_literal_text_v2>", "a".repeat(3_000))}
             ],"nextCursor":"next","completionTimes":{"019e0b6a-b5cb-7b62-bd89-4c58f82fd1a2":42}}});
             let raw_response = serde_json::to_string_pretty(&response).unwrap();
@@ -198,9 +198,8 @@ async fn bounded_preview_codex_opt_in_is_consumed_and_only_changes_the_list_payl
                 panic!("list response")
             };
             let mut expected = response;
-            for row in expected["result"]["data"].as_array_mut().unwrap() {
-                row["parent"] = Value::Null;
-                row["parentThreadId"] = Value::Null;
+            if opted_in != Some(true) {
+                assert_eq!(received, raw_response);
             }
             if opted_in == Some(true) {
                 expected["result"]["data"][0]["preview"] = json!(prefix);
