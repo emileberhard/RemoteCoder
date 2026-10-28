@@ -46,6 +46,7 @@ pub(crate) struct Args {
 
 #[derive(Clone, Debug, Subcommand)]
 pub(crate) enum Command {
+    Sessions(Box<crate::agents::client::sessions::Command>),
     Agent {
         #[command(subcommand)]
         command: Box<crate::agents::client::AgentCommand>,

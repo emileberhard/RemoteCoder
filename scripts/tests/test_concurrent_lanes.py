@@ -64,6 +64,7 @@ class ConcurrentLanesTests(unittest.TestCase):
         self.assertLess(time.monotonic() - started, 3)
 
     def test_a_finished_lane_closes_its_output_pipe(self):
+        gc.collect()
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always", ResourceWarning)
             status = run_lanes(

@@ -66,8 +66,10 @@ class AuthenticationTests(unittest.TestCase):
 
     def test_unsigned_and_other_origin_requests_never_receive_an_apple_token(self):
         for url, headers in ((asc.API + "apps", {}), ("https://example.com/upload", {"Authorization": "Bearer upload"})):
+            error = urllib.error.HTTPError(url, 401, "rejected", {}, io.BytesIO(b"invalid"))
+            self.addCleanup(error.close)
             with self.subTest(url=url), \
-                 patch.object(asc.urllib.request, "urlopen", side_effect=urllib.error.HTTPError(url, 401, "rejected", {}, io.BytesIO(b"invalid"))) as opener, \
+                 patch.object(asc.urllib.request, "urlopen", side_effect=error) as opener, \
                  patch.object(asc, "token", side_effect=AssertionError("Do not sign upload requests")), \
                  patch.object(asc.time, "sleep", side_effect=AssertionError("Do not retry uploads")):
                 with self.assertRaises(asc.RequestFailed):

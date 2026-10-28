@@ -9,7 +9,7 @@ mod input;
 pub(crate) mod native_parent;
 pub(crate) mod notification_hook;
 pub(crate) mod projection;
-mod records;
+pub(crate) mod records;
 pub(crate) mod restart;
 pub(crate) mod restart_driver;
 pub(crate) mod session_context;
