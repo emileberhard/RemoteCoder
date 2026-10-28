@@ -117,7 +117,15 @@ impl PrivateTmux {
                 if let Ok(code) = std::fs::read_to_string(&status)
                     && let Ok(exit) = code.parse()
                 {
-                    let payload = std::fs::read_to_string(&stdout).unwrap();
+                    let output = std::fs::read_to_string(&stdout).unwrap();
+                    let errors = std::fs::read_to_string(root.join("stderr")).unwrap();
+                    let payload = if exit == 0 {
+                        assert!(errors.is_empty(), "{errors}");
+                        output
+                    } else {
+                        assert!(output.is_empty(), "{output}");
+                        errors
+                    };
                     return (exit, serde_json::from_str(&payload).unwrap());
                 }
                 tokio::time::sleep(Duration::from_millis(10)).await;
