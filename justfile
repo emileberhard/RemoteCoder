@@ -522,9 +522,9 @@ gateway-e2e-upload-live:
 gateway-e2e-files-live *args:
     ./dev-tools/rc-gateway e2e-files-live {{ args }}
 
-# Delegated jobs against a built gateway and its matched runtime package; each staged agent-jobs/v1 is read while held.
-gateway-e2e-delegated-jobs-isolated candidate package *staged:
-    bun dev-tools/probes/delegated-jobs.mjs "{{ candidate }}" "{{ package }}" {{ staged }}
+# Delegated jobs against a built gateway and its matched runtime package.
+gateway-e2e-delegated-jobs-isolated candidate package:
+    bun dev-tools/probes/delegated-jobs.mjs "{{ candidate }}" "{{ package }}"
 
 gateway-e2e-query-admission-isolated $candidate:
     bun dev-tools/probes/query-admission.mjs "$candidate"

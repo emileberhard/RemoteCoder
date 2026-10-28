@@ -19,9 +19,6 @@ impl JobOwner {
     pub(super) async fn reconcile_job(&self, id: JobId) -> Result<bool> {
         let gateway = self.gateway()?;
         let store = self.store().await?;
-        if store.execution_held().await? {
-            return Ok(true);
-        }
         let notices_pending = self.deliver_notices(&id).await?;
         for _ in 0..8 {
             let job = store.read(id.clone()).await?;

@@ -408,31 +408,3 @@ async fn settled_notice_payload_expires_but_its_identity_survives() {
         "an already expired settled job is not rewritten by later admissions"
     );
 }
-
-#[tokio::test]
-async fn cutover_hold_survives_owner_restart_and_preserves_reads_and_stop() {
-    let directory = tempfile::tempdir().unwrap();
-    let store = JobStore::open(directory.path().into()).await.unwrap();
-    let original = job(11);
-    store.admit(original.clone()).await.unwrap();
-    crate::storage::private_state::replace(
-        &directory.path().join("cutover.hold"),
-        b"fixture cutover",
-    )
-    .unwrap();
-    drop(store);
-    let store = JobStore::open(directory.path().into()).await.unwrap();
-    assert!(store.execution_held().await.unwrap());
-    assert!(store.admit(job(12)).await.is_err());
-    assert_eq!(
-        store.read(original.job_id.clone()).await.unwrap().job_id,
-        original.job_id
-    );
-    let stopped = store
-        .request_stop(original.job_id, "stop-during-cutover".into(), 105)
-        .await
-        .unwrap();
-    assert!(matches!(stopped.stop, StopState::Requested { .. }));
-    std::fs::remove_file(directory.path().join("cutover.hold")).unwrap();
-    store.admit(job(12)).await.unwrap();
-}
