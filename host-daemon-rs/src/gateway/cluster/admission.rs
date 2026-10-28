@@ -278,7 +278,12 @@ impl Gateway {
     }
 
     pub(crate) async fn reconcile_cluster_member(&self, host: &str) -> Result<bool> {
-        let intents = self.jobs.store().await?.intents().await?;
+        let intents = self
+            .jobs
+            .store()
+            .await?
+            .member_pending_intents(host.to_owned())
+            .await?;
         let mut retry = false;
         let link = self.cluster_link().await?;
         let identity = self.host_identity().await?;
@@ -292,7 +297,7 @@ impl Gateway {
                 link.store.remove(RemoveParams {protocol:PROTOCOL,host:member.host,membership:member.membership},false).await?;
             } else {retry=true;}
         }
-        for intent in intents.into_iter().filter(|intent| intent.host == host) {
+        for intent in intents {
             if !matches!(
                 intent.state,
                 IntentState::Pending | IntentState::StopRequested

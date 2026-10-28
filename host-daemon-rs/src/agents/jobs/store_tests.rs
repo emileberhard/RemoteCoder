@@ -1021,3 +1021,103 @@ async fn stop_during_provider_backoff_survives_restart_and_blocks_successor_disp
     assert!(matches!(stopped.stop, StopState::Requested { .. }));
     assert_eq!(stopped.provider_retries.len(), 1);
 }
+
+#[tokio::test]
+async fn cluster_store_indexes_follow_binding_move_promotion_and_reload() {
+    use crate::wire::cluster::AgentAddress;
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().to_owned();
+    let store = JobStore::open(root.clone()).await.unwrap();
+    let mut a = store.member_changes("host-a".into()).await.unwrap();
+    let b = store.member_changes("host-b".into()).await.unwrap();
+    let mut original = job(91);
+    original.recipient = Recipient::Remote {
+        host: "host-a".into(),
+        incarnation: "inc-a".into(),
+        conversation: conversation(),
+    };
+    store.admit(original.clone()).await.unwrap();
+    assert!(a.has_changed().unwrap());
+    a.borrow_and_update();
+    assert!(!b.has_changed().unwrap());
+    assert_eq!(
+        store.member_pending_ids("host-a".into()).await.unwrap(),
+        vec![original.job_id.clone()]
+    );
+    let bound = store
+        .bind(original.job_id.clone(), 0, conversation(), 101)
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .agent_for_conversation(conversation())
+            .await
+            .unwrap()
+            .unwrap()
+            .agent_id,
+        original.agent_id
+    );
+    assert!(!a.has_changed().unwrap());
+    store
+        .set_parent(
+            original.agent_id.clone(),
+            Some(AgentAddress {
+                host_id: "host-b".into(),
+                thread_id: "parent-b".into(),
+            }),
+            Recipient::Remote {
+                host: "host-b".into(),
+                incarnation: "inc-b".into(),
+                conversation: conversation(),
+            },
+        )
+        .await
+        .unwrap();
+    assert!(a.has_changed().unwrap());
+    store.retarget_delivery(bound.job_id.clone()).await.unwrap();
+    assert!(
+        store
+            .member_pending_ids("host-a".into())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        store.member_pending_ids("host-b".into()).await.unwrap(),
+        vec![original.job_id.clone()]
+    );
+    assert!(b.has_changed().unwrap());
+    store
+        .set_parent(original.agent_id.clone(), None, Recipient::None)
+        .await
+        .unwrap();
+    store
+        .retarget_delivery(original.job_id.clone())
+        .await
+        .unwrap();
+    assert!(
+        store
+            .member_pending_ids("host-b".into())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    drop(store);
+    let store = JobStore::open(root).await.unwrap();
+    let agent = store
+        .agent_for_conversation(conversation())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(agent.parent, None);
+    assert_eq!(agent.latest_job_id, Some(original.job_id.clone()));
+    assert!(
+        store
+            .member_pending_ids("host-b".into())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let page = store.list(Selection::Recent, 1, None).await.unwrap();
+    assert_eq!(page.jobs[0].job_id, original.job_id);
+}

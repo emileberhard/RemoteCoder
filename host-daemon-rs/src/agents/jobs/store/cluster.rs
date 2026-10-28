@@ -19,9 +19,7 @@ impl Inner {
                 "intent filename differs from its job identity"
             );
             ensure!(
-                self.intents
-                    .insert(intent.request.job_id.clone(), intent)
-                    .is_none(),
+                self.insert_intent(intent).is_none(),
                 "duplicate remote intent"
             );
         }
@@ -74,12 +72,8 @@ impl JobStore {
     pub(crate) async fn adopt_conversation(&self, agent: AgentRecord) -> Result<AgentRecord> {
         self.access(move |inner| {
             if let ConversationBinding::Known { conversation } = &agent.conversation {
-                if let Some(existing) = inner
-                    .agents
-                    .values()
-                    .find(|existing| existing.conversation == agent.conversation)
-                {
-                    return inner.agent_view(&existing.agent_id);
+                if let Some(id) = inner.indexes.agent(conversation)? {
+                    return inner.agent_view(id);
                 }
                 ensure!(
                     !conversation.thread_id.is_empty(),
@@ -94,7 +88,7 @@ impl JobStore {
                 "agent store capacity reached"
             );
             inner.write_agent(&agent)?;
-            inner.agents.insert(agent.agent_id.clone(), agent.clone());
+            inner.insert_agent(agent.clone());
             Ok(agent)
         })
         .await
@@ -136,7 +130,7 @@ impl JobStore {
                 agent.parent = parent;
                 agent.parent_recipient = Some(recipient);
                 inner.write_agent(&agent)?;
-                inner.agents.insert(agent.agent_id.clone(), agent);
+                inner.insert_agent(agent);
             }
             Ok(())
         })
@@ -162,7 +156,7 @@ impl JobStore {
                     .join(format!("{}.json", id.as_str())),
                 &intent,
             )?;
-            inner.intents.insert(id, intent);
+            inner.insert_intent(intent);
             Ok(())
         })
         .await
@@ -214,9 +208,7 @@ impl JobStore {
                     .join(format!("{}.json", intent.request.job_id.as_str())),
                 &bytes,
             )?;
-            inner
-                .intents
-                .insert(intent.request.job_id.clone(), intent.clone());
+            inner.insert_intent(intent.clone());
             Ok(intent)
         })
         .await
@@ -257,7 +249,7 @@ impl JobStore {
                     .join(format!("{}.json", id.as_str())),
                 &intent,
             )?;
-            inner.intents.insert(id, intent.clone());
+            inner.insert_intent(intent.clone());
             Ok(intent)
         })
         .await
@@ -314,7 +306,7 @@ impl JobStore {
                 .context("parent revision exhausted")?;
             agent.parent_recipient = Some(recipient);
             inner.write_agent(&agent)?;
-            inner.agents.insert(id, agent.clone());
+            inner.insert_agent(agent.clone());
             Ok(agent)
         })
         .await
@@ -337,8 +329,12 @@ impl JobStore {
     }
 
     pub(crate) async fn agent_ids(&self) -> Result<Vec<String>> {
-        self.access(|inner| Ok(inner.agents.keys().cloned().collect()))
-            .await
+        self.access(|inner| {
+            let mut ids: Vec<_> = inner.agents.keys().cloned().collect();
+            ids.sort();
+            Ok(ids)
+        })
+        .await
     }
 }
 

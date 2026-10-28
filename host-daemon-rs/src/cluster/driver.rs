@@ -61,7 +61,7 @@ pub(crate) fn start(gateway: &Arc<Gateway>) -> Result<()> {
             let Some(gateway) = weak.upgrade() else {
                 return Ok(());
             };
-            let mut changes = gateway.jobs.changes();
+            let mut changes = gateway.cluster_link().await?.store.changes().await;
             let mut workers = tokio::task::JoinSet::new();
             let mut running = std::collections::HashSet::new();
             let capacity = Arc::new(tokio::sync::Semaphore::new(64));
@@ -119,14 +119,13 @@ async fn member_worker(
     let Some(owner) = gateway.upgrade() else {
         return Ok(());
     };
-    let mut changes = owner.jobs.changes();
+    let store = owner.jobs.store().await?;
+    let mut changes = store.member_changes(member.host.clone()).await?;
     let link = owner.cluster_link().await?;
+    let mut membership_changes = link.store.changes().await;
     let mut wakes = link.member_wakes(&member.host).await;
     drop(owner);
     let mut delay = Duration::from_millis(250);
-    let mut due = tokio::time::Instant::now();
-    let mut previous = String::new();
-    let mut retry = false;
     let mut introduced = false;
     loop {
         let Some(owner) = gateway.upgrade() else {
@@ -135,48 +134,21 @@ async fn member_worker(
         if owner.is_draining() {
             break;
         }
-        let Some(record) = link.store.all().await?.into_iter().find(|record| {
-            record.membership == member.membership && record.state != MemberState::Removed
-        }) else {
-            break;
-        };
-        let store = owner.jobs.store().await?;
-        let mut ids = Vec::new();
-        let mut key = Vec::new();
-        for id in store.pending_ids().await? {
-            let job = store.read(id.clone()).await?;
-            if matches!(&job.recipient,crate::agents::jobs::model::Recipient::Remote {host,..} if host==&member.host)
+        let record = match link.store.resolve(&member.host).await {
+            Ok(record)
+                if record.membership == member.membership
+                    && record.state != MemberState::Removed =>
             {
-                key.push((id.as_str().to_owned(), job.revision));
-                ids.push(id);
+                record
             }
-        }
-        let intents = store
-            .intents()
-            .await?
-            .into_iter()
-            .filter(|intent| intent.host == member.host)
-            .map(|intent| (intent.request.job_id, intent.state, intent.stop_confirmed))
-            .collect::<Vec<_>>();
-        let current = crate::agents::jobs::store::fingerprint(&serde_json::to_vec(&(
-            key,
-            intents,
-            record.state,
-        ))?);
-        if current != previous || retry && tokio::time::Instant::now() >= due {
-            let permit =
-                tokio::select! {_=shutdown.cancelled()=>break,permit=capacity.acquire()=>permit?};
-            let attempted_ids = ids.clone();
-            let attempted_intents = store
-                .intents()
-                .await?
-                .into_iter()
-                .filter(|intent| intent.host == member.host)
-                .map(|intent| intent.request.job_id)
-                .collect::<std::collections::HashSet<_>>();
-            if !introduced && record.state == MemberState::Active {
-                let identity = owner.host_identity().await?;
-                introduced = link
+            _ => break,
+        };
+        let ids = store.member_pending_ids(member.host.clone()).await?;
+        let permit =
+            tokio::select! {_=shutdown.cancelled()=>break,permit=capacity.acquire()=>permit?};
+        if !introduced && record.state == MemberState::Active {
+            let identity = owner.host_identity().await?;
+            introduced = link
                     .call(
                         &member.host,
                         "cluster/hello",
@@ -184,10 +156,10 @@ async fn member_worker(
                     )
                     .await
                     .is_ok();
-            }
-            retry = !introduced && record.state == MemberState::Active;
-            retry |= owner.reconcile_cluster_member(&member.host).await?;
-            let outcomes=stream::iter(ids).map(|id| {
+        }
+        let mut retry = !introduced && record.state == MemberState::Active;
+        retry |= owner.reconcile_cluster_member(&member.host).await?;
+        let outcomes=stream::iter(ids).map(|id| {
                 let owner=&owner;
                 let host=&member.host;
                 async move {
@@ -203,46 +175,24 @@ async fn member_worker(
                     }
                 }
             }).buffer_unordered(64).collect::<Vec<_>>().await;
-            for outcome in outcomes {
-                match outcome {
-                    Ok(pending) => retry |= pending,
-                    Err(error) => {
-                        tracing::warn!(host=member.host,%error,"remote delivery remains pending");
-                        retry = true;
-                    }
+        for outcome in outcomes {
+            match outcome {
+                Ok(pending) => retry |= pending,
+                Err(error) => {
+                    tracing::warn!(host=member.host,%error,"remote delivery remains pending");
+                    retry = true;
                 }
             }
-            drop(permit);
-            let mut key = Vec::new();
-            for id in attempted_ids {
-                let job = store.read(id.clone()).await?;
-                if matches!(&job.recipient,crate::agents::jobs::model::Recipient::Remote {host,..} if host==&member.host)
-                {
-                    key.push((id.as_str().to_owned(), job.revision));
-                }
-            }
-            let intents = store
-                .intents()
-                .await?
-                .into_iter()
-                .filter(|intent| {
-                    intent.host == member.host && attempted_intents.contains(&intent.request.job_id)
-                })
-                .map(|intent| (intent.request.job_id, intent.state, intent.stop_confirmed))
-                .collect::<Vec<_>>();
-            previous = crate::agents::jobs::store::fingerprint(&serde_json::to_vec(&(
-                key,
-                intents,
-                record.state,
-            ))?);
-            due = tokio::time::Instant::now() + delay;
-            delay = (delay * 2).min(Duration::from_secs(60));
         }
+        drop(permit);
+        let due = tokio::time::Instant::now() + delay;
+        delay = (delay * 2).min(Duration::from_secs(60));
         drop(owner);
         tokio::select! {
             _=shutdown.cancelled()=>break,
-            result=wakes.changed()=> {if result.is_err(){break;}delay=Duration::from_millis(250);due=tokio::time::Instant::now();retry=true;},
+            result=wakes.changed()=> {if result.is_err(){break;}delay=Duration::from_millis(250);},
             result=changes.changed()=> {if result.is_err(){break;}},
+            result=membership_changes.changed()=> {if result.is_err(){break;}},
             _=tokio::time::sleep_until(due),if retry=>{},
         }
     }
