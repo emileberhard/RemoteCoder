@@ -33,6 +33,11 @@ uses `IsolatedGateway`, a loopback Responses model, and isolated provider homes.
 Its Claude child uses the host router without copying provider credentials.
 It checks message-to-finished continuation deduplication and failure receipts
 through the installed candidate CLI, including isolated gateway restart.
+It also copies its completed Claude probe child's transcript into a deleted-cwd
+fixture, resumes that exact session through RPC, and requires both the unique
+input UUID and the new response in that same copied transcript. This fixture
+changes the first user cwd and project directory; it never executes a copied
+historical task.
 
 Optional `--seed <absolute-private-manifest.json>` checks copied conversation
 agent projections through real RPC. The version-1 manifest has `snapshot: true`,

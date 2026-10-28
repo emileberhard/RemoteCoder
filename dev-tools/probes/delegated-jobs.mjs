@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { cp, mkdir, readFile, symlink, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import { randomBytes, randomInt, randomUUID } from "node:crypto";
 import { IsolatedGateway, startStubRouter } from "./isolated-gateway.mjs";
@@ -238,6 +238,67 @@ async function runtimeFlows(lab, model) {
     return receipt;
 }
 
+async function cwdResumeFlow(lab, jobId) {
+    const job = await settle(lab, jobId, job => terminal(job)?.cleanup === "complete");
+    const threadId = terminal(job).execution.conversation.threadId;
+    assert(threadId.startsWith("claude_"));
+    const session = threadId.slice(7);
+    await lab.stop();
+    const projects = lab.path(".claude/projects");
+    const candidates = await Promise.all((await readdir(projects)).map(async directory => {
+        const path = join(projects, directory, `${session}.jsonl`);
+        return await Bun.file(path).exists() ? path : null;
+    }));
+    const found = candidates.filter(Boolean);
+    assert.equal(found.length, 1, "Completed isolated Claude child has ambiguous transcript identity");
+    const original = found[0];
+    assert(Bun.file(original).size <= 16 * 1024 * 1024, "Isolated child transcript exceeds the copy bound");
+    const rows = (await readFile(original, "utf8")).trimEnd().split("\n").map(line => JSON.parse(line));
+    const missingCwd = lab.path("work/removed-worktree");
+    assert(!(await Bun.file(missingCwd).exists()), "Missing-cwd fixture unexpectedly exists");
+    const firstUser = rows.find(row => row.type === "user" && row.sessionId === session && row.cwd);
+    assert(firstUser, "Isolated Claude transcript has no authoritative cwd record");
+    firstUser.cwd = missingCwd;
+    assert(rows.some(row => row.type === "assistant" && row.sessionId === session && row.cwd === lab.path("work")),
+        "Copied transcript lacks evidence for the existing replacement directory");
+    const project = join(projects, missingCwd.replace(/[^a-zA-Z0-9]/g, "-"));
+    await mkdir(project, { recursive: true });
+    const copied = join(project, `${session}.jsonl`);
+    await writeFile(copied, rows.map(row => JSON.stringify(row)).join("\n") + "\n", { mode: 0o600, flag: "wx" });
+    await rm(original);
+    await lab.start();
+    const client = await lab.connect();
+    const inputId = randomUUID();
+    const marker = `RCJOB_CWD_RESUMED_${randomUUID()}`;
+    const response = await client.rpc("turn/start", { threadId, cwd: missingCwd, model: "sonnet",
+        clientUserMessageId: inputId,
+        input: [{ type: "text", text: `Reply with exactly ${marker} and nothing else. Do not use tools.`, text_elements: [] }] });
+    assert(!response.error, `Deleted-cwd copied transcript did not resume: ${JSON.stringify(response.error)}`);
+    const turnId = response.result.turn.id;
+    const evidence = await lab.waitFor(async () => {
+        const records = (await readFile(copied, "utf8")).trimEnd().split("\n").flatMap(line => {
+            try { return [JSON.parse(line)]; } catch { return []; }
+        });
+        const input = records.findIndex(row => row.type === "user" && row.sessionId === session && row.uuid === inputId);
+        if (input < 0) return null;
+        const answer = records.slice(input + 1).find(row => row.type === "assistant" && row.sessionId === session
+            && (row.message?.content ?? []).some(part => part.type === "text" && part.text.includes(marker)));
+        return answer ? { inputUuid: records[input].uuid, answerUuid: answer.uuid, sessionId: answer.sessionId, cwd: answer.cwd } : null;
+    }, 120);
+    assert.equal(evidence.sessionId, session, "Resume forked or replaced the exact isolated session");
+    assert.equal(evidence.cwd, lab.path("work"), "Resumed process did not use the proven replacement cwd");
+    assert(!(await Bun.file(original).exists()), "Resume wrote a second transcript instead of the exact copied path");
+    await lab.waitFor(async () => {
+        const active = await client.rpc("daemon/activeTurns");
+        assert(!active.error);
+        return !active.result.activeTurns.some(turn => turn.threadId === threadId);
+    });
+    const released = await client.rpc("claude/thread/release", { threadId });
+    assert(!released.error);
+    return { threadId, turnId, ...evidence, originalTask: "completed isolated probe child",
+        copiedTranscript: true, changedFixtureFields: ["first user cwd", "project directory"], exactCopiedPath: true };
+}
+
 async function messageFlows(lab, finishedJob) {
     await settle(lab, finishedJob, job => terminal(job)?.cleanup === "complete");
     const deliveryId = randomUUID();
@@ -330,6 +391,7 @@ try {
     await prepare(lab, model, inference);
     await lab.start();
     const receipt = { runtime: await runtimeFlows(lab, model) };
+    receipt.cwdResume = await cwdResumeFlow(lab, receipt.runtime.claudeChild.jobId);
     if (seedPath) {
         await lab.stop();
         const seed = await installSeed(lab, seedPath);
