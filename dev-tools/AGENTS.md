@@ -53,12 +53,16 @@ agent projections through real RPC. The version-1 manifest has `snapshot: true`,
 `jobStore` (relative directory with bounded `jobs`, `agents`, `uncertainties`),
 `transcripts` (`threadId`, relative `path`), and `queries` (`threadId`,
 `expectedAgentIds`, optional `warningContains`). Capture the selected jobs,
-continuation branches and ancestors outside Git; include matching agent records.
+continuation branches and ancestors outside Git; include matching agent records
+and every job referenced by their origin and latest pointers.
 Provider homes and directory/transcript references are remapped into the lab.
 Copied jobs become imported snapshots with Stop intent cleared, preventing the
 job driver from executing historical work. The receipt names these alterations:
 this proves static projection and isolation, not historical execution state.
 The probe verifies the copied job records remain unchanged during reads.
+It then runs the actual configs worktree cleanup planner as a dry run, routing
+only its two gateway clients to the isolated candidate. The receipt requires
+known activity and no applied deletions; the planner keeps the real home context.
 
 ## rc-gateway
 
