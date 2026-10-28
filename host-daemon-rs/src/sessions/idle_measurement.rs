@@ -51,6 +51,16 @@ pub(super) fn run(store: &Store, origins: &[Origin], mode: &str) -> Result<()> {
         mode == "after",
         "The baseline uses its preserved executable"
     );
+    let read_resolver_plan: Vec<String> = store
+        .reader()?
+        .prepare(&format!(
+            "EXPLAIN QUERY PLAN {}",
+            super::query::SESSION_TARGET_SQL
+        ))?
+        .query_map(["absent-session", "mini", "absent-session"], |row| {
+            row.get(3)
+        })?
+        .collect::<rusqlite::Result<_>>()?;
     let stop = AtomicBool::new(false);
     let cpu = cpu_seconds();
     let started = Instant::now();
@@ -180,7 +190,7 @@ pub(super) fn run(store: &Store, origins: &[Origin], mode: &str) -> Result<()> {
     append(&new, "fleetidlenewprobe")?;
     let new_seconds = wait_text(store, "fleet-idle-new", "fleetidlenewprobe", started)?;
     worker.stop()?;
-    let report = json!({"phase":mode,"headerSeconds":header_seconds,"headerComplete":header_complete,"directories":directory_counts,"directoryDiscoveryP95Seconds":discovery_times[9],"inventoryCatchupP95Seconds":inventory_times[9],"initialSeconds":initial_seconds,"initialCpuSeconds":initial_cpu,"initial":initial,"reconcileSeconds":reconcile_seconds,"reconcileCpuSeconds":reconcile_cpu,"outcome":reconcile,"cpuSeconds":idle_cpu,"elapsedSeconds":elapsed,"cpuSecondsPerMinute":idle_cpu*60.0/elapsed,"amortizedReconcileCpuSecondsPerMinute":reconcile_cpu/10.0,"databaseWrittenDuringQuiet":false,"coldAppendSeconds":append_seconds,"newFileSeconds":new_seconds});
+    let report = json!({"phase":mode,"readResolverPlan":read_resolver_plan,"headerSeconds":header_seconds,"headerComplete":header_complete,"directories":directory_counts,"directoryDiscoveryP95Seconds":discovery_times[9],"inventoryCatchupP95Seconds":inventory_times[9],"initialSeconds":initial_seconds,"initialCpuSeconds":initial_cpu,"initial":initial,"reconcileSeconds":reconcile_seconds,"reconcileCpuSeconds":reconcile_cpu,"outcome":reconcile,"cpuSeconds":idle_cpu,"elapsedSeconds":elapsed,"cpuSecondsPerMinute":idle_cpu*60.0/elapsed,"amortizedReconcileCpuSecondsPerMinute":reconcile_cpu/10.0,"databaseWrittenDuringQuiet":false,"coldAppendSeconds":append_seconds,"newFileSeconds":new_seconds});
     std::fs::write(
         std::env::var("RC_SESSIONS_MEASURE_REPORT")?,
         serde_json::to_vec_pretty(&report)?,

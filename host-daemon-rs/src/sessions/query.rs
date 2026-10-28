@@ -210,6 +210,8 @@ pub(crate) struct SourceRef {
     pub sidecars: Vec<String>,
 }
 
+pub(super) const SESSION_TARGET_SQL: &str = "WITH candidates AS (SELECT session_key FROM session WHERE session_key=?1 UNION SELECT session_key FROM (SELECT session_key FROM session WHERE thread_id=?1 LIMIT 2) UNION SELECT session_key FROM (SELECT session_key FROM session WHERE origin_host=?2 AND thread_id=?3 LIMIT 2) LIMIT 2) SELECT src.local_path,src.present FROM candidates JOIN session s USING(session_key) JOIN source src USING(source_id)";
+
 pub(crate) fn read(db: &super::store::Reader, request: ReadRequest) -> Result<Value> {
     let length = request.length.unwrap_or(64 * 1024);
     ensure!(
@@ -253,11 +255,17 @@ pub(crate) fn read(db: &super::store::Reader, request: ReadRequest) -> Result<Va
             request.dependency.is_none(),
             "Dependencies require an item key"
         );
-        let mut stmt=db.prepare("SELECT src.local_path,src.present FROM session s JOIN source src USING(source_id) WHERE s.session_key=?1 OR s.thread_id=?1 OR s.origin_host||':'||s.thread_id=?1 LIMIT 2")?;
+        let address = request.target.split_once(':');
+        let mut stmt = db.prepare(SESSION_TARGET_SQL)?;
         let matches = stmt
-            .query_map([&request.target], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
-            })?
+            .query_map(
+                params![
+                    request.target,
+                    address.map(|(host, _)| host),
+                    address.map(|(_, thread)| thread)
+                ],
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)),
+            )?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         ensure!(
             !matches.is_empty(),

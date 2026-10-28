@@ -56,6 +56,11 @@ append prefixes continue at the last complete record. Malformed or oversized
 records retain accepted data and surface incomplete coverage. Missing dependencies
 prevent the complete watermark from advancing.
 
+Inventory pages seek the session primary key directly. Exact session reads union
+three indexed address seeks (canonical key, bare thread ID, host plus thread ID),
+with at most two candidates per arm and at most two distinct results. Unknown
+addresses remain not_found; multiple canonical keys remain ambiguous usage.
+
 SQL opens a separate read-only connection with query_only, no extensions or
 attachments, a five-second progress deadline, 10,000 rows, and an 8 MiB response
 budget. Read commands use byte ranges and return base64 plus UTF-8 when valid.

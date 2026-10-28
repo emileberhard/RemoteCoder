@@ -1282,3 +1282,56 @@ fn sessions_claude_tool_result_jsonl_stays_evidence() {
         .unwrap();
     assert_eq!(evidence, 1);
 }
+
+#[test]
+fn sessions_read_seeks_all_address_forms_and_rejects_ambiguous_ids() {
+    let f = fixture();
+    scan(&f);
+    let canonical: String = f
+        .store
+        .reader()
+        .unwrap()
+        .query_row(
+            "SELECT session_key FROM session WHERE thread_id='codex-root'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let read = |target: &str| {
+        query::read(
+            &f.store.reader().unwrap(),
+            query::ReadRequest {
+                target: target.into(),
+                offset: 0,
+                length: Some(4 << 20),
+                dependency: None,
+            },
+        )
+    };
+    let expected = std::fs::read(&f.codex).unwrap();
+    for address in [&canonical, "codex-root", "fixture:codex-root"] {
+        let result = read(address).unwrap();
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(result["base64"].as_str().unwrap())
+            .unwrap();
+        assert_eq!(bytes, expected);
+    }
+    assert!(
+        read("absent-session")
+            .unwrap_err()
+            .to_string()
+            .starts_with("not_found:")
+    );
+    let mut other = f.origins[0].clone();
+    other.host = "other".into();
+    ingest::scan(&f.store, &[other], &AtomicBool::new(false)).unwrap();
+    assert!(
+        read("codex-root")
+            .unwrap_err()
+            .to_string()
+            .starts_with("usage: ambiguous")
+    );
+    assert!(read(&canonical).is_ok());
+    assert!(read("fixture:codex-root").is_ok());
+    assert!(read("other:codex-root").is_ok());
+}
