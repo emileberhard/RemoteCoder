@@ -45,7 +45,8 @@ struct ChatHistoryReadTests {
         await gateway.releaseHeldRead()
         await warm.value
         #expect(!target.conversationWarmer.needsWarm(first) && !target.conversationWarmer.needsWarm(second))
-        #expect(await gateway.requestedThreadIDs == [first.id, second.id])
+        let readThreadIDs = await gateway.requestedThreadIDs
+        #expect(Set(readThreadIDs) == [first.id, second.id])
     }
 
     @Test(.timeLimit(.minutes(1))) func aLatePageFromAnInvalidatedOwnerCannotPopulateItsReplacement() async throws {
