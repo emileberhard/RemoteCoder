@@ -329,7 +329,8 @@ async fn canceled_message_caller_cannot_release_execution_before_provider_admiss
     use crate::test_support::FakeControl;
     for stop_requested in [false, true] {
         let directory = tempfile::tempdir().unwrap();
-        let gateway = TestGateway::with_native_runtime(directory.path());
+        let root = directory.path().canonicalize().unwrap();
+        let gateway = TestGateway::with_native_runtime(&root);
         let store = gateway.jobs.store().await.unwrap();
         let id = JobId::for_mutation(Provider::Codex, "running-message-target").unwrap();
         let admitted = gateway
@@ -404,7 +405,7 @@ async fn canceled_message_caller_cannot_release_execution_before_provider_admiss
         let mut control = FakeControl::attach(&gateway, 16).await;
         let sender = gateway.clone();
         let target = id.clone();
-        let caller = tokio::spawn(async move {
+        let mut caller = tokio::spawn(async move {
             sender
                 .agent_jobs_rpc(
                     "agent/jobs/message",
@@ -416,7 +417,10 @@ async fn canceled_message_caller_cannot_release_execution_before_provider_admiss
                 )
                 .await
         });
-        let raw = control.requests.recv().await.unwrap();
+        let raw = tokio::select! {
+            result = &mut caller => panic!("message returned before provider admission: {result:?}"),
+            request = control.requests.recv() => request.unwrap(),
+        };
         let rpc: serde_json::Value = serde_json::from_str(&raw).unwrap();
         assert_eq!(rpc["method"], "thread/input/acceptance/read");
         caller.abort();
