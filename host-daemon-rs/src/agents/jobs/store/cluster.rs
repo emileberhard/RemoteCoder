@@ -110,7 +110,7 @@ impl JobStore {
                 .collect::<Vec<_>>();
             for mut agent in agents {
                 let parent = match &agent.origin {
-                    Origin::TopLevel => None,
+                    Origin::TopLevel => continue,
                     Origin::Parent { conversation } => Some(AgentAddress {
                         host_id: host.clone(),
                         thread_id: conversation.thread_id.clone(),

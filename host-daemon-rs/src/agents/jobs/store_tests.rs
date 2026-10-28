@@ -54,6 +54,57 @@ fn conversation() -> ConversationIdentity {
 }
 
 #[tokio::test]
+async fn cluster_untagged_records_keep_legacy_keys_until_explicit_parent_change() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().to_owned();
+    let store = JobStore::open(root.clone()).await.unwrap();
+    let original = job(89);
+    store.admit(original.clone()).await.unwrap();
+    store
+        .initialize_parent_tags("local-host".into())
+        .await
+        .unwrap();
+    for (name, fields) in [
+        (
+            "jobs",
+            &[
+                "admittedMembership",
+                "remoteFingerprint",
+                "parentRevision",
+                "initialParent",
+                "attention",
+            ][..],
+        ),
+        (
+            "agents",
+            &["parent", "parentRevision", "parentRecipient"][..],
+        ),
+    ] {
+        let file = std::fs::read_dir(root.join(name))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap();
+        let value: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(file.path()).unwrap()).unwrap();
+        for field in fields {
+            assert!(value.get(field).is_none(), "{name} contains {field}");
+        }
+    }
+    let promoted = store
+        .set_parent(original.agent_id.clone(), None, Recipient::None)
+        .await
+        .unwrap();
+    assert_eq!(promoted.parent_recipient, Some(Recipient::None));
+    assert_eq!(promoted.parent_revision, 1);
+    drop(store);
+    let reopened = JobStore::open(root).await.unwrap();
+    let promoted = reopened.agent(original.agent_id).await.unwrap();
+    assert_eq!(promoted.parent, None);
+    assert_eq!(promoted.parent_recipient, Some(Recipient::None));
+}
+
+#[tokio::test]
 async fn cluster_fault_commits_survive_restart_and_fence_parent_handover() {
     use crate::wire::cluster::*;
     let directory = tempfile::tempdir().unwrap();

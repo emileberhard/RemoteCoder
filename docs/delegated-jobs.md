@@ -29,6 +29,23 @@ origin or provider scope stays unknown rather than becoming a root.
 
 ## Durable lifecycle
 
+The cluster upgrade is a one-way job-store change. After an agent gains a parent
+tag or a job gains cluster state, gateways at `aa96ebb` and earlier reject the
+new fields or enum variants. Recover by rolling forward to a fixed next patch;
+never restore a pre-upgrade snapshot that would discard accepted jobs.
+
+| Store | Older gateway behavior |
+|---|---|
+| `agent-jobs/v1/agents` | Rejects parent-tag fields and `remoteParent` origin. Never-tagged roots omit new fields and retain their old shape. |
+| `agent-jobs/v1/jobs` | Rejects cluster admission, parent or attention fields, remote origin/recipient and `waitingForProvider`. Ordinary untagged jobs omit absent new fields and retain their old shape until they use a new state. |
+| `agent-jobs/v1/messages` | Rejects a non-null `remoteRecipient` or remote sender/recipient. Local messages omit the absent field and retain their old shape. |
+| `agent-jobs/v1/remote-intents` and `cancel-fences` | Ignores these new directories; cannot enforce their accepted work or Stop fences. |
+| `identity/v1`, job-store `.epoch`, Claude receipt `.epoch` | Ignores these new files; existing receipt records keep their prior format. |
+| `cluster/v1` members and credentials | Ignores this new store and cannot authenticate peer credentials. |
+
+Ignoring a new store does not make a downgrade safe: the older gateway cannot
+reconcile its accepted intents, remote deliveries or cancellation fences.
+
 Admission, exact conversation binding and ancestry commit before useful provider
 work starts. The initial input has a deterministic UUID derived from the JobId.
 A job moves through admitted, bound, dispatching, running or recovering, and a
@@ -300,8 +317,9 @@ returns `HostIdentity {host_id, incarnation}`.
 `cluster/list` returns `self {hostId,name,incarnation,version,protocol}` and
 `members [{hostId,name,membership,state,reachability,version,protocol,load,routes}]`.
 Reachability has `state`, `since` and nullable `lastSeenAt`, with RFC 3339 times.
-It is the last observed state, not an on-demand probe; clients show when a
-reachable member was last seen. A failed member call updates the observation.
+Listing probes active members concurrently with a two-second hello deadline,
+updates reachability and preserves the last successful `lastSeenAt`. A successful
+hello resets that member's delivery backoff. There is no background polling.
 Removed tombstones stay private. Load, when available, is
 `{cpuPercent,memoryPressure,activeAgents}`. Every job read/list and conversation
 agent row adds `ownerHostId`, `parent` and `recipient`. Parent references always

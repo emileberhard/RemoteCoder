@@ -1042,6 +1042,13 @@ scoped receipt reads require the exact sender conversation.
 
 ## Install, restart and recovery
 
+- The cluster upgrade makes the delegated-job store one-way once parent tags,
+  cluster fields or new execution states are written. Gateways at `aa96ebb` and
+  earlier reject those records and ignore remote intents, fences and membership.
+  Recover by rolling forward to a fixed next patch. Never restore a pre-upgrade
+  snapshot that would discard accepted jobs. `docs/delegated-jobs.md` lists each
+  store's compatibility boundary. Never-tagged records omit absent new fields.
+
 - A planned daemon or runtime restart is one Rust-owned transaction in the
   gateway binary:
   1. Hold the host lease and fence new work.

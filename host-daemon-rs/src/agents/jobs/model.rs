@@ -8,6 +8,10 @@ pub(crate) const MAX_JOB_BYTES: u64 = 1024 * 1024;
 pub(crate) const MAX_STORE_BYTES: u64 = 512 * 1024 * 1024;
 pub(crate) const MAX_UNSETTLED_JOBS: usize = 256;
 
+fn is_zero(value: &u64) -> bool {
+    *value == 0
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "camelCase")]
 pub(crate) enum Provider {
@@ -432,17 +436,17 @@ pub(crate) struct JobRecord {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub provider_retries: Vec<ProviderRetry>,
     pub source: JobSource,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub admitted_membership: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote_fingerprint: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_zero")]
     pub parent_revision: u64,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initial_parent: Option<crate::wire::cluster::AgentAddress>,
     pub admission_origin: Option<Origin>,
     pub unconfirmed_result: Option<JobResult>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attention: Option<Attention>,
     pub notices: Vec<JobNotice>,
     pub spec: SpecEvidence,
@@ -489,11 +493,11 @@ pub(crate) enum ConversationBinding {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct AgentRecord {
     pub agent_id: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent: Option<crate::wire::cluster::AgentAddress>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_zero")]
     pub parent_revision: u64,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_recipient: Option<Recipient>,
     pub conversation: ConversationBinding,
     pub origin: Origin,

@@ -808,7 +808,8 @@ impl Inner {
         let agent = AgentRecord {
             parent: job.initial_parent.clone(),
             parent_revision: job.parent_revision,
-            parent_recipient: Some(job.recipient.clone()),
+            parent_recipient: (job.initial_parent.is_some() || job.parent_revision > 0)
+                .then(|| job.recipient.clone()),
             agent_id: job.agent_id.clone(),
             conversation: ConversationBinding::Unknown {
                 reason: "provider conversation is not yet bound".into(),
