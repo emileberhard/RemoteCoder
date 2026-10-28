@@ -654,7 +654,16 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
-        write("native-two-needle");
+        write("native-two-signal");
+        let discovered = gateway
+            .resolve_local_agent("signal")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(discovered["threadId"], "native-two-signal");
+        write("native-three-needle");
+        gateway.session_inventory(None, 1000).await.unwrap();
+        gateway.stop_sessions().await;
         let error = gateway.resolve_local_agent("needle").await.unwrap_err();
         assert!(
             error
@@ -667,6 +676,5 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(exact["threadId"], "native-one-needle");
-        gateway.stop_sessions().await;
     }
 }

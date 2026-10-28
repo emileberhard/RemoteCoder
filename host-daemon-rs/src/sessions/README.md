@@ -94,7 +94,8 @@ database and reports its covered origins. Search fans out, deduplicates mirrored
 items and reports unreachable members without hiding successful results.
 
 The gateway uses the retained host identity and cluster link for member reads.
-Native suffix resolution requests worker catch-up before its bounded indexed seek.
+Native suffix resolution reads its bounded index first and requests coalesced
+worker catch-up only on a miss.
 The CLI is `remote-coder-codex-gateway sessions`; `--local` and `--database`
 permit gateway-independent reads. All output is JSON; errors go to stderr.
 

@@ -166,6 +166,10 @@ impl Gateway {
         let suffix = suffix.to_owned();
         tokio::task::spawn_blocking(move || {
             let _permit = permit;
+            let matches = query::match_thread_suffix(&store.reader()?, &host, &suffix)?;
+            if !matches.is_empty() {
+                return Ok(matches);
+            }
             crate::sessions::ingest::refresh_inventory(&store)?;
             query::match_thread_suffix(&store.reader()?, &host, &suffix)
         })
