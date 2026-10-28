@@ -92,6 +92,11 @@ no worker. Missing holder/socket/token becomes unreachable; it never triggers
 terminal takeover. Registration after a gateway restart reestablishes that same
 live route. Gateway-owned parents use their existing supervisor and Stop fence.
 
+An older parent record can lack a route while retaining a gateway-owned turn
+selection. Only that exact persisted selection plus a freshly available native
+inventory proving no external client may restore its gateway route. A native
+route is never converted, and restoration preserves Stop and its generation.
+
 ## Caller authority and read-only work
 
 Caller capture checks kernel PID/birth ancestry against actual provider-owned

@@ -31,9 +31,37 @@ impl Gateway {
             delivery_id: delivery_id.to_owned(),
             text: text.to_owned(),
         };
-        let gateway_owned = provider
+        let mut gateway_owned = provider
             .job_parent_gateway_owned(&conversation.thread_id)
             .await?;
+        if !gateway_owned
+            && provider
+                .has_legacy_gateway_parent(&conversation.thread_id)
+                .await?
+        {
+            self.external_activity.invalidate().await;
+            let request = json!({"params":{"threadId":conversation.thread_id}});
+            if let Some(error) = self
+                .other_client_refusal(
+                    "claude/message",
+                    request.as_object().expect("constructed request object"),
+                )
+                .await
+            {
+                return Ok(
+                    json!({"deliveryId":delivery_id,"deliveryState":DeliveryState::Blocked { reason: error.message }}),
+                );
+            }
+            gateway_owned = provider
+                .restore_gateway_parent_route(&conversation.thread_id)
+                .await?;
+            if gateway_owned {
+                self.journal.runtime(
+                    "parent_route_restored",
+                    json!({"threadId":conversation.thread_id,"evidence":"retainedGatewaySelectionAndAvailableClientInventory"}),
+                );
+            }
+        }
         let result = if gateway_owned {
             provider.deliver_parent_message(message).await
         } else {

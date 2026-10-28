@@ -37,6 +37,25 @@ impl ClaudeSupervisor {
                 == ParentDeliveryRoute::Gateway)
     }
 
+    pub(crate) async fn has_legacy_gateway_parent(&self, thread: &str) -> anyhow::Result<bool> {
+        let parent = self.conversation_index.parent(thread).await?;
+        Ok(parent.delivery_route == ParentDeliveryRoute::Unknown && parent.selection.is_some())
+    }
+
+    pub(crate) async fn restore_gateway_parent_route(&self, thread: &str) -> anyhow::Result<bool> {
+        let _lifecycle = self.lifecycles.lock(thread).await;
+        self.conversation_index
+            .transact_parent(thread, |parent| {
+                if parent.delivery_route == ParentDeliveryRoute::Unknown
+                    && parent.selection.is_some()
+                {
+                    parent.delivery_route = ParentDeliveryRoute::Gateway;
+                }
+                Ok(parent.delivery_route == ParentDeliveryRoute::Gateway)
+            })
+            .await
+    }
+
     pub(crate) async fn record_native_parent(&self, thread: &str) -> anyhow::Result<()> {
         let _lifecycle = self.lifecycles.lock(thread).await;
         anyhow::ensure!(
@@ -928,6 +947,93 @@ mod tests {
             delivery_id: id.to_owned(),
             text: text.to_owned(),
         }
+    }
+
+    #[tokio::test]
+    async fn legacy_gateway_parent_route_restores_delivery_without_clearing_stop() {
+        let mut fixture = Fixture::new();
+        fixture.initial_turn().await;
+        fixture.expire().await;
+        fixture
+            .agent
+            .conversation_index
+            .update_parent(THREAD, |parent| {
+                parent.delivery_route = ParentDeliveryRoute::Unknown;
+            })
+            .await
+            .unwrap();
+        assert!(
+            fixture
+                .agent
+                .has_legacy_gateway_parent(THREAD)
+                .await
+                .unwrap()
+        );
+        assert!(
+            fixture
+                .agent
+                .restore_gateway_parent_route(THREAD)
+                .await
+                .unwrap()
+        );
+        let receipt = fixture
+            .agent
+            .deliver_parent_message(message("legacy-route", "restored delivery"))
+            .await
+            .unwrap();
+        assert_eq!(receipt["delivery_state"], "submitted");
+        let received = fixture.received(2).await;
+        assert_eq!(received.len(), 2);
+        fixture.agent.stop_all().await;
+        fixture.agent.stop_parent(THREAD).await.unwrap();
+        let generation = fixture.agent.stop_generation(THREAD).await.unwrap();
+        fixture
+            .agent
+            .conversation_index
+            .update_parent(THREAD, |parent| {
+                parent.delivery_route = ParentDeliveryRoute::Unknown;
+            })
+            .await
+            .unwrap();
+        assert!(
+            fixture
+                .agent
+                .restore_gateway_parent_route(THREAD)
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            fixture.agent.stop_generation(THREAD).await.unwrap(),
+            generation
+        );
+        let error = fixture
+            .agent
+            .deliver_parent_message(message("after-stop", "must stay stopped"))
+            .await
+            .unwrap_err();
+        assert!(error.message.contains("interrupted by the user"));
+        fixture.agent.record_native_parent(THREAD).await.unwrap();
+        assert!(
+            !fixture
+                .agent
+                .has_legacy_gateway_parent(THREAD)
+                .await
+                .unwrap()
+        );
+        assert!(
+            !fixture
+                .agent
+                .restore_gateway_parent_route(THREAD)
+                .await
+                .unwrap()
+        );
+        assert!(
+            !fixture
+                .agent
+                .has_legacy_gateway_parent("claude_aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee")
+                .await
+                .unwrap()
+        );
     }
 
     #[tokio::test]
