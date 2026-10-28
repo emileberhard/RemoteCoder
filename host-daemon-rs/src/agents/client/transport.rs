@@ -12,18 +12,36 @@ use crate::providers::codex::daemon::websocket_config;
 use crate::wire::agent_jobs::ScopedRequest;
 use crate::wire::json::{EncodedJson, encode};
 
-pub(super) async fn scoped(path: &Path, request: &ScopedRequest) -> Result<Value, TransportError> {
+pub(super) async fn scoped(
+    path: &Path,
+    legacy_target: &Path,
+    request: &ScopedRequest,
+) -> Result<Value, TransportError> {
     use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 
     let mut submission = Submission::NotSent;
     let result = tokio::time::timeout(REQUEST_DEADLINE, async {
-        let mut encoded = serde_json::to_vec(request)?;
+        let mut request = request.clone();
+        let mut stream = match tokio::net::UnixStream::connect(path).await {
+            Ok(stream) => stream,
+            Err(error)
+                if error.kind() == std::io::ErrorKind::NotFound
+                    && crate::agents::jobs::routes::is_legacy_socket(path) =>
+            {
+                request = ScopedRequest::Legacy {
+                    socket: path.to_owned(),
+                    request: Box::new(request),
+                };
+                tokio::net::UnixStream::connect(legacy_target).await?
+            }
+            Err(error) => return Err(error.into()),
+        };
+        let mut encoded = serde_json::to_vec(&request)?;
         anyhow::ensure!(
             encoded.len() <= crate::agents::jobs::model::MAX_JOB_BYTES as usize,
             "scoped request exceeds its byte budget"
         );
         encoded.push(b'\n');
-        let mut stream = tokio::net::UnixStream::connect(path).await?;
         submission = Submission::Uncertain;
         stream.write_all(&encoded).await?;
         let mut response = Vec::new();
@@ -330,5 +348,66 @@ mod tests {
             .unwrap_err();
         assert_eq!(error.submission, Submission::NotSent);
         server.await.unwrap();
+    }
+    #[tokio::test]
+    async fn scoped_legacy_migration_wraps_only_a_missing_recognized_job_socket() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        use tokio::net::UnixListener;
+        let directory = tempfile::tempdir_in("/tmp").unwrap();
+        let id = crate::agents::jobs::model::JobId::for_mutation(
+            crate::agents::jobs::model::Provider::Codex,
+            directory.path().to_str().unwrap(),
+        )
+        .unwrap();
+        let legacy = crate::agents::jobs::routes::legacy_socket(&id);
+        let canonical = directory.path().join("canonical");
+        let listener = UnixListener::bind(&canonical).unwrap();
+        let expected = legacy.clone();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut stream = BufReader::new(stream);
+            let mut line = String::new();
+            stream.read_line(&mut line).await.unwrap();
+            let frame: ScopedRequest = serde_json::from_str(&line).unwrap();
+            assert!(matches!(frame, ScopedRequest::Legacy { socket, request }
+                if socket == expected && matches!(*request, ScopedRequest::ReadSelf {})));
+            stream
+                .get_mut()
+                .write_all(b"{\"error\":{\"code\":-32600,\"message\":\"namespace denied\"}}\n")
+                .await
+                .unwrap();
+        });
+        let response = scoped(&legacy, &canonical, &ScopedRequest::ReadSelf {})
+            .await
+            .unwrap();
+        assert_eq!(response["error"]["message"], "namespace denied");
+        server.await.unwrap();
+        assert!(!legacy.exists());
+    }
+
+    #[tokio::test]
+    async fn scoped_migration_never_uses_another_route_after_refusal_or_an_unrecognized_path() {
+        use futures_util::FutureExt;
+        use tokio::net::UnixListener;
+        let directory = tempfile::tempdir_in("/tmp").unwrap();
+        let id = crate::agents::jobs::model::JobId::for_mutation(
+            crate::agents::jobs::model::Provider::Codex,
+            directory.path().to_str().unwrap(),
+        )
+        .unwrap();
+        let legacy = crate::agents::jobs::routes::legacy_socket(&id);
+        std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+        let stale = UnixListener::bind(&legacy).unwrap();
+        drop(stale);
+        let canonical = directory.path().join("canonical");
+        let target = UnixListener::bind(&canonical).unwrap();
+        for path in [&legacy, &directory.path().join("not-a-job-socket")] {
+            let error = scoped(path, &canonical, &ScopedRequest::ReadSelf {})
+                .await
+                .unwrap_err();
+            assert_eq!(error.submission, Submission::NotSent);
+            assert!(target.accept().now_or_never().is_none());
+        }
+        std::fs::remove_file(legacy).unwrap();
     }
 }

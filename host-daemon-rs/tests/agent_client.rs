@@ -288,7 +288,7 @@ async fn agent_client_explicit_context_uses_authenticated_owner_despite_stale_so
         assert_eq!(request["params"]["deliveryId"], "stable-detached-message");
         socket
             .send(Message::Text(
-                json!({"id":1,"result":{"accepted":true}}).to_string(),
+                json!({"id":1,"result":{"deliveryId":"stable-detached-message","deliveryState":{"kind":"accepted","receipt":"fixture-native-custody"}}}).to_string(),
             ))
             .await
             .unwrap();
@@ -318,11 +318,362 @@ async fn agent_client_explicit_context_uses_authenticated_owner_despite_stale_so
         )
         .await;
     assert_eq!(exit, 0);
-    assert_eq!(payload["accepted"], true);
+    assert_eq!(payload["deliveryId"], "stable-detached-message");
+    assert_eq!(payload["deliveryState"]["kind"], "accepted");
     assert!(
         tokio::time::timeout(Duration::from_millis(100), stale.accept())
             .await
             .is_err()
     );
     server.await.unwrap();
+}
+
+#[test]
+fn agent_client_format_only_reserves_stdout_for_envelopes() {
+    let binary = env!("CARGO_BIN_EXE_remote-coder-codex-gateway");
+    for text in ["", "Fixture message"] {
+        let output = Command::new(binary)
+            .env_clear()
+            .args(["agent", "message", "parent", text, "--format-only"])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(64));
+        assert!(output.stdout.is_empty());
+        let diagnostic: Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert_eq!(diagnostic["ok"], false);
+        assert_eq!(diagnostic["error"]["kind"], "invalidRequest");
+    }
+    let output = Command::new(binary)
+        .env_clear()
+        .args([
+            "agent",
+            "message",
+            "parent",
+            "Fixture message",
+            "--format-only",
+            "--sender-id",
+            "/root/fixture",
+            "--reply-tool",
+            "collaboration.send_message",
+            "--reply-target",
+            "/root/fixture",
+            "--delivery-id",
+            "format-fixture",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    let envelope = String::from_utf8(output.stdout).unwrap();
+    assert!(envelope.starts_with("<agent_message"));
+    assert!(envelope.contains("Fixture message"));
+    assert!(envelope.trim_end().ends_with("</agent_message>"));
+}
+
+#[tokio::test]
+async fn agent_client_active_listing_skips_history_pages_and_warns_only_for_active_truncation() {
+    let root = tempfile::tempdir().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    configuration(root.path(), listener.local_addr().unwrap().port());
+    let server = tokio::spawn(async move {
+        for _ in 0..4 {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            initialize(&mut socket).await;
+            let Message::Text(text) = socket.next().await.unwrap().unwrap() else {
+                panic!("No list request");
+            };
+            let request: Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(request["method"], "agent/jobs/list");
+            let first_page = request["params"]["cursor"].is_null();
+            let rows = if first_page { 0..200 } else { 200..202 };
+            let jobs: Vec<_> = rows.map(|sequence| json!({
+                "jobId": format!("agent-codex-1793127141860775000-{sequence:08x}"),
+                "agentId": format!("fixture-{sequence}"),
+                "conversation": {"kind":"unknown","reason":"historical identity unavailable"},
+                "provider":"codex", "cwd":null,"title":null,"model":null,
+                "state":if first_page { "unknown" } else { "working" },
+                "active":!first_page,"createdAtMs":null,"updatedAtMs":1793153277624_i64,
+            })).collect();
+            let result = json!({"jobs":jobs,"nextCursor":if first_page { Some("agent-codex-1793127141860775000-000000c7") } else { None }});
+            socket
+                .send(Message::Text(
+                    json!({"id":request["id"],"result":result}).to_string(),
+                ))
+                .await
+                .unwrap();
+        }
+    });
+    for (limit, expected_rows, expected_warnings) in [(200, 2, 0), (1, 1, 1)] {
+        let output = tokio::process::Command::new(env!("CARGO_BIN_EXE_remote-coder-codex-gateway"))
+            .env_clear()
+            .env("HOME", root.path())
+            .arg("--env-file")
+            .arg(root.path().join("gateway.env"))
+            .args([
+                "agent",
+                "list",
+                "--active",
+                "--last",
+                &limit.to_string(),
+                "--json",
+            ])
+            .output()
+            .await
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+        let agents = result["agents"].as_array().unwrap();
+        assert_eq!(agents.len(), expected_rows);
+        assert!(agents.iter().all(|agent| agent["state"] == "working"));
+        assert_eq!(
+            result["warnings"].as_array().unwrap().len(),
+            expected_warnings
+        );
+    }
+    server.await.unwrap();
+}
+
+fn formatting_context() -> Value {
+    json!({
+        "context":{"contextId":"proven-context","provider":"codex","threadId":"proven-thread","turnId":"proven-turn"},
+        "conversation":{"provider":"codex","providerHome":{"kind":"known","path":"/fixture/codex"},"threadId":"proven-thread"},
+        "senderId":"agent-codex-1700000000000000000-aabbccdd",
+        "jobId":"agent-codex-1700000000000000000-aabbccdd"
+    })
+}
+
+#[tokio::test]
+async fn agent_client_format_only_uses_gateway_proof_and_owning_host() {
+    for explicit_context in [false, true] {
+        let host = if explicit_context {
+            "owning-gateway-host".to_owned()
+        } else {
+            nix::unistd::gethostname()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .split('.')
+                .next()
+                .unwrap()
+                .to_ascii_lowercase()
+        };
+        let expected_host = host.clone();
+        let root = tempfile::tempdir().unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        configuration(root.path(), listener.local_addr().unwrap().port());
+        let server = tokio::spawn(async move {
+            let methods = if explicit_context {
+                vec!["host/info", "agent/context/read"]
+            } else {
+                vec!["host/info", "agent/context/capture", "agent/context/read"]
+            };
+            for method in methods {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+                initialize(&mut socket).await;
+                let Message::Text(text) = socket.next().await.unwrap().unwrap() else {
+                    panic!("No proof request")
+                };
+                let request: Value = serde_json::from_str(&text).unwrap();
+                assert_eq!(request["method"], method);
+                let result = match method {
+                    "agent/context/capture" => {
+                        assert_eq!(request["params"].as_object().unwrap().len(), 2);
+                        assert!(request["params"]["pid"].as_u64().unwrap() > 0);
+                        assert!(request["params"]["startedAtUnixMicros"].as_u64().unwrap() > 0);
+                        formatting_context()["context"].clone()
+                    }
+                    "agent/context/read" => {
+                        assert_eq!(
+                            request["params"]["caller"],
+                            json!({"kind":"captured","contextId":"proven-context"})
+                        );
+                        formatting_context()
+                    }
+                    "host/info" => {
+                        json!({"homeDirectory":"/fixture/home","hostname":host,"automationsAuthority":null,"speechAvailable":false})
+                    }
+                    _ => unreachable!(),
+                };
+                socket
+                    .send(Message::Text(
+                        json!({"id":request["id"],"result":result}).to_string(),
+                    ))
+                    .await
+                    .unwrap();
+            }
+        });
+        let env_file = root.path().join("gateway.env");
+        let output = tokio::task::spawn_blocking(move || {
+            let mut command = Command::new(env!("CARGO_BIN_EXE_remote-coder-codex-gateway"));
+            command
+                .env_clear()
+                .env("HOME", env_file.parent().unwrap())
+                .env("CODEX_THREAD_ID", "forged-codex")
+                .env("CLAUDE_CODE_SESSION_ID", "forged-claude")
+                .arg("--env-file")
+                .arg(env_file)
+                .args([
+                    "agent",
+                    "message",
+                    "parent",
+                    "Fixture message",
+                    "--format-only",
+                    "--delivery-id",
+                    "proven-format",
+                ]);
+            if explicit_context {
+                command.args(["--caller-context", "proven-context"]);
+            }
+            command.output().unwrap()
+        })
+        .await
+        .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        assert!(output.stderr.is_empty());
+        let envelope = String::from_utf8(output.stdout).unwrap();
+        assert!(envelope.contains(&format!("id=\"agent-codex-1700000000000000000-aabbccdd\" provider=\"codex\" host=\"{expected_host}\"")));
+        assert!(envelope.contains(
+            "tool=\"message_agent\" target=\"agent-codex-1700000000000000000-aabbccdd\""
+        ));
+        assert!(!envelope.contains("forged"));
+        tokio::time::timeout(Duration::from_secs(10), server)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn agent_client_format_only_rejects_unproven_or_peer_host_environment_identity_on_stderr() {
+    for peer_host in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        configuration(root.path(), listener.local_addr().unwrap().port());
+        let server = tokio::spawn(async move {
+            let methods = if peer_host {
+                vec!["host/info"]
+            } else {
+                vec!["host/info", "agent/context/capture"]
+            };
+            for method in methods {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+                initialize(&mut socket).await;
+                let Message::Text(text) = socket.next().await.unwrap().unwrap() else {
+                    panic!("No identity request")
+                };
+                let request: Value = serde_json::from_str(&text).unwrap();
+                assert_eq!(request["method"], method);
+                let reply = if method == "host/info" {
+                    let host = if peer_host {
+                        "peer-gateway-host".to_owned()
+                    } else {
+                        nix::unistd::gethostname()
+                            .unwrap()
+                            .to_str()
+                            .unwrap()
+                            .split('.')
+                            .next()
+                            .unwrap()
+                            .to_ascii_lowercase()
+                    };
+                    json!({"id":request["id"],"result":{"homeDirectory":"/fixture/home","hostname":host,"automationsAuthority":null,"speechAvailable":false}})
+                } else {
+                    json!({"id":request["id"],"error":{"code":-32003,"message":"No proven local caller","data":{"kind":"unprovenCaller"}}})
+                };
+                socket.send(Message::Text(reply.to_string())).await.unwrap();
+            }
+        });
+        let env_file = root.path().join("gateway.env");
+        let output = tokio::task::spawn_blocking(move || {
+            Command::new(env!("CARGO_BIN_EXE_remote-coder-codex-gateway"))
+                .env_clear()
+                .env("HOME", env_file.parent().unwrap())
+                .env("CODEX_THREAD_ID", "forged-thread")
+                .arg("--env-file")
+                .arg(env_file)
+                .args([
+                    "agent",
+                    "message",
+                    "parent",
+                    "Fixture message",
+                    "--format-only",
+                ])
+                .output()
+                .unwrap()
+        })
+        .await
+        .unwrap();
+        assert_eq!(output.status.code(), Some(if peer_host { 64 } else { 69 }));
+        assert!(output.stdout.is_empty());
+        let diagnostic: Value = serde_json::from_slice(&output.stderr).unwrap();
+        if peer_host {
+            assert!(
+                diagnostic["error"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("another host's gateway")
+            );
+        } else {
+            assert_eq!(diagnostic["error"]["data"]["kind"], "unprovenCaller");
+        }
+        tokio::time::timeout(Duration::from_secs(10), server)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn agent_client_format_only_reads_scoped_proof_without_bearer_credentials() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("scoped.sock");
+    let listener = UnixListener::bind(&path).unwrap();
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut line = String::new();
+        BufReader::new(&mut stream)
+            .read_line(&mut line)
+            .await
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&line).unwrap()["method"],
+            "readSelf"
+        );
+        stream
+            .write_all(format!("{}\n", json!({"result":formatting_context()})).as_bytes())
+            .await
+            .unwrap();
+    });
+    let output = tokio::task::spawn_blocking(move || {
+        Command::new(env!("CARGO_BIN_EXE_remote-coder-codex-gateway"))
+            .env_clear()
+            .env("HOME", root.path())
+            .env("RC_AGENT_JOB_SOCKET", path)
+            .env("CLAUDE_CODE_SESSION_ID", "forged-claude")
+            .args([
+                "agent",
+                "message",
+                "parent",
+                "Fixture message",
+                "--format-only",
+            ])
+            .output()
+            .unwrap()
+    })
+    .await
+    .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stderr.is_empty());
+    let envelope = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        envelope.contains("id=\"agent-codex-1700000000000000000-aabbccdd\" provider=\"codex\"")
+    );
+    assert!(!envelope.contains("forged"));
+    tokio::time::timeout(Duration::from_secs(10), server)
+        .await
+        .unwrap()
+        .unwrap();
 }

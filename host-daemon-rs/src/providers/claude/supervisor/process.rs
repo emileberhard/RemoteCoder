@@ -13,6 +13,7 @@ use crate::rpc::error::RpcCode;
 use serde_json::json;
 use std::collections::HashMap;
 use std::fs;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -21,43 +22,53 @@ use tokio::sync::Mutex;
 use tracing::warn;
 
 impl ClaudeSupervisor {
-    fn session_launch_error(&self, request: &ClaudeTurnRequest) -> Option<String> {
+    fn session_launch_history(
+        &self,
+        request: &ClaudeTurnRequest,
+    ) -> Result<Option<PathBuf>, String> {
         let account = "the host-default profile";
         if !is_session_uuid(&request.session_uuid) {
-            return Some(format!(
+            return Err(format!(
                 "Claude session id {} is not a UUID; refusing to launch it in {account}",
                 request.session_uuid
             ));
         }
         if request.first_turn {
             return match self.is_minted(&claude_thread_id(&request.session_uuid)) {
-                Ok(true) => None,
-                Ok(false) => Some(format!(
+                Ok(true) => Ok(None),
+                Ok(false) => Err(format!(
                     "Claude history for session {} is missing from {account} ({}) and this gateway did not create that session; refusing to start a new conversation under an existing id",
                     request.session_uuid,
                     self.settings.claude_home.display()
                 )),
-                Err(error) => Some(format!(
+                Err(error) => Err(format!(
                     "Claude session {} has an unreadable creation record in {account}: {error:#}; refusing to launch it",
                     request.session_uuid
                 )),
             };
         }
-        self.session_history(&request.cwd, &request.session_uuid)
-            .is_none()
-            .then(|| {
-                format!(
-                    "Claude history for session {} is missing from {account}: expected {} for cwd {}; refusing to start a new conversation",
-                    request.session_uuid,
-                    crate::providers::claude::timeline::session_path_for_cwd(
-                        &self.settings.claude_home,
-                        &request.cwd,
-                        &request.session_uuid
-                    )
-                    .display(),
-                    request.cwd
-                )
-            })
+        let history = crate::providers::claude::timeline::find_session_path(
+            &request.session_uuid,
+            &self.settings.claude_home,
+        )
+        .map_err(|error| {
+            format!(
+                "Claude history lookup for session {} in {account} failed: {error:#}",
+                request.session_uuid
+            )
+        })?;
+        history.map(Some).ok_or_else(|| {
+            format!(
+                "Claude history for session {} is missing from {account}: expected {} for cwd {}; refusing to start a new conversation",
+                request.session_uuid,
+                crate::providers::claude::timeline::session_path_for_cwd(
+                    &self.settings.claude_home,
+                    &request.cwd,
+                    &request.session_uuid
+                ).display(),
+                request.cwd
+            )
+        })
     }
 
     /// Spawns `command` as the leader of its own process group, registered
@@ -123,33 +134,115 @@ impl ClaudeSupervisor {
         Ok(group)
     }
 
+    pub(super) async fn recover_stored_cwd(
+        &self,
+        request: &mut ClaudeTurnRequest,
+        launch: &super::jobs::LaunchPolicy,
+    ) -> Result<(), TurnStartError> {
+        match fs::metadata(&request.cwd) {
+            Ok(_) => return Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(TurnStartError {
+                    data: None,
+                    code: RpcCode::InvalidParams,
+                    message: format!(
+                        "Claude working directory {} is unavailable: {error}",
+                        request.cwd
+                    ),
+                });
+            }
+        }
+        if request.first_turn
+            || !matches!(launch.scope(), crate::agents::jobs::model::ToolScope::Full)
+        {
+            return Ok(());
+        }
+        let session_uuid = request.session_uuid.clone();
+        let cwd = request.cwd.clone();
+        let home = self.settings.claude_home.clone();
+        let replacement = tokio::task::spawn_blocking(move || {
+            let Some(path) =
+                crate::providers::claude::timeline::find_session_path(&session_uuid, &home)?
+            else {
+                return Ok(None);
+            };
+            crate::providers::claude::timeline::existing_recorded_cwd(&path, &session_uuid, &cwd)
+        })
+        .await
+        .map_err(|error| TurnStartError {
+            data: None,
+            code: RpcCode::Internal,
+            message: format!("Claude cwd recovery failed for {}: {error}", request.cwd),
+        })?
+        .map_err(|error| TurnStartError {
+            data: None,
+            code: RpcCode::Internal,
+            message: format!("Claude cwd recovery failed for {}: {error:#}", request.cwd),
+        })?;
+        if let Some(cwd) = replacement {
+            self.journal.runtime(
+                "cwd_recovered",
+                json!({
+                    "threadId": request.thread_id,
+                    "previousCwd": request.cwd,
+                    "cwd": cwd,
+                    "source": "exactSessionTranscript",
+                }),
+            );
+            request.cwd = cwd;
+        }
+        Ok(())
+    }
+
     pub(super) fn spawn_runtime(
         &self,
         request: &ClaudeTurnRequest,
         launch: &super::jobs::LaunchPolicy,
     ) -> Result<SpawnedRuntime, TurnStartError> {
-        if let Some(message) = self.session_launch_error(request) {
-            self.journal.runtime(
-                "spawn_refused",
-                json!({
-                    "threadId": request.thread_id,
-                    "sessionUuid": request.session_uuid,
-                    "cwd": request.cwd,
-                    "firstTurn": request.first_turn,
-                    "error": message,
-                }),
-            );
+        let history = match self.session_launch_history(request) {
+            Ok(history) => history,
+            Err(message) => {
+                self.journal.runtime(
+                    "spawn_refused",
+                    json!({
+                        "threadId": request.thread_id,
+                        "sessionUuid": request.session_uuid,
+                        "cwd": request.cwd,
+                        "firstTurn": request.first_turn,
+                        "error": message,
+                    }),
+                );
+                return Err(TurnStartError {
+                    data: None,
+                    code: RpcCode::InvalidParams,
+                    message,
+                });
+            }
+        };
+        let metadata = fs::metadata(&request.cwd).map_err(|error| TurnStartError {
+            data: None,
+            code: RpcCode::InvalidParams,
+            message: format!(
+                "Claude working directory {} is unavailable: {error}",
+                request.cwd
+            ),
+        })?;
+        if !metadata.is_dir() {
             return Err(TurnStartError {
                 data: None,
                 code: RpcCode::InvalidParams,
-                message,
+                message: format!(
+                    "Claude working directory {} is not a directory",
+                    request.cwd
+                ),
             });
         }
-        self.spawn_process(request, launch)
+        self.spawn_process(request, launch, history.as_deref())
             .map_err(|err| TurnStartError {
                 data: None,
                 code: RpcCode::Internal,
-                message: format!("failed to spawn claude: {err}"),
+                message: format!("failed to spawn claude in {}: {err}", request.cwd),
             })
     }
 
@@ -157,12 +250,13 @@ impl ClaudeSupervisor {
         &self,
         request: &ClaudeTurnRequest,
         launch: &super::jobs::LaunchPolicy,
+        history: Option<&Path>,
     ) -> std::io::Result<SpawnedRuntime> {
         let wakes = if request.first_turn {
             WakeHold::default()
         } else {
             WakeHold::resuming(
-                self.session_history(&request.cwd, &request.session_uuid)
+                history
                     .and_then(|path| fs::metadata(path).ok())
                     .map_or(0, |metadata| metadata.len()),
             )
@@ -184,6 +278,19 @@ impl ClaudeSupervisor {
             request,
             mcp.as_ref().map(|access| access.config_path.as_path()),
         );
+        if let Some(history) = history {
+            let expected = crate::providers::claude::timeline::session_path_for_cwd(
+                &self.settings.claude_home,
+                &request.cwd,
+                &request.session_uuid,
+            );
+            if history != expected && history.canonicalize().ok() != expected.canonicalize().ok() {
+                let resume = args
+                    .last_mut()
+                    .expect("Claude stream arguments include the session");
+                *resume = history.canonicalize()?.to_string_lossy().into_owned();
+            }
+        }
         launch.apply_args(&mut args);
         let mut command = claude_exec::command(&self.settings, &args)?;
         launch.apply_env(&mut command);

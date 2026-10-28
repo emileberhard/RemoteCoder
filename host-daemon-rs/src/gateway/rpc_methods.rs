@@ -869,7 +869,7 @@ impl Gateway {
         Ok(response)
     }
 
-    pub(super) async fn claude_thread_response(&self, params: &Value) -> RpcResult {
+    pub(crate) async fn claude_thread_response(&self, params: &Value) -> RpcResult {
         self.claude_thread_header(params, None).await
     }
 

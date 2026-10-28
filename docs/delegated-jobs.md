@@ -32,14 +32,25 @@ origin or provider scope stays unknown rather than becoming a root.
 Admission, exact conversation binding and ancestry commit before useful provider
 work starts. The initial input has a deterministic UUID derived from the JobId.
 A job moves through admitted, bound, dispatching, running or recovering, and a
-terminal outcome. Unknown is nonterminal. Connection loss, process signals,
+terminal outcome. Unknown is nonterminal. `JobSummary.active` describes an owned nonterminal runtime
+lifecycle, independently of its observed state. `agent list --active` uses that
+fact; imported historical uncertainty remains unknown and is excluded from the
+active list. Native provider activity retains its separate inventory owner.
+Connection loss, process signals,
 idleness and time alone never mean completion and never free its slot.
 
 Stop is persisted before the provider interrupt. It works after the client is
 gone and is applied before restart recovery. Stale controls cannot act on a
 newer job. A receipt distinguishes accepting Stop from finishing the provider
 fence and cleanup. A completed turn is finalized from its exact history and
-never dispatched again.
+never dispatched again. A positively failed transient provider turn may schedule
+up to five successor attempts in the same job and exact conversation. Each failed
+binding and outcome, retry deadline and deterministic successor input identity is
+durable before dispatch. Exponential delays include jitter; restart preserves the
+budget and deadline. Stop during backoff prevents the successor. A successor asks
+the agent to continue from history and inspect existing effects; it never replays
+the original task. Unknown acceptance or outcome remains reconciliation work,
+never permission to create another attempt.
 
 Finalization atomically commits outcome, bounded result, Git snapshot and the
 immutable completion envelope. Claude provider cleanup follows that commit and
@@ -56,6 +67,14 @@ the original binding and reject changed payloads; they cannot bypass planned
 suspension, Stop or the exact restart owner. The existing turn ledger retains
 pending custody even before the user item appears. Canonical acceptance, turn
 inspection and exact-turn items determine progress and the final answer.
+Typed capacity, rate-limit, server and statusless transport errors, and HTTP
+408/429/5xx failures qualify for retry. Authentication, quota, refusal, Stop and untyped errors do not.
+Claude requires its failed result's authoritative `api_error_status` on a normal
+or execution-error result; a known terminal reason must identify an API error. Its preceding
+process must have reached the existing EOF/reap fence, and exact session history
+must remain available. The matched Codex and Claude terminal protocols expose no
+Retry-After header, so the job owner cannot observe provider-specific header delays.
+
 The native queue remains the sole Codex queue. Its replay uses the same stable
 input identity, so a crash between native admission and queue-row removal does
 not execute a second turn. The gateway reconciles queue attribution with native
@@ -92,19 +111,95 @@ no worker. Missing holder/socket/token becomes unreachable; it never triggers
 terminal takeover. Registration after a gateway restart reestablishes that same
 live route. Gateway-owned parents use their existing supervisor and Stop fence.
 
+An older parent record can lack a route while retaining a gateway-owned turn
+selection. Only that exact persisted selection plus a freshly available native
+inventory proving no external client may restore its gateway route. A native
+route is never converted, and restoration preserves Stop and its generation.
+
+## Sender message receipts
+
+`JobStore` also owns manual sender receipts under `agent-jobs/v1/messages/`.
+Admission freezes the proven sender, exact requested target, raw-request hash,
+envelope and envelope hash before target lookup. Lookup failure is a durable
+failed receipt. Resolution freezes the exact conversation and target job before
+effects; a later sender job or selector match cannot rewrite them. Per-ID claims
+serialize only duplicate requests, and are acquired before the shutdown gate.
+
+Running-job delivery holds a `JobStore` execution read grant from exact-current-job
+validation through native custody admission. Execution transitions and successor
+admission take that job's write grant, so an old delivery cannot cross into a
+new invocation. Stop records and signals independently; it never waits for a model
+turn or acquires the admission write grant. The owned message admission task
+retains its per-ID claim and shutdown read guard after caller cancellation until
+provider custody settles and its sender receipt is updated. Only admission is
+fenced; queued turn execution remains owned by the native receiver.
+
+The same delivery ID, sender, target and raw text reuse the retained receipt;
+changed input conflicts. Sending is persisted before the native receiver acts.
+Submitted, accepted and recorded receipts are never replayed. New Codex input
+steers a positively identified running turn using its expected turn ID and stable
+message ID; runtime targets must match their exact job binding. A refused or
+uncertain steer never falls through to a queued successor. Native idle
+conversations retain the existing native queue path. Explicit retries
+reconcile unresolved native delivery using its original ID and envelope; a
+superseded frozen target stays uncertain instead of receiving fresh input in a
+newer invocation. There is no message scheduler or second provider registry.
+`agent/messages/read` and `agent receipt ID --json` inspect the stored receipt.
+A scoped client may read only receipts from its exact proven sender conversation.
+
+A message to the latest completed or failed job admits one explicit successor
+through the existing Continue owner, with a JobId derived from the delivery ID.
+The expected previous job is checked again atomically at storage admission.
+Accepted means that successor was admitted, not that the model consumed it.
+Automatic message continuation cannot clear Stop; an explicit Continue remains
+the deliberate restart operation. Parent callbacks retain their existing native
+or gateway receiver and never take over a terminal parent.
+
+Message records share the store's 512 MiB cap and process lease. Admission reserves
+record and mutation space. Submitted, accepted and recorded receipts release
+unresolved capacity immediately; submitted proves transport custody, not provider
+acceptance or consumption. A failed lookup with no resolved target is also a
+terminal receipt because no effect was attempted. These immutable receipts retain
+their identity, hashes and delivery evidence while payloads expire after 30 days.
+Blocked, unreachable, provider-side failures with a resolved target, and uncertain
+receipts remain pinned for exact-ID reconciliation. Diagnostics are bounded, and
+capacity refusal names the retained obligations that prevent admission. The
+existing provider receiver owns reconciliation and Stop fences. Canonical native
+selectors are `claude_UUID` for Claude and a bare UUID for Codex; `codex:UUID`
+also selects Codex. A raw Claude session UUID never substitutes for its canonical
+thread ID. Local lookup failures explain how to resolve the owning host and use
+`codex-threads send --host <host>`; the gateway does not relay between hosts.
+
 ## Caller authority and read-only work
 
 Caller capture checks kernel PID/birth ancestry against actual provider-owned
-tool processes. It never trusts `AGENT_ID`, provider environment IDs or tmux's
+tool processes. Native proof stops at the daemon's exact tool root after checking
+its live birth identity and every intervening parent link. Unrelated launcher
+ancestors above that owner may be unreadable and carry no additional authority.
+Without an authoritative native owner, complete ancestry and Claude owner checks
+retain their existing fail-closed behavior. It never trusts `AGENT_ID`, provider environment IDs or tmux's
 global environment. Capture briefly rechecks an unpublished process entry,
 without changing the requested identity. The ephemeral captured handle is
 revalidated before every mutation; detached work must pass it explicitly and
 fails actionably when its owner is gone. Deliberate standalone work selects
 operator intent explicitly.
 
-A job's Unix coordination socket verifies its actual peer and permits only
-self read, parent messaging and title changes. An inherited or failed socket
-never falls back to the operator bearer. Full-access clients use the existing
+The JobOwner owns one Unix coordination listener for the gateway lifetime,
+namespaced by its actual store root. It verifies the kernel peer and current
+provider process, then resolves the conversation's current job from the Agent
+record. Jobs and native continuations share that endpoint; finishing a job does
+not remove a conversation's tool route. Self reads, parent messaging, title
+changes and reads of the caller's own message receipts are the only operations.
+A process with no registered job is refused.
+
+Older provider environments retain a per-job socket path. Only ENOENT for the
+recognized old path can try the canonical local scoped listener, carrying the
+old socket explicitly. Before any action, that listener proves the old path
+belongs to a retained job in its own store and to the actual caller's exact
+conversation. This prevents an isolated instance from falling into the default
+host. Existing, refused and denied routes never try another endpoint. No scoped
+failure falls back to the operator bearer. Remove this narrow migration once
+retained provider environments no longer name per-job sockets. Full-access clients use the existing
 credential owner for other operations. This preserves the current same-user
 trust boundary, not a hostile same-UID security sandbox.
 
@@ -141,3 +236,20 @@ staged canonical records before activation. Unknown outcomes, timestamps,
 ancestry and delivery certainty remain unknown. No runtime legacy reader,
 second registry or import RPC remains. Provider history and rollback snapshots
 are retained data, not an alternative execution path.
+
+Explicit Continue can start a new job after an imported Claude record whose old
+outcome remains unknown. Admission requires the recorded exact conversation and
+provider home, retained permission scope, authoritative native model and working
+directory, completed provider recovery, no gateway active turn and a successful
+external-client inventory showing no other owner. Missing evidence refuses
+admission. The old job and immutable ancestry remain unchanged. Historical
+settings are resolved for the new invocation from native history; standard mode
+is the new invocation default unless explicitly overridden, rather than an
+assertion about the old run's speed setting.
+
+## Retry-state rollout and rollback
+
+A nonempty `providerRetries` record and the `retryWaiting` execution state require
+a gateway that understands this format. Once retries have written these records,
+keep a matching gateway reader during rollback; older gateways reject them.
+Never restore an older store snapshot over jobs admitted or changed afterwards.

@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::sync::Weak;
+use std::sync::{Arc, Weak};
 
 use anyhow::{Context, Result, bail, ensure};
 use tokio::sync::{Mutex, OnceCell, RwLock, watch};
@@ -15,10 +15,10 @@ pub(crate) struct JobOwner {
     pub(crate) operations: RwLock<()>,
     pub(super) tasks: crate::tasks::owned_tasks::OwnedTasks,
     pub(super) scopes: super::routes::ScopedEndpoints,
-    pub(super) endpoints:
-        Mutex<std::collections::HashMap<JobId, super::routes::ScopedEndpointLease>>,
+    pub(super) endpoint: Mutex<Option<super::routes::ScopedEndpointLease>>,
     pub(super) root: Option<PathBuf>,
     store: OnceCell<JobStore>,
+    message_claims: Mutex<std::collections::HashMap<String, Weak<Mutex<()>>>>,
     gateway: Weak<Gateway>,
     changed: watch::Sender<u64>,
 }
@@ -31,9 +31,10 @@ impl JobOwner {
             operations: Default::default(),
             tasks: Default::default(),
             scopes: Default::default(),
-            endpoints: Default::default(),
+            endpoint: Default::default(),
             root,
             store: OnceCell::new(),
+            message_claims: Default::default(),
             gateway,
             changed: watch::channel(0).0,
         }
@@ -43,10 +44,11 @@ impl JobOwner {
         if self.root.is_none() {
             return Ok(());
         }
-        self.store().await.map(|_| ())
+        self.store().await?;
+        self.ensure_endpoint().await
     }
 
-    pub(super) async fn store(&self) -> Result<&JobStore> {
+    pub(crate) async fn store(&self) -> Result<&JobStore> {
         self.store
             .get_or_try_init(|| async {
                 JobStore::open(
@@ -57,6 +59,25 @@ impl JobOwner {
                 .await
             })
             .await
+    }
+
+    pub(crate) async fn claim_message(&self, id: &str) -> Result<tokio::sync::OwnedMutexGuard<()>> {
+        let lock = {
+            let mut claims = self.message_claims.lock().await;
+            claims.retain(|_, claim| claim.strong_count() > 0);
+            if let Some(lock) = claims.get(id).and_then(Weak::upgrade) {
+                lock
+            } else {
+                ensure!(
+                    claims.len() < MAX_UNSETTLED_JOBS,
+                    "message delivery concurrency is at capacity; inspect existing receipts before retrying"
+                );
+                let lock = Arc::new(Mutex::new(()));
+                claims.insert(id.to_owned(), Arc::downgrade(&lock));
+                lock
+            }
+        };
+        Ok(lock.lock_owned().await)
     }
 
     pub(crate) fn gateway(&self) -> Result<std::sync::Arc<Gateway>> {
@@ -81,10 +102,6 @@ impl JobOwner {
             "runtime job is missing its authoritative agent record"
         );
         Ok(JobView { job, agent })
-    }
-
-    pub(crate) async fn ensure_new_message_id(&self, id: &str) -> Result<()> {
-        self.store().await?.ensure_new_message_id(id.into()).await
     }
 
     pub(crate) async fn agent_for_conversation(
@@ -172,6 +189,7 @@ impl JobOwner {
             updated_at_ms: at_ms,
             revision: 0,
             previous_job_id: None,
+            provider_retries: Vec::new(),
             source: JobSource::Runtime,
             admission_origin: Some(origin),
             unconfirmed_result: None,
@@ -201,13 +219,35 @@ impl JobOwner {
             ContinueRecipient::Previous => None,
             ContinueRecipient::Current => Some(recipient(&caller)),
         };
-        let request_fingerprint = fingerprint(&serde_json::to_vec(&(
-            &request.agent_id,
-            &request.prompt,
-            &request.settings,
-            &request.recipient,
-            &current_recipient,
-        ))?);
+        let request_bytes = if request.intent == ContinueIntent::Message {
+            serde_json::to_vec(&(
+                &request.agent_id,
+                &request.prompt,
+                &request.settings,
+                &request.recipient,
+                &current_recipient,
+                &request.expected_previous_job_id,
+                &request.intent,
+            ))?
+        } else if request.expected_previous_job_id.is_some() {
+            serde_json::to_vec(&(
+                &request.agent_id,
+                &request.prompt,
+                &request.settings,
+                &request.recipient,
+                &current_recipient,
+                &request.expected_previous_job_id,
+            ))?
+        } else {
+            serde_json::to_vec(&(
+                &request.agent_id,
+                &request.prompt,
+                &request.settings,
+                &request.recipient,
+                &current_recipient,
+            ))?
+        };
+        let request_fingerprint = fingerprint(&request_bytes);
         if let Some(job) = store
             .existing_request(request.job_id.clone(), request_fingerprint.clone())
             .await?
@@ -226,6 +266,52 @@ impl JobOwner {
                     .context("conversation's latest job is unresolved")?,
             )
             .await?;
+        ensure!(
+            request
+                .expected_previous_job_id
+                .as_ref()
+                .is_none_or(|expected| expected == &previous.job_id),
+            "Continue target was superseded; inspect its latest job before sending more work"
+        );
+        if previous.source == JobSource::Imported {
+            let ConversationBinding::Known { conversation } = &agent.conversation else {
+                bail!("historical provider conversation is unresolved");
+            };
+            ensure!(
+                conversation.provider == Provider::Claude
+                    || matches!(&previous.execution, ExecutionState::Terminal { .. }),
+                "historical Codex continuation needs a confirmed terminal result"
+            );
+            let gateway = self.gateway()?;
+            ensure!(
+                gateway
+                    .job_provider_recovery_complete(conversation.provider)
+                    .await?,
+                "provider recovery is unresolved; continuation cannot prove idle"
+            );
+            ensure!(
+                gateway
+                    .claude_active_turn_id(&conversation.thread_id)
+                    .await
+                    .is_none(),
+                "historical conversation is still running"
+            );
+            let object = serde_json::json!({"params":{"threadId":conversation.thread_id}});
+            if let Some(error) = gateway
+                .other_client_refusal(
+                    "thread/resume",
+                    object
+                        .as_object()
+                        .context("continuation request is not an object")?,
+                )
+                .await
+            {
+                bail!(
+                    "historical continuation cannot acquire this conversation: {}",
+                    error.message
+                );
+            }
+        }
         let (cwd, original_settings, tool_scope, title) = match &previous.spec {
             SpecEvidence::Known { spec } => (
                 spec.cwd.clone(),
@@ -244,9 +330,55 @@ impl JobOwner {
                 tool_scope.clone(),
                 title.clone(),
             ),
-            SpecEvidence::Unknown { .. } => bail!(
-                "historical execution settings are unresolved; this conversation cannot continue until they are proven"
-            ),
+            SpecEvidence::Unknown { .. } => {
+                ensure!(
+                    previous.source == JobSource::Imported,
+                    "runtime job has no execution specification"
+                );
+                let ConversationBinding::Known { conversation } = &agent.conversation else {
+                    bail!("historical provider conversation is unresolved");
+                };
+                ensure!(
+                    conversation.provider == Provider::Claude,
+                    "historical Codex execution settings are unresolved"
+                );
+                let response = self
+                    .gateway()?
+                    .claude_thread_response(&serde_json::json!({"threadId":conversation.thread_id}))
+                    .await
+                    .map_err(|error| anyhow::anyhow!(error.message))?;
+                let header = &response["thread"];
+                ensure!(
+                    crate::agents::conversation::conversation_from_header(header)? == *conversation,
+                    "provider history resolved a different conversation or home"
+                );
+                let cwd = PathBuf::from(
+                    header["cwd"]
+                        .as_str()
+                        .context("historical working directory is unknown")?,
+                );
+                ensure!(
+                    cwd.is_absolute(),
+                    "historical working directory is unavailable"
+                );
+                let settings = ExecutionSettings::Claude {
+                    model: header["model"]
+                        .as_str()
+                        .context("historical model is unknown")?
+                        .to_owned(),
+                    effort: header["reasoningEffort"].as_str().map(str::to_owned),
+                    fast: false,
+                };
+                (
+                    cwd,
+                    settings,
+                    agent
+                        .tool_scope
+                        .clone()
+                        .context("historical permission scope is unresolved")?,
+                    header["name"].as_str().map(str::to_owned),
+                )
+            }
         };
         ensure!(
             matches!(
@@ -311,6 +443,7 @@ impl JobOwner {
             updated_at_ms: at_ms,
             revision: 0,
             previous_job_id: Some(previous.job_id),
+            provider_retries: Vec::new(),
             source: JobSource::Runtime,
             admission_origin: None,
             unconfirmed_result: None,
@@ -320,7 +453,10 @@ impl JobOwner {
             execution: ExecutionState::Admitted,
             stop: StopState::NotRequested,
         };
-        let (job, duplicate) = store.admit(job).await?;
+        let (job, duplicate) = match request.intent {
+            ContinueIntent::Explicit => store.admit(job).await?,
+            ContinueIntent::Message => store.admit_message_continuation(job).await?,
+        };
         self.dirty();
         Ok(AdmissionReceipt { job, duplicate })
     }

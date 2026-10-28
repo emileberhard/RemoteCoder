@@ -26,6 +26,44 @@ advertised capability and a usable connection afterwards. It stops its own
 processes and removes the private root on success; failure retains the root as
 evidence. It never connects to an installed gateway or starts an agent turn.
 
+## Delegated-job isolation probe
+
+`bun dev-tools/probes/delegated-jobs.mjs <candidate> <matched-runtime-package>`
+uses `IsolatedGateway`, a loopback Responses model, and isolated provider homes.
+Its Claude child uses the host router without copying provider credentials.
+It checks running-job messages through the candidate CLI while the native model
+response is held, then requires the stable message ID and body in that original
+turn's canonical items and model input after release. Same-ID requests retain
+their receipt. It also checks message-to-finished continuation deduplication and
+failure receipts through the candidate CLI, including isolated gateway restart.
+A native continuation of a completed Codex job also sets its title and sends a
+parent message through the inherited scoped endpoint; the original parent's
+canonical items must contain the exact delivery ID.
+It also copies its completed Claude probe child's transcript into a deleted-cwd
+fixture, resumes that exact session through RPC, and requires both the unique
+input UUID and the new response in that same copied transcript. This fixture
+changes the first user cwd and project directory; it never executes a copied
+historical task. A second stage marks only that completed lab job imported with
+unknown settings, preserves its known conversation and scope, then continues it
+through the real installed candidate CLI. Its exact input and response must
+appear in the same copied transcript.
+
+Optional `--seed <absolute-private-manifest.json>` checks copied conversation
+agent projections through real RPC. The version-1 manifest has `snapshot: true`,
+`jobStore` (relative directory with bounded `jobs`, `agents`, `uncertainties`),
+`transcripts` (`threadId`, relative `path`), and `queries` (`threadId`,
+`expectedAgentIds`, optional `warningContains`). Capture the selected jobs,
+continuation branches and ancestors outside Git; include matching agent records
+and every job referenced by their origin and latest pointers.
+Provider homes and directory/transcript references are remapped into the lab.
+Copied jobs become imported snapshots with Stop intent cleared, preventing the
+job driver from executing historical work. The receipt names these alterations:
+this proves static projection and isolation, not historical execution state.
+The probe verifies the copied job records remain unchanged during reads.
+It then runs the actual configs worktree cleanup planner as a dry run, routing
+only its two gateway clients to the isolated candidate. The receipt requires
+known activity and no applied deletions; the planner keeps the real home context.
+
 ## rc-gateway
 
 - **Config discovery:** CLI flags, then `RC_CODEX_GATEWAY_*` env vars, then the
@@ -52,7 +90,9 @@ evidence. It never connects to an installed gateway or starts an agent turn.
   exits 2. A 409 is a permanent rejection with the gateway
   response body. Turn connection
   setup failures, including configuration discovery before opening a socket,
-  write `dispatch.not_started` and their retryability to the event log. So does a thread/turn request the gateway refuses before dispatch: a
+  write `dispatch.not_started` and their retryability to the event log. TLS identity
+  discovery preserves retryable health connection refusal/reset, timeout and 5xx
+  failures; rejected authentication and malformed identity remain permanent. So does a thread/turn request the gateway refuses before dispatch: a
   JSON-RPC error with code -32600..-32602, -32001, -32002, -32003 or -32009 and no
   `data.kind` ending in `Uncertain`/`Unknown`; `data.retryable` wins, else the
   -3200x codes are retryable. Any other failure after handoff, including -32603

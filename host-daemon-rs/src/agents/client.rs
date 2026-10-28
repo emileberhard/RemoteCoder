@@ -13,10 +13,11 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
+use super::conversation::conversation_from_header;
 use super::envelope::{self, Sender};
 use super::jobs::model::{
-    ConversationBinding, ConversationIdentity, ExecutionSettings, ExecutionState, JobId, JobRecord,
-    JobSpec, Provider, ProviderHome, SpecEvidence, ToolScope,
+    ConversationBinding, ExecutionSettings, ExecutionState, JobId, JobRecord, JobSpec, Provider,
+    ProviderHome, SpecEvidence, ToolScope,
 };
 use crate::config::{ConfigSources, GatewayEndpoint, HostPaths};
 use crate::wire::agent_jobs::*;
@@ -55,6 +56,11 @@ pub(crate) enum AgentCommand {
         caller: CallerArgs,
     },
     Capture,
+    Receipt {
+        delivery_id: String,
+        #[arg(long)]
+        json: bool,
+    },
     NativeParent,
     Items {
         target: String,
@@ -203,7 +209,9 @@ async fn rpc<P: Serialize, R: DeserializeOwned>(
 
 async fn scoped(request: ScopedRequest) -> Result<Value> {
     let path = std::env::var_os(SCOPED_SOCKET_ENV).context("No scoped agent route is available")?;
-    response_value(transport::scoped(Path::new(&path), &request).await?)
+    let root = HostPaths::from_env()?.state("agent-jobs/v1");
+    let legacy_target = crate::agents::jobs::routes::scoped_socket(&root);
+    response_value(transport::scoped(Path::new(&path), &legacy_target, &request).await?)
 }
 
 async fn mutation<P: Serialize>(
@@ -374,7 +382,8 @@ fn summary_matches(summary: &JobSummary, target: &str) -> bool {
         || match &summary.conversation {
             ConversationBinding::Known { conversation } => {
                 conversation.thread_id == target
-                    || conversation.thread_id.strip_prefix("claude_") == Some(target)
+                    || (crate::ids::parse_uuid(target).is_none()
+                        && conversation.thread_id.strip_prefix("claude_") == Some(target))
             }
             ConversationBinding::Unknown { .. } => false,
         }
@@ -447,96 +456,6 @@ async fn read(endpoint: &GatewayEndpoint, target: &str) -> Result<JobView> {
     .await
 }
 
-fn conversation_from_header(header: &Value) -> Result<ConversationIdentity> {
-    let thread_id = header["id"]
-        .as_str()
-        .context("Conversation has no exact ID")?;
-    let provider = if thread_id.starts_with("claude_") {
-        Provider::Claude
-    } else {
-        Provider::Codex
-    };
-    let path = Path::new(
-        header["path"]
-            .as_str()
-            .context("Conversation has no authoritative history path")?,
-    );
-    ensure!(
-        path.is_absolute(),
-        "Conversation history path is not absolute"
-    );
-    let directory = match provider {
-        Provider::Claude => "projects",
-        Provider::Codex => "sessions",
-    };
-    let home = path
-        .ancestors()
-        .find(|path| {
-            path.file_name().is_some_and(|name| {
-                name == directory || (provider == Provider::Codex && name == "archived_sessions")
-            })
-        })
-        .and_then(Path::parent)
-        .context("Conversation history path does not identify a provider home")?;
-    Ok(ConversationIdentity {
-        provider,
-        provider_home: ProviderHome::Known {
-            path: home.to_owned(),
-        },
-        thread_id: thread_id.to_owned(),
-    })
-}
-
-async fn native_recipient(
-    endpoint: &GatewayEndpoint,
-    target: &str,
-) -> Result<ConversationIdentity> {
-    if target.starts_with("claude_") || target.starts_with("codex:") {
-        let id = target.strip_prefix("codex:").unwrap_or(target);
-        let response: Value = rpc(
-            endpoint,
-            "thread/read",
-            json!({"threadId":id,"includeTurns":false}),
-        )
-        .await?;
-        ensure!(
-            response["thread"]["id"] == id,
-            "Gateway returned a different conversation"
-        );
-        return conversation_from_header(&response["thread"]);
-    }
-    let mut cursor = Value::Null;
-    let mut matches = Vec::new();
-    for _ in 0..MAX_INVENTORY_PAGES {
-        let page: Value = rpc(
-            endpoint,
-            "thread/list",
-            json!({"limit":200,"cursor":cursor}),
-        )
-        .await?;
-        for header in page["data"]
-            .as_array()
-            .context("Gateway returned no conversation page")?
-        {
-            let id = header["id"]
-                .as_str()
-                .context("Conversation has no exact ID")?;
-            if id == target || id.strip_prefix("claude_") == Some(target) {
-                matches.push(conversation_from_header(header)?);
-            }
-        }
-        cursor = page["nextCursor"].clone();
-        if cursor.is_null() {
-            return match matches.as_slice() {
-                [conversation] => Ok(conversation.clone()),
-                [] => bail!("No job or native conversation matches {target:?}"),
-                _ => bail!("Native conversation is ambiguous; use claude_UUID or codex:UUID"),
-            };
-        }
-    }
-    bail!("Native conversation discovery exceeded its page budget; use claude_UUID or codex:UUID")
-}
-
 fn execution_status(job: &JobRecord) -> &'static str {
     match &job.execution {
         ExecutionState::Admitted => "admitted",
@@ -544,6 +463,7 @@ fn execution_status(job: &JobRecord) -> &'static str {
         ExecutionState::Dispatching { .. } => "dispatchUncertain",
         ExecutionState::Running { .. } => "running",
         ExecutionState::Recovering { .. } => "recovering",
+        ExecutionState::RetryWaiting { .. } => "retryWaiting",
         ExecutionState::Unknown { .. } => "unknown",
         ExecutionState::Terminal { terminal } => match terminal.outcome {
             super::jobs::model::JobOutcome::Completed => "completed",
@@ -580,6 +500,7 @@ async fn spawn(endpoint: &GatewayEndpoint, arguments: SpawnArgs) -> Result<Value
             "Continuation keeps the existing conversation's directory and title"
         );
         let source = read(endpoint, target).await?;
+        let historical;
         let (original_settings, original_scope) = match &source.job.spec {
             SpecEvidence::Known { spec } => (&spec.settings, &spec.tool_scope),
             SpecEvidence::Expired {
@@ -587,9 +508,46 @@ async fn spawn(endpoint: &GatewayEndpoint, arguments: SpawnArgs) -> Result<Value
                 tool_scope,
                 ..
             } => (settings, tool_scope),
-            SpecEvidence::Unknown { .. } => bail!(
-                "Historical execution settings are unknown; continuation needs resolved provider evidence"
-            ),
+            SpecEvidence::Unknown { .. } => {
+                let agent = source
+                    .agent
+                    .as_ref()
+                    .context("Historical agent identity is unresolved")?;
+                let ConversationBinding::Known { conversation } = &agent.conversation else {
+                    bail!("Historical provider conversation is unresolved");
+                };
+                ensure!(
+                    conversation.provider == Provider::Claude,
+                    "Historical Codex execution settings are unresolved"
+                );
+                let response: Value = rpc(
+                    endpoint,
+                    "thread/read",
+                    json!({"threadId":conversation.thread_id,"includeTurns":false}),
+                )
+                .await?;
+                ensure!(
+                    conversation_from_header(&response["thread"])? == *conversation,
+                    "Provider history resolved a different conversation or home"
+                );
+                historical = ExecutionSettings::Claude {
+                    model: response["thread"]["model"]
+                        .as_str()
+                        .context("Historical model is unknown")?
+                        .to_owned(),
+                    effort: response["thread"]["reasoningEffort"]
+                        .as_str()
+                        .map(str::to_owned),
+                    fast: false,
+                };
+                (
+                    &historical,
+                    agent
+                        .tool_scope
+                        .as_ref()
+                        .context("Historical permission scope is unresolved")?,
+                )
+            }
         };
         if let Some(preset) = &arguments.preset {
             ensure!(
@@ -636,6 +594,8 @@ async fn spawn(endpoint: &GatewayEndpoint, arguments: SpawnArgs) -> Result<Value
             agent_id: source.job.agent_id,
             prompt: text(&arguments.provider_or_prompt)?,
             settings,
+            expected_previous_job_id: Some(source.job.job_id),
+            intent: ContinueIntent::Explicit,
             recipient: if arguments.parent.as_deref() == Some("current") {
                 ContinueRecipient::Current
             } else {
@@ -771,6 +731,40 @@ fn update_settings(
     Ok(selected)
 }
 
+async fn formatting_context(
+    arguments: &CallerArgs,
+    env_file: Option<&Path>,
+) -> Result<(ContextView, String)> {
+    if use_scoped(arguments) {
+        let view = serde_json::from_value(scoped(ScopedRequest::ReadSelf {}).await?)?;
+        return Ok((view, host()?.to_ascii_lowercase()));
+    }
+    ensure!(
+        !arguments.operator,
+        "Inferred formatting requires a proven agent context; provide complete explicit sender metadata for native formatting"
+    );
+    let endpoint = endpoint(env_file)?;
+    let host: crate::wire::gateway::HostInfoResponse =
+        rpc(&endpoint, "host/info", json!({})).await?;
+    ensure!(
+        !host.hostname.trim().is_empty(),
+        "The owning gateway's hostname is unavailable"
+    );
+    ensure!(
+        arguments.caller_context.is_some() || host.hostname == self::host()?.to_ascii_lowercase(),
+        "Cannot prove this local process through another host's gateway; capture caller context on the owning host and pass --caller-context, or provide complete explicit formatting metadata"
+    );
+    let view = rpc(
+        &endpoint,
+        "agent/context/read",
+        ContextReadParams {
+            caller: caller(&endpoint, arguments).await?,
+        },
+    )
+    .await?;
+    Ok((view, host.hostname))
+}
+
 fn host() -> Result<String> {
     Ok(nix::unistd::gethostname()?
         .to_string_lossy()
@@ -811,12 +805,8 @@ async fn message(
     let target = if arguments.target == "parent" {
         MessageTarget::Parent
     } else {
-        match resolve(endpoint, &arguments.target).await {
-            Ok(job_id) => MessageTarget::Job { job_id },
-            Err(error) if error.is::<NoMatchingJob>() => MessageTarget::Conversation {
-                conversation: native_recipient(endpoint, &arguments.target).await?,
-            },
-            Err(error) => return Err(error),
+        MessageTarget::Selector {
+            selector: arguments.target,
         }
     };
     mutation(
@@ -942,6 +932,14 @@ async fn execute(command: AgentCommand, env_file: Option<&Path>) -> Result<Value
     } else {
         None
     };
+    if let AgentCommand::Receipt { delivery_id, .. } = &command
+        && std::env::var_os(SCOPED_SOCKET_ENV).is_some()
+    {
+        return scoped(ScopedRequest::ReadMessage {
+            delivery_id: delivery_id.clone(),
+        })
+        .await;
+    }
     if let AgentCommand::Read { target, caller, .. } = &command
         && target == "self"
         && use_scoped(caller)
@@ -950,22 +948,36 @@ async fn execute(command: AgentCommand, env_file: Option<&Path>) -> Result<Value
     }
     if let AgentCommand::Message(arguments) = &command {
         if arguments.format_only {
-            let host = host()?;
+            let context = if arguments.sender_id.is_none() {
+                Some(formatting_context(&arguments.caller, env_file).await?)
+            } else {
+                None
+            };
+            let view = context.as_ref().map(|(view, _)| view);
+            let host = match &context {
+                Some((_, host)) => host.clone(),
+                None => host()?,
+            };
             let sender = Sender {
                 agent_id: arguments
                     .sender_id
                     .as_deref()
-                    .context("Formatting requires --sender-id, --reply-tool and --reply-target")?,
-                provider: "native",
+                    .or_else(|| view.map(|view| view.sender_id.as_str()))
+                    .context("Formatting has no proven sender")?,
+                provider: view.map_or("native", |view| view.context.provider.as_str()),
                 host: &host,
-                reply_tool: arguments
-                    .reply_tool
-                    .as_deref()
-                    .context("Formatting requires --reply-tool")?,
+                reply_tool: arguments.reply_tool.as_deref().unwrap_or("message_agent"),
                 reply_target: arguments
                     .reply_target
                     .as_deref()
-                    .context("Formatting requires --reply-target")?,
+                    .or_else(|| {
+                        view.map(|view| {
+                            view.job_id
+                                .as_ref()
+                                .map_or(view.conversation.thread_id.as_str(), JobId::as_str)
+                        })
+                    })
+                    .context("Formatting has no proven reply target")?,
             };
             return Ok(Value::String(envelope::message(
                 arguments
@@ -1047,7 +1059,7 @@ async fn execute(command: AgentCommand, env_file: Option<&Path>) -> Result<Value
             for _ in 0..MAX_INVENTORY_PAGES {
                 let page = list_page(&endpoint, cursor, 200).await?;
                 rows.extend(page.jobs.into_iter().filter(|row| {
-                    (!arguments.active || row.state.may_be_running())
+                    (!arguments.active || row.active)
                         && arguments
                             .provider
                             .as_deref()
@@ -1066,7 +1078,7 @@ async fn execute(command: AgentCommand, env_file: Option<&Path>) -> Result<Value
             rows.truncate(arguments.last as usize);
             let rows = rows.into_iter().map(|row| {
                 let provider_session_id = match &row.conversation { ConversationBinding::Known { conversation } => Some(conversation.thread_id.strip_prefix("claude_").unwrap_or(&conversation.thread_id)), ConversationBinding::Unknown { .. } => None };
-                json!({"run_id":row.job_id,"agent_id":row.agent_id,"provider":row.provider,"provider_session_id":provider_session_id,"cwd":row.cwd,"model":row.model,"title":row.title,"state":row.state,"created_at_epoch_ms":row.created_at_ms,"last_active_at_epoch_ms":row.updated_at_ms,"conversation":row.conversation})
+                json!({"run_id":row.job_id,"agent_id":row.agent_id,"provider":row.provider,"provider_session_id":provider_session_id,"cwd":row.cwd,"model":row.model,"title":row.title,"state":row.state,"status":row.state,"created_at_epoch_ms":row.created_at_ms,"last_active_at_epoch_ms":row.updated_at_ms,"conversation":row.conversation})
             }).collect::<Vec<_>>();
             Ok(
                 json!({"agents":rows,"warnings":if truncated { vec!["Agent list is limited; more matching history may exist"] } else { Vec::<&str>::new() }}),
@@ -1132,6 +1144,14 @@ async fn execute(command: AgentCommand, env_file: Option<&Path>) -> Result<Value
             )
             .await
         }
+        AgentCommand::Receipt { delivery_id, .. } => {
+            rpc(
+                &endpoint,
+                "agent/messages/read",
+                MessageReadParams { delivery_id },
+            )
+            .await
+        }
         AgentCommand::Capture => Ok(serde_json::to_value(capture(&endpoint).await?)?),
         AgentCommand::Items { target, .. } => items(&endpoint, &target).await,
         AgentCommand::NativeParent => {
@@ -1140,13 +1160,100 @@ async fn execute(command: AgentCommand, env_file: Option<&Path>) -> Result<Value
     }
 }
 
+fn human_listing(result: &Value) -> Result<String> {
+    fn value<'a>(row: &'a Value, field: &str) -> &'a str {
+        row[field].as_str().unwrap_or("unknown")
+    }
+    if let Some(rows) = result["agents"].as_array() {
+        let mut lines = rows
+            .iter()
+            .map(|row| {
+                format!(
+                    "{}  {}  {}  {}\n  {}",
+                    value(row, "run_id"),
+                    value(row, "status"),
+                    value(row, "provider"),
+                    value(row, "model"),
+                    value(row, "title")
+                )
+            })
+            .collect::<Vec<_>>();
+        if rows.is_empty() {
+            lines.push("No matching agents".into());
+        }
+        if let Some(warnings) = result["warnings"].as_array() {
+            lines.extend(warnings.iter().filter_map(Value::as_str).map(str::to_owned));
+        }
+        return Ok(lines.join("\n"));
+    }
+    let view: JobView = serde_json::from_value(result.clone())?;
+    let (model, cwd) = match &view.job.spec {
+        SpecEvidence::Known { spec } => (Some(&spec.settings), Some(&spec.cwd)),
+        SpecEvidence::Expired { settings, cwd, .. } => (Some(settings), Some(cwd)),
+        SpecEvidence::Unknown { .. } => (None, None),
+    };
+    let model = model
+        .map(|settings| match settings {
+            ExecutionSettings::Codex { model, .. } | ExecutionSettings::Claude { model, .. } => {
+                model.as_str()
+            }
+        })
+        .unwrap_or("unknown");
+    let mut lines = vec![
+        format!(
+            "{}  {}",
+            view.job.job_id.as_str(),
+            execution_status(&view.job)
+        ),
+        format!("Model: {model}"),
+        format!(
+            "Directory: {}",
+            cwd.map(|cwd| cwd.display().to_string())
+                .unwrap_or_else(|| "unknown".into())
+        ),
+    ];
+    if let Some(agent) = view.agent {
+        match agent.conversation {
+            ConversationBinding::Known { conversation } => lines.push(format!(
+                "Conversation: {} ({})",
+                conversation.thread_id,
+                conversation.provider.as_str()
+            )),
+            ConversationBinding::Unknown { reason } => {
+                lines.push(format!("Conversation: unknown ({reason})"))
+            }
+        }
+    }
+    match &view.job.execution {
+        ExecutionState::Unknown { reason, .. } => lines.push(format!("Status evidence: {reason}")),
+        ExecutionState::Terminal { terminal } => {
+            if let super::jobs::model::ResultEvidence::Available { result } = &terminal.result {
+                lines.push(result.text.clone());
+            }
+        }
+        _ => {}
+    }
+    Ok(lines.join("\n"))
+}
+
+fn message_exit(result: &Value) -> i32 {
+    match result["deliveryState"]["kind"].as_str() {
+        Some("submitted" | "accepted" | "recorded") => 0,
+        _ => 69,
+    }
+}
+
 pub(crate) async fn run(command: AgentCommand, env_file: Option<&Path>) -> Result<i32> {
     let format_only = matches!(&command, AgentCommand::Message(arguments) if arguments.format_only);
+    let is_message = matches!(&command, AgentCommand::Message(arguments) if !arguments.target.starts_with("automation:"));
+    let human_list = matches!(&command, AgentCommand::List(arguments) if !arguments.json && !arguments.automations && !arguments.target.as_deref().is_some_and(|target| target.starts_with("automation:")));
     let compact = match &command {
         AgentCommand::Spawn(arguments) => arguments.json,
         AgentCommand::Message(arguments) => arguments.json,
         AgentCommand::List(arguments) => arguments.json,
-        AgentCommand::Read { json, .. } | AgentCommand::Items { json, .. } => *json,
+        AgentCommand::Read { json, .. }
+        | AgentCommand::Items { json, .. }
+        | AgentCommand::Receipt { json, .. } => *json,
         _ => true,
     };
     match execute(command, env_file).await {
@@ -1154,7 +1261,12 @@ pub(crate) async fn run(command: AgentCommand, env_file: Option<&Path>) -> Resul
             println!("{text}");
             Ok(0)
         }
+        Ok(result) if human_list => {
+            println!("{}", human_listing(&result)?);
+            Ok(0)
+        }
         Ok(result) => {
+            let exit = if is_message { message_exit(&result) } else { 0 };
             println!(
                 "{}",
                 if compact {
@@ -1163,7 +1275,7 @@ pub(crate) async fn run(command: AgentCommand, env_file: Option<&Path>) -> Resul
                     serde_json::to_string_pretty(&result)?
                 }
             );
-            Ok(0)
+            Ok(exit)
         }
         Err(error) => {
             let (exit, payload) = if let Some(error) = error.downcast_ref::<RpcFailure>() {
@@ -1191,13 +1303,57 @@ pub(crate) async fn run(command: AgentCommand, env_file: Option<&Path>) -> Resul
             let request_id = error
                 .downcast_ref::<RequestIdentity>()
                 .map(|identity| identity.0.as_str());
-            println!(
-                "{}",
-                serde_json::to_string(
-                    &json!({"ok":false,"request_id":request_id,"error":payload})
-                )?
-            );
+            let diagnostic = serde_json::to_string(
+                &json!({"ok":false,"request_id":request_id,"error":payload}),
+            )?;
+            if format_only {
+                eprintln!("{diagnostic}");
+            } else {
+                println!("{diagnostic}");
+            }
             Ok(exit)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn message_delivery_failures_return_nonzero_without_changing_receipt() {
+        for kind in [
+            "unreachable",
+            "blocked",
+            "uncertain",
+            "failed",
+            "sending",
+            "pending",
+        ] {
+            assert_eq!(
+                message_exit(
+                    &json!({"deliveryId":"same-id","deliveryState":{"kind":kind,"reason":"not accepted"}})
+                ),
+                69
+            );
+        }
+        for kind in ["submitted", "accepted", "recorded"] {
+            assert_eq!(
+                message_exit(&json!({"deliveryId":"same-id","deliveryState":{"kind":kind}})),
+                0
+            );
+        }
+        assert_eq!(message_exit(&json!({"deliveryId":"same-id"})), 69);
+    }
+
+    #[test]
+    fn human_list_preserves_unknown_status_and_missing_model() {
+        let output = human_listing(&json!({"agents":[{"run_id":"agent-claude-old","status":"unknown","provider":"claude","model":null,"title":null}],"warnings":[]})).unwrap();
+        assert!(output.contains("agent-claude-old  unknown  claude  unknown"));
+        assert!(!output.contains("null"));
+        assert_eq!(
+            human_listing(&json!({"agents":[],"warnings":[]})).unwrap(),
+            "No matching agents"
+        );
     }
 }

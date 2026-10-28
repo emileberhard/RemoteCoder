@@ -329,6 +329,11 @@ pub(crate) enum ExecutionState {
     Running {
         binding: ExecutionBinding,
     },
+    RetryWaiting {
+        binding: ExecutionBinding,
+        #[serde(rename = "retryAtMs")]
+        retry_at_ms: i64,
+    },
     Recovering {
         binding: ExecutionBinding,
         #[serde(rename = "recoveryInputId")]
@@ -347,7 +352,9 @@ pub(crate) enum ExecutionState {
 impl ExecutionState {
     pub(crate) fn binding(&self) -> Option<&ExecutionBinding> {
         match self {
-            Self::Running { binding } | Self::Recovering { binding, .. } => Some(binding),
+            Self::Running { binding }
+            | Self::Recovering { binding, .. }
+            | Self::RetryWaiting { binding, .. } => Some(binding),
             Self::Unknown { binding, .. } => binding.as_ref(),
             Self::Terminal { terminal } => terminal.execution.as_ref(),
             _ => None,
@@ -379,6 +386,13 @@ pub(crate) enum StopState {
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ProviderRetry {
+    pub binding: ExecutionBinding,
+    pub outcome: JobOutcome,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct JobRecord {
     pub job_id: JobId,
     pub agent_id: String,
@@ -387,6 +401,8 @@ pub(crate) struct JobRecord {
     pub updated_at_ms: i64,
     pub revision: u64,
     pub previous_job_id: Option<JobId>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub provider_retries: Vec<ProviderRetry>,
     pub source: JobSource,
     pub admission_origin: Option<Origin>,
     pub unconfirmed_result: Option<JobResult>,
@@ -398,6 +414,20 @@ pub(crate) struct JobRecord {
 }
 
 impl JobRecord {
+    pub(crate) fn current_input_id(&self) -> String {
+        if self.provider_retries.is_empty() {
+            self.initial_input_id()
+        } else {
+            crate::ids::hash_uuid(
+                "remotecoder-agent-retry",
+                &[
+                    self.job_id.as_str(),
+                    &self.provider_retries.len().to_string(),
+                ],
+            )
+        }
+    }
+
     pub(crate) fn initial_input_id(&self) -> String {
         crate::ids::hash_uuid("remotecoder-agent-input", &[self.job_id.as_str()])
     }
@@ -461,6 +491,10 @@ pub(crate) enum Inspection {
         reason: String,
     },
     Unknown {
+        reason: String,
+    },
+    TransientFailure {
+        binding: ExecutionBinding,
         reason: String,
     },
     Finished {

@@ -229,7 +229,10 @@ async fn final_result_waits_for_background_work_eof_and_reap_and_survives_replac
     fs::write(fixture.stub.state.join("child-result"), "ready").unwrap();
     let candidate = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            if let ClaudeJobInspection::Finished { outcome, candidate } = fixture.inspect().await {
+            if let ClaudeJobInspection::Finished {
+                outcome, candidate, ..
+            } = fixture.inspect().await
+            {
                 assert_eq!(outcome, JobOutcome::Completed);
                 break candidate.unwrap();
             }
@@ -549,4 +552,146 @@ async fn prepared_recovery_retries_only_its_frozen_input_and_never_the_original_
         .stop_job(&fixture.job_id, &fixture.conversation, &fixture.evidence)
         .await
         .unwrap();
+}
+
+#[tokio::test]
+async fn transient_terminal_failure_retries_same_session_once_and_reconciles_duplicate_preparation()
+{
+    let fixture = Fixture::new();
+    let state = serde_json::to_string(&fixture.stub.state.to_string_lossy()).unwrap();
+    fs::write(&fixture.stub.settings.claude_path, format!(r#"#!/usr/bin/python3
+import json, sys
+from pathlib import Path
+state = Path({state})
+def emit(value):
+    print(json.dumps(value), flush=True)
+def save(name, value):
+    with (state / name).open('a') as output:
+        output.write(json.dumps(value) + '\n')
+args = sys.argv[1:]
+session = args[args.index('--resume') + 1]
+save('launches.jsonl', {{'session':session}})
+emit({{'type':'system','subtype':'init','session_id':session,'apiKeySource':'none','fast_mode_state':'off','permissionMode':'bypassPermissions'}})
+frame = json.loads(sys.stdin.readline())
+save('received.jsonl', frame)
+emit(frame)
+retry = (state / 'failed-once').exists()
+(state / 'failed-once').touch()
+emit({{'type':'result','session_id':session,'is_error':not retry,
+    'subtype':'success',
+    'api_error_status':None if retry else 503, 'terminal_reason':'completed' if retry else 'api_error',
+    'num_turns':1,'result':'done' if retry else 'temporary provider failure'}})
+for line in sys.stdin:
+    save('unexpected-input.jsonl', json.loads(line))
+"#)).unwrap();
+    let original = fixture.start().await;
+    let mut changes = fixture.agent.subscribe_job_changes();
+    let failed = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let ClaudeJobInspection::Finished {
+                binding,
+                outcome,
+                candidate,
+            } = fixture.inspect().await
+            {
+                assert!(matches!(outcome, JobOutcome::Failed { .. }));
+                assert!(candidate.unwrap().transient_failure());
+                break binding.unwrap();
+            }
+            changes.changed().await.unwrap();
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(failed, original);
+    let mut spec = fixture.spec.clone();
+    spec.prompt = "Continue from existing history; inspect prior effects before acting.".into();
+    let successor = "22222222-2222-4333-8444-666666666666";
+    for _ in 0..2 {
+        fixture
+            .agent
+            .prepare_job_retry(
+                &fixture.job_id,
+                &failed,
+                &spec,
+                successor,
+                &fixture.evidence,
+            )
+            .await
+            .unwrap();
+    }
+    let mut changed = spec.clone();
+    changed.prompt = "different payload".into();
+    assert!(
+        fixture
+            .agent
+            .prepare_job_retry(
+                &fixture.job_id,
+                &failed,
+                &changed,
+                successor,
+                &fixture.evidence
+            )
+            .await
+            .is_err()
+    );
+    let resumed = fixture
+        .agent
+        .start_job(
+            &fixture.job_id,
+            &fixture.conversation,
+            &spec,
+            successor,
+            &fixture.socket,
+            &fixture.evidence,
+        )
+        .await
+        .unwrap();
+    assert_eq!(resumed.conversation, original.conversation);
+    assert_ne!(resumed.turn_id, original.turn_id);
+    fixture
+        .agent
+        .prepare_job_retry(
+            &fixture.job_id,
+            &failed,
+            &spec,
+            successor,
+            &fixture.evidence,
+        )
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let ClaudeJobInspection::Finished {
+                outcome, candidate, ..
+            } = fixture.inspect().await
+            {
+                assert_eq!(outcome, JobOutcome::Completed);
+                assert_eq!(candidate.unwrap().text.as_deref(), Some("done"));
+                break;
+            }
+            changes.changed().await.unwrap();
+        }
+    })
+    .await
+    .unwrap();
+    let received = fixture.stub.log("received.jsonl");
+    assert_eq!(received.len(), 2);
+    assert_eq!(received[1]["uuid"], successor);
+    assert_eq!(received[1]["message"]["content"], spec.prompt);
+    assert_ne!(received[1]["message"]["content"], fixture.spec.prompt);
+    assert!(fixture.stub.log("unexpected-input.jsonl").is_empty());
+    assert!(
+        fixture
+            .agent
+            .prepare_job_retry(
+                &fixture.job_id,
+                &resumed,
+                &spec,
+                "33333333-2222-4333-8444-666666666666",
+                &fixture.evidence
+            )
+            .await
+            .is_err()
+    );
 }

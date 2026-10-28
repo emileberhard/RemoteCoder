@@ -14,6 +14,15 @@ Compare app-server protocol changes between exact fork revisions with
 `CODEX_BIN=<candidate>/bin/codex just codex-schema` generates the candidate
 schema under ignored `build/codex-schema/<version>/`.
 
+- `JobStore` owns exact-job message admission grants. Execution transitions and
+  successor admission wait for native custody admission, including after caller
+  cancellation; the owned message task retains the per-ID claim and shutdown
+  read guard. Stop persists and signals independently. Never hold this grant
+  through a model turn or release it by canceling an in-flight provider RPC.
+  New Codex messages steer a known running turn with the stable message ID and
+  expected turn ID; the runtime job binding must match. A steer refusal never
+  falls through to a queued turn, and accepted historical input is never resent.
+
 ## Verify
 
 The root file decides which checks a change needs; gateway changes count as
@@ -56,6 +65,18 @@ Agent/Job/execution model, exact process attribution, durable Stop, result and
 delivery invariants. The installed binary's `agent` subcommand is the client;
 no launcher process, second ancestry registry or runtime legacy reader exists.
 Native terminal Claude holders own only their process-lifetime inbox route.
+Scoped caller coordination belongs to the gateway lifetime, namespaced by its
+job-store root; it proves the actual provider process and resolves the current
+job from the conversation. Finishing a job must not remove that shared route.
+Native caller proof validates the peer before provider lookup and verifies ancestry
+only through the daemon's exact tool root; unrelated launcher ancestors above
+that owner are outside the proof.
+
+Manual message receipts share `JobStore` and its cap. Their frozen sender,
+requested target, envelope, resolved conversation and target job survive retries;
+never resolve a retry against a newer invocation. Message-driven Continue uses
+the atomic previous-job and Stop fence. `agent/messages/read` is the read owner;
+scoped receipt reads require the exact sender conversation.
 
 ## Process model
 
@@ -1291,6 +1312,14 @@ Claude. The `RC_CLAUDE_*` settings are in
       bound. A restart captures an idle runtime whose hold is
       live and resumes it, so its crons come back with `--resume` and the
       notice asks the model to re-arm its `/loop`.
+- **Claude resume identity is independent of cwd.** A resumed conversation resolves
+  its exact UUID transcript inside the configured Claude home. A different launch
+  directory uses the absolute transcript path with `--resume`, never a fork or a
+  fresh session. If a full-access thread's recorded cwd disappeared, its exact
+  transcript may supply the latest existing recorded cwd; `cwd_recovered` records
+  both paths. Unrecorded missing overrides fail with their path. Read-only scopes
+  never recover into another directory. The runtime and saved parent selection
+  retain the effective launch cwd.
 - **Turns have no wall-clock cap**, in either provider. A turn ends when the
   agent ends it, when the process dies or when the user interrupts. Turns can
   legitimately run for hours, and a long silent tool call looks the same as a

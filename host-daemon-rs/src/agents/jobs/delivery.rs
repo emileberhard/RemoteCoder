@@ -44,7 +44,7 @@ impl JobOwner {
                 )
                 .await?;
             let next = match gateway
-                .deliver_job_input(conversation, &delivery_id, &text)
+                .deliver_job_input(conversation, &delivery_id, &text, None)
                 .await
             {
                 Ok(value) => {
@@ -116,7 +116,7 @@ impl JobOwner {
             )
             .await?;
         let next = match gateway
-            .deliver_job_input(conversation, delivery_id, text)
+            .deliver_job_input(conversation, delivery_id, text, None)
             .await
         {
             Ok(value) => serde_json::from_value::<DeliveryState>(value["deliveryState"].clone())?,

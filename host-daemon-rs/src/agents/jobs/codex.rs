@@ -22,12 +22,8 @@ const READ_ONLY_DISABLED_FEATURES: [&str; 8] = [
     "tool_suggest",
 ];
 
-pub(crate) async fn create(
-    gateway: &Arc<Gateway>,
-    id: &JobId,
-    spec: &JobSpec,
-) -> Result<ConversationIdentity> {
-    let mut params = thread_params(gateway, id, spec).await?;
+pub(crate) async fn create(gateway: &Arc<Gateway>, spec: &JobSpec) -> Result<ConversationIdentity> {
+    let mut params = thread_params(gateway, spec).await?;
     if matches!(spec.tool_scope, ToolScope::Full) {
         params["dynamicTools"] = crate::agents::tools::codex_dynamic_tools();
     }
@@ -73,14 +69,14 @@ pub(crate) async fn start(gateway: &Arc<Gateway>, job: &JobRecord) -> Result<Exe
     let SpecEvidence::Known { spec } = &job.spec else {
         bail!("the original Codex input specification is unavailable");
     };
-    let input_id = job.initial_input_id();
+    let input_id = job.current_input_id();
     if let ExecutionState::Dispatching {
         input_id: retained, ..
     } = &job.execution
     {
         ensure!(retained == &input_id, "the retained input identity changed");
     }
-    let mut resume = thread_params(gateway, &job.job_id, spec).await?;
+    let mut resume = thread_params(gateway, spec).await?;
     resume["threadId"] = json!(conversation.thread_id);
     resume["excludeTurns"] = json!(true);
     let resumed = gateway.job_native_call("thread/resume", resume).await?;
@@ -107,7 +103,7 @@ pub(crate) async fn start(gateway: &Arc<Gateway>, job: &JobRecord) -> Result<Exe
         .job_start_codex_input(json!({
             "threadId":conversation.thread_id,
             "clientUserMessageId":input_id,
-            "input":[{"type":"text","text":spec.prompt}],
+            "input":[{"type":"text","text":if job.provider_retries.is_empty() { spec.prompt.as_str() } else { super::retry::CONTINUATION_PROMPT }}],
             "cwd":spec.cwd,
             "model":model,
             "effort":effort,
@@ -141,7 +137,7 @@ pub(crate) async fn start(gateway: &Arc<Gateway>, job: &JobRecord) -> Result<Exe
 pub(crate) async fn inspect(gateway: &Arc<Gateway>, job: &JobRecord) -> Result<Inspection> {
     let conversation = conversation(job)?;
     verify_home(gateway, conversation)?;
-    let input_id = job.initial_input_id();
+    let input_id = job.current_input_id();
     let Some(accepted) = gateway
         .job_read_codex_acceptance(&conversation.thread_id, &input_id)
         .await?
@@ -216,11 +212,35 @@ pub(crate) async fn inspect(gateway: &Arc<Gateway>, job: &JobRecord) -> Result<I
     if inspected["outcome"]["state"] == "known" {
         let outcome = match inspected["outcome"]["status"].as_str() {
             Some("completed") => JobOutcome::Completed,
+            Some("failed")
+                if accepted.has(NativeInputFact::Recorded)
+                    && super::retry::is_transient(&inspected["outcome"]["error"])
+                    && job.provider_retries.len() < super::retry::MAX_PROVIDER_RETRIES =>
+            {
+                return Ok(Inspection::TransientFailure {
+                    binding,
+                    reason: inspected["outcome"]["error"]["message"]
+                        .as_str()
+                        .unwrap_or("transient native provider failure")
+                        .to_owned(),
+                });
+            }
             Some("failed") => JobOutcome::Failed {
-                reason: inspected["outcome"]["error"]["message"]
-                    .as_str()
-                    .unwrap_or("the native turn failed without a recorded error message")
-                    .to_owned(),
+                reason: {
+                    let reason = inspected["outcome"]["error"]["message"]
+                        .as_str()
+                        .unwrap_or("the native turn failed without a recorded error message");
+                    if job.provider_retries.len() == super::retry::MAX_PROVIDER_RETRIES
+                        && super::retry::is_transient(&inspected["outcome"]["error"])
+                    {
+                        format!(
+                            "provider retry budget exhausted after {} retries: {reason}",
+                            job.provider_retries.len()
+                        )
+                    } else {
+                        reason.to_owned()
+                    }
+                },
             },
             Some("interrupted") => JobOutcome::Stopped {
                 effects: EffectEvidence::MayHaveRun,
@@ -258,7 +278,7 @@ pub(crate) async fn inspect(gateway: &Arc<Gateway>, job: &JobRecord) -> Result<I
 pub(crate) async fn recover(gateway: &Arc<Gateway>, job: &JobRecord) -> Result<ExecutionBinding> {
     let target = conversation(job)?;
     let accepted = gateway
-        .job_read_codex_acceptance(&target.thread_id, &job.initial_input_id())
+        .job_read_codex_acceptance(&target.thread_id, &job.current_input_id())
         .await?
         .context("native input recovery has no exact acceptance evidence")?;
     ensure!(
@@ -273,7 +293,7 @@ pub(crate) async fn recover(gateway: &Arc<Gateway>, job: &JobRecord) -> Result<E
 pub(crate) async fn stop(gateway: &Arc<Gateway>, job: &JobRecord) -> Result<()> {
     let target = conversation(job)?;
     verify_home(gateway, target)?;
-    let input_id = job.initial_input_id();
+    let input_id = job.current_input_id();
     gateway
         .job_stop_codex_input(&target.thread_id, &input_id)
         .await
@@ -311,7 +331,7 @@ fn verify_home(gateway: &Gateway, target: &ConversationIdentity) -> Result<()> {
     Ok(())
 }
 
-async fn thread_params(gateway: &Gateway, id: &JobId, spec: &JobSpec) -> Result<Value> {
+async fn thread_params(gateway: &Gateway, spec: &JobSpec) -> Result<Value> {
     let ExecutionSettings::Codex {
         model,
         model_provider,
@@ -321,7 +341,7 @@ async fn thread_params(gateway: &Gateway, id: &JobId, spec: &JobSpec) -> Result<
     else {
         bail!("Codex thread settings use another provider");
     };
-    let socket = gateway.job_coordination_socket(id);
+    let socket = gateway.job_coordination_socket()?;
     let mut config = json!({
         "shell_environment_policy":{"set":{"RC_AGENT_JOB_SOCKET":socket}}
     });

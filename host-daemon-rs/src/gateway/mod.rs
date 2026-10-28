@@ -4,6 +4,7 @@ mod agent_delivery;
 mod agent_gateway;
 mod agent_jobs;
 pub(crate) mod agent_jobs_codex;
+mod agent_messages;
 mod agent_routes;
 mod question_gateway;
 

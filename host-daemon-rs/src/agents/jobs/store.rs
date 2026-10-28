@@ -1,3 +1,6 @@
+mod execution;
+pub(crate) mod messages;
+
 use std::collections::BTreeMap;
 use std::fs::{File, OpenOptions};
 use std::os::unix::fs::OpenOptionsExt;
@@ -21,6 +24,7 @@ const RETENTION_MS: i64 = 30 * 24 * 60 * 60 * 1000;
 #[derive(Clone)]
 pub(crate) struct JobStore {
     inner: Arc<Mutex<Inner>>,
+    executions: Arc<execution::ExecutionGates>,
 }
 
 struct Inner {
@@ -29,6 +33,7 @@ struct Inner {
     jobs: BTreeMap<JobId, JobRecord>,
     agents: BTreeMap<String, AgentRecord>,
     uncertainties: Vec<ImportedUncertainty>,
+    messages: BTreeMap<String, messages::MessageRecord>,
 }
 
 pub(crate) enum Selection {
@@ -51,8 +56,8 @@ impl JobStore {
                 .custom_flags(libc::O_NOFOLLOW)
                 .open(root.join("owner.lock"))?;
             lease.try_lock().context("another process owns the delegated-job store")?;
-            let mut inner = Inner { root, _lease: lease, jobs: BTreeMap::new(), agents: BTreeMap::new(), uncertainties: Vec::new() };
-            for name in ["jobs", "agents", "evidence", "uncertainties"] {
+            let mut inner = Inner { root, _lease: lease, jobs: BTreeMap::new(), agents: BTreeMap::new(), uncertainties: Vec::new(), messages: BTreeMap::new() };
+            for name in ["jobs", "agents", "evidence", "uncertainties", "messages"] {
                 private_state::ensure_private_directory(&inner.root.join(name))?;
             }
             File::open(&inner.root)?.sync_all()?;
@@ -84,12 +89,13 @@ impl JobStore {
                 ensure!(entry.path().file_stem().and_then(|name| name.to_str()) == Some(fingerprint(evidence.evidence_id.as_bytes()).as_str()), "historical uncertainty filename differs from its identity");
                 inner.uncertainties.push(evidence);
             }
+            inner.load_messages()?;
             inner.validate_slots()?;
             let accounted = inner.accounted_bytes()?;
             if accounted + MUTATION_RESERVE > MAX_STORE_BYTES {
                 tracing::warn!(accounted, "delegated-job store is over its budget; admission stays closed until settled payloads are reclaimed");
             }
-            Ok(Self { inner: Arc::new(Mutex::new(inner)) })
+            Ok(Self { inner: Arc::new(Mutex::new(inner)), executions: Arc::default() })
         }).await.context("opening delegated-job store")?
     }
 
@@ -197,6 +203,26 @@ impl JobStore {
         }).await
     }
 
+    pub(crate) async fn verify_legacy_socket(
+        &self,
+        conversation: ConversationIdentity,
+        socket: PathBuf,
+    ) -> Result<()> {
+        ensure!(
+            super::routes::is_legacy_socket(&socket),
+            "unrecognized legacy scoped socket"
+        );
+        self.access(move |inner| {
+            let matches = inner.jobs.values().any(|job| {
+                super::routes::legacy_socket(&job.job_id) == socket
+                    && inner.agents.get(&job.agent_id).is_some_and(|agent|
+                        matches!(&agent.conversation, ConversationBinding::Known { conversation: known } if known == &conversation))
+            });
+            ensure!(matches, "legacy scoped socket does not belong to this gateway's exact calling conversation");
+            Ok(())
+        }).await
+    }
+
     pub(crate) async fn agent_for_conversation(
         &self,
         conversation: ConversationIdentity,
@@ -273,7 +299,27 @@ impl JobStore {
     }
 
     pub(crate) async fn admit(&self, job: JobRecord) -> Result<(JobRecord, bool)> {
+        self.admit_with_stop_fence(job, false).await
+    }
+
+    pub(crate) async fn admit_message_continuation(
+        &self,
+        job: JobRecord,
+    ) -> Result<(JobRecord, bool)> {
+        self.admit_with_stop_fence(job, true).await
+    }
+
+    async fn admit_with_stop_fence(
+        &self,
+        job: JobRecord,
+        require_unstopped: bool,
+    ) -> Result<(JobRecord, bool)> {
+        let _previous = match &job.previous_job_id {
+            Some(previous) => Some(self.executions.mutation(previous).await?),
+            None => None,
+        };
         self.access(move |inner| {
+            let _previous = _previous;
             validate_job(&job)?;
             ensure!(job.source == JobSource::Runtime && job.revision == 0, "new admission requires an initial runtime job");
             if let Some(previous) = inner.existing_request(&job.job_id, job.request_fingerprint.as_deref().context("new admission requires its request fingerprint")?)? {
@@ -285,7 +331,8 @@ impl JobStore {
             ensure!(!inner.jobs.values().any(|existing| existing.agent_id == job.agent_id && existing.source == JobSource::Runtime && !is_terminal(existing)), "conversation already has an unresolved runtime job");
             if let Some(previous_id) = &job.previous_job_id {
                 let previous = inner.job(previous_id)?;
-                ensure!(previous.agent_id == job.agent_id && matches!(&previous.execution, ExecutionState::Terminal { terminal } if terminal.cleanup == CleanupState::Complete), "Continue waits until the previous terminal result is acknowledged by its provider");
+                ensure!(!require_unstopped || (matches!(previous.stop, StopState::NotRequested) && !matches!(&previous.execution, ExecutionState::Terminal { terminal } if matches!(terminal.outcome, JobOutcome::Stopped { .. }))), "automatic message continuation cannot clear Stop; use explicit Continue to restart deliberately");
+                ensure!(previous.agent_id == job.agent_id && ((previous.source == JobSource::Imported && !matches!(&previous.execution, ExecutionState::Terminal { terminal } if terminal.cleanup == CleanupState::Pending)) || matches!(&previous.execution, ExecutionState::Terminal { terminal } if terminal.cleanup == CleanupState::Complete)), "Continue waits until the previous terminal result is acknowledged by its provider");
                 ensure!(inner.agent_view(&job.agent_id)?.latest_job_id.as_ref() == Some(previous_id), "Continue was based on a superseded job");
                 ensure!(job.admission_origin.is_none(), "Continue cannot replace original ancestry");
             } else {
@@ -333,10 +380,53 @@ impl JobStore {
         execution: ExecutionState,
         at_ms: i64,
     ) -> Result<JobRecord> {
+        let _execution = self.executions.mutation(&id).await?;
         self.access(move |inner| {
+            let _execution = _execution;
             let mut job = inner.current(&id, revision)?;
             validate_transition(&job, &execution)?;
+            if let ExecutionState::RetryWaiting { retry_at_ms, .. } = &job.execution
+                && matches!(execution, ExecutionState::Dispatching { .. })
+            {
+                ensure!(at_ms >= *retry_at_ms, "provider retry is not due");
+            }
             job.execution = execution;
+            inner.commit(job, at_ms)
+        })
+        .await
+    }
+
+    pub(crate) async fn schedule_provider_retry(
+        &self,
+        id: JobId,
+        revision: u64,
+        binding: ExecutionBinding,
+        reason: String,
+        retry_at_ms: i64,
+        at_ms: i64,
+    ) -> Result<JobRecord> {
+        let _execution = self.executions.mutation(&id).await?;
+        self.access(move |inner| {
+            let _execution = _execution;
+            let mut job = inner.current(&id, revision)?;
+            ensure!(
+                job.provider_retries.len() < super::retry::MAX_PROVIDER_RETRIES,
+                "provider retry budget exhausted"
+            );
+            ensure!(
+                job.execution.conversation() == Some(&binding.conversation),
+                "retry changed the exact failed conversation"
+            );
+            let next = ExecutionState::RetryWaiting {
+                binding: binding.clone(),
+                retry_at_ms,
+            };
+            validate_transition(&job, &next)?;
+            job.provider_retries.push(ProviderRetry {
+                binding,
+                outcome: JobOutcome::Failed { reason },
+            });
+            job.execution = next;
             inner.commit(job, at_ms)
         })
         .await
@@ -371,7 +461,9 @@ impl JobStore {
         notice: Option<String>,
         at_ms: i64,
     ) -> Result<JobRecord> {
+        let _execution = self.executions.mutation(&id).await?;
         self.access(move |inner| {
+            let _execution = _execution;
             let mut job = inner.current(&id, revision)?;
             let next = ExecutionState::Unknown { conversation: job.execution.conversation().cloned(), binding: job.execution.binding().cloned(), reason };
             validate_transition(&job, &next)?;
@@ -527,9 +619,9 @@ impl Inner {
                 reason: "historical provider conversation is unresolved".into(),
             });
         let state = match &job.execution {
-            ExecutionState::Admitted | ExecutionState::Bound { .. } => {
-                crate::agents::State::Waiting
-            }
+            ExecutionState::Admitted
+            | ExecutionState::Bound { .. }
+            | ExecutionState::RetryWaiting { .. } => crate::agents::State::Waiting,
             ExecutionState::Running { .. } | ExecutionState::Recovering { .. } => {
                 crate::agents::State::Working
             }
@@ -551,6 +643,7 @@ impl Inner {
             title,
             model,
             state,
+            active: job.source == JobSource::Runtime && !is_terminal(job),
             created_at_ms: job.created_at_ms,
             updated_at_ms: job.updated_at_ms,
         })
@@ -583,10 +676,38 @@ impl Inner {
             .get(id)
             .context("delegated agent does not exist")?
             .clone();
-        let Some(mut latest) = agent.origin_job_id.as_ref() else {
+        let mut active = self.jobs.values().filter(|job| {
+            job.agent_id == id
+                && job.source == JobSource::Runtime
+                && matches!(
+                    job.execution,
+                    ExecutionState::Admitted
+                        | ExecutionState::Bound { .. }
+                        | ExecutionState::Dispatching { .. }
+                        | ExecutionState::Running { .. }
+                        | ExecutionState::Recovering { .. }
+                )
+        });
+        if let Some(job) = active.next() {
+            ensure!(
+                active.next().is_none(),
+                "conversation has conflicting active runtime jobs"
+            );
+            agent.latest_job_id = Some(job.job_id.clone());
+            return Ok(agent);
+        }
+        let Some(mut latest) = agent
+            .latest_job_id
+            .as_ref()
+            .or(agent.origin_job_id.as_ref())
+        else {
             return Ok(agent);
         };
         for _ in 0..=self.jobs.len() {
+            ensure!(
+                self.job(latest)?.agent_id == id,
+                "continuation belongs to another agent"
+            );
             let mut successors = self
                 .jobs
                 .values()
@@ -595,10 +716,10 @@ impl Inner {
                 agent.latest_job_id = Some(latest.clone());
                 return Ok(agent);
             };
-            ensure!(
-                successors.next().is_none(),
-                "conversation has conflicting continuation jobs"
-            );
+            if successors.next().is_some() {
+                agent.latest_job_id = None;
+                return Ok(agent);
+            }
             latest = &next.job_id;
         }
         bail!("conversation continuation chain contains a cycle")
@@ -716,10 +837,12 @@ impl Inner {
             let owned = job_bytes + evidence_bytes;
             accounted += RUNTIME_RESERVATION.saturating_sub(owned);
         }
+        accounted += self.message_reservations()?;
         Ok(accounted)
     }
 
     fn reclaim(&mut self, now: i64, incoming: u64) -> Result<()> {
+        self.reclaim_messages(now)?;
         let mut candidates: Vec<_> = self
             .jobs
             .values()
@@ -851,6 +974,30 @@ fn live_reservation(job: &JobRecord) -> bool {
 }
 
 fn validate_job(job: &JobRecord) -> Result<()> {
+    ensure!(
+        job.provider_retries.len() <= super::retry::MAX_PROVIDER_RETRIES,
+        "provider retry budget exceeded"
+    );
+    for retry in &job.provider_retries {
+        ensure!(
+            matches!(retry.outcome, JobOutcome::Failed { .. }),
+            "provider retry predecessor must have failed"
+        );
+        ensure!(
+            job.execution
+                .conversation()
+                .is_none_or(|conversation| conversation == &retry.binding.conversation),
+            "provider retry changed its conversation"
+        );
+    }
+    if let ExecutionState::RetryWaiting { binding, .. } = &job.execution {
+        ensure!(
+            job.provider_retries
+                .last()
+                .is_some_and(|retry| &retry.binding == binding),
+            "provider retry waiting lost its predecessor"
+        );
+    }
     if let ExecutionState::Unknown {
         conversation,
         binding: Some(binding),
@@ -937,8 +1084,8 @@ fn validate_job(job: &JobRecord) -> Result<()> {
     if job.source == JobSource::Runtime {
         if let ExecutionState::Dispatching { input_id, .. } = &job.execution {
             ensure!(
-                *input_id == job.initial_input_id(),
-                "dispatch input differs from the job's immutable initial input identity"
+                *input_id == job.current_input_id(),
+                "dispatch input differs from the job's immutable current input identity"
             );
         }
         if let ExecutionState::Terminal { terminal } = &job.execution {
@@ -1034,6 +1181,14 @@ fn validate_transition(job: &JobRecord, next: &ExecutionState) -> Result<()> {
         ) | (
             ExecutionState::Recovering { .. },
             ExecutionState::Recovering { .. }
+        ) | (
+            ExecutionState::Running { .. }
+                | ExecutionState::Recovering { .. }
+                | ExecutionState::Unknown { .. },
+            ExecutionState::RetryWaiting { .. }
+        ) | (
+            ExecutionState::RetryWaiting { .. },
+            ExecutionState::Dispatching { .. }
         ) | (_, ExecutionState::Terminal { .. })
     );
     ensure!(valid, "invalid delegated-job execution transition");

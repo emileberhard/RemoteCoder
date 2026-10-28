@@ -191,11 +191,15 @@ try:
     with contextlib.closing(http.client.HTTPConnection('127.0.0.1', values['port'], timeout=5)) as connection:
         connection.request('GET', '/health', headers={'Authorization': 'Bearer ' + values['token']})
         response = connection.getresponse()
+        if response.status >= 500:
+            raise SystemExit(76)
         if response.status != 200:
             raise RuntimeError('Gateway identity health request did not succeed')
         data = response.read(65537)
 except TimeoutError:
     raise SystemExit(75)
+except ConnectionError:
+    raise SystemExit(76)
 if len(data) > 65536:
     raise RuntimeError('Gateway health response exceeds the identity lookup limit')
 print(json.dumps(json.loads(data)['lanEndpoint']))
@@ -217,6 +221,8 @@ print(json.dumps(json.loads(data)['lanEndpoint']))
     except subprocess.CalledProcessError as error:
         if error.returncode == 75:
             raise TimeoutError(f"Gateway TLS identity health request to 127.0.0.1:{health_port} on {ssh_host or 'this host'} timed out after 5 seconds") from error
+        if error.returncode == 76:
+            raise ConnectionError(f"Gateway TLS identity health request to 127.0.0.1:{health_port} on {ssh_host or 'this host'} is unavailable") from error
         raise GatewayIdentityError(f"Cannot establish the gateway TLS identity {location}") from error
     except (subprocess.SubprocessError, KeyError, TypeError, ValueError, GatewayIdentityError) as error:
         raise GatewayIdentityError(f"Cannot establish the gateway TLS identity {location}") from error

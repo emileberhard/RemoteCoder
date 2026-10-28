@@ -6,6 +6,7 @@ mod execution;
 pub(crate) mod model;
 pub(crate) mod owner;
 mod result;
+mod retry;
 pub(crate) mod routes;
 pub(crate) mod store;
 

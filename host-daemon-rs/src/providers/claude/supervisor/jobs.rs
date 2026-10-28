@@ -106,6 +106,7 @@ pub(crate) enum ClaudeJobInspection {
         reason: String,
     },
     Finished {
+        binding: Option<ExecutionBinding>,
         outcome: JobOutcome,
         candidate: Option<Candidate>,
     },
@@ -302,9 +303,10 @@ impl ClaudeSupervisor {
         let evidence = self
             .reconcile_job_input(&conversation.thread_id, &handle, evidence)
             .await?;
-        if let JobPhase::Finished { outcome } = evidence.phase {
+        if let JobPhase::Finished { ref outcome } = evidence.phase {
             return Ok(ClaudeJobInspection::Finished {
-                outcome,
+                binding: binding(&evidence),
+                outcome: outcome.clone(),
                 candidate: evidence.candidate,
             });
         }
@@ -348,6 +350,81 @@ impl ClaudeSupervisor {
             }
             _ => ClaudeJobInspection::Unknown { reason: "Claude execution ended without final EOF and reap evidence; exact recovery must inspect history and state".into() },
         })
+    }
+
+    pub(crate) async fn prepare_job_retry(
+        &self,
+        job_id: &JobId,
+        previous: &ExecutionBinding,
+        spec: &JobSpec,
+        input_id: &str,
+        evidence_path: &Path,
+    ) -> Result<()> {
+        self.validate_job_conversation(&previous.conversation)?;
+        let session = session_uuid_from_thread_id(&previous.conversation.thread_id)
+            .context("Claude retry has no exact session")?;
+        ensure!(
+            self.session_history(&spec.cwd.to_string_lossy(), session)
+                .is_some(),
+            "Claude retry history is unavailable; refusing a new session"
+        );
+        let handle = JobHandle {
+            job_id: job_id.clone(),
+            evidence_path: evidence_path.to_owned(),
+        };
+        let next = JobInput {
+            id: input_id.to_owned(),
+            fingerprint: format!("{:x}", Sha256::digest(spec.prompt.as_bytes())),
+        };
+        let previous = previous.clone();
+        let thread = previous.conversation.thread_id.clone();
+        let generation = self.stop_generation(&thread).await?;
+        self.conversation_index
+            .update_job(&thread, &handle, move |saved| {
+                ensure!(
+                    saved.stop_generation == generation,
+                    "Claude Stop superseded provider retry"
+                );
+                if saved.input == next {
+                    ensure!(
+                        !matches!(saved.phase, JobPhase::Stopping),
+                        "Claude retry is stopped"
+                    );
+                    return Ok(());
+                }
+                ensure!(
+                    binding(saved).as_ref() == Some(&previous),
+                    "Claude retry predecessor changed"
+                );
+                ensure!(
+                    matches!(
+                        saved.phase,
+                        JobPhase::Finished {
+                            outcome: JobOutcome::Failed { .. }
+                        }
+                    ),
+                    "Claude retry requires a positively finished failed execution"
+                );
+                ensure!(
+                    saved
+                        .candidate
+                        .as_ref()
+                        .is_some_and(Candidate::transient_failure),
+                    "Claude retry has no typed transient terminal failure"
+                );
+                saved.input = next;
+                saved.recovery_input = None;
+                saved.turn_id = None;
+                saved.owner = None;
+                saved.input_consumed = false;
+                saved.input_recorded = false;
+                saved.ordinary_result_seen = false;
+                saved.nonambient_tasks.clear();
+                saved.candidate = None;
+                saved.phase = JobPhase::Prepared;
+                Ok(())
+            })
+            .await
     }
 
     pub(crate) async fn recover_job(

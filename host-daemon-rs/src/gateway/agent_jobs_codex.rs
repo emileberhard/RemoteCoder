@@ -59,6 +59,7 @@ impl Gateway {
         conversation: &ConversationIdentity,
         delivery_id: &str,
         text: &str,
+        expected_turn: Option<&str>,
     ) -> RpcResult {
         let ProviderHome::Known { path } = &conversation.provider_home else {
             return Err(RpcError::new(
@@ -78,7 +79,7 @@ impl Gateway {
             ));
         }
         let state = match self
-            .deliver_codex_input(conversation, delivery_id, text)
+            .deliver_codex_input(conversation, delivery_id, text, expected_turn)
             .await
         {
             Ok(state) => state,
@@ -94,6 +95,7 @@ impl Gateway {
         target: &ConversationIdentity,
         id: &str,
         text: &str,
+        expected_turn: Option<&str>,
     ) -> Result<DeliveryState> {
         if let Some(accepted) = self
             .job_read_codex_acceptance(&target.thread_id, id)
@@ -145,6 +147,67 @@ impl Gateway {
                 ),
             }
         }
+        let latest = self.latest_codex_turn(&target.thread_id, None).await?;
+        let active = latest
+            .as_ref()
+            .filter(|turn| turn["status"] == "inProgress");
+        if let Some(expected) = expected_turn
+            && active.and_then(|turn| turn["id"].as_str()) != Some(expected)
+        {
+            return Ok(DeliveryState::Blocked {
+                reason: "the target job's exact native turn is no longer active; input was not submitted".into(),
+            });
+        }
+        if let Some(turn) = active {
+            let turn_id = turn["id"]
+                .as_str()
+                .filter(|id| !id.is_empty())
+                .context("the active native turn has no identity")?;
+            let response = self
+                .call_control(
+                    "turn/steer",
+                    json!({
+                        "threadId":target.thread_id,
+                        "expectedTurnId":turn_id,
+                        "clientUserMessageId":id,
+                        "input":input,
+                    }),
+                )
+                .await;
+            return match response {
+                Ok(response) => {
+                    ensure!(
+                        response["turnId"].as_str() == Some(turn_id),
+                        "native steer acknowledged a different turn"
+                    );
+                    Ok(DeliveryState::Accepted {
+                        receipt: format!(
+                            "codex:{}/{} input={} steered=true",
+                            target.thread_id, turn_id, id
+                        ),
+                    })
+                }
+                Err(error) => Ok(
+                    match super::agent_gateway::parse_native_error(&error.to_string()) {
+                        Some(error) => DeliveryState::Blocked {
+                            reason: error.message,
+                        },
+                        None => DeliveryState::Uncertain {
+                            reason: format!(
+                                "native steer custody could not be reconciled: {error:#}"
+                            ),
+                        },
+                    },
+                ),
+            };
+        }
+        ensure!(
+            latest.as_ref().is_none_or(|turn| matches!(
+                turn["status"].as_str(),
+                Some("completed" | "interrupted" | "failed")
+            )),
+            "native turn activity is unknown; input was not submitted"
+        );
         let response = self
             .queue_rpc(
                 0,
@@ -334,6 +397,128 @@ mod tests {
     use super::*;
     use crate::notifications::history::NotificationOrigin;
     use crate::test_support::{FakeControl, TestGateway};
+
+    fn reply(gateway: &Gateway, request: &Value, result: Value) {
+        gateway
+            .control_requests
+            .lock()
+            .unwrap()
+            .remove(request["id"].as_str().unwrap())
+            .unwrap()
+            .send(Ok(result))
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn running_delivery_steers_with_stable_identity_and_never_retargets() {
+        for (native_turn, steer_reply) in [
+            ("expected", Some(Ok(json!({"turnId":"expected"})))),
+            ("successor", None),
+            (
+                "expected",
+                Some(Err(
+                    json!({"code":-32600,"message":"no active turn to steer"}).to_string(),
+                )),
+            ),
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path().canonicalize().unwrap();
+            let gateway = TestGateway::with_native_runtime(&root);
+            let target = ConversationIdentity {
+                provider: Provider::Codex,
+                provider_home: ProviderHome::Known {
+                    path: gateway.job_codex_home().unwrap(),
+                },
+                thread_id: "frozen-thread".into(),
+            };
+            let mut control = FakeControl::attach(&gateway, 4).await.requests;
+            let owner = gateway.clone();
+            let task = tokio::spawn(async move {
+                owner
+                    .job_deliver_codex(&target, "stable-message", "live input", Some("expected"))
+                    .await
+            });
+            for (method, result) in [
+                ("thread/input/acceptance/read", json!({"acceptance":null})),
+                ("thread/items/list", json!({"data":[],"nextCursor":null})),
+                (
+                    "thread/turns/list",
+                    json!({"data":[{"id":native_turn,"status":"inProgress"}]}),
+                ),
+            ] {
+                let request: Value = serde_json::from_str(&control.recv().await.unwrap()).unwrap();
+                assert_eq!(request["method"], method);
+                reply(&gateway, &request, result);
+            }
+            let expected_state = if let Some(result) = steer_reply {
+                let request: Value = serde_json::from_str(&control.recv().await.unwrap()).unwrap();
+                assert_eq!(request["method"], "turn/steer");
+                assert_eq!(
+                    request["params"],
+                    json!({"threadId":"frozen-thread","expectedTurnId":"expected","clientUserMessageId":"stable-message","input":[{"type":"text","text":"live input"}]})
+                );
+                let success = result.is_ok();
+                gateway
+                    .control_requests
+                    .lock()
+                    .unwrap()
+                    .remove(request["id"].as_str().unwrap())
+                    .unwrap()
+                    .send(result)
+                    .unwrap();
+                if success { "accepted" } else { "blocked" }
+            } else {
+                "blocked"
+            };
+            assert_eq!(
+                task.await.unwrap().unwrap()["deliveryState"]["kind"],
+                expected_state
+            );
+            assert!(matches!(
+                control.try_recv(),
+                Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn accepted_historical_delivery_is_reconciled_without_new_steer() {
+        let directory = tempfile::tempdir().unwrap();
+        let gateway = TestGateway::with_native_runtime(directory.path());
+        let target = ConversationIdentity {
+            provider: Provider::Codex,
+            provider_home: ProviderHome::Known {
+                path: gateway.job_codex_home().unwrap(),
+            },
+            thread_id: "frozen-thread".into(),
+        };
+        let mut control = FakeControl::attach(&gateway, 1).await.requests;
+        let owner = gateway.clone();
+        let task = tokio::spawn(async move {
+            owner
+                .job_deliver_codex(&target, "stable-message", "live input", Some("new-turn"))
+                .await
+        });
+        let request: Value = serde_json::from_str(&control.recv().await.unwrap()).unwrap();
+        assert_eq!(request["method"], "thread/input/acceptance/read");
+        reply(
+            &gateway,
+            &request,
+            json!({"acceptance":{"turnId":"original-turn","rootTurnId":"original-turn","fingerprint":"a".repeat(64),"facts":[]}}),
+        );
+        let receipt = task.await.unwrap().unwrap();
+        assert_eq!(receipt["deliveryState"]["kind"], "accepted");
+        assert!(
+            receipt["deliveryState"]["receipt"]
+                .as_str()
+                .unwrap()
+                .contains("original-turn")
+        );
+        assert!(matches!(
+            control.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+        ));
+    }
 
     #[tokio::test]
     async fn input_stop_requires_positive_native_fence_acknowledgement() {

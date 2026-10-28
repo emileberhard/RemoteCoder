@@ -478,6 +478,7 @@ fn seed_origin(
         updated_at_ms: 1,
         revision: 0,
         previous_job_id: None,
+        provider_retries: Vec::new(),
         source: JobSource::Imported,
         admission_origin: Some(origin.clone()),
         spec: SpecEvidence::Unknown {
@@ -848,4 +849,113 @@ async fn unavailable_child_ancestry_is_held_even_when_its_cached_root_is_known()
         .thread_roots(&["root".into(), "child".into()])
         .await;
     assert_eq!(roots, HashMap::from([("root".into(), "root".into())]));
+}
+
+#[tokio::test]
+async fn runtime_inventory_keeps_healthy_agents_when_one_continuation_is_ambiguous() {
+    use crate::agents::jobs::model::*;
+    let directory = tempfile::tempdir().unwrap();
+    let state = directory.path().join("active-codex-turns.json");
+    let gateway = crate::test_support::TestGateway::with_codex(
+        Arc::new(CodexAppServer::new_for_test_socket(
+            directory.path().join("codex"),
+        )),
+        Some(state),
+    );
+    let root = directory.path().join("agent-jobs/v1");
+    for index in 1..=3 {
+        seed_origin(
+            &root,
+            gateway
+                .agent_conversation(&format!("child-{index}"))
+                .unwrap(),
+            Origin::Parent {
+                conversation: gateway.agent_conversation("parent").unwrap(),
+            },
+            index,
+        );
+    }
+    for (index, sequences) in [(2, vec![4, 5]), (3, vec![3])] {
+        let initial = JobId::for_mutation(Provider::Codex, &format!("fixture-{index}")).unwrap();
+        let file = root.join("jobs").join(format!("{}.json", initial.as_str()));
+        let original: JobRecord = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+        for sequence in sequences {
+            let mut next = original.clone();
+            next.job_id =
+                JobId::for_mutation(Provider::Codex, &format!("fixture-{sequence}")).unwrap();
+            next.previous_job_id = Some(initial.clone());
+            std::fs::write(
+                root.join("jobs")
+                    .join(format!("{}.json", next.job_id.as_str())),
+                serde_json::to_vec(&next).unwrap(),
+            )
+            .unwrap();
+        }
+        let file = root.join("agents").join(format!(
+            "{}.json",
+            crate::agents::jobs::store::fingerprint(original.agent_id.as_bytes())
+        ));
+        let mut agent: AgentRecord =
+            serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+        agent.latest_job_id = None;
+        std::fs::write(file, serde_json::to_vec(&agent).unwrap()).unwrap();
+    }
+    let mut control = crate::test_support::FakeControl::attach(&gateway, 32)
+        .await
+        .requests;
+    let owner = Arc::clone(&gateway);
+    let responder = tokio::spawn(async move {
+        while let Some(raw) = control.recv().await {
+            let request: Value = serde_json::from_str(&raw).unwrap();
+            let result = match request["method"].as_str().unwrap() {
+                "thread/list" => json!({"data":[],"nextCursor":null}),
+                "thread/read" => {
+                    json!({"thread":{"id":request["params"]["threadId"],"source":"cli","status":{"type":"idle"},"turns":[]}})
+                }
+                method => panic!("unexpected inventory RPC {method}"),
+            };
+            owner
+                .control_requests
+                .lock()
+                .unwrap()
+                .remove(request["id"].as_str().unwrap())
+                .unwrap()
+                .send(Ok(result))
+                .unwrap();
+        }
+    });
+    let result = gateway
+        .agent_service()
+        .agents_rpc("conversation/agents/list", json!({"threadId":"parent"}))
+        .await;
+    responder.abort();
+    let result = result.unwrap();
+    let agents = result["agents"].as_array().unwrap();
+    assert_eq!(agents.len(), 2);
+    let healthy = agents
+        .iter()
+        .find(|agent| agent["threadId"] == "child-1")
+        .unwrap();
+    assert_eq!(healthy["state"], "completed");
+    let ambiguous = agents
+        .iter()
+        .find(|agent| agent["threadId"] == "child-2")
+        .unwrap();
+    assert_eq!(ambiguous["state"], "unknown");
+    assert!(ambiguous["executionId"].is_null());
+    for capability in ["message", "continueWork", "stop"] {
+        assert_eq!(ambiguous["capabilities"][capability], false);
+    }
+    let warnings = result["warnings"].as_array().unwrap();
+    assert!(warnings.iter().any(|warning| {
+        warning
+            .as_str()
+            .unwrap()
+            .contains("conflicting continuation")
+    }));
+    assert!(
+        warnings
+            .iter()
+            .any(|warning| warning.as_str().unwrap().contains("cycle"))
+    );
 }

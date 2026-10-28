@@ -1,5 +1,7 @@
 pub mod claude;
 pub(crate) mod client;
+mod conversation;
+pub(crate) use conversation::conversation_from_header;
 pub(crate) mod envelope;
 pub(crate) mod jobs;
 pub mod mcp;

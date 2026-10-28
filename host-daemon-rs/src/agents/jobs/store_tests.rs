@@ -1,5 +1,5 @@
 use super::model::*;
-use super::store::JobStore;
+use super::store::{JobStore, Selection};
 
 fn job(sequence: u8) -> JobRecord {
     let job_id =
@@ -12,6 +12,7 @@ fn job(sequence: u8) -> JobRecord {
         updated_at_ms: 100,
         revision: 0,
         previous_job_id: None,
+        provider_retries: Vec::new(),
         source: JobSource::Runtime,
         admission_origin: Some(Origin::TopLevel),
         unconfirmed_result: None,
@@ -407,4 +408,375 @@ async fn settled_notice_payload_expires_but_its_identity_survives() {
         retained.revision,
         "an already expired settled job is not rewritten by later admissions"
     );
+}
+
+#[tokio::test]
+async fn explicit_continuation_preserves_imported_unknown_outcome_and_origin() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = JobStore::open(directory.path().into()).await.unwrap();
+    drop(store);
+    let mut imported = job(81);
+    imported.source = JobSource::Imported;
+    imported.admission_origin = None;
+    imported.spec = SpecEvidence::Unknown {
+        reason: "historical prompt is unavailable".into(),
+    };
+    imported.execution = ExecutionState::Unknown {
+        conversation: Some(conversation()),
+        binding: None,
+        reason: "historical outcome is unconfirmed".into(),
+    };
+    let agent = AgentRecord {
+        agent_id: imported.agent_id.clone(),
+        conversation: ConversationBinding::Known {
+            conversation: conversation(),
+        },
+        origin: Origin::Unknown {
+            reason: "historical ancestry is unavailable".into(),
+        },
+        tool_scope: Some(ToolScope::ReadOnly {
+            root: "/tmp/job-fixture".into(),
+        }),
+        origin_job_id: Some(imported.job_id.clone()),
+        latest_job_id: Some(imported.job_id.clone()),
+    };
+    std::fs::write(
+        directory
+            .path()
+            .join("jobs")
+            .join(format!("{}.json", imported.job_id.as_str())),
+        serde_json::to_vec(&imported).unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        directory.path().join("agents").join(format!(
+            "{}.json",
+            super::store::fingerprint(agent.agent_id.as_bytes())
+        )),
+        serde_json::to_vec(&agent).unwrap(),
+    )
+    .unwrap();
+    let store = JobStore::open(directory.path().into()).await.unwrap();
+    let mut continuation = job(82);
+    continuation.agent_id = imported.agent_id.clone();
+    continuation.previous_job_id = Some(imported.job_id.clone());
+    continuation.admission_origin = None;
+    if let SpecEvidence::Known { spec } = &mut continuation.spec {
+        spec.tool_scope = agent.tool_scope.clone().unwrap();
+    }
+    store.admit(continuation.clone()).await.unwrap();
+    let bound = store
+        .bind(continuation.job_id.clone(), 0, conversation(), 101)
+        .await
+        .unwrap();
+    let dispatching = store
+        .advance(
+            continuation.job_id.clone(),
+            bound.revision,
+            ExecutionState::Dispatching {
+                conversation: conversation(),
+                input_id: continuation.initial_input_id(),
+            },
+            102,
+        )
+        .await
+        .unwrap();
+    store
+        .record_uncertainty(
+            continuation.job_id.clone(),
+            dispatching.revision,
+            "runtime observation unavailable".into(),
+            None,
+            103,
+        )
+        .await
+        .unwrap();
+    let page = store.list(Selection::Recent, 200, None).await.unwrap();
+    let historical = page
+        .jobs
+        .iter()
+        .find(|row| row.job_id == imported.job_id)
+        .unwrap();
+    let current = page
+        .jobs
+        .iter()
+        .find(|row| row.job_id == continuation.job_id)
+        .unwrap();
+    assert_eq!(historical.state, crate::agents::State::Unknown);
+    assert!(!historical.active);
+    assert_eq!(current.state, crate::agents::State::Unknown);
+    assert!(current.active);
+    assert_eq!(store.read(imported.job_id.clone()).await.unwrap(), imported);
+    let continued = store.agent(agent.agent_id).await.unwrap();
+    assert_eq!(continued.origin, agent.origin);
+    assert_eq!(continued.tool_scope, agent.tool_scope);
+    assert_eq!(continued.latest_job_id, Some(continuation.job_id));
+}
+
+#[tokio::test]
+async fn imported_forks_use_retained_checkpoint_or_single_active_runtime() {
+    for (checkpoint, active, expected) in [
+        (Some(2), false, Some(2)),
+        (None, false, None),
+        (None, true, Some(4)),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        drop(JobStore::open(directory.path().into()).await.unwrap());
+        let mut original = job(1);
+        original.source = JobSource::Imported;
+        original.execution = ExecutionState::Unknown {
+            conversation: Some(conversation()),
+            binding: None,
+            reason: "Historical outcome is unconfirmed".into(),
+        };
+        for sequence in 1..=if active { 4 } else { 3 } {
+            let mut record = original.clone();
+            record.job_id = job(sequence).job_id;
+            record.created_at_ms = Some(1000 - i64::from(sequence));
+            if sequence != 1 {
+                record.previous_job_id = Some(original.job_id.clone());
+                record.admission_origin = None;
+            }
+            if sequence == 4 {
+                record.source = JobSource::Runtime;
+                record.execution = ExecutionState::Running {
+                    binding: ExecutionBinding {
+                        conversation: conversation(),
+                        input_id: "active-input".into(),
+                        turn_id: "active-turn".into(),
+                    },
+                };
+            }
+            std::fs::write(
+                directory
+                    .path()
+                    .join("jobs")
+                    .join(format!("{}.json", record.job_id.as_str())),
+                serde_json::to_vec(&record).unwrap(),
+            )
+            .unwrap();
+        }
+        let agent = AgentRecord {
+            agent_id: original.agent_id.clone(),
+            conversation: ConversationBinding::Known {
+                conversation: conversation(),
+            },
+            origin: Origin::TopLevel,
+            tool_scope: Some(ToolScope::Full),
+            origin_job_id: Some(original.job_id),
+            latest_job_id: checkpoint.map(|sequence| job(sequence).job_id),
+        };
+        std::fs::write(
+            directory.path().join("agents").join(format!(
+                "{}.json",
+                super::store::fingerprint(agent.agent_id.as_bytes())
+            )),
+            serde_json::to_vec(&agent).unwrap(),
+        )
+        .unwrap();
+        let store = JobStore::open(directory.path().into()).await.unwrap();
+        assert_eq!(
+            store.agent(agent.agent_id).await.unwrap().latest_job_id,
+            expected.map(|sequence| job(sequence).job_id),
+        );
+    }
+}
+
+async fn running_retry_fixture(store: &JobStore, sequence: u8) -> JobRecord {
+    let original = job(sequence);
+    store.admit(original.clone()).await.unwrap();
+    let bound = store
+        .bind(original.job_id.clone(), 0, conversation(), 101)
+        .await
+        .unwrap();
+    let dispatched = store
+        .advance(
+            bound.job_id.clone(),
+            bound.revision,
+            ExecutionState::Dispatching {
+                conversation: conversation(),
+                input_id: bound.current_input_id(),
+            },
+            102,
+        )
+        .await
+        .unwrap();
+    store
+        .advance(
+            dispatched.job_id.clone(),
+            dispatched.revision,
+            ExecutionState::Running {
+                binding: ExecutionBinding {
+                    conversation: conversation(),
+                    input_id: dispatched.current_input_id(),
+                    turn_id: "failed-0".into(),
+                },
+            },
+            103,
+        )
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn provider_retries_retain_exact_bindings_due_time_and_budget_across_restart() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = JobStore::open(directory.path().into()).await.unwrap();
+    let mut current = running_retry_fixture(&store, 41).await;
+    let original_input = current.current_input_id();
+    for attempt in 0..super::retry::MAX_PROVIDER_RETRIES {
+        let failed = current.execution.binding().unwrap().clone();
+        current = store
+            .schedule_provider_retry(
+                current.job_id.clone(),
+                current.revision,
+                failed.clone(),
+                "Selected model is at capacity".into(),
+                2_000,
+                1_000,
+            )
+            .await
+            .unwrap();
+        assert_eq!(current.provider_retries[attempt].binding, failed);
+        assert_ne!(current.current_input_id(), original_input);
+        let next_input = current.current_input_id();
+        drop(store);
+        store = JobStore::open(directory.path().into()).await.unwrap();
+        current = store.read(current.job_id.clone()).await.unwrap();
+        assert_eq!(current.current_input_id(), next_input);
+        assert!(matches!(
+            current.execution,
+            ExecutionState::RetryWaiting {
+                retry_at_ms: 2_000,
+                ..
+            }
+        ));
+        let dispatch = ExecutionState::Dispatching {
+            conversation: conversation(),
+            input_id: next_input.clone(),
+        };
+        assert!(
+            store
+                .advance(
+                    current.job_id.clone(),
+                    current.revision,
+                    dispatch.clone(),
+                    1_999
+                )
+                .await
+                .is_err()
+        );
+        current = store
+            .advance(current.job_id.clone(), current.revision, dispatch, 2_000)
+            .await
+            .unwrap();
+        current = store
+            .advance(
+                current.job_id.clone(),
+                current.revision,
+                ExecutionState::Running {
+                    binding: ExecutionBinding {
+                        conversation: conversation(),
+                        input_id: next_input,
+                        turn_id: format!("failed-{}", attempt + 1),
+                    },
+                },
+                2_001,
+            )
+            .await
+            .unwrap();
+    }
+    assert!(
+        store
+            .schedule_provider_retry(
+                current.job_id.clone(),
+                current.revision,
+                current.execution.binding().unwrap().clone(),
+                "still unavailable".into(),
+                3_000,
+                2_002
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        store
+            .read(current.job_id.clone())
+            .await
+            .unwrap()
+            .provider_retries
+            .len(),
+        5
+    );
+    let final_binding = current.execution.binding().cloned();
+    let completed = store
+        .advance(
+            current.job_id.clone(),
+            current.revision,
+            ExecutionState::Terminal {
+                terminal: Terminal {
+                    at_ms: Some(2_003),
+                    execution: final_binding,
+                    git: GitSnapshot::Unknown {
+                        reason: "fixture".into(),
+                    },
+                    outcome: JobOutcome::Completed,
+                    result: ResultEvidence::Available {
+                        result: JobResult {
+                            text: "completed once".into(),
+                            truncated: false,
+                        },
+                    },
+                    completion: Completion::NotRequired,
+                    cleanup: CleanupState::Complete,
+                },
+            },
+            2_003,
+        )
+        .await
+        .unwrap();
+    assert!(
+        matches!(completed.execution, ExecutionState::Terminal { terminal } if terminal.outcome == JobOutcome::Completed)
+    );
+}
+
+#[tokio::test]
+async fn stop_during_provider_backoff_survives_restart_and_blocks_successor_dispatch() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = JobStore::open(directory.path().into()).await.unwrap();
+    let current = running_retry_fixture(&store, 42).await;
+    let waiting = store
+        .schedule_provider_retry(
+            current.job_id.clone(),
+            current.revision,
+            current.execution.binding().unwrap().clone(),
+            "overloaded".into(),
+            2_000,
+            1_000,
+        )
+        .await
+        .unwrap();
+    store
+        .request_stop(waiting.job_id.clone(), "stop-during-backoff".into(), 1_001)
+        .await
+        .unwrap();
+    drop(store);
+    let store = JobStore::open(directory.path().into()).await.unwrap();
+    let stopped = store.read(waiting.job_id).await.unwrap();
+    assert!(
+        store
+            .advance(
+                stopped.job_id.clone(),
+                stopped.revision,
+                ExecutionState::Dispatching {
+                    conversation: conversation(),
+                    input_id: stopped.current_input_id(),
+                },
+                2_001
+            )
+            .await
+            .is_err()
+    );
+    assert!(matches!(stopped.stop, StopState::Requested { .. }));
+    assert_eq!(stopped.provider_retries.len(), 1);
 }

@@ -121,6 +121,46 @@ pub(crate) fn session_path_for_cwd(claude_home: &Path, cwd: &str, session_uuid: 
         .join(format!("{session_uuid}.jsonl"))
 }
 
+pub(crate) fn existing_recorded_cwd(
+    path: &Path,
+    session_uuid: &str,
+    missing_cwd: &str,
+) -> Result<Option<String>> {
+    use crate::providers::claude::records::{
+        LineKind, MAX_SESSION_RECORD_BYTES, read_bounded_line,
+    };
+    let mut reader = std::io::BufReader::new(std::fs::File::open(path)?);
+    let mut line = Vec::new();
+    let mut recorded_missing = false;
+    let mut existing = None;
+    loop {
+        line.clear();
+        let (read, kind) = read_bounded_line(&mut reader, &mut line, MAX_SESSION_RECORD_BYTES)?;
+        if read == 0 || kind == LineKind::Partial {
+            break;
+        }
+        if kind == LineKind::Oversized {
+            continue;
+        }
+        let Ok(record) = serde_json::from_slice::<Value>(&line) else {
+            continue;
+        };
+        if record["sessionId"].as_str() != Some(session_uuid)
+            || !matches!(record["type"].as_str(), Some("user" | "assistant"))
+        {
+            continue;
+        }
+        let Some(cwd) = record["cwd"].as_str() else {
+            continue;
+        };
+        recorded_missing |= cwd == missing_cwd;
+        if Path::new(cwd).is_absolute() && Path::new(cwd).is_dir() {
+            existing = Some(cwd.to_owned());
+        }
+    }
+    Ok(existing.filter(|_| recorded_missing))
+}
+
 pub(crate) fn queued_user_prompt(record: &Value) -> Option<(String, &str)> {
     let attachment = record.get("attachment")?;
     if attachment.get("type").and_then(Value::as_str) != Some("queued_command")

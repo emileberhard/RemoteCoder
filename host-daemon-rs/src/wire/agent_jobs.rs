@@ -30,6 +30,14 @@ pub(crate) enum ContinueRecipient {
     Current,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum ContinueIntent {
+    #[default]
+    Explicit,
+    Message,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct ContinueParams {
@@ -37,6 +45,10 @@ pub(crate) struct ContinueParams {
     pub agent_id: String,
     pub prompt: String,
     pub settings: Option<ExecutionSettings>,
+    #[serde(default)]
+    pub expected_previous_job_id: Option<JobId>,
+    #[serde(default)]
+    pub intent: ContinueIntent,
     pub recipient: ContinueRecipient,
     pub caller: Caller,
 }
@@ -71,6 +83,9 @@ pub(crate) struct ListParams {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) enum MessageTarget {
+    Selector {
+        selector: String,
+    },
     Conversation {
         conversation: ConversationIdentity,
     },
@@ -88,6 +103,12 @@ pub(crate) struct MessageParams {
     pub caller: Caller,
     pub delivery_id: String,
     pub text: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct MessageReadParams {
+    pub delivery_id: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -130,6 +151,7 @@ pub(crate) struct JobSummary {
     pub title: Option<String>,
     pub model: Option<String>,
     pub state: crate::agents::State,
+    pub active: bool,
     pub created_at_ms: Option<i64>,
     pub updated_at_ms: i64,
 }
@@ -188,7 +210,15 @@ pub(crate) struct SetTitleParams {
     deny_unknown_fields
 )]
 pub(crate) enum ScopedRequest {
+    Legacy {
+        socket: std::path::PathBuf,
+        request: Box<ScopedRequest>,
+    },
     ReadSelf {},
+    ReadMessage {
+        #[serde(rename = "deliveryId")]
+        delivery_id: String,
+    },
     MessageParent {
         #[serde(rename = "deliveryId")]
         delivery_id: String,
