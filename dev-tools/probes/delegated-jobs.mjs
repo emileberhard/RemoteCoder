@@ -482,13 +482,13 @@ try {
         const seed = await installSeed(lab, seedPath);
         await lab.start();
         receipt.seed = await inspectSeed(lab, seed);
+        const gc = Bun.spawn(["python3", join(import.meta.dir, "worktree-gc-candidate.py"), "--binary", binary,
+            "--env-file", lab.path("gateway.env"), "--isolated-home", lab.root, "--configs", join(lab.realHome, "configs")],
+            { env: process.env, cwd: lab.root, stdout: "pipe", stderr: "pipe" });
+        const [gcStatus, gcOutput, gcError] = await Promise.all([gc.exited, new Response(gc.stdout).text(), new Response(gc.stderr).text()]);
+        assert.equal(gcStatus, 0, `Actual worktree-gc candidate dry run failed: ${gcError.trim()}`);
+        receipt.worktreeGc = JSON.parse(gcOutput);
     }
-    const gc = Bun.spawn(["python3", join(import.meta.dir, "worktree-gc-candidate.py"), "--binary", binary,
-        "--env-file", lab.path("gateway.env"), "--isolated-home", lab.root, "--configs", join(lab.realHome, "configs")],
-        { env: process.env, cwd: lab.root, stdout: "pipe", stderr: "pipe" });
-    const [gcStatus, gcOutput, gcError] = await Promise.all([gc.exited, new Response(gc.stdout).text(), new Response(gc.stderr).text()]);
-    assert.equal(gcStatus, 0, `Actual worktree-gc candidate dry run failed: ${gcError.trim()}`);
-    receipt.worktreeGc = JSON.parse(gcOutput);
     console.log(JSON.stringify(receipt, null, 1));
 } catch (error) {
     failure = error;
