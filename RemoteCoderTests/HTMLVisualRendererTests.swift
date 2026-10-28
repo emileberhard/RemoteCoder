@@ -745,7 +745,7 @@ struct HTMLVisualRendererTests {
     }
 
     @Test(.timeLimit(.minutes(1)))
-    func anExplicitFailureSettlesButATimedOutVisualStaysIncomplete() async throws {
+    func anExplicitFailureSettlesAsUnpreparable() async throws {
         let missing = try Self.reference("<body>missing</body>")
         try await withFixture { fixture in
             try await withPreparationHost(fixture, documents: []) { host in
@@ -753,11 +753,39 @@ struct HTMLVisualRendererTests {
                 #expect(await host.preparation.prepareInBackground([missing], documents: host.source.documents)
                     == .settled(stored: 0, unpreparable: 1))
             }
-            let held = try Self.reference("<body>held</body>")
-            try await withPreparationHost(fixture, documents: [], access: RendererHoldingAccess()) { host in
-                host.preparation.updateLayoutContext { $0.width = 320 }
-                #expect(await host.preparation.prepareInBackground([held], documents: host.source.documents)
-                    == .incomplete(missing: 1))
+        }
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func consecutiveTimeoutsReleaseAdmissionWithoutPublishingLate() async throws {
+        let access = RendererHoldingAccess()
+        let deadline = RendererPageDeadline()
+        let held = try (0..<4).map { try Self.reference("<body>held \($0)</body>") }
+        try await withFixture { fixture in
+            let preparation = HTMLVisualPreparation(renderer: fixture.renderer, pageDeadline: { try await deadline.wait() })
+            try await withPreparationHost(fixture, access: access, preparation: preparation) { host in
+                preparation.updateLayoutContext { $0.width = 320 }
+                for reference in held {
+                    let attempt = Task { await preparation.prepareInBackground([reference], documents: host.source.documents) }
+                    await access.waitForRead(reference)
+                    let instance = try #require(preparation.surface.instance)
+                    try #require(instance.requestID != nil)
+                    await deadline.waitUntilArmed()
+                    await deadline.fire()
+                    #expect(await attempt.value == .incomplete(missing: 1))
+                    #expect(instance.requestID == nil && instance.page == nil && instance.activity == nil)
+                    #expect(preparation.surface.instance == nil)
+                    #expect(await access.cancelled.contains(reference))
+                }
+                let healthy = try #require(host.references.first)
+                #expect(await preparation.prepareInBackground([healthy], documents: host.source.documents)
+                    == .settled(stored: 1, unpreparable: 0))
+                #expect(fixture.renderer.height(for: HTMLVisualLayoutKey(digest: healthy.digest, width: 320, theme: theme)) == 80)
+                for reference in held {
+                    let key = HTMLVisualLayoutKey(digest: reference.digest, width: 320, theme: theme)
+                    #expect(fixture.renderer.height(for: key) == nil && !fixture.renderer.hasStoredSnapshot(for: key))
+                }
+                #expect(await access.cancelled == Set(held))
             }
         }
     }
@@ -772,6 +800,7 @@ struct HTMLVisualRendererTests {
     private func withPreparationHost(_ fixture: RendererLifecycleFixture, documents: [String]? = nil,
                                      access: any HostFileAccess = RendererCacheOnlyAccess(),
                                      energyPolicy: AppEnergyPolicy = Self.unconstrained,
+                                     preparation: HTMLVisualPreparation? = nil,
                                      _ operation: (PreparationHost) async throws -> Void) async throws {
         let hostID = UUID()
         let cache = HTMLVisualDocumentCache(directory: fixture.directory.appending(path: "documents-\(UUID().uuidString)"),
@@ -786,7 +815,7 @@ struct HTMLVisualRendererTests {
         }
         let store = HTMLVisualDocumentStore(hostID: hostID, access: access, cache: cache)
         let source = HTMLVisualSource(hostID: hostID, documents: store, renderer: fixture.renderer,
-            preparation: HTMLVisualPreparation(renderer: fixture.renderer))
+            preparation: preparation ?? HTMLVisualPreparation(renderer: fixture.renderer))
         let controller = UIHostingController(rootView: preparationHost(source, energyPolicy: energyPolicy))
         fixture.window.show(controller)
         do {
@@ -1386,7 +1415,7 @@ struct HTMLVisualRendererTests {
             #expect(activity.kind == .automatic)
             #expect(activity.layoutEvents > 0)
             #expect(activity.capturesStarted == 0)
-            try await Task.sleep(for: .milliseconds(250))
+            #expect(instance.capture == nil && instance.needsSnapshot)
             #expect(instance.snapshot?.image == nil)
             fixture.renderer.setCaptureAllowed(instance, true)
             try await wait { instance.snapshot?.image != nil }
@@ -1399,7 +1428,7 @@ struct HTMLVisualRendererTests {
             _ = try await page.callJavaScript("document.getElementById('content').style.height='260px';globalThis.rcVisualMeasure(true);",
                 contentWorld: .defaultClient)
             try await wait { instance.height == 260 }
-            try await Task.sleep(for: .milliseconds(250))
+            #expect(instance.capture == nil && instance.needsSnapshot)
             #expect(instance.snapshot?.revision == revision)
             await fixture.stop(instance)
             #expect(instance.activity == nil)
@@ -1721,13 +1750,66 @@ private struct CompactVisualTranscriptView: View {
 }
 
 private actor RendererHoldingAccess: HostFileAccess {
+    private var reads: [HTMLVisualReference: (id: UUID, continuation: CheckedContinuation<HostFileLease, any Error>)] = [:]
+    private var arrivals: [HTMLVisualReference: CheckedContinuation<Void, Never>] = [:]
+    private(set) var cancelled: Set<HTMLVisualReference> = []
+
     func open(reference: HostFileReference, containingDirectory: String?, progress: @escaping @Sendable (HostFileProgress) -> Void) throws -> HostFileLease { throw HostFileError.unavailable }
     func openVisual(reference: HTMLVisualReference, progress: @escaping @Sendable (HostFileProgress) -> Void) async throws -> HostFileLease {
-        try await Task.sleep(for: .seconds(60))
-        throw HostFileError.unavailable
+        let id = UUID()
+        return try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            return try await withCheckedThrowingContinuation {
+                reads[reference] = (id, $0)
+                arrivals.removeValue(forKey: reference)?.resume()
+            }
+        } onCancel: {
+            Task { await self.cancel(reference, id: id) }
+        }
+    }
+    func waitForRead(_ reference: HTMLVisualReference) async {
+        if reads[reference] == nil { await withCheckedContinuation { arrivals[reference] = $0 } }
+    }
+    private func cancel(_ reference: HTMLVisualReference, id: UUID) {
+        guard reads[reference]?.id == id, let read = reads.removeValue(forKey: reference) else { return }
+        cancelled.insert(reference)
+        read.continuation.resume(throwing: CancellationError())
     }
     func cachedCopy(for reference: HostFileReference) -> HostFileLease? { nil }
     func release(_ lease: HostFileLease) {}
+}
+
+private actor RendererPageDeadline {
+    private var pending: (id: UUID, continuation: CheckedContinuation<Void, any Error>)?
+    private var arrival: CheckedContinuation<Void, Never>?
+
+    func wait() async throws {
+        let id = UUID()
+        try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            try await withCheckedThrowingContinuation {
+                pending = (id, $0)
+                arrival?.resume()
+                arrival = nil
+            }
+        } onCancel: {
+            Task { await self.cancel(id) }
+        }
+    }
+    func waitUntilArmed() async {
+        if pending == nil { await withCheckedContinuation { arrival = $0 } }
+    }
+    func fire() {
+        let continuation = pending?.continuation
+        pending = nil
+        continuation?.resume()
+    }
+    private func cancel(_ id: UUID) {
+        guard pending?.id == id else { return }
+        let continuation = pending?.continuation
+        pending = nil
+        continuation?.resume(throwing: CancellationError())
+    }
 }
 
 private actor RendererCacheOnlyAccess: HostFileAccess {
