@@ -9,86 +9,114 @@ impl Gateway {
     pub(crate) fn start_cluster_liveness(self: &Arc<Self>) -> Result<()> {
         use futures_util::{StreamExt, stream};
         let gateway = Arc::downgrade(self);
-        ensure!(self.jobs.tasks.spawn_graceful("cluster_liveness",move |shutdown|async move {
-            let mut previous=std::time::SystemTime::now();
-            let mut first=true;
-            let mut tick=tokio::time::interval(std::time::Duration::from_secs(2));
-            let mut route=tokio::process::Command::new("/sbin/route").args(["-n","monitor"]).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null()).kill_on_drop(true).spawn()?;
+        let started = self.jobs.tasks.spawn_graceful("cluster_liveness", move |shutdown| async move {
+            let mut previous = std::time::SystemTime::now();
+            let mut first = true;
+            let mut tick = tokio::time::interval(Duration::from_secs(2));
+            let mut route = tokio::process::Command::new("/sbin/route")
+                .args(["-n", "monitor"])
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::null())
+                .kill_on_drop(true)
+                .spawn()?;
             use tokio::io::AsyncBufReadExt;
-            let mut changes=tokio::io::BufReader::new(route.stdout.take().context("network monitor has no output")?).lines();
-            let mut route_open=true;
+            let mut changes = tokio::io::BufReader::new(route.stdout.take().context("network monitor has no output")?).lines();
+            let mut route_open = true;
             loop {
-                let changed=tokio::select! {
-                    _=shutdown.cancelled()=>break,
-                    result=changes.next_line(),if route_open=> {
-                        route_open=result?.is_some();
+                let changed = tokio::select! {
+                    _ = shutdown.cancelled() => break,
+                    result = changes.next_line(), if route_open => {
+                        route_open = result?.is_some();
                         route_open
                     }
-                    _=tick.tick()=> {
-                        let now=std::time::SystemTime::now();
-                        let woke=now.duration_since(previous).is_ok_and(|elapsed|elapsed>std::time::Duration::from_secs(5));
-                        previous=now;
+                    _ = tick.tick() => {
+                        let now = std::time::SystemTime::now();
+                        let woke = now.duration_since(previous).is_ok_and(|elapsed| elapsed > Duration::from_secs(5));
+                        previous = now;
                         woke
                     }
                 };
-                if !changed && !first {continue;}
-                first=false;
-                let Some(gateway)=gateway.upgrade() else {break};
-                let link=gateway.cluster_link().await?;
-                let identity=gateway.host_identity().await?.clone();
-                let members=link.members().await?;
-                stream::iter(members.into_iter().filter(|member|member.state==MemberState::Active)).for_each_concurrent(64,|member| {
-                    let link=link.clone();
-                    let identity=identity.clone();
-                    async move {let _=link.call(&member.host,"cluster/hello",json!({"protocol":PROTOCOL,"host":identity.host_id,"incarnation":identity.incarnation})).await;}
-                }).await;
+                if !changed && !first {
+                    continue;
+                }
+                first = false;
+                let Some(gateway) = gateway.upgrade() else { break };
+                let link = gateway.cluster_link().await?;
+                let identity = gateway.host_identity().await?;
+                let members = link.members().await?;
+                stream::iter(members.into_iter().filter(|member| member.state == MemberState::Active))
+                    .for_each_concurrent(64, |member| {
+                        let link = link.clone();
+                        let identity = identity.clone();
+                        async move {
+                            let _ = link.call(&member.host, "cluster/hello", json!({"protocol":PROTOCOL,"host":identity.host_id,"incarnation":identity.incarnation})).await;
+                        }
+                    }).await;
                 gateway.jobs.dirty();
-                previous=std::time::SystemTime::now();
+                previous = std::time::SystemTime::now();
             }
             route.start_kill()?;
             route.wait().await?;
             Ok(())
-        }),"cluster liveness owner is closed");
+        });
+        ensure!(started, "cluster liveness owner is closed");
         Ok(())
     }
 }
 
 pub(crate) fn start(gateway: &Arc<Gateway>) -> Result<()> {
     let weak = Arc::downgrade(gateway);
-    ensure!(gateway.jobs.tasks.spawn_graceful("cluster_driver",move |shutdown|async move {
-        let Some(gateway)=weak.upgrade() else {return Ok(())};
-        let mut changes=gateway.jobs.changes();
-        let mut workers=tokio::task::JoinSet::new();
-        let mut running=std::collections::HashSet::new();
-        let capacity=Arc::new(tokio::sync::Semaphore::new(64));
-        loop {
-            let link=gateway.cluster_link().await?;
-            for member in link.store.all().await?.into_iter().filter(|member|member.state!=MemberState::Removed) {
-                if running.insert(member.membership.clone()) {
-                    let weak=Arc::downgrade(&gateway);
-                    let stop=shutdown.child_token();
-                    let capacity=capacity.clone();
-                    workers.spawn(async move {
-                        let id=member.membership.clone();
-                        let result=member_worker(weak,member,capacity,stop).await;
-                        (id,result)
-                    });
+    let started = gateway
+        .jobs
+        .tasks
+        .spawn_graceful("cluster_driver", move |shutdown| async move {
+            let Some(gateway) = weak.upgrade() else {
+                return Ok(());
+            };
+            let mut changes = gateway.jobs.changes();
+            let mut workers = tokio::task::JoinSet::new();
+            let mut running = std::collections::HashSet::new();
+            let capacity = Arc::new(tokio::sync::Semaphore::new(64));
+            loop {
+                let link = gateway.cluster_link().await?;
+                for member in link
+                    .store
+                    .all()
+                    .await?
+                    .into_iter()
+                    .filter(|member| member.state != MemberState::Removed)
+                {
+                    if running.insert(member.membership.clone()) {
+                        let weak = Arc::downgrade(&gateway);
+                        let stop = shutdown.child_token();
+                        let capacity = capacity.clone();
+                        workers.spawn(async move {
+                            let id = member.membership.clone();
+                            let result = member_worker(weak, member, capacity, stop).await;
+                            (id, result)
+                        });
+                    }
+                }
+                tokio::select! {
+                    _ = shutdown.cancelled() => break,
+                    result = changes.changed() => { if result.is_err() { break; } },
+                    Some(result) = workers.join_next(), if !workers.is_empty() => {
+                        let (id, result) = result?;
+                        running.remove(&id);
+                        if let Err(error) = result {
+                            tracing::warn!(membership=id,%error,"cluster member driver stopped");
+                            tokio::time::sleep(Duration::from_secs(1)).await;
+                        }
+                    }
                 }
             }
-            tokio::select! {
-                _=shutdown.cancelled()=>break,
-                result=changes.changed()=> {if result.is_err(){break;}},
-                Some(result)=workers.join_next(),if !workers.is_empty()=> {
-                    let (id,result)=result?;
-                    running.remove(&id);
-                    if let Err(error)=result {tracing::warn!(membership=id,%error,"cluster member driver stopped");tokio::time::sleep(Duration::from_secs(1)).await;}
-                }
+            shutdown.cancel();
+            while let Some(result) = workers.join_next().await {
+                result?;
             }
-        }
-        shutdown.cancel();
-        while let Some(result)=workers.join_next().await {result?;}
-        Ok(())
-    }),"cluster driver owner is closed");
+            Ok(())
+        });
+    ensure!(started, "cluster driver owner is closed");
     Ok(())
 }
 

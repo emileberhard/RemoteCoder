@@ -37,6 +37,58 @@ async fn buffered_codex_texts(
 }
 
 #[tokio::test]
+async fn parent_tag_failure_returns_an_error_and_keeps_processing_responses() {
+    let gateway = TestGateway::new();
+    let root = gateway
+        .turn_state_path
+        .as_ref()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("agent-jobs/v1/jobs");
+    crate::storage::private_state::ensure_private_directory(&root).unwrap();
+    crate::storage::private_state::replace(&root.join("broken.json"), b"broken").unwrap();
+    let pending: PendingRequests = Arc::default();
+    pending
+        .lock()
+        .await
+        .insert("1".into(), PendingRequest::new("thread/read", None, false));
+    let (tx, mut replies) = mpsc::channel(4);
+    let client = super::super::tests::test_client(1, tx);
+    let (upstream, _forwarded) = mpsc::channel(4);
+    let stream = buffered_codex_frames(vec![
+        json!({"id":1,"result":{"thread":{"id":"child"}}}),
+        json!({"id":2,"result":{"usable":true}}),
+    ])
+    .await;
+    gateway
+        .codex_to_client_loop(
+            1,
+            NotificationOrigin::Client {
+                id: 1,
+                opened_after: 0,
+            },
+            stream,
+            client,
+            upstream,
+            pending,
+        )
+        .await;
+    for id in [1, 2] {
+        let ClientCommand::Text(text) = replies.recv().await.unwrap() else {
+            panic!("response")
+        };
+        let response: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(response["id"], id);
+        if id == 1 {
+            assert!(response["error"].is_object());
+        } else {
+            assert_eq!(response["result"]["usable"], true);
+        }
+    }
+}
+
+#[tokio::test]
 async fn bounded_preview_rejects_non_boolean_codex_opt_in_before_forwarding() {
     let gateway = TestGateway::new();
     let (tx, mut replies) = mpsc::channel(4);
@@ -118,10 +170,7 @@ async fn bounded_preview_codex_opt_in_is_consumed_and_only_changes_the_list_payl
             if opted_in.is_none() {
                 assert_eq!(sent, raw);
             }
-            assert_eq!(
-                pending.lock().await.len(),
-                usize::from(opted_in == Some(true))
-            );
+            assert_eq!(pending.lock().await.len(), 1);
 
             let prefix = format!("{}{}", "a".repeat(2_047), grapheme);
             let preview = format!("{prefix}tail");
@@ -148,13 +197,15 @@ async fn bounded_preview_codex_opt_in_is_consumed_and_only_changes_the_list_payl
             let ClientCommand::Text(received) = replies.recv().await.unwrap() else {
                 panic!("list response")
             };
-            if opted_in == Some(true) {
-                let mut expected = response;
-                expected["result"]["data"][0]["preview"] = json!(prefix);
-                assert_eq!(serde_json::from_str::<Value>(&received).unwrap(), expected);
-            } else {
-                assert_eq!(received, raw_response);
+            let mut expected = response;
+            for row in expected["result"]["data"].as_array_mut().unwrap() {
+                row["parent"] = Value::Null;
+                row["parentThreadId"] = Value::Null;
             }
+            if opted_in == Some(true) {
+                expected["result"]["data"][0]["preview"] = json!(prefix);
+            }
+            assert_eq!(serde_json::from_str::<Value>(&received).unwrap(), expected);
             assert!(pending.lock().await.is_empty());
         }
     }

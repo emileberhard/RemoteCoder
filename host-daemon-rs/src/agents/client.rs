@@ -1295,19 +1295,19 @@ mod tests {
 
     #[test]
     fn message_delivery_failures_return_nonzero_without_changing_receipt() {
-        for kind in [
-            "unreachable",
-            "blocked",
-            "uncertain",
-            "failed",
-            "sending",
-            "pending",
+        for (kind, exit) in [
+            ("unreachable", 5),
+            ("uncertain", 6),
+            ("blocked", 4),
+            ("failed", 4),
+            ("sending", 4),
+            ("pending", 4),
         ] {
             assert_eq!(
                 message_exit(
                     &json!({"deliveryId":"same-id","deliveryState":{"kind":kind,"reason":"not accepted"}})
                 ),
-                69
+                exit
             );
         }
         for kind in ["submitted", "accepted", "recorded"] {
@@ -1316,7 +1316,7 @@ mod tests {
                 0
             );
         }
-        assert_eq!(message_exit(&json!({"deliveryId":"same-id"})), 69);
+        assert_eq!(message_exit(&json!({"deliveryId":"same-id"})), 4);
     }
 
     #[test]

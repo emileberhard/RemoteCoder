@@ -48,6 +48,24 @@ impl Inner {
 }
 
 impl JobStore {
+    pub(crate) async fn parent_tags(
+        &self,
+        threads: Vec<ConversationIdentity>,
+    ) -> Result<std::collections::HashMap<ConversationIdentity, Option<AgentAddress>>> {
+        self.access(move |inner| {
+            Ok(threads
+                .into_iter()
+                .filter_map(|thread| {
+                    inner
+                        .parents
+                        .get(&thread)
+                        .map(|parent| (thread.clone(), parent.clone()))
+                })
+                .collect())
+        })
+        .await
+    }
+
     pub(crate) async fn find_job(&self, id: JobId) -> Result<Option<JobRecord>> {
         self.access(move |inner| Ok(inner.jobs.get(&id).cloned()))
             .await

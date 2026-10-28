@@ -712,7 +712,10 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let relay = SpeechRelay::new(
             "test-operator".into(),
-            InstallationCredentials::new(directory.path().join("installations")),
+            InstallationCredentials::new(
+                directory.path().join("installations"),
+                Arc::new(crate::cluster::members::Members::new(directory.path())),
+            ),
             None,
             SpeechClients::All,
             Journal::disabled(),

@@ -358,6 +358,10 @@ can be inspected, messaged, stopped, adopted, moved or promoted. Continue refuse
 with `unsupported` when native permission evidence is unavailable; it does not
 invent a JobSpec from a thread header.
 
+Claude child sidecars (`claude:<parent UUID>:<child ID>`) are listed and read
+through sessions. They have no resumable provider thread, so lifecycle operations
+return unsupported (exit 7). Unrecognized conversation IDs never route to Codex.
+
 Every agent row includes `ownerHostId`, the current nullable `parent` address
 and its turn's `recipient`. Native ancestry stays immutable provenance. Thread
 headers expose `parent: {hostId, threadId} | null`; relation JSON exposes

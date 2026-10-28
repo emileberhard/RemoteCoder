@@ -75,7 +75,7 @@ struct Connection {
 }
 
 pub(crate) struct Link {
-    pub(crate) store: Members,
+    pub(crate) store: Arc<Members>,
     identity: RwLock<HostIdentity>,
     connections: Mutex<HashMap<String, Arc<Mutex<Option<Connection>>>>>,
     observations: RwLock<HashMap<String, MemberView>>,
@@ -93,7 +93,7 @@ pub(crate) fn timestamp() -> String {
 impl Link {
     pub(crate) fn new(state: &Path, identity: HostIdentity) -> Self {
         Self {
-            store: Members::new(state),
+            store: Arc::new(Members::new(state)),
             identity: RwLock::new(identity),
             connections: Mutex::new(HashMap::new()),
             observations: RwLock::new(HashMap::new()),

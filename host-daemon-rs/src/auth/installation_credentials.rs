@@ -71,6 +71,7 @@ impl Default for Document {
 pub(crate) struct InstallationCredentials {
     path: PathBuf,
     admission: Arc<Semaphore>,
+    members: Arc<crate::cluster::members::Members>,
 }
 
 #[derive(Debug, Clone)]
@@ -112,9 +113,10 @@ impl InstallationCredentials {
         Ok(crate::config::HostPaths::from_env()?.state("installation-credentials.json"))
     }
 
-    pub fn new(path: PathBuf) -> Self {
+    pub fn new(path: PathBuf, members: Arc<crate::cluster::members::Members>) -> Self {
         Self {
             path,
+            members,
             admission: Arc::new(Semaphore::new(8)),
         }
     }
@@ -124,13 +126,7 @@ impl InstallationCredentials {
             return Ok(Some(Grant::Operator));
         }
         if token.starts_with("rcp1.") {
-            let state = self
-                .path
-                .parent()
-                .context("credential store has no parent")?;
-            return crate::cluster::members::Members::new(state)
-                .authenticate(token)
-                .await;
+            return self.members.authenticate(token).await;
         }
         let Some(rest) = token.strip_prefix("rc1.") else {
             return Ok(None);
@@ -155,13 +151,7 @@ impl InstallationCredentials {
             digest,
         } = grant
         {
-            let state = self
-                .path
-                .parent()
-                .context("credential store has no parent")?;
-            return crate::cluster::members::Members::new(state)
-                .valid(host, membership, digest)
-                .await;
+            return self.members.valid(host, membership, digest).await;
         }
         let Grant::Installation { id, digest } = grant else {
             return Ok(true);
@@ -305,7 +295,11 @@ fn load(path: &Path) -> Result<Document> {
 }
 
 pub(crate) async fn run(command: CredentialCommand) -> Result<()> {
-    let store = InstallationCredentials::new(InstallationCredentials::default_path()?);
+    let path = InstallationCredentials::default_path()?;
+    let members = Arc::new(crate::cluster::members::Members::new(
+        path.parent().context("credential store has no parent")?,
+    ));
+    let store = InstallationCredentials::new(path, members);
     match command {
         CredentialCommand::Issue { label, output } => {
             ensure!(
@@ -364,7 +358,10 @@ mod tests {
     async fn enrollment_is_idempotent_revocable_and_stores_only_a_digest() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("credentials.json");
-        let store = InstallationCredentials::new(path.clone());
+        let store = InstallationCredentials::new(
+            path.clone(),
+            Arc::new(crate::cluster::members::Members::new(dir.path())),
+        );
         let enroll = || Enrollment {
             installation_id: "phone-1".into(),
             label: "Test phone".into(),
@@ -386,7 +383,10 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        let other_process = InstallationCredentials::new(path);
+        let other_process = InstallationCredentials::new(
+            path,
+            Arc::new(crate::cluster::members::Members::new(dir.path())),
+        );
         assert!(other_process.revoke("phone-1".into()).await.unwrap());
         assert!(!store.is_valid(&grant).await.unwrap());
         assert!(
@@ -420,7 +420,10 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("credentials.json");
-        let store = InstallationCredentials::new(path.clone());
+        let store = InstallationCredentials::new(
+            path.clone(),
+            Arc::new(crate::cluster::members::Members::new(dir.path())),
+        );
         let enroll = || Enrollment {
             installation_id: "phone-1".into(),
             label: "Test phone".into(),
@@ -435,8 +438,14 @@ mod tests {
     async fn malformed_storage_is_not_empty_and_independent_enrollments_survive() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("credentials.json");
-        let first = InstallationCredentials::new(path.clone());
-        let second = InstallationCredentials::new(path.clone());
+        let first = InstallationCredentials::new(
+            path.clone(),
+            Arc::new(crate::cluster::members::Members::new(dir.path())),
+        );
+        let second = InstallationCredentials::new(
+            path.clone(),
+            Arc::new(crate::cluster::members::Members::new(dir.path())),
+        );
         let (a, b) = tokio::join!(
             first.enroll(
                 Enrollment {

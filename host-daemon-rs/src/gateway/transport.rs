@@ -570,46 +570,6 @@ impl Gateway {
             self.send_error_to(out_tx, id.as_ref(), &error).await?;
             return Ok(());
         }
-        if matches!(
-            out_tx.grant,
-            crate::auth::installation_credentials::Grant::Peer { .. }
-        ) {
-            let method = request.method.as_str();
-            let allowed = method.starts_with("cluster/")
-                || method.starts_with("agent/cluster/")
-                || method.starts_with("agent/parent/")
-                || matches!(
-                    method,
-                    "agent/jobs/admit"
-                        | "agent/jobs/deliver"
-                        | "agent/jobs/stop"
-                        | "agent/jobs/read"
-                        | "agent/jobs/list"
-                        | "agent/jobs/message"
-                        | "agent/conversation/operate"
-                        | "sessions/list"
-                        | "sessions/search"
-                        | "sessions/mirror/list"
-                        | "sessions/mirror/fetch"
-                        | "$/cancelRequest"
-                );
-            if !allowed || method == "sessions/search" && request.object["params"]["local"] != true
-            {
-                self.send_error_to(
-                    out_tx,
-                    id.as_ref(),
-                    &crate::rpc::RpcError::new(
-                        crate::rpc::error::RpcCode::InvalidRequest,
-                        "member credential cannot invoke this method",
-                    )
-                    .with_data(crate::rpc::error::RpcData::Raw(
-                        serde_json::json!({"class":"refused"}),
-                    )),
-                )
-                .await?;
-                return Ok(());
-            }
-        }
         if request.method == "$/cancelRequest" {
             if id.is_some() {
                 return self
@@ -994,7 +954,11 @@ impl Gateway {
         };
 
         if let Some(method) =
-            correlated_method(Some(method.as_str())).or(bounded_preview.then_some("thread/list"))
+            correlated_method(Some(method.as_str())).or_else(|| match method.as_str() {
+                "thread/read" => Some("thread/read"),
+                "thread/list" => Some("thread/list"),
+                _ => None,
+            })
             && let Some(id) = &id
         {
             let mut pending = pending_requests.lock().await;
@@ -1212,8 +1176,15 @@ impl Gateway {
                         match self.apply_parent_tags(result).await {
                             Ok(changed) => reencode |= changed,
                             Err(error) => {
-                                warn!(client_id,%error,"parent tags could not be applied");
-                                return;
+                                let error = RpcError::from(error);
+                                let _ = self
+                                    .send_error_to(
+                                        &out_tx,
+                                        parsed.as_ref().and_then(|message| message.get("id")),
+                                        &error,
+                                    )
+                                    .await;
+                                continue;
                             }
                         }
                     }

@@ -63,8 +63,20 @@ impl LanHarness {
             LanIdentity::load(&directory.path().join("lan-tls-key.der"), HOST.to_string()).unwrap();
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
-        let installations =
-            InstallationCredentials::new(directory.path().join("installation-credentials.json"));
+        let gateway = Gateway::with_state_paths(
+            Arc::new(CodexAppServer::new_for_test_socket(
+                directory.path().join("codex"),
+            )),
+            claude_test.settings.clone(),
+            journal.clone(),
+            Some(directory.path().join("turns.json")),
+            None,
+            None,
+        );
+        let installations = InstallationCredentials::new(
+            directory.path().join("installation-credentials.json"),
+            gateway.cluster_link().await.unwrap().store.clone(),
+        );
         let mut state = HttpState {
             full_disk_access: crate::platform::macos::full_disk_access::probe(
                 &directory.path().join("TCC.db"),
@@ -76,16 +88,7 @@ impl LanHarness {
             ),
             auth_token: OPERATOR.to_string(),
             installation_credentials: installations.clone(),
-            gateway: Gateway::with_state_paths(
-                Arc::new(CodexAppServer::new_for_test_socket(
-                    directory.path().join("codex"),
-                )),
-                claude_test.settings.clone(),
-                journal.clone(),
-                Some(directory.path().join("turns.json")),
-                None,
-                None,
-            ),
+            gateway,
             accounts: None,
             codex_version: "test".to_string(),
             codex_code_mode_host_path: directory.path().join("codex-code-mode-host"),

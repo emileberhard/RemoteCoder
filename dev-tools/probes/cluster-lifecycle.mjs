@@ -151,6 +151,13 @@ async function nativeParent(host, provider) {
     return response.thread.id;
 }
 
+async function nativeCommand(host, thread, provider, command) {
+    const text = provider === "codex" ? `RCJOB_SPAWN:${Buffer.from(command).toString("base64url")}`
+        : `Run exactly this shell command once, then reply with ADMITTED. Do not call any other tools:\n${command}`;
+    await host.rpc("turn/start", { threadId: thread,
+        input: [{ type: "text", text, text_elements: [] }] });
+}
+
 async function remoteSpawn(parentHost, childHost, provider, name) {
     const parent = await nativeParent(parentHost, provider);
     const id = jobId();
@@ -161,10 +168,7 @@ async function remoteSpawn(parentHost, childHost, provider, name) {
     const command = [parentHost.info.binary, "--env-file", parentHost.info.env, "agent", "spawn",
         "codex", "rcjob-mock", childPrompt, "--host", childHost.info.hostId,
         "--cwd", childHost.info.cwd, "--job-id", id, "--json"].map(quote).join(" ");
-    const text = provider === "codex" ? `RCJOB_SPAWN:${Buffer.from(command).toString("base64url")}`
-        : `Run exactly this shell command once, then reply with ADMITTED. Do not call any other tools:\n${command}`;
-    await parentHost.rpc("turn/start", { threadId: parent,
-        input: [{ type: "text", text, text_elements: [] }] });
+    await nativeCommand(parentHost, parent, provider, command);
     const job = await waitFor(async () => {
         const rows = await childHost.rpc("agent/jobs/list", { selector: { kind: "recent" }, limit: 100, cursor: null });
         if (!rows.jobs.some(row => row.jobId === id)) return null;
@@ -257,6 +261,20 @@ async function main() {
             const moved = await workers[1].rpc("agent/parent/set", { protocol: 1, agent: address,
                 parent: { hostId: workers[2].info.hostId, threadId: root }, caller: { kind: "operator" } });
             assert.equal(moved.parent.hostId, workers[2].info.hostId);
+            const continued = jobId();
+            const command = [workers[2].info.binary, "--env-file", workers[2].info.env,
+                "agent", "spawn", `RCJOB_ECHO:Moved child result ${continued}`,
+                "--resume", child.id, "--host", workers[1].info.hostId,
+                "--job-id", continued, "--json"].map(quote).join(" ");
+            await nativeCommand(workers[2], root, "codex", command);
+            await waitFor(async () => {
+                const rows = await workers[1].rpc("agent/jobs/list", {selector:{kind:"recent"},limit:100,cursor:null});
+                if (!rows.jobs.some(row => row.jobId === continued)) return false;
+                const view = await workers[1].rpc("agent/jobs/read", {jobId:continued});
+                return ["accepted", "recorded"].includes(terminal(view.job)?.completion?.delivery?.kind);
+            });
+            assert.equal((await observedCompletion(workers[2], root, continued)).length, 1);
+            assert.equal((await observedCompletion(workers[0], child.parent, continued)).length, 0);
             const promoted = await workers[1].rpc("agent/parent/set", { protocol: 1, agent: address,
                 parent: null, caller: { kind: "operator" } });
             assert.equal(promoted.parent, null);

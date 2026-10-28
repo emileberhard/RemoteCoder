@@ -53,7 +53,7 @@ async fn register_job(gateway: &Gateway, sequence: u8, previous: Option<&JobReco
         provider_home: ProviderHome::Known {
             path: gateway.job_codex_home().unwrap(),
         },
-        thread_id: "continued-thread".into(),
+        thread_id: "6587aec5-99c2-5919-9221-89bdf86e59b6".into(),
     };
     let job = store
         .bind(job.job_id, job.revision, conversation, 2)
@@ -116,7 +116,9 @@ async fn scoped_route_outlives_jobs_and_legacy_title_proves_current_process_and_
             .unwrap()
             .started_micros,
     };
-    let thread = Arc::new(Mutex::new("continued-thread".to_owned()));
+    let thread = Arc::new(Mutex::new(
+        "6587aec5-99c2-5919-9221-89bdf86e59b6".to_owned(),
+    ));
     let names = Arc::new(Mutex::new(Vec::new()));
     let provider_thread = Arc::clone(&thread);
     let renamed = Arc::clone(&names);
@@ -170,7 +172,7 @@ async fn scoped_route_outlives_jobs_and_legacy_title_proves_current_process_and_
     assert_eq!(result, json!({"result":{}}));
     assert_eq!(
         *names.lock().unwrap(),
-        vec![json!({"threadId":"continued-thread","name":"Continued work"})]
+        vec![json!({"threadId":"6587aec5-99c2-5919-9221-89bdf86e59b6","name":"Continued work"})]
     );
     *thread.lock().unwrap() = "different-conversation".into();
     let rejected = request(
@@ -222,7 +224,9 @@ async fn scoped_route_outlives_jobs_and_legacy_title_proves_current_process_and_
             .await
             .unwrap()
             .verify_legacy_socket(
-                gateway.agent_conversation("continued-thread").unwrap(),
+                gateway
+                    .agent_conversation("6587aec5-99c2-5919-9221-89bdf86e59b6")
+                    .unwrap(),
                 legacy_socket(&first.job_id)
             )
             .await

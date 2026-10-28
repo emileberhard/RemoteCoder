@@ -453,6 +453,7 @@ async fn serve_http(
     );
     let installation_credentials = auth::installation_credentials::InstallationCredentials::new(
         settings.host_paths.state("installation-credentials.json"),
+        gateway.cluster_link().await?.store.clone(),
     );
     let speech = voice::speech::SpeechRelay::new(
         settings.auth_token.clone(),

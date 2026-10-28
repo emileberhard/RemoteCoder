@@ -33,6 +33,8 @@ struct Inner {
     _lease: File,
     jobs: BTreeMap<JobId, JobRecord>,
     agents: BTreeMap<String, AgentRecord>,
+    parents:
+        std::collections::HashMap<ConversationIdentity, Option<crate::wire::cluster::AgentAddress>>,
     uncertainties: Vec<ImportedUncertainty>,
     messages: BTreeMap<String, messages::MessageRecord>,
     intents: BTreeMap<JobId, crate::wire::cluster::RemoteIntent>,
@@ -59,7 +61,7 @@ impl JobStore {
                 .custom_flags(libc::O_NOFOLLOW)
                 .open(root.join("owner.lock"))?;
             lease.try_lock().context("another process owns the delegated-job store")?;
-            let mut inner = Inner { root, _lease: lease, jobs: BTreeMap::new(), agents: BTreeMap::new(), uncertainties: Vec::new(), messages: BTreeMap::new(), intents: BTreeMap::new(), fences: BTreeMap::new() };
+            let mut inner = Inner { root, _lease: lease, jobs: BTreeMap::new(), agents: BTreeMap::new(), parents:Default::default(), uncertainties: Vec::new(), messages: BTreeMap::new(), intents: BTreeMap::new(), fences: BTreeMap::new() };
             for name in ["jobs", "agents", "evidence", "uncertainties", "messages", "remote-intents", "cancel-fences"] {
                 private_state::ensure_private_directory(&inner.root.join(name))?;
             }
@@ -81,6 +83,7 @@ impl JobStore {
                 }
                 let agent: AgentRecord = read(&entry.path(), MAX_AGENT_BYTES)?;
                 ensure!(entry.path() == inner.agent_path(&agent.agent_id), "agent filename does not match its identity");
+                inner.index_parent(&agent);
                 ensure!(inner.agents.insert(agent.agent_id.clone(), agent).is_none(), "duplicate persisted agent identity");
             }
             inner.recover_agents()?;
@@ -856,13 +859,26 @@ impl Inner {
         private_state::replace(&self.job_path(&job.job_id), &bytes)
     }
 
-    fn write_agent(&self, agent: &AgentRecord) -> Result<()> {
+    fn index_parent(&mut self, agent: &AgentRecord) {
+        if let ConversationBinding::Known { conversation } = &agent.conversation {
+            if agent.parent_recipient.is_some() {
+                self.parents
+                    .insert(conversation.clone(), agent.parent.clone());
+            } else {
+                self.parents.remove(conversation);
+            }
+        }
+    }
+
+    fn write_agent(&mut self, agent: &AgentRecord) -> Result<()> {
         let bytes = serde_json::to_vec(agent)?;
         ensure!(
             bytes.len() as u64 <= MAX_AGENT_BYTES,
             "agent origin exceeds its record budget"
         );
-        private_state::replace(&self.agent_path(&agent.agent_id), &bytes)
+        private_state::replace(&self.agent_path(&agent.agent_id), &bytes)?;
+        self.index_parent(agent);
+        Ok(())
     }
 
     fn commit(&mut self, mut job: JobRecord, at_ms: i64) -> Result<JobRecord> {

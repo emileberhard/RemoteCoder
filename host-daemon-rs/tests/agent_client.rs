@@ -378,6 +378,47 @@ fn agent_client_format_only_reserves_stdout_for_envelopes() {
     assert!(envelope.trim_end().ends_with("</agent_message>"));
 }
 
+#[test]
+fn agent_client_message_dash_reads_stdin_and_rejects_blank_input() {
+    use std::io::Write;
+    for input in ["A multiline\nmessage from stdin", " \n\t"] {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_remote-coder-codex-gateway"))
+            .env_clear()
+            .args([
+                "agent",
+                "message",
+                "parent",
+                "-",
+                "--format-only",
+                "--sender-id",
+                "native-fixture",
+                "--reply-tool",
+                "message_agent",
+                "--reply-target",
+                "native-fixture",
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(input.as_bytes())
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        if input.trim().is_empty() {
+            assert!(!output.status.success());
+            assert!(output.stdout.is_empty());
+        } else {
+            assert!(output.status.success(), "{output:?}");
+            assert!(String::from_utf8(output.stdout).unwrap().contains(input));
+        }
+    }
+}
+
 #[tokio::test]
 async fn agent_client_listing_preserves_cluster_coverage_and_cursor() {
     let root = tempfile::tempdir().unwrap();
