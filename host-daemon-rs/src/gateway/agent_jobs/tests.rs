@@ -1,4 +1,5 @@
 use super::*;
+use crate::agents::jobs::model::JobId;
 use crate::agents::jobs::model::*;
 use crate::agents::jobs::routes::{legacy_socket, scoped_socket};
 use crate::test_support::{FakeControl, TestGateway};

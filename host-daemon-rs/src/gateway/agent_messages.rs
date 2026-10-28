@@ -347,7 +347,7 @@ impl Gateway {
                 "native conversation provider is unknown; use an explicit claude_UUID or codex:UUID selector"
             );
         };
-        let conversation = crate::agents::conversation::conversation_from_header(&header)?;
+        let conversation = crate::agents::conversation_from_header(&header)?;
         ensure!(
             conversation.thread_id == selector
                 || conversation.thread_id.strip_prefix("claude_") == Some(selector)

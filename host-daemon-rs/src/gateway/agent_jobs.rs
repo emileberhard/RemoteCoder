@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 
 use super::Gateway;
 use crate::agents::jobs::context::ProvenCaller;
-use crate::agents::jobs::model::{ConversationIdentity, JobId, Origin, Provider, ProviderHome};
+use crate::agents::jobs::model::{ConversationIdentity, Origin, Provider, ProviderHome};
 use crate::platform::process::{ProcessInstance, ancestry};
 use crate::rpc::error::RpcCode;
 use crate::rpc::{RpcError, RpcResult};
@@ -305,7 +305,7 @@ impl Gateway {
         }
     }
 
-    async fn job_context_view(&self, caller: Caller) -> Result<ContextView> {
+    pub(super) async fn job_context_view(&self, caller: Caller) -> Result<ContextView> {
         let Caller::Captured { context_id } = &caller else {
             anyhow::bail!("operator intent has no agent sender identity")
         };
