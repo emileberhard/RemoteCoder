@@ -1541,3 +1541,79 @@ fn sessions_reconcile_repairs_a_growing_rewrite_that_preserves_both_windows() {
         1
     );
 }
+
+#[test]
+fn sessions_active_malformed_record_keeps_a_gap_and_indexes_following_appends() {
+    let f = fixture();
+    scan(&f);
+    let append = |text: &str| {
+        writeln!(OpenOptions::new().append(true).open(&f.codex).unwrap(),"{}",json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":text}]}})).unwrap();
+    };
+    let incremental = || {
+        ingest::scan_scope(
+            &f.store,
+            &f.origins,
+            ingest::Scope::Changed(std::slice::from_ref(&f.codex)),
+            &AtomicBool::new(false),
+        )
+        .unwrap()
+    };
+    let gap_start = f.codex.metadata().unwrap().len();
+    writeln!(
+        OpenOptions::new().append(true).open(&f.codex).unwrap(),
+        "{{malformed}}"
+    )
+    .unwrap();
+    append("aftergapfirst");
+    assert_eq!(incremental()["parseFailures"], 1);
+    let first = search(&f.store, "aftergapfirst")["hits"][0]["itemKey"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let revision = || {
+        f.store
+            .reader()
+            .unwrap()
+            .query_row(
+                "SELECT revision FROM item WHERE item_key=?1",
+                [&first],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap()
+    };
+    let before = revision();
+    append("aftergapsecond");
+    assert_eq!(incremental()["parseFailures"], 1);
+    assert_eq!(revision(), before);
+    assert_eq!(
+        search(&f.store, "aftergapsecond")["hits"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    let db = f.store.reader().unwrap();
+    let (offset, failure, state): (u64, String, String) = db
+        .query_row(
+            "SELECT ingested_offset,failure,append_state FROM source WHERE local_path=?1",
+            [f.codex.to_string_lossy().as_ref()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(offset, f.codex.metadata().unwrap().len());
+    assert_eq!(failure, "record_gap");
+    let state: Value = serde_json::from_str(&state).unwrap();
+    assert_eq!(state["gap_records"], 1);
+    assert_eq!(state["first_gap"][0], gap_start);
+    let reason: String = db
+        .query_row(
+            "SELECT stale_reason FROM coverage WHERE origin_host='fixture'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(reason, "parse_failure");
+    drop(db);
+    assert_eq!(scan(&f)["ingested"], 0);
+    assert_eq!(revision(), before);
+}

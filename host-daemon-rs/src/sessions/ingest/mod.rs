@@ -8,7 +8,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{File, Metadata};
-use std::io::{BufReader, Read, Seek, SeekFrom};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -20,29 +20,62 @@ pub(crate) fn identity(metadata: &Metadata) -> String {
 
 const FINGERPRINT_WINDOW: u64 = 64 << 10;
 
-fn chain_record(previous: blake3::Hash, bytes: &[u8]) -> blake3::Hash {
+struct RecordReader<R: Read> {
+    input: BufReader<R>,
+    hash: blake3::Hasher,
+}
+
+impl<R: Read> RecordReader<R> {
+    fn new(input: R) -> Self {
+        Self {
+            input: BufReader::new(input),
+            hash: blake3::Hasher::new(),
+        }
+    }
+}
+
+impl<R: Read> Read for RecordReader<R> {
+    fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+        let count = self.input.read(bytes)?;
+        self.hash.update(&bytes[..count]);
+        Ok(count)
+    }
+}
+
+impl<R: Read> BufRead for RecordReader<R> {
+    fn fill_buf(&mut self) -> std::io::Result<&[u8]> {
+        self.input.fill_buf()
+    }
+    fn consume(&mut self, length: usize) {
+        self.hash.update(&self.input.buffer()[..length]);
+        self.input.consume(length);
+    }
+}
+
+fn chain_record(previous: blake3::Hash, record: blake3::Hash) -> blake3::Hash {
     let mut chain = blake3::Hasher::new();
     chain.update(previous.as_bytes());
-    chain.update(blake3::hash(bytes).as_bytes());
+    chain.update(record.as_bytes());
     chain.finalize()
 }
 
 fn verify_prefix(path: &Path, length: u64, expected: &str, stop: &AtomicBool) -> Result<bool> {
-    let mut reader = BufReader::new(File::open(path)?.take(length));
+    let mut reader = RecordReader::new(File::open(path)?.take(length));
     let mut line = Vec::new();
     let mut read = 0;
     let mut chain = blake3::hash(&[]);
     loop {
         ensure!(!stop.load(Ordering::Acquire), "Session ingestion cancelled");
         line.clear();
+        reader.hash.reset();
         let (count, kind) = read_bounded_line(&mut reader, &mut line, MAX_SESSION_RECORD_BYTES)?;
         if count == 0 {
             break;
         }
-        if kind != LineKind::Complete {
+        if kind == LineKind::Partial {
             return Ok(false);
         }
-        chain = chain_record(chain, &line);
+        chain = chain_record(chain, reader.hash.finalize());
         read += count;
     }
     Ok(read == length && chain.to_hex().as_str() == expected)
@@ -248,7 +281,6 @@ pub(super) fn scan_serving(
                 match outcome {
                     Ok(changed) => ingested += usize::from(changed),
                     Err(error) => {
-                        failures += 1;
                         db.execute("INSERT INTO source(origin_host,provider,provider_home,path,local_path,file_identity,size,mtime_ns,ingested_offset,revision,present,prefix_hash,parser_state,failure) VALUES(?1,?2,?3,?4,?5,'',0,0,0,0,1,'','{}',?6) ON CONFLICT(origin_host,path) DO UPDATE SET failure=excluded.failure",params![origin.host,origin.provider,origin.provider_home.to_string_lossy(),original,path.to_string_lossy(),format!("{error:#}")])?;
                     }
                 }
@@ -272,6 +304,7 @@ pub(super) fn scan_serving(
             .filter(|o| o.host == host)
             .any(|o| !o.path().is_dir());
         let errors:i64=db.query_row("SELECT count(*) FROM source WHERE origin_host=?1 AND failure IS NOT NULL AND failure<>'partial_record'",[&host],|r|r.get(0))?;
+        failures += usize::try_from(errors)?;
         let unavailable:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM source WHERE origin_host=?1 AND failure IS NOT NULL) OR EXISTS(SELECT 1 FROM dependency d CROSS JOIN source s USING(source_id) WHERE d.present=0 AND s.origin_host=?1)",[&host],|r|r.get(0))?;
         let reason = if absent {
             Some("provider_unavailable")
@@ -351,6 +384,8 @@ struct AppendState {
     head: String,
     tail: String,
     verified_revision: i64,
+    gap_records: u64,
+    first_gap: Option<(u64, u64)>,
 }
 
 struct Previous {
@@ -487,9 +522,27 @@ fn ingest_source(
         blake3::hash(&[])
     };
     file.seek(SeekFrom::Start(offset))?;
-    let mut reader = BufReader::new((&mut file).take(before.len() - offset));
+    let mut reader = RecordReader::new((&mut file).take(before.len() - offset));
     let mut line = Vec::new();
     let mut records = 0;
+    let mut gap_records = if append {
+        prior
+            .as_ref()
+            .context("Append needs previous state")?
+            .append
+            .gap_records
+    } else {
+        0
+    };
+    let mut first_gap = if append {
+        prior
+            .as_ref()
+            .context("Append needs previous state")?
+            .append
+            .first_gap
+    } else {
+        None
+    };
     if origin.provider == "claude" && state.thread.is_none() {
         normalize::Record {
             db: &tx,
@@ -506,6 +559,7 @@ fn ingest_source(
         loop {
             ensure!(!stop.load(Ordering::Acquire), "Session ingestion cancelled");
             line.clear();
+            reader.hash.reset();
             let bound = if mode == ReadMode::Inventory {
                 8 << 20
             } else {
@@ -515,13 +569,11 @@ fn ingest_source(
             if read == 0 || kind == LineKind::Partial {
                 break;
             }
-            ensure!(
-                kind != LineKind::Oversized,
-                "capacity: source record exceeds {MAX_SESSION_RECORD_BYTES} bytes; raw evidence retained"
-            );
-            if !line.iter().all(u8::is_ascii_whitespace) {
-                let value: Value =
-                    serde_json::from_slice(&line).context("Malformed complete session record")?;
+            let bad = if kind == LineKind::Oversized {
+                true
+            } else if line.iter().all(u8::is_ascii_whitespace) {
+                false
+            } else if let Ok(value) = serde_json::from_slice::<Value>(&line) {
                 normalize::Record {
                     db: &tx,
                     origin,
@@ -532,8 +584,15 @@ fn ingest_source(
                     bytes: &line,
                 }
                 .apply(&mut state, value)?;
+                false
+            } else {
+                true
+            };
+            if bad {
+                gap_records = gap_records.checked_add(1).context("Too many record gaps")?;
+                first_gap.get_or_insert((offset, read));
             }
-            chain = chain_record(chain, &line);
+            chain = chain_record(chain, reader.hash.finalize());
             offset += read;
             records += 1;
             if mode == ReadMode::Inventory {
@@ -599,8 +658,10 @@ fn ingest_source(
         head,
         tail,
         verified_revision,
+        gap_records,
+        first_gap,
     };
-    tx.execute("UPDATE source SET local_path=?1,file_identity=?2,size=?3,mtime_ns=?4,ingested_offset=?5,revision=?6,present=1,prefix_hash=?7,parser_state=?8,failure=?9,append_state=?10 WHERE source_id=?11",params![path.to_string_lossy(),if mode != ReadMode::Inventory {&stamp} else {""},i64::try_from(before.len())?,before.mtime()*1_000_000_000+before.mtime_nsec(),i64::try_from(offset)?,revision,prefix,serde_json::to_string(&state)?,if offset<before.len(){Some("partial_record")}else{None},serde_json::to_string(&append_state)?,source])?;
+    tx.execute("UPDATE source SET local_path=?1,file_identity=?2,size=?3,mtime_ns=?4,ingested_offset=?5,revision=?6,present=1,prefix_hash=?7,parser_state=?8,failure=?9,append_state=?10 WHERE source_id=?11",params![path.to_string_lossy(),if mode != ReadMode::Inventory {&stamp} else {""},i64::try_from(before.len())?,before.mtime()*1_000_000_000+before.mtime_nsec(),i64::try_from(offset)?,revision,prefix,serde_json::to_string(&state)?,if gap_records>0 {Some("record_gap")} else if offset<before.len(){Some("partial_record")}else{None},serde_json::to_string(&append_state)?,source])?;
     tx.commit()?;
     Ok(true)
 }
@@ -762,4 +823,27 @@ pub(crate) fn catalog(db: &Connection, roots: &[PathBuf]) -> Result<()> {
     }
     tx.commit()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sessions_record_hash_includes_discarded_oversized_bytes() {
+        let oversized = format!("{}\n", "x".repeat(129));
+        let complete = "accepted\n";
+        let mut reader = RecordReader::new(std::io::Cursor::new(format!("{oversized}{complete}")));
+        let mut line = Vec::new();
+        let (count, kind) = read_bounded_line(&mut reader, &mut line, 64).unwrap();
+        assert_eq!(kind, LineKind::Oversized);
+        assert_eq!(count, oversized.len() as u64);
+        assert!(line.is_empty());
+        assert_eq!(reader.hash.finalize(), blake3::hash(oversized.as_bytes()));
+        reader.hash.reset();
+        let (_, kind) = read_bounded_line(&mut reader, &mut line, 64).unwrap();
+        assert_eq!(kind, LineKind::Complete);
+        assert_eq!(line, complete.as_bytes());
+        assert_eq!(reader.hash.finalize(), blake3::hash(complete.as_bytes()));
+    }
 }
