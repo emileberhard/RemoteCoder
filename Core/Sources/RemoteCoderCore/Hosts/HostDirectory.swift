@@ -8,6 +8,8 @@ struct HostDirectory: Codable, Equatable, Sendable {
         var port: Int
         var transport: GatewayTransport
         var enrollmentToken: String?
+        var gatewayID: UUID?
+        var legacyIDs: [UUID]?
         var modifiedAt: Date
 
         init(_ host: GatewayHostConfiguration, enrollmentToken: String?, modifiedAt: Date) {
@@ -17,13 +19,21 @@ struct HostDirectory: Codable, Equatable, Sendable {
             port = host.port
             transport = host.transport
             self.enrollmentToken = enrollmentToken
+            gatewayID = host.gatewayID
+            legacyIDs = host.legacyIDs.isEmpty ? nil : host.legacyIDs
             self.modifiedAt = modifiedAt
         }
 
         func configuration(updating current: GatewayHostConfiguration?) -> GatewayHostConfiguration {
             var host = GatewayHostConfiguration(id: id, name: name, hostname: hostname, port: port,
                 authToken: enrollmentToken ?? "", transport: transport)
+            host.gatewayID = gatewayID
+            host.legacyIDs = legacyIDs ?? []
             guard let current, current.hasSameEndpoint(as: host) else { return host }
+            if current.id != id {
+                host.id = current.id
+                host.legacyIDs = Array(Set((legacyIDs ?? []) + [id]).subtracting([current.id]))
+            }
             if current.usesInstallationCredential || enrollmentToken == nil { host.authToken = current.authToken }
             if current.hasSameConnection(as: host) { host.incomingCallHostID = current.incomingCallHostID }
             return host
@@ -72,12 +82,20 @@ struct HostDirectory: Codable, Equatable, Sendable {
     }
 
     mutating func adopt(_ hosts: [GatewayHostConfiguration]) {
-        for host in hosts where !entries.contains(where: { $0.id == host.id }) && !deletions.contains(where: { $0.id == host.id }) {
+        for host in hosts where !entries.contains(where: { $0.id == host.id || $0.legacyIDs?.contains(host.id) == true }) && !deletions.contains(where: { $0.id == host.id }) {
             entries.append(Entry(host, enrollmentToken: host.enrollmentCredential, modifiedAt: .distantPast))
         }
     }
 
     mutating func record(_ host: GatewayHostConfiguration, at time: Date) {
+        if let canonical = entries.first(where: { $0.legacyIDs?.contains(host.id) == true }) {
+            var projection = host
+            projection.id = canonical.id
+            projection.gatewayID = canonical.gatewayID
+            projection.legacyIDs = canonical.legacyIDs ?? []
+            record(projection, at: time)
+            return
+        }
         guard let index = entries.firstIndex(where: { $0.id == host.id }) else {
             entries.append(Entry(host, enrollmentToken: host.enrollmentCredential, modifiedAt: time))
             return
@@ -126,7 +144,9 @@ struct HostDirectory: Codable, Equatable, Sendable {
 
     func configurations(updating device: [GatewayHostConfiguration]) -> [GatewayHostConfiguration] {
         let current = Dictionary(device.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        return entries.map { $0.configuration(updating: current[$0.id]) }
+        return entries.map { entry in
+            entry.configuration(updating: current[entry.id] ?? device.first { entry.legacyIDs?.contains($0.id) == true })
+        }
     }
 
     private static func canonical(_ deletions: [Deletion]) -> [Deletion] {

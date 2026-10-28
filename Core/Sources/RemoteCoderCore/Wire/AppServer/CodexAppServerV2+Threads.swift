@@ -29,6 +29,8 @@ extension CodexAppServerV2 {
         var parentThreadId: String? = nil
         var canAcceptDirectInput: Bool? = nil
         var agentRelation: ConversationAgentRelation? = nil
+        var parent: ClusterParent? = nil
+        var hasParentTag = false
     }
 
     enum ThreadPreview: Sendable {
@@ -215,7 +217,7 @@ extension CodexAppServerV2.Thread: Codable {
         case source
         case name
         case status
-        case parentThreadId, canAcceptDirectInput, agentRelation
+        case parentThreadId, canAcceptDirectInput, agentRelation, parent
     }
 
     init(from decoder: Decoder) throws {
@@ -238,6 +240,8 @@ extension CodexAppServerV2.Thread: Codable {
         parentThreadId = try container.decodeIfPresent(String.self, forKey: .parentThreadId)
         canAcceptDirectInput = try container.decodeIfPresent(Bool.self, forKey: .canAcceptDirectInput)
         agentRelation = try container.decodeIfPresent(ConversationAgentRelation.self, forKey: .agentRelation)
+        parent = try container.decodeIfPresent(ClusterParent.self, forKey: .parent)
+        hasParentTag = container.contains(.parent)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -260,6 +264,7 @@ extension CodexAppServerV2.Thread: Codable {
         try container.encodeIfPresent(parentThreadId, forKey: .parentThreadId)
         try container.encodeIfPresent(canAcceptDirectInput, forKey: .canAcceptDirectInput)
         try container.encodeIfPresent(agentRelation, forKey: .agentRelation)
+        if hasParentTag { try container.encode(parent, forKey: .parent) }
     }
 }
 

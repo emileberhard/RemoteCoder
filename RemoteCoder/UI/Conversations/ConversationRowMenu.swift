@@ -8,6 +8,7 @@ struct ConversationHistoryActions {
     let regenerateName: (ConversationAddress) -> Void
     let unpin: (ConversationAddress) -> Void
     let fork: (ConversationAddress) -> Void
+    let moveUnder: (ConversationAddress) -> Void
     let markRead: ([ConversationAddress]) -> Void
     let markUnread: (ConversationAddress) -> Void
     let settle: ([ConversationAddress]) -> Void
@@ -27,6 +28,7 @@ struct ConversationHistoryActions {
             items.append(ContextMenuItem(title: "Pin", systemImage: "pin") { pin(row) })
             items.append(ContextMenuItem(title: "Regenerate Name", systemImage: "wand.and.sparkles") { regenerateName(row.address) })
         }
+        items.append(ContextMenuItem(title: "Move under…", systemImage: "person.2") { moveUnder(row.address) })
         items.append(readToggle(for: row))
         items.append(ContextMenuItem(title: "Fork", systemImage: "arrow.triangle.branch") { fork(row.address) })
         if let toggle = settlementToggle(for: row) { items.append(toggle) }

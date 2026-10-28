@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct ConversationAgentsView: View {
+    let workspace: ChatWorkspaceModel
     @Bindable var model: ConversationAgentsModel
     let onParentRequest: (String) async throws -> Void
     let onOpenConversation: (ConversationAgent) async throws -> Void
@@ -13,6 +14,7 @@ struct ConversationAgentsView: View {
             let recent = model.sections.recent
             let earlier = model.sections.earlier
             List {
+                Section { ClusterCoverageStrip(coverage: model.coverage) }
                 Group {
                     if !recent.isEmpty {
                         Section { agentLinks(recent) }
@@ -54,12 +56,13 @@ struct ConversationAgentsView: View {
     }
 
     private func agentLinks(_ rows: [ConversationAgentRow]) -> some View {
-        ConversationAgentLinks(model: model, rows: rows, onParentRequest: onParentRequest,
+        ConversationAgentLinks(workspace: workspace, model: model, rows: rows, onParentRequest: onParentRequest,
                                onOpenConversation: onOpenConversation, onAction: onAction)
     }
 }
 
 struct ConversationAgentLinks: View {
+    let workspace: ChatWorkspaceModel
     let model: ConversationAgentsModel
     let rows: [ConversationAgentRow]
     let onParentRequest: (String) async throws -> Void
@@ -69,7 +72,7 @@ struct ConversationAgentLinks: View {
     var body: some View {
         ForEach(rows) { row in
             NavigationLink {
-                ConversationAgentDetail(model: model, agentID: row.id, onParentRequest: onParentRequest, onOpenConversation: onOpenConversation, onAction: onAction)
+                ConversationAgentDetail(workspace: workspace, model: model, agentID: row.id, onParentRequest: onParentRequest, onOpenConversation: onOpenConversation, onAction: onAction)
             } label: {
                 AgentRow(row: row)
             }
@@ -106,7 +109,7 @@ struct ConversationAgentsPlaceholder: View {
             } else {
                 ProgressView()
             }
-        } else if model.agents.isEmpty && model.warnings.isEmpty && model.error == nil {
+        } else if model.agents.isEmpty && model.warnings.isEmpty && model.error == nil && model.coverage.allSatisfy { $0.state == .ok } {
             ContentUnavailableView("No Agents", systemImage: "person.2")
         }
     }
@@ -155,11 +158,47 @@ private struct AgentRow: View {
     var body: some View {
         HStack(spacing: 12) {
             AgentStateSymbol(state: row.agent.state)
-            Text(row.agent.title)
-                .lineLimit(2)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(row.agent.title).lineLimit(2)
+                if let host = row.agent.hostName {
+                    AgentHostBadge(name: host, reachability: row.agent.reachability)
+                }
+                if let state = row.agent.intentState {
+                    Text(state.replacingOccurrences(of: "_", with: " ").capitalized)
+                        .scaledFont(.caption).foregroundStyle(.secondary)
+                }
+            }
         }
         .padding(.leading, CGFloat(row.depth) * indent)
         .accessibilityElement(children: .combine)
+    }
+}
+
+private struct AgentHostBadge: View {
+    let name: String
+    let reachability: String?
+
+    var body: some View {
+        Label(label, systemImage: symbol)
+            .scaledFont(.caption).foregroundStyle(.secondary)
+    }
+
+    private var label: String {
+        switch reachability {
+        case "reachable": name
+        case "unreachable": "\(name) · Unreachable"
+        case "unsupported": "\(name) · Too old"
+        default: "\(name) · Unknown"
+        }
+    }
+
+    private var symbol: String {
+        switch reachability {
+        case "reachable": "server.rack"
+        case "unreachable": "network.slash"
+        case "unsupported": "clock.badge.exclamationmark"
+        default: "questionmark.circle"
+        }
     }
 }
 
@@ -191,6 +230,7 @@ private struct AgentStateSymbol: View {
         case .interrupted: "stop.circle.fill"
         case .failed: "xmark.circle.fill"
         case .unknown: "questionmark.circle"
+        case .removed: "minus.circle"
         }
     }
 
@@ -199,7 +239,7 @@ private struct AgentStateSymbol: View {
         case .working: themeStore.theme.colors.accentTint
         case .waiting: .orange
         case .failed: .red
-        case .completed, .interrupted, .unknown: .secondary
+        case .completed, .interrupted, .unknown, .removed: .secondary
         }
     }
 }
@@ -215,11 +255,14 @@ struct AgentNote: View {
 }
 
 private struct ConversationAgentDetail: View {
+    let workspace: ChatWorkspaceModel
     let model: ConversationAgentsModel
     let agentID: String
     let onParentRequest: (String) async throws -> Void
     let onOpenConversation: (ConversationAgent) async throws -> Void
     let onAction: (ConversationAgent, ConversationAgentAction, String, UUID) async throws -> Void
+    @State private var movesUnder = false
+    @State private var promotes = false
     @State private var output: ConversationAgentOutput?
     @State private var outputGeneration: UInt64 = 0
     @State private var text = ""
@@ -235,7 +278,7 @@ private struct ConversationAgentDetail: View {
         case askParent
     }
 
-    private var agent: ConversationAgent? { model.agents.first { $0.id == agentID } }
+    private var agent: ConversationAgent? { model.agents.first { $0.identity == agentID } }
 
     var body: some View {
         List {
@@ -255,7 +298,7 @@ private struct ConversationAgentDetail: View {
                     if agent.capabilities.message || agent.capabilities.continueWork {
                         Section { instructionField(agent) }
                     }
-                    Section { outputRows }
+                    if agent.capabilities.inspect { Section { outputRows } }
                 }
             } else {
                 ContentUnavailableView("Agent Unavailable", systemImage: "person.crop.circle.badge.questionmark")
@@ -264,9 +307,23 @@ private struct ConversationAgentDetail: View {
         .navigationTitle(agent?.title ?? "Agent")
         .inlineNavigationTitle()
         .toolbar {
-            if let agent, agent.capabilities.openConversation || agent.capabilities.askParent || agent.capabilities.stop {
+            if let agent {
                 ToolbarItem(placement: .primaryAction) { actionsMenu(agent) }
             }
+        }
+        .sheet(isPresented: $movesUnder) {
+            if let agent, let address = agent.address(localHostID: model.address.hostID) {
+                AgentPlacementPicker(agent: address, workspace: workspace)
+            }
+        }
+        .task(id: promotes) {
+            guard promotes, let agent, let address = agent.address(localHostID: model.address.hostID) else { return }
+            defer { promotes = false }
+            do {
+                try await workspace.moveAgent(address, under: nil)
+                model.invalidate()
+                await model.refresh()
+            } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
         }
         .onChange(of: text) { mutationID = UUID() }
         .task(id: scenePhase) {
@@ -312,7 +369,7 @@ private struct ConversationAgentDetail: View {
             AgentStateSymbol(state: agent.state)
                 .scaledFont(.title2)
             VStack(alignment: .leading, spacing: 2) {
-                Text(agent.state.title)
+                Text(agent.intentState.map { $0.replacingOccurrences(of: "_", with: " ").capitalized } ?? agent.state.title)
                     .scaledFont(.headline)
                 Text(agent.model ?? agent.provider.displayName)
                     .scaledFont(.subheadline)
@@ -376,6 +433,11 @@ private struct ConversationAgentDetail: View {
             if agent.capabilities.askParent {
                 Button("Ask in Chat", systemImage: "quote.bubble") { pendingAction = .askParent }
             }
+            if agent.threadId != nil, agent.state != .removed {
+                Divider()
+                Button("Move to sidebar", systemImage: "sidebar.left") { promotes = true }
+                Button("Move under…", systemImage: "person.2") { movesUnder = true }
+            }
             if agent.capabilities.stop {
                 Divider()
                 Button("Stop Agent", systemImage: "stop.circle", role: .destructive) { pendingAction = .agent(.stop) }
@@ -388,6 +450,7 @@ private struct ConversationAgentDetail: View {
     }
 
     private func loadOutput() async {
+        guard agent?.capabilities.inspect == true else { return }
         outputGeneration &+= 1
         let generation = outputGeneration
         do {

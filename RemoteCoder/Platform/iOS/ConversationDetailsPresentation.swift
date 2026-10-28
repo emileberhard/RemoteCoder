@@ -14,7 +14,7 @@ struct ConversationDetailsPresentation: ViewModifier {
     func body(content: Content) -> some View {
         content
             .sheet(item: $presentedAgents) { agents in
-                ConversationAgentsView(model: agents, onParentRequest: { request in
+                ConversationAgentsView(workspace: workspace, model: agents, onParentRequest: { request in
                     try await workspace.sendToAgentParent(request, from: agents.address)
                     presentedAgents = nil
                     onParentRequestSent()

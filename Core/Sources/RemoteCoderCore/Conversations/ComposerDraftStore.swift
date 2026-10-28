@@ -651,7 +651,12 @@ final class ComposerDraftStore {
         }
     }
 
-    nonisolated static func importDrafts(from source: URL, into target: URL, conversationIDs: [UUID: UUID], hostID: UUID, accountID: UUID) throws {
+    enum ImportScope {
+        case retiredAccount(hostID: UUID, accountID: UUID)
+        case gateway
+    }
+
+    nonisolated static func importDrafts(from source: URL, into target: URL, conversationIDs: [UUID: UUID], scope: ImportScope) throws {
         let original = try makeContext(directory: source)
         let destination = try makeContext(directory: target)
         let receipts = Set(try destination.fetch(FetchDescriptor<DraftImportReceipt>()).map(\.sourceDraftID))
@@ -659,7 +664,7 @@ final class ComposerDraftStore {
                                             uniquingKeysWith: { first, _ in first })
         for draft in try original.fetch(FetchDescriptor<ComposerDraft>()) where !receipts.contains(draft.id) {
             var key = draft.destination
-            if let slot = Destination.newChatID(for: key) {
+            if case let .retiredAccount(hostID, accountID) = scope, let slot = Destination.newChatID(for: key) {
                 key = Destination.newChat(AccountRetirementMigration.draftSlot(hostID: hostID, accountID: accountID, slot: slot)).key
             }
             if key.hasPrefix("conversation:"), let id = UUID(uuidString: String(key.dropFirst("conversation:".count))),

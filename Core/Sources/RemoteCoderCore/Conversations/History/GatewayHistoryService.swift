@@ -491,6 +491,11 @@ actor GatewayHistoryService {
         await cache.invalidate(threadID: threadID, hostID: hostID)
     }
 
+    func invalidateAgentClassification(threadID: String) {
+        if let cached = agentClassifications.removeValue(forKey: threadID) { classificationBytes -= cached.bytes }
+        invalidateRecentCoverage()
+    }
+
     func cachedConversation(header: ConversationHeader) async -> ConversationSnapshot? {
         let readEpoch = epoch
         let generation = generations[header.id]

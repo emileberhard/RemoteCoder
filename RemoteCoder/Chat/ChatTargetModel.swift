@@ -255,7 +255,13 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
     @ObservationIgnored let realtimeVoice: VoiceCall
     @ObservationIgnored let gatewayPolicy: SharedGatewayPolicy
 
-    private(set) var gatewayConnectivity = GatewayConnectivity.disconnected
+    private(set) var gatewayUnreachableSince: Date?
+    private(set) var gatewayConnectivity = GatewayConnectivity.disconnected {
+        didSet {
+            if gatewayConnectivity.route != nil { gatewayUnreachableSince = nil }
+            else if oldValue.route != nil { gatewayUnreachableSince = .now }
+        }
+    }
     var gatewayRoute: GatewayRoute.Kind? { gatewayConnectivity.route }
     var isGatewayConnected: Bool { gatewayRoute != nil }
 
@@ -317,11 +323,21 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
         return agents
     }
 
+    @ObservationIgnored var agentHosts: @MainActor () -> [ConversationAgentsHost] = { [] }
+    @ObservationIgnored var agentCoverage: @MainActor () -> [ClusterCoverage] = { [] }
+
+    func invalidateAgentLists() {
+        for screen in screens { screen.conversationAgents?.invalidate() }
+    }
+
     private func agentsModel(threadID: String) -> ConversationAgentsModel {
-        screens.lazy.compactMap(\.conversationAgents).first { $0.threadID == threadID }
+        let model = screens.lazy.compactMap(\.conversationAgents).first { $0.threadID == threadID }
             ?? recentConversations.agents(threadID: threadID)
             ?? ConversationAgentsModel(address: ConversationAddress(hostID: hostID, threadID: threadID),
                                        gateway: gateway)
+        model.clusterHosts = { [weak self] in self?.agentHosts() ?? [] }
+        model.knownCoverage = { [weak self] in self?.agentCoverage() ?? [] }
+        return model
     }
 
     private var isOnScreen: Bool { lifecycle.isOnScreen }

@@ -680,6 +680,16 @@ actor GatewayRoutes {
         return try JSONDecoder().decode(BuildIdentity.self, from: data)
     }
 
+    func identity() async throws -> GatewayIdentity {
+        guard let url = host.gatewayHTTPBaseURL()?.appending(path: "health") else { throw GatewayClient.ClientError.invalidURL }
+        let data = try await send(readRequest(url), traffic: .read) { request, session in
+            var request = request
+            request.timeoutInterval = 10
+            return try await Self.requireOK(session.data(for: request), path: "health")
+        }
+        return try JSONDecoder().decode(GatewayIdentity.self, from: data)
+    }
+
     private func read(path: String, over route: GatewayRoute) async throws -> Data {
         try await Self.requireOK(fetch(path: path, over: route), path: path)
     }

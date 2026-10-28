@@ -199,6 +199,8 @@ final class HostStore {
         var directory = directory
         if let index = updated.firstIndex(where: { $0.id == host.id }) {
             var replacement = host
+            replacement.gatewayID = updated[index].gatewayID
+            replacement.legacyIDs = updated[index].legacyIDs
             replacement.incomingCallHostID = updated[index].hasSameConnection(as: host) ? updated[index].incomingCallHostID : nil
             updated[index] = replacement
             directory.record(replacement, at: .now)
@@ -231,6 +233,33 @@ final class HostStore {
         var updated = configurations
         updated[index].incomingCallHostID = serverHostID
         try persist(updated, activeHostID: activeHostID, directory: directory)
+    }
+
+    func verifyIdentity(_ identity: GatewayIdentity, for captured: GatewayHostConfiguration) throws {
+        guard let current = configurations.first(where: { $0.id == captured.id }),
+              current.hasSameConnection(as: captured) else { throw CancellationError() }
+        if let known = current.gatewayID, known != identity.hostId { throw AgentIncomingCallError.hostIdentityChanged }
+    }
+
+    func adoptIdentity(_ identity: GatewayIdentity, for captured: GatewayHostConfiguration) throws {
+        try verifyIdentity(identity, for: captured)
+        let matching = configurations.filter { $0.id == captured.id || $0.gatewayID == identity.hostId || $0.id == identity.hostId }
+        var host = matching.first { $0.id == identity.hostId } ?? captured
+        if host.usesInstallationCredential, let operatorHost = matching.first(where: { !$0.usesInstallationCredential }) {
+            host = operatorHost
+        }
+        host.id = identity.hostId
+        host.gatewayID = identity.hostId
+        host.legacyIDs = Array(Set(matching.flatMap { [$0.id] + $0.legacyIDs }).subtracting([identity.hostId]))
+            .sorted { $0.uuidString < $1.uuidString }
+        var directory = directory
+        for old in matching where old.id != host.id { directory.remove(old.id, at: .now) }
+        directory.record(host, at: .now)
+        let matchingIDs = Set(matching.map(\.id))
+        let active = activeHostID.map { matchingIDs.contains($0) ? host.id : $0 }
+        try persist(configurations.filter { !matchingIDs.contains($0.id) } + [host], activeHostID: active, directory: directory)
+        for old in host.legacyIDs { GatewayIdentityPreferences.migrate(from: old, to: host.id, defaults: defaults) }
+        requestSync()
     }
 
     private func commit(_ configurations: [GatewayHostConfiguration], activeHostID: UUID?, directory: HostDirectory) -> Bool {

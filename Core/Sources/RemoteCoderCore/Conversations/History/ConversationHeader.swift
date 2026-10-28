@@ -63,6 +63,11 @@ struct ConversationHeader: Codable, Identifiable, Equatable, Sendable {
         nativeParentThreadID = thread.parentThreadId ?? spawn?["parent_thread_id"]?.stringValue
         canAcceptDirectInput = thread.canAcceptDirectInput
         agentClassification = thread.agentRelation.map(ConversationAgentClassification.child) ?? .unresolved
+        if thread.hasParentTag {
+            agentClassification = thread.parent.map {
+                .child(.init(parentHostID: $0.hostId, parentThreadId: $0.threadId, parentAccountId: nil, agentId: thread.id))
+            } ?? .root
+        }
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -145,9 +150,18 @@ struct ConversationHeader: Codable, Identifiable, Equatable, Sendable {
 
     var isNativeAgent: Bool { nativeParentThreadID != nil || spawnedAsSubAgent }
 
-    var isDelegatedAgent: Bool { isNativeAgent || agentRelation != nil }
+    var isDelegatedAgent: Bool {
+        switch agentClassification {
+        case .root: false
+        case .child: true
+        case .unresolved: isNativeAgent
+        }
+    }
 
-    var agentParentThreadID: String? { nativeParentThreadID ?? agentRelation?.parentThreadId }
+    var agentParentThreadID: String? {
+        if case .root = agentClassification { return nil }
+        return agentRelation?.parentThreadId ?? nativeParentThreadID
+    }
 
     var acceptsDirectInput: Bool { !isNativeAgent && canAcceptDirectInput != false }
 
