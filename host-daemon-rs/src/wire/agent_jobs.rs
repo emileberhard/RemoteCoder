@@ -209,6 +209,10 @@ pub(crate) struct SetTitleParams {
     deny_unknown_fields
 )]
 pub(crate) enum ScopedRequest {
+    Legacy {
+        socket: std::path::PathBuf,
+        request: Box<ScopedRequest>,
+    },
     ReadSelf {},
     ReadMessage {
         #[serde(rename = "deliveryId")]

@@ -201,6 +201,26 @@ impl JobStore {
         }).await
     }
 
+    pub(crate) async fn verify_legacy_socket(
+        &self,
+        conversation: ConversationIdentity,
+        socket: PathBuf,
+    ) -> Result<()> {
+        ensure!(
+            super::routes::is_legacy_socket(&socket),
+            "unrecognized legacy scoped socket"
+        );
+        self.access(move |inner| {
+            let matches = inner.jobs.values().any(|job| {
+                super::routes::legacy_socket(&job.job_id) == socket
+                    && inner.agents.get(&job.agent_id).is_some_and(|agent|
+                        matches!(&agent.conversation, ConversationBinding::Known { conversation: known } if known == &conversation))
+            });
+            ensure!(matches, "legacy scoped socket does not belong to this gateway's exact calling conversation");
+            Ok(())
+        }).await
+    }
+
     pub(crate) async fn agent_for_conversation(
         &self,
         conversation: ConversationIdentity,

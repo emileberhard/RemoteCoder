@@ -22,12 +22,8 @@ const READ_ONLY_DISABLED_FEATURES: [&str; 8] = [
     "tool_suggest",
 ];
 
-pub(crate) async fn create(
-    gateway: &Arc<Gateway>,
-    id: &JobId,
-    spec: &JobSpec,
-) -> Result<ConversationIdentity> {
-    let mut params = thread_params(gateway, id, spec).await?;
+pub(crate) async fn create(gateway: &Arc<Gateway>, spec: &JobSpec) -> Result<ConversationIdentity> {
+    let mut params = thread_params(gateway, spec).await?;
     if matches!(spec.tool_scope, ToolScope::Full) {
         params["dynamicTools"] = crate::agents::tools::codex_dynamic_tools();
     }
@@ -80,7 +76,7 @@ pub(crate) async fn start(gateway: &Arc<Gateway>, job: &JobRecord) -> Result<Exe
     {
         ensure!(retained == &input_id, "the retained input identity changed");
     }
-    let mut resume = thread_params(gateway, &job.job_id, spec).await?;
+    let mut resume = thread_params(gateway, spec).await?;
     resume["threadId"] = json!(conversation.thread_id);
     resume["excludeTurns"] = json!(true);
     let resumed = gateway.job_native_call("thread/resume", resume).await?;
@@ -335,7 +331,7 @@ fn verify_home(gateway: &Gateway, target: &ConversationIdentity) -> Result<()> {
     Ok(())
 }
 
-async fn thread_params(gateway: &Gateway, id: &JobId, spec: &JobSpec) -> Result<Value> {
+async fn thread_params(gateway: &Gateway, spec: &JobSpec) -> Result<Value> {
     let ExecutionSettings::Codex {
         model,
         model_provider,
@@ -345,7 +341,7 @@ async fn thread_params(gateway: &Gateway, id: &JobId, spec: &JobSpec) -> Result<
     else {
         bail!("Codex thread settings use another provider");
     };
-    let socket = gateway.job_coordination_socket(id);
+    let socket = gateway.job_coordination_socket()?;
     let mut config = json!({
         "shell_environment_policy":{"set":{"RC_AGENT_JOB_SOCKET":socket}}
     });

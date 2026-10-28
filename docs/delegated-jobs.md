@@ -154,9 +154,21 @@ revalidated before every mutation; detached work must pass it explicitly and
 fails actionably when its owner is gone. Deliberate standalone work selects
 operator intent explicitly.
 
-A job's Unix coordination socket verifies its actual peer and permits only
-self read, parent messaging and title changes. An inherited or failed socket
-never falls back to the operator bearer. Full-access clients use the existing
+The JobOwner owns one Unix coordination listener for the gateway lifetime,
+namespaced by its actual store root. It verifies the kernel peer and current
+provider process, then resolves the conversation's current job from the Agent
+record. Jobs and native continuations share that endpoint; finishing a job does
+not remove a conversation's tool route. Self reads, parent messaging, title
+changes and reads of the caller's own message receipts are the only operations.
+A process with no registered job is refused.
+
+Older provider environments retain a per-job socket path. Only ENOENT for the
+recognized old path can try the canonical local scoped listener, carrying the
+old socket explicitly. Before any action, that listener proves the old path
+belongs to a retained job in its own store and to the actual caller's exact
+conversation. This prevents an isolated instance from falling into the default
+host. Existing, refused and denied routes never try another endpoint. No scoped
+failure falls back to the operator bearer. Full-access clients use the existing
 credential owner for other operations. This preserves the current same-user
 trust boundary, not a hostile same-UID security sandbox.
 
@@ -203,3 +215,10 @@ admission. The old job and immutable ancestry remain unchanged. Historical
 settings are resolved for the new invocation from native history; standard mode
 is the new invocation default unless explicitly overridden, rather than an
 assertion about the old run's speed setting.
+
+## Retry-state rollout and rollback
+
+A nonempty `providerRetries` record and the `retryWaiting` execution state require
+a gateway that understands this format. Once retries have written these records,
+keep a matching gateway reader during rollback; older gateways reject them.
+Never restore an older store snapshot over jobs admitted or changed afterwards.

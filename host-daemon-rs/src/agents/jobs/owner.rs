@@ -15,8 +15,7 @@ pub(crate) struct JobOwner {
     pub(crate) operations: RwLock<()>,
     pub(super) tasks: crate::tasks::owned_tasks::OwnedTasks,
     pub(super) scopes: super::routes::ScopedEndpoints,
-    pub(super) endpoints:
-        Mutex<std::collections::HashMap<JobId, super::routes::ScopedEndpointLease>>,
+    pub(super) endpoint: Mutex<Option<super::routes::ScopedEndpointLease>>,
     pub(super) root: Option<PathBuf>,
     store: OnceCell<JobStore>,
     message_claims: Mutex<std::collections::HashMap<String, Weak<Mutex<()>>>>,
@@ -32,7 +31,7 @@ impl JobOwner {
             operations: Default::default(),
             tasks: Default::default(),
             scopes: Default::default(),
-            endpoints: Default::default(),
+            endpoint: Default::default(),
             root,
             store: OnceCell::new(),
             message_claims: Default::default(),
@@ -45,7 +44,8 @@ impl JobOwner {
         if self.root.is_none() {
             return Ok(());
         }
-        self.store().await.map(|_| ())
+        self.store().await?;
+        self.ensure_endpoint().await
     }
 
     pub(crate) async fn store(&self) -> Result<&JobStore> {

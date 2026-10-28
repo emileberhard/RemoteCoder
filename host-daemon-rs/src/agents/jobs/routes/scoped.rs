@@ -11,14 +11,13 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::task::{JoinHandle, JoinSet};
 
-use crate::agents::jobs::model::{JobId, MAX_JOB_BYTES};
+use crate::agents::jobs::model::MAX_JOB_BYTES;
 use crate::platform::process::{ProcessInstance, unix_peer_identity};
 use crate::rpc::error::{RpcCode, RpcError, RpcResult};
 use crate::wire::agent_jobs::ScopedRequest;
 
-pub(crate) type ScopedHandler = Arc<
-    dyn Fn(JobId, ProcessInstance, ScopedRequest) -> BoxFuture<'static, RpcResult> + Send + Sync,
->;
+pub(crate) type ScopedHandler =
+    Arc<dyn Fn(ProcessInstance, ScopedRequest) -> BoxFuture<'static, RpcResult> + Send + Sync>;
 
 #[derive(Clone)]
 pub(crate) struct ScopedEndpoints {
@@ -29,7 +28,7 @@ pub(crate) struct ScopedEndpoints {
 impl Default for ScopedEndpoints {
     fn default() -> Self {
         Self {
-            endpoints: Arc::new(Semaphore::new(256)),
+            endpoints: Arc::new(Semaphore::new(1)),
             peers: Arc::new(Semaphore::new(64)),
         }
     }
@@ -50,7 +49,6 @@ impl ScopedEndpoints {
     pub(crate) async fn bind(
         &self,
         path: &Path,
-        job_id: JobId,
         handler: ScopedHandler,
     ) -> Result<ScopedEndpointLease> {
         let permit = Arc::clone(&self.endpoints)
@@ -91,11 +89,10 @@ impl ScopedEndpoints {
                     accepted = listener.accept() => {
                         let Ok((stream, _)) = accepted else { break; };
                         let Ok(permit) = Arc::clone(&peers).try_acquire_owned() else { continue; };
-                        let job_id = job_id.clone();
                         let handler = Arc::clone(&handler);
                         tasks.spawn(async move {
                             let _permit = permit;
-                            let _ = tokio::time::timeout(Duration::from_secs(30), serve(stream, job_id, handler)).await;
+                            let _ = tokio::time::timeout(Duration::from_secs(30), serve(stream, handler)).await;
                         });
                     }
                     _ = tasks.join_next(), if !tasks.is_empty() => {}
@@ -130,7 +127,7 @@ async fn reclaim_stale_socket(path: &Path) -> Result<()> {
     std::fs::remove_file(path).context("stale scoped socket could not be reclaimed")
 }
 
-async fn serve(mut stream: UnixStream, job_id: JobId, handler: ScopedHandler) -> Result<()> {
+async fn serve(mut stream: UnixStream, handler: ScopedHandler) -> Result<()> {
     let peer = unix_peer_identity(&stream).map(|(pid, identity)| ProcessInstance {
         pid,
         started_micros: identity.started_micros,
@@ -145,7 +142,7 @@ async fn serve(mut stream: UnixStream, job_id: JobId, handler: ScopedHandler) ->
         )),
     };
     let result = match result {
-        Ok((peer, request)) => handler(job_id, peer, request).await,
+        Ok((peer, request)) => handler(peer, request).await,
         Err(error) => Err(error),
     };
     let response = match result {
@@ -215,4 +212,38 @@ impl Drop for SocketOwner {
             let _ = std::fs::remove_file(&self.path);
         }
     }
+}
+
+pub(crate) fn scoped_socket(root: &Path) -> PathBuf {
+    socket_directory().join(format!(
+        "caller-{}.sock",
+        super::super::store::fingerprint(root.as_os_str().as_encoded_bytes())
+    ))
+}
+
+pub(crate) fn legacy_socket(id: &crate::agents::jobs::model::JobId) -> PathBuf {
+    socket_directory().join(format!(
+        "{}.sock",
+        super::super::store::fingerprint(id.as_str().as_bytes())
+    ))
+}
+
+pub(crate) fn is_legacy_socket(path: &Path) -> bool {
+    path.parent() == Some(socket_directory().as_path())
+        && path
+            .extension()
+            .is_some_and(|extension| extension == "sock")
+        && path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .is_some_and(|stem| {
+                stem.len() == 64
+                    && stem
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            })
+}
+
+fn socket_directory() -> PathBuf {
+    PathBuf::from(format!("/tmp/rc-aj-{}", nix::unistd::getuid()))
 }

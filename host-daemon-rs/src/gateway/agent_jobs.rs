@@ -27,8 +27,8 @@ struct NativeProcessIdentity {
 }
 
 impl Gateway {
-    pub(crate) fn job_coordination_socket(&self, id: &JobId) -> std::path::PathBuf {
-        self.jobs.coordination_socket(id)
+    pub(crate) fn job_coordination_socket(&self) -> Result<std::path::PathBuf> {
+        self.jobs.coordination_socket()
     }
 
     pub(crate) fn job_host_name(&self) -> Result<String> {
@@ -335,26 +335,47 @@ impl Gateway {
 
     pub(crate) async fn scoped_job_rpc(
         &self,
-        id: JobId,
         peer: ProcessInstance,
         request: ScopedRequest,
     ) -> RpcResult {
-        let proven = self.jobs.verify_peer(&id, peer).await?;
-        let conversation = proven.conversation.clone();
+        let proven = self.job_process_context(peer).await?;
+        let request = match request {
+            ScopedRequest::Legacy { socket, request } => {
+                self.jobs
+                    .store()
+                    .await?
+                    .verify_legacy_socket(proven.conversation.clone(), socket)
+                    .await?;
+                ensure!(
+                    !matches!(*request, ScopedRequest::Legacy { .. }),
+                    "nested scoped migration is not permitted"
+                );
+                *request
+            }
+            request => request,
+        };
         let context = self.jobs.contexts.capture(proven).await;
         let caller = Caller::Captured {
             context_id: context.context_id.clone(),
         };
+        let view = self.job_context_view(caller.clone()).await?;
+        ensure!(
+            view.job_id.is_some(),
+            "scoped route has no registered calling job"
+        );
         match request {
-            ScopedRequest::ReadSelf {} => Ok(json!(ContextView {
-                context,
-                conversation,
-                sender_id: id.as_str().into(),
-                job_id: Some(id)
-            })),
+            ScopedRequest::Legacy { .. } => Err(RpcError::new(
+                RpcCode::InvalidParams,
+                "nested scoped migration is not permitted",
+            )),
+            ScopedRequest::ReadSelf {} => Ok(json!(view)),
             ScopedRequest::ReadMessage { delivery_id } => {
                 let record = self.jobs.store().await?.message(delivery_id).await?;
-                if record.sender != (Origin::Parent { conversation }) {
+                if record.sender
+                    != (Origin::Parent {
+                        conversation: view.conversation,
+                    })
+                {
                     return Err(RpcError::new(
                         RpcCode::InvalidRequest,
                         "scoped message inspection requires the exact sender conversation",
@@ -385,3 +406,6 @@ impl Gateway {
         }
     }
 }
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests;

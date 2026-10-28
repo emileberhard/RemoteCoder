@@ -209,7 +209,9 @@ async fn rpc<P: Serialize, R: DeserializeOwned>(
 
 async fn scoped(request: ScopedRequest) -> Result<Value> {
     let path = std::env::var_os(SCOPED_SOCKET_ENV).context("No scoped agent route is available")?;
-    response_value(transport::scoped(Path::new(&path), &request).await?)
+    let root = HostPaths::from_env()?.state("agent-jobs/v1");
+    let legacy_target = crate::agents::jobs::routes::scoped_socket(&root);
+    response_value(transport::scoped(Path::new(&path), &legacy_target, &request).await?)
 }
 
 async fn mutation<P: Serialize>(

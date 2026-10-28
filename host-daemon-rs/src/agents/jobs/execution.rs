@@ -11,9 +11,10 @@ use crate::gateway::Gateway;
 use crate::providers::claude::ClaudeJobInspection;
 
 impl JobOwner {
-    pub(crate) fn coordination_socket(&self, id: &JobId) -> PathBuf {
-        PathBuf::from(format!("/tmp/rc-aj-{}", nix::unistd::getuid()))
-            .join(format!("{}.sock", fingerprint(id.as_str().as_bytes())))
+    pub(crate) fn coordination_socket(&self) -> Result<PathBuf> {
+        Ok(super::routes::scoped_socket(self.root.as_deref().context(
+            "delegated jobs require persistent gateway state",
+        )?))
     }
 
     pub(super) async fn reconcile_job(&self, id: JobId) -> Result<bool> {
@@ -77,9 +78,7 @@ impl JobOwner {
                     let conversation = match agent.conversation {
                         ConversationBinding::Known { conversation } => conversation,
                         ConversationBinding::Unknown { .. } => match spec.settings.provider() {
-                            Provider::Codex => {
-                                super::codex::create(&gateway, &job.job_id, spec).await?
-                            }
+                            Provider::Codex => super::codex::create(&gateway, spec).await?,
                             Provider::Claude => gateway.job_new_claude_conversation(),
                         },
                     };
@@ -113,7 +112,7 @@ impl JobOwner {
                             .record_job_session(&conversation.thread_id, &job.job_id)
                             .await?;
                     }
-                    self.ensure_endpoint(&job).await?;
+                    self.ensure_endpoint().await?;
                     store
                         .advance(
                             id.clone(),
@@ -139,7 +138,7 @@ impl JobOwner {
                                     conversation,
                                     spec,
                                     &input_id(&current)?,
-                                    &self.coordination_socket(&id),
+                                    &self.coordination_socket()?,
                                     &self.evidence_file(&id).await?,
                                 )
                                 .await
@@ -167,7 +166,7 @@ impl JobOwner {
                     }
                 }
                 _ => {
-                    self.ensure_endpoint(&job).await?;
+                    self.ensure_endpoint().await?;
                     let evidence = self.inspect(&gateway, &job).await?;
                     match evidence {
                         Inspection::PreparedRecovery { recovery_input_id } => {
@@ -186,7 +185,7 @@ impl JobOwner {
                                     identity,
                                     spec,
                                     &recovery_input_id,
-                                    &self.coordination_socket(&id),
+                                    &self.coordination_socket()?,
                                     &self.evidence_file(&id).await?,
                                 )
                                 .await?;
@@ -225,7 +224,7 @@ impl JobOwner {
                                             conversation,
                                             spec,
                                             &input_id(&job)?,
-                                            &self.coordination_socket(&id),
+                                            &self.coordination_socket()?,
                                             &self.evidence_file(&id).await?,
                                         )
                                         .await?
@@ -290,7 +289,7 @@ impl JobOwner {
                                             recovery_input_id.as_deref().context(
                                                 "Claude recovery input identity is missing",
                                             )?,
-                                            &self.coordination_socket(&id),
+                                            &self.coordination_socket()?,
                                             &self.evidence_file(&id).await?,
                                         )
                                         .await?;
@@ -616,7 +615,6 @@ impl JobOwner {
                 now_ms(),
             )
             .await?;
-        self.close_endpoint(&job.job_id).await;
         Ok(())
     }
 }

@@ -4,7 +4,6 @@ use std::time::Duration;
 use anyhow::{Result, ensure};
 use futures_util::{FutureExt, StreamExt, stream};
 
-use super::model::JobId;
 use super::owner::JobOwner;
 
 const SETTLE_DELAY: Duration = Duration::from_secs(2);
@@ -68,66 +67,34 @@ impl JobOwner {
     }
 
     pub(crate) async fn close_endpoints(&self) {
-        let endpoints = std::mem::take(&mut *self.endpoints.lock().await);
-        for (_, endpoint) in endpoints {
-            endpoint.close().await;
-        }
-    }
-
-    pub(super) async fn ensure_endpoint(&self, job: &super::model::JobRecord) -> Result<()> {
-        let mut endpoints = self.endpoints.lock().await;
-        if endpoints.contains_key(&job.job_id) {
-            return Ok(());
-        }
-        let gateway = Arc::downgrade(&self.gateway()?);
-        let handler: super::routes::ScopedHandler = Arc::new(move |id, peer, request| {
-            let gateway = gateway.clone();
-            async move {
-                let Some(gateway) = gateway.upgrade() else {
-                    return Err(crate::rpc::RpcError::draining());
-                };
-                gateway.scoped_job_rpc(id, peer, request).await
-            }
-            .boxed()
-        });
-        let endpoint = self
-            .scopes
-            .bind(
-                &self.coordination_socket(&job.job_id),
-                job.job_id.clone(),
-                handler,
-            )
-            .await?;
-        endpoints.insert(job.job_id.clone(), endpoint);
-        Ok(())
-    }
-
-    pub(super) async fn close_endpoint(&self, id: &JobId) {
-        let endpoint = self.endpoints.lock().await.remove(id);
+        let endpoint = self.endpoint.lock().await.take();
         if let Some(endpoint) = endpoint {
             endpoint.close().await;
         }
     }
 
-    pub(crate) async fn verify_peer(
-        &self,
-        id: &JobId,
-        peer: crate::platform::process::ProcessInstance,
-    ) -> Result<super::context::ProvenCaller> {
-        let view = self.read(id).await?;
-        let proven = self.gateway()?.job_process_context(peer).await?;
-        ensure!(
-            view.job.execution.conversation() == Some(&proven.conversation),
-            "scoped socket does not belong to the actual calling provider process; capture context before detaching"
+    pub(super) async fn ensure_endpoint(&self) -> Result<()> {
+        let mut endpoint = self.endpoint.lock().await;
+        if endpoint.is_some() {
+            return Ok(());
+        }
+        let gateway = Arc::downgrade(&self.gateway()?);
+        let handler: super::routes::ScopedHandler = Arc::new(move |peer, request| {
+            let gateway = gateway.clone();
+            async move {
+                let Some(gateway) = gateway.upgrade() else {
+                    return Err(crate::rpc::RpcError::draining());
+                };
+                gateway.scoped_job_rpc(peer, request).await
+            }
+            .boxed()
+        });
+        *endpoint = Some(
+            self.scopes
+                .bind(&self.coordination_socket()?, handler)
+                .await?,
         );
-        ensure!(
-            view.agent
-                .as_ref()
-                .and_then(|agent| agent.latest_job_id.as_ref())
-                == Some(id),
-            "scoped socket belongs to a superseded job"
-        );
-        Ok(proven)
+        Ok(())
     }
 
     pub(crate) fn notify_provider_event(&self, message: &serde_json::Value) {
