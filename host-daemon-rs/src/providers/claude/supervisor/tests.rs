@@ -988,11 +988,7 @@ async fn deleted_recorded_cwd_resumes_the_exact_transcript_in_an_existing_record
     fs::create_dir_all(duplicate.parent().unwrap()).unwrap();
     fs::copy(&transcript, &duplicate).unwrap();
     let error = agent.spawn_runtime(&turn, &full).err().unwrap();
-    assert!(
-        error.message.contains("duplicate Claude session UUID"),
-        "{}",
-        error.message
-    );
+    assert!(error.message.contains("duplicate Claude session UUID"));
 }
 
 #[tokio::test]
