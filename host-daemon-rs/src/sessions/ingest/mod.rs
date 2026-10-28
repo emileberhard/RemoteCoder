@@ -222,7 +222,7 @@ pub(super) fn scan_serving(
             .filter(|o| o.host == host)
             .any(|o| !o.path().is_dir());
         let errors:i64=db.query_row("SELECT count(*) FROM source WHERE origin_host=?1 AND failure IS NOT NULL AND failure<>'partial_record'",[&host],|r|r.get(0))?;
-        let unavailable:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM source WHERE origin_host=?1 AND failure IS NOT NULL) OR EXISTS(SELECT 1 FROM dependency d JOIN source s USING(source_id) WHERE s.origin_host=?1 AND d.present=0)",[&host],|r|r.get(0))?;
+        let unavailable:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM source WHERE origin_host=?1 AND failure IS NOT NULL) OR EXISTS(SELECT 1 FROM dependency d CROSS JOIN source s USING(source_id) WHERE d.present=0 AND s.origin_host=?1)",[&host],|r|r.get(0))?;
         let reason = if absent {
             Some("provider_unavailable")
         } else if errors > 0 {

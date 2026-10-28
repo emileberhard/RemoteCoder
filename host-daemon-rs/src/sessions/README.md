@@ -53,7 +53,7 @@ ten minutes, resetting on success. One storage writer serves
 each batch of at most 32 sources. Missing sources reclaim their catalog rows
 and emit feed tombstones through this same ingest owner. An unavailable provider
 root preserves its rows and reports provider_unavailable instead of deletions. Source/dependency path
-indexes bound incremental discovery; unchanged history is not walked per event. It reuses the provider bounded-line reader
+indexes bound incremental discovery; exact and subtree paths use separate indexed ranges, and dependency-driven checks join their source by primary key. Unchanged history is not walked per event. It reuses the provider bounded-line reader
 and FileRevision. Changed prefixes rebuild one source transactionally; verified
 append prefixes continue at the last complete record. Malformed or oversized
 records retain accepted data and surface incomplete coverage. Missing dependencies
