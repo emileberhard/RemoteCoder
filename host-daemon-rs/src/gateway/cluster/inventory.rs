@@ -298,33 +298,17 @@ impl Gateway {
         if found.is_some() {
             return Ok(found);
         }
-        let mut cursor = None;
-        let mut found = None;
-        loop {
-            let page = self.session_inventory(cursor, 1000).await?;
-            for session in page.sessions {
-                if session.host_id == identity.host_id
-                    && session.source_present
-                    && (session.thread_id == target || session.thread_id.ends_with(target))
-                {
-                    if found.is_some() {
-                        return Err(cluster_error(
-                            ErrorClass::Usage,
-                            "conversation selector is ambiguous; use an exact address",
-                        )
-                        .into());
-                    }
-                    found = Some(
-                        json!({"ownerHostId":identity.host_id,"threadId":session.thread_id,"jobId":null,"kind":"native"}),
-                    );
-                }
-            }
-            cursor = page.cursor;
-            if cursor.is_none() {
-                break;
-            }
-        }
-        Ok(found)
+        let matches = self.session_thread_suffix(target).await?;
+        ensure!(
+            matches.len() < 2,
+            cluster_error(
+                ErrorClass::Usage,
+                "conversation selector is ambiguous; use an exact address"
+            )
+        );
+        Ok(matches.into_iter().next().map(|session| {
+            json!({"ownerHostId":session.host_id,"threadId":session.thread_id,"jobId":null,"kind":"native"})
+        }))
     }
 
     pub(super) async fn resolve_cluster_agent(&self, params: Value, peer: bool) -> Result<Value> {
@@ -484,7 +468,6 @@ mod tests {
         }
         let gateway = crate::test_support::TestGateway::with_native_runtime(root);
         gateway.sessions_runtime().await.unwrap();
-        gateway.stop_sessions().await;
         assert_eq!(
             gateway
                 .session_inventory(None, 1000)
@@ -494,6 +477,7 @@ mod tests {
                 .len(),
             128
         );
+        gateway.stop_sessions().await;
         let file = std::fs::OpenOptions::new()
             .read(true)
             .write(true)
@@ -579,6 +563,8 @@ mod tests {
             .parent()
             .unwrap()
             .join("sessions/v1");
+        drop(gateway);
+        let gateway = crate::test_support::TestGateway::with_native_runtime(directory.path());
         let file = std::fs::OpenOptions::new()
             .read(true)
             .write(true)
@@ -631,5 +617,64 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(page["coverage"][0]["state"], "ok", "{page}");
+        gateway.stop_sessions().await;
+    }
+
+    #[tokio::test]
+    async fn sessions_native_suffix_resolution_catches_new_files_and_preserves_ambiguity() {
+        let directory = tempfile::tempdir().unwrap();
+        let sessions = directory.path().join("codex/sessions/2026/10/29");
+        std::fs::create_dir_all(&sessions).unwrap();
+        let write = |id: &str| {
+            let metadata = json!({"type":"session_meta","payload":{"id":id,"source":"cli"}});
+            std::fs::write(
+                sessions.join(format!("{id}.jsonl")),
+                format!("{metadata}\n"),
+            )
+            .unwrap();
+        };
+        write("native-one-needle");
+        let gateway = crate::test_support::TestGateway::with_native_runtime(directory.path());
+        let found = gateway
+            .resolve_local_agent("needle")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(found["threadId"], "native-one-needle");
+        assert_eq!(found["kind"], "native");
+        assert_eq!(found["jobId"], Value::Null);
+        assert_eq!(
+            found["ownerHostId"],
+            gateway.host_identity().await.unwrap().host_id
+        );
+        assert!(
+            gateway
+                .resolve_local_agent("missing")
+                .await
+                .unwrap()
+                .is_none()
+        );
+        write("native-two-signal");
+        let discovered = gateway
+            .resolve_local_agent("signal")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(discovered["threadId"], "native-two-signal");
+        write("native-three-needle");
+        gateway.session_inventory(None, 1000).await.unwrap();
+        gateway.stop_sessions().await;
+        let error = gateway.resolve_local_agent("needle").await.unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("conversation selector is ambiguous")
+        );
+        let exact = gateway
+            .resolve_local_agent("native-one-needle")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(exact["threadId"], "native-one-needle");
     }
 }

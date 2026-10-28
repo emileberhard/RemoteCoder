@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::fs::{File, OpenOptions};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 pub(crate) const CAP_BYTES: u64 = 64 << 30;
@@ -13,6 +13,7 @@ pub(crate) struct Storage {
     root: PathBuf,
     database: PathBuf,
     cache: Mutex<Cache>,
+    gate: Arc<Gate>,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -39,6 +40,7 @@ impl Storage {
                 .context("Session state needs a directory")?
                 .to_owned(),
             database: database.to_owned(),
+            gate: Arc::new(Gate::default()),
             cache: Mutex::new(Cache {
                 other_bytes: 0,
                 reconciled_ms: 0,
@@ -182,6 +184,7 @@ impl Storage {
     }
 
     pub fn lease(&self, incoming: u64) -> Result<Lease> {
+        let permit = self.gate.enter()?;
         let lock = OpenOptions::new()
             .read(true)
             .write(true)
@@ -190,8 +193,9 @@ impl Storage {
             .mode(0o600)
             .custom_flags(libc::O_NOFOLLOW)
             .open(self.path(".storage.lock"))?;
-        let lock = Lease::acquire(lock)
+        let mut lock = Lease::acquire(lock)
             .context("unavailable: another session writer owns the storage budget")?;
+        lock._permit = Some(permit);
         let cache = self.load_cache()?;
         let stale = cache.as_ref().is_none_or(|cache| {
             milliseconds().map_or(true, |now| {
@@ -267,18 +271,52 @@ fn file_bytes(path: &Path) -> Result<u64> {
     }
 }
 
-pub(crate) struct Lease(File);
+#[derive(Default)]
+struct Gate(Mutex<bool>, Condvar);
+
+impl Gate {
+    fn enter(self: &Arc<Self>) -> Result<Permit> {
+        let busy = self.0.lock().expect("Session storage gate poisoned");
+        let (mut busy, _) = self
+            .1
+            .wait_timeout_while(busy, Duration::from_secs(5), |busy| *busy)
+            .expect("Session storage gate poisoned");
+        ensure!(
+            !*busy,
+            "unavailable: session storage admission exceeded five seconds"
+        );
+        *busy = true;
+        Ok(Permit(self.clone()))
+    }
+}
+
+struct Permit(Arc<Gate>);
+
+impl Drop for Permit {
+    fn drop(&mut self) {
+        *self.0.0.lock().expect("Session storage gate poisoned") = false;
+        self.0.1.notify_one();
+    }
+}
+
+pub(crate) struct Lease {
+    file: File,
+    _permit: Option<Permit>,
+}
 
 impl Lease {
     pub fn acquire(file: File) -> Result<Self> {
         file.try_lock()?;
-        Ok(Self(file))
+        Ok(Self {
+            file,
+            _permit: None,
+        })
     }
 }
 
 impl Drop for Lease {
     fn drop(&mut self) {
-        if let Err(error) = self.0.unlock() {
+        if let Err(error) = self.file.unlock() {
             tracing::error!(%error,"Session storage lease could not unlock");
         }
     }
@@ -293,7 +331,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let storage = Storage::new(&root.path().join("catalog.sqlite3")).unwrap();
         let lease = storage.lease(0).unwrap();
-        let inherited = lease.0.try_clone().unwrap();
+        let inherited = lease.file.try_clone().unwrap();
         drop(lease);
         let next = storage.lease(0).unwrap();
         drop(inherited);

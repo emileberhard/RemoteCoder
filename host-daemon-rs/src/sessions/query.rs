@@ -90,20 +90,9 @@ pub(crate) fn inventory(
         (1..=1000).contains(&limit),
         "Inventory limit must be 1..=1000"
     );
-    let mut statement=db.prepare("SELECT s.session_key,s.origin_host,s.provider,s.thread_id,s.cwd,s.title,s.started_at,s.last_at,s.parent_session_key,src.present FROM session s JOIN source src USING(source_id) WHERE (?1 IS NULL OR s.session_key>?1) ORDER BY s.session_key LIMIT ?2")?;
-    let rows = statement.query_map(params![after, limit as i64 + 1], |r| {
-        Ok(SessionHeader {
-            session_key: r.get(0)?,
-            host_id: r.get(1)?,
-            provider: r.get(2)?,
-            thread_id: r.get(3)?,
-            cwd: r.get(4)?,
-            title: r.get(5)?,
-            started_at: r.get(6)?,
-            last_at: r.get(7)?,
-            parent_session_key: r.get(8)?,
-            source_present: r.get(9)?,
-        })
+    let mut statement=db.prepare("SELECT s.session_key,s.origin_host,s.provider,s.thread_id,s.cwd,s.title,s.started_at,s.last_at,s.parent_session_key,src.present FROM session s JOIN source src USING(source_id) WHERE s.session_key>?1 ORDER BY s.session_key LIMIT ?2")?;
+    let rows = statement.query_map(params![after.unwrap_or(""), limit as i64 + 1], |r| {
+        session_header(r)
     })?;
     let mut sessions = Vec::new();
     let mut bytes = 65536;
@@ -128,6 +117,44 @@ pub(crate) fn inventory(
         None
     };
     Ok(SessionPage { sessions, cursor })
+}
+
+fn session_header(r: &rusqlite::Row<'_>) -> rusqlite::Result<SessionHeader> {
+    Ok(SessionHeader {
+        session_key: r.get(0)?,
+        host_id: r.get(1)?,
+        provider: r.get(2)?,
+        thread_id: r.get(3)?,
+        cwd: r.get(4)?,
+        title: r.get(5)?,
+        started_at: r.get(6)?,
+        last_at: r.get(7)?,
+        parent_session_key: r.get(8)?,
+        source_present: r.get(9)?,
+    })
+}
+
+pub(super) const THREAD_SUFFIX_SQL: &str = "SELECT s.session_key,s.origin_host,s.provider,s.thread_id,s.cwd,s.title,s.started_at,s.last_at,s.parent_session_key,src.present FROM session s JOIN source src USING(source_id) WHERE s.origin_host=?1 AND s.thread_id_reversed>=?2 AND s.thread_id_reversed<?3 AND src.present=1 LIMIT 2";
+
+pub(crate) fn match_thread_suffix(
+    db: &super::store::Reader,
+    host: &str,
+    suffix: &str,
+) -> Result<Vec<SessionHeader>> {
+    ensure!(
+        !suffix.is_empty() && suffix.len() <= 512,
+        "Thread suffix must be 1..=512 UTF-8 bytes"
+    );
+    let lower: Vec<_> = suffix.bytes().rev().collect();
+    let mut upper = lower.clone();
+    let last = upper.last_mut().context("Empty thread suffix")?;
+    *last = last
+        .checked_add(1)
+        .context("Thread suffix has no upper bound")?;
+    Ok(db
+        .prepare(THREAD_SUFFIX_SQL)?
+        .query_map(params![host, lower, upper], session_header)?
+        .collect::<rusqlite::Result<_>>()?)
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -210,6 +237,8 @@ pub(crate) struct SourceRef {
     pub sidecars: Vec<String>,
 }
 
+pub(super) const SESSION_TARGET_SQL: &str = "WITH candidates AS (SELECT session_key FROM session WHERE session_key=?1 UNION SELECT session_key FROM (SELECT session_key FROM session WHERE thread_id=?1 LIMIT 2) UNION SELECT session_key FROM (SELECT session_key FROM session WHERE origin_host=?2 AND thread_id=?3 LIMIT 2) LIMIT 2) SELECT src.local_path,src.present FROM candidates JOIN session s USING(session_key) JOIN source src USING(source_id)";
+
 pub(crate) fn read(db: &super::store::Reader, request: ReadRequest) -> Result<Value> {
     let length = request.length.unwrap_or(64 * 1024);
     ensure!(
@@ -253,11 +282,17 @@ pub(crate) fn read(db: &super::store::Reader, request: ReadRequest) -> Result<Va
             request.dependency.is_none(),
             "Dependencies require an item key"
         );
-        let mut stmt=db.prepare("SELECT src.local_path,src.present FROM session s JOIN source src USING(source_id) WHERE s.session_key=?1 OR s.thread_id=?1 OR s.origin_host||':'||s.thread_id=?1 LIMIT 2")?;
+        let address = request.target.split_once(':');
+        let mut stmt = db.prepare(SESSION_TARGET_SQL)?;
         let matches = stmt
-            .query_map([&request.target], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
-            })?
+            .query_map(
+                params![
+                    request.target,
+                    address.map(|(host, _)| host),
+                    address.map(|(_, thread)| thread)
+                ],
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)),
+            )?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         ensure!(
             !matches.is_empty(),

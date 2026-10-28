@@ -7,13 +7,15 @@ CREATE TABLE IF NOT EXISTS source (
  file_identity TEXT NOT NULL, size INTEGER NOT NULL, mtime_ns INTEGER NOT NULL,
  ingested_offset INTEGER NOT NULL, revision INTEGER NOT NULL, present INTEGER NOT NULL,
  prefix_hash TEXT NOT NULL, parser_state TEXT NOT NULL, failure TEXT,
+ append_state TEXT NOT NULL DEFAULT '{}',
  UNIQUE(origin_host,path));
 CREATE TABLE IF NOT EXISTS session (
  session_key TEXT PRIMARY KEY, origin_host TEXT NOT NULL, provider TEXT NOT NULL,
- provider_home TEXT NOT NULL, thread_id TEXT NOT NULL, cwd TEXT, title TEXT,
+ provider_home TEXT NOT NULL, thread_id TEXT NOT NULL, thread_id_reversed BLOB NOT NULL, cwd TEXT, title TEXT,
  started_at TEXT, last_at TEXT, parent_session_key TEXT,
  source_id INTEGER NOT NULL UNIQUE REFERENCES source);
 CREATE INDEX IF NOT EXISTS session_thread ON session(thread_id,origin_host);
+CREATE INDEX IF NOT EXISTS session_thread_suffix ON session(origin_host,thread_id_reversed);
 CREATE TABLE IF NOT EXISTS turn (
  session_key TEXT NOT NULL REFERENCES session ON DELETE CASCADE, turn_id TEXT NOT NULL,
  seq INTEGER NOT NULL, started_at TEXT, ended_at TEXT, status TEXT, model TEXT,
@@ -71,3 +73,9 @@ CREATE TABLE IF NOT EXISTS mirror_file (
  origin_host TEXT NOT NULL, path TEXT NOT NULL, identity TEXT NOT NULL,
  size INTEGER NOT NULL, received INTEGER NOT NULL, local_path TEXT NOT NULL,
  PRIMARY KEY(origin_host,path));
+
+CREATE INDEX IF NOT EXISTS dependency_path ON dependency(path,source_id);
+CREATE INDEX IF NOT EXISTS source_failures ON source(origin_host) WHERE failure IS NOT NULL;
+CREATE INDEX IF NOT EXISTS dependency_missing ON dependency(source_id) WHERE present=0;
+
+CREATE INDEX IF NOT EXISTS source_recent ON source(origin_host,provider,provider_home,mtime_ns DESC) WHERE present=1;

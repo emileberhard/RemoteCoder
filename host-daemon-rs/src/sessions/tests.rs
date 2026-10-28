@@ -257,9 +257,11 @@ fn sessions_evidence_survives_append_rewrite_and_exact_paging() {
     );
     std::fs::remove_file(&f.claude).unwrap();
     scan(&f);
-    assert_eq!(
-        search(&f.store, "sidecarrewritten")["hits"][0]["sourceDeleted"],
-        true
+    assert!(
+        search(&f.store, "sidecarrewritten")["hits"]
+            .as_array()
+            .unwrap()
+            .is_empty()
     );
 }
 
@@ -442,6 +444,7 @@ fn sessions_previous_schema_rebuilds_projection_and_expires_cursor() {
 fn sessions_spawn_then_resolve_catches_up_before_worker_scan() {
     let f = fixture();
     scan(&f);
+    let worker = super::worker::Worker::start(f.store.clone(), f.origins.clone()).unwrap();
     let new = f.codex.with_file_name("newly-spawned.jsonl");
     write(
         &new,
@@ -450,9 +453,10 @@ fn sessions_spawn_then_resolve_catches_up_before_worker_scan() {
             json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"afteridentityneedle"}]}}),
         ],
     );
-    ingest::refresh_inventory(&f.store, &f.origins).unwrap();
+    ingest::refresh_inventory(&f.store).unwrap();
     let page = query::inventory(&f.store.reader().unwrap(), None, 1000).unwrap();
     assert!(page.sessions.iter().any(|h| h.thread_id == "newly-spawned"));
+    worker.stop().unwrap();
     scan(&f);
     assert_eq!(
         search(&f.store, "afteridentityneedle")["hits"]
@@ -461,8 +465,11 @@ fn sessions_spawn_then_resolve_catches_up_before_worker_scan() {
             .len(),
         1
     );
+    let next = Store::open(f.store.path.clone()).unwrap();
+    let worker = super::worker::Worker::start(next.clone(), f.origins.clone()).unwrap();
     std::fs::write(f.codex.with_file_name("pending-identity.jsonl"), b"{").unwrap();
-    assert!(ingest::refresh_inventory(&f.store, &f.origins).is_err());
+    assert!(ingest::refresh_inventory(&next).is_err());
+    worker.stop().unwrap();
 }
 
 #[test]
@@ -596,6 +603,27 @@ async fn sessions_mirror_preserves_sidecars_and_refuses_over_budget() {
         .unwrap();
     assert!(watermark.is_some());
     assert_eq!(watermark, previous);
+    std::fs::remove_dir_all(f.claude.parent().unwrap()).unwrap();
+    scan(&f);
+    mirror::sync(
+        &target,
+        "fixture",
+        call,
+        tokio_util::sync::CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    let remaining: i64 = target
+        .reader()
+        .unwrap()
+        .query_row(
+            "SELECT count(*) FROM session WHERE provider='claude'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(remaining, 0);
+
     assert!(super::storage::admit(64 << 30, 1, 100 << 30).is_err());
     assert!(super::storage::admit(0, 1, 19 << 30).is_err());
     assert!(super::storage::admit(0, 1, 30 << 30).is_ok());
@@ -688,6 +716,9 @@ fn sessions_measure_corpus() -> Result<()> {
     let manifest = std::env::var("RC_SESSIONS_MEASURE_ORIGINS")?;
     let origins: Vec<Origin> = serde_json::from_slice(&std::fs::read(manifest)?)?;
     let store = Store::open(PathBuf::from(std::env::var("RC_SESSIONS_MEASURE_DB")?))?;
+    if let Ok(mode) = std::env::var("RC_SESSIONS_MEASURE_IDLE") {
+        return super::idle_measurement::run(&store, &origins, &mode);
+    }
     let started = Instant::now();
     let outcome = ingest::scan(&store, &origins, &AtomicBool::new(false))?;
     let ingest_seconds = started.elapsed().as_secs_f64();
@@ -1008,4 +1039,584 @@ fn sessions_measure_populated_mirror() -> Result<()> {
     )?;
     println!("{report}");
     Ok(())
+}
+
+#[test]
+fn sessions_scoped_reconcile_reclaims_deleted_sources_and_updates_sidecars() {
+    let f = fixture();
+    scan(&f);
+    std::fs::remove_file(&f.codex).unwrap();
+    std::fs::write(&f.sidecar, "changedsidecarevidence").unwrap();
+    let paths = [f.codex.clone(), f.sidecar.parent().unwrap().to_owned()];
+    let result = ingest::scan_scope(
+        &f.store,
+        &f.origins,
+        ingest::Scope::Changed(&paths),
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+    assert_eq!(result["parseFailures"], 0);
+    assert!(
+        search(&f.store, "codexmiddle")["hits"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        search(&f.store, "changedsidecarevidence")["hits"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    let db = f.store.reader().unwrap();
+    let remaining: i64 = db
+        .query_row("SELECT count(*) FROM session", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(remaining, 3);
+    let deleted: i64 = db
+        .query_row(
+            "SELECT count(*) FROM source WHERE local_path=?1",
+            [f.codex.to_string_lossy().as_ref()],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(deleted, 0);
+    let tombstones: i64 = db
+        .query_row(
+            "SELECT count(*) FROM change WHERE entity='session' AND op='tombstone'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(tombstones > 0);
+    drop(db);
+    std::fs::write(&f.codex, "malformed outside the scoped subtree\n").unwrap();
+    std::fs::write(&f.sidecar, "anotherchangedsidecar").unwrap();
+    ingest::scan_scope(
+        &f.store,
+        &f.origins,
+        ingest::Scope::Changed(&[f.claude.parent().unwrap().to_owned()]),
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+    assert_eq!(
+        search(&f.store, "anotherchangedsidecar")["hits"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    let count: i64 = f
+        .store
+        .reader()
+        .unwrap()
+        .query_row(
+            "SELECT count(*) FROM source WHERE local_path=?1",
+            [f.codex.to_string_lossy().as_ref()],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(count, 0);
+}
+
+#[test]
+fn sessions_missing_provider_root_preserves_rows_without_tombstones() {
+    let f = fixture();
+    scan(&f);
+    let counts = || {
+        f.store.reader().unwrap().query_row(
+            "SELECT (SELECT count(*) FROM session), (SELECT count(*) FROM source), (SELECT count(*) FROM change WHERE op='tombstone')",
+            [],
+            |row| Ok((row.get::<_,i64>(0)?, row.get::<_,i64>(1)?, row.get::<_,i64>(2)?)),
+        ).unwrap()
+    };
+    let before = counts();
+    std::fs::remove_dir_all(f.origins[0].path()).unwrap();
+    scan(&f);
+    assert_eq!(counts(), before);
+    ingest::scan_scope(
+        &f.store,
+        &f.origins,
+        ingest::Scope::Changed(&[f.origins[0].path()]),
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+    assert_eq!(counts(), before);
+    let reason: String = f
+        .store
+        .reader()
+        .unwrap()
+        .query_row(
+            "SELECT stale_reason FROM coverage WHERE origin_host='fixture'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(reason, "provider_unavailable");
+}
+
+#[test]
+fn sessions_inventory_accepts_known_exact_duplicates_without_transferring_ownership() {
+    let f = fixture();
+    scan(&f);
+    let duplicate = f.codex.with_file_name("duplicate.jsonl");
+    std::fs::copy(&f.codex, &duplicate).unwrap();
+    assert_eq!(scan(&f)["parseFailures"], 1);
+    let mut db = f.store.writer().unwrap();
+    let owner: i64 = db
+        .query_row(
+            "SELECT source_id FROM session WHERE thread_id='codex-root'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    ingest::header(&mut db, &f.origins[0], &duplicate, &AtomicBool::new(false)).unwrap();
+    let after: i64 = db
+        .query_row(
+            "SELECT source_id FROM session WHERE thread_id='codex-root'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(owner, after);
+    let failures: i64 = db
+        .query_row(
+            "SELECT count(*) FROM source WHERE failure IS NOT NULL",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(failures, 1);
+    let headers: i64 = db
+        .query_row("SELECT count(*) FROM session", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(headers, 4);
+}
+
+#[test]
+fn sessions_claude_filename_owns_inherited_queue_identity() {
+    let f = fixture();
+    let path = f.claude.with_file_name("fork.jsonl");
+    write(
+        &path,
+        &[
+            json!({"type":"queue-operation","sessionId":"root"}),
+            json!({"type":"user","sessionId":"root","message":{"content":"inheritedqueuefixture"}}),
+        ],
+    );
+    assert_eq!(scan(&f)["parseFailures"], 0);
+    let db = f.store.reader().unwrap();
+    let owner: String = db.query_row("SELECT src.local_path FROM session s JOIN source src USING(source_id) WHERE s.thread_id='claude_fork'", [], |row|row.get(0)).unwrap();
+    assert_eq!(Path::new(&owner), path);
+}
+
+#[test]
+fn sessions_claude_workflow_children_keep_the_session_ancestor() {
+    let f = fixture();
+    let path = f
+        .claude
+        .with_extension("")
+        .join("subagents/workflows/workflow/agent-nested.jsonl");
+    write(
+        &path,
+        &[json!({"type":"user","sessionId":"root","message":{"content":"workflowchildfixture"}})],
+    );
+    assert_eq!(scan(&f)["parseFailures"], 0);
+    let db = f.store.reader().unwrap();
+    let parent: String = db.query_row("SELECT p.thread_id FROM session c JOIN session p ON p.session_key=c.parent_session_key WHERE c.thread_id='claude:root:nested'", [], |row|row.get(0)).unwrap();
+    assert_eq!(parent, "claude_root");
+}
+
+#[test]
+fn sessions_claude_workflow_journals_are_not_transcripts() {
+    let f = fixture();
+    let path = f
+        .claude
+        .with_extension("")
+        .join("subagents/workflows/workflow/journal.jsonl");
+    write(&path, &[json!({"type":"started","agentId":"fixture"})]);
+    assert_eq!(scan(&f)["parseFailures"], 0);
+    assert!(!f.origins[1].is_transcript(&path));
+    let count: i64 = f
+        .store
+        .reader()
+        .unwrap()
+        .query_row(
+            "SELECT count(*) FROM source WHERE local_path=?1",
+            [path.to_string_lossy().as_ref()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(count, 0);
+}
+
+#[test]
+fn sessions_claude_tool_result_jsonl_stays_evidence() {
+    let f = fixture();
+    let path = f
+        .claude
+        .with_extension("")
+        .join("tool-results/records.jsonl");
+    write(
+        &path,
+        &[json!({"type":"user","sessionId":"root","message":{"content":"toolresultjsonlfixture"}})],
+    );
+    assert_eq!(scan(&f)["parseFailures"], 0);
+    assert!(!f.origins[1].is_transcript(&path));
+    let db = f.store.reader().unwrap();
+    let count: i64 = db
+        .query_row(
+            "SELECT count(*) FROM source WHERE local_path=?1",
+            [path.to_string_lossy().as_ref()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(count, 0);
+    let evidence: i64 = db
+        .query_row(
+            "SELECT count(*) FROM dependency WHERE local_path=?1",
+            [path.to_string_lossy().as_ref()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(evidence, 1);
+}
+
+#[test]
+fn sessions_read_seeks_all_address_forms_and_rejects_ambiguous_ids() {
+    let f = fixture();
+    scan(&f);
+    let canonical: String = f
+        .store
+        .reader()
+        .unwrap()
+        .query_row(
+            "SELECT session_key FROM session WHERE thread_id='codex-root'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let read = |target: &str| {
+        query::read(
+            &f.store.reader().unwrap(),
+            query::ReadRequest {
+                target: target.into(),
+                offset: 0,
+                length: Some(4 << 20),
+                dependency: None,
+            },
+        )
+    };
+    let expected = std::fs::read(&f.codex).unwrap();
+    for address in [&canonical, "codex-root", "fixture:codex-root"] {
+        let result = read(address).unwrap();
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(result["base64"].as_str().unwrap())
+            .unwrap();
+        assert_eq!(bytes, expected);
+    }
+    assert!(
+        read("absent-session")
+            .unwrap_err()
+            .to_string()
+            .starts_with("not_found:")
+    );
+    let mut other = f.origins[0].clone();
+    other.host = "other".into();
+    ingest::scan(&f.store, &[other], &AtomicBool::new(false)).unwrap();
+    assert!(
+        read("codex-root")
+            .unwrap_err()
+            .to_string()
+            .starts_with("usage: ambiguous")
+    );
+    assert!(read(&canonical).is_ok());
+    assert!(read("fixture:codex-root").is_ok());
+    assert!(read("other:codex-root").is_ok());
+}
+
+#[test]
+fn sessions_claude_empty_transcripts_keep_path_headers_through_content_ingest() {
+    let f = fixture();
+    let path = f.claude.with_file_name("empty.jsonl");
+    std::fs::write(&path, b"").unwrap();
+    let mut db = f.store.writer().unwrap();
+    ingest::header(&mut db, &f.origins[1], &path, &AtomicBool::new(false)).unwrap();
+    drop(db);
+    assert_eq!(scan(&f)["parseFailures"], 0);
+    let headers = query::inventory(&f.store.reader().unwrap(), None, 1000).unwrap();
+    let header = headers
+        .sessions
+        .iter()
+        .find(|header| header.thread_id == "claude_empty")
+        .unwrap();
+    assert!(header.cwd.is_none());
+    assert!(header.title.is_none());
+    assert!(header.started_at.is_none());
+    assert!(header.last_at.is_none());
+    let turns: i64 = f
+        .store
+        .reader()
+        .unwrap()
+        .query_row(
+            "SELECT count(*) FROM turn WHERE session_key=?1",
+            [&header.session_key],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(turns, 0);
+}
+
+#[test]
+fn sessions_thread_suffix_seeks_unique_ambiguous_and_missing_keys() {
+    let f = fixture();
+    scan(&f);
+    let db = f.store.reader().unwrap();
+    let unique = query::match_thread_suffix(&db, "fixture", "codex-root").unwrap();
+    assert_eq!(unique.len(), 1);
+    assert_eq!(unique[0].thread_id, "codex-root");
+    assert_eq!(
+        query::match_thread_suffix(&db, "fixture", "root")
+            .unwrap()
+            .len(),
+        2
+    );
+    assert!(
+        query::match_thread_suffix(&db, "fixture", "absent")
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        query::match_thread_suffix(&db, "other-host", "root")
+            .unwrap()
+            .is_empty()
+    );
+    assert!(query::match_thread_suffix(&db, "fixture", "").is_err());
+    let lower = b"toor";
+    let upper = b"toos";
+    let plan: Vec<String> = db
+        .prepare(&format!("EXPLAIN QUERY PLAN {}", query::THREAD_SUFFIX_SQL))
+        .unwrap()
+        .query_map(rusqlite::params!["fixture", lower, upper], |row| row.get(3))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert!(plan.iter().any(
+        |step| step.contains("SEARCH s USING INDEX session_thread_suffix")
+            && step.contains("thread_id_reversed>?")
+            && step.contains("thread_id_reversed<?")
+    ));
+}
+
+#[test]
+fn sessions_incremental_append_preserves_items_and_reconcile_verifies_the_chain() {
+    let f = fixture();
+    scan(&f);
+    let old_key = search(&f.store, "codexmiddle")["hits"][0]["itemKey"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let old_revision: i64 = f
+        .store
+        .reader()
+        .unwrap()
+        .query_row(
+            "SELECT revision FROM item WHERE item_key=?1",
+            [&old_key],
+            |row| row.get(0),
+        )
+        .unwrap();
+    for text in ["firstchainappend", "secondchainappend"] {
+        writeln!(OpenOptions::new().append(true).open(&f.codex).unwrap(), "{}", json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":text}]}})).unwrap();
+        let result = ingest::scan_scope(
+            &f.store,
+            &f.origins,
+            ingest::Scope::Changed(std::slice::from_ref(&f.codex)),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert_eq!(result["parseFailures"], 0);
+    }
+    let db = f.store.reader().unwrap();
+    let current_revision: i64 = db
+        .query_row(
+            "SELECT revision FROM item WHERE item_key=?1",
+            [&old_key],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(current_revision, old_revision);
+    let (chain, revision, verified): (String,i64,i64) = db.query_row("SELECT prefix_hash,revision,json_extract(append_state,'$.verified_revision') FROM source WHERE local_path=?1", [f.codex.to_string_lossy().as_ref()], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?))).unwrap();
+    assert!(verified < revision);
+    drop(db);
+    assert_eq!(scan(&f)["ingested"], 0);
+    let db = f.store.reader().unwrap();
+    let (current_chain, current_revision, verified): (String,i64,i64) = db.query_row("SELECT prefix_hash,revision,json_extract(append_state,'$.verified_revision') FROM source WHERE local_path=?1", [f.codex.to_string_lossy().as_ref()], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?))).unwrap();
+    assert_eq!(chain, current_chain);
+    assert_eq!(revision, current_revision);
+    assert_eq!(verified, revision);
+    drop(db);
+    let fresh = Store::open(f._directory.path().join("rebuilt/catalog.sqlite3")).unwrap();
+    ingest::scan(&fresh, &f.origins, &AtomicBool::new(false)).unwrap();
+    let rebuilt_chain: String = fresh
+        .reader()
+        .unwrap()
+        .query_row(
+            "SELECT prefix_hash FROM source WHERE local_path=?1",
+            [f.codex.to_string_lossy().as_ref()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(chain, rebuilt_chain);
+}
+
+#[test]
+fn sessions_reconcile_repairs_a_growing_rewrite_that_preserves_both_windows() {
+    use std::io::{Seek, SeekFrom};
+    let f = fixture();
+    scan(&f);
+    let raw = std::fs::read(&f.codex).unwrap();
+    let middle = raw
+        .windows(b"codexmiddle".len())
+        .position(|window| window == b"codexmiddle")
+        .unwrap();
+    assert!(middle > 64 << 10);
+    assert!(raw.len() - middle > 64 << 10);
+    let old_key = search(&f.store, "codexmiddle")["hits"][0]["itemKey"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let mut file = OpenOptions::new().write(true).open(&f.codex).unwrap();
+    file.seek(SeekFrom::Start(middle as u64)).unwrap();
+    file.write_all(b"rewritemid!").unwrap();
+    drop(file);
+    writeln!(OpenOptions::new().append(true).open(&f.codex).unwrap(),"{}",json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"afterhiddenrewrite"}]}})).unwrap();
+    let result = ingest::scan_scope(
+        &f.store,
+        &f.origins,
+        ingest::Scope::Changed(std::slice::from_ref(&f.codex)),
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+    assert_eq!(result["parseFailures"], 0);
+    assert_eq!(
+        search(&f.store, "afterhiddenrewrite")["hits"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        search(&f.store, "codexmiddle")["hits"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        query::read(
+            &f.store.reader().unwrap(),
+            query::ReadRequest {
+                target: old_key,
+                offset: 0,
+                length: None,
+                dependency: None
+            }
+        )
+        .is_err()
+    );
+    assert_eq!(scan(&f)["parseFailures"], 0);
+    assert!(
+        search(&f.store, "codexmiddle")["hits"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        search(&f.store, "rewritemid!")["hits"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn sessions_active_malformed_record_keeps_a_gap_and_indexes_following_appends() {
+    let f = fixture();
+    scan(&f);
+    let append = |text: &str| {
+        writeln!(OpenOptions::new().append(true).open(&f.codex).unwrap(),"{}",json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":text}]}})).unwrap();
+    };
+    let incremental = || {
+        ingest::scan_scope(
+            &f.store,
+            &f.origins,
+            ingest::Scope::Changed(std::slice::from_ref(&f.codex)),
+            &AtomicBool::new(false),
+        )
+        .unwrap()
+    };
+    let gap_start = f.codex.metadata().unwrap().len();
+    writeln!(
+        OpenOptions::new().append(true).open(&f.codex).unwrap(),
+        "{{malformed}}"
+    )
+    .unwrap();
+    append("aftergapfirst");
+    assert_eq!(incremental()["parseFailures"], 1);
+    let first = search(&f.store, "aftergapfirst")["hits"][0]["itemKey"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let revision = || {
+        f.store
+            .reader()
+            .unwrap()
+            .query_row(
+                "SELECT revision FROM item WHERE item_key=?1",
+                [&first],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap()
+    };
+    let before = revision();
+    append("aftergapsecond");
+    assert_eq!(incremental()["parseFailures"], 1);
+    assert_eq!(revision(), before);
+    assert_eq!(
+        search(&f.store, "aftergapsecond")["hits"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    let db = f.store.reader().unwrap();
+    let (offset, failure, state): (i64, String, String) = db
+        .query_row(
+            "SELECT ingested_offset,failure,append_state FROM source WHERE local_path=?1",
+            [f.codex.to_string_lossy().as_ref()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        u64::try_from(offset).unwrap(),
+        f.codex.metadata().unwrap().len()
+    );
+    assert_eq!(failure, "record_gap");
+    let state: Value = serde_json::from_str(&state).unwrap();
+    assert_eq!(state["gap_records"], 1);
+    assert_eq!(state["first_gap"][0], gap_start);
+    let reason: String = db
+        .query_row(
+            "SELECT stale_reason FROM coverage WHERE origin_host='fixture'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(reason, "parse_failure");
+    drop(db);
+    assert_eq!(scan(&f)["ingested"], 0);
+    assert_eq!(revision(), before);
 }

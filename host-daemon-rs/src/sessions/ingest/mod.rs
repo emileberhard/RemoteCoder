@@ -8,7 +8,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{File, Metadata};
-use std::io::{BufReader, Read, Seek, SeekFrom};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -18,13 +18,91 @@ pub(crate) fn identity(metadata: &Metadata) -> String {
     format!("{:?}", FileRevision::from(metadata.clone()))
 }
 
-fn hash_prefix(path: &Path, length: u64) -> Result<String> {
-    let mut hash = blake3::Hasher::new();
-    let copied = std::io::copy(&mut File::open(path)?.take(length), &mut hash)?;
-    ensure!(copied == length, "Source shortened during ingestion");
-    Ok(hash.finalize().to_hex().to_string())
+const FINGERPRINT_WINDOW: u64 = 64 << 10;
+
+struct RecordReader<R: Read> {
+    input: BufReader<R>,
+    hash: blake3::Hasher,
 }
 
+impl<R: Read> RecordReader<R> {
+    fn new(input: R) -> Self {
+        Self {
+            input: BufReader::new(input),
+            hash: blake3::Hasher::new(),
+        }
+    }
+}
+
+impl<R: Read> Read for RecordReader<R> {
+    fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+        let count = self.input.read(bytes)?;
+        self.hash.update(&bytes[..count]);
+        Ok(count)
+    }
+}
+
+impl<R: Read> BufRead for RecordReader<R> {
+    fn fill_buf(&mut self) -> std::io::Result<&[u8]> {
+        self.input.fill_buf()
+    }
+    fn consume(&mut self, length: usize) {
+        self.hash.update(&self.input.buffer()[..length]);
+        self.input.consume(length);
+    }
+}
+
+fn chain_record(previous: blake3::Hash, record: blake3::Hash) -> blake3::Hash {
+    let mut chain = blake3::Hasher::new();
+    chain.update(previous.as_bytes());
+    chain.update(record.as_bytes());
+    chain.finalize()
+}
+
+fn verify_prefix(path: &Path, length: u64, expected: &str, stop: &AtomicBool) -> Result<bool> {
+    let mut reader = RecordReader::new(File::open(path)?.take(length));
+    let mut line = Vec::new();
+    let mut read = 0;
+    let mut chain = blake3::hash(&[]);
+    loop {
+        ensure!(!stop.load(Ordering::Acquire), "Session ingestion cancelled");
+        line.clear();
+        reader.hash.reset();
+        let (count, kind) = read_bounded_line(&mut reader, &mut line, MAX_SESSION_RECORD_BYTES)?;
+        if count == 0 {
+            break;
+        }
+        if kind == LineKind::Partial {
+            return Ok(false);
+        }
+        chain = chain_record(chain, reader.hash.finalize());
+        read += count;
+    }
+    Ok(read == length && chain.to_hex().as_str() == expected)
+}
+
+fn fingerprint(file: &mut File, length: u64) -> Result<(String, String)> {
+    let window = length.min(FINGERPRINT_WINDOW);
+    file.seek(SeekFrom::Start(0))?;
+    let mut head = blake3::Hasher::new();
+    ensure!(
+        std::io::copy(&mut (&mut *file).take(window), &mut head)? == window,
+        "Source shortened during fingerprint"
+    );
+    let head = head.finalize().to_hex().to_string();
+    if length <= FINGERPRINT_WINDOW {
+        return Ok((head.clone(), head));
+    }
+    file.seek(SeekFrom::Start(length - window))?;
+    let mut tail = blake3::Hasher::new();
+    ensure!(
+        std::io::copy(&mut file.take(window), &mut tail)? == window,
+        "Source shortened during fingerprint"
+    );
+    Ok((head, tail.finalize().to_hex().to_string()))
+}
+
+#[cfg(test)]
 pub(crate) fn files(origin: &Origin) -> Result<Vec<PathBuf>> {
     if !origin.path().exists() {
         return Ok(Vec::new());
@@ -32,7 +110,7 @@ pub(crate) fn files(origin: &Origin) -> Result<Vec<PathBuf>> {
     let mut files = Vec::new();
     for entry in WalkDir::new(origin.path()).follow_links(false) {
         let entry = entry?;
-        if entry.file_type().is_file() && entry.path().extension().is_some_and(|e| e == "jsonl") {
+        if entry.file_type().is_file() && origin.is_transcript(entry.path()) {
             ensure!(
                 files.len() < 100_000,
                 "capacity: more than 100000 session sources"
@@ -40,18 +118,17 @@ pub(crate) fn files(origin: &Origin) -> Result<Vec<PathBuf>> {
             files.push(entry.into_path());
         }
     }
-    files.sort_by_key(|path| std::fs::metadata(path).and_then(|m| m.modified()).ok());
+    files.sort_by_cached_key(|path| std::fs::metadata(path).and_then(|m| m.modified()).ok());
     Ok(files)
 }
 
-fn companions(path: &Path) -> Result<Vec<PathBuf>> {
+fn companions(origin: &Origin, path: &Path) -> Result<Vec<PathBuf>> {
     let mut result = Vec::new();
     let directory = path.with_extension("");
     if directory.is_dir() {
         for entry in WalkDir::new(directory).follow_links(false) {
             let entry = entry?;
-            if entry.file_type().is_file() && entry.path().extension().is_none_or(|e| e != "jsonl")
-            {
+            if entry.file_type().is_file() && !origin.is_transcript(entry.path()) {
                 ensure!(
                     result.len() < 100_000,
                     "capacity: too many session companions"
@@ -68,89 +145,217 @@ fn companions(path: &Path) -> Result<Vec<PathBuf>> {
 }
 
 pub(crate) fn scan(store: &Store, origins: &[Origin], stop: &AtomicBool) -> Result<Value> {
-    let mut ingested = 0;
-    let mut failures = 0;
-    let mut hosts = BTreeMap::<String, (bool, usize, bool)>::new();
-    let at = super::now();
-    for origin in origins {
-        let status = hosts.entry(origin.host.clone()).or_default();
-        status.0 |= origin.local_home == origin.provider_home;
-        let mut paths = BTreeSet::new();
+    scan_scope(store, origins, Scope::Full, stop)
+}
 
-        for path in files(origin)? {
-            if stop.load(Ordering::Acquire) {
-                return Ok(serde_json::json!({"cancelled":true}));
+pub(crate) enum Scope<'a> {
+    Full,
+    Changed(&'a [PathBuf]),
+}
+
+pub(super) const SOURCE_SELECTION_SQL: &str = "SELECT path FROM source WHERE origin_host=?1 AND path=?2 UNION SELECT path FROM source WHERE origin_host=?1 AND path>=?3 AND path<?4 UNION SELECT s.path FROM dependency d CROSS JOIN source s USING(source_id) WHERE d.path=?2 AND s.origin_host=?1 AND s.present=1 UNION SELECT s.path FROM dependency d CROSS JOIN source s USING(source_id) WHERE d.path>=?3 AND d.path<?4 AND s.origin_host=?1 AND s.present=1";
+
+fn selected(store: &Store, origin: &Origin, paths: &[PathBuf]) -> Result<BTreeSet<PathBuf>> {
+    let mut selected = BTreeSet::new();
+    let db = store.reader()?;
+    for path in paths {
+        match std::fs::symlink_metadata(path) {
+            Ok(metadata) if metadata.is_file() && origin.is_transcript(path) => {
+                selected.insert(path.clone());
             }
-            let original = origin.original(&path)?.to_string_lossy().into_owned();
-            paths.insert(original.clone());
-            let mut db = store.writer()?;
-            match ingest(&mut db, origin, &path, stop) {
-                Ok(changed) => ingested += usize::from(changed),
-                Err(error) => {
-                    failures += 1;
-                    status.1 += 1;
-                    db.execute("INSERT INTO source(origin_host,provider,provider_home,path,local_path,file_identity,size,mtime_ns,ingested_offset,revision,present,prefix_hash,parser_state,failure) VALUES(?1,?2,?3,?4,?5,'',0,0,0,0,1,'','{}',?6) ON CONFLICT(origin_host,path) DO UPDATE SET failure=excluded.failure",params![origin.host,origin.provider,origin.provider_home.to_string_lossy(),original,path.to_string_lossy(),format!("{error:#}")])?;
+            Ok(metadata) if metadata.is_dir() => {
+                for entry in WalkDir::new(path).follow_links(false) {
+                    let entry = entry?;
+                    if entry.file_type().is_file() && origin.is_transcript(entry.path()) {
+                        selected.insert(entry.into_path());
+                        ensure!(
+                            selected.len() <= 100_000,
+                            "capacity: more than 100000 session sources"
+                        );
+                    }
                 }
             }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
         }
-        let db = store.writer()?;
-        let missing:Vec<(i64,String)>=db.prepare("SELECT source_id,path FROM source WHERE origin_host=?1 AND provider=?2 AND provider_home=?3 AND present=1")?.query_map(params![origin.host,origin.provider,origin.provider_home.to_string_lossy()],|r|Ok((r.get(0)?,r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
-        for (id, path) in missing {
-            if !paths.contains(&path) && !origin.local(Path::new(&path))?.exists() {
-                db.execute("UPDATE source SET present=0,revision=revision+1,failure='source deleted' WHERE source_id=?1",[id])?;
+        let original = origin.original(path)?.to_string_lossy().into_owned();
+        let low = format!("{original}/");
+        let high = format!("{original}0");
+        let known: Vec<String> = db
+            .prepare(SOURCE_SELECTION_SQL)?
+            .query_map(params![origin.host, original, low, high], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        for path in known {
+            selected.insert(origin.local(Path::new(&path))?);
+            ensure!(
+                selected.len() <= 100_000,
+                "capacity: more than 100000 session sources"
+            );
+        }
+    }
+    Ok(selected)
+}
+
+pub(crate) fn scan_scope(
+    store: &Store,
+    origins: &[Origin],
+    scope: Scope<'_>,
+    stop: &AtomicBool,
+) -> Result<Value> {
+    scan_serving(store, origins, scope, stop, &mut |_| Ok(()))
+}
+
+pub(super) fn scan_serving(
+    store: &Store,
+    origins: &[Origin],
+    scope: Scope<'_>,
+    stop: &AtomicBool,
+    between: &mut impl FnMut(&mut Connection) -> Result<()>,
+) -> Result<Value> {
+    let mut ingested = 0;
+    let mut failures = 0;
+    let mut longest_source = 0.0_f64;
+    let mut slow_sources = 0;
+    let mut changed_hosts = BTreeSet::new();
+    let at = super::now();
+    for origin in origins {
+        let root = origin.path();
+        let scopes = match &scope {
+            Scope::Full => vec![root.clone()],
+            Scope::Changed(paths) => paths
+                .iter()
+                .filter_map(|path| {
+                    if path.starts_with(&root) {
+                        Some(path.clone())
+                    } else if root.starts_with(path) {
+                        Some(root.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect(),
+        };
+        if scopes.is_empty() {
+            continue;
+        }
+        changed_hosts.insert(origin.host.clone());
+        if !root.is_dir() {
+            continue;
+        }
+        let paths: Vec<_> = selected(store, origin, &scopes)?.into_iter().collect();
+        for batch in paths.chunks(32) {
+            let mut db = store.writer()?;
+            for path in batch {
+                if stop.load(Ordering::Acquire) {
+                    return Ok(serde_json::json!({"cancelled":true}));
+                }
+                let original = origin.original(path)?.to_string_lossy().into_owned();
+                let gone = match std::fs::symlink_metadata(path) {
+                    Ok(metadata) => !metadata.is_file(),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+                    Err(error) => return Err(error.into()),
+                };
+                if gone {
+                    if !root.is_dir() {
+                        break;
+                    }
+                    let tx =
+                        db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+                    tx.execute("DELETE FROM session WHERE source_id IN (SELECT source_id FROM source WHERE origin_host=?1 AND path=?2)",params![origin.host,original])?;
+                    tx.execute(
+                        "DELETE FROM source WHERE origin_host=?1 AND path=?2",
+                        params![origin.host, original],
+                    )?;
+                    tx.commit()?;
+                    between(&mut db)?;
+                    continue;
+                }
+                let started = std::time::Instant::now();
+                let outcome = match &scope {
+                    Scope::Full => ingest(&mut db, origin, path, stop),
+                    Scope::Changed(_) => {
+                        ingest_source(&mut db, origin, path, stop, ReadMode::Incremental)
+                    }
+                };
+                match outcome {
+                    Ok(changed) => ingested += usize::from(changed),
+                    Err(error) => {
+                        db.execute("INSERT INTO source(origin_host,provider,provider_home,path,local_path,file_identity,size,mtime_ns,ingested_offset,revision,present,prefix_hash,parser_state,failure) VALUES(?1,?2,?3,?4,?5,'',0,0,0,0,1,'','{}',?6) ON CONFLICT(origin_host,path) DO UPDATE SET failure=excluded.failure",params![origin.host,origin.provider,origin.provider_home.to_string_lossy(),original,path.to_string_lossy(),format!("{error:#}")])?;
+                    }
+                }
+                let elapsed = started.elapsed().as_secs_f64();
+                longest_source = longest_source.max(elapsed);
+                slow_sources += usize::from(elapsed > 5.0);
+                between(&mut db)?;
             }
         }
-        status.2 |= !origin.path().exists();
+    }
+    if changed_hosts.is_empty() {
+        return Ok(serde_json::json!({"ingested":0,"parseFailures":0}));
     }
     let db = store.writer()?;
-    for (host, (local, failures, absent)) in hosts {
-        let unavailable: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM source s WHERE s.origin_host=?1 AND s.failure IS NOT NULL) OR EXISTS(SELECT 1 FROM dependency d JOIN source s USING(source_id) WHERE s.origin_host=?1 AND d.present=0)",[&host],|r|r.get(0))?;
-        let reason = if failures > 0 {
-            Some("parse_failure")
-        } else if absent {
+    for host in changed_hosts {
+        let local = origins
+            .iter()
+            .any(|o| o.host == host && o.local_home == o.provider_home);
+        let absent = origins
+            .iter()
+            .filter(|o| o.host == host)
+            .any(|o| !o.path().is_dir());
+        let errors:i64=db.query_row("SELECT count(*) FROM source WHERE origin_host=?1 AND failure IS NOT NULL AND failure<>'partial_record'",[&host],|r|r.get(0))?;
+        failures += usize::try_from(errors)?;
+        let unavailable:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM source WHERE origin_host=?1 AND failure IS NOT NULL) OR EXISTS(SELECT 1 FROM dependency d CROSS JOIN source s USING(source_id) WHERE d.present=0 AND s.origin_host=?1)",[&host],|r|r.get(0))?;
+        let reason = if absent {
             Some("provider_unavailable")
+        } else if errors > 0 {
+            Some("parse_failure")
         } else if unavailable {
             Some("incomplete_evidence")
         } else {
             None
         };
-        db.execute("INSERT INTO coverage(origin_host,mode,indexed_through,complete_through,stale_reason,parse_failures) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(origin_host) DO UPDATE SET indexed_through=excluded.indexed_through,complete_through=CASE WHEN excluded.stale_reason IS NULL AND excluded.mode='local' THEN excluded.complete_through ELSE coverage.complete_through END,stale_reason=excluded.stale_reason,parse_failures=excluded.parse_failures",params![host,if local {"local"} else {"mirror"},at,if local && reason.is_none() {Some(&at)} else {None},reason,failures as i64])?;
+        db.execute("INSERT INTO coverage(origin_host,mode,indexed_through,complete_through,stale_reason,parse_failures) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(origin_host) DO UPDATE SET indexed_through=excluded.indexed_through,complete_through=CASE WHEN excluded.stale_reason IS NULL AND excluded.mode='local' THEN excluded.complete_through ELSE coverage.complete_through END,stale_reason=excluded.stale_reason,parse_failures=excluded.parse_failures",params![host,if local {"local"}else{"mirror"},at,if local&&reason.is_none(){Some(&at)}else{None},reason,errors])?;
     }
     changes::prune(&db)?;
     db.execute_batch("PRAGMA wal_checkpoint(PASSIVE);")?;
-    Ok(serde_json::json!({"ingested":ingested,"parseFailures":failures}))
+    Ok(
+        serde_json::json!({"ingested":ingested,"parseFailures":failures,"longestSourceSeconds":longest_source,"sourcesOverFiveSeconds":slow_sources}),
+    )
 }
 
-pub(crate) fn refresh_inventory(store: &Store, origins: &[Origin]) -> Result<()> {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    let mut db = store.writer()?;
-    for origin in origins {
-        let known:BTreeSet<String>=db.prepare("SELECT path FROM source JOIN session USING(source_id) WHERE source.origin_host=?1 AND source.provider=?2 AND source.provider_home=?3 AND source.present=1")?.query_map(params![origin.host,origin.provider,origin.provider_home.to_string_lossy()],|r|r.get(0))?.collect::<rusqlite::Result<_>>()?;
-        for path in files(origin)? {
-            ensure!(
-                std::time::Instant::now() < deadline,
-                "unavailable: inventory catch-up exceeded five seconds"
-            );
-            let original = origin.original(&path)?.to_string_lossy().into_owned();
-            if !known.contains(&original) {
-                ingest_source(
-                    &mut db,
-                    origin,
-                    &path,
-                    &AtomicBool::new(false),
-                    ReadMode::Inventory,
-                )?;
-                let present:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM source JOIN session USING(source_id) WHERE source.origin_host=?1 AND source.path=?2)",params![origin.host,original],|r|r.get(0))?;
-                ensure!(
-                    present,
-                    "unavailable: transcript exists without a complete identity record"
-                );
+pub(crate) fn refresh_inventory(store: &Store) -> Result<()> {
+    store
+        .worker
+        .get()
+        .context("unavailable: session worker is not running")?
+        .inventory()
+}
+
+pub(super) fn header(
+    db: &mut Connection,
+    origin: &Origin,
+    path: &Path,
+    stop: &AtomicBool,
+) -> Result<()> {
+    if let Err(error) = ingest_source(db, origin, path, stop, ReadMode::Inventory) {
+        if let Some(conflict) = error.downcast_ref::<normalize::IdentityConflict>() {
+            let known: bool = db.query_row(
+                "SELECT EXISTS(SELECT 1 FROM session WHERE session_key=?1)",
+                [&conflict.key],
+                |row| row.get(0),
+            )?;
+            if known {
+                return Ok(());
             }
         }
+        return Err(error);
     }
+    let original = origin.original(path)?.to_string_lossy().into_owned();
+    let present: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM source JOIN session USING(source_id) WHERE source.origin_host=?1 AND source.path=?2)",params![origin.host,original],|r|r.get(0))?;
     ensure!(
-        std::time::Instant::now() < deadline,
-        "unavailable: inventory catch-up exceeded five seconds"
+        present,
+        "unavailable: transcript exists without a complete identity record"
     );
     Ok(())
 }
@@ -158,6 +363,7 @@ pub(crate) fn refresh_inventory(store: &Store, origins: &[Origin]) -> Result<()>
 #[derive(PartialEq, Eq)]
 enum ReadMode {
     Full,
+    Incremental,
     Inventory,
 }
 
@@ -168,6 +374,30 @@ pub(crate) fn ingest(
     stop: &AtomicBool,
 ) -> Result<bool> {
     ingest_source(db, origin, path, stop, ReadMode::Full)
+}
+
+#[derive(Clone, Default, serde::Deserialize, serde::Serialize)]
+#[serde(default)]
+struct AppendState {
+    device: u64,
+    inode: u64,
+    head: String,
+    tail: String,
+    verified_revision: i64,
+    gap_records: u64,
+    first_gap: Option<(u64, u64)>,
+}
+
+struct Previous {
+    id: i64,
+    stamp: String,
+    offset: u64,
+    chain: String,
+    parser: String,
+    revision: i64,
+    present: bool,
+    append: AppendState,
+    size: u64,
 }
 
 fn ingest_source(
@@ -182,142 +412,204 @@ fn ingest_source(
     ensure!(before.is_file(), "Session source is not a regular file");
     let stamp = identity(&before);
     let original = origin.original(path)?.to_string_lossy().into_owned();
-    let prior:Option<(i64,String,i64,String,String,i64,bool)>=db.query_row("SELECT source_id,file_identity,ingested_offset,prefix_hash,parser_state,revision,present FROM source WHERE origin_host=?1 AND path=?2",params![origin.host,original],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?))).optional()?;
-    let prior = prior
-        .map(
-            |(id, stamp, offset, prefix, state, revision, present)| -> Result<_> {
-                Ok((
-                    id,
-                    stamp,
-                    u64::try_from(offset)?,
-                    prefix,
-                    state,
-                    revision,
-                    present,
-                ))
-            },
-        )
-        .transpose()?;
-    let companions = if mode == ReadMode::Full {
-        companions(path)?
+    let prior = db.query_row("SELECT source_id,file_identity,ingested_offset,prefix_hash,parser_state,revision,present,append_state,size FROM source WHERE origin_host=?1 AND path=?2", params![origin.host,original], |row| {
+        let unsigned = |index: usize| -> rusqlite::Result<u64> {
+            u64::try_from(row.get::<_,i64>(index)?).map_err(|error|rusqlite::Error::FromSqlConversionFailure(index,rusqlite::types::Type::Integer,Box::new(error)))
+        };
+        let saved: String = row.get(7)?;
+        let append = serde_json::from_str(&saved).map_err(|error| rusqlite::Error::FromSqlConversionFailure(7,rusqlite::types::Type::Text,Box::new(error)))?;
+        Ok(Previous {id:row.get(0)?,stamp:row.get(1)?,offset:unsigned(2)?,chain:row.get(3)?,parser:row.get(4)?,revision:row.get(5)?,present:row.get(6)?,append,size:unsigned(8)?})
+    }).optional()?;
+    let companions = if mode != ReadMode::Inventory {
+        companions(origin, path)?
     } else {
         Vec::new()
     };
     let mut dependencies_changed = false;
-    if let Some((id, ..)) = &prior {
+    if let Some(previous) = &prior {
         let dependencies: Vec<(String, Option<String>)> = db
             .prepare("SELECT local_path,identity FROM dependency WHERE source_id=?1")?
-            .query_map([id], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .query_map([previous.id], |row| Ok((row.get(0)?, row.get(1)?)))?
             .collect::<rusqlite::Result<_>>()?;
         for (path, old) in dependencies {
             let current = match std::fs::metadata(path) {
-                Ok(m) => Some(identity(&m)),
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-                Err(e) => return Err(e.into()),
+                Ok(metadata) => Some(identity(&metadata)),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                Err(error) => return Err(error.into()),
             };
             dependencies_changed |= current != old;
         }
-    }
-    if let Some((id, ..)) = &prior {
         let known: BTreeSet<String> = db
             .prepare("SELECT path FROM dependency WHERE source_id=?1")?
-            .query_map([id], |r| r.get(0))?
+            .query_map([previous.id], |row| row.get(0))?
             .collect::<rusqlite::Result<_>>()?;
         for companion in &companions {
             dependencies_changed |=
                 !known.contains(&origin.original(companion)?.to_string_lossy().into_owned());
         }
     }
-    if prior
+    let unchanged = prior
         .as_ref()
-        .is_some_and(|(_, previous, _, _, _, _, present)| previous == &stamp && *present)
-        && !dependencies_changed
+        .is_some_and(|previous| previous.stamp == stamp && previous.present)
+        && !dependencies_changed;
+    let mut verified = true;
+    if let Some(previous) = &prior
+        && mode == ReadMode::Full
+        && previous.offset > 0
+        && (previous.append.verified_revision != previous.revision || !unchanged)
     {
+        verified = before.len() >= previous.offset
+            && verify_prefix(path, previous.offset, &previous.chain, stop)?;
+        if unchanged && verified {
+            let mut append = previous.append.clone();
+            append.verified_revision = previous.revision;
+            db.execute(
+                "UPDATE source SET append_state=?1 WHERE source_id=?2",
+                params![serde_json::to_string(&append)?, previous.id],
+            )?;
+            return Ok(false);
+        }
+    } else if unchanged {
         return Ok(false);
     }
-    let append = if let Some((_, _, offset, hash, _, _, present)) = &prior {
-        *present
+    let append = if let Some(previous) = &prior {
+        previous.present
+            && verified
             && !dependencies_changed
-            && *offset > 0
-            && before.len() >= *offset
-            && hash_prefix(path, *offset)? == *hash
+            && previous.offset > 0
+            && before.len() > previous.size
+            && previous.append.device == before.dev()
+            && previous.append.inode == before.ino()
+            && fingerprint(&mut file, previous.offset)?
+                == (previous.append.head.clone(), previous.append.tail.clone())
     } else {
         false
     };
     let mut state = if append {
-        serde_json::from_str(&prior.as_ref().context("Append needs previous state")?.4)?
+        serde_json::from_str(
+            &prior
+                .as_ref()
+                .context("Append needs previous state")?
+                .parser,
+        )?
     } else {
         normalize::State::default()
     };
     let mut offset = if append {
-        prior.as_ref().context("Append needs previous state")?.2
+        prior
+            .as_ref()
+            .context("Append needs previous state")?
+            .offset
     } else {
         0
     };
-    let revision = prior.as_ref().map_or(1, |p| p.5 + 1);
+    let revision = prior.as_ref().map_or(1, |previous| previous.revision + 1);
     let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     tx.execute("INSERT OR IGNORE INTO source(origin_host,provider,provider_home,path,local_path,file_identity,size,mtime_ns,ingested_offset,revision,present,prefix_hash,parser_state) VALUES(?1,?2,?3,?4,?5,'',0,0,0,0,1,'','{}')",params![origin.host,origin.provider,origin.provider_home.to_string_lossy(),original,path.to_string_lossy()])?;
     let source: i64 = tx.query_row(
         "SELECT source_id FROM source WHERE origin_host=?1 AND path=?2",
         params![origin.host, original],
-        |r| r.get(0),
+        |row| row.get(0),
     )?;
     if !append {
         tx.execute("DELETE FROM session WHERE source_id=?1", [source])?;
         tx.execute("DELETE FROM dependency WHERE source_id=?1", [source])?;
     }
-    let mut hash = blake3::Hasher::new();
-    std::io::copy(&mut File::open(path)?.take(offset), &mut hash)?;
+    let mut chain = if append {
+        prior
+            .as_ref()
+            .context("Append needs previous state")?
+            .chain
+            .parse::<blake3::Hash>()?
+    } else {
+        blake3::hash(&[])
+    };
     file.seek(SeekFrom::Start(offset))?;
-    let mut reader = BufReader::new(file.take(before.len() - offset));
+    let mut reader = RecordReader::new((&mut file).take(before.len() - offset));
     let mut line = Vec::new();
     let mut records = 0;
-    loop {
-        ensure!(!stop.load(Ordering::Acquire), "Session ingestion cancelled");
-        line.clear();
-        let bound = if mode == ReadMode::Inventory {
-            8 << 20
-        } else {
-            MAX_SESSION_RECORD_BYTES
-        };
-        let (read, kind) = read_bounded_line(&mut reader, &mut line, bound)?;
-        if read == 0 {
-            break;
+    let mut gap_records = if append {
+        prior
+            .as_ref()
+            .context("Append needs previous state")?
+            .append
+            .gap_records
+    } else {
+        0
+    };
+    let mut first_gap = if append {
+        prior
+            .as_ref()
+            .context("Append needs previous state")?
+            .append
+            .first_gap
+    } else {
+        None
+    };
+    if origin.provider == "claude" && state.thread.is_none() {
+        normalize::Record {
+            db: &tx,
+            origin,
+            source,
+            revision,
+            path,
+            offset,
+            bytes: &[],
         }
-        if kind == LineKind::Partial {
-            break;
-        }
-        ensure!(
-            kind != LineKind::Oversized,
-            "capacity: source record exceeds {MAX_SESSION_RECORD_BYTES} bytes; raw evidence retained"
-        );
-        if !line.iter().all(u8::is_ascii_whitespace) {
-            let value: Value =
-                serde_json::from_slice(&line).context("Malformed complete session record")?;
-            let record = normalize::Record {
-                db: &tx,
-                origin,
-                source,
-                revision,
-                path,
-                offset,
-                bytes: &line,
+        .apply(&mut state, Value::Null)?;
+    }
+    if mode != ReadMode::Inventory || origin.provider != "claude" {
+        loop {
+            ensure!(!stop.load(Ordering::Acquire), "Session ingestion cancelled");
+            line.clear();
+            reader.hash.reset();
+            let bound = if mode == ReadMode::Inventory {
+                8 << 20
+            } else {
+                MAX_SESSION_RECORD_BYTES
             };
-            record.apply(&mut state, value)?;
-        }
-        hash.update(&line);
-        offset += read;
-        records += 1;
-        if mode == ReadMode::Inventory {
-            if state.thread.is_some() {
+            let (read, kind) = read_bounded_line(&mut reader, &mut line, bound)?;
+            if read == 0 || kind == LineKind::Partial {
                 break;
             }
-            ensure!(
-                records < 128 && offset < 8 << 20,
-                "unavailable: identity exceeds inventory read budget"
-            );
+            let bad = if kind == LineKind::Oversized {
+                true
+            } else if line.iter().all(u8::is_ascii_whitespace) {
+                false
+            } else if let Ok(value) = serde_json::from_slice::<Value>(&line) {
+                normalize::Record {
+                    db: &tx,
+                    origin,
+                    source,
+                    revision,
+                    path,
+                    offset,
+                    bytes: &line,
+                }
+                .apply(&mut state, value)?;
+                false
+            } else {
+                true
+            };
+            if bad {
+                gap_records = gap_records.checked_add(1).context("Too many record gaps")?;
+                first_gap.get_or_insert((offset, read));
+            }
+            chain = chain_record(chain, reader.hash.finalize());
+            offset += read;
+            records += 1;
+            if mode == ReadMode::Inventory {
+                if state.thread.is_some() {
+                    break;
+                }
+                ensure!(
+                    records < 128 && offset < 8 << 20,
+                    "unavailable: identity exceeds inventory read budget"
+                );
+            }
         }
     }
+    drop(reader);
     for companion in companions {
         let metadata = std::fs::metadata(&companion)?;
         tx.execute(
@@ -330,15 +622,24 @@ fn ingest_source(
             ],
         )?;
     }
-    let prefix = hash.finalize().to_hex().to_string();
+    let prefix = chain.to_hex().to_string();
+    let (head, tail) = fingerprint(&mut file, offset)?;
     let after = std::fs::metadata(path)?;
     ensure!(
         before.dev() == after.dev() && before.ino() == after.ino() && before.len() <= after.len(),
         "Source replaced during ingestion"
     );
-    if FileRevision::from(before.clone()) != FileRevision::from(after.clone()) {
+    let stable = FileRevision::from(before.clone()) == FileRevision::from(after.clone());
+    if !stable && mode == ReadMode::Full {
         ensure!(
-            prefix == hash_prefix(path, offset)?,
+            verify_prefix(path, offset, &prefix, stop)?,
+            "Source changed during ingestion"
+        );
+    } else if !stable && append {
+        let previous = prior.as_ref().context("Append needs previous state")?;
+        ensure!(
+            fingerprint(&mut file, previous.offset)?
+                == (previous.append.head.clone(), previous.append.tail.clone()),
             "Source changed during ingestion"
         );
     }
@@ -346,7 +647,24 @@ fn ingest_source(
         state.thread.is_some() || offset == 0,
         "Transcript has no exact provider identity"
     );
-    tx.execute("UPDATE source SET local_path=?1,file_identity=?2,size=?3,mtime_ns=?4,ingested_offset=?5,revision=?6,present=1,prefix_hash=?7,parser_state=?8,failure=?9 WHERE source_id=?10",params![path.to_string_lossy(),if mode==ReadMode::Full {&stamp} else {""},i64::try_from(before.len())?,before.mtime()*1_000_000_000+before.mtime_nsec(),i64::try_from(offset)?,revision,prefix,serde_json::to_string(&state)?,if offset<before.len() {Some("partial_record")} else {None},source])?;
+    let verified_revision =
+        if mode == ReadMode::Full || (!append && stable && mode != ReadMode::Inventory) {
+            revision
+        } else {
+            prior
+                .as_ref()
+                .map_or(0, |previous| previous.append.verified_revision)
+        };
+    let append_state = AppendState {
+        device: before.dev(),
+        inode: before.ino(),
+        head,
+        tail,
+        verified_revision,
+        gap_records,
+        first_gap,
+    };
+    tx.execute("UPDATE source SET local_path=?1,file_identity=?2,size=?3,mtime_ns=?4,ingested_offset=?5,revision=?6,present=1,prefix_hash=?7,parser_state=?8,failure=?9,append_state=?10 WHERE source_id=?11",params![path.to_string_lossy(),if mode != ReadMode::Inventory {&stamp} else {""},i64::try_from(before.len())?,before.mtime()*1_000_000_000+before.mtime_nsec(),i64::try_from(offset)?,revision,prefix,serde_json::to_string(&state)?,if gap_records>0 {Some("record_gap")} else if offset<before.len(){Some("partial_record")}else{None},serde_json::to_string(&append_state)?,source])?;
     tx.commit()?;
     Ok(true)
 }
@@ -508,4 +826,27 @@ pub(crate) fn catalog(db: &Connection, roots: &[PathBuf]) -> Result<()> {
     }
     tx.commit()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sessions_record_hash_includes_discarded_oversized_bytes() {
+        let oversized = format!("{}\n", "x".repeat(129));
+        let complete = "accepted\n";
+        let mut reader = RecordReader::new(std::io::Cursor::new(format!("{oversized}{complete}")));
+        let mut line = Vec::new();
+        let (count, kind) = read_bounded_line(&mut reader, &mut line, 64).unwrap();
+        assert_eq!(kind, LineKind::Oversized);
+        assert_eq!(count, oversized.len() as u64);
+        assert!(line.is_empty());
+        assert_eq!(reader.hash.finalize(), blake3::hash(oversized.as_bytes()));
+        reader.hash.reset();
+        let (_, kind) = read_bounded_line(&mut reader, &mut line, 64).unwrap();
+        assert_eq!(kind, LineKind::Complete);
+        assert_eq!(line, complete.as_bytes());
+        assert_eq!(reader.hash.finalize(), blake3::hash(complete.as_bytes()));
+    }
 }

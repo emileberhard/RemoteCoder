@@ -4,6 +4,19 @@ use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+#[derive(Debug)]
+pub(super) struct IdentityConflict {
+    pub key: String,
+}
+
+impl std::fmt::Display for IdentityConflict {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("Conflicting provider session identity in different source files")
+    }
+}
+
+impl std::error::Error for IdentityConflict {}
+
 #[derive(Clone, Default, Debug, Serialize, Deserialize)]
 pub(super) struct State {
     pub thread: Option<String>,
@@ -48,7 +61,7 @@ impl Record<'_> {
             self.claude(state, &value, timestamp.as_deref())?;
         }
         if let Some(thread) = &state.thread {
-            self.db.execute("INSERT INTO session(session_key,origin_host,provider,provider_home,thread_id,cwd,title,started_at,last_at,parent_session_key,source_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11) ON CONFLICT(session_key) DO UPDATE SET cwd=excluded.cwd,title=excluded.title,started_at=excluded.started_at,last_at=excluded.last_at,parent_session_key=excluded.parent_session_key WHERE session.source_id=excluded.source_id",params![super::super::session_key(self.origin,thread),self.origin.host,self.origin.provider,self.origin.provider_home.to_string_lossy(),thread,state.cwd,state.title,state.first,state.last,state.parent.as_ref().map(|p|super::super::session_key(self.origin,p)),self.source])?;
+            self.db.execute("INSERT INTO session(session_key,origin_host,provider,provider_home,thread_id,cwd,title,started_at,last_at,parent_session_key,source_id,thread_id_reversed) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12) ON CONFLICT(session_key) DO UPDATE SET cwd=excluded.cwd,title=excluded.title,started_at=excluded.started_at,last_at=excluded.last_at,parent_session_key=excluded.parent_session_key WHERE session.source_id=excluded.source_id",params![super::super::session_key(self.origin,thread),self.origin.host,self.origin.provider,self.origin.provider_home.to_string_lossy(),thread,state.cwd,state.title,state.first,state.last,state.parent.as_ref().map(|p|super::super::session_key(self.origin,p)),self.source,thread.bytes().rev().collect::<Vec<_>>()])?;
         }
         Ok(())
     }
@@ -210,25 +223,29 @@ impl Record<'_> {
                 .file_stem()
                 .and_then(|p| p.to_str())
                 .context("Session path needs a UTF-8 name")?;
-            if self
-                .path
-                .parent()
-                .and_then(|p| p.file_name())
-                .is_some_and(|p| p == "subagents")
+            let root = self.origin.path();
+            let relative = self.path.strip_prefix(&root)?;
+            let mut parts = relative.iter();
+            parts
+                .next()
+                .context("Claude transcript has no project directory")?;
+            let session = parts
+                .next()
+                .context("Claude transcript has no session filename")?;
+            if parts
+                .next()
+                .is_some_and(|directory| directory == "subagents")
             {
-                let parent = self
-                    .path
-                    .parent()
-                    .and_then(|p| p.parent())
-                    .and_then(|p| p.file_name())
-                    .and_then(|p| p.to_str())
+                let parent = session
+                    .to_str()
                     .context("Native child has no owning session")?;
-                let child = stem.strip_prefix("agent-").unwrap_or(stem);
+                let child = stem
+                    .strip_prefix("agent-")
+                    .context("Native child has no agent filename")?;
                 state.thread = Some(format!("claude:{parent}:{child}"));
                 state.parent = Some(format!("claude_{parent}"));
             } else {
-                let id = v["sessionId"].as_str().unwrap_or(stem);
-                state.thread = Some(format!("claude_{id}"));
+                state.thread = Some(format!("claude_{stem}"));
             }
         }
         state.cwd = string(&v["cwd"]).or(state.cwd.take());
@@ -367,11 +384,10 @@ impl Record<'_> {
                 |r| r.get(0),
             )
             .optional()?;
-        anyhow::ensure!(
-            existing.is_none_or(|id| id == self.source),
-            "Conflicting provider session identity in different source files"
-        );
-        self.db.execute("INSERT OR IGNORE INTO session(session_key,origin_host,provider,provider_home,thread_id,source_id) VALUES(?1,?2,?3,?4,?5,?6)",params![key,self.origin.host,self.origin.provider,self.origin.provider_home.to_string_lossy(),thread,self.source])?;
+        if existing.is_some_and(|id| id != self.source) {
+            return Err(IdentityConflict { key }.into());
+        }
+        self.db.execute("INSERT OR IGNORE INTO session(session_key,origin_host,provider,provider_home,thread_id,source_id,thread_id_reversed) VALUES(?1,?2,?3,?4,?5,?6,?7)",params![key,self.origin.host,self.origin.provider,self.origin.provider_home.to_string_lossy(),thread,self.source,thread.bytes().rev().collect::<Vec<_>>()])?;
         Ok(())
     }
 

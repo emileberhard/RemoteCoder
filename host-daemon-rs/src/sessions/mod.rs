@@ -1,5 +1,7 @@
 pub(crate) mod changes;
 pub(crate) mod cluster;
+mod discovery;
+mod hot;
 pub(crate) mod ingest;
 pub(crate) mod mirror;
 pub(crate) mod query;
@@ -11,7 +13,7 @@ use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-pub(crate) const SCHEMA_VERSION: u32 = 2;
+pub(crate) const SCHEMA_VERSION: u32 = 3;
 pub(crate) const PAGE_BYTES: usize = 8 << 20;
 pub(crate) const PAGE_ROWS: usize = 10_000;
 pub(crate) const CHANGE_DAYS: i64 = 30;
@@ -32,6 +34,34 @@ impl Origin {
         } else {
             "projects"
         })
+    }
+
+    pub fn is_transcript(&self, path: &Path) -> bool {
+        if path
+            .extension()
+            .is_none_or(|extension| extension != "jsonl")
+        {
+            return false;
+        }
+        if self.provider == "codex" {
+            return path.starts_with(self.path());
+        }
+        let Ok(relative) = path.strip_prefix(self.path()) else {
+            return false;
+        };
+        let mut parts = relative.iter();
+        if parts.next().is_none() || parts.next().is_none() {
+            return false;
+        }
+        match parts.next() {
+            None => true,
+            Some(directory) => {
+                directory == "subagents"
+                    && path
+                        .file_stem()
+                        .is_some_and(|name| name.as_encoded_bytes().starts_with(b"agent-"))
+            }
+        }
     }
 
     pub fn original(&self, path: &Path) -> Result<PathBuf> {
@@ -144,3 +174,6 @@ pub(crate) fn exit_code(data: &serde_json::Value) -> i32 {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod idle_measurement;

@@ -11,7 +11,6 @@ use tokio::sync::{Mutex, Semaphore};
 pub(super) struct Runtime {
     store: Store,
     worker: Arc<Worker>,
-    origins: Vec<Origin>,
     readers: Arc<Semaphore>,
     mirror_lock: Mutex<()>,
     mirror_stop: tokio_util::sync::CancellationToken,
@@ -47,11 +46,10 @@ impl Gateway {
                 ];
                 tokio::task::spawn_blocking(move || -> Result<Arc<Runtime>> {
                     let store = Store::open(root.join("catalog.sqlite3"))?;
-                    let worker = Arc::new(Worker::start(store.clone(), origins.clone())?);
+                    let worker = Arc::new(Worker::start(store.clone(), origins)?);
                     Ok(Arc::new(Runtime {
                         store,
                         worker,
-                        origins,
                         readers: Arc::new(Semaphore::new(16)),
                         mirror_lock: Mutex::new(()),
                         mirror_stop: tokio_util::sync::CancellationToken::new(),
@@ -147,13 +145,33 @@ impl Gateway {
         let runtime = self.sessions_runtime().await?;
         let permit = runtime.readers.clone().acquire_owned().await?;
         let store = runtime.store.clone();
-        let origins = runtime.origins.clone();
         tokio::task::spawn_blocking(move || {
             let _permit = permit;
             if after.is_none() {
-                crate::sessions::ingest::refresh_inventory(&store, &origins)?;
+                crate::sessions::ingest::refresh_inventory(&store)?;
             }
             query::inventory(&store.reader()?, after.as_deref(), limit)
+        })
+        .await?
+    }
+
+    pub(crate) async fn session_thread_suffix(
+        &self,
+        suffix: &str,
+    ) -> Result<Vec<query::SessionHeader>> {
+        let runtime = self.sessions_runtime().await?;
+        let permit = runtime.readers.clone().acquire_owned().await?;
+        let store = runtime.store.clone();
+        let host = self.host_identity().await?.host_id;
+        let suffix = suffix.to_owned();
+        tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            let matches = query::match_thread_suffix(&store.reader()?, &host, &suffix)?;
+            if !matches.is_empty() {
+                return Ok(matches);
+            }
+            crate::sessions::ingest::refresh_inventory(&store)?;
+            query::match_thread_suffix(&store.reader()?, &host, &suffix)
         })
         .await?
     }
