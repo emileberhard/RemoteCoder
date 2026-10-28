@@ -24,7 +24,7 @@ surface:
 |---|---|
 | History reads, native pages, `daemon/activeTurns` (read-only) | `just gateway-e2e-reads`, optionally `e2e_thread=<id>` |
 | Owned read burst, exact query cancellation and ready capability (isolated gateway) | `just gateway-e2e-query-admission-isolated /absolute/gateway/binary` |
-| Delegated jobs: Codex and Claude children spawned from a parent's tool process, results, parent callbacks, Stop, restart recovery and same-ID retry; optionally held reads of staged stores (isolated gateway, deterministic Codex model, host router for Claude) | `just gateway-e2e-delegated-jobs-isolated /absolute/gateway/binary /absolute/runtime/package [/absolute/staged/agent-jobs/v1 ...]` |
+| Delegated jobs: Codex and Claude children spawned from a parent's tool process, results, parent callbacks, Stop, restart recovery and same-ID retry (isolated gateway, deterministic Codex model, host router for Claude) | `just gateway-e2e-delegated-jobs-isolated /absolute/gateway/binary /absolute/runtime/package` |
 | First-party-first new conversation admission and last-resort effort clamping (isolated gateway, host router; logged-out Codex xhigh runs on Opus, then unavailable Claude forces Argon high, including a resumed Fast request) | `just gateway-e2e-provider-fallback-isolated /absolute/gateway/binary` |
 | `thread/fork(lastTurnId:)` boundaries (creates threads) | `just gateway-e2e-fork-live`, `just gateway-e2e-claude-fork-live` |
 | Claude steering folds into one completion (router-backed Sonnet; one completion plus an empty active-turn snapshot) | `just gateway-e2e-claude-steer-live` |
@@ -56,14 +56,6 @@ Agent/Job/execution model, exact process attribution, durable Stop, result and
 delivery invariants. The installed binary's `agent` subcommand is the client;
 no launcher process, second ancestry registry or runtime legacy reader exists.
 Native terminal Claude holders own only their process-lifetime inbox route.
-
-Temporary cutover interlock: `agent-jobs/v1/cutover.hold` is installed only while
-the old writers are drained, before starting the candidate gateway. It survives
-restart and holds admission, dispatch, recovery and callback delivery while
-reads and durable Stop remain available. Its private owner is
-RemoteCoder-deploy's agent-runtime migration. Remove the hold check, test and
-this paragraph after both hosts accept the final migrated store and coordinated
-cutover evidence is complete; do not make it a permanent public control API.
 
 ## Process model
 

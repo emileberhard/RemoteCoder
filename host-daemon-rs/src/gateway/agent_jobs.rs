@@ -403,12 +403,6 @@ impl Gateway {
         if self.is_draining() {
             return Err(RpcError::draining());
         }
-        if self.jobs.execution_held().await? {
-            return Err(RpcError::new(
-                RpcCode::Unavailable,
-                "delegated messaging is held for the coordinated runtime cutover",
-            ));
-        }
         if request
             .delivery_id
             .split_once(':')

@@ -1,13 +1,12 @@
 import assert from "node:assert/strict";
-import { cp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import { randomBytes, randomInt, randomUUID } from "node:crypto";
 import { IsolatedGateway, startStubRouter } from "./isolated-gateway.mjs";
 
-const [binary, runtimePackage, ...stagedStores] = process.argv.slice(2);
+const [binary, runtimePackage] = process.argv.slice(2);
 assert(binary && isAbsolute(binary), "Pass the built gateway executable as an absolute path");
 assert(runtimePackage && isAbsolute(runtimePackage), "Pass the matched Codex runtime package directory");
-assert(stagedStores.every(store => isAbsolute(store)), "Pass staged agent-jobs/v1 directories as absolute paths");
 
 const marker = /^RCJOB_(SPAWN|HOLD|ECHO):(\S+)/;
 const jobId = provider => `agent-${provider}-${BigInt(Date.now()) * 1_000_000n + BigInt(randomInt(1_000_000))}-${randomBytes(4).toString("hex")}`;
@@ -227,33 +226,6 @@ async function runtimeFlows(lab, model) {
     return receipt;
 }
 
-async function heldStoreRead(model, inference, stagedStore) {
-    const lab = await IsolatedGateway.create(binary);
-    try {
-        await prepare(lab, model, inference);
-        const store = lab.path(".remote-coder/agent-jobs/v1");
-        await mkdir(lab.path(".remote-coder/agent-jobs"), { recursive: true });
-        await cp(stagedStore, store, { recursive: true });
-        await rm(join(store, "owner.lock"), { force: true });
-        await writeFile(join(store, "cutover.hold"), "", { mode: 0o600 });
-        await lab.start();
-        const list = await agent(lab, ["list", "--json", "--last", "200"]);
-        assert(list.agents.length > 0, "The staged store listed no jobs");
-        const states = {};
-        for (const row of list.agents) states[row.state] = (states[row.state] ?? 0) + 1;
-        const samples = [];
-        for (const row of list.agents.slice(0, 5)) samples.push((await read(lab, row.run_id)).execution.kind);
-        const refused = await agent(lab, ["spawn", "codex", probeModel, "RCJOB_ECHO:held", "--operator", "--json"],
-            { allowFailure: true });
-        assert.notEqual(refused.status, 0, "The held store admitted a new job");
-        return { listed: list.agents.length, states, samples, spawnRefused: refused.stderr.trim().slice(0, 200) };
-    } finally {
-        await lab.stop().catch(() => lab.forceStop());
-        if (await lab.hasNativeDaemon(lab.path(".codex"))) await lab.stopNativeDaemon(lab.path(".codex"));
-        await lab.removeRoot();
-    }
-}
-
 const model = startModel();
 const inference = await hostRouter();
 const lab = await IsolatedGateway.create(binary);
@@ -262,8 +234,6 @@ try {
     await prepare(lab, model, inference);
     await lab.start();
     const receipt = { runtime: await runtimeFlows(lab, model) };
-    receipt.heldStores = {};
-    for (const store of stagedStores) receipt.heldStores[store] = await heldStoreRead(model, inference, store);
     console.log(JSON.stringify(receipt, null, 1));
 } catch (error) {
     failure = error;

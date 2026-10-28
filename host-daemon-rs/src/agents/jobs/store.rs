@@ -112,10 +112,6 @@ impl JobStore {
         self.access(move |inner| inner.job(&id).cloned()).await
     }
 
-    pub(crate) async fn execution_held(&self) -> Result<bool> {
-        self.access(|inner| inner.execution_held()).await
-    }
-
     pub(crate) async fn existing_request(
         &self,
         id: JobId,
@@ -278,7 +274,6 @@ impl JobStore {
 
     pub(crate) async fn admit(&self, job: JobRecord) -> Result<(JobRecord, bool)> {
         self.access(move |inner| {
-            ensure!(!inner.execution_held()?, "delegated jobs are held for the coordinated runtime cutover");
             validate_job(&job)?;
             ensure!(job.source == JobSource::Runtime && job.revision == 0, "new admission requires an initial runtime job");
             if let Some(previous) = inner.existing_request(&job.job_id, job.request_fingerprint.as_deref().context("new admission requires its request fingerprint")?)? {
@@ -487,13 +482,6 @@ impl JobStore {
 }
 
 impl Inner {
-    // Remove this cutover interlock after both hosts accept their final migrated store.
-    fn execution_held(&self) -> Result<bool> {
-        private_state::read_bounded(&self.root.join("cutover.hold"), 4096)
-            .map(|hold| hold.is_some())
-            .map_err(|error| anyhow::anyhow!("delegated-job cutover hold is unreadable: {error:?}"))
-    }
-
     fn existing_request(&self, id: &JobId, fingerprint: &str) -> Result<Option<JobRecord>> {
         self.jobs
             .get(id)
