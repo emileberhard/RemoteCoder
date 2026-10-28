@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 use super::Gateway;
 use crate::agents::jobs::context::ProvenCaller;
 use crate::agents::jobs::model::{ConversationIdentity, Origin, Provider, ProviderHome};
-use crate::platform::process::{ProcessInstance, ancestry, ancestry_to};
+use crate::platform::process::{ProcessInstance, ancestry};
 use crate::rpc::error::RpcCode;
 use crate::rpc::{RpcError, RpcResult};
 use crate::wire::agent_jobs::*;
@@ -49,13 +49,16 @@ impl Gateway {
             .context("Claude provider is unavailable")
     }
 
-    pub(crate) fn job_new_claude_conversation(&self) -> ConversationIdentity {
-        ConversationIdentity {
-            provider: Provider::Claude,
-            provider_home: ProviderHome::Known {
-                path: self.claude_settings.claude_home.clone(),
-            },
-            thread_id: crate::providers::claude::claude_thread_id(&crate::ids::new_session_uuid()),
+    pub(crate) fn job_new_claude_conversation(&self) -> Result<ConversationIdentity> {
+        self.agent_conversation(&crate::providers::claude::claude_thread_id(
+            &crate::ids::new_session_uuid(),
+        ))
+    }
+
+    pub(crate) async fn job_provider_ready(&self, provider: Provider) -> bool {
+        match provider {
+            Provider::Codex => self.codex_ready().await,
+            Provider::Claude => self.claude_agent().is_some(),
         }
     }
 
@@ -91,7 +94,9 @@ impl Gateway {
                 if self.is_draining() {
                     return Err(RpcError::draining());
                 }
-                let request: StartParams = decode(params)?;
+                let mut request: StartParams = decode(params)?;
+                let authority = self.cluster_authority(&request.caller).await?;
+                Self::inherit_job_scope(&authority, &mut request.spec)?;
                 let origin = self.resolve_job_caller(&request.caller).await?;
                 Ok(json!(self.jobs.start(request, origin).await?))
             }
@@ -100,6 +105,8 @@ impl Gateway {
                     return Err(RpcError::draining());
                 }
                 let request: ContinueParams = decode(params)?;
+                self.authorize_existing(&request.agent_id, &request.caller)
+                    .await?;
                 let origin = self.resolve_job_caller(&request.caller).await?;
                 Ok(json!(self.jobs.continue_job(request, origin).await?))
             }
@@ -162,7 +169,10 @@ impl Gateway {
         &self,
         process: ProcessInstance,
     ) -> Result<ProvenCaller> {
-        tokio::task::spawn_blocking(move || ancestry_to(process, process)).await??;
+        ancestry(process)
+            .next()
+            .transpose()?
+            .context("caller process is not a live application process")?;
         tokio::time::timeout(std::time::Duration::from_secs(3), async {
             loop {
                 if let Some(caller) = self.find_job_process_context(process).await? {
@@ -198,35 +208,19 @@ impl Gateway {
             ),
             Err(error) => (None, Some(error)),
         };
-        let owner = native.as_ref().map(|context| ProcessInstance {
-            pid: context.root_process_identity.pid,
-            started_micros: context.root_process_identity.started_at_unix_micros,
-        });
-        let chain = tokio::task::spawn_blocking(move || match owner {
-            Some(owner) => ancestry_to(process, owner),
-            None => ancestry(process),
-        })
-        .await??;
-        ensure!(
-            !chain.is_empty(),
-            "caller has no verifiable process ancestry"
-        );
-        let native_position = native
-            .as_ref()
-            .map(|context| {
-                chain
-                    .iter()
-                    .position(|candidate| {
-                        candidate.pid == context.root_process_identity.pid
-                            && candidate.started_micros
-                                == context.root_process_identity.started_at_unix_micros
-                    })
-                    .context("native tool owner is outside the verified caller ancestry")
-            })
-            .transpose()?;
         let claude_home = self.claude_settings.claude_home.clone();
-        for (position, candidate) in chain.iter().enumerate() {
-            if native_position == Some(position) {
+        let mut found_process = false;
+        for candidate in ancestry(process) {
+            let candidate = candidate.map_err(|error| {
+                let message = format!("No Codex tool root or Claude session owner was proved below the failing process: {error:#}");
+                error.context(message)
+            })?;
+            found_process = true;
+            if native.as_ref().is_some_and(|context| {
+                candidate.pid == context.root_process_identity.pid
+                    && candidate.started_micros
+                        == context.root_process_identity.started_at_unix_micros
+            }) {
                 let context = native.as_ref().context("native caller owner disappeared")?;
                 ensure!(
                     !context.thread_id.is_empty()
@@ -242,7 +236,7 @@ impl Gateway {
                         },
                         thread_id: context.thread_id.clone(),
                     },
-                    process: *candidate,
+                    process: candidate,
                     turn_id: Some(context.turn_id.clone()),
                     tool_call_id: Some(context.tool_call_id.clone()),
                 }));
@@ -258,7 +252,7 @@ impl Gateway {
                         provider_home: ProviderHome::Known { path: claude_home },
                         thread_id,
                     },
-                    process: *candidate,
+                    process: candidate,
                     turn_id,
                     tool_call_id: None,
                 }));
@@ -276,12 +270,17 @@ impl Gateway {
                         provider_home: ProviderHome::Known { path: claude_home },
                         thread_id: crate::providers::claude::claude_thread_id(&owner.session_uuid),
                     },
-                    process: *candidate,
+                    process: candidate,
                     turn_id: None,
                     tool_call_id: None,
                 }));
             }
         }
+        ensure!(found_process, "caller has no verifiable process ancestry");
+        ensure!(
+            native.is_none(),
+            "native tool owner is outside the verified caller ancestry"
+        );
         if let Some(error) = native_failure {
             return Err(error).context("caller could not be proved; native process mapping was unavailable and no Claude owner matched");
         }
@@ -300,6 +299,17 @@ impl Gateway {
     pub(super) async fn resolve_job_caller(&self, caller: &Caller) -> Result<Origin> {
         match caller {
             Caller::Operator => Ok(Origin::TopLevel),
+            Caller::Forwarded {
+                host, authority, ..
+            } => Ok(match authority {
+                crate::wire::cluster::CallerAuthority::Operator => Origin::TopLevel,
+                crate::wire::cluster::CallerAuthority::Agent { conversation, .. } => {
+                    Origin::RemoteParent {
+                        host: host.clone(),
+                        conversation: conversation.clone(),
+                    }
+                }
+            }),
             Caller::Captured { context_id } => {
                 let saved = self.jobs.contexts.get(context_id).await?;
                 let current = self.job_process_context(saved.process).await?;
@@ -315,6 +325,23 @@ impl Gateway {
     }
 
     pub(super) async fn job_context_view(&self, caller: Caller) -> Result<ContextView> {
+        if let Caller::Forwarded { authority, .. } = &caller {
+            let crate::wire::cluster::CallerAuthority::Agent { conversation, .. } = authority
+            else {
+                anyhow::bail!("operator has no sender conversation");
+            };
+            return Ok(ContextView {
+                context: CapturedContext {
+                    context_id: String::new(),
+                    provider: conversation.provider,
+                    thread_id: conversation.thread_id.clone(),
+                    turn_id: None,
+                },
+                conversation: conversation.clone(),
+                sender_id: conversation.thread_id.clone(),
+                job_id: None,
+            });
+        }
         let Caller::Captured { context_id } = &caller else {
             anyhow::bail!("operator intent has no agent sender identity")
         };

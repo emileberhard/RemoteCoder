@@ -11,7 +11,7 @@ use crate::rpc::error::RpcCode;
 use crate::rpc::{RpcError, RpcResult};
 use crate::wire::agent_jobs::*;
 
-const CROSS_HOST_MESSAGE_GUIDANCE: &str = "Target lookup is local to this gateway; message_agent has no cross-host relay. Use the canonical thread ID from its owning host's list_agents --json, then codex-threads resolve <thread-id> --json and codex-threads send --host <host> <thread-id> '<message>'";
+const ADDRESS_GUIDANCE: &str = "Use host:id or --host to address the owning cluster member";
 
 fn now_ms() -> i64 {
     (crate::time::unix_seconds() * 1000.0) as i64
@@ -72,9 +72,12 @@ impl Gateway {
         } else {
             let text = match &sender {
                 Origin::TopLevel => request.text,
-                Origin::Parent { .. } => {
+                Origin::Parent { .. } | Origin::RemoteParent { .. } => {
                     let view = self.job_context_view(request.caller.clone()).await?;
-                    let host = self.job_host_name()?;
+                    let host = match &sender {
+                        Origin::RemoteParent { host, .. } => host.clone(),
+                        _ => self.host_identity().await?.host_id,
+                    };
                     crate::agents::envelope::message(
                         &request.delivery_id,
                         &crate::agents::envelope::Sender {
@@ -82,10 +85,13 @@ impl Gateway {
                             provider: view.context.provider.as_str(),
                             host: &host,
                             reply_tool: "message_agent",
-                            reply_target: view
-                                .job_id
-                                .as_ref()
-                                .map_or(view.conversation.thread_id.as_str(), JobId::as_str),
+                            reply_target: &format!(
+                                "{}:{}",
+                                host,
+                                view.job_id
+                                    .as_ref()
+                                    .map_or(view.conversation.thread_id.as_str(), JobId::as_str)
+                            ),
                         },
                         &request.text,
                     )
@@ -144,6 +150,8 @@ impl Gateway {
             .resolved
             .as_ref()
             .context("message resolution was not frozen")?;
+        self.authorize_conversation(&request.caller, &resolved.conversation)
+            .await?;
         let text = record
             .text
             .as_deref()
@@ -163,7 +171,7 @@ impl Gateway {
             drop(operation);
             match self.jobs.continue_job(ContinueParams {
                 job_id: continuation.job_id.clone(), agent_id: continuation.agent_id.clone(), prompt: text.to_owned(), settings: None,
-                expected_previous_job_id: Some(continuation.previous_job_id.clone()), intent: ContinueIntent::Message, recipient: ContinueRecipient::Previous, caller: request.caller,
+                expected_previous_job_id: Some(continuation.previous_job_id.clone()), intent: ContinueIntent::Message, recipient: ContinueRecipient::Current, caller: request.caller,
             }, record.sender.clone()).await {
                 Ok(receipt) => DeliveryState::Accepted { receipt: json!({"jobId":receipt.job.job_id,"duplicate":receipt.duplicate,"admitted":true,"consumed":false}).to_string() },
                 Err(error) => DeliveryState::Blocked { reason: bounded_reason(&format!("{error:#}")) },
@@ -211,14 +219,22 @@ impl Gateway {
                 return Ok(json!(record));
             }
             let gateway = self.jobs.gateway()?;
-            let response = gateway
-                .deliver_job_input(
-                    &resolved.conversation,
-                    &record.delivery_id,
-                    text,
-                    expected_turn.as_deref(),
-                )
-                .await;
+            let response = if let Some(recipient) = &resolved.remote_recipient {
+                gateway
+                    .deliver_job_recipient(recipient, &record.delivery_id, text)
+                    .await
+                    .map(|state| json!({"deliveryState":state}))
+                    .map_err(RpcError::from)
+            } else {
+                gateway
+                    .deliver_job_input(
+                        &resolved.conversation,
+                        &record.delivery_id,
+                        text,
+                        expected_turn.as_deref(),
+                    )
+                    .await
+            };
             drop(execution);
             match response {
                 Ok(response) => serde_json::from_value(response["deliveryState"].clone())
@@ -247,7 +263,7 @@ impl Gateway {
             }
             MessageTarget::Conversation { conversation } => {
                 match self.jobs.agent_for_conversation(conversation).await? {
-                    Some(agent) => {
+                    Some(agent) if agent.latest_job_id.is_some() => {
                         self.resolve_message_job(
                             agent
                                 .latest_job_id
@@ -256,7 +272,8 @@ impl Gateway {
                         )
                         .await?
                     }
-                    None => ResolvedMessage {
+                    _ => ResolvedMessage {
+                        remote_recipient: None,
                         conversation: conversation.clone(),
                         target_job_id: None,
                         continuation: None,
@@ -276,24 +293,41 @@ impl Gateway {
                     .agent_for_conversation(conversation)
                     .await?
                     .context("caller has no delegated-agent recipient")?;
-                let latest = agent
-                    .latest_job_id
-                    .context("caller's current job is unresolved")?;
-                let Recipient::Conversation { conversation } =
+                let recipient = if let Some(recipient) = agent.parent_recipient {
+                    recipient
+                } else {
+                    let latest = agent
+                        .latest_job_id
+                        .context("caller's current job is unresolved")?;
                     self.jobs.read(&latest).await?.job.recipient
-                else {
-                    bail!("caller has no proven parent recipient");
                 };
-                ResolvedMessage {
-                    conversation,
-                    target_job_id: None,
-                    continuation: None,
+                match recipient {
+                    Recipient::Conversation { conversation } => ResolvedMessage {
+                        remote_recipient: None,
+                        conversation,
+                        target_job_id: None,
+                        continuation: None,
+                    },
+                    recipient @ Recipient::Remote { .. } => {
+                        let Recipient::Remote { conversation, .. } = &recipient else {
+                            unreachable!()
+                        };
+                        ResolvedMessage {
+                            remote_recipient: Some(recipient.clone()),
+                            conversation: conversation.clone(),
+                            target_job_id: None,
+                            continuation: None,
+                        }
+                    }
+                    _ => bail!("caller has no parent tag"),
                 }
             }
         };
         ensure!(
-            self.agent_conversation(&resolved.conversation.thread_id)? == resolved.conversation,
-            "message target belongs to another provider home; {CROSS_HOST_MESSAGE_GUIDANCE}"
+            resolved.remote_recipient.is_some()
+                || self.agent_conversation(&resolved.conversation.thread_id)?
+                    == resolved.conversation,
+            "message target belongs to another provider home; {ADDRESS_GUIDANCE}"
         );
         Ok(resolved)
     }
@@ -378,7 +412,7 @@ impl Gateway {
                 .claude_thread_response(&json!({"threadId":thread_id}))
                 .await
                 .map_err(|error| anyhow::anyhow!(error.message))
-                .context(CROSS_HOST_MESSAGE_GUIDANCE)?["thread"]
+                .context(ADDRESS_GUIDANCE)?["thread"]
                 .clone(),
             crate::agents::jobs::model::Provider::Codex => self
                 .call_control(
@@ -386,7 +420,7 @@ impl Gateway {
                     json!({"threadId":thread_id,"includeTurns":false}),
                 )
                 .await
-                .context(CROSS_HOST_MESSAGE_GUIDANCE)?["thread"]
+                .context(ADDRESS_GUIDANCE)?["thread"]
                 .clone(),
         };
         let conversation = crate::agents::conversation_from_header(&header)?;
@@ -394,17 +428,13 @@ impl Gateway {
             conversation.provider == provider && conversation.thread_id == thread_id,
             "provider returned a different native conversation"
         );
-        if let Some(agent) = self.jobs.agent_for_conversation(&conversation).await? {
-            return self
-                .resolve_message_job(
-                    agent
-                        .latest_job_id
-                        .context("conversation's latest job is unresolved")?,
-                    delivery_id,
-                )
-                .await;
+        if let Some(agent) = self.jobs.agent_for_conversation(&conversation).await?
+            && let Some(job_id) = agent.latest_job_id
+        {
+            return self.resolve_message_job(job_id, delivery_id).await;
         }
         Ok(ResolvedMessage {
+            remote_recipient: None,
             conversation,
             target_job_id: None,
             continuation: None,
@@ -416,11 +446,7 @@ impl Gateway {
         job_id: JobId,
         delivery_id: &str,
     ) -> Result<ResolvedMessage> {
-        let view = self
-            .jobs
-            .read(&job_id)
-            .await
-            .context(CROSS_HOST_MESSAGE_GUIDANCE)?;
+        let view = self.jobs.read(&job_id).await.context(ADDRESS_GUIDANCE)?;
         let agent = view.agent.context("target conversation is unresolved")?;
         ensure!(
             agent.latest_job_id.as_ref() == Some(&job_id),
@@ -457,6 +483,7 @@ impl Gateway {
             None
         };
         Ok(ResolvedMessage {
+            remote_recipient: None,
             conversation,
             target_job_id: Some(job_id),
             continuation,

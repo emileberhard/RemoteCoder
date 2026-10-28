@@ -7,6 +7,25 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
+#[tokio::test]
+async fn sidecar_and_unrecognized_ids_never_route_to_codex() {
+    let gateway = crate::test_support::TestGateway::new();
+    let mut control = crate::test_support::FakeControl::attach(&gateway, 4).await;
+    for thread in [
+        "claude:11111111-2222-4333-8444-555555555555:a123456",
+        "unknown-provider:11111111-2222-4333-8444-555555555555",
+        "unrecognized-id",
+    ] {
+        let error = gateway.agent_conversation(thread).unwrap_err();
+        let error = error.downcast_ref::<RpcError>().unwrap();
+        assert_eq!(
+            error.response(&Value::Null)["error"]["data"]["class"],
+            "unsupported"
+        );
+    }
+    assert!(control.requests.try_recv().is_err());
+}
+
 async fn respond_control(
     gateway: &Arc<Gateway>,
     count: usize,
@@ -248,6 +267,12 @@ async fn stopping_an_agent_card_also_stops_that_agents_descendants() {
             root: "root".into(),
             at: Instant::now(),
             agents: vec![Agent {
+                owner_host_id: "fixture-host".into(),
+                job_id: None,
+                parent: None,
+                recipient: None,
+                kind: None,
+                intent_state: None,
                 id: "codex:working".into(),
                 thread_id: Some("working".into()),
                 title: "Working".into(),
@@ -381,6 +406,12 @@ fn native_non_child_proof_requires_a_valid_exact_thread_header() {
 
 fn native_agent(state: State) -> Agent {
     Agent {
+        owner_host_id: "fixture-host".into(),
+        job_id: None,
+        parent: None,
+        recipient: None,
+        kind: None,
+        intent_state: None,
         id: "codex:child".into(),
         parent_id: None,
         owner_thread_id: "root".into(),
@@ -473,6 +504,7 @@ fn seed_origin(
         agent_id: agent_id.clone(),
         request_fingerprint: None,
         unconfirmed_result: None,
+        attention: None,
         notices: Vec::new(),
         created_at_ms: Some(1),
         updated_at_ms: 1,
@@ -480,6 +512,10 @@ fn seed_origin(
         previous_job_id: None,
         provider_retries: Vec::new(),
         source: JobSource::Imported,
+        admitted_membership: None,
+        remote_fingerprint: None,
+        parent_revision: 0,
+        initial_parent: None,
         admission_origin: Some(origin.clone()),
         spec: SpecEvidence::Unknown {
             reason: "No execution fixture".into(),
@@ -503,6 +539,9 @@ fn seed_origin(
         stop: StopState::NotRequested,
     };
     let agent = AgentRecord {
+        parent: None,
+        parent_revision: 0,
+        parent_recipient: None,
         agent_id: agent_id.clone(),
         conversation: ConversationBinding::Known { conversation },
         origin,
@@ -575,44 +614,46 @@ async fn user_alert_gate_preserves_roots_and_silences_all_child_events() {
         notifier,
     );
     let cases = [
-        ("native-child", None, false),
-        ("codex-child", Some(true), false),
+        ("0e1a0399-0e3d-5aa4-ace7-0ed28835d55f", None, false),
+        ("77a2f659-7b8e-5d46-8561-c26b4b7685c2", Some(true), false),
         (
             "claude_11111111-2222-4333-8444-555555555555",
             Some(true),
             false,
         ),
-        ("codex-root", Some(false), true),
+        ("6407bee6-488b-52bb-a3d5-27c219d415b2", Some(false), true),
         (
             "claude_aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
             Some(false),
             true,
         ),
-        ("same-id-other-home", Some(true), true),
-        ("unknown-coverage", None, false),
-        ("wrong-native-identity", None, false),
-        ("missing-native-identity", None, false),
-        ("missing-native-source", None, false),
-        ("native-review-child", None, false),
+        ("84ff411c-7cbe-5039-9bfa-912fc369c611", Some(true), true),
+        ("1369ef40-cee5-54eb-b96c-fd8ae3910118", None, false),
+        ("48bf3cf7-1b9f-555d-8344-dbaf8fd28653", None, false),
+        ("0b46fc9e-7efa-56f4-b838-618003791c5b", None, false),
+        ("2178375a-bde2-5ae6-bbea-aa786e82da95", None, false),
+        ("da106880-212d-58d2-a240-55890388dadf", None, false),
     ];
     let job_root = state_path.parent().unwrap().join("agent-jobs/v1");
     for (index, (thread, child, _)) in cases.iter().enumerate() {
         if let Some(child) = child {
             let mut identity = gateway.agent_conversation(thread).unwrap();
-            if *thread == "same-id-other-home" {
+            if *thread == "84ff411c-7cbe-5039-9bfa-912fc369c611" {
                 identity.provider_home = crate::agents::jobs::model::ProviderHome::Known {
                     path: directory.path().join("other-provider-home"),
                 };
             }
             let origin = if *child {
                 crate::agents::jobs::model::Origin::Parent {
-                    conversation: gateway.agent_conversation("parent").unwrap(),
+                    conversation: gateway
+                        .agent_conversation("8c43d12f-8038-5d28-be95-ef14cc47faf3")
+                        .unwrap(),
                 }
             } else {
                 crate::agents::jobs::model::Origin::TopLevel
             };
             seed_origin(&job_root, identity, origin, index);
-        } else if *thread == "unknown-coverage" {
+        } else if *thread == "1369ef40-cee5-54eb-b96c-fd8ae3910118" {
             seed_origin(
                 &job_root,
                 gateway.agent_conversation(thread).unwrap(),
@@ -634,14 +675,14 @@ async fn user_alert_gate_preserves_roots_and_silences_all_child_events() {
             assert_eq!(request["method"], "thread/read");
             let thread = request["params"]["threadId"].as_str().unwrap();
             let response = match thread {
-                "wrong-native-identity" => json!({"thread":{"id":"another-thread"}}),
-                "missing-native-identity" => json!({}),
-                "missing-native-source" => json!({"thread":{"id":thread}}),
-                "native-review-child" => {
+                "48bf3cf7-1b9f-555d-8344-dbaf8fd28653" => json!({"thread":{"id":"another-thread"}}),
+                "0b46fc9e-7efa-56f4-b838-618003791c5b" => json!({}),
+                "2178375a-bde2-5ae6-bbea-aa786e82da95" => json!({"thread":{"id":thread}}),
+                "da106880-212d-58d2-a240-55890388dadf" => {
                     json!({"thread":{"id":thread,"source":{"subAgent":"review"}}})
                 }
                 _ => {
-                    json!({"thread":{"id":thread,"source":"appServer","parentThreadId":(thread == "native-child").then_some("parent")}})
+                    json!({"thread":{"id":thread,"source":"appServer","parentThreadId":(thread == "0e1a0399-0e3d-5aa4-ace7-0ed28835d55f").then_some("8c43d12f-8038-5d28-be95-ef14cc47faf3")}})
                 }
             };
             responder_owner
@@ -801,7 +842,11 @@ async fn stalled_ancestry_is_bounded_and_cannot_authorize_an_alert() {
     let _control = crate::test_support::FakeControl::attach(&gateway, 1).await;
     let result = tokio::time::timeout(
         Duration::from_secs(3),
-        gateway.check_user_alert_ownership(Some("stalled"), "alert", Some("event")),
+        gateway.check_user_alert_ownership(
+            Some("11111111-2222-4333-8444-555555555555"),
+            "alert",
+            Some("event"),
+        ),
     )
     .await
     .unwrap();
@@ -867,10 +912,12 @@ async fn runtime_inventory_keeps_healthy_agents_when_one_continuation_is_ambiguo
         seed_origin(
             &root,
             gateway
-                .agent_conversation(&format!("child-{index}"))
+                .agent_conversation(&format!("00000000-0000-4000-8000-{index:012}"))
                 .unwrap(),
             Origin::Parent {
-                conversation: gateway.agent_conversation("parent").unwrap(),
+                conversation: gateway
+                    .agent_conversation("8c43d12f-8038-5d28-be95-ef14cc47faf3")
+                    .unwrap(),
             },
             index,
         );
@@ -925,8 +972,10 @@ async fn runtime_inventory_keeps_healthy_agents_when_one_continuation_is_ambiguo
         }
     });
     let result = gateway
-        .agent_service()
-        .agents_rpc("conversation/agents/list", json!({"threadId":"parent"}))
+        .cluster_agents_rpc(
+            "conversation/agents/list",
+            json!({"threadId":"8c43d12f-8038-5d28-be95-ef14cc47faf3"}),
+        )
         .await;
     responder.abort();
     let result = result.unwrap();
@@ -934,12 +983,12 @@ async fn runtime_inventory_keeps_healthy_agents_when_one_continuation_is_ambiguo
     assert_eq!(agents.len(), 2);
     let healthy = agents
         .iter()
-        .find(|agent| agent["threadId"] == "child-1")
+        .find(|agent| agent["threadId"] == "00000000-0000-4000-8000-000000000001")
         .unwrap();
     assert_eq!(healthy["state"], "completed");
     let ambiguous = agents
         .iter()
-        .find(|agent| agent["threadId"] == "child-2")
+        .find(|agent| agent["threadId"] == "00000000-0000-4000-8000-000000000002")
         .unwrap();
     assert_eq!(ambiguous["state"], "unknown");
     assert!(ambiguous["executionId"].is_null());
@@ -958,4 +1007,183 @@ async fn runtime_inventory_keeps_healthy_agents_when_one_continuation_is_ambiguo
             .iter()
             .any(|warning| warning.as_str().unwrap().contains("cycle"))
     );
+}
+
+#[tokio::test]
+async fn current_parent_tag_overrides_native_provenance_in_headers_and_classification() {
+    use crate::agents::jobs::model::*;
+    use crate::wire::cluster::AgentAddress;
+    let gateway = gateway();
+    let identity = gateway.host_identity().await.unwrap();
+    let conversation = gateway
+        .agent_conversation("0e1a0399-0e3d-5aa4-ace7-0ed28835d55f")
+        .unwrap();
+    let original_parent = gateway
+        .agent_conversation("83fd029c-0ad3-5ed2-8513-781e45c9b22a")
+        .unwrap();
+    let origin = Origin::Parent {
+        conversation: original_parent.clone(),
+    };
+    let store = gateway.jobs.store().await.unwrap();
+    let agent = store
+        .adopt_conversation(AgentRecord {
+            agent_id: "native-child-tag".into(),
+            conversation: ConversationBinding::Known { conversation },
+            origin: origin.clone(),
+            tool_scope: None,
+            origin_job_id: None,
+            latest_job_id: None,
+            parent: Some(AgentAddress {
+                host_id: identity.host_id.clone(),
+                thread_id: "83fd029c-0ad3-5ed2-8513-781e45c9b22a".into(),
+            }),
+            parent_revision: 0,
+            parent_recipient: Some(Recipient::Conversation {
+                conversation: original_parent,
+            }),
+        })
+        .await
+        .unwrap();
+    store
+        .set_parent(agent.agent_id.clone(), None, Recipient::None)
+        .await
+        .unwrap();
+    let mut header = json!({"thread":{"id":"0e1a0399-0e3d-5aa4-ace7-0ed28835d55f","parentThreadId":"83fd029c-0ad3-5ed2-8513-781e45c9b22a"}});
+    gateway.apply_parent_tags(&mut header).await.unwrap();
+    assert!(header["thread"]["parent"].is_null());
+    assert!(header["thread"]["parentThreadId"].is_null());
+    assert!(
+        !gateway
+            .is_agent_thread("0e1a0399-0e3d-5aa4-ace7-0ed28835d55f")
+            .await
+            .unwrap()
+    );
+    let classified = gateway
+        .agent_service()
+        .agents_rpc(
+            "conversation/agents/classify",
+            json!({"threadIds":["0e1a0399-0e3d-5aa4-ace7-0ed28835d55f"]}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        classified["knownRoots"],
+        json!(["0e1a0399-0e3d-5aa4-ace7-0ed28835d55f"])
+    );
+    let address = AgentAddress {
+        host_id: crate::ids::new_session_uuid(),
+        thread_id: "remote-parent".into(),
+    };
+    let parent = ConversationIdentity {
+        provider: Provider::Codex,
+        provider_home: ProviderHome::Known {
+            path: "/remote/codex".into(),
+        },
+        thread_id: address.thread_id.clone(),
+    };
+    store
+        .set_parent(
+            agent.agent_id.clone(),
+            Some(address.clone()),
+            Recipient::Remote {
+                host: address.host_id.clone(),
+                incarnation: crate::ids::new_session_uuid(),
+                conversation: parent,
+            },
+        )
+        .await
+        .unwrap();
+    let mut header = json!({"thread":{"id":"0e1a0399-0e3d-5aa4-ace7-0ed28835d55f","parentThreadId":"83fd029c-0ad3-5ed2-8513-781e45c9b22a"}});
+    gateway.apply_parent_tags(&mut header).await.unwrap();
+    assert_eq!(header["thread"]["parent"], json!(address));
+    assert!(header["thread"]["parentThreadId"].is_null());
+    assert!(header["thread"].get("parentHostID").is_none());
+    assert!(!gateway.apply_parent_tags(&mut header).await.unwrap());
+    assert!(
+        gateway
+            .is_agent_thread("0e1a0399-0e3d-5aa4-ace7-0ed28835d55f")
+            .await
+            .unwrap()
+    );
+    let classified = gateway
+        .agent_service()
+        .agents_rpc(
+            "conversation/agents/classify",
+            json!({"threadIds":["0e1a0399-0e3d-5aa4-ace7-0ed28835d55f"]}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        classified["relations"]["0e1a0399-0e3d-5aa4-ace7-0ed28835d55f"]["parentHostID"],
+        address.host_id
+    );
+    assert_eq!(
+        classified["relations"]["0e1a0399-0e3d-5aa4-ace7-0ed28835d55f"]["parentThreadId"],
+        address.thread_id
+    );
+    assert_eq!(store.agent(agent.agent_id).await.unwrap().origin, origin);
+    let mut malformed =
+        json!({"data":[null,7,"invalid",{"id":"0e1a0399-0e3d-5aa4-ace7-0ed28835d55f"}]});
+    gateway.apply_parent_tags(&mut malformed).await.unwrap();
+    assert_eq!(malformed["data"][0], Value::Null);
+    assert_eq!(malformed["data"][3]["parent"], json!(address));
+}
+
+#[tokio::test]
+async fn remote_parent_pages_have_stable_revisions_and_non_null_titles() {
+    use crate::agents::jobs::model::*;
+    use crate::wire::cluster::AgentAddress;
+    let gateway = gateway();
+    let root = gateway
+        .turn_state_path
+        .as_ref()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("agent-jobs/v1");
+    let conversation = gateway
+        .agent_conversation("6e76341f-f81c-5418-b4cb-ebefa71be1c2")
+        .unwrap();
+    seed_origin(&root, conversation.clone(), Origin::TopLevel, 77);
+    let store = gateway.jobs.store().await.unwrap();
+    let agent = store
+        .agent_for_conversation(conversation)
+        .await
+        .unwrap()
+        .unwrap();
+    let address = AgentAddress {
+        host_id: crate::ids::new_session_uuid(),
+        thread_id: "other-host-parent".into(),
+    };
+    store
+        .set_parent(
+            agent.agent_id.clone(),
+            Some(address.clone()),
+            Recipient::Unknown {
+                reason: "fixture remote receiver".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let page = gateway
+        .cluster_agents_rpc("conversation/agents/list", json!({"parent":address}))
+        .await
+        .unwrap();
+    assert_eq!(page["agents"][0]["title"], "Agent");
+    assert!(page["revision"].is_string());
+    let unchanged = gateway
+        .cluster_agents_rpc("conversation/agents/list", json!({"parent":address}))
+        .await
+        .unwrap();
+    assert_eq!(page["revision"], unchanged["revision"]);
+    store
+        .set_parent(agent.agent_id, None, Recipient::None)
+        .await
+        .unwrap();
+    let empty = gateway
+        .cluster_agents_rpc("conversation/agents/list", json!({"parent":address}))
+        .await
+        .unwrap();
+    assert!(empty["agents"].as_array().unwrap().is_empty());
+    assert_ne!(page["revision"], empty["revision"]);
 }

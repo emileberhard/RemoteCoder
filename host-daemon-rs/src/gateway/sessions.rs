@@ -30,7 +30,7 @@ impl Gateway {
                     .join("sessions/v1");
                 let codex = self.codex.provider_home()?.to_owned();
                 let claude = self.claude_settings.claude_home.clone();
-                let host = local_cluster().0;
+                let host = self.host_identity().await?.host_id;
                 let origins = vec![
                     Origin {
                         host: host.clone(),
@@ -111,13 +111,21 @@ impl Gateway {
         let Some(_guard) = runtime.mirror_lock.try_lock().ok() else {
             return Ok(json!({"running":true}));
         };
-        let (_, members, call) = local_cluster();
+        let link = self.cluster_link().await?;
+        let members = link
+            .members()
+            .await?
+            .into_iter()
+            .filter(|member| member.state == crate::wire::cluster::MemberState::Active);
         let mut outcomes = Vec::new();
-        for host in members {
+        for member in members {
+            let host = member.host;
             let member = host.clone();
-            let caller = call.clone();
+            let link = link.clone();
             let callback: mirror::Call = Arc::new(move |method: &'static str, params: Value| {
-                caller(member.clone(), method.into(), params)
+                let link = link.clone();
+                let member = member.clone();
+                async move { link.call(&member, method, params).await.map_err(Into::into) }.boxed()
             });
             match mirror::sync(&runtime.store, &host, callback, runtime.mirror_stop.clone()).await {
                 Ok(value) => outcomes.push(json!({"host":host,"result":value})),
@@ -150,15 +158,26 @@ impl Gateway {
         .await?
     }
 
-    pub(crate) async fn sessions_rpc(self: &Arc<Self>, method: &str, params: Value) -> RpcResult {
-        self.session_request(method, params)
+    pub(crate) async fn sessions_rpc(
+        self: &Arc<Self>,
+        grant: &crate::auth::installation_credentials::Grant,
+        method: &str,
+        params: Value,
+    ) -> RpcResult {
+        self.session_request(grant, method, params)
             .await
             .map_err(session_error)
     }
 
-    async fn session_request(&self, method: &str, params: Value) -> Result<Value> {
+    async fn session_request(
+        &self,
+        grant: &crate::auth::installation_credentials::Grant,
+        method: &str,
+        params: Value,
+    ) -> Result<Value> {
         let runtime = self.sessions_runtime().await?.clone();
-        let (host, members, call) = local_cluster();
+        let host = self.host_identity().await?.host_id;
+        let local_host = host.clone();
         if method == "sessions/list" {
             #[derive(serde::Deserialize)]
             #[serde(deny_unknown_fields)]
@@ -179,7 +198,12 @@ impl Gateway {
         let store = runtime.store.clone();
         let method = method.to_owned();
         let request = if method == "sessions/search" {
-            Some(serde_json::from_value::<query::Search>(params.clone())?)
+            let mut request = serde_json::from_value::<query::Search>(params.clone())?;
+            request.local |= matches!(
+                grant,
+                crate::auth::installation_credentials::Grant::Peer { .. }
+            );
+            Some(request)
         } else {
             None
         };
@@ -191,8 +215,8 @@ impl Gateway {
                     let mut request=request_copy.context("Search request missing")?;
                     if !request.local {
                         let cursors:std::collections::BTreeMap<String,Option<String>>=request.cursor.as_deref().map(serde_json::from_str).transpose()?.unwrap_or_default();
-                        if cursors.contains_key("local") && cursors["local"].is_none() {return Ok(json!({"hits":[],"cursor":null,"coverage":query::coverage(&store.reader()?)?}));}
-                        request.cursor=cursors.get("local").cloned().flatten();
+                        if cursors.contains_key(&host) && cursors[&host].is_none() {return Ok(json!({"hits":[],"cursor":null,"coverage":query::coverage(&store.reader()?)?}));}
+                        request.cursor=cursors.get(&host).cloned().flatten();
                     }
                     query::search(&store.reader()?,&request)
                 }
@@ -219,20 +243,22 @@ impl Gateway {
         if let Some(request) = request
             && !request.local
         {
-            return cluster::search(output, members, request, call).await;
+            let link = self.cluster_link().await?;
+            let members = link
+                .members()
+                .await?
+                .into_iter()
+                .filter(|member| member.state == crate::wire::cluster::MemberState::Active)
+                .map(|member| member.host)
+                .collect();
+            let call: cluster::MemberCall = Arc::new(move |host, method, params| {
+                let link = link.clone();
+                async move { link.call(&host, &method, params).await.map_err(Into::into) }.boxed()
+            });
+            return cluster::search(&local_host, output, members, request, call).await;
         }
         Ok(output)
     }
-}
-
-fn local_cluster() -> (String, Vec<String>, cluster::MemberCall) {
-    (
-        "local".into(),
-        Vec::new(),
-        Arc::new(|_, _, _| {
-            async { anyhow::bail!("Cluster link is not wired in this stage") }.boxed()
-        }),
-    )
 }
 
 fn session_error(error: anyhow::Error) -> RpcError {

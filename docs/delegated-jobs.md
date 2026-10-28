@@ -29,10 +29,31 @@ origin or provider scope stays unknown rather than becoming a root.
 
 ## Durable lifecycle
 
+The cluster upgrade is a one-way job-store change. After an agent gains a parent
+tag or a job gains cluster state, gateways at `aa96ebb` and earlier reject the
+new fields or enum variants. Recover by rolling forward to a fixed next patch;
+never restore a pre-upgrade snapshot that would discard accepted jobs.
+
+| Store | Older gateway behavior |
+|---|---|
+| `agent-jobs/v1/agents` | Rejects parent-tag fields and `remoteParent` origin. Never-tagged roots omit new fields and retain their old shape. |
+| `agent-jobs/v1/jobs` | Rejects cluster admission, parent or attention fields, remote origin/recipient and `waitingForProvider`. Ordinary untagged jobs omit absent new fields and retain their old shape until they use a new state. |
+| `agent-jobs/v1/messages` | Rejects a non-null `remoteRecipient` or remote sender/recipient. Local messages omit the absent field and retain their old shape. |
+| `agent-jobs/v1/remote-intents` and `cancel-fences` | Ignores these new directories; cannot enforce their accepted work or Stop fences. |
+| `identity/v1`, job-store `.epoch`, Claude receipt `.epoch` | Ignores these new files; existing receipt records keep their prior format. |
+| `cluster/v1` members and credentials | Ignores this new store and cannot authenticate peer credentials. |
+
+Ignoring a new store does not make a downgrade safe: the older gateway cannot
+reconcile its accepted intents, remote deliveries or cancellation fences.
+
 Admission, exact conversation binding and ancestry commit before useful provider
 work starts. The initial input has a deterministic UUID derived from the JobId.
 A job moves through admitted, bound, dispatching, running or recovering, and a
-terminal outcome. Unknown is nonterminal. `JobSummary.active` describes an owned nonterminal runtime
+terminal outcome. Before binding, an unavailable provider is represented by
+`waitingForProvider` with its provider name. The driver retries with its existing
+250 ms to 60 s bounded backoff, retains the job until readiness or explicit Stop,
+and never blocks another provider's admission or execution. No provider effects
+have started in this state. Unknown is nonterminal. `JobSummary.active` describes an owned nonterminal runtime
 lifecycle, independently of its observed state. `agent list --active` uses that
 fact; imported historical uncertainty remains unknown and is excluded from the
 active list. Native provider activity retains its separate inventory owner.
@@ -167,17 +188,21 @@ capacity refusal names the retained obligations that prevent admission. The
 existing provider receiver owns reconciliation and Stop fences. Canonical native
 selectors are `claude_UUID` for Claude and a bare UUID for Codex; `codex:UUID`
 also selects Codex. A raw Claude session UUID never substitutes for its canonical
-thread ID. Local lookup failures explain how to resolve the owning host and use
-`codex-threads send --host <host>`; the gateway does not relay between hosts.
+thread ID. Cross-host operations use the exact owning member and its pinned
+cluster link; lookup failures never guess a host or fall back to an SSH send.
 
 ## Caller authority and read-only work
 
 Caller capture checks kernel PID/birth ancestry against actual provider-owned
-tool processes. Native proof stops at the daemon's exact tool root after checking
-its live birth identity and every intervening parent link. Unrelated launcher
+tool processes. One lazy walker stops at the first proven Codex tool root or
+Claude session owner after checking its live birth identity and every intervening
+parent link. Unrelated launcher
 ancestors above that owner may be unreadable and carry no additional authority.
-Without an authoritative native owner, complete ancestry and Claude owner checks
-retain their existing fail-closed behavior. It never trusts `AGENT_ID`, provider environment IDs or tmux's
+Without a proven owner, the complete walk retains its existing fail-closed
+behavior. An unreadable caller, intervening process or owner retains its exact
+error. This fixes the SSH-launched Claude caller failure present in 3.74.0 and
+`aa96ebb`: their eager walk could reach a privileged SSH launcher before checking
+the valid Claude owner. It never trusts `AGENT_ID`, provider environment IDs or tmux's
 global environment. Capture briefly rechecks an unpublished process entry,
 without changing the requested identity. The ephemeral captured handle is
 revalidated before every mutation; detached work must pass it explicitly and
@@ -202,6 +227,11 @@ failure falls back to the operator bearer. Remove this narrow migration once
 retained provider environments no longer name per-job sockets. Full-access clients use the existing
 credential owner for other operations. This preserves the current same-user
 trust boundary, not a hostile same-UID security sandbox.
+
+Local and remote starts share caller proof and scope inheritance. An unrestricted
+native caller uses the existing full-access coordination contract; a managed
+read-only caller's child retains that root and cannot widen its scope on a hop.
+The receiver validates target paths inside that root. Parent tags grant no scope.
 
 Codex read-only uses its native sandbox, core-only tool environment and disabled
 inherited MCP/hooks/apps/plugins. Claude read-only preserves the limited tool
@@ -253,3 +283,173 @@ A nonempty `providerRetries` record and the `retryWaiting` execution state requi
 a gateway that understands this format. Once retries have written these records,
 keep a matching gateway reader during rollback; older gateways reject them.
 Never restore an older store snapshot over jobs admitted or changed afterwards.
+
+## Host identity
+
+Authorized `/health` includes top-level `hostId` and `incarnation`, each a UUID.
+The host UUID persists at `identity/v1` across restarts, address changes and key
+rotation. The incarnation fences the job store and delivery receipts. Each store
+has a random `.epoch` created once: `agent-jobs/v1/.epoch` and the configured
+Claude home's `remotecoder-history/.epoch`. Startup rotates the incarnation when
+an epoch is missing or differs from the retained identity record. An inconsistent
+job store also invalidates it before startup fails. Remote input must match the
+recipient's current incarnation before native delivery custody can have effects.
+
+Restoring bytes in place within the same epoch is not automatically detectable.
+After restoring backups, run `cluster reset-identity` before rejoining members.
+A full disk clone requires that same reset. Existing membership is removed before
+a new identity joins. Identity and epoch files use `storage/private_state` and
+never derive identity from a hostname, address or authentication key.
+
+## Cluster v1 contract
+
+`wire::cluster` owns the versioned member, intent, cancel-fence, caller-authority
+and protocol records. Remote provenance is `Origin::RemoteParent`; each Agent
+has a separate nullable `parent` tag `{hostId, threadId}`. A per-job remote
+recipient carries `hostId`, `incarnation` and the exact provider conversation.
+Membership credentials prove `Grant::Peer {host, membership, digest}`; request
+fields cannot choose that principal. Membership removal retains its tombstone.
+
+Other modules use `Gateway::cluster_link().await` to obtain an `Arc<Link>`.
+`Link::members().await` returns public `MemberView` rows; `host` is the UUID
+(serialized as `hostId`), and `name` is its alias. `Link::call(host, method,
+params).await` uses one pooled, pinned TLS connection per membership. A
+`LinkError` retains `class` and `transmitted`; only `transmitted == false`
+proves that the requested method was never sent. `Gateway::host_identity().await`
+returns `HostIdentity {host_id, incarnation}`.
+
+`cluster/list` returns `self {hostId,name,incarnation,version,protocol}` and
+`members [{hostId,name,membership,state,reachability,version,protocol,load,routes}]`.
+Reachability has `state`, `since` and nullable `lastSeenAt`, with RFC 3339 times.
+Listing probes active members concurrently with a two-second hello deadline,
+updates reachability and preserves the last successful `lastSeenAt`. A successful
+hello resets that member's delivery backoff. There is no background polling.
+Removed tombstones stay private. Load, when available, is
+`{cpuPercent,memoryPressure,activeAgents}`. Every job read/list and conversation
+agent row adds `ownerHostId`, `parent` and `recipient`. Parent references always
+use `{hostId,threadId}`. A cross-host conversation-agent query uses
+`{parent:{hostId,threadId}}`; omitted `hostId` means this host. The parent's own
+host adds `kind:"remote_intent"` stub rows with `jobId`, `ownerHostId`,
+`intentState`, `parent`, `lastActiveAt` in epoch seconds and string `title`. An owner's real row
+replaces its stub by `(ownerHostId,jobId)`.
+
+Cluster-wide CLI reads include `coverage [{hostId,state,since?,staleThrough?}]`,
+where state is `ok`, `unreachable`, `unsupported` or `refused`.
+`agent/parent/set {agent:{hostId,threadId},parent:{hostId,threadId}|null}` goes to
+the agent's owner and returns the updated row. A cycle is `usage`; an unreachable
+parent-chain hop is `unavailable`. Provenance and authority never change with the
+tag. The caller starting a new turn receives its result; moving a tag transfers
+unaccepted results to its new parent or to the user when promoted.
+
+A move changes the parent tag immediately. Positively unaccepted completion
+obligations follow the current tag. An uncertain send retains its frozen old
+receiver and delivery identity until reconciliation proves non-acceptance; it
+then follows the current tag. If that reconciliation cannot finish because the
+old member was removed or its 24-hour receiver window expires, the delivery
+stays uncertain and visible to the user with its saved result. It is never
+readdressed to another parent or silently discarded. A promoted result remains
+available to the user. Unknown native acceptance never authorizes another turn.
+
+The authorized health response includes top-level `hostId` and `incarnation`
+UUID strings. Operator key rotation changes neither. Cluster protocol 1 uses
+`cluster/issue`, `cluster/accept` and `cluster/remove` with a membership UUID;
+only a local operator can mutate membership. Each side stores its issued digest,
+the other side's credential, direct `wss` routes and SPKI pin. Issue is idempotent
+per membership. Removal revokes existing sockets, retains a tombstone, stops work
+admitted by that membership and retains results. An unreachable half stays
+`remove_pending`. Joining again requires a new membership UUID.
+
+`agent/jobs/admit` returns the normal admission receipt plus `protocol`,
+`ownerHostId`, `jobId`, `address`, typed `state` and `incarnation`. `address` is
+null until a provider binds the exact conversation. The stable admission key is
+`(ownerHostId, jobId)`. The parent's host saves a bounded RemoteIntent before
+sending admission bytes. Uncertain admissions retry the same identity and
+fingerprint. A definitive refusal closes the intent; a changed incarnation
+makes it unknown. Stop is durable before transport, and a CancelFence on the
+receiver prevents a delayed admission from starting native work. A confirmed
+Stop closes transport retries without removing its retained receipt.
+
+The execution driver owns provider custody and local delivery. The cluster
+driver owns member network work, with independent member backoff, at most 64
+members doing network work concurrently and at most 64 delivery operations per
+member. Each member link serializes its socket. A slow member cannot block local
+launches or another member. `cluster/hello` wakes that member's driver and resets
+its backoff. Both drivers belong to the gateway lifecycle and resume durable
+records after a planned restart. There is no separate remote outbox.
+Accepting membership wakes the driver, whose new member worker sends hello and
+retries an unavailable member with its bounded backoff.
+
+`list_agents` defaults to the cluster; `--local` narrows it. Every fan-out result
+includes per-host `coverage`, and `--cursor` resumes each host independently.
+Bare IDs resolve locally first and then uniquely across members. Native session
+inventory comes from the sessions projection; unavailable inventory remains an
+error. Catalog schema 2 rebuilds provisional catalogs with UUID-scoped session
+keys. Incoming peer searches stay local; cluster coverage retains each link's
+unreachable, unsupported or refused state. Unknown native activity is excluded
+from `--active`. Native conversations
+can be inspected, messaged, stopped, adopted, moved or promoted. Continue refuses
+with `unsupported` when native permission evidence is unavailable; it does not
+invent a JobSpec from a thread header.
+
+Claude child sidecars (`claude:<parent UUID>:<child ID>`) are listed and read
+through sessions. They have no resumable provider thread, so lifecycle operations
+return unsupported (exit 7). Unrecognized conversation IDs never route to Codex.
+
+Every agent row includes `ownerHostId`, the current nullable `parent` address
+and its turn's `recipient`. Native ancestry stays immutable provenance. Thread
+headers with a current tag or native parent expose `parent: {hostId, threadId} | null`; untagged native roots preserve their provider response bytes. Relation JSON exposes
+`parentHostID` and `parentThreadId`. Promotion classifies the conversation as a
+root. Parent changes invalidate ancestry and agent-view caches. Remote-intent
+stub rows use `lastActiveAt` in epoch seconds, matching real rows, and every
+conversation-agent page carries a revision derived from its final rows.
+
+`cluster add SSH_HOST` enrolls every pair through each host's operator SSH route,
+skips active pairs and reports per-pair JSON. Partial enrollment exits 5;
+rerunning finishes existing membership IDs. Peer credentials cannot issue or
+accept another membership. `cluster list --json` reports reachability, version,
+protocol and measured CPU percentage, typed memory pressure and active agents.
+
+A failed first `hello` lookup returns unavailable (exit 5) before an immutable
+admission or intent exists; nothing is queued for later transmission. Abandoned
+applies after a complete immutable admission exists but cannot be sent. Admission
+uses one typed operation, `start(JobSpec)` or `continue(ContinueParams)`, through
+`agent/jobs/admit`; its fingerprint includes the operation kind and full payload.
+Reusing a job ID with different admission inputs is conflict (exit 8), including
+changing Start into Continue.
+
+## Indexed lifecycle work
+
+JobStore owns the derived conversation, parent, current-head, active-agent,
+ordered-page, reversed job-ID suffix and per-member pending-work indexes. Every persisted agent, job or
+intent transition publishes its index change in the same store critical section;
+startup rebuilds the indexes from retained records. Parent moves and promotions
+update the parent index and wake only members with affected pending deliveries.
+Ambiguous continuation branches retain an unresolved head. Ordinary head reads do
+not walk the continuation history. Active inventory pages use an ordered index of
+nonterminal runtime jobs and never query native session inventory. Their cursors
+advance only over active jobs, including provider waits, retry waits and unknown
+runtime outcomes; historical imports are excluded. Job suffix resolution uses an
+ordered reversed-ID range and returns at most two matches, keeping ambiguity
+explicit.
+
+Network workers subscribe to their member's coalesced watch and read only that
+member's pending jobs and intents. Delivery attempts that change only the retry
+receipt do not wake themselves and bypass backoff. Each watch retains one revision;
+record sets are derived from the retained store. New work has a 512 MiB storage
+admission budget; runtime reservations and unconfirmed remote intents each cap at
+256. Settled payloads expire after 30 days, but job records, receipt metadata and
+their indexes have no count-based retention or eviction policy. Their size grows
+with retained history even after payload expiry; record retention is separate
+follow-up work.
+
+Members owns one parsed immutable snapshot. Authentication and selector reads use
+its indexes without disk reads. Its atomic file transaction serializes mutations;
+a successful write swaps the snapshot and wakes membership observers. External
+membership-file edits are unsupported while the gateway is running.
+
+The existing JobStore persistence mutex still spans accounting and disk I/O.
+The per-member Link socket mutex still spans one request/response exchange, with
+a ten-second deadline, so one slow request can delay other requests to that peer.
+These ordering boundaries remain explicit follow-up work; other peers proceed
+independently. Native session inventory freshness and ingestion remain owned by
+sessions, including its pending event-driven single-writer repair.

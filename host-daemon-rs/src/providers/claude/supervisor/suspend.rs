@@ -149,7 +149,7 @@ pub(crate) mod suspend_test_support {
                 &stub,
                 crate::test_support::ClaudeCliMode::SuspendLogsInterrupt,
             );
-            let executable = root.root_path().join("claude");
+            let executable = root.root_path().join("claude-cli");
             std::fs::write(
                 &executable,
                 format!(

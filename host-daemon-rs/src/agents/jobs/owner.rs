@@ -13,7 +13,7 @@ pub(crate) struct JobOwner {
     pub(crate) contexts: super::context::Contexts,
     pub(crate) native_routes: super::routes::NativeRoutes,
     pub(crate) operations: RwLock<()>,
-    pub(super) tasks: crate::tasks::owned_tasks::OwnedTasks,
+    pub(crate) tasks: crate::tasks::owned_tasks::OwnedTasks,
     pub(super) scopes: super::routes::ScopedEndpoints,
     pub(super) endpoint: Mutex<Option<super::routes::ScopedEndpointLease>>,
     pub(super) root: Option<PathBuf>,
@@ -51,12 +51,15 @@ impl JobOwner {
     pub(crate) async fn store(&self) -> Result<&JobStore> {
         self.store
             .get_or_try_init(|| async {
-                JobStore::open(
+                let store = JobStore::open(
                     self.root
                         .clone()
                         .context("delegated jobs require a persistent gateway state directory")?,
                 )
-                .await
+                .await?;
+                let host = self.gateway()?.host_identity().await?.host_id;
+                store.initialize_parent_tags(host).await?;
+                Ok::<_, anyhow::Error>(store)
             })
             .await
     }
@@ -89,8 +92,45 @@ impl JobOwner {
             .send_modify(|revision| *revision = revision.wrapping_add(1));
     }
 
-    pub(super) fn changes(&self) -> watch::Receiver<u64> {
+    pub(crate) fn changes(&self) -> watch::Receiver<u64> {
         self.changed.subscribe()
+    }
+
+    async fn admission_receipt(&self, job: JobRecord, duplicate: bool) -> Result<AdmissionReceipt> {
+        let identity = self.gateway()?.host_identity().await?;
+        let address =
+            job.execution
+                .conversation()
+                .map(|conversation| crate::wire::cluster::AgentAddress {
+                    host_id: identity.host_id.clone(),
+                    thread_id: conversation.thread_id.clone(),
+                });
+        let state = if matches!(job.stop, StopState::Requested { .. }) {
+            crate::agents::State::Interrupted
+        } else {
+            match &job.execution {
+                ExecutionState::Terminal { terminal } => match terminal.outcome {
+                    JobOutcome::Completed => crate::agents::State::Completed,
+                    JobOutcome::Failed { .. } => crate::agents::State::Failed,
+                    JobOutcome::Stopped { .. } => crate::agents::State::Interrupted,
+                },
+                ExecutionState::Unknown { .. } => crate::agents::State::Unknown,
+                ExecutionState::Running { .. }
+                | ExecutionState::Recovering { .. }
+                | ExecutionState::Dispatching { .. } => crate::agents::State::Working,
+                _ => crate::agents::State::Waiting,
+            }
+        };
+        Ok(AdmissionReceipt {
+            protocol: crate::wire::cluster::PROTOCOL,
+            owner_host_id: identity.host_id,
+            job_id: job.job_id.clone(),
+            address,
+            state,
+            incarnation: identity.incarnation,
+            job,
+            duplicate,
+        })
     }
 
     pub(crate) async fn read(&self, id: &JobId) -> Result<JobView> {
@@ -101,7 +141,16 @@ impl JobOwner {
             agent.is_some() || job.source == JobSource::Imported,
             "runtime job is missing its authoritative agent record"
         );
-        Ok(JobView { job, agent })
+        let owner_host_id = Some(self.gateway()?.host_identity().await?.host_id.clone());
+        let parent = agent.as_ref().and_then(|agent| agent.parent.clone());
+        let recipient = Some(job.recipient.clone());
+        Ok(JobView {
+            owner_host_id,
+            parent,
+            recipient,
+            job,
+            agent,
+        })
     }
 
     pub(crate) async fn agent_for_conversation(
@@ -133,10 +182,16 @@ impl JobOwner {
                 bail!("caller-scoped listing must resolve its identity at the gateway boundary")
             }
         };
-        self.store()
+        let mut page = self
+            .store()
             .await?
             .list(selection, request.limit, request.cursor)
-            .await
+            .await?;
+        let owner = self.gateway()?.host_identity().await?.host_id.clone();
+        for row in &mut page.jobs {
+            row.owner_host_id = Some(owner.clone());
+        }
+        Ok(page)
     }
 
     pub(crate) async fn children(
@@ -147,7 +202,14 @@ impl JobOwner {
     ) -> Result<ListPage> {
         self.store()
             .await?
-            .list(Selection::Children(parent.clone()), limit, cursor)
+            .list(
+                Selection::Children(crate::wire::cluster::AgentAddress {
+                    host_id: self.gateway()?.host_identity().await?.host_id,
+                    thread_id: parent.thread_id.clone(),
+                }),
+                limit,
+                cursor,
+            )
             .await
     }
 
@@ -159,7 +221,14 @@ impl JobOwner {
     ) -> Result<ListPage> {
         self.store()
             .await?
-            .list(Selection::Descendants(parent.clone()), limit, cursor)
+            .list(
+                Selection::Descendants(crate::wire::cluster::AgentAddress {
+                    host_id: self.gateway()?.host_identity().await?.host_id,
+                    thread_id: parent.thread_id.clone(),
+                }),
+                limit,
+                cursor,
+            )
             .await
     }
 
@@ -177,9 +246,48 @@ impl JobOwner {
             !matches!(origin, Origin::Unknown { .. }),
             "new work requires a proven parent or explicit operator intent"
         );
-        let recipient = recipient(&origin);
+        let recipient = recipient(&origin, &request.caller);
+        let initial_parent = match &origin {
+            Origin::Parent { conversation } => Some(crate::wire::cluster::AgentAddress {
+                host_id: self.gateway()?.host_identity().await?.host_id.clone(),
+                thread_id: conversation.thread_id.clone(),
+            }),
+            Origin::RemoteParent { host, conversation } => {
+                Some(crate::wire::cluster::AgentAddress {
+                    host_id: host.clone(),
+                    thread_id: conversation.thread_id.clone(),
+                })
+            }
+            _ => None,
+        };
+        let admitted_membership = match &request.caller {
+            Caller::Forwarded { membership, .. } => Some(membership.clone()),
+            _ => None,
+        };
         let request_fingerprint =
             fingerprint(&serde_json::to_vec(&(&request.spec, &origin, &recipient))?);
+        if let Some(job) = self
+            .store()
+            .await?
+            .existing_request(request.job_id.clone(), request_fingerprint.clone())
+            .await?
+        {
+            return self.admission_receipt(job, true).await;
+        }
+        if !request.spec.cwd.is_dir() {
+            return Err(crate::rpc::RpcError::new(crate::rpc::error::RpcCode::InvalidParams,"working directory is missing on the target host; pass --cwd with an existing target path").with_data(crate::rpc::error::RpcData::Raw(serde_json::json!({"class":"usage"}))).into());
+        }
+        if let ToolScope::ReadOnly { root } = &request.spec.tool_scope {
+            ensure!(
+                root.is_dir()
+                    && request
+                        .spec
+                        .cwd
+                        .canonicalize()?
+                        .starts_with(root.canonicalize()?),
+                "working directory must be inside the target host's read-only root"
+            );
+        }
         let at_ms = now_ms();
         let job = JobRecord {
             agent_id: request.job_id.as_str().into(),
@@ -191,8 +299,19 @@ impl JobOwner {
             previous_job_id: None,
             provider_retries: Vec::new(),
             source: JobSource::Runtime,
+            admitted_membership,
+            remote_fingerprint: match &request.caller {
+                Caller::Forwarded {
+                    admission_fingerprint,
+                    ..
+                } => admission_fingerprint.clone(),
+                _ => None,
+            },
+            parent_revision: 0,
+            initial_parent,
             admission_origin: Some(origin),
             unconfirmed_result: None,
+            attention: None,
             notices: Vec::new(),
             spec: SpecEvidence::Known { spec: request.spec },
             recipient,
@@ -201,7 +320,7 @@ impl JobOwner {
         };
         let (job, duplicate) = self.store().await?.admit(job).await?;
         self.dirty();
-        Ok(AdmissionReceipt { job, duplicate })
+        self.admission_receipt(job, duplicate).await
     }
 
     pub(crate) async fn continue_job(
@@ -217,7 +336,7 @@ impl JobOwner {
         let store = self.store().await?;
         let current_recipient = match &request.recipient {
             ContinueRecipient::Previous => None,
-            ContinueRecipient::Current => Some(recipient(&caller)),
+            ContinueRecipient::Current => Some(recipient(&caller, &request.caller)),
         };
         let request_bytes = if request.intent == ContinueIntent::Message {
             serde_json::to_vec(&(
@@ -252,10 +371,7 @@ impl JobOwner {
             .existing_request(request.job_id.clone(), request_fingerprint.clone())
             .await?
         {
-            return Ok(AdmissionReceipt {
-                job,
-                duplicate: true,
-            });
+            return self.admission_receipt(job, true).await;
         }
         let agent = store.agent(request.agent_id.clone()).await?;
         let previous = store
@@ -421,7 +537,7 @@ impl JobOwner {
         }
         let recipient = match request.recipient {
             ContinueRecipient::Previous => previous.recipient.clone(),
-            ContinueRecipient::Current => recipient(&caller),
+            ContinueRecipient::Current => recipient(&caller, &request.caller),
         };
         ensure!(
             !matches!(recipient, Recipient::Unknown { .. }),
@@ -445,8 +561,22 @@ impl JobOwner {
             previous_job_id: Some(previous.job_id),
             provider_retries: Vec::new(),
             source: JobSource::Runtime,
+            admitted_membership: match &request.caller {
+                Caller::Forwarded { membership, .. } => Some(membership.clone()),
+                _ => None,
+            },
+            remote_fingerprint: match &request.caller {
+                Caller::Forwarded {
+                    admission_fingerprint,
+                    ..
+                } => admission_fingerprint.clone(),
+                _ => None,
+            },
+            parent_revision: agent.parent_revision,
+            initial_parent: agent.parent.clone(),
             admission_origin: None,
             unconfirmed_result: None,
+            attention: None,
             notices: Vec::new(),
             spec: SpecEvidence::Known { spec },
             recipient,
@@ -458,7 +588,7 @@ impl JobOwner {
             ContinueIntent::Message => store.admit_message_continuation(job).await?,
         };
         self.dirty();
-        Ok(AdmissionReceipt { job, duplicate })
+        self.admission_receipt(job, duplicate).await
     }
 
     pub(crate) async fn stop(&self, request: StopParams) -> Result<JobRecord> {
@@ -489,11 +619,21 @@ impl JobOwner {
     }
 }
 
-fn recipient(origin: &Origin) -> Recipient {
+fn recipient(origin: &Origin, caller: &Caller) -> Recipient {
     match origin {
         Origin::TopLevel => Recipient::None,
         Origin::Parent { conversation } => Recipient::Conversation {
             conversation: conversation.clone(),
+        },
+        Origin::RemoteParent { host, conversation } => match caller {
+            Caller::Forwarded { incarnation, .. } => Recipient::Remote {
+                host: host.clone(),
+                incarnation: incarnation.clone(),
+                conversation: conversation.clone(),
+            },
+            _ => Recipient::Unknown {
+                reason: "remote caller has no proven incarnation".into(),
+            },
         },
         Origin::Unknown { reason } => Recipient::Unknown {
             reason: reason.clone(),

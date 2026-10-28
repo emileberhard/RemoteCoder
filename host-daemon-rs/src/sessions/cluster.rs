@@ -8,6 +8,7 @@ pub(crate) type MemberCall =
     Arc<dyn Fn(String, String, Value) -> BoxFuture<'static, Result<Value>> + Send + Sync>;
 
 pub(crate) async fn search(
+    local_host: &str,
     local: Value,
     members: Vec<String>,
     request: super::query::Search,
@@ -43,9 +44,9 @@ pub(crate) async fn search(
     .collect::<Vec<_>>()
     .await;
     let mut hits = local["hits"].as_array().cloned().unwrap_or_default();
-    let mut coverage = vec![json!({"hostId":"local","state":"ok","coverage":local["coverage"]})];
+    let mut coverage = vec![json!({"hostId":local_host,"state":"ok","coverage":local["coverage"]})];
     let mut next = BTreeMap::from([(
-        "local".to_owned(),
+        local_host.to_owned(),
         local["cursor"].as_str().map(str::to_owned),
     )]);
     for (host, result) in pages {
@@ -59,9 +60,15 @@ pub(crate) async fn search(
             }
             Err(error) => {
                 next.insert(host.clone(), cursors.get(&host).cloned().flatten());
-                coverage.push(
-                    json!({"hostId":host,"state":"unreachable","error":format!("{error:#}")}),
-                );
+                let state = match error
+                    .downcast_ref::<crate::cluster::link::LinkError>()
+                    .map(|error| &error.class)
+                {
+                    Some(crate::wire::cluster::ErrorClass::Unsupported) => "unsupported",
+                    Some(crate::wire::cluster::ErrorClass::Refused) => "refused",
+                    _ => "unreachable",
+                };
+                coverage.push(json!({"hostId":host,"state":state,"error":format!("{error:#}")}));
             }
         }
     }

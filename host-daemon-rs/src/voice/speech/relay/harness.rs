@@ -42,8 +42,10 @@ impl Harness {
         let key_file = directory.path().join("router-key");
         std::fs::write(&key_file, ROUTER_KEY).unwrap();
         std::fs::set_permissions(&key_file, std::fs::Permissions::from_mode(0o600)).unwrap();
-        let installations =
-            InstallationCredentials::new(directory.path().join("installations.json"));
+        let installations = InstallationCredentials::new(
+            directory.path().join("installations.json"),
+            Arc::new(crate::cluster::members::Members::new(directory.path())),
+        );
         let release_stream = Arc::new(Notify::new());
         let router = serve(mock_router(Arc::clone(&release_stream))).await;
         let relay = SpeechRelay::new(

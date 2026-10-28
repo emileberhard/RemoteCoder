@@ -117,7 +117,15 @@ impl PrivateTmux {
                 if let Ok(code) = std::fs::read_to_string(&status)
                     && let Ok(exit) = code.parse()
                 {
-                    let payload = std::fs::read_to_string(&stdout).unwrap();
+                    let output = std::fs::read_to_string(&stdout).unwrap();
+                    let errors = std::fs::read_to_string(root.join("stderr")).unwrap();
+                    let payload = if exit == 0 {
+                        assert!(errors.is_empty(), "{errors}");
+                        output
+                    } else {
+                        assert!(output.is_empty(), "{output}");
+                        errors
+                    };
                     return (exit, serde_json::from_str(&payload).unwrap());
                 }
                 tokio::time::sleep(Duration::from_millis(10)).await;
@@ -202,7 +210,7 @@ async fn agent_client_detached_tmux_rejects_inherited_identity_before_delivery()
             &["message", "parent", "Detached callback", "--json"],
         )
         .await;
-    assert_eq!(exit, 69);
+    assert_eq!(exit, 4);
     assert_eq!(payload["error"]["data"]["kind"], "unprovenCaller");
     server.await.unwrap();
 }
@@ -251,7 +259,7 @@ async fn agent_client_stale_scoped_socket_never_falls_back_to_bearer() {
             ],
         )
         .await;
-    assert_eq!(exit, 69);
+    assert_eq!(exit, 4);
     assert_eq!(payload["error"]["kind"], "unprovenCaller");
     assert_eq!(payload["request_id"], "stable-detached-message");
     assert!(
@@ -337,11 +345,11 @@ fn agent_client_format_only_reserves_stdout_for_envelopes() {
             .args(["agent", "message", "parent", text, "--format-only"])
             .output()
             .unwrap();
-        assert_eq!(output.status.code(), Some(64));
+        assert_eq!(output.status.code(), Some(2));
         assert!(output.stdout.is_empty());
         let diagnostic: Value = serde_json::from_slice(&output.stderr).unwrap();
         assert_eq!(diagnostic["ok"], false);
-        assert_eq!(diagnostic["error"]["kind"], "invalidRequest");
+        assert_eq!(diagnostic["error"]["kind"], "usage");
     }
     let output = Command::new(binary)
         .env_clear()
@@ -370,66 +378,87 @@ fn agent_client_format_only_reserves_stdout_for_envelopes() {
     assert!(envelope.trim_end().ends_with("</agent_message>"));
 }
 
+#[test]
+fn agent_client_message_dash_reads_stdin_and_rejects_blank_input() {
+    use std::io::Write;
+    for input in ["A multiline\nmessage from stdin", " \n\t"] {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_remote-coder-codex-gateway"))
+            .env_clear()
+            .args([
+                "agent",
+                "message",
+                "parent",
+                "-",
+                "--format-only",
+                "--sender-id",
+                "native-fixture",
+                "--reply-tool",
+                "message_agent",
+                "--reply-target",
+                "native-fixture",
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(input.as_bytes())
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        if input.trim().is_empty() {
+            assert!(!output.status.success());
+            assert!(output.stdout.is_empty());
+        } else {
+            assert!(output.status.success(), "{output:?}");
+            assert!(String::from_utf8(output.stdout).unwrap().contains(input));
+        }
+    }
+}
+
 #[tokio::test]
-async fn agent_client_active_listing_skips_history_pages_and_warns_only_for_active_truncation() {
+async fn agent_client_listing_preserves_cluster_coverage_and_cursor() {
     let root = tempfile::tempdir().unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     configuration(root.path(), listener.local_addr().unwrap().port());
     let server = tokio::spawn(async move {
-        for _ in 0..4 {
+        for local in [false, true] {
             let (stream, _) = listener.accept().await.unwrap();
             let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
             initialize(&mut socket).await;
             let Message::Text(text) = socket.next().await.unwrap().unwrap() else {
-                panic!("No list request");
+                panic!("No list request")
             };
             let request: Value = serde_json::from_str(&text).unwrap();
-            assert_eq!(request["method"], "agent/jobs/list");
-            let first_page = request["params"]["cursor"].is_null();
-            let rows = if first_page { 0..200 } else { 200..202 };
-            let jobs: Vec<_> = rows.map(|sequence| json!({
-                "jobId": format!("agent-codex-1793127141860775000-{sequence:08x}"),
-                "agentId": format!("fixture-{sequence}"),
-                "conversation": {"kind":"unknown","reason":"historical identity unavailable"},
-                "provider":"codex", "cwd":null,"title":null,"model":null,
-                "state":if first_page { "unknown" } else { "working" },
-                "active":!first_page,"createdAtMs":null,"updatedAtMs":1793153277624_i64,
-            })).collect();
-            let result = json!({"jobs":jobs,"nextCursor":if first_page { Some("agent-codex-1793127141860775000-000000c7") } else { None }});
-            socket
-                .send(Message::Text(
-                    json!({"id":request["id"],"result":result}).to_string(),
-                ))
-                .await
-                .unwrap();
+            assert_eq!(request["method"], "agent/cluster/list");
+            assert_eq!(request["params"]["local"], local);
+            assert_eq!(request["params"]["active"], true);
+            assert_eq!(request["params"]["cursor"], "previous");
+            socket.send(Message::Text(json!({"id":request["id"],"result":{"agents":[],"coverage":[{"hostId":"peer","state":"unreachable"}],"nextCursor":"next","warnings":[]}}).to_string())).await.unwrap();
         }
     });
-    for (limit, expected_rows, expected_warnings) in [(200, 2, 0), (1, 1, 1)] {
-        let output = tokio::process::Command::new(env!("CARGO_BIN_EXE_remote-coder-codex-gateway"))
+    for local in [false, true] {
+        let mut command =
+            tokio::process::Command::new(env!("CARGO_BIN_EXE_remote-coder-codex-gateway"));
+        command
             .env_clear()
             .env("HOME", root.path())
             .arg("--env-file")
             .arg(root.path().join("gateway.env"))
             .args([
-                "agent",
-                "list",
-                "--active",
-                "--last",
-                &limit.to_string(),
-                "--json",
-            ])
-            .output()
-            .await
-            .unwrap();
+                "agent", "list", "--active", "--cursor", "previous", "--json",
+            ]);
+        if local {
+            command.arg("--local");
+        }
+        let output = command.output().await.unwrap();
         assert!(output.status.success(), "{output:?}");
-        let result: Value = serde_json::from_slice(&output.stdout).unwrap();
-        let agents = result["agents"].as_array().unwrap();
-        assert_eq!(agents.len(), expected_rows);
-        assert!(agents.iter().all(|agent| agent["state"] == "working"));
-        assert_eq!(
-            result["warnings"].as_array().unwrap().len(),
-            expected_warnings
-        );
+        let page: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(page["coverage"][0]["state"], "unreachable");
+        assert_eq!(page["nextCursor"], "next");
     }
     server.await.unwrap();
 }
@@ -606,7 +635,7 @@ async fn agent_client_format_only_rejects_unproven_or_peer_host_environment_iden
         })
         .await
         .unwrap();
-        assert_eq!(output.status.code(), Some(if peer_host { 64 } else { 69 }));
+        assert_eq!(output.status.code(), Some(if peer_host { 2 } else { 4 }));
         assert!(output.stdout.is_empty());
         let diagnostic: Value = serde_json::from_slice(&output.stderr).unwrap();
         if peer_host {
@@ -676,4 +705,119 @@ async fn agent_client_format_only_reads_scoped_proof_without_bearer_credentials(
         .await
         .unwrap()
         .unwrap();
+}
+
+#[tokio::test]
+async fn agent_client_resume_agent_id_continues_latest_but_explicit_stale_jobs_stay_fenced() {
+    let root = tempfile::tempdir().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    configuration(root.path(), listener.local_addr().unwrap().port());
+    let first = "agent-claude-1793127141860775000-00000001";
+    let stale = "agent-claude-1793127141860775000-00000002";
+    let latest = "agent-claude-1793127141860775000-00000003";
+    let next = "agent-claude-1793127141860775000-00000004";
+    let server = tokio::spawn(async move {
+        let job = |id: &str| {
+            json!({
+                "jobId":id,"agentId":first,"requestFingerprint":null,"createdAtMs":100,
+                "updatedAtMs":100,"revision":0,"previousJobId":null,"source":"imported",
+                "admissionOrigin":null,"unconfirmedResult":null,"notices":[],
+                "spec":{"kind":"known","spec":{"prompt":"fixture","cwd":"/tmp",
+                    "settings":{"provider":"claude","model":"opus","effort":"high","fast":false},
+                    "toolScope":{"kind":"full"},"title":null}},
+                "recipient":{"kind":"none"},"execution":{"kind":"admitted"},"stop":{"kind":"notRequested"}
+            })
+        };
+        for target in [first, stale] {
+            let mut source_id = target;
+            for method in if target == first {
+                vec![
+                    "agent/cluster/resolve",
+                    "cluster/list",
+                    "agent/jobs/read",
+                    "agent/jobs/read",
+                    "agent/jobs/continue",
+                ]
+            } else {
+                vec![
+                    "agent/cluster/resolve",
+                    "cluster/list",
+                    "agent/jobs/read",
+                    "agent/jobs/continue",
+                ]
+            } {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+                initialize(&mut socket).await;
+                let Message::Text(text) = socket.next().await.unwrap().unwrap() else {
+                    panic!("No request");
+                };
+                let request: Value = serde_json::from_str(&text).unwrap();
+                assert_eq!(request["method"], method);
+                let response = if method == "agent/cluster/resolve" {
+                    json!({"result":{"ownerHostId":"fixture-host","jobId":target,"agentId":first}})
+                } else if method == "cluster/list" {
+                    json!({"result":{"self":{"hostId":"fixture-host"},"members":[]}})
+                } else if method == "agent/jobs/read" {
+                    assert_eq!(request["params"]["jobId"], source_id);
+                    let result = json!({"job":job(source_id),"agent":{
+                        "agentId":first,"conversation":{"kind":"unknown","reason":"fixture"},
+                        "origin":{"kind":"topLevel"},"toolScope":{"kind":"full"},
+                        "originJobId":first,"latestJobId":latest
+                    }});
+                    source_id = latest;
+                    json!({"result":result})
+                } else {
+                    let expected = if target == first { latest } else { stale };
+                    assert_eq!(request["params"]["expectedPreviousJobId"], expected);
+                    if target == first {
+                        let mut continued = job(next);
+                        continued["previousJobId"] = json!(latest);
+                        json!({"result":{"protocol":1,"ownerHostId":"fixture-host","jobId":next,"address":null,"state":"waiting","incarnation":"fixture-incarnation","job":continued,"duplicate":false}})
+                    } else {
+                        json!({"error":{"code":-32603,"message":"Continue target was superseded"}})
+                    }
+                };
+                let mut response = response;
+                response["id"] = request["id"].clone();
+                socket
+                    .send(Message::Text(response.to_string()))
+                    .await
+                    .unwrap();
+            }
+        }
+    });
+    for target in [first, stale] {
+        let output = tokio::process::Command::new(env!("CARGO_BIN_EXE_remote-coder-codex-gateway"))
+            .env_clear()
+            .env("HOME", root.path())
+            .arg("--env-file")
+            .arg(root.path().join("gateway.env"))
+            .args([
+                "agent",
+                "spawn",
+                "--resume",
+                target,
+                "Continue fixture",
+                "--operator",
+                "--json",
+                "--job-id",
+                next,
+            ])
+            .output()
+            .await
+            .unwrap();
+        if target == first {
+            assert!(output.status.success(), "{output:?}");
+            assert!(output.stderr.is_empty());
+            let receipt: Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(receipt["previous_run_id"], latest);
+        } else {
+            assert_eq!(output.status.code(), Some(4));
+            assert!(output.stdout.is_empty());
+            let error: Value = serde_json::from_slice(&output.stderr).unwrap();
+            assert_eq!(error["error"]["message"], "Continue target was superseded");
+        }
+    }
+    server.await.unwrap();
 }

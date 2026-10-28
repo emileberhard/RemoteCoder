@@ -24,6 +24,8 @@ pub(crate) struct MessageRecord {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct ResolvedMessage {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_recipient: Option<Recipient>,
     pub conversation: ConversationIdentity,
     pub target_job_id: Option<JobId>,
     pub continuation: Option<MessageContinuation>,

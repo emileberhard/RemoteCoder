@@ -159,7 +159,7 @@ async fn model_trace_preserves_frozen_input_and_outputs_and_redacts_the_echoed_r
     let journal = Journal::open_in(directory.path().to_owned(), 30);
     let mut trace = Trace::new(
         journal.clone(),
-        json!({"threadId":"thread","turnId":"turn"}),
+        json!({"threadId":"11111111-2222-4333-8444-555555555555","turnId":"turn"}),
     );
     let secret = "private-router-key";
     let state = json!({"title":"New chat","messages":[{"role":"user",
@@ -239,7 +239,10 @@ async fn dropped_work_has_an_abandoned_outcome_instead_of_a_keep() {
     use crate::observability::journal::Journal;
     let directory = tempfile::tempdir().unwrap();
     let journal = Journal::open_in(directory.path().to_owned(), 30);
-    let mut trace = Trace::new(journal.clone(), json!({"threadId":"thread"}));
+    let mut trace = Trace::new(
+        journal.clone(),
+        json!({"threadId":"11111111-2222-4333-8444-555555555555"}),
+    );
     let tasks = OwnedTasks::default();
     let (ready, started) = tokio::sync::oneshot::channel();
     tasks.spawn("cancelled title check", async move {
@@ -276,7 +279,7 @@ async fn ineligible_completions_and_busy_capacity_are_traceable_without_model_ca
     for (turn, status) in [("failed", "failed"), ("busy", "completed")] {
         gateway.review.ingest(
             &json!({"method":"turn/completed","params":{
-            "threadId":"thread","turn":{"id":turn,"status":status}}}),
+            "threadId":"11111111-2222-4333-8444-555555555555","turn":{"id":turn,"status":status}}}),
             true,
         );
     }
@@ -356,7 +359,10 @@ async fn only_context_limit_errors_retry_with_smaller_bookends() {
         let directory = tempfile::tempdir().unwrap();
         let journal =
             crate::observability::journal::Journal::open_in(directory.path().to_owned(), 30);
-        let mut trace = Trace::new(journal.clone(), json!({"threadId":"thread"}));
+        let mut trace = Trace::new(
+            journal.clone(),
+            json!({"threadId":"11111111-2222-4333-8444-555555555555"}),
+        );
         let (tx, mut requests) = tokio::sync::mpsc::channel(4);
         let calls = Arc::new(AtomicU64::new(0));
         let count = Arc::clone(&calls);
@@ -530,7 +536,7 @@ async fn fake_pages(
             let request: Value = serde_json::from_str(&raw).unwrap();
             let result = match request["method"].as_str().unwrap() {
                 "thread/read" => {
-                    json!({"thread":{"id":"thread","name":title,"status":{"type":"idle"},"ephemeral":false}})
+                    json!({"thread":{"id":"11111111-2222-4333-8444-555555555555","name":title,"status":{"type":"idle"},"ephemeral":false}})
                 }
                 "thread/turns/list" => {
                     if request["params"]["sortDirection"] == "asc" {
@@ -575,13 +581,21 @@ async fn codex_snapshot_rejects_a_newer_turn_and_preserves_initial_goal() {
     .await;
     assert!(
         gateway
-            .review_snapshot("thread", "old", &Trace::silent())
+            .review_snapshot(
+                "11111111-2222-4333-8444-555555555555",
+                "old",
+                &Trace::silent()
+            )
             .await
             .unwrap()
             .is_none()
     );
     let snapshot = gateway
-        .review_snapshot("thread", "latest", &Trace::silent())
+        .review_snapshot(
+            "11111111-2222-4333-8444-555555555555",
+            "latest",
+            &Trace::silent(),
+        )
         .await
         .unwrap()
         .unwrap();
@@ -612,7 +626,11 @@ async fn latest_user_goal_survives_trimming_and_image_only_input_stays_unknown()
     latest["items"][1]["text"] = json!("y".repeat(512 * 1024));
     let control = fake_pages(gateway.clone(), "Old iOS topic", latest).await;
     let snapshot = gateway
-        .review_snapshot("thread", "latest", &Trace::silent())
+        .review_snapshot(
+            "11111111-2222-4333-8444-555555555555",
+            "latest",
+            &Trace::silent(),
+        )
         .await
         .unwrap()
         .unwrap();
@@ -645,7 +663,11 @@ async fn latest_user_goal_survives_trimming_and_image_only_input_stays_unknown()
         json!({"type":"userMessage","content":[{"type":"image","url":"fixture-image"}]});
     let control = fake_pages(gateway.clone(), "Old iOS topic", latest).await;
     let snapshot = gateway
-        .review_snapshot("thread", "latest", &Trace::silent())
+        .review_snapshot(
+            "11111111-2222-4333-8444-555555555555",
+            "latest",
+            &Trace::silent(),
+        )
         .await
         .unwrap()
         .unwrap();
@@ -689,7 +711,10 @@ async fn conversation_pages_keep_middle_messages_despite_unrelated_activity() {
                     .await;
             }
         });
-        let context = gateway.review_conversation("thread").await.unwrap();
+        let context = gateway
+            .review_conversation("11111111-2222-4333-8444-555555555555")
+            .await
+            .unwrap();
         let context = context.unwrap();
         assert!(!context.middle_truncated);
         assert_eq!(context.latest_user_goal.as_deref(), Some("Latest task"));
@@ -709,23 +734,35 @@ async fn conversation_pages_keep_middle_messages_despite_unrelated_activity() {
 async fn pinned_names_and_automation_or_probe_threads_are_ineligible() {
     for change in [
         Change::Pin {
-            thread_id: "thread".into(),
+            thread_id: "11111111-2222-4333-8444-555555555555".into(),
             name: "My title".into(),
         },
         Change::SetPurpose {
-            thread_id: "thread".into(),
+            thread_id: "11111111-2222-4333-8444-555555555555".into(),
             purpose: Purpose::Automation,
         },
         Change::SetPurpose {
-            thread_id: "thread".into(),
+            thread_id: "11111111-2222-4333-8444-555555555555".into(),
             purpose: Purpose::Probe,
         },
     ] {
         let directory = tempfile::tempdir().unwrap();
         let gateway = TestGateway::with_native_runtime(directory.path());
-        assert!(gateway.review_exclusion("thread").await.unwrap().is_none());
+        assert!(
+            gateway
+                .review_exclusion("11111111-2222-4333-8444-555555555555")
+                .await
+                .unwrap()
+                .is_none()
+        );
         gateway.marks.update(vec![change], 1).await.unwrap();
-        assert!(!gateway.review_exclusion("thread").await.unwrap().is_none());
+        assert!(
+            !gateway
+                .review_exclusion("11111111-2222-4333-8444-555555555555")
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 }
 
@@ -831,9 +868,9 @@ async fn codex_rename_applies_only_when_title_turn_activity_and_pin_are_unchange
         let logs = directory.path().join("title-logs");
         let journal = crate::observability::journal::Journal::open_in(logs.clone(), 30);
         let gateway = TestGateway::with_native_runtime_journal(directory.path(), journal.clone());
-        let mut trace = gateway.review_trace("thread", "latest");
+        let mut trace = gateway.review_trace("11111111-2222-4333-8444-555555555555", "latest");
         let native = Arc::new(tokio::sync::Mutex::new(json!({
-            "thread":{"id":"thread","name":rejected_title,"status":{"type":"idle"},"ephemeral":false,
+            "thread":{"id":"11111111-2222-4333-8444-555555555555","name":rejected_title,"status":{"type":"idle"},"ephemeral":false,
                 "model":"gpt-6.1-sol","reasoningEffort":"xhigh"},
             "latest":turn("latest",latest_goal)
         })));
@@ -869,7 +906,7 @@ async fn codex_rename_applies_only_when_title_turn_activity_and_pin_are_unchange
                     "thread/fork" => {
                         fork_id = if attempts == 0 { "fork" } else { "fork-2" }.to_owned();
                         fork_events = vec![json!({"method":"thread/started","params":{"thread":
-                            {"id":fork_id,"ephemeral":true,"forkedFromId":"thread"}}})];
+                            {"id":fork_id,"ephemeral":true,"forkedFromId":"11111111-2222-4333-8444-555555555555"}}})];
                         json!({"thread":{"id":fork_id,"ephemeral":true}})
                     }
                     "turn/start" => {
@@ -898,7 +935,7 @@ async fn codex_rename_applies_only_when_title_turn_activity_and_pin_are_unchange
                                     .marks
                                     .update(
                                         vec![Change::Pin {
-                                            thread_id: "thread".into(),
+                                            thread_id: "11111111-2222-4333-8444-555555555555".into(),
                                             name: "My pinned name".into(),
                                         }],
                                         1,
@@ -994,7 +1031,7 @@ async fn codex_rename_applies_only_when_title_turn_activity_and_pin_are_unchange
         let outcome = gateway
             .review_turn(
                 &api,
-                "thread",
+                "11111111-2222-4333-8444-555555555555",
                 "latest",
                 &trace,
                 Arc::clone(&gateway.review.budget)
@@ -1020,7 +1057,7 @@ async fn codex_rename_applies_only_when_title_turn_activity_and_pin_are_unchange
         };
         assert_eq!(
             call("thread/fork"),
-            json!({"threadId":"thread","ephemeral":true,"excludeTurns":true,
+            json!({"threadId":"11111111-2222-4333-8444-555555555555","ephemeral":true,"excludeTurns":true,
                 "model":"gpt-6.1-sol","sandbox":"read-only","approvalPolicy":"never"})
         );
         let question = call("turn/start");
@@ -1296,7 +1333,7 @@ async fn review_questions_follow_turn_eligibility_and_malformed_done_does_not_wr
         let logs = directory.path().join("review-logs");
         let journal = crate::observability::journal::Journal::open_in(logs.clone(), 30);
         let gateway = TestGateway::with_native_runtime_journal(directory.path(), journal.clone());
-        let mut trace = gateway.review_trace("thread", "latest");
+        let mut trace = gateway.review_trace("11111111-2222-4333-8444-555555555555", "latest");
         let mut latest = turn("latest", "Fix naming");
         if kind == "agent" {
             latest["items"].as_array_mut().unwrap().remove(0);
@@ -1312,7 +1349,11 @@ async fn review_questions_follow_turn_eligibility_and_malformed_done_does_not_wr
         if matches!(kind, "notDone" | "malformed") {
             gateway
                 .marks
-                .record_done("thread".into(), Some(1000), 1100)
+                .record_done(
+                    "11111111-2222-4333-8444-555555555555".into(),
+                    Some(1000),
+                    1100,
+                )
                 .await
                 .unwrap();
         }
@@ -1329,7 +1370,7 @@ async fn review_questions_follow_turn_eligibility_and_malformed_done_does_not_wr
         let outcome = gateway
             .review_turn(
                 &api,
-                "thread",
+                "11111111-2222-4333-8444-555555555555",
                 "latest",
                 &trace,
                 Arc::clone(&gateway.review.budget)
@@ -1382,7 +1423,7 @@ async fn review_questions_follow_turn_eligibility_and_malformed_done_does_not_wr
                 .await
                 .unwrap()
                 .threads
-                .get("thread")
+                .get("11111111-2222-4333-8444-555555555555")
                 .and_then(|marks| marks.done_through),
             if kind == "malformed" {
                 Some(1000)
@@ -1428,7 +1469,7 @@ async fn done_verdicts_survive_read_marks_and_unrelated_activity_but_respect_uns
                                 .marks
                                 .update(
                                     vec![Change::MarkRead {
-                                        thread_id: "thread".into(),
+                                        thread_id: "11111111-2222-4333-8444-555555555555".into(),
                                         through: 1234,
                                     }],
                                     2000,
@@ -1446,7 +1487,7 @@ async fn done_verdicts_survive_read_marks_and_unrelated_activity_but_respect_uns
                                 .marks
                                 .update(
                                     vec![Change::Unsettle {
-                                        thread_id: "thread".into(),
+                                        thread_id: "11111111-2222-4333-8444-555555555555".into(),
                                         through: 1234,
                                     }],
                                     2000,
@@ -1459,7 +1500,7 @@ async fn done_verdicts_survive_read_marks_and_unrelated_activity_but_respect_uns
                                 .marks
                                 .update(
                                     vec![Change::Pin {
-                                        thread_id: "thread".into(),
+                                        thread_id: "11111111-2222-4333-8444-555555555555".into(),
                                         name: "Keep".into(),
                                     }],
                                     2000,
@@ -1472,7 +1513,7 @@ async fn done_verdicts_survive_read_marks_and_unrelated_activity_but_respect_uns
                                 .marks
                                 .update(
                                     vec![Change::SetPurpose {
-                                        thread_id: "thread".into(),
+                                        thread_id: "11111111-2222-4333-8444-555555555555".into(),
                                         purpose: Purpose::Probe,
                                     }],
                                     2000,
@@ -1490,7 +1531,7 @@ async fn done_verdicts_survive_read_marks_and_unrelated_activity_but_respect_uns
         gateway
             .review_turn(
                 &judge_api(address, "router-key"),
-                "thread",
+                "11111111-2222-4333-8444-555555555555",
                 "latest",
                 &Trace::silent(),
                 Arc::clone(&gateway.review.budget)
@@ -1506,7 +1547,7 @@ async fn done_verdicts_survive_read_marks_and_unrelated_activity_but_respect_uns
                 .await
                 .unwrap()
                 .threads
-                .get("thread")
+                .get("11111111-2222-4333-8444-555555555555")
                 .and_then(|marks| marks.done_through)
                 == Some(1234),
         );
@@ -1527,9 +1568,9 @@ async fn delegated_completions_are_skipped_before_reading_dialogue_or_calling_je
     let task = tokio::spawn(async move {
         let request: Value = serde_json::from_str(&control.requests.recv().await.unwrap()).unwrap();
         assert_eq!(request["method"], "thread/read");
-        owner.handle_control_text(json!({"id":request["id"],"result":{"thread":{"id":"child","source":{"subAgent":"review"}}}}).to_string(), NotificationOrigin::Control { opened_after: 0 }).await;
+        owner.handle_control_text(json!({"id":request["id"],"result":{"thread":{"id":"22222222-2222-4333-8444-555555555555","source":{"subAgent":"review"}}}}).to_string(), NotificationOrigin::Control { opened_after: 0 }).await;
     });
-    gateway.review.ingest(&json!({"method":"turn/completed","params":{"threadId":"child","turn":{"id":"latest","status":"completed"}}}), true);
+    gateway.review.ingest(&json!({"method":"turn/completed","params":{"threadId":"22222222-2222-4333-8444-555555555555","turn":{"id":"latest","status":"completed"}}}), true);
     let _finished = tokio::time::timeout(
         Duration::from_secs(3),
         Arc::clone(&gateway.review.budget).acquire_owned(),
@@ -1560,7 +1601,7 @@ async fn early_title_names_only_an_untitled_running_first_turn() {
                 .marks
                 .update(
                     vec![Change::Pin {
-                        thread_id: "thread".into(),
+                        thread_id: "11111111-2222-4333-8444-555555555555".into(),
                         name: "Pinned".into(),
                     }],
                     1,
@@ -1579,7 +1620,7 @@ async fn early_title_names_only_an_untitled_running_first_turn() {
         } else {
             json!([first])
         };
-        let header = json!({"id":"thread","name":if case == "named" { json!("My name") } else { Value::Null },
+        let header = json!({"id":"11111111-2222-4333-8444-555555555555","name":if case == "named" { json!("My name") } else { Value::Null },
             "preview":"fix the names please","status":{"type":"active"},"ephemeral":false,"source":"appServer",
             "model":"gpt-6.1-sol","reasoningEffort":"low"});
         let (control_task, mut calls) = spawn_title_control(
@@ -1596,7 +1637,7 @@ async fn early_title_names_only_an_untitled_running_first_turn() {
             "first"
         };
         gateway.review.ingest(
-            &json!({"method":"turn/started","params":{"threadId":"thread","turn":{"id":started}}}),
+            &json!({"method":"turn/started","params":{"threadId":"11111111-2222-4333-8444-555555555555","turn":{"id":started}}}),
             true,
         );
         tokio::time::sleep(early_title::DELAY + Duration::from_secs(1)).await;
@@ -1681,7 +1722,7 @@ async fn spawn_title_control(
                 "thread/turns/list" => json!({"data":turns}),
                 "thread/fork" => {
                     events = vec![json!({"method":"thread/started","params":{"thread":
-                        {"id":"fork","ephemeral":true,"forkedFromId":"thread"}}})];
+                        {"id":"fork","ephemeral":true,"forkedFromId":"11111111-2222-4333-8444-555555555555"}}})];
                     json!({"thread":{"id":"fork","ephemeral":true}})
                 }
                 "turn/start" => {
@@ -1731,12 +1772,12 @@ async fn regenerating_a_name_fails_when_the_writer_keeps_repeating_it() {
             directory.path(),
             crate::observability::journal::Journal::disabled(),
         );
-        let header = json!({"id":"thread","name":"Old title","preview":"fix the names",
+        let header = json!({"id":"11111111-2222-4333-8444-555555555555","name":"Old title","preview":"fix the names",
             "status":{"type":"idle"},"ephemeral":false,"model":"gpt-6.1-sol","reasoningEffort":"low"});
         let (control_task, mut calls) =
             spawn_title_control(&gateway, header, json!([]), answers.clone()).await;
         let result = gateway
-            .regenerate_title_rpc(&json!({"threadId":"thread"}))
+            .regenerate_title_rpc(&json!({"threadId":"11111111-2222-4333-8444-555555555555"}))
             .await;
         control_task.abort();
         let mut questions = Vec::new();

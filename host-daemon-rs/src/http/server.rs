@@ -32,6 +32,8 @@ use super::{accounts, claude_accounts, resets};
 
 pub(crate) mod auth;
 mod client;
+#[cfg(test)]
+mod cluster_tests;
 mod files;
 #[cfg(test)]
 mod harness;
@@ -161,6 +163,12 @@ pub(crate) async fn run_http_server(
     state: HttpState,
     lan: Option<LanListener>,
 ) -> Result<()> {
+    state
+        .gateway
+        .cluster_link()
+        .await?
+        .set_endpoint(state.lan_endpoint.clone())
+        .await;
     let shutdown_gateway = Arc::clone(&state.gateway);
     let shutdown_state = state.clone();
     let app = router(state);
@@ -450,9 +458,10 @@ mod tests {
         )
         .await;
         assert_eq!(status, 500);
+        let identity = lan.gateway.host_identity().await.unwrap();
         assert_eq!(
             serde_json::from_slice::<Value>(&body).unwrap(),
-            json!({"status": "error", "message": "codex unavailable"})
+            json!({"status": "error", "message": "codex unavailable", "hostId": identity.host_id, "incarnation": identity.incarnation})
         );
 
         let segment = [0x1f, 0x8b, 0x08, 0x00];

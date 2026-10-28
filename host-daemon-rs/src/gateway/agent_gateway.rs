@@ -245,12 +245,34 @@ impl Gateway {
     ) -> Result<crate::agents::jobs::model::ConversationIdentity> {
         use crate::agents::jobs::model::{ConversationIdentity, Provider, ProviderHome};
         crate::questions::validate_id(thread)?;
+        let unsupported = |message| {
+            crate::rpc::RpcError::new(crate::rpc::error::RpcCode::InvalidRequest, message)
+                .with_data(crate::rpc::error::RpcData::Raw(
+                    json!({"class":"unsupported","retryable":false}),
+                ))
+        };
+        let provider = if let Some(sidecar) = thread.strip_prefix("claude:") {
+            let (parent, child) = sidecar
+                .split_once(':')
+                .context("Invalid Claude sidecar identity")?;
+            ensure!(
+                crate::ids::is_session_uuid(parent) && !child.is_empty() && !child.contains(':'),
+                "Invalid Claude sidecar identity"
+            );
+            return Err(unsupported("Claude child sidecars have no resumable provider thread; read them through sessions").into());
+        } else if let Some(uuid) = thread.strip_prefix("claude_") {
+            ensure!(
+                crate::ids::is_session_uuid(uuid),
+                "Invalid Claude conversation identity"
+            );
+            Provider::Claude
+        } else if crate::ids::is_session_uuid(thread) {
+            Provider::Codex
+        } else {
+            return Err(unsupported("Unrecognized provider conversation identity").into());
+        };
         Ok(ConversationIdentity {
-            provider: if crate::providers::claude::is_claude_thread_id(thread) {
-                Provider::Claude
-            } else {
-                Provider::Codex
-            },
+            provider,
             provider_home: ProviderHome::Known {
                 path: self.agent_home_for_thread(thread)?,
             },

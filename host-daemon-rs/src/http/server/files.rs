@@ -264,6 +264,7 @@ mod tests {
         let request = serde_json::to_vec(&json!({"path": path})).unwrap();
         let installations = InstallationCredentials::new(
             lan.directory.path().join("installation-credentials.json"),
+            lan.gateway.cluster_link().await.unwrap().store.clone(),
         );
         let installation_id = "file-test-phone";
         let token = installations

@@ -898,7 +898,7 @@ mod startup_tests {
             )
             .await;
         gateway.core.lock().await.finished_turns.record(
-            "child",
+            "019e0b6a-b5cb-7b62-bd89-4c58f82fd1a5",
             FinishedTurn {
                 turn_id: "old".into(),
                 started_at: 10,
@@ -906,7 +906,7 @@ mod startup_tests {
             },
         );
         gateway.agents.parents.lock().await.insert(
-            "root".into(),
+            "019e0b6a-b5cb-7b62-bd89-4c58f82fd1a6".into(),
             super::super::agent_gateway::ParentSnapshot {
                 at: std::time::Instant::now(),
                 parent: None,
@@ -928,8 +928,8 @@ mod startup_tests {
         )
         .unwrap();
         assert_eq!(request["method"], "thread/read");
-        gateway.handle_control_text(json!({"method":"turn/started","params":{"threadId":"child","turn":{"id":"new","status":"inProgress"}}}).to_string(), crate::gateway::tests::CONTROL).await;
-        gateway.handle_control_text(json!({"id":request["id"],"result":{"thread":{"id":"child","parentThreadId":"root","source":"cli"}}}).to_string(), crate::gateway::tests::CONTROL).await;
+        gateway.handle_control_text(json!({"method":"turn/started","params":{"threadId":"019e0b6a-b5cb-7b62-bd89-4c58f82fd1a5","turn":{"id":"new","status":"inProgress"}}}).to_string(), crate::gateway::tests::CONTROL).await;
+        gateway.handle_control_text(json!({"id":request["id"],"result":{"thread":{"id":"019e0b6a-b5cb-7b62-bd89-4c58f82fd1a5","parentThreadId":"019e0b6a-b5cb-7b62-bd89-4c58f82fd1a6","source":"cli"}}}).to_string(), crate::gateway::tests::CONTROL).await;
         tokio::time::sleep(Duration::from_millis(650)).await;
         let requests = probe.requests.lock().unwrap().clone();
         let snapshot = probe.service.live_activity_updates().borrow().clone();

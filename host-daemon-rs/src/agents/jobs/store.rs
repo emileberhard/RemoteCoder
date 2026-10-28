@@ -1,7 +1,9 @@
+pub(crate) mod cluster;
 mod execution;
+mod indexes;
 pub(crate) mod messages;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs::{File, OpenOptions};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
@@ -30,17 +32,23 @@ pub(crate) struct JobStore {
 struct Inner {
     root: PathBuf,
     _lease: File,
-    jobs: BTreeMap<JobId, JobRecord>,
-    agents: BTreeMap<String, AgentRecord>,
+    indexes: indexes::Indexes,
+    jobs: HashMap<JobId, JobRecord>,
+    agents: HashMap<String, AgentRecord>,
+    parents:
+        std::collections::HashMap<ConversationIdentity, Option<crate::wire::cluster::AgentAddress>>,
     uncertainties: Vec<ImportedUncertainty>,
     messages: BTreeMap<String, messages::MessageRecord>,
+    intents: BTreeMap<JobId, crate::wire::cluster::RemoteIntent>,
+    fences: BTreeMap<String, crate::wire::cluster::CancelFence>,
 }
 
 pub(crate) enum Selection {
     Recent,
+    Active,
     Agent(String),
-    Children(ConversationIdentity),
-    Descendants(ConversationIdentity),
+    Children(crate::wire::cluster::AgentAddress),
+    Descendants(crate::wire::cluster::AgentAddress),
 }
 
 impl JobStore {
@@ -56,8 +64,8 @@ impl JobStore {
                 .custom_flags(libc::O_NOFOLLOW)
                 .open(root.join("owner.lock"))?;
             lease.try_lock().context("another process owns the delegated-job store")?;
-            let mut inner = Inner { root, _lease: lease, jobs: BTreeMap::new(), agents: BTreeMap::new(), uncertainties: Vec::new(), messages: BTreeMap::new() };
-            for name in ["jobs", "agents", "evidence", "uncertainties", "messages"] {
+            let mut inner = Inner { root, _lease: lease, indexes: indexes::Indexes::default(), jobs: HashMap::new(), agents: HashMap::new(), parents:Default::default(), uncertainties: Vec::new(), messages: BTreeMap::new(), intents: BTreeMap::new(), fences: BTreeMap::new() };
+            for name in ["jobs", "agents", "evidence", "uncertainties", "messages", "remote-intents", "cancel-fences"] {
                 private_state::ensure_private_directory(&inner.root.join(name))?;
             }
             File::open(&inner.root)?.sync_all()?;
@@ -69,7 +77,7 @@ impl JobStore {
                 let job: JobRecord = read(&entry.path(), MAX_JOB_BYTES)?;
                 validate_job(&job)?;
                 ensure!(entry.path() == inner.job_path(&job.job_id), "job filename does not match its identity");
-                ensure!(inner.jobs.insert(job.job_id.clone(), job).is_none(), "duplicate persisted job identity");
+                ensure!(inner.insert_job(job).is_none(), "duplicate persisted job identity");
             }
             for entry in std::fs::read_dir(inner.root.join("agents"))? {
                 let entry = entry?;
@@ -78,7 +86,7 @@ impl JobStore {
                 }
                 let agent: AgentRecord = read(&entry.path(), MAX_AGENT_BYTES)?;
                 ensure!(entry.path() == inner.agent_path(&agent.agent_id), "agent filename does not match its identity");
-                ensure!(inner.agents.insert(agent.agent_id.clone(), agent).is_none(), "duplicate persisted agent identity");
+                ensure!(inner.insert_agent(agent).is_none(), "duplicate persisted agent identity");
             }
             inner.recover_agents()?;
             for entry in std::fs::read_dir(inner.root.join("uncertainties"))? {
@@ -90,6 +98,7 @@ impl JobStore {
                 inner.uncertainties.push(evidence);
             }
             inner.load_messages()?;
+            inner.load_cluster()?;
             inner.validate_slots()?;
             let accounted = inner.accounted_bytes()?;
             if accounted + MUTATION_RESERVE > MAX_STORE_BYTES {
@@ -162,7 +171,7 @@ impl JobStore {
 
     pub(crate) async fn pending_ids(&self) -> Result<Vec<JobId>> {
         self.access(|inner| {
-            Ok(inner
+            let mut ids: Vec<_> = inner
                 .jobs
                 .values()
                 .filter(|job| {
@@ -170,7 +179,9 @@ impl JobStore {
                         || !is_terminal(job) && matches!(job.stop, StopState::Requested { .. })
                 })
                 .map(|job| job.job_id.clone())
-                .collect())
+                .collect();
+            ids.sort();
+            Ok(ids)
         })
         .await
     }
@@ -227,12 +238,8 @@ impl JobStore {
         &self,
         conversation: ConversationIdentity,
     ) -> Result<Option<AgentRecord>> {
-        self.access(move |inner| {
-            let mut found = inner.agents.values().filter(|agent| matches!(&agent.conversation, ConversationBinding::Known { conversation: known } if known == &conversation));
-            let id = found.next().map(|agent| agent.agent_id.clone());
-            ensure!(found.next().is_none(), "multiple agents claim the same provider conversation");
-            id.map(|id| inner.agent_view(&id)).transpose()
-        }).await
+        self.access(move |inner| inner.conversation_agent(&conversation))
+            .await
     }
 
     pub(crate) async fn list(
@@ -242,49 +249,83 @@ impl JobStore {
         cursor: Option<String>,
     ) -> Result<ListPage> {
         self.access(move |inner| {
-            ensure!((1..=256).contains(&limit), "job page limit must be between 1 and 256");
-            let before = cursor.map(|id| {
-                let id = JobId::try_from(id).map_err(anyhow::Error::msg)?;
-                let job = inner.job(&id)?;
-                Ok::<_, anyhow::Error>((job.created_at_ms, id))
-            }).transpose()?;
+            ensure!(
+                (1..=256).contains(&limit),
+                "job page limit must be between 1 and 256"
+            );
+            let before = cursor
+                .map(|id| {
+                    let id = JobId::try_from(id).map_err(anyhow::Error::msg)?;
+                    let job = inner.job(&id)?;
+                    Ok::<_, anyhow::Error>((job.created_at_ms, id))
+                })
+                .transpose()?;
             let included = match &selection {
                 Selection::Children(parent) | Selection::Descendants(parent) => {
-                    let mut parents = std::collections::HashSet::from([parent.clone()]);
+                    let mut parents = std::collections::VecDeque::from([parent.clone()]);
                     let mut included = std::collections::HashSet::new();
-                    loop {
-                        let mut changed = false;
-                        for agent in inner.agents.values() {
-                            if matches!(&agent.origin, Origin::Parent { conversation } if parents.contains(conversation)) && included.insert(agent.agent_id.clone()) {
-                                changed = true;
-                                if matches!(selection, Selection::Descendants(_))
-                                    && let ConversationBinding::Known { conversation } = &agent.conversation
-                                {
-                                    parents.insert(conversation.clone());
-                                }
+                    while let Some(next) = parents.pop_front() {
+                        for id in inner.indexes.parents.get(&next).into_iter().flatten() {
+                            if included.insert(id.clone())
+                                && matches!(selection, Selection::Descendants(_))
+                                && let Some(AgentRecord {
+                                    conversation: ConversationBinding::Known { conversation },
+                                    ..
+                                }) = inner.agents.get(id)
+                            {
+                                parents.push_back(crate::wire::cluster::AgentAddress {
+                                    host_id: parent.host_id.clone(),
+                                    thread_id: conversation.thread_id.clone(),
+                                });
                             }
                         }
-                        if !changed || matches!(selection, Selection::Children(_)) { break; }
                     }
                     Some(included)
                 }
                 _ => None,
             };
-            let mut records: Vec<_> = inner.jobs.values().filter(|job| {
-                let matches = match &selection {
-                    Selection::Recent => true,
-                    Selection::Agent(id) => &job.agent_id == id,
-                    _ => included.as_ref().is_some_and(|ids| ids.contains(&job.agent_id)),
-                };
-                matches && before.as_ref().is_none_or(|before| (job.created_at_ms, &job.job_id) < (before.0, &before.1))
-            }).collect();
-            records.sort_by(|left, right| (right.created_at_ms, &right.job_id).cmp(&(left.created_at_ms, &left.job_id)));
+            let order = match &selection {
+                Selection::Active => Some(&inner.indexes.active_order),
+                Selection::Agent(id) => inner.indexes.by_agent.get(id),
+                _ => Some(&inner.indexes.order),
+            };
+            let mut records = Vec::new();
+            if let Some(order) = order {
+                use std::ops::Bound::{Excluded, Unbounded};
+                for (_, id) in order
+                    .range((Unbounded, before.map_or(Unbounded, Excluded)))
+                    .rev()
+                {
+                    let job = inner.job(id)?;
+                    if included
+                        .as_ref()
+                        .is_some_and(|ids| !ids.contains(&job.agent_id))
+                    {
+                        continue;
+                    }
+                    records.push(job);
+                    if records.len() > limit as usize {
+                        break;
+                    }
+                }
+            }
             let more = records.len() > limit as usize;
             records.truncate(limit as usize);
-            let next_cursor = more.then(|| records.last().expect("nonempty bounded page").job_id.as_str().to_owned());
-            let jobs = records.into_iter().map(|job| inner.summary(job)).collect::<Result<Vec<_>>>()?;
+            let next_cursor = more.then(|| {
+                records
+                    .last()
+                    .expect("nonempty bounded page")
+                    .job_id
+                    .as_str()
+                    .to_owned()
+            });
+            let jobs = records
+                .into_iter()
+                .map(|job| inner.summary(job))
+                .collect::<Result<Vec<_>>>()?;
             Ok(ListPage { jobs, next_cursor })
-        }).await
+        })
+        .await
     }
 
     pub(crate) async fn evidence_root(&self, id: JobId) -> Result<PathBuf> {
@@ -311,7 +352,7 @@ impl JobStore {
 
     async fn admit_with_stop_fence(
         &self,
-        job: JobRecord,
+        mut job: JobRecord,
         require_unstopped: bool,
     ) -> Result<(JobRecord, bool)> {
         let _previous = match &job.previous_job_id {
@@ -320,6 +361,9 @@ impl JobStore {
         };
         self.access(move |inner| {
             let _previous = _previous;
+            if job.admitted_membership.is_some() && let Some(fence)=inner.fences.values().find(|fence|fence.job_id==job.job_id && job.admitted_membership.as_deref()==Some(fence.membership.as_str())) {
+                job.stop=StopState::Requested {mutation_id:format!("cluster:{}",fence.membership),at_ms:fence.at};
+            }
             validate_job(&job)?;
             ensure!(job.source == JobSource::Runtime && job.revision == 0, "new admission requires an initial runtime job");
             if let Some(previous) = inner.existing_request(&job.job_id, job.request_fingerprint.as_deref().context("new admission requires its request fingerprint")?)? {
@@ -342,7 +386,7 @@ impl JobStore {
             inner.reclaim(job.created_at_ms.context("runtime admission requires creation time")?, RUNTIME_RESERVATION)?;
             ensure!(inner.accounted_bytes()? + RUNTIME_RESERVATION + MUTATION_RESERVE <= MAX_STORE_BYTES, "delegated-job storage is pinned at its cap; settle pending work before admitting more");
             inner.write_job(&job)?;
-            inner.jobs.insert(job.job_id.clone(), job.clone());
+            inner.insert_job(job.clone());
             inner.ensure_agent(&job)?;
             Ok((job, false))
         }).await
@@ -357,20 +401,48 @@ impl JobStore {
     ) -> Result<JobRecord> {
         self.access(move |inner| {
             let mut job = inner.current(&id, revision)?;
-            ensure!(matches!(job.execution, ExecutionState::Admitted), "only an admitted job can acquire a provider conversation");
-            ensure!(matches!(conversation.provider_home, ProviderHome::Known { .. }), "new execution needs an exact provider home");
-            ensure!(!conversation.thread_id.is_empty(), "provider thread identity is empty");
-            ensure!(!inner.agents.values().any(|other| other.agent_id != job.agent_id && matches!(&other.conversation, ConversationBinding::Known { conversation: existing } if existing == &conversation)), "provider conversation already belongs to another delegated agent");
+            ensure!(
+                matches!(
+                    job.execution,
+                    ExecutionState::Admitted | ExecutionState::WaitingForProvider { .. }
+                ),
+                "only an admitted job can acquire a provider conversation"
+            );
+            ensure!(
+                matches!(conversation.provider_home, ProviderHome::Known { .. }),
+                "new execution needs an exact provider home"
+            );
+            ensure!(
+                !conversation.thread_id.is_empty(),
+                "provider thread identity is empty"
+            );
+            ensure!(
+                inner
+                    .indexes
+                    .agent(&conversation)?
+                    .is_none_or(|id| id == &job.agent_id),
+                "provider conversation already belongs to another delegated agent"
+            );
             let mut agent = inner.agent_view(&job.agent_id)?;
             match &agent.conversation {
-                ConversationBinding::Known { conversation: existing } => ensure!(*existing == conversation, "Continue cannot switch provider conversation"),
-                ConversationBinding::Unknown { .. } => agent.conversation = ConversationBinding::Known { conversation: conversation.clone() },
+                ConversationBinding::Known {
+                    conversation: existing,
+                } => ensure!(
+                    *existing == conversation,
+                    "Continue cannot switch provider conversation"
+                ),
+                ConversationBinding::Unknown { .. } => {
+                    agent.conversation = ConversationBinding::Known {
+                        conversation: conversation.clone(),
+                    }
+                }
             }
             inner.write_agent(&agent)?;
-            inner.agents.insert(agent.agent_id.clone(), agent);
+            inner.insert_agent(agent);
             job.execution = ExecutionState::Bound { conversation };
             inner.commit(job, at_ms)
-        }).await
+        })
+        .await
     }
 
     pub(crate) async fn advance(
@@ -578,10 +650,16 @@ impl Inner {
         self.jobs
             .get(id)
             .map(|previous| {
-                ensure!(
-                    previous.request_fingerprint.as_deref() == Some(fingerprint),
-                    "jobId was already used for a different or unverifiable request"
-                );
+                if previous.request_fingerprint.as_deref() != Some(fingerprint) {
+                    return Err(crate::rpc::RpcError::new(
+                        crate::rpc::error::RpcCode::Conflict,
+                        "jobId was already used for a different or unverifiable request",
+                    )
+                    .with_data(crate::rpc::error::RpcData::Raw(
+                        serde_json::json!({"class":"conflict"}),
+                    ))
+                    .into());
+                }
                 Ok(previous.clone())
             })
             .transpose()
@@ -620,6 +698,7 @@ impl Inner {
             });
         let state = match &job.execution {
             ExecutionState::Admitted
+            | ExecutionState::WaitingForProvider { .. }
             | ExecutionState::Bound { .. }
             | ExecutionState::RetryWaiting { .. } => crate::agents::State::Waiting,
             ExecutionState::Running { .. } | ExecutionState::Recovering { .. } => {
@@ -635,6 +714,12 @@ impl Inner {
             },
         };
         Ok(JobSummary {
+            owner_host_id: None,
+            parent: self
+                .agents
+                .get(&job.agent_id)
+                .and_then(|agent| agent.parent.clone()),
+            recipient: Some(job.recipient.clone()),
             job_id: job.job_id.clone(),
             agent_id: job.agent_id.clone(),
             conversation,
@@ -643,7 +728,7 @@ impl Inner {
             title,
             model,
             state,
-            active: job.source == JobSource::Runtime && !is_terminal(job),
+            active: listing_active(job),
             created_at_ms: job.created_at_ms,
             updated_at_ms: job.updated_at_ms,
         })
@@ -676,53 +761,16 @@ impl Inner {
             .get(id)
             .context("delegated agent does not exist")?
             .clone();
-        let mut active = self.jobs.values().filter(|job| {
-            job.agent_id == id
-                && job.source == JobSource::Runtime
-                && matches!(
-                    job.execution,
-                    ExecutionState::Admitted
-                        | ExecutionState::Bound { .. }
-                        | ExecutionState::Dispatching { .. }
-                        | ExecutionState::Running { .. }
-                        | ExecutionState::Recovering { .. }
-                )
-        });
-        if let Some(job) = active.next() {
+        if let Some(active) = self.indexes.active.get(id) {
             ensure!(
-                active.next().is_none(),
+                active.len() == 1,
                 "conversation has conflicting active runtime jobs"
             );
-            agent.latest_job_id = Some(job.job_id.clone());
+            agent.latest_job_id = active.first().cloned();
             return Ok(agent);
         }
-        let Some(mut latest) = agent
-            .latest_job_id
-            .as_ref()
-            .or(agent.origin_job_id.as_ref())
-        else {
-            return Ok(agent);
-        };
-        for _ in 0..=self.jobs.len() {
-            ensure!(
-                self.job(latest)?.agent_id == id,
-                "continuation belongs to another agent"
-            );
-            let mut successors = self
-                .jobs
-                .values()
-                .filter(|job| job.agent_id == id && job.previous_job_id.as_ref() == Some(latest));
-            let Some(next) = successors.next() else {
-                agent.latest_job_id = Some(latest.clone());
-                return Ok(agent);
-            };
-            if successors.next().is_some() {
-                agent.latest_job_id = None;
-                return Ok(agent);
-            }
-            latest = &next.job_id;
-        }
-        bail!("conversation continuation chain contains a cycle")
+        agent.latest_job_id = self.indexes.head(id)?;
+        Ok(agent)
     }
 
     fn ensure_agent(&mut self, job: &JobRecord) -> Result<()> {
@@ -744,6 +792,10 @@ impl Inner {
             return Ok(());
         };
         let agent = AgentRecord {
+            parent: job.initial_parent.clone(),
+            parent_revision: job.parent_revision,
+            parent_recipient: (job.initial_parent.is_some() || job.parent_revision > 0)
+                .then(|| job.recipient.clone()),
             agent_id: job.agent_id.clone(),
             conversation: ConversationBinding::Unknown {
                 reason: "provider conversation is not yet bound".into(),
@@ -754,17 +806,18 @@ impl Inner {
             latest_job_id: Some(job.job_id.clone()),
         };
         self.write_agent(&agent)?;
-        self.agents.insert(agent.agent_id.clone(), agent);
+        self.insert_agent(agent);
         Ok(())
     }
 
     fn recover_agents(&mut self) -> Result<()> {
-        let initial: Vec<_> = self
+        let mut initial: Vec<_> = self
             .jobs
             .values()
             .filter(|job| job.source == JobSource::Runtime && job.previous_job_id.is_none())
             .cloned()
             .collect();
+        initial.sort_by(|left, right| left.job_id.cmp(&right.job_id));
         for job in initial {
             self.ensure_agent(&job)?;
         }
@@ -796,13 +849,25 @@ impl Inner {
         private_state::replace(&self.job_path(&job.job_id), &bytes)
     }
 
-    fn write_agent(&self, agent: &AgentRecord) -> Result<()> {
+    fn index_parent(&mut self, agent: &AgentRecord) {
+        if let ConversationBinding::Known { conversation } = &agent.conversation {
+            if agent.parent_recipient.is_some() {
+                self.parents
+                    .insert(conversation.clone(), agent.parent.clone());
+            } else {
+                self.parents.remove(conversation);
+            }
+        }
+    }
+
+    fn write_agent(&mut self, agent: &AgentRecord) -> Result<()> {
         let bytes = serde_json::to_vec(agent)?;
         ensure!(
             bytes.len() as u64 <= MAX_AGENT_BYTES,
             "agent origin exceeds its record budget"
         );
-        private_state::replace(&self.agent_path(&agent.agent_id), &bytes)
+        private_state::replace(&self.agent_path(&agent.agent_id), &bytes)?;
+        Ok(())
     }
 
     fn commit(&mut self, mut job: JobRecord, at_ms: i64) -> Result<JobRecord> {
@@ -820,7 +885,7 @@ impl Inner {
             );
         }
         self.write_job(&job)?;
-        self.jobs.insert(job.job_id.clone(), job.clone());
+        self.insert_job(job.clone());
         Ok(job)
     }
 
@@ -951,6 +1016,9 @@ fn tree_bytes(path: &Path) -> Result<u64> {
 
 fn is_terminal(job: &JobRecord) -> bool {
     matches!(job.execution, ExecutionState::Terminal { .. })
+}
+fn listing_active(job: &JobRecord) -> bool {
+    job.source == JobSource::Runtime && !is_terminal(job)
 }
 fn delivery_settled(delivery: &DeliveryState) -> bool {
     matches!(
@@ -1146,6 +1214,9 @@ fn validate_transition(job: &JobRecord, next: &ExecutionState) -> Result<()> {
     let valid = matches!(
         (&job.execution, next),
         (
+            ExecutionState::Admitted,
+            ExecutionState::WaitingForProvider { .. }
+        ) | (
             ExecutionState::Bound { .. },
             ExecutionState::Dispatching { .. }
         ) | (

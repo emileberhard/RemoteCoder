@@ -19,8 +19,13 @@ async fn register_job(gateway: &Gateway, sequence: u8, previous: Option<&JobReco
         previous_job_id: previous.map(|job| job.job_id.clone()),
         provider_retries: Vec::new(),
         source: JobSource::Runtime,
+        admitted_membership: None,
+        remote_fingerprint: None,
+        parent_revision: 0,
+        initial_parent: None,
         admission_origin: previous.is_none().then_some(Origin::TopLevel),
         unconfirmed_result: None,
+        attention: None,
         notices: Vec::new(),
         recipient: Recipient::None,
         spec: SpecEvidence::Known {
@@ -48,7 +53,7 @@ async fn register_job(gateway: &Gateway, sequence: u8, previous: Option<&JobReco
         provider_home: ProviderHome::Known {
             path: gateway.job_codex_home().unwrap(),
         },
-        thread_id: "continued-thread".into(),
+        thread_id: "6587aec5-99c2-5919-9221-89bdf86e59b6".into(),
     };
     let job = store
         .bind(job.job_id, job.revision, conversation, 2)
@@ -111,7 +116,9 @@ async fn scoped_route_outlives_jobs_and_legacy_title_proves_current_process_and_
             .unwrap()
             .started_micros,
     };
-    let thread = Arc::new(Mutex::new("continued-thread".to_owned()));
+    let thread = Arc::new(Mutex::new(
+        "6587aec5-99c2-5919-9221-89bdf86e59b6".to_owned(),
+    ));
     let names = Arc::new(Mutex::new(Vec::new()));
     let provider_thread = Arc::clone(&thread);
     let renamed = Arc::clone(&names);
@@ -165,7 +172,7 @@ async fn scoped_route_outlives_jobs_and_legacy_title_proves_current_process_and_
     assert_eq!(result, json!({"result":{}}));
     assert_eq!(
         *names.lock().unwrap(),
-        vec![json!({"threadId":"continued-thread","name":"Continued work"})]
+        vec![json!({"threadId":"6587aec5-99c2-5919-9221-89bdf86e59b6","name":"Continued work"})]
     );
     *thread.lock().unwrap() = "different-conversation".into();
     let rejected = request(
@@ -217,7 +224,9 @@ async fn scoped_route_outlives_jobs_and_legacy_title_proves_current_process_and_
             .await
             .unwrap()
             .verify_legacy_socket(
-                gateway.agent_conversation("continued-thread").unwrap(),
+                gateway
+                    .agent_conversation("6587aec5-99c2-5919-9221-89bdf86e59b6")
+                    .unwrap(),
                 legacy_socket(&first.job_id)
             )
             .await
@@ -227,4 +236,100 @@ async fn scoped_route_outlives_jobs_and_legacy_title_proves_current_process_and_
     gateway.jobs.close_endpoints().await;
     assert!(!path.exists());
     responder.abort();
+}
+
+#[tokio::test]
+async fn provider_wait_is_visible_while_another_provider_proceeds() {
+    use crate::agents::mcp::McpTokens;
+    use crate::observability::journal::Journal;
+    use crate::providers::claude::ClaudeSupervisor;
+    use crate::providers::claude::restart::test_support::StubClaude;
+    use crate::providers::codex::daemon::CodexAppServer;
+    use tokio::sync::mpsc;
+
+    let stub = StubClaude::new();
+    let gateway = Gateway::with_turn_state(
+        Arc::new(CodexAppServer::new_for_test_socket(
+            stub.state.join("codex"),
+        )),
+        stub.settings.clone(),
+        Journal::disabled(),
+        Some(stub.turn_state_path()),
+    );
+    let (sender, mut events) = mpsc::channel(256);
+    let notifications = tokio::spawn(async move { while events.recv().await.is_some() {} });
+    gateway.set_claude_agent(ClaudeSupervisor::new(
+        stub.settings.clone(),
+        sender,
+        Journal::disabled(),
+        McpTokens::default(),
+    ));
+    let mut ids = Vec::new();
+    for settings in [
+        ExecutionSettings::Codex {
+            model: "fixture".into(),
+            model_provider: "openai".into(),
+            effort: "medium".into(),
+            service_tier: None,
+            cyber_access_program: None,
+        },
+        ExecutionSettings::Claude {
+            model: "opus".into(),
+            effort: Some("max".into()),
+            fast: false,
+        },
+    ] {
+        let id = JobId::for_mutation(settings.provider(), "provider-readiness").unwrap();
+        let params = json!(StartParams {
+            job_id: id.clone(),
+            spec: JobSpec {
+                prompt: "Read this fixture".into(),
+                cwd: stub.cwd.clone().into(),
+                settings,
+                tool_scope: ToolScope::Full,
+                title: None,
+            },
+            caller: Caller::Operator
+        });
+        gateway
+            .validate_dispatch(
+                "agent/jobs/start",
+                json!({"params":params}).as_object().unwrap(),
+            )
+            .await
+            .unwrap();
+        gateway
+            .agent_jobs_rpc("agent/jobs/start", params)
+            .await
+            .unwrap();
+        ids.push(id);
+    }
+    gateway.jobs.start_driver().unwrap();
+    let (codex, claude) = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            let codex = gateway.jobs.read(&ids[0]).await.unwrap();
+            let claude = gateway.jobs.read(&ids[1]).await.unwrap();
+            if matches!(
+                codex.job.execution,
+                ExecutionState::WaitingForProvider {
+                    provider: Provider::Codex
+                }
+            ) && matches!(claude.job.execution, ExecutionState::Running { .. })
+            {
+                break (codex, claude);
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    stub.wait_for_log("received.jsonl", 1).await;
+    assert!(codex.job.execution.conversation().is_none());
+    assert_eq!(
+        serde_json::to_value(codex.job).unwrap()["execution"],
+        json!({"kind":"waitingForProvider","provider":"codex"})
+    );
+    assert!(claude.job.execution.conversation().is_some());
+    gateway.stop().await.unwrap();
+    notifications.await.unwrap();
 }

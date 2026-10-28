@@ -4,15 +4,18 @@ use super::model::*;
 use super::owner::{JobOwner, now_ms};
 
 impl JobOwner {
-    pub(super) async fn deliver_notices(&self, id: &JobId) -> Result<bool> {
+    pub(crate) async fn deliver_notices(&self, id: &JobId) -> Result<bool> {
         let store = self.store().await?;
         let original = store.read(id.clone()).await?;
         if original.source != JobSource::Runtime {
             return Ok(false);
         }
-        let Recipient::Conversation { conversation } = &original.recipient else {
+        if matches!(
+            &original.recipient,
+            Recipient::None | Recipient::Unknown { .. }
+        ) {
             return Ok(false);
-        };
+        }
         let gateway = self.gateway()?;
         if gateway.is_draining() {
             return Ok(false);
@@ -33,6 +36,40 @@ impl JobOwner {
             ) {
                 continue;
             }
+            let removed = match &original.recipient {
+                Recipient::Remote { host, .. } => !gateway.remote_receiver_active(host).await?,
+                _ => false,
+            };
+            let expired = notice
+                .at_ms
+                .is_some_and(|at| now_ms().saturating_sub(at) >= 24 * 60 * 60 * 1000)
+                && matches!(
+                    notice.delivery,
+                    DeliveryState::Unreachable { .. } | DeliveryState::Uncertain { .. }
+                );
+            if removed || expired {
+                let reason = if removed {
+                    "receiver host was removed; notice acceptance cannot be reconciled"
+                } else {
+                    "receiver could not be reconciled within 24 hours; notice requires user attention"
+                };
+                let current = store.read(id.clone()).await?;
+                if !matches!(notice.delivery, DeliveryState::Uncertain { .. }) {
+                    store
+                        .notice_delivery(
+                            id.clone(),
+                            current.revision,
+                            delivery_id,
+                            DeliveryState::Uncertain {
+                                reason: reason.into(),
+                            },
+                            now_ms(),
+                        )
+                        .await?;
+                }
+                gateway.surface_job_result(id, reason).await?;
+                continue;
+            }
             let current = store.read(id.clone()).await?;
             let sending = store
                 .notice_delivery(
@@ -44,14 +81,12 @@ impl JobOwner {
                 )
                 .await?;
             let next = match gateway
-                .deliver_job_input(conversation, &delivery_id, &text, None)
+                .deliver_job_recipient(&original.recipient, &delivery_id, &text)
                 .await
             {
-                Ok(value) => {
-                    serde_json::from_value::<DeliveryState>(value["deliveryState"].clone())?
-                }
+                Ok(state) => state,
                 Err(error) => DeliveryState::Uncertain {
-                    reason: error.message,
+                    reason: error.to_string(),
                 },
             };
             retry |= matches!(
@@ -61,6 +96,7 @@ impl JobOwner {
                     | DeliveryState::Submitted { .. }
                     | DeliveryState::Uncertain { .. }
                     | DeliveryState::Blocked { .. }
+                    | DeliveryState::Unreachable { .. }
             );
             store
                 .notice_delivery(id.clone(), sending.revision, delivery_id, next, now_ms())
@@ -69,7 +105,7 @@ impl JobOwner {
         Ok(retry)
     }
 
-    pub(super) async fn deliver_completion(
+    pub(crate) async fn deliver_completion(
         &self,
         job: &JobRecord,
         terminal: &Terminal,
@@ -92,9 +128,68 @@ impl JobOwner {
         ) {
             return Ok(false);
         }
-        let Recipient::Conversation { conversation } = &job.recipient else {
+        let job = self
+            .store()
+            .await?
+            .retarget_delivery(job.job_id.clone())
+            .await?;
+        let gateway = self.gateway()?;
+        if let Recipient::Remote { host, .. } = &job.recipient
+            && !gateway.remote_receiver_active(host).await?
+        {
+            let reason = "receiver host was removed; prior acceptance cannot be reconciled";
+            self.store()
+                .await?
+                .delivery(
+                    job.job_id.clone(),
+                    job.revision,
+                    DeliveryState::Uncertain {
+                        reason: reason.into(),
+                    },
+                    now_ms(),
+                )
+                .await?;
+            gateway.surface_job_result(&job.job_id, reason).await?;
             return Ok(false);
-        };
+        }
+        if matches!(job.recipient, Recipient::None) {
+            gateway
+                .surface_job_result(
+                    &job.job_id,
+                    "agent was promoted; its result is available to the user",
+                )
+                .await?;
+            let current = self.store().await?.read(job.job_id.clone()).await?;
+            self.store()
+                .await?
+                .delivery(
+                    job.job_id.clone(),
+                    current.revision,
+                    DeliveryState::Dismissed {
+                        reason: "result surfaced to the user after promotion".into(),
+                    },
+                    now_ms(),
+                )
+                .await?;
+            return Ok(false);
+        }
+        if let ExecutionState::Terminal { terminal } = &job.execution
+            && let Completion::Required { delivery, .. } = &terminal.completion
+            && terminal
+                .at_ms
+                .is_some_and(|at| now_ms().saturating_sub(at) >= 24 * 60 * 60 * 1000)
+            && matches!(
+                delivery,
+                DeliveryState::Unreachable { .. } | DeliveryState::Uncertain { .. }
+            )
+        {
+            if matches!(delivery, DeliveryState::Unreachable { .. }) {
+                self.store().await?.delivery(job.job_id.clone(),job.revision,DeliveryState::Uncertain {reason:"receiver could not be reconciled within 24 hours; result requires user attention".into()},now_ms()).await?;
+            }
+            gateway.surface_job_result(&job.job_id,"receiver could not be reconciled within 24 hours; result requires user attention").await?;
+            return Ok(false);
+        }
+
         let gateway = self.gateway()?;
         if gateway.is_draining() {
             return Ok(false);
@@ -116,12 +211,12 @@ impl JobOwner {
             )
             .await?;
         let next = match gateway
-            .deliver_job_input(conversation, delivery_id, text, None)
+            .deliver_job_recipient(&job.recipient, delivery_id, text)
             .await
         {
-            Ok(value) => serde_json::from_value::<DeliveryState>(value["deliveryState"].clone())?,
+            Ok(state) => state,
             Err(error) => DeliveryState::Uncertain {
-                reason: error.message,
+                reason: error.to_string(),
             },
         };
         let retry = matches!(
@@ -131,6 +226,7 @@ impl JobOwner {
                 | DeliveryState::Submitted { .. }
                 | DeliveryState::Uncertain { .. }
                 | DeliveryState::Blocked { .. }
+                | DeliveryState::Unreachable { .. }
         );
         self.store()
             .await?

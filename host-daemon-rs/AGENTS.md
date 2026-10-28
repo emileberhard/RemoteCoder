@@ -68,9 +68,10 @@ Native terminal Claude holders own only their process-lifetime inbox route.
 Scoped caller coordination belongs to the gateway lifetime, namespaced by its
 job-store root; it proves the actual provider process and resolves the current
 job from the conversation. Finishing a job must not remove that shared route.
-Native caller proof validates the peer before provider lookup and verifies ancestry
-only through the daemon's exact tool root; unrelated launcher ancestors above
-that owner are outside the proof.
+Native caller proof validates the peer before provider lookup. One lazy walker
+verifies every link through the first proven Codex tool root or Claude session
+owner; unrelated launcher ancestors above that owner are outside the proof.
+Unreadable processes at or below the owner retain their exact failure.
 
 Manual message receipts share `JobStore` and its cap. Their frozen sender,
 requested target, envelope, resolved conversation and target job survive retries;
@@ -1042,6 +1043,13 @@ scoped receipt reads require the exact sender conversation.
 
 ## Install, restart and recovery
 
+- The cluster upgrade makes the delegated-job store one-way once parent tags,
+  cluster fields or new execution states are written. Gateways at `aa96ebb` and
+  earlier reject those records and ignore remote intents, fences and membership.
+  Recover by rolling forward to a fixed next patch. Never restore a pre-upgrade
+  snapshot that would discard accepted jobs. `docs/delegated-jobs.md` lists each
+  store's compatibility boundary. Never-tagged records omit absent new fields.
+
 - A planned daemon or runtime restart is one Rust-owned transaction in the
   gateway binary:
   1. Hold the host lease and fence new work.
@@ -1927,3 +1935,34 @@ Existing threads never migrate. Managed Claude is ineligible for restricted
 Codex requests. Voice and internal starts keep their realtime/native contract.
 `docs/provider-health.md` owns readiness evidence, effort adaptation and the
 no-replay boundary. Keep this policy in the gateway rather than client retries.
+
+Cluster identity belongs to `identity.rs`: the host UUID is stable, the ledger
+incarnation fences job and receipt store epochs, and same-epoch backup restores
+require `cluster reset-identity`. Membership and pinned links belong to
+`cluster/`. Membership mutations require the local operator; every peer request
+rechecks the retained membership, including on existing sockets. Cluster
+credentials are journal-redacted.
+
+`agents/jobs` remains the only job, intent, fence and result owner. The execution
+driver owns native custody and local delivery; `cluster/driver.rs` owns network
+reconciliation. Parent tags decide current placement, notification classification
+and `message_agent parent`; immutable origin never grants authority. Delivery
+with uncertain acceptance stays on its frozen receiver and identity until
+reconciled. Thread headers expose the current nested parent address. The flat
+parent thread ID is only a compatibility projection for local parents.
+
+Use the sessions projection for native conversation inventory and resolution;
+never add another transcript reader. An unavailable projection is not an empty
+inventory. Native parent moves need no JobSpec; continuing unknown native
+permissions fails closed.
+
+## Lifecycle indexes
+
+JobStore is the only owner of conversation, parent, current-head, list-order and
+per-member work indexes. Insert or replace records through its indexed insertion
+methods; direct map mutation would leave reads or delivery wakeups stale. Agent
+parent changes, promotion and startup reload update those same indexes. The
+network driver consumes coalesced member-specific watches, never global history
+scans. A delivery retry receipt alone must not wake its own worker and bypass
+backoff. Members owns one cached immutable document per gateway; successful atomic
+writes publish a new snapshot, and authentication never reloads it from disk.

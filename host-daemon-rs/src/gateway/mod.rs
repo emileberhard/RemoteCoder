@@ -6,6 +6,7 @@ mod agent_jobs;
 pub(crate) mod agent_jobs_codex;
 mod agent_messages;
 mod agent_routes;
+mod cluster;
 mod question_gateway;
 mod sessions;
 
@@ -110,6 +111,7 @@ enum ClientCommand {
 /// the id through separately.
 #[derive(Debug, Clone)]
 struct ClientTx {
+    grant: crate::auth::installation_credentials::Grant,
     content_subscriptions: Arc<subscriptions::ContentSubscriptions>,
     id: u64,
     installation_id: Option<String>,
@@ -260,6 +262,8 @@ mod takeover;
 
 pub(crate) struct Gateway {
     user_name: Option<String>,
+    identity: tokio::sync::OnceCell<tokio::sync::RwLock<crate::identity::HostIdentity>>,
+    cluster_link: tokio::sync::OnceCell<Arc<crate::cluster::link::Link>>,
     pub(crate) admission: Arc<crate::gateway::admission::ConversationAdmission>,
     external_auth: Option<external_auth::ExternalAuth>,
     external_providers: Option<Arc<ExternalProviders>>,
@@ -467,6 +471,8 @@ impl Gateway {
         let restart_journal = journal.clone();
         Arc::new_cyclic(|gateway| Self {
             user_name,
+            identity: tokio::sync::OnceCell::new(),
+            cluster_link: tokio::sync::OnceCell::new(),
             claude_recovery_ready: AtomicBool::new(!claude_settings.enabled),
             review: conversation_review::Runtime::new(
                 gateway.clone(),
@@ -558,11 +564,55 @@ impl Gateway {
         })
     }
 
+    pub(crate) async fn cluster_link(&self) -> Result<Arc<crate::cluster::link::Link>> {
+        let link = self
+            .cluster_link
+            .get_or_try_init(|| async {
+                let state = self
+                    .turn_state_path
+                    .as_deref()
+                    .and_then(Path::parent)
+                    .context("cluster membership requires persistent state")?;
+                Ok::<_, anyhow::Error>(Arc::new(crate::cluster::link::Link::new(
+                    state,
+                    self.host_identity().await?.clone(),
+                )))
+            })
+            .await?;
+        Ok(Arc::clone(link))
+    }
+
+    pub(crate) async fn host_identity(&self) -> Result<crate::identity::HostIdentity> {
+        let identity = self
+            .identity
+            .get_or_try_init(|| async {
+                let state = self
+                    .turn_state_path
+                    .as_deref()
+                    .and_then(Path::parent)
+                    .context("host identity requires persistent state")?
+                    .to_owned();
+                let receipts = crate::identity::receipt_root(&self.claude_settings.claude_home);
+                Ok::<_, anyhow::Error>(tokio::sync::RwLock::new(
+                    tokio::task::spawn_blocking(move || crate::identity::open(&state, &receipts))
+                        .await??,
+                ))
+            })
+            .await?;
+        Ok(identity.read().await.clone())
+    }
+
     pub(crate) async fn start(self: &Arc<Self>) -> Result<()> {
         self.codex.verify_ready().await?;
         self.load_turn_state().await?;
         self.calls.load().await?;
-        self.jobs.initialize().await?;
+        self.host_identity().await?;
+        if let Err(error) = self.jobs.initialize().await {
+            if let Some(state) = self.turn_state_path.as_deref().and_then(Path::parent) {
+                crate::identity::invalidate(state)?;
+            }
+            return Err(error);
+        }
 
         // APNs is best-effort, but should be serialized/coalesced to avoid bursts and JWT churn.
         let (completion_tx, completion_rx) = mpsc::channel::<ApnsSend>(256);
@@ -633,6 +683,8 @@ impl Gateway {
         }
 
         self.jobs.start_driver()?;
+        self.start_cluster_liveness()?;
+        crate::cluster::driver::start(self)?;
         Ok(())
     }
 

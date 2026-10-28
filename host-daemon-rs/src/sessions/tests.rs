@@ -400,7 +400,7 @@ fn sessions_timestamps_preserve_fractional_order() {
 }
 
 #[test]
-fn sessions_schema_mismatch_rebuilds_projection_and_expires_cursor() {
+fn sessions_previous_schema_rebuilds_projection_and_expires_cursor() {
     let f = fixture();
     scan(&f);
     let raw = std::fs::read(&f.codex).unwrap();
@@ -408,7 +408,7 @@ fn sessions_schema_mismatch_rebuilds_projection_and_expires_cursor() {
     f.store
         .writer()
         .unwrap()
-        .pragma_update(None, "user_version", 99)
+        .pragma_update(None, "user_version", super::SCHEMA_VERSION - 1)
         .unwrap();
     Store::open(f.store.path.clone()).unwrap();
     assert!(
@@ -603,6 +603,51 @@ async fn sessions_mirror_preserves_sidecars_and_refuses_over_budget() {
 }
 
 #[tokio::test]
+async fn sessions_cluster_coverage_preserves_link_failure_classes() {
+    let call: cluster::MemberCall = Arc::new(|host, _, _| {
+        async move {
+            let class = match host.as_str() {
+                "unsupported" => crate::wire::cluster::ErrorClass::Unsupported,
+                "refused" => crate::wire::cluster::ErrorClass::Refused,
+                _ => crate::wire::cluster::ErrorClass::Unavailable,
+            };
+            Err(crate::cluster::link::LinkError {
+                class,
+                transmitted: false,
+                message: host,
+            }
+            .into())
+        }
+        .boxed()
+    });
+    let result = cluster::search(
+        "local-uuid",
+        json!({"hits":[],"cursor":null}),
+        vec!["unsupported".into(), "refused".into(), "unreachable".into()],
+        query::Search {
+            query: "fixture".into(),
+            ..Default::default()
+        },
+        call,
+    )
+    .await
+    .unwrap();
+    let coverage = result["coverage"].as_array().unwrap();
+    assert!(
+        coverage
+            .iter()
+            .any(|row| row["hostId"] == "local-uuid" && row["state"] == "ok")
+    );
+    for state in ["unsupported", "refused", "unreachable"] {
+        assert!(
+            coverage
+                .iter()
+                .any(|row| row["hostId"] == state && row["state"] == state)
+        );
+    }
+}
+
+#[tokio::test]
 async fn sessions_cluster_search_reports_unreachable_members() {
     let call: cluster::MemberCall = Arc::new(|host, method, params| {
         async move {
@@ -616,6 +661,7 @@ async fn sessions_cluster_search_reports_unreachable_members() {
         .boxed()
     });
     let result = cluster::search(
+        "local-uuid",
         json!({"hits":[],"cursor":null}),
         vec!["peer".into(), "away".into()],
         query::Search {

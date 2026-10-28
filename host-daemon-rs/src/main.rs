@@ -5,6 +5,7 @@ mod auth;
 mod automations;
 mod build_identity;
 mod call_worker;
+mod cluster;
 mod config;
 mod conversation_marks;
 mod conversation_projects;
@@ -14,6 +15,7 @@ mod directory_favorites;
 mod files;
 mod gateway;
 mod http;
+mod identity;
 mod ids;
 mod navigation;
 mod notifications;
@@ -451,6 +453,7 @@ async fn serve_http(
     );
     let installation_credentials = auth::installation_credentials::InstallationCredentials::new(
         settings.host_paths.state("installation-credentials.json"),
+        gateway.cluster_link().await?.store.clone(),
     );
     let speech = voice::speech::SpeechRelay::new(
         settings.auth_token.clone(),

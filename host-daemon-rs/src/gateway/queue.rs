@@ -647,6 +647,7 @@ mod tests {
         gateway.clients.insert(
             12,
             crate::gateway::ClientTx {
+                grant: crate::auth::installation_credentials::Grant::Operator,
                 content_subscriptions: Arc::default(),
                 query_response: None,
                 installation_id: None,

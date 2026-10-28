@@ -69,6 +69,7 @@ pub(super) fn redact_call_details(value: &mut Value) {
                         | "userCode"
                         | "authorizationCode"
                         | "bearer"
+                        | "credential"
                         | "_remoteCoderRootPermit"
                 ) {
                     *member = Value::String("[redacted]".into());
@@ -257,6 +258,14 @@ mod tests {
             assert!(text.contains("imageBytes"));
             assert!(text.contains("13"));
         }
+    }
+
+    #[test]
+    fn cluster_credentials_are_redacted_in_requests_and_receipts() {
+        let mut value = json!({"method":"cluster/accept","params":{"credential":"rcp1.private"},"result":{"credential":"rcp1.reply"}});
+        redact_call_details(&mut value);
+        assert_eq!(value["params"]["credential"], "[redacted]");
+        assert_eq!(value["result"]["credential"], "[redacted]");
     }
 
     #[test]

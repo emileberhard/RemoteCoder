@@ -37,6 +37,58 @@ async fn buffered_codex_texts(
 }
 
 #[tokio::test]
+async fn parent_tag_failure_returns_an_error_and_keeps_processing_responses() {
+    let gateway = TestGateway::new();
+    let root = gateway
+        .turn_state_path
+        .as_ref()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("agent-jobs/v1/jobs");
+    crate::storage::private_state::ensure_private_directory(&root).unwrap();
+    crate::storage::private_state::replace(&root.join("broken.json"), b"broken").unwrap();
+    let pending: PendingRequests = Arc::default();
+    pending
+        .lock()
+        .await
+        .insert("1".into(), PendingRequest::new("thread/read", None, false));
+    let (tx, mut replies) = mpsc::channel(4);
+    let client = super::super::tests::test_client(1, tx);
+    let (upstream, _forwarded) = mpsc::channel(4);
+    let stream = buffered_codex_frames(vec![
+        json!({"id":1,"result":{"thread":{"id":"child"}}}),
+        json!({"id":2,"result":{"usable":true}}),
+    ])
+    .await;
+    gateway
+        .codex_to_client_loop(
+            1,
+            NotificationOrigin::Client {
+                id: 1,
+                opened_after: 0,
+            },
+            stream,
+            client,
+            upstream,
+            pending,
+        )
+        .await;
+    for id in [1, 2] {
+        let ClientCommand::Text(text) = replies.recv().await.unwrap() else {
+            panic!("response")
+        };
+        let response: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(response["id"], id);
+        if id == 1 {
+            assert!(response["error"].is_object());
+        } else {
+            assert_eq!(response["result"]["usable"], true);
+        }
+    }
+}
+
+#[tokio::test]
 async fn bounded_preview_rejects_non_boolean_codex_opt_in_before_forwarding() {
     let gateway = TestGateway::new();
     let (tx, mut replies) = mpsc::channel(4);
@@ -118,18 +170,15 @@ async fn bounded_preview_codex_opt_in_is_consumed_and_only_changes_the_list_payl
             if opted_in.is_none() {
                 assert_eq!(sent, raw);
             }
-            assert_eq!(
-                pending.lock().await.len(),
-                usize::from(opted_in == Some(true))
-            );
+            assert_eq!(pending.lock().await.len(), 1);
 
             let prefix = format!("{}{}", "a".repeat(2_047), grapheme);
             let preview = format!("{prefix}tail");
             let response = json!({"id":7,"result":{"data":[
-                {"id":"codex","preview":preview,"name":"Full title"},
-                {"id":"short","preview":"short"},
-                {"id":"marked","preview":format!("{}<remotecoder_literal_text_v2 bytes=\"4\">\ntext\n</remotecoder_literal_text_v2>", "a".repeat(3_000))}
-            ],"nextCursor":"next","completionTimes":{"codex":42}}});
+                {"id":"019e0b6a-b5cb-7b62-bd89-4c58f82fd1a2","preview":preview,"name":"Full title"},
+                {"id":"019e0b6a-b5cb-7b62-bd89-4c58f82fd1a3","preview":"short"},
+                {"id":"019e0b6a-b5cb-7b62-bd89-4c58f82fd1a4","preview":format!("{}<remotecoder_literal_text_v2 bytes=\"4\">\ntext\n</remotecoder_literal_text_v2>", "a".repeat(3_000))}
+            ],"nextCursor":"next","completionTimes":{"019e0b6a-b5cb-7b62-bd89-4c58f82fd1a2":42}}});
             let raw_response = serde_json::to_string_pretty(&response).unwrap();
             let stream = buffered_codex_texts(vec![raw_response.clone()]).await;
             gateway
@@ -148,13 +197,14 @@ async fn bounded_preview_codex_opt_in_is_consumed_and_only_changes_the_list_payl
             let ClientCommand::Text(received) = replies.recv().await.unwrap() else {
                 panic!("list response")
             };
-            if opted_in == Some(true) {
-                let mut expected = response;
-                expected["result"]["data"][0]["preview"] = json!(prefix);
-                assert_eq!(serde_json::from_str::<Value>(&received).unwrap(), expected);
-            } else {
+            let mut expected = response;
+            if opted_in != Some(true) {
                 assert_eq!(received, raw_response);
             }
+            if opted_in == Some(true) {
+                expected["result"]["data"][0]["preview"] = json!(prefix);
+            }
+            assert_eq!(serde_json::from_str::<Value>(&received).unwrap(), expected);
             assert!(pending.lock().await.is_empty());
         }
     }
@@ -783,6 +833,7 @@ async fn forwarded_codex_input_changes_the_driver_only_on_its_exact_success_resp
     let gateway = TestGateway::new();
     let (outbound, mut replies) = mpsc::channel(16);
     let client = ClientTx {
+        grant: crate::auth::installation_credentials::Grant::Operator,
         content_subscriptions: Arc::default(),
         query_response: None,
         id: 2,
@@ -792,6 +843,7 @@ async fn forwarded_codex_input_changes_the_driver_only_on_its_exact_success_resp
     };
     let (phone_outbound, _phone_replies) = mpsc::channel(4);
     let phone = ClientTx {
+        grant: crate::auth::installation_credentials::Grant::Operator,
         content_subscriptions: Arc::default(),
         query_response: None,
         id: 1,
@@ -1606,4 +1658,94 @@ async fn explicit_claude_start_works_without_codex_connection() {
     assert_eq!(response["result"]["model"], "opus");
     assert_eq!(response["result"]["reasoningEffort"], "xhigh");
     assert!(gateway.request_budgets.command.try_acquire(1).is_some());
+}
+
+#[tokio::test]
+async fn thread_reads_preserve_untagged_bytes_and_project_a_promoted_parent() {
+    use crate::agents::jobs::model::*;
+    let gateway = TestGateway::new();
+    let native = "019e0b6a-b5cb-7b62-bd89-4c58f82fd1a7";
+    let promoted = "019e0b6a-b5cb-7b62-bd89-4c58f82fd1a8";
+    let store = gateway.jobs.store().await.unwrap();
+    let agent = store
+        .adopt_conversation(AgentRecord {
+            agent_id: "promoted-read".into(),
+            conversation: ConversationBinding::Known {
+                conversation: gateway.agent_conversation(promoted).unwrap(),
+            },
+            origin: Origin::TopLevel,
+            tool_scope: None,
+            origin_job_id: None,
+            latest_job_id: None,
+            parent: None,
+            parent_revision: 0,
+            parent_recipient: Some(Recipient::None),
+        })
+        .await
+        .unwrap();
+    store
+        .set_parent(agent.agent_id, None, Recipient::None)
+        .await
+        .unwrap();
+    let (tx, mut replies) = mpsc::channel(4);
+    let client = super::super::tests::test_client(1, tx);
+    let (upstream, mut forwarded) = mpsc::channel(4);
+    let pending: PendingRequests = Arc::default();
+    for (id, thread) in [(1, native), (2, promoted)] {
+        let raw = json!({"id":id,"method":"thread/read","params":{"threadId":thread,"includeTurns":true}}).to_string();
+        let DispatchPlan::Request(request) = DispatchPlan::parse(&raw) else {
+            panic!("request")
+        };
+        gateway
+            .forward_native_request(
+                1,
+                &client,
+                NativeRequest {
+                    _start_permit: None,
+                    raw,
+                    request,
+                    _admission: None,
+                },
+                Some(&upstream),
+                &pending,
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            forwarded.recv().await,
+            Some(UpstreamMessage::Text(_))
+        ));
+    }
+    assert_eq!(pending.lock().await.len(), 1);
+    let original = |id, thread| {
+        serde_json::to_string_pretty(&json!({"id":id,"result":{"thread":{
+        "id":thread,"parentThreadId":native,"turns":[{"id":"native-turn","items":[{"type":"agentMessage","text":"Exact native text 👩🏽‍💻"}]}],
+    }}})).unwrap()
+    };
+    let native_response = original(1, native);
+    let stream = buffered_codex_texts(vec![native_response.clone(), original(2, promoted)]).await;
+    gateway
+        .codex_to_client_loop(
+            1,
+            NotificationOrigin::Client {
+                id: 1,
+                opened_after: 0,
+            },
+            stream,
+            client,
+            upstream,
+            pending.clone(),
+        )
+        .await;
+    let ClientCommand::Text(received) = replies.recv().await.unwrap() else {
+        panic!("native response")
+    };
+    assert_eq!(received, native_response);
+    let ClientCommand::Text(received) = replies.recv().await.unwrap() else {
+        panic!("promoted response")
+    };
+    let response: Value = serde_json::from_str(&received).unwrap();
+    assert_eq!(response["result"]["thread"]["parent"], Value::Null);
+    assert_eq!(response["result"]["thread"]["parentThreadId"], Value::Null);
+    assert!(pending.lock().await.is_empty());
 }

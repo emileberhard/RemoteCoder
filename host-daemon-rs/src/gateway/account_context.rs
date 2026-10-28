@@ -27,6 +27,12 @@ pub(super) fn admission_refusal(id: Option<&Value>, error: &anyhow::Error) -> Va
 }
 
 pub(super) fn requires_admission(method: &str, params: &Value) -> bool {
+    if matches!(
+        method,
+        "agent/jobs/start" | "agent/jobs/continue" | "agent/jobs/admit"
+    ) {
+        return false;
+    }
     if method == "conversation/agents/action" && params["action"] == "stop" {
         return false;
     }

@@ -96,11 +96,13 @@ impl Gateway {
         let (tx, out_rx) = mpsc::channel::<ClientCommand>(CLIENT_OUTBOUND_QUEUE_SIZE);
         let (lane_tx, lane_rx) = mpsc::channel::<UpstreamFrame>(CLIENT_UPSTREAM_QUEUE_SIZE);
         let out_tx = ClientTx {
+            grant: grant.clone(),
             query_response: None,
             content_subscriptions: Arc::default(),
             installation_id: match grant {
                 crate::auth::installation_credentials::Grant::Installation { id, .. } => Some(id),
-                crate::auth::installation_credentials::Grant::Operator => None,
+                crate::auth::installation_credentials::Grant::Operator
+                | crate::auth::installation_credentials::Grant::Peer { .. } => None,
             },
             id: client_id,
             tx,
@@ -564,6 +566,10 @@ impl Gateway {
             queries: _,
         } = requests;
         let id = request.object.get("id").cloned();
+        if let Err(error) = self.validate_member_grant(&out_tx.grant).await {
+            self.send_error_to(out_tx, id.as_ref(), &error).await?;
+            return Ok(());
+        }
         if request.method == "$/cancelRequest" {
             if id.is_some() {
                 return self
@@ -850,6 +856,10 @@ impl Gateway {
             _admission,
         } = request;
         let id = object.get("id").cloned();
+        if let Err(error) = self.validate_member_grant(&out_tx.grant).await {
+            let _ = self.send_error_to(out_tx, id.as_ref(), &error).await;
+            return Ok(());
+        }
         let mut object = object;
         let mut params = object.remove("params").unwrap_or(Value::Null);
         let mut selected = false;
@@ -943,8 +953,41 @@ impl Gateway {
             }
         };
 
-        if let Some(method) =
-            correlated_method(Some(method.as_str())).or(bounded_preview.then_some("thread/list"))
+        let correlated = if method == "thread/read" {
+            let indexed = async {
+                let Some(conversation) = object
+                    .get("params")
+                    .and_then(|params| params["threadId"].as_str())
+                    .and_then(|thread| self.agent_conversation(thread).ok())
+                else {
+                    return Ok(false);
+                };
+                Ok::<_, anyhow::Error>(
+                    !self
+                        .jobs
+                        .store()
+                        .await?
+                        .parent_tags(vec![conversation])
+                        .await?
+                        .is_empty(),
+                )
+            }
+            .await;
+            match indexed {
+                Ok(true) => Some("thread/read"),
+                Ok(false) => None,
+                Err(error) => {
+                    self.send_error_to(out_tx, id.as_ref(), &RpcError::from(error))
+                        .await?;
+                    return Ok(());
+                }
+            }
+        } else if method == "thread/list" {
+            Some("thread/list")
+        } else {
+            correlated_method(Some(method.as_str()))
+        };
+        if let Some(method) = correlated
             && let Some(id) = &id
         {
             let mut pending = pending_requests.lock().await;
@@ -1154,6 +1197,26 @@ impl Gateway {
                         .and_then(|(message, request)| tag_upstream_error(message, request));
                     let mut reencode = tagged.is_some();
                     let mut parsed = tagged.or(parsed);
+                    if matches!(history_method, Some("thread/read" | "thread/list"))
+                        && let Some(result) = parsed
+                            .as_mut()
+                            .and_then(|message| message.get_mut("result"))
+                    {
+                        match self.apply_parent_tags(result).await {
+                            Ok(changed) => reencode |= changed,
+                            Err(error) => {
+                                let error = RpcError::from(error);
+                                let _ = self
+                                    .send_error_to(
+                                        &out_tx,
+                                        parsed.as_ref().and_then(|message| message.get("id")),
+                                        &error,
+                                    )
+                                    .await;
+                                continue;
+                            }
+                        }
+                    }
                     if request
                         .as_ref()
                         .is_some_and(|request| request.bounded_preview)

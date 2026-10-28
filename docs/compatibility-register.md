@@ -117,3 +117,10 @@ PR must introduce the reader before enabling its writer.
 |---|---|---|---|
 | Mac App Store package as completion marker through 3.73.0 | `scripts/release-cache.py`, `mac_completion` | Retained direct releases predate the independent direct completion marker | Neither host retains a release reference at 3.73.0 or earlier; then use the direct marker for every retained release |
 | `testflight-` symbol directory names through 3.73.0 | `scripts/release-cache.py`, `symbol_directory` | Retained pre-migration direct dSYMs use the former TestFlight label | Neither host retains a release reference at 3.73.0 or earlier; then use `direct-` for every retained symbol directory |
+
+The gateway projects the current parent tag into the legacy thread header
+`parentThreadId` for app versions that do not read `parent`. The value is the
+parent's thread ID only when the parent belongs to this host; remote parents
+and promoted roots project to null. The authoritative header field is
+`parent: {hostId, threadId} | null`. Remove the flat projection when the minimum
+supported app version reads the nested parent address.

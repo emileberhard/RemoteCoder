@@ -5,7 +5,9 @@ pub(super) const CONTINUATION_PROMPT: &str = "The previous attempt ended with a 
 
 pub(super) fn is_transient(error: &Value) -> bool {
     match error["codexErrorInfo"].as_str() {
-        Some("serverOverloaded" | "rateLimitExceeded" | "internalServerError") => true,
+        Some(
+            "serverOverloaded" | "flexUnavailable" | "rateLimitExceeded" | "internalServerError",
+        ) => true,
         Some(
             "httpConnectionFailed"
             | "responseStreamConnectionFailed"
@@ -34,10 +36,13 @@ mod tests {
     fn only_proven_transient_provider_failures_retry() {
         for code in [
             "serverOverloaded",
+            "flexUnavailable",
             "rateLimitExceeded",
             "internalServerError",
         ] {
-            assert!(is_transient(&json!({"codexErrorInfo":code})));
+            let raw = json!({"message":"provider capacity","codexErrorInfo":code});
+            let normalized = crate::wire::gateway::TerminalError::from_wire(Some(&raw)).unwrap();
+            assert!(is_transient(&serde_json::to_value(normalized).unwrap()));
         }
         for code in [
             "httpConnectionFailed",

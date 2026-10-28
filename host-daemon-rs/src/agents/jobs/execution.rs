@@ -20,7 +20,13 @@ impl JobOwner {
     pub(super) async fn reconcile_job(&self, id: JobId) -> Result<bool> {
         let gateway = self.gateway()?;
         let store = self.store().await?;
-        let notices_pending = self.deliver_notices(&id).await?;
+        let current = store.retarget_delivery(id.clone()).await?;
+        let notices_pending = if matches!(&current.recipient, Recipient::Remote {host,..} if gateway.remote_receiver_active(host).await?)
+        {
+            false
+        } else {
+            self.deliver_notices(&id).await?
+        };
         for _ in 0..8 {
             let job = store.read(id.clone()).await?;
             if let ExecutionState::Terminal { terminal } = &job.execution {
@@ -42,13 +48,24 @@ impl JobOwner {
                         .await?;
                     continue;
                 }
-                return Ok(self.deliver_completion(&job, terminal).await? || notices_pending);
+                let current = store.retarget_delivery(job.job_id.clone()).await?;
+                if let Recipient::Remote { host, .. } = &current.recipient
+                    && gateway.remote_receiver_active(host).await?
+                {
+                    return Ok(false);
+                }
+                let ExecutionState::Terminal { terminal } = &current.execution else {
+                    unreachable!()
+                };
+                return Ok(self.deliver_completion(&current, terminal).await? || notices_pending);
             }
             if matches!(job.stop, StopState::Requested { .. }) {
                 self.stop_execution(&gateway, &job).await?;
                 let effects = if matches!(
                     job.execution,
-                    ExecutionState::Admitted | ExecutionState::Bound { .. }
+                    ExecutionState::Admitted
+                        | ExecutionState::WaitingForProvider { .. }
+                        | ExecutionState::Bound { .. }
                 ) {
                     EffectEvidence::NotStarted
                 } else {
@@ -73,13 +90,27 @@ impl JobOwner {
             let retry_spec = (!job.provider_retries.is_empty()).then(|| continuation_spec(spec));
             let spec = retry_spec.as_ref().unwrap_or(spec);
             match &job.execution {
-                ExecutionState::Admitted => {
+                ExecutionState::Admitted | ExecutionState::WaitingForProvider { .. } => {
+                    let provider = spec.settings.provider();
+                    if !gateway.job_provider_ready(provider).await {
+                        if matches!(job.execution, ExecutionState::Admitted) {
+                            store
+                                .advance(
+                                    id.clone(),
+                                    job.revision,
+                                    ExecutionState::WaitingForProvider { provider },
+                                    now_ms(),
+                                )
+                                .await?;
+                        }
+                        return Ok(true);
+                    }
                     let agent = store.agent(job.agent_id.clone()).await?;
                     let conversation = match agent.conversation {
                         ConversationBinding::Known { conversation } => conversation,
                         ConversationBinding::Unknown { .. } => match spec.settings.provider() {
                             Provider::Codex => super::codex::create(&gateway, spec).await?,
-                            Provider::Claude => gateway.job_new_claude_conversation(),
+                            Provider::Claude => gateway.job_new_claude_conversation()?,
                         },
                     };
                     store
@@ -450,6 +481,7 @@ impl JobOwner {
         if matches!(
             job.execution,
             ExecutionState::Admitted
+                | ExecutionState::WaitingForProvider { .. }
                 | ExecutionState::Bound { .. }
                 | ExecutionState::RetryWaiting { .. }
         ) {
@@ -515,7 +547,10 @@ impl JobOwner {
         {
             return Ok(());
         }
-        let notice = if matches!(job.recipient, Recipient::Conversation { .. }) {
+        let notice = if matches!(
+            job.recipient,
+            Recipient::Conversation { .. } | Recipient::Remote { .. }
+        ) {
             let host = self.gateway()?.job_host_name()?;
             Some(crate::agents::envelope::message(
                 &format!("{}:notice:observation", job.job_id.as_str()),
@@ -568,7 +603,7 @@ impl JobOwner {
                 let text = crate::agents::envelope::completion(
                     &job.job_id,
                     provider(job)?,
-                    &gateway.job_host_name()?,
+                    &gateway.host_identity().await?.host_id,
                     &outcome,
                     &result,
                     &git,
@@ -591,7 +626,9 @@ impl JobOwner {
                 .is_some_and(|identity| identity.provider == Provider::Claude)
             && !matches!(
                 job.execution,
-                ExecutionState::Admitted | ExecutionState::Bound { .. }
+                ExecutionState::Admitted
+                    | ExecutionState::WaitingForProvider { .. }
+                    | ExecutionState::Bound { .. }
             ) {
             CleanupState::Pending
         } else {

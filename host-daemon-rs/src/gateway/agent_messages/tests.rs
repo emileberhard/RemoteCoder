@@ -31,9 +31,7 @@ async fn missing_target_has_a_durable_failure_receipt_and_conflicting_retry_is_r
             .contains("does not exist")
     );
     let reason = first["deliveryState"]["reason"].as_str().unwrap();
-    assert!(reason.contains("message_agent has no cross-host relay"));
-    assert!(reason.contains("codex-threads resolve <thread-id> --json"));
-    assert!(reason.contains("codex-threads send --host <host> <thread-id> '<message>'"));
+    assert!(reason.contains("host:id or --host"));
     assert_eq!(
         gateway
             .agent_jobs_rpc(
@@ -94,7 +92,7 @@ async fn terminal_job(gateway: &Gateway, outcome: JobOutcome) -> JobId {
         .bind(
             id.clone(),
             admitted.job.revision,
-            gateway.job_new_claude_conversation(),
+            gateway.job_new_claude_conversation().unwrap(),
             now_ms(),
         )
         .await
@@ -200,7 +198,7 @@ async fn finished_message_admits_one_exact_continuation_and_duplicate_keeps_its_
     );
     let first = first.unwrap();
     assert_eq!(first, duplicate.unwrap());
-    assert_eq!(first["deliveryState"]["kind"], "accepted");
+    assert_eq!(first["deliveryState"]["kind"], "accepted", "{first:#}");
     let id: JobId =
         serde_json::from_value(first["resolved"]["continuation"]["jobId"].clone()).unwrap();
     assert_eq!(
@@ -366,7 +364,7 @@ async fn canceled_message_caller_cannot_release_execution_before_provider_admiss
             provider_home: ProviderHome::Known {
                 path: gateway.job_codex_home().unwrap(),
             },
-            thread_id: "frozen-message-thread".into(),
+            thread_id: "11111111-2222-4333-8444-555555555555".into(),
         };
         let bound = store
             .bind(
@@ -615,9 +613,7 @@ async fn missing_native_target_retains_peer_route_guidance_without_peer_discover
     assert_eq!(receipt["deliveryState"]["kind"], "failed");
     let reason = receipt["deliveryState"]["reason"].as_str().unwrap();
     assert!(reason.contains("thread is not present in this native home"));
-    assert!(reason.contains("message_agent has no cross-host relay"));
-    assert!(reason.contains("codex-threads resolve <thread-id> --json"));
-    assert!(reason.contains("codex-threads send --host <host> <thread-id> '<message>'"));
+    assert!(reason.contains("host:id or --host"));
     assert!(receipt["resolved"].is_null());
     assert_eq!(
         gateway

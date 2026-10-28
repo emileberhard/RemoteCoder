@@ -336,9 +336,20 @@ impl RpcError {
     }
 }
 
+impl std::fmt::Display for RpcError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for RpcError {}
+
 impl From<anyhow::Error> for RpcError {
     fn from(error: anyhow::Error) -> Self {
-        CodexUnavailable::find(&error)
+        error
+            .downcast_ref::<Self>()
+            .cloned()
+            .or_else(|| CodexUnavailable::find(&error))
             .unwrap_or_else(|| Self::new(RpcCode::Internal, error.to_string()))
     }
 }

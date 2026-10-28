@@ -45,6 +45,11 @@ impl Gateway {
 }
 
 impl AgentService<'_> {
+    pub(in crate::gateway) async fn invalidate_parent_views(&self) {
+        self.gateway.agents.parents.lock().await.clear();
+        self.gateway.agents.views.lock().await.clear();
+    }
+
     pub(in crate::gateway) async fn agents_rpc(&self, method: &str, params: Value) -> RpcResult {
         let result = match method {
             "conversation/agents/classify" => self.classify_agents(decode(params)?).await,
@@ -253,6 +258,15 @@ impl AgentService<'_> {
                     );
                 }
                 nodes.push(Agent {
+                    owner_host_id: self.gateway.host_identity().await?.host_id.clone(),
+                    job_id: None,
+                    parent: Some(crate::wire::cluster::AgentAddress {
+                        host_id: self.gateway.host_identity().await?.host_id,
+                        thread_id: parent.unwrap_or(root).into(),
+                    }),
+                    recipient: None,
+                    kind: None,
+                    intent_state: None,
                     id: format!("codex:{id}"),
                     parent_id: parent.filter(|p| *p != root).map(|p| format!("codex:{p}")),
                     owner_thread_id: root.into(),
@@ -385,7 +399,11 @@ impl AgentService<'_> {
             history_limited: projection.limited,
             ..NativeCoverage::default()
         };
-        let mut agents = projection.agents(root, live.is_some());
+        let mut agents = projection.agents(
+            root,
+            live.is_some(),
+            &self.gateway.host_identity().await?.host_id,
+        );
         if let Some(generation) = live {
             for agent in &mut agents {
                 if let Some(task) = &agent.execution_id {
@@ -593,9 +611,13 @@ impl AgentService<'_> {
             )?);
         }
         let thread = node.thread_id.context("Missing native thread")?;
+        self.read_thread_output(&thread).await
+    }
+
+    pub(in crate::gateway) async fn read_thread_output(&self, thread: &str) -> Result<Value> {
         let turns = self
             .gateway
-            .call_control(
+            .cluster_history_page(
                 "thread/turns/list",
                 json!({"threadId":thread,"limit":5,"sortDirection":"desc","itemsView":"notLoaded"}),
             )
@@ -607,7 +629,7 @@ impl AgentService<'_> {
             .iter()
             .rev()
         {
-            let items=self.gateway.call_control("thread/items/list",json!({"threadId":thread,"turnId":turn["id"],"limit":100,"sortDirection":"desc"})).await?;
+            let items=self.gateway.cluster_history_page("thread/items/list",json!({"threadId":thread,"turnId":turn["id"],"limit":100,"sortDirection":"desc"})).await?;
             output.truncated |= !items["nextCursor"].is_null();
             for entry in items["data"]
                 .as_array()
@@ -735,10 +757,15 @@ impl AgentService<'_> {
                 let reads = futures_util::stream::iter(missing)
                     .map(|thread| {
                         async move {
-                            let parent = self
-                                .parent_for_thread(&thread)
-                                .await
-                                .map(|parent| parent.map(|parent| parent.thread_id));
+                            let parent = async {
+                                let host = self.gateway.host_identity().await?.host_id;
+                                self.parent_for_thread(&thread).await.map(|parent| {
+                                    parent
+                                        .filter(|parent| parent.host_id == host)
+                                        .map(|parent| parent.thread_id)
+                                })
+                            }
+                            .await;
                             (thread, parent)
                         }
                         .boxed()

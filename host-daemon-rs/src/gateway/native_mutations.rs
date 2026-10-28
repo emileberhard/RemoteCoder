@@ -340,6 +340,7 @@ mod tests {
         });
         let (client_tx, client_rx) = mpsc::channel(2);
         let client = ClientTx {
+            grant: crate::auth::installation_credentials::Grant::Operator,
             content_subscriptions: Arc::default(),
             query_response: None,
             installation_id: None,

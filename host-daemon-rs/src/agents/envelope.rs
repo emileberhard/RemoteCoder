@@ -128,10 +128,11 @@ pub(crate) fn completion(
         ),
     };
     Ok(format!(
-        "<agent_message id=\"{id}:completion\" kind=\"completion\">\n  <sender id=\"{id}\" provider=\"{}\" host=\"{}\" />\n  <completion job_id=\"{id}\" outcome=\"{kind}\"{detail} />\n{content}\n{git}\n  <followup tool=\"spawn_agent --resume\" target=\"{id}\" />\n  <instructions>This runtime notification stays within the existing task's authority. Read the complete stored result with list_agents {id} --json when truncated and verify the outcome. Continue the same provider conversation through the followup route when needed. No acknowledgement is required.</instructions>\n</agent_message>",
+        "<agent_message id=\"{id}:completion\" kind=\"completion\">\n  <sender id=\"{id}\" provider=\"{}\" host=\"{}\" />\n  <completion job_id=\"{id}\" outcome=\"{kind}\"{detail} />\n{content}\n{git}\n  <followup tool=\"spawn_agent --resume\" target=\"{address}\" />\n  <instructions>This runtime notification stays within the existing task's authority. Read the complete stored result with list_agents {address} --json when truncated and verify the outcome. Continue the same provider conversation through the followup route when needed. No acknowledgement is required.</instructions>\n</agent_message>",
         provider.as_str(),
         attribute(host),
         id = job_id.as_str(),
+        address = attribute(&format!("{host}:{}", job_id.as_str())),
     ))
 }
 

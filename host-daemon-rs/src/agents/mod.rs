@@ -41,9 +41,23 @@ pub(crate) struct Capabilities {
     pub ask_parent: bool,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum AgentKind {
+    RemoteIntent,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Agent {
+    pub owner_host_id: String,
+    pub job_id: Option<String>,
+    pub parent: Option<crate::wire::cluster::AgentAddress>,
+    pub recipient: Option<jobs::model::Recipient>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<AgentKind>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub intent_state: Option<crate::wire::cluster::IntentState>,
     pub id: String,
     pub parent_id: Option<String>,
     pub owner_thread_id: String,

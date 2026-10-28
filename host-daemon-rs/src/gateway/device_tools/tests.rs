@@ -20,6 +20,7 @@ fn connect(
 ) -> (ClientTx, mpsc::Receiver<ClientCommand>) {
     let (tx, receiver) = mpsc::channel(16);
     let client = ClientTx {
+        grant: crate::auth::installation_credentials::Grant::Operator,
         content_subscriptions: Arc::default(),
         query_response: None,
         id,

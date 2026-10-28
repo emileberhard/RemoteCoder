@@ -42,7 +42,7 @@ impl SpeechClients {
 
     fn permits(&self, grant: &Grant) -> bool {
         match (self, grant) {
-            (_, Grant::Operator) | (Self::All, _) => true,
+            (_, Grant::Operator | Grant::Peer { .. }) | (Self::All, _) => true,
             (Self::Installations(ids), Grant::Installation { id, .. }) => ids.contains(id),
         }
     }

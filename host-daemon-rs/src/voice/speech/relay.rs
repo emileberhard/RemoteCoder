@@ -317,6 +317,7 @@ impl SpeechRelay {
     ) -> Result<Admitted, Rejection> {
         let principal = match grant {
             Grant::Operator => "operator".to_owned(),
+            Grant::Peer { host, .. } => format!("peer:{host}"),
             Grant::Installation { id, .. } => id.clone(),
         };
         let target = uri
@@ -712,7 +713,10 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let relay = SpeechRelay::new(
             "test-operator".into(),
-            InstallationCredentials::new(directory.path().join("installations")),
+            InstallationCredentials::new(
+                directory.path().join("installations"),
+                Arc::new(crate::cluster::members::Members::new(directory.path())),
+            ),
             None,
             SpeechClients::All,
             Journal::disabled(),
