@@ -163,7 +163,6 @@ actor HistoryGatewayFixture: CodexHistoryGateway, ConversationMarksRemote {
         if method == "thread/items/list", fields["cursor"]?.stringValue == nil { tailReads += 1 }
         if shouldFail { throw Failure.offline }
         requestedThreadIDs.append(fields["threadId"]?.stringValue ?? "")
-        await suspendRead(.page)
         if method == "thread/items/list" {
             if case .number(let limit)? = fields["limit"] { itemPageLimits.append(Int(limit)) }
             if itemPagesExceedCapacity {
