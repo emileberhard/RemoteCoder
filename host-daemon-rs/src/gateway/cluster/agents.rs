@@ -120,6 +120,13 @@ impl Gateway {
             .filter_map(|(index, row)| row.thread_id.clone().map(|id| (id, index)))
             .collect();
         for agent in store.agents_with_parent(parent.clone()).await? {
+            let agent = match agent {
+                Ok(agent) => agent,
+                Err(error) => {
+                    warnings.push(json!(format!("{error:#}")));
+                    continue;
+                }
+            };
             let ConversationBinding::Known { conversation } = &agent.conversation else {
                 continue;
             };

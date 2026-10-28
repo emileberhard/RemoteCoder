@@ -486,16 +486,20 @@ impl JobStore {
     pub(crate) async fn agents_with_parent(
         &self,
         parent: crate::wire::cluster::AgentAddress,
-    ) -> Result<Vec<AgentRecord>> {
+    ) -> Result<Vec<Result<AgentRecord>>> {
         self.access(move |inner| {
-            inner
+            Ok(inner
                 .indexes
                 .parents
                 .get(&parent)
                 .into_iter()
                 .flatten()
-                .map(|id| inner.agent_view(id))
-                .collect()
+                .map(|id| {
+                    inner
+                        .agent_view(id)
+                        .with_context(|| format!("Agent {id} is unavailable"))
+                })
+                .collect())
         })
         .await
     }
