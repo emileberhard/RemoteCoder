@@ -18,29 +18,13 @@ enum GatewayIdentityLaunch {
         let unresolved = hosts.filter { $0.gatewayID != $0.id }
         guard !unresolved.isEmpty else { return [] }
         var resolved: [(GatewayHostConfiguration, GatewayIdentity)] = []
-        let probes = Task {
-            await BoundedFanOut.run(unresolved, limit: 3, skipping: { _ in false }) { host in
-                do {
-                    let identity = try await read(host)
-                    try Task.checkCancellation()
-                    resolved.append((host, identity))
-                } catch {}
-            }
-        }
-        let timeout = Task {
+        await BoundedFanOut.run(unresolved, limit: BoundedFanOut.hostLimit, deadline: .now + budget, skipping: { _ in false }) { host in
             do {
-                try await Task.sleep(for: budget)
-                probes.cancel()
+                let identity = try await read(host)
+                try Task.checkCancellation()
+                resolved.append((host, identity))
             } catch {}
         }
-        await withTaskCancellationHandler {
-            await probes.value
-        } onCancel: {
-            probes.cancel()
-            timeout.cancel()
-        }
-        timeout.cancel()
-        await timeout.value
         return resolved
     }
 }

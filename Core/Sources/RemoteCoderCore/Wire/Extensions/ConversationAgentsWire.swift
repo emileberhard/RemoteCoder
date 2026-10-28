@@ -90,37 +90,20 @@ extension ConversationAgent {
         parent = try values.decodeIfPresent(ClusterParent.self, forKey: .parent)
         intentState = try values.decodeIfPresent(IntentState.self, forKey: .intentState)
         lastActiveAt = try values.decodeIfPresent(Int64.self, forKey: .lastActiveAt)
-        if kind == "remote_intent" {
-            ownerHostId = try values.decode(UUID.self, forKey: .ownerHostId)
-            parent = try values.decode(ClusterParent.self, forKey: .parent)
-            id = try values.decode(String.self, forKey: .jobId)
-            ownerThreadId = parent?.threadId ?? ""
-            parentId = nil
-            threadId = nil
-            provider = .init(rawValue: "unknown")
-            source = kind ?? "remote_intent"
-            title = try values.decodeIfPresent(String.self, forKey: .title) ?? "Remote agent"
-            model = nil
-            state = intentState == .removed ? .removed : .unknown
-            capabilities = .init(inspect: false, openConversation: false, message: false, continueWork: false, stop: false, askParent: false)
-            executionId = nil
-            accountId = nil
-            isStub = true
-        } else {
-            isStub = false
-            id = try values.decode(String.self, forKey: .id)
-            parentId = try values.decodeIfPresent(String.self, forKey: .parentId)
-            ownerThreadId = try values.decode(String.self, forKey: .ownerThreadId)
-            threadId = try values.decodeIfPresent(String.self, forKey: .threadId)
-            provider = try values.decode(ReportedProvider.self, forKey: .provider)
-            source = try values.decode(String.self, forKey: .source)
-            title = try values.decode(String.self, forKey: .title)
-            model = try values.decodeIfPresent(String.self, forKey: .model)
-            state = try values.decode(State.self, forKey: .state)
-            capabilities = try values.decode(Capabilities.self, forKey: .capabilities)
-            executionId = try values.decodeIfPresent(String.self, forKey: .executionId)
-            accountId = try values.decodeIfPresent(String.self, forKey: .accountId)
-        }
+        isStub = kind == "remote_intent"
+        id = try values.decode(String.self, forKey: .id)
+        parentId = try values.decodeIfPresent(String.self, forKey: .parentId)
+        ownerThreadId = try values.decode(String.self, forKey: .ownerThreadId)
+        threadId = try values.decodeIfPresent(String.self, forKey: .threadId)
+        provider = try values.decode(ReportedProvider.self, forKey: .provider)
+        source = try values.decode(String.self, forKey: .source)
+        title = try values.decode(String.self, forKey: .title)
+        model = try values.decodeIfPresent(String.self, forKey: .model)
+        let reportedState = try values.decode(State.self, forKey: .state)
+        state = isStub == true && intentState == .removed ? .removed : reportedState
+        capabilities = try values.decode(Capabilities.self, forKey: .capabilities)
+        executionId = try values.decodeIfPresent(String.self, forKey: .executionId)
+        accountId = try values.decodeIfPresent(String.self, forKey: .accountId)
         parentHostID = try parent?.hostId ?? values.decodeIfPresent(UUID.self, forKey: .parentHostID)
     }
 }

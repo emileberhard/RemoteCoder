@@ -3,7 +3,7 @@ import Observation
 
 @Observable @MainActor
 final class ClusterModel {
-    struct Host: Identifiable {
+    struct Host: Identifiable, Sendable {
         let configuration: GatewayHostConfiguration
         let remote: any ClusterRemote
         var id: UUID { configuration.id }
@@ -26,6 +26,7 @@ final class ClusterModel {
     private(set) var listings: [UUID: ClusterList] = [:]
     private(set) var failures: [UUID: String] = [:]
     private(set) var pairs: [Pair]
+    private(set) var membersByID: [UUID: ClusterMember] = [:]
     private(set) var isRefreshing = false
     private(set) var running: Set<UUID> = []
     private(set) var persistenceFailure: String?
@@ -33,6 +34,9 @@ final class ClusterModel {
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private static let pairsKey = "cluster.pairs.v1"
     @ObservationIgnored private var generation = UUID()
+    @ObservationIgnored private var refreshTask: Task<Void, Never>?
+    @ObservationIgnored private var refreshInputs: [GatewayHostConfiguration] = []
+    @ObservationIgnored private var memberIndex: [UUID: [UUID: ClusterMember]] = [:]
 
     init(defaults: UserDefaults) {
         self.defaults = defaults
@@ -45,37 +49,73 @@ final class ClusterModel {
         } else { pairs = [] }
     }
 
+    deinit { refreshTask?.cancel() }
+
     func refresh(hosts: [Host]) async {
+        let inputs = hosts.map(\.configuration)
+        if let task = refreshTask, !task.isCancelled, inputs == refreshInputs { await task.value; return }
+        refreshTask?.cancel()
         let ids = Set(hosts.map(\.id))
         listings = listings.filter { ids.contains($0.key) }
         failures = failures.filter { ids.contains($0.key) }
+        memberIndex = memberIndex.filter { ids.contains($0.key) }
         pairs.removeAll { $0.complete && (!ids.contains($0.first) || !ids.contains($0.second)) }
         let generation = UUID()
         self.generation = generation
+        refreshInputs = inputs
         isRefreshing = true
-        await withTaskGroup(of: (UUID, Result<ClusterList, Error>).self) { group in
-            for host in hosts {
-                group.addTask {
-                    do { return (host.id, .success(try await host.remote.clusterList())) }
-                    catch { return (host.id, .failure(error)) }
-                }
+        let task = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                if self.generation == generation { self.isRefreshing = false; self.refreshTask = nil }
             }
-            for await (host, result) in group {
-                guard self.generation == generation, !Task.isCancelled else { continue }
+            var answered: Set<UUID> = []
+            await BoundedFanOut.run(hosts, limit: BoundedFanOut.hostLimit, deadline: .now + .seconds(10), skipping: { _ in false }) { host in
+                let result: Result<PreparedList, Error>
+                do { result = .success(try await Self.read(host)) }
+                catch { result = .failure(error) }
+                guard self.generation == generation, !Task.isCancelled else { return }
+                answered.insert(host.id)
                 switch result {
-                case .success(let list) where list.local.hostId == host:
-                    listings[host] = list
-                    failures[host] = nil
-                case .success: failures[host] = ClusterFailure.identityChanged.localizedDescription
-                case .failure(let error): failures[host] = error.localizedDescription
+                case .success(let prepared) where prepared.list.local.hostId == host.id:
+                    self.listings[host.id] = prepared.list
+                    self.memberIndex[host.id] = prepared.members
+                    self.failures[host.id] = nil
+                case .success: self.failures[host.id] = ClusterFailure.identityChanged.localizedDescription
+                case .failure(let error): self.failures[host.id] = error.localizedDescription
                 }
             }
+            guard self.generation == generation, !Task.isCancelled else { return }
+            for host in hosts where !answered.contains(host.id) { self.failures[host.id] = ClusterReadFailure.deadline.localizedDescription }
+            let members = await Self.prepareMembers(self.memberIndex)
+            guard self.generation == generation, !Task.isCancelled else { return }
+            self.membersByID = members
         }
-        if self.generation == generation { isRefreshing = false }
+        refreshTask = task
+        await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
+    }
+
+    private struct PreparedList: Sendable {
+        let list: ClusterList
+        let members: [UUID: ClusterMember]
+    }
+
+    @concurrent private static func read(_ host: Host) async throws -> PreparedList {
+        let list = try await host.remote.clusterList()
+        return .init(list: list, members: Dictionary(list.members.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first }))
+    }
+
+    @concurrent private static func prepareMembers(_ lists: [UUID: [UUID: ClusterMember]]) async -> [UUID: ClusterMember] {
+        var members: [UUID: ClusterMember] = [:]
+        for list in lists.values {
+            guard !Task.isCancelled else { return members }
+            for (id, member) in list where members[id] == nil { members[id] = member }
+        }
+        return members
     }
 
     func isMember(_ host: UUID, of anchor: UUID) -> Bool {
-        host == anchor || listings[anchor]?.members.contains { $0.hostId == host && $0.state == .active } == true
+        host == anchor || memberIndex[anchor]?[host]?.state == .active
     }
 
     func join(_ hostID: UUID, anchor: UUID, hosts: [Host]) async {
@@ -98,8 +138,7 @@ final class ClusterModel {
     func remove(_ hostID: UUID, hosts: [Host]) async {
         guard persistenceFailure == nil else { return }
         for host in hosts where host.id != hostID {
-            let member = listings[host.id]?.members.first { $0.hostId == hostID }
-                ?? listings[hostID]?.members.first { $0.hostId == host.id }
+            let member = memberIndex[host.id]?[hostID] ?? memberIndex[hostID]?[host.id]
             guard let member else { continue }
             let existing = pairs.first { $0.membership == member.membership }
             if existing == nil, !reservePair() { return }
@@ -164,7 +203,7 @@ final class ClusterModel {
     }
 
     private func operatorHost(_ id: UUID, hosts: [Host]) throws -> Host {
-        let name = listings.values.flatMap(\.members).first { $0.id == id }?.name ?? id.uuidString
+        let name = membersByID[id]?.name ?? id.uuidString
         guard let host = hosts.first(where: { $0.id == id }) else { throw ClusterFailure.connectionRequired(name) }
         guard !host.configuration.usesInstallationCredential else { throw ClusterFailure.operatorRequired(host.configuration.displayName) }
         return host

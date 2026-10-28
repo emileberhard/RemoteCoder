@@ -7,11 +7,7 @@ struct ClusterAgentRelationTests {
         let host = UUID()
         let other = UUID()
         let parent = UUID()
-        let stub = try decode([
-            "kind": "remote_intent", "jobId": "job", "ownerHostId": host.uuidString,
-            "intentState": "unknown", "parent": ["hostId": parent.uuidString, "threadId": "parent"],
-            "lastActiveAt": 1_793_181_600
-        ])
+        let stub = try decode(intent(host: host, parent: parent, state: "unknown"))
         let real = try decode(row(host: host, parent: parent))
         let separate = try decode(row(host: other, parent: parent))
         #expect(stub.state == .unknown)
@@ -23,10 +19,7 @@ struct ClusterAgentRelationTests {
             #expect(result.first?.isStub == false)
             #expect(result.first?.address(localHostID: parent) == .init(hostID: host, threadID: "child"))
         }
-        var removedFields: [String: Any] = ["kind": "remote_intent", "jobId": "removed", "ownerHostId": host.uuidString,
-            "intentState": "removed", "parent": ["hostId": parent.uuidString, "threadId": "parent"]]
-        removedFields["lastActiveAt"] = 1_793_181_600
-        #expect(try decode(removedFields).state == .removed)
+        #expect(try decode(intent(host: host, parent: parent, state: "removed")).state == .removed)
     }
 
     @Test func currentParentTagOverridesSpawnProvenanceIncludingPromotion() throws {
@@ -68,11 +61,34 @@ struct ClusterAgentRelationTests {
         var fields = row(host: host, parent: parent)
         fields["lastActiveAt"] = 1_793_181_600
         let real = try decode(fields)
-        let stub = try decode(["kind": "remote_intent", "jobId": "job", "ownerHostId": host.uuidString,
-            "intentState": "future", "parent": ["hostId": parent.uuidString, "threadId": "parent"],
-            "lastActiveAt": 1_793_181_600])
+        let stub = try decode(intent(host: host, parent: parent, state: "future"))
         #expect(stub.lastActiveAt == real.lastActiveAt)
         #expect(stub.intentState == .unknown)
+    }
+
+    @Test func intentsRequireTheSameCapabilitiesAsEveryOtherAgentRow() throws {
+        var fields = intent(host: UUID(), parent: UUID(), state: "pending")
+        fields["capabilities"] = nil
+        #expect(throws: DecodingError.self) { try decode(fields) }
+    }
+
+    @Test func clusterErrorClassesRetainTheirCoverageMeaning() throws {
+        for (name, expected) in [("unavailable", ClusterCoverage.State.unavailable), ("unsupported", .unsupported), ("refused", .refused)] {
+            let data: JSONValue = .object(["class": .string(name), "retryable": .bool(false)])
+            let error = try #require(GatewayRPCFailure(code: -32600, message: name, data: data))
+            #expect(ClusterCoverage.State.failure(error) == expected)
+        }
+        let fields: [String: Any] = ["hostId": UUID().uuidString, "state": "unavailable"]
+        #expect(try JSONDecoder().decode(ClusterCoverage.self, from: JSONSerialization.data(withJSONObject: fields)).state == .unavailable)
+    }
+
+    private func intent(host: UUID, parent: UUID, state: String) -> [String: Any] {
+        ["id": "job", "jobId": "job", "ownerHostId": host.uuidString, "ownerThreadId": "parent",
+         "kind": "remote_intent", "intentState": state, "provider": "codex", "source": "remote_intent",
+         "title": "Child", "state": "unknown", "lastActiveAt": 1_793_181_600,
+         "parent": ["hostId": parent.uuidString, "threadId": "parent"],
+         "capabilities": ["inspect": false, "openConversation": false, "message": false,
+                          "continueWork": false, "stop": false, "askParent": false]]
     }
 
     private func row(host: UUID, parent: UUID) -> [String: Any] {

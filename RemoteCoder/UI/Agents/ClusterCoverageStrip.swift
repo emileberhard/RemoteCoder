@@ -38,6 +38,7 @@ struct ClusterCoverageStrip: View {
         case .stale: member.staleThrough.map { "Stale through \($0.formatted(date: .abbreviated, time: .shortened))" } ?? "Stale"
         case .unknown: "Unknown"
         case .refused: "Refused"
+        case .unavailable: "Unavailable"
         }
     }
 
@@ -48,6 +49,7 @@ struct ClusterCoverageStrip: View {
         case .unsupported, .stale: "clock.badge.exclamationmark"
         case .unknown: "questionmark.circle"
         case .refused: "minus.circle"
+        case .unavailable: "exclamationmark.circle"
         }
     }
 }

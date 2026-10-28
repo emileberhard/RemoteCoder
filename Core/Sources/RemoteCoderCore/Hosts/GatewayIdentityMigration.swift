@@ -112,7 +112,7 @@ actor GatewayIdentityMigration {
         for id in ids.sorted(by: { $0.uuidString < $1.uuidString }) {
             let restored = try await original.restore(id, threadID: nil, generation: nil)
             guard !restored.requiresAuthoritativeHistory else { throw MigrationFailure.recovery }
-            let thread = restored.checkpoint?.threadID ?? aliases[id]?.sorted().first
+            let thread = restored.checkpoint?.threadID ?? aliases[id]?.min()
             let targetID = thread.flatMap { current[$0] } ?? id
             replacements[id] = targetID
             for alias in aliases[id] ?? [] { current[alias] = targetID }
@@ -157,9 +157,9 @@ actor GatewayIdentityMigration {
     }
 }
 
-@MainActor
 enum GatewayIdentityPreferences {
-    static func migrate(from source: UUID, to target: UUID, defaults: UserDefaults, domainName: String) {
+    @concurrent static func migrate(from source: UUID, to target: UUID, domainName: String) async throws {
+        guard let defaults = UserDefaults(suiteName: domainName) else { throw CocoaError(.fileReadInvalidFileName) }
         guard source != target else { return }
         let sourceText = source.uuidString
         let targetText = target.uuidString

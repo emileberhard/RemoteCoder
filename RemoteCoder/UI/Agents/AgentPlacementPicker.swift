@@ -4,6 +4,7 @@ struct AgentPlacementPicker: View {
     let agent: ConversationAddress
     let workspace: ChatWorkspaceModel
     @State private var query = ""
+    @State private var candidates: [(address: ConversationAddress, title: String, hostName: String)] = []
     @State private var destination: ConversationAddress?
     @State private var error: String?
     @Environment(\.dismiss) private var dismiss
@@ -33,6 +34,11 @@ struct AgentPlacementPicker: View {
                     Button("Cancel", systemImage: "xmark") { dismiss() }
                 }
             }
+            .task(id: query) {
+                let prepared = await workspace.agentParentCandidates(excluding: agent, query: query)
+                guard !Task.isCancelled else { return }
+                candidates = prepared
+            }
             .task(id: destination) {
                 guard let destination else { return }
                 defer { self.destination = nil }
@@ -47,9 +53,4 @@ struct AgentPlacementPicker: View {
         }
     }
 
-    private var candidates: [(address: ConversationAddress, title: String, hostName: String)] {
-        workspace.agentParentCandidates.filter {
-            $0.address != agent && (query.isEmpty || $0.title.localizedStandardContains(query) || $0.hostName.localizedStandardContains(query))
-        }
-    }
 }

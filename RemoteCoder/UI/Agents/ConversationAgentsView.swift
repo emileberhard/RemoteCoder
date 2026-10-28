@@ -76,7 +76,7 @@ struct ConversationAgentLinks: View {
             NavigationLink {
                 ConversationAgentDetail(workspace: workspace, model: model, agentID: row.id, onParentRequest: onParentRequest, onOpenConversation: onOpenConversation, onAction: onAction)
             } label: {
-                AgentRow(row: row, coverage: row.agent.ownerHostId.flatMap { host in model.coverage.first { $0.id == host } })
+                AgentRow(row: row, coverage: row.agent.ownerHostId.flatMap { model.coverageByHost[$0] })
             }
             .accessibilityIdentifier("agent-\(row.id)")
         }
@@ -193,6 +193,7 @@ private struct AgentHostBadge: View {
         case .unsupported: "\(name) · Too old"
         case .stale: "\(name) · Stale"
         case .refused: "\(name) · Refused"
+        case .unavailable: "\(name) · Unavailable"
         case .unknown: "\(name) · Unknown"
         }
     }
@@ -204,6 +205,7 @@ private struct AgentHostBadge: View {
         case .unsupported: "clock.badge.exclamationmark"
         case .stale: "clock.badge.exclamationmark"
         case .refused: "minus.circle"
+        case .unavailable: "exclamationmark.circle"
         case .unknown: "questionmark.circle"
         }
     }
@@ -285,7 +287,7 @@ private struct ConversationAgentDetail: View {
         case askParent
     }
 
-    private var agent: ConversationAgent? { model.agents.first { $0.identity == agentID } }
+    private var agent: ConversationAgent? { model.agent(for: agentID) }
 
     var body: some View {
         List {

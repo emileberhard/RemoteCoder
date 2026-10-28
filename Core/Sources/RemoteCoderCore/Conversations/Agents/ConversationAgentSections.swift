@@ -51,9 +51,12 @@ struct ConversationAgentSections: Equatable, Sendable {
         let ids = Set(agents.map(\.identity))
         let children = Dictionary(grouping: agents, by: { (parents[$0.identity] ?? nil) ?? "" })
         func append(_ agent: ConversationAgent, depth: Int) {
-            guard visited.insert(agent.identity).inserted else { return }
-            result.append(ConversationAgentRow(agent: agent, depth: min(depth, 4)))
-            for child in children[agent.identity] ?? [] { append(child, depth: depth + 1) }
+            var pending = [(agent, depth)]
+            while let (agent, depth) = pending.popLast() {
+                guard visited.insert(agent.identity).inserted else { continue }
+                result.append(ConversationAgentRow(agent: agent, depth: min(depth, 4)))
+                for child in (children[agent.identity] ?? []).reversed() { pending.append((child, depth + 1)) }
+            }
         }
         for agent in agents where (parents[agent.identity] ?? nil).map({ !ids.contains($0) }) ?? true { append(agent, depth: 0) }
         for agent in agents where !visited.contains(agent.identity) { append(agent, depth: 0) }

@@ -135,7 +135,11 @@ struct ConversationAgentsRefreshTests {
         let childGateway = GatewayClient(config: .init(url: try #require(URL(string: "ws://127.0.0.1:\(childPort)")),
             authToken: "fixture", hostLabel: "Child"), routes: nil)
         let parent: JSONValue = .object(["hostId": .string(parentHost.uuidString), "threadId": .string("parent")])
-        let stub: JSONValue = .object(["kind": .string("remote_intent"), "jobId": .string("job"),
+        let stub: JSONValue = .object(["id": .string("job"), "kind": .string("remote_intent"), "jobId": .string("job"),
+            "ownerThreadId": .string("parent"), "provider": .string("codex"), "source": .string("remote_intent"),
+            "title": .string("Remote child"), "state": .string("unknown"),
+            "capabilities": .object(["inspect": .bool(false), "openConversation": .bool(false), "message": .bool(false),
+                                    "continueWork": .bool(false), "stop": .bool(false), "askParent": .bool(false)]),
             "ownerHostId": .string(childHost.uuidString), "parent": parent, "intentState": .string("admitted"),
             "lastActiveAt": .number(1_793_181_600)])
         var real = try #require(page.objectValue?["agents"]?.arrayValue?.first?.objectValue)

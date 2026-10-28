@@ -84,7 +84,7 @@ struct ClusterIssuedCredential: Decodable, Sendable {
 
 struct ClusterCoverage: Decodable, Equatable, Sendable, Identifiable {
     enum State: String, Decodable, Sendable {
-        case ok, unreachable, unsupported, stale, unknown, refused
+        case ok, unreachable, unsupported, stale, unknown, refused, unavailable
 
         init(from decoder: any Decoder) throws {
             self = Self(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .unknown
@@ -163,5 +163,49 @@ extension GatewayClient: ClusterRemote {
     func setAgentParent(agent: ClusterParent, parent: ClusterParent?) async throws {
         let _: JSONValue = try await callDecodable(method: "agent/parent/set", params: .object([
             "protocol": .number(1), "agent": agent.json, "parent": parent?.json ?? .null]), timeout: .seconds(10))
+    }
+}
+
+enum ClusterReadFailure: LocalizedError, Equatable {
+    case deadline, unsupported
+
+    var errorDescription: String? {
+        switch self {
+        case .deadline: "The cluster refresh deadline elapsed before this host answered."
+        case .unsupported: "This gateway does not support cluster agent reads."
+        }
+    }
+}
+
+enum ClusterErrorClass: String, Decodable, Sendable {
+    case usage, notFound = "not_found", refused, unavailable, uncertain, unsupported, conflict, unknown
+
+    init(from decoder: any Decoder) throws {
+        self = Self(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .unknown
+    }
+}
+
+extension ClusterCoverage.State {
+    static func failure(_ error: any Error) -> Self {
+        if let error = error as? ClusterReadFailure {
+            return error == .unsupported ? .unsupported : .unavailable
+        }
+        if let failure = error as? GatewayRPCFailure, case .cluster(let errorClass) = failure.kind {
+            switch errorClass {
+            case .unsupported: return .unsupported
+            case .refused: return .refused
+            case .unavailable: return .unavailable
+            default: return .stale
+            }
+        }
+        if error is URLError { return .unreachable }
+        if let error = error as? GatewayClient.ClientError {
+            switch error {
+            case .serverError(_, let code) where code == -32601: return .unsupported
+            case .notConnected, .connectionClosed, .connectionFailed, .gatewayRestarting, .gatewayNotReady, .requestTimedOut: return .unreachable
+            default: break
+            }
+        }
+        return .stale
     }
 }

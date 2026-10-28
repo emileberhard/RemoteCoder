@@ -14,7 +14,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
     /// How many hosts bootstrap or refresh at once. A sleeping laptop must not
     /// delay the Mini's first rows, and an unbounded fan-out on a cold launch
     /// competes with the visible host's transcript load.
-    private static let refreshConcurrency = 3
+    private static let refreshConcurrency = BoundedFanOut.hostLimit
 
     let settings: HostStore
     let cluster: ClusterModel
@@ -178,12 +178,14 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         let storage = storage
         accountMigration = Task { [weak self] in
             guard let self else { return }
-            let previous = await ledger.run(hosts: self.settings.hosts.map(\.id), excluding: admittedHosts,
+            let originalIDs = self.settings.hosts.map(\.id)
+            let previous = await ledger.run(hosts: originalIDs, excluding: admittedHosts,
                 storage: storage, discovered: { _ in }, finishedHost: { _ in })
             await self.resolveGatewayIdentities()
             guard !Task.isCancelled else { return }
             let hostIDs = self.settings.hosts.map(\.id)
             self.launchRestore.reloadPendingLocation()
+            if Set(hostIDs) == Set(originalIDs) { self.finishAccountMigration(previous); return }
             let outcome = await ledger.run(hosts: hostIDs, excluding: admittedHosts, storage: storage, discovered: { [weak self] hosts in
                 self?.isDiscoveringRetiredState = false
                 self?.migratingHosts = hosts
@@ -220,7 +222,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
                     try await migration.migrate(from: source, to: identity.hostId)
                 }
                 try Task.checkCancellation()
-                try self.settings.adoptIdentity(identity, for: host)
+                try await self.settings.adoptIdentity(identity, for: host)
                 for source in sources { try await migration.finish(from: source, to: identity.hostId) }
             } catch is CancellationError {
             } catch {
@@ -276,7 +278,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         let sources = ids.union(host.legacyIDs)
         for old in sources { try await migration.migrate(from: old, to: identity.hostId) }
         try Task.checkCancellation()
-        try settings.adoptIdentity(identity, for: host)
+        try await settings.adoptIdentity(identity, for: host)
         launchRestore.reloadPendingLocation()
         for old in sources { try await migration.finish(from: old, to: identity.hostId) }
     }
@@ -385,8 +387,9 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
     }
 
     var agentCoverage: [ClusterCoverage] {
+        let byID = Dictionary(models.map { ($0.hostID, $0) }, uniquingKeysWith: { first, _ in first })
         var coverage: [ClusterCoverage] = settings.hosts.map { host in
-            guard let model = model(for: host.id) else {
+            guard let model = byID[host.id] else {
                 return .init(hostId: host.id, name: host.displayName, state: .unknown)
             }
             let since = model.conversationList.lastSuccessfulRefreshAt
@@ -399,10 +402,8 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
             return .init(hostId: host.id, name: host.displayName, state: .ok)
         }
         var seen = Set(coverage.map(\.id))
-        for list in cluster.listings.values {
-            for member in list.members where seen.insert(member.id).inserted {
-                coverage.append(.init(hostId: member.id, name: member.name, state: .unknown))
-            }
+        for member in cluster.membersByID.values where seen.insert(member.id).inserted {
+            coverage.append(.init(hostId: member.id, name: member.name, state: .unknown))
         }
         return coverage
     }
@@ -955,7 +956,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         _ models: [ChatTargetModel],
         _ body: @escaping @MainActor (ChatTargetModel) async -> Void
     ) async {
-        await BoundedFanOut.run(prioritized(models), limit: Self.refreshConcurrency, skipping: { $0.isRetired }, body)
+        await BoundedFanOut.run(prioritized(models), limit: Self.refreshConcurrency, deadline: nil, skipping: { $0.isRetired }, body)
     }
 
     /// The selected host goes first; the rest keep their configured order.
@@ -1436,12 +1437,24 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         for model in models { model.invalidateAgentLists() }
     }
 
-    var agentParentCandidates: [(address: ConversationAddress, title: String, hostName: String)] {
-        models.flatMap { model in
-            model.conversationList.threads.map { header in
-                (ConversationAddress(hostID: model.hostID, threadID: header.id), header.displayTitle, model.hostDisplayName)
+    func agentParentCandidates(excluding address: ConversationAddress, query: String) async -> [(address: ConversationAddress, title: String, hostName: String)] {
+        let inputs = models.map { ($0.hostID, $0.hostDisplayName, $0.conversationList.threads) }
+        return await Self.prepareParentCandidates(inputs, excluding: address, query: query)
+    }
+
+    @concurrent private static func prepareParentCandidates(_ inputs: [(UUID, String, [ConversationHeader])],
+        excluding address: ConversationAddress, query: String) async -> [(address: ConversationAddress, title: String, hostName: String)] {
+        var candidates: [(address: ConversationAddress, title: String, hostName: String)] = []
+        for (hostID, name, headers) in inputs {
+            for header in headers {
+                guard !Task.isCancelled else { return [] }
+                let candidate = ConversationAddress(hostID: hostID, threadID: header.id)
+                if candidate != address, query.isEmpty || header.displayTitle.localizedStandardContains(query) || name.localizedStandardContains(query) {
+                    candidates.append((candidate, header.displayTitle, name))
+                }
             }
         }
+        return candidates
     }
 
     private func activeOwner(hostID: UUID) throws -> ChatScreenModel {

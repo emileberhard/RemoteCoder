@@ -23,7 +23,7 @@ struct GatewayHostsSettings<Page: View>: View {
             .task(id: settings.hosts.map(\.configuration)) {
                 gatewayVersions = [:]
                 relayAnswers = [:]
-                await BoundedFanOut.run(settings.hosts.map(\.configuration), limit: 2, skipping: { _ in false }) { host in
+                await BoundedFanOut.run(settings.hosts.map(\.configuration), limit: 2, deadline: nil, skipping: { _ in false }) { host in
                     let routes = workspace.model(for: host.id)?.hostServices.routes
                     let identity = try? await routes?.version()
                     guard !Task.isCancelled else { return }

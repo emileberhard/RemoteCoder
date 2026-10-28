@@ -4,6 +4,50 @@ import Testing
 
 @MainActor
 struct ClusterModelTests {
+    @Test func overlappingRefreshesShareOneRead() async throws {
+        let suite = "ClusterModelTests.\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let id = UUID()
+        let remote = MemberRemote(host: id)
+        await remote.holdLists()
+        let hosts = [host(id, remote: remote)]
+        let model = ClusterModel(defaults: defaults)
+        let first = Task { await model.refresh(hosts: hosts) }
+        #expect(await waitUntil { await remote.listCalls == 1 })
+        var secondStarted = false
+        let second = Task { secondStarted = true; await model.refresh(hosts: hosts) }
+        while !secondStarted { await Task.yield() }
+        await remote.releaseLists()
+        await first.value
+        await second.value
+        #expect(await remote.listCalls == 1)
+        #expect(!model.isRefreshing)
+    }
+
+    @Test func aLateReadCannotReplaceANewerGeneration() async throws {
+        let suite = "ClusterModelTests.\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let id = UUID(), oldMember = UUID(), newMember = UUID()
+        let old = MemberRemote(host: id), current = MemberRemote(host: id)
+        await old.setMembers([member(oldMember, name: "Old")])
+        await current.setMembers([member(newMember, name: "Current")])
+        await old.holdLists()
+        let model = ClusterModel(defaults: defaults)
+        let first = Task { await model.refresh(hosts: [host(id, remote: old)]) }
+        #expect(await waitUntil { await old.listCalls == 1 })
+        var replacement = host(id, remote: current).configuration
+        replacement.name = "Replacement"
+        await model.refresh(hosts: [.init(configuration: replacement, remote: current)])
+        await old.releaseLists()
+        await first.value
+        #expect(model.listings[id]?.members.map(\.id) == [newMember])
+        #expect(model.membersByID[newMember] != nil)
+        #expect(model.membersByID[oldMember] == nil)
+        #expect(!model.isRefreshing)
+    }
+
     @Test func partialJoinResumesTheSameMembershipAndRejoinUsesANewOne() async throws {
         let suite = "ClusterModelTests.\(UUID())"
         let defaults = try #require(UserDefaults(suiteName: suite))
@@ -122,13 +166,28 @@ private actor MemberRemote: ClusterRemote {
     private var members: [ClusterMember] = []
     private var acceptFailure = false
     private var removeFailure = false
+    private(set) var listCalls = 0
+    private var held = false
+    private var lists: [CheckedContinuation<ClusterList, Never>] = []
 
     init(host: UUID) { self.host = host }
     func setMembers(_ members: [ClusterMember]) { self.members = members }
     func setAcceptFailure(_ value: Bool) { acceptFailure = value }
     func setRemoveFailure(_ value: Bool) { removeFailure = value }
 
-    func clusterList() -> ClusterList {
+    func holdLists() { held = true }
+    func releaseLists() {
+        held = false
+        let pending = lists
+        lists = []
+        for continuation in pending { continuation.resume(returning: listing()) }
+    }
+    func clusterList() async -> ClusterList {
+        listCalls += 1
+        if held { return await withCheckedContinuation { lists.append($0) } }
+        return listing()
+    }
+    private func listing() -> ClusterList {
         .init(local: .init(hostId: host, name: "Fixture", incarnation: UUID(), version: "1.0.0", protocol: 1), members: members)
     }
     func clusterIssue(for host: UUID, name: String, membership: UUID) -> ClusterIssuedCredential {
