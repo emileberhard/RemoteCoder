@@ -49,7 +49,7 @@ struct ChatHistoryReadTests {
     @Test(.timeLimit(.minutes(1))) func coveringTheTranscriptDefersPagingUntilItIsUncovered() async throws {
         let fixture = await WorkspaceFixture()
         defer { await fixture.cleanUp() }
-        let (chat, gateway) = try await openInProcess(fixture, entries: 120)
+        let (chat, gateway) = try await openInProcess(fixture, entries: 240)
         defer { await gateway.releaseHeldRead() }
         await gateway.holdNextRead(.page)
         let read = try #require(chat.historyEdges.load(.older))
