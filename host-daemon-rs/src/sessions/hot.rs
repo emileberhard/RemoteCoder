@@ -61,13 +61,14 @@ impl Hot {
         let now = ::time::OffsetDateTime::now_utc();
         let floor = i64::try_from((now - LIFETIME).unix_timestamp_nanos())?;
         for origin in origins {
-            let mut statement=db.prepare("SELECT path,file_identity,mtime_ns FROM source WHERE origin_host=?1 AND provider=?2 AND provider_home=?3 AND present=1 AND mtime_ns>=?4 ORDER BY mtime_ns DESC LIMIT 64")?;
+            let mut statement=db.prepare("SELECT path,file_identity,mtime_ns FROM source WHERE origin_host=?1 AND provider=?2 AND provider_home=?3 AND present=1 AND mtime_ns>=?4 ORDER BY mtime_ns DESC LIMIT ?5")?;
             let rows = statement.query_map(
                 params![
                     origin.host,
                     origin.provider,
                     origin.provider_home.to_string_lossy(),
-                    floor
+                    floor,
+                    CAPACITY as i64
                 ],
                 |row| {
                     Ok((
