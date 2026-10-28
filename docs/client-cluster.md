@@ -74,7 +74,7 @@ changed. Refreshes do not sort the full result set.
 | Cluster refresh | O(M) host metadata, O(1) response application | O(R) member indexing and union; R is at most M times the cluster size; one shared refresh and deadline |
 | Agent refresh | O(M) host metadata, O(1) response and prepared snapshot application | O(M + R + A) per coalesced projection; R ≤ 512M; O(M + R + A) retained storage; badge and detail lookups O(1) |
 | Parent picker | O(M) header snapshots | O(R) filtering per query; cancelled queries cannot publish; preserves source order |
-| Identity migration | O(M) verified host configuration changes once per adoption | Actor-owned store I/O; O(B + R log R) for B imported bytes and checkpoint rows; manifest scans O(MR) across M legacy sources; preferences scan only the owning persistent domain off the main actor, once per alias |
+| Identity migration | O(M) verified host configuration changes once per adoption | Actor-owned store I/O; orchestration sorts checkpoint IDs once, O(R log R), plus the existing checkpoint/draft owners' import work and B imported bytes; manifest scans O(MR) across M legacy sources; preferences scan only the owning persistent domain off the main actor, once per alias |
 
 Hierarchy construction uses indexed parents and an iterative traversal, O(A),
 including cycles. Agent refresh callers share one read, reuse results for 15
