@@ -40,9 +40,26 @@ pub(crate) struct Candidate {
     pub truncated: bool,
     pub failed: bool,
     pub failure: Option<String>,
+    #[serde(default)]
+    pub api_error_status: Option<u16>,
+    #[serde(default)]
+    pub terminal_reason: Option<String>,
 }
 
 impl Candidate {
+    pub(crate) fn transient_failure(&self) -> bool {
+        self.failed
+            && matches!(
+                self.failure.as_deref(),
+                Some("success" | "error_during_execution")
+            )
+            && self
+                .terminal_reason
+                .as_deref()
+                .is_none_or(|reason| reason == "api_error")
+            && matches!(self.api_error_status, Some(408 | 429 | 500..=599))
+    }
+
     fn from_result(frame: &Value) -> Self {
         let original = frame.get("result").and_then(Value::as_str);
         let text = original.map(|text| {
@@ -69,6 +86,14 @@ impl Candidate {
                 .is_some_and(|(original, saved)| original.len() != saved.len()),
             text,
             failed,
+            api_error_status: frame
+                .get("api_error_status")
+                .and_then(Value::as_u64)
+                .and_then(|status| u16::try_from(status).ok()),
+            terminal_reason: frame
+                .get("terminal_reason")
+                .and_then(Value::as_str)
+                .map(|reason| reason.chars().take(128).collect()),
             failure: failed.then(|| {
                 frame
                     .get("subtype")
@@ -283,6 +308,31 @@ impl Store {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn terminal_api_status_is_required_and_quota_or_non_api_limits_do_not_retry() {
+        for status in [408, 429, 500, 503, 529] {
+            for subtype in ["success", "error_during_execution"] {
+                let candidate = Candidate::from_result(&json!({"type":"result", "is_error":true,
+                "subtype":subtype, "api_error_status":status, "terminal_reason":"api_error"}));
+                assert!(candidate.transient_failure());
+            }
+        }
+        for (status, reason, subtype) in [
+            (401, "api_error", "error_during_execution"),
+            (403, "api_error", "error_during_execution"),
+            (429, "blocking_limit", "error_during_execution"),
+            (503, "budget_exhausted", "error_during_execution"),
+            (503, "api_error", "error_max_turns"),
+        ] {
+            let candidate = Candidate::from_result(&json!({"type":"result", "is_error":true,
+                "subtype":subtype,"api_error_status":status,"terminal_reason":reason}));
+            assert!(!candidate.transient_failure());
+        }
+        let untyped = Candidate::from_result(&json!({"type":"result","is_error":true,
+            "subtype":"error_during_execution","result":"overloaded, retry later"}));
+        assert!(!untyped.transient_failure());
+    }
 
     #[test]
     fn result_tail_bounds_encoded_bytes_and_preserves_utf8() {

@@ -69,6 +69,8 @@ impl JobOwner {
             let SpecEvidence::Known { spec } = &job.spec else {
                 bail!("unfinished runtime job has no execution specification");
             };
+            let retry_spec = (!job.provider_retries.is_empty()).then(|| continuation_spec(spec));
+            let spec = retry_spec.as_ref().unwrap_or(spec);
             match &job.execution {
                 ExecutionState::Admitted => {
                     let agent = store.agent(job.agent_id.clone()).await?;
@@ -349,40 +351,96 @@ impl JobOwner {
             .context("job has no exact provider conversation")?;
         match identity.provider {
             Provider::Codex => super::codex::inspect(gateway, job).await,
-            Provider::Claude => Ok(
-                match gateway
-                    .job_claude()?
-                    .inspect_job(
-                        &job.job_id,
-                        identity,
-                        &self.evidence_file(&job.job_id).await?,
-                    )
-                    .await?
+            Provider::Claude => {
+                if matches!(job.execution, ExecutionState::Dispatching { .. })
+                    && let Some(previous) = job.provider_retries.last()
                 {
-                    ClaudeJobInspection::Prepared => Inspection::Prepared,
-                    ClaudeJobInspection::PreparedRecovery { recovery_input_id } => {
-                        Inspection::PreparedRecovery { recovery_input_id }
-                    }
-                    ClaudeJobInspection::Running { binding } => Inspection::Running { binding },
-                    ClaudeJobInspection::Recoverable { binding } => {
-                        Inspection::Recoverable { binding }
-                    }
-                    ClaudeJobInspection::Unknown { reason } => Inspection::Unknown { reason },
-                    ClaudeJobInspection::Finished { outcome, candidate } => Inspection::Finished {
-                        outcome,
-                        result: match candidate.and_then(|candidate| {
-                            candidate.text.map(|text| (text, candidate.truncated))
-                        }) {
-                            Some((text, truncated)) => ResultEvidence::Available {
-                                result: bounded_result(text, truncated)?,
-                            },
-                            None => ResultEvidence::Unavailable {
-                                reason: "provider ended without a final text result".into(),
-                            },
-                        },
+                    let SpecEvidence::Known { spec } = &job.spec else {
+                        bail!("Claude provider retry has no specification");
+                    };
+                    gateway
+                        .job_claude()?
+                        .prepare_job_retry(
+                            &job.job_id,
+                            &previous.binding,
+                            &continuation_spec(spec),
+                            &job.current_input_id(),
+                            &self.evidence_file(&job.job_id).await?,
+                        )
+                        .await?;
+                }
+                Ok(
+                    match gateway
+                        .job_claude()?
+                        .inspect_job(
+                            &job.job_id,
+                            identity,
+                            &self.evidence_file(&job.job_id).await?,
+                        )
+                        .await?
+                    {
+                        ClaudeJobInspection::Prepared => Inspection::Prepared,
+                        ClaudeJobInspection::PreparedRecovery { recovery_input_id } => {
+                            Inspection::PreparedRecovery { recovery_input_id }
+                        }
+                        ClaudeJobInspection::Running { binding } => Inspection::Running { binding },
+                        ClaudeJobInspection::Recoverable { binding } => {
+                            Inspection::Recoverable { binding }
+                        }
+                        ClaudeJobInspection::Unknown { reason } => Inspection::Unknown { reason },
+                        ClaudeJobInspection::Finished {
+                            binding,
+                            outcome,
+                            candidate,
+                        } => {
+                            let transient = matches!(outcome, JobOutcome::Failed { .. })
+                                && candidate
+                                    .as_ref()
+                                    .is_some_and(|candidate| candidate.transient_failure());
+                            if transient
+                                && job.provider_retries.len() < super::retry::MAX_PROVIDER_RETRIES
+                            {
+                                Inspection::TransientFailure {
+                                    binding: binding.context(
+                                        "Claude terminal retry has no exact execution binding",
+                                    )?,
+                                    reason: candidate
+                                        .as_ref()
+                                        .and_then(|candidate| candidate.failure.clone())
+                                        .context(
+                                            "Claude transient failure has no terminal reason",
+                                        )?,
+                                }
+                            } else {
+                                Inspection::Finished {
+                                    outcome: match outcome {
+                                        JobOutcome::Failed { reason } if transient => {
+                                            JobOutcome::Failed {
+                                                reason: format!(
+                                                    "provider retry budget exhausted after {} retries: {reason}",
+                                                    job.provider_retries.len()
+                                                ),
+                                            }
+                                        }
+                                        other => other,
+                                    },
+                                    result: match candidate.and_then(|candidate| {
+                                        candidate.text.map(|text| (text, candidate.truncated))
+                                    }) {
+                                        Some((text, truncated)) => ResultEvidence::Available {
+                                            result: bounded_result(text, truncated)?,
+                                        },
+                                        None => ResultEvidence::Unavailable {
+                                            reason: "provider ended without a final text result"
+                                                .into(),
+                                        },
+                                    },
+                                }
+                            }
+                        }
                     },
-                },
-            ),
+                )
+            }
         }
     }
 
@@ -583,5 +641,15 @@ fn provider(job: &JobRecord) -> Result<Provider> {
             .conversation()
             .map(|identity| identity.provider)
             .context("job provider is unresolved"),
+    }
+}
+
+fn continuation_spec(spec: &JobSpec) -> JobSpec {
+    JobSpec {
+        prompt: super::retry::CONTINUATION_PROMPT.to_owned(),
+        cwd: spec.cwd.clone(),
+        settings: spec.settings.clone(),
+        tool_scope: spec.tool_scope.clone(),
+        title: spec.title.clone(),
     }
 }

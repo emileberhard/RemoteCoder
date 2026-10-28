@@ -39,7 +39,14 @@ Stop is persisted before the provider interrupt. It works after the client is
 gone and is applied before restart recovery. Stale controls cannot act on a
 newer job. A receipt distinguishes accepting Stop from finishing the provider
 fence and cleanup. A completed turn is finalized from its exact history and
-never dispatched again.
+never dispatched again. A positively failed transient provider turn may schedule
+up to five successor attempts in the same job and exact conversation. Each failed
+binding and outcome, retry deadline and deterministic successor input identity is
+durable before dispatch. Exponential delays include jitter; restart preserves the
+budget and deadline. Stop during backoff prevents the successor. A successor asks
+the agent to continue from history and inspect existing effects; it never replays
+the original task. Unknown acceptance or outcome remains reconciliation work,
+never permission to create another attempt.
 
 Finalization atomically commits outcome, bounded result, Git snapshot and the
 immutable completion envelope. Claude provider cleanup follows that commit and
@@ -56,6 +63,14 @@ the original binding and reject changed payloads; they cannot bypass planned
 suspension, Stop or the exact restart owner. The existing turn ledger retains
 pending custody even before the user item appears. Canonical acceptance, turn
 inspection and exact-turn items determine progress and the final answer.
+Typed capacity, rate-limit and server errors, and HTTP 408/429/5xx failures
+qualify for retry. Authentication, quota, refusal, Stop and untyped errors do not.
+Claude requires its failed result's authoritative `api_error_status` on a normal
+or execution-error result; a known terminal reason must identify an API error. Its preceding
+process must have reached the existing EOF/reap fence, and exact session history
+must remain available. The matched Codex and Claude terminal protocols expose no
+Retry-After header, so the job owner cannot observe provider-specific header delays.
+
 The native queue remains the sole Codex queue. Its replay uses the same stable
 input identity, so a crash between native admission and queue-row removal does
 not execute a second turn. The gateway reconciles queue attribution with native
