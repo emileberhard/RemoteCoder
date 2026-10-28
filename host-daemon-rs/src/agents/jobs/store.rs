@@ -1,3 +1,4 @@
+mod execution;
 pub(crate) mod messages;
 
 use std::collections::BTreeMap;
@@ -23,6 +24,7 @@ const RETENTION_MS: i64 = 30 * 24 * 60 * 60 * 1000;
 #[derive(Clone)]
 pub(crate) struct JobStore {
     inner: Arc<Mutex<Inner>>,
+    executions: Arc<execution::ExecutionGates>,
 }
 
 struct Inner {
@@ -93,7 +95,7 @@ impl JobStore {
             if accounted + MUTATION_RESERVE > MAX_STORE_BYTES {
                 tracing::warn!(accounted, "delegated-job store is over its budget; admission stays closed until settled payloads are reclaimed");
             }
-            Ok(Self { inner: Arc::new(Mutex::new(inner)) })
+            Ok(Self { inner: Arc::new(Mutex::new(inner)), executions: Arc::default() })
         }).await.context("opening delegated-job store")?
     }
 
@@ -312,7 +314,12 @@ impl JobStore {
         job: JobRecord,
         require_unstopped: bool,
     ) -> Result<(JobRecord, bool)> {
+        let _previous = match &job.previous_job_id {
+            Some(previous) => Some(self.executions.mutation(previous).await?),
+            None => None,
+        };
         self.access(move |inner| {
+            let _previous = _previous;
             validate_job(&job)?;
             ensure!(job.source == JobSource::Runtime && job.revision == 0, "new admission requires an initial runtime job");
             if let Some(previous) = inner.existing_request(&job.job_id, job.request_fingerprint.as_deref().context("new admission requires its request fingerprint")?)? {
@@ -373,7 +380,9 @@ impl JobStore {
         execution: ExecutionState,
         at_ms: i64,
     ) -> Result<JobRecord> {
+        let _execution = self.executions.mutation(&id).await?;
         self.access(move |inner| {
+            let _execution = _execution;
             let mut job = inner.current(&id, revision)?;
             validate_transition(&job, &execution)?;
             if let ExecutionState::RetryWaiting { retry_at_ms, .. } = &job.execution
@@ -396,7 +405,9 @@ impl JobStore {
         retry_at_ms: i64,
         at_ms: i64,
     ) -> Result<JobRecord> {
+        let _execution = self.executions.mutation(&id).await?;
         self.access(move |inner| {
+            let _execution = _execution;
             let mut job = inner.current(&id, revision)?;
             ensure!(
                 job.provider_retries.len() < super::retry::MAX_PROVIDER_RETRIES,
@@ -450,7 +461,9 @@ impl JobStore {
         notice: Option<String>,
         at_ms: i64,
     ) -> Result<JobRecord> {
+        let _execution = self.executions.mutation(&id).await?;
         self.access(move |inner| {
+            let _execution = _execution;
             let mut job = inner.current(&id, revision)?;
             let next = ExecutionState::Unknown { conversation: job.execution.conversation().cloned(), binding: job.execution.binding().cloned(), reason };
             validate_transition(&job, &next)?;

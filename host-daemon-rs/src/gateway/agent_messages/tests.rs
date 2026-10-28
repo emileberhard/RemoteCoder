@@ -323,3 +323,180 @@ async fn unregistered_bare_native_selector_keeps_provider_identity_unknown() {
         response
     );
 }
+
+#[tokio::test]
+async fn canceled_message_caller_cannot_release_execution_before_provider_admission() {
+    use crate::test_support::FakeControl;
+    let directory = tempfile::tempdir().unwrap();
+    let gateway = TestGateway::with_native_runtime(directory.path());
+    let store = gateway.jobs.store().await.unwrap();
+    let id = JobId::for_mutation(Provider::Codex, "running-message-target").unwrap();
+    let admitted = gateway
+        .jobs
+        .start(
+            StartParams {
+                job_id: id.clone(),
+                spec: JobSpec {
+                    prompt: "running fixture".into(),
+                    cwd: directory.path().into(),
+                    settings: ExecutionSettings::Codex {
+                        model: "fixture".into(),
+                        model_provider: "openai".into(),
+                        effort: "medium".into(),
+                        service_tier: None,
+                        cyber_access_program: None,
+                    },
+                    tool_scope: ToolScope::Full,
+                    title: None,
+                },
+                caller: Caller::Operator,
+            },
+            Origin::TopLevel,
+        )
+        .await
+        .unwrap();
+    let conversation = ConversationIdentity {
+        provider: Provider::Codex,
+        provider_home: ProviderHome::Known {
+            path: gateway.job_codex_home().unwrap(),
+        },
+        thread_id: "frozen-message-thread".into(),
+    };
+    let bound = store
+        .bind(
+            id.clone(),
+            admitted.job.revision,
+            conversation.clone(),
+            now_ms(),
+        )
+        .await
+        .unwrap();
+    let input_id = bound.initial_input_id();
+    let dispatching = store
+        .advance(
+            id.clone(),
+            bound.revision,
+            ExecutionState::Dispatching {
+                conversation: conversation.clone(),
+                input_id: input_id.clone(),
+            },
+            now_ms(),
+        )
+        .await
+        .unwrap();
+    let binding = ExecutionBinding {
+        conversation,
+        input_id,
+        turn_id: "original-turn".into(),
+    };
+    let running = store
+        .advance(
+            id.clone(),
+            dispatching.revision,
+            ExecutionState::Running {
+                binding: binding.clone(),
+            },
+            now_ms(),
+        )
+        .await
+        .unwrap();
+    let mut control = FakeControl::attach(&gateway, 16).await;
+    let sender = gateway.clone();
+    let target = id.clone();
+    let caller = tokio::spawn(async move {
+        sender
+            .agent_jobs_rpc(
+                "agent/jobs/message",
+                request(
+                    MessageTarget::Job { job_id: target },
+                    "fenced-delivery",
+                    "frozen input",
+                ),
+            )
+            .await
+    });
+    let raw = control.requests.recv().await.unwrap();
+    let rpc: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    assert_eq!(rpc["method"], "thread/input/acceptance/read");
+    caller.abort();
+    assert!(caller.await.unwrap_err().is_cancelled());
+    let stopped = store
+        .request_stop(id.clone(), "stop-during-admission".into(), now_ms())
+        .await
+        .unwrap();
+    assert!(matches!(stopped.stop, StopState::Requested { .. }));
+    let finishing = store.advance(
+        id.clone(),
+        stopped.revision,
+        ExecutionState::Terminal {
+            terminal: Terminal {
+                at_ms: Some(now_ms()),
+                execution: Some(binding),
+                git: GitSnapshot::Unknown {
+                    reason: "fixture".into(),
+                },
+                outcome: JobOutcome::Stopped {
+                    effects: EffectEvidence::MayHaveRun,
+                },
+                result: ResultEvidence::Unavailable {
+                    reason: "fixture".into(),
+                },
+                completion: Completion::NotRequired,
+                cleanup: CleanupState::Complete,
+            },
+        },
+        now_ms(),
+    );
+    tokio::pin!(finishing);
+    tokio::select! {
+        biased;
+        result = &mut finishing => panic!("terminal transition overtook provider admission: {result:?}"),
+        () = std::future::ready(()) => {}
+    }
+    assert_eq!(
+        store.read(id.clone()).await.unwrap().execution,
+        running.execution
+    );
+    gateway.control_requests.lock().unwrap().remove(rpc["id"].as_str().unwrap()).unwrap().send(Ok(json!({"acceptance": {"turnId":"original-turn","rootTurnId":"original-turn","fingerprint":"a".repeat(64),"facts":["recorded"]}}))).unwrap();
+    let terminal = finishing.await.unwrap();
+    assert!(matches!(
+        terminal.execution,
+        ExecutionState::Terminal { .. }
+    ));
+    let successor = JobId::for_mutation(Provider::Codex, "after-admission").unwrap();
+    let continued = gateway
+        .jobs
+        .continue_job(
+            ContinueParams {
+                job_id: successor.clone(),
+                agent_id: terminal.agent_id,
+                prompt: "explicit continuation".into(),
+                settings: None,
+                expected_previous_job_id: Some(id.clone()),
+                intent: ContinueIntent::Explicit,
+                recipient: ContinueRecipient::Previous,
+                caller: Caller::Operator,
+            },
+            Origin::TopLevel,
+        )
+        .await
+        .unwrap();
+    assert_eq!(continued.job.previous_job_id, Some(id.clone()));
+    let receipt = gateway
+        .agent_jobs_rpc(
+            "agent/jobs/message",
+            request(
+                MessageTarget::Job { job_id: id.clone() },
+                "fenced-delivery",
+                "frozen input",
+            ),
+        )
+        .await
+        .unwrap();
+    assert_eq!(receipt["resolved"]["targetJobId"], id.as_str());
+    assert_eq!(receipt["deliveryState"]["kind"], "recorded");
+    assert!(matches!(
+        control.requests.try_recv(),
+        Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+    ));
+}

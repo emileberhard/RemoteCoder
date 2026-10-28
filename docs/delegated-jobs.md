@@ -121,6 +121,15 @@ failed receipt. Resolution freezes the exact conversation and target job before
 effects; a later sender job or selector match cannot rewrite them. Per-ID claims
 serialize only duplicate requests, and are acquired before the shutdown gate.
 
+Running-job delivery holds a `JobStore` execution read grant from exact-current-job
+validation through native custody admission. Execution transitions and successor
+admission take that job's write grant, so an old delivery cannot cross into a
+new invocation. Stop records and signals independently; it never waits for a model
+turn or acquires the admission write grant. The owned message admission task
+retains its per-ID claim and shutdown read guard after caller cancellation until
+provider custody settles and its sender receipt is updated. Only admission is
+fenced; queued turn execution remains owned by the native receiver.
+
 The same delivery ID, sender, target and raw text reuse the retained receipt;
 changed input conflicts. Sending is persisted before the native receiver acts.
 Submitted, accepted and recorded receipts are never replayed. Explicit retries

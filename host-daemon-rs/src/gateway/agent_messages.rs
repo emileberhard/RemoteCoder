@@ -26,6 +26,15 @@ fn bounded_reason(reason: &str) -> String {
 
 impl Gateway {
     pub(super) async fn job_message(&self, request: MessageParams) -> RpcResult {
+        let gateway = self.jobs.gateway()?;
+        tokio::spawn(async move { gateway.admit_job_message(request).await })
+            .await
+            .map_err(|error| {
+                RpcError::from(anyhow::anyhow!("message admission task failed: {error}"))
+            })?
+    }
+
+    async fn admit_job_message(&self, request: MessageParams) -> RpcResult {
         if request
             .delivery_id
             .split_once(':')
@@ -154,15 +163,31 @@ impl Gateway {
                 Ok(receipt) => DeliveryState::Accepted { receipt: json!({"jobId":receipt.job.job_id,"duplicate":receipt.duplicate,"admitted":true,"consumed":false}).to_string() },
                 Err(error) => DeliveryState::Blocked { reason: bounded_reason(&format!("{error:#}")) },
             }
-        } else if let Some(reason) = self.message_target_changed(resolved).await {
-            DeliveryState::Uncertain { reason }
         } else {
-            match self
-                .jobs
-                .gateway()?
+            let execution = match &resolved.target_job_id {
+                Some(id) => match store.message_execution(id.clone()).await {
+                    Ok(execution) => Some(execution),
+                    Err(error) => {
+                        record = store
+                            .update_message(
+                                record.delivery_id.clone(),
+                                DeliveryState::Uncertain {
+                                    reason: bounded_reason(&format!("{error:#}")),
+                                },
+                                now_ms(),
+                            )
+                            .await?;
+                        return Ok(json!(record));
+                    }
+                },
+                None => None,
+            };
+            let gateway = self.jobs.gateway()?;
+            let response = gateway
                 .deliver_job_input(&resolved.conversation, &record.delivery_id, text)
-                .await
-            {
+                .await;
+            drop(execution);
+            match response {
                 Ok(response) => serde_json::from_value(response["deliveryState"].clone())
                     .unwrap_or_else(|error| DeliveryState::Uncertain {
                         reason: bounded_reason(&format!(
@@ -174,40 +199,11 @@ impl Gateway {
                 },
             }
         };
+
         record = store
             .update_message(record.delivery_id, state, now_ms())
             .await?;
         Ok(json!(record))
-    }
-
-    async fn message_target_changed(&self, resolved: &ResolvedMessage) -> Option<String> {
-        let Some(job_id) = &resolved.target_job_id else {
-            return None;
-        };
-        let view = match self.jobs.read(job_id).await {
-            Ok(view) => view,
-            Err(error) => {
-                return Some(bounded_reason(&format!(
-                    "the frozen target could not be revalidated: {error:#}"
-                )));
-            }
-        };
-        if view
-            .agent
-            .as_ref()
-            .and_then(|agent| agent.latest_job_id.as_ref())
-            != Some(job_id)
-        {
-            return Some("the frozen target job was superseded; inspect this receipt instead of sending input into a newer invocation".into());
-        }
-        if !matches!(
-            view.job.stop,
-            crate::agents::jobs::model::StopState::NotRequested
-        ) || matches!(&view.job.execution, ExecutionState::Terminal { terminal } if matches!(terminal.outcome, crate::agents::jobs::model::JobOutcome::Stopped { .. }))
-        {
-            return Some("the frozen target job was explicitly stopped; delivery remains unconfirmed and cannot clear Stop".into());
-        }
-        None
     }
 
     async fn resolve_message_target(&self, record: &MessageRecord) -> Result<ResolvedMessage> {

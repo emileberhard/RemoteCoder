@@ -14,6 +14,12 @@ Compare app-server protocol changes between exact fork revisions with
 `CODEX_BIN=<candidate>/bin/codex just codex-schema` generates the candidate
 schema under ignored `build/codex-schema/<version>/`.
 
+- `JobStore` owns exact-job message admission grants. Execution transitions and
+  successor admission wait for native custody admission, including after caller
+  cancellation; the owned message task retains the per-ID claim and shutdown
+  read guard. Stop persists and signals independently. Never hold this grant
+  through a model turn or release it by canceling an in-flight provider RPC.
+
 ## Verify
 
 The root file decides which checks a change needs; gateway changes count as
