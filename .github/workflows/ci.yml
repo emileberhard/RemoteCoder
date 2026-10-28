@@ -73,6 +73,10 @@ jobs:
         with:
           version: '0.13.4'
           python-version: '3.14'
+      - name: Install the credential-source shell
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes zsh
       - run: uv run --locked ruff check agent_calls tests
       - run: uv run --locked ty check
       - run: uv run --locked pytest -q
