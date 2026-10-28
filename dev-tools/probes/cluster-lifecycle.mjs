@@ -185,9 +185,24 @@ async function remoteSpawn(parentHost, childHost, provider, name) {
     await nativeCommand(parentHost, parent, provider, command);
     const job = await waitFor(async () => {
         const rows = await childHost.rpc("agent/jobs/list", { selector: { kind: "recent" }, limit: 100, cursor: null });
-        if (!rows.jobs.some(row => row.jobId === id)) return null;
+        if (!rows.jobs.some(row => row.jobId === id)) {
+            const page = await parentHost.rpc("thread/items/list", { threadId: parent, limit: 100, sortDirection: "asc" });
+            for (const row of page.data) {
+                const item = row.item;
+                if (item?.type === "commandExecution" && item.exitCode != null && item.exitCode !== 0) {
+                    throw new Error(`Native ${provider} spawn failed: ${item.aggregatedOutput}`);
+                }
+            }
+            return null;
+        }
         const view = await childHost.rpc("agent/jobs/read", { jobId: id });
+        assert(!terminal(view.job), `Child ended before held execution: ${JSON.stringify(terminal(view.job))}`);
         return view.job.execution.kind === "running" ? view.job : null;
+    }).catch(async error => {
+        const page = await parentHost.rpc("thread/items/list", { threadId: parent, limit: 100, sortDirection: "asc" });
+        console.error(JSON.stringify({ provider, parent, commands: page.data
+            .filter(row => row.item?.type === "commandExecution").map(row => row.item) }));
+        throw error;
     });
     assert.equal(job.admissionOrigin.kind, "remoteParent");
     assert.equal(job.admissionOrigin.host, parentHost.info.hostId);
