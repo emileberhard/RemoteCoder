@@ -247,16 +247,19 @@ pub(crate) fn read(db: &Connection, request: ReadRequest) -> Result<Value> {
             request.dependency.is_none(),
             "Dependencies require an item key"
         );
-        let mut stmt=db.prepare("SELECT src.local_path,src.present FROM session s JOIN source src USING(source_id) WHERE session_key=?1 OR thread_id=?1 OR origin_host||':'||thread_id=?1 LIMIT 2")?;
+        let mut stmt=db.prepare("SELECT src.local_path,src.present FROM session s JOIN source src USING(source_id) WHERE s.session_key=?1 OR s.thread_id=?1 OR s.origin_host||':'||s.thread_id=?1 LIMIT 2")?;
         let matches = stmt
             .query_map([&request.target], |r| {
                 Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         ensure!(
+            !matches.is_empty(),
+            "not_found: no session matches the address"
+        );
+        ensure!(
             matches.len() == 1,
-            "not_found: expected one exact session, found {}",
-            matches.len()
+            "usage: ambiguous session address; use its canonical session key"
         );
         ensure!(matches[0].1 == 1, "source deleted");
         let path = matches[0].0.clone();

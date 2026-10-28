@@ -302,6 +302,39 @@ fn sessions_feed_restart_expiry_and_atomic_rejection() {
 }
 
 #[test]
+fn sessions_raw_session_read_and_missing_address() {
+    let f = fixture();
+    scan(&f);
+    let result = query::read(
+        &f.store.reader().unwrap(),
+        query::ReadRequest {
+            target: "codex-root".into(),
+            offset: 0,
+            length: Some(4 << 20),
+            dependency: None,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        base64::engine::general_purpose::STANDARD
+            .decode(result["base64"].as_str().unwrap())
+            .unwrap(),
+        std::fs::read(&f.codex).unwrap()
+    );
+    let error = query::read(
+        &f.store.reader().unwrap(),
+        query::ReadRequest {
+            target: "missing-session".into(),
+            offset: 0,
+            length: None,
+            dependency: None,
+        },
+    )
+    .unwrap_err();
+    assert_eq!(super::exit_code(&super::error_data(&error)), 3);
+}
+
+#[test]
 fn sessions_errors_keep_their_cli_exit_class() {
     for (message, code) in [
         ("not_found: source", 3),
