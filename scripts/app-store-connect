@@ -35,11 +35,18 @@ def token():
 
 
 def send(request):
+    refreshed = False
     for attempt in range(6):
         try:
             with urllib.request.urlopen(request, timeout=60) as response:
                 return response.read()
         except urllib.error.HTTPError as error:
+            if (error.code == 401 and request.get_method() == "GET" and not refreshed and attempt < 5
+                    and request.full_url.startswith(API) and request.has_header("Authorization")):
+                error.close()
+                request.add_header("Authorization", f"Bearer {token()}")
+                refreshed = True
+                continue
             retryable = error.code == 429 or error.code >= 500 and request.get_method() != "POST"
             if not retryable or attempt == 5:
                 raise RequestFailed(f"{request.get_method()} {request.full_url} failed with {error.code}: {error.read().decode(errors='replace')[:2000]}")
