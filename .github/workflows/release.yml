@@ -330,4 +330,11 @@ jobs:
           object=$(gh api "repos/$GH_REPO/git/ref/tags/$VERSION" --jq .object.sha)
           gh api "repos/$GH_REPO/git/tags/$object" | jq -j .message > "$RUNNER_TEMP/notes.md"
           [[ -s "$RUNNER_TEMP/notes.md" ]] || { echo "::error::The tag has no release notes."; exit 1; }
-          gh release create "$VERSION" --verify-tag --title "$VERSION" --notes-file "$RUNNER_TEMP/notes.md" --latest
+          if gh release view "$VERSION" --json name,body,isDraft > "$RUNNER_TEMP/release.json" 2>/dev/null; then
+            jq -e --arg version "$VERSION" --rawfile notes "$RUNNER_TEMP/notes.md" \
+              '.name == $version and .body == $notes and .isDraft == false' "$RUNNER_TEMP/release.json" >/dev/null \
+              || { echo "::error::The existing $VERSION release is a draft or has different title or notes."; exit 1; }
+            echo "Release $VERSION is already published with matching title and notes."
+          else
+            gh release create "$VERSION" --verify-tag --title "$VERSION" --notes-file "$RUNNER_TEMP/notes.md" --latest
+          fi
