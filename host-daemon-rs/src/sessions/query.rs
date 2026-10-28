@@ -90,8 +90,8 @@ pub(crate) fn inventory(
         (1..=1000).contains(&limit),
         "Inventory limit must be 1..=1000"
     );
-    let mut statement=db.prepare("SELECT s.session_key,s.origin_host,s.provider,s.thread_id,s.cwd,s.title,s.started_at,s.last_at,s.parent_session_key,src.present FROM session s JOIN source src USING(source_id) WHERE (?1 IS NULL OR s.session_key>?1) ORDER BY s.session_key LIMIT ?2")?;
-    let rows = statement.query_map(params![after, limit as i64 + 1], |r| {
+    let mut statement=db.prepare("SELECT s.session_key,s.origin_host,s.provider,s.thread_id,s.cwd,s.title,s.started_at,s.last_at,s.parent_session_key,src.present FROM session s JOIN source src USING(source_id) WHERE s.session_key>?1 ORDER BY s.session_key LIMIT ?2")?;
+    let rows = statement.query_map(params![after.unwrap_or(""), limit as i64 + 1], |r| {
         Ok(SessionHeader {
             session_key: r.get(0)?,
             host_id: r.get(1)?,
