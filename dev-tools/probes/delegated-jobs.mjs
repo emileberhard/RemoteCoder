@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { cp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
-import { randomBytes, randomUUID } from "node:crypto";
+import { randomBytes, randomInt, randomUUID } from "node:crypto";
 import { IsolatedGateway, startStubRouter } from "./isolated-gateway.mjs";
 
 const [binary, runtimePackage, ...stagedStores] = process.argv.slice(2);
@@ -10,8 +10,10 @@ assert(runtimePackage && isAbsolute(runtimePackage), "Pass the matched Codex run
 assert(stagedStores.every(store => isAbsolute(store)), "Pass staged agent-jobs/v1 directories as absolute paths");
 
 const marker = /^RCJOB_(SPAWN|HOLD|ECHO):(\S+)/;
-const jobId = provider => `agent-${provider}-${String(randomBytes(8).readBigUInt64BE() % 10n ** 19n).padStart(19, "0")}-${randomBytes(4).toString("hex")}`;
+const jobId = provider => `agent-${provider}-${BigInt(Date.now()) * 1_000_000n + BigInt(randomInt(1_000_000))}-${randomBytes(4).toString("hex")}`;
 const shellTools = ["exec_command", "shell_command", "shell"];
+const probeProvider = "probe";
+const probeModel = "rcjob-mock";
 
 function startModel() {
     const holds = new Map();
@@ -38,7 +40,13 @@ function startModel() {
     const server = Bun.serve({
         hostname: "127.0.0.1", port: 0, idleTimeout: 0,
         async fetch(request) {
-            if (request.method !== "POST" || !new URL(request.url).pathname.endsWith("/responses")) {
+            const path = new URL(request.url).pathname;
+            if (request.method === "GET" && path.endsWith("/models")) {
+                return Response.json({ data: [{ id: probeModel, capabilities: { endpoints: ["/v1/responses"],
+                    streaming: true, tool_calls: true, prompt_tokens: 128000, reasoning_efforts: ["medium"],
+                    input_modalities: ["text"] } }] });
+            }
+            if (request.method !== "POST" || !path.endsWith("/responses")) {
                 return new Response("", { status: 404 });
             }
             const body = await request.json();
@@ -87,20 +95,15 @@ async function installPackage(lab) {
     lab.codex = join(standalone, "current/codex");
 }
 
-async function writeCodexConfig(lab, model) {
-    await writeFile(lab.path(".codex/config.toml"), `model = "mock-model"
-approval_policy = "never"
+async function writeProviderConfig(lab, model) {
+    await writeFile(lab.path(".codex/config.toml"), `approval_policy = "never"
 sandbox_mode = "danger-full-access"
 check_for_update_on_startup = false
-model_provider = "mock"
-
-[model_providers.mock]
-name = "mock"
-base_url = "http://127.0.0.1:${model.server.port}/v1"
-wire_api = "responses"
-request_max_retries = 0
-stream_max_retries = 0
 `, { mode: 0o600 });
+    await writeFile(lab.path("probe-provider.key"), "probe-key\n", { mode: 0o600 });
+    await writeFile(lab.path("external-providers.json"), JSON.stringify({ providers: [{ id: probeProvider,
+        name: "Probe", baseUrl: `http://127.0.0.1:${model.server.port}/v1`, keyFile: lab.path("probe-provider.key"),
+        models: [probeModel] }] }), { mode: 0o600 });
 }
 
 async function hostRouter() {
@@ -116,9 +119,10 @@ async function prepare(lab, model, inference) {
     await mkdir(lab.path(".claude"), { recursive: true });
     await mkdir(lab.path("work"), { recursive: true });
     await installPackage(lab);
-    await writeCodexConfig(lab, model);
+    await writeProviderConfig(lab, model);
     lab.router = startStubRouter(inference);
     await lab.writeGatewayEnv([
+        `RC_CODEX_GATEWAY_EXTERNAL_PROVIDERS_FILE=${lab.path("external-providers.json")}`,
         "RC_CLAUDE_ENABLED=true",
         `RC_CLAUDE_HOME=${lab.path(".claude")}`,
         `RC_CLAUDE_PATH=${join(lab.realHome, ".local/bin/claude")}`,
@@ -159,14 +163,15 @@ async function parentItems(client, threadId) {
 async function runtimeFlows(lab, model) {
     const receipt = {};
     const client = await lab.connect();
-    const started = await client.rpc("thread/start", { cwd: lab.path("work") });
+    const started = await client.rpc("thread/start", { cwd: lab.path("work"), model: probeModel,
+        modelProvider: probeProvider });
     assert(!started.error, `thread/start failed: ${JSON.stringify(started.error)}`);
     const parent = started.result.thread.id;
     receipt.parent = parent;
     const spawn = (provider, model, prompt) => [binary, "--env-file", lab.path("gateway.env"), "agent", "spawn", provider,
         model, prompt, "--job-id", jobId(provider), "--json"].map(part => `'${part.replaceAll("'", "'\\''")}'`).join(" ");
     const command = [
-        spawn("codex", "mock-model", "RCJOB_ECHO:codex-child"),
+        spawn("codex", probeModel, "RCJOB_ECHO:codex-child"),
         spawn("claude", "sonnet", "Reply with exactly RCJOB_RESULT:claude-child and nothing else. Do not use tools."),
     ].join(" && ");
     const turn = await client.rpc("turn/start", { threadId: parent,
@@ -195,7 +200,7 @@ async function runtimeFlows(lab, model) {
     receipt.parentCallbacks = children.map(row => items.includes(`${row.run_id}:completion`));
 
     const stopId = jobId("codex");
-    await agent(lab, ["spawn", "codex", "mock-model", "RCJOB_HOLD:stop-child", "--job-id", stopId, "--operator", "--json"]);
+    await agent(lab, ["spawn", "codex", probeModel, "RCJOB_HOLD:stop-child", "--job-id", stopId, "--operator", "--json"]);
     await settle(lab, stopId, running);
     await agent(lab, ["stop", stopId]);
     const stopped = await settle(lab, stopId, job => terminal(job) !== null);
@@ -204,7 +209,7 @@ async function runtimeFlows(lab, model) {
     receipt.stop = terminal(stopped).outcome;
 
     const restartId = jobId("codex");
-    await agent(lab, ["spawn", "codex", "mock-model", "RCJOB_HOLD:restart-child", "--job-id", restartId, "--operator", "--json"]);
+    await agent(lab, ["spawn", "codex", probeModel, "RCJOB_HOLD:restart-child", "--job-id", restartId, "--operator", "--json"]);
     const before = await settle(lab, restartId, running);
     client.close();
     await lab.stop();
@@ -218,7 +223,7 @@ async function runtimeFlows(lab, model) {
     const dispatches = model.requests.filter(entry => entry.name === "restart-child").length;
     receipt.restart = { stateAfterRestart: after.execution.kind, turnId: before.execution.binding.turnId, modelRequests: dispatches };
 
-    const duplicate = await agent(lab, ["spawn", "codex", "mock-model", "RCJOB_HOLD:restart-child", "--job-id", restartId, "--operator", "--json"]);
+    const duplicate = await agent(lab, ["spawn", "codex", probeModel, "RCJOB_HOLD:restart-child", "--job-id", restartId, "--operator", "--json"]);
     receipt.idempotentRetry = duplicate;
     return receipt;
 }
@@ -239,7 +244,7 @@ async function heldStoreRead(model, inference, stagedStore) {
         for (const row of list.agents) states[row.state] = (states[row.state] ?? 0) + 1;
         const samples = [];
         for (const row of list.agents.slice(0, 5)) samples.push((await read(lab, row.run_id)).execution.kind);
-        const refused = await agent(lab, ["spawn", "codex", "mock-model", "RCJOB_ECHO:held", "--operator", "--json"],
+        const refused = await agent(lab, ["spawn", "codex", probeModel, "RCJOB_ECHO:held", "--operator", "--json"],
             { allowFailure: true });
         assert.notEqual(refused.status, 0, "The held store admitted a new job");
         return { listed: list.agents.length, states, samples, spawnRefused: refused.stderr.trim().slice(0, 200) };
