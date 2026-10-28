@@ -68,6 +68,11 @@ jobs:
         run: |
           /usr/bin/time -p /usr/bin/git --version
           /usr/bin/time -p /usr/bin/python3 -c 'import json, pathlib'
+      - name: Install tmux for the agent client tests
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: '1'
+          HOMEBREW_NO_INSTALL_CLEANUP: '1'
+        run: brew list tmux >/dev/null 2>&1 || brew install tmux
       - run: rustup show
       - run: cargo fmt --manifest-path host-daemon-rs/Cargo.toml --check
       - run: cargo clippy --manifest-path host-daemon-rs/Cargo.toml --locked --all-targets --all-features -- -D warnings
