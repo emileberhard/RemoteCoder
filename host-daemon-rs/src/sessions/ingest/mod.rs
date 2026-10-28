@@ -18,11 +18,55 @@ pub(crate) fn identity(metadata: &Metadata) -> String {
     format!("{:?}", FileRevision::from(metadata.clone()))
 }
 
-fn hash_prefix(path: &Path, length: u64) -> Result<String> {
-    let mut hash = blake3::Hasher::new();
-    let copied = std::io::copy(&mut File::open(path)?.take(length), &mut hash)?;
-    ensure!(copied == length, "Source shortened during ingestion");
-    Ok(hash.finalize().to_hex().to_string())
+const FINGERPRINT_WINDOW: u64 = 64 << 10;
+
+fn chain_record(previous: blake3::Hash, bytes: &[u8]) -> blake3::Hash {
+    let mut chain = blake3::Hasher::new();
+    chain.update(previous.as_bytes());
+    chain.update(blake3::hash(bytes).as_bytes());
+    chain.finalize()
+}
+
+fn verify_prefix(path: &Path, length: u64, expected: &str, stop: &AtomicBool) -> Result<bool> {
+    let mut reader = BufReader::new(File::open(path)?.take(length));
+    let mut line = Vec::new();
+    let mut read = 0;
+    let mut chain = blake3::hash(&[]);
+    loop {
+        ensure!(!stop.load(Ordering::Acquire), "Session ingestion cancelled");
+        line.clear();
+        let (count, kind) = read_bounded_line(&mut reader, &mut line, MAX_SESSION_RECORD_BYTES)?;
+        if count == 0 {
+            break;
+        }
+        if kind != LineKind::Complete {
+            return Ok(false);
+        }
+        chain = chain_record(chain, &line);
+        read += count;
+    }
+    Ok(read == length && chain.to_hex().as_str() == expected)
+}
+
+fn fingerprint(file: &mut File, length: u64) -> Result<(String, String)> {
+    let window = length.min(FINGERPRINT_WINDOW);
+    file.seek(SeekFrom::Start(0))?;
+    let mut head = blake3::Hasher::new();
+    ensure!(
+        std::io::copy(&mut (&mut *file).take(window), &mut head)? == window,
+        "Source shortened during fingerprint"
+    );
+    let head = head.finalize().to_hex().to_string();
+    if length <= FINGERPRINT_WINDOW {
+        return Ok((head.clone(), head));
+    }
+    file.seek(SeekFrom::Start(length - window))?;
+    let mut tail = blake3::Hasher::new();
+    ensure!(
+        std::io::copy(&mut file.take(window), &mut tail)? == window,
+        "Source shortened during fingerprint"
+    );
+    Ok((head, tail.finalize().to_hex().to_string()))
 }
 
 #[cfg(test)]
@@ -195,7 +239,13 @@ pub(super) fn scan_serving(
                     continue;
                 }
                 let started = std::time::Instant::now();
-                match ingest(&mut db, origin, path, stop) {
+                let outcome = match &scope {
+                    Scope::Full => ingest(&mut db, origin, path, stop),
+                    Scope::Changed(_) => {
+                        ingest_source(&mut db, origin, path, stop, ReadMode::Incremental)
+                    }
+                };
+                match outcome {
                     Ok(changed) => ingested += usize::from(changed),
                     Err(error) => {
                         failures += 1;
@@ -280,6 +330,7 @@ pub(super) fn header(
 #[derive(PartialEq, Eq)]
 enum ReadMode {
     Full,
+    Incremental,
     Inventory,
 }
 
@@ -290,6 +341,28 @@ pub(crate) fn ingest(
     stop: &AtomicBool,
 ) -> Result<bool> {
     ingest_source(db, origin, path, stop, ReadMode::Full)
+}
+
+#[derive(Clone, Default, serde::Deserialize, serde::Serialize)]
+#[serde(default)]
+struct AppendState {
+    device: u64,
+    inode: u64,
+    head: String,
+    tail: String,
+    verified_revision: i64,
+}
+
+struct Previous {
+    id: i64,
+    stamp: String,
+    offset: u64,
+    chain: String,
+    parser: String,
+    revision: i64,
+    present: bool,
+    append: AppendState,
+    size: u64,
 }
 
 fn ingest_source(
@@ -304,94 +377,117 @@ fn ingest_source(
     ensure!(before.is_file(), "Session source is not a regular file");
     let stamp = identity(&before);
     let original = origin.original(path)?.to_string_lossy().into_owned();
-    let prior:Option<(i64,String,i64,String,String,i64,bool)>=db.query_row("SELECT source_id,file_identity,ingested_offset,prefix_hash,parser_state,revision,present FROM source WHERE origin_host=?1 AND path=?2",params![origin.host,original],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?))).optional()?;
-    let prior = prior
-        .map(
-            |(id, stamp, offset, prefix, state, revision, present)| -> Result<_> {
-                Ok((
-                    id,
-                    stamp,
-                    u64::try_from(offset)?,
-                    prefix,
-                    state,
-                    revision,
-                    present,
-                ))
-            },
-        )
-        .transpose()?;
-    let companions = if mode == ReadMode::Full {
+    let prior = db.query_row("SELECT source_id,file_identity,ingested_offset,prefix_hash,parser_state,revision,present,append_state,size FROM source WHERE origin_host=?1 AND path=?2", params![origin.host,original], |row| {
+        let saved: String = row.get(7)?;
+        let append = serde_json::from_str(&saved).map_err(|error| rusqlite::Error::FromSqlConversionFailure(7,rusqlite::types::Type::Text,Box::new(error)))?;
+        Ok(Previous {id:row.get(0)?,stamp:row.get(1)?,offset:row.get(2)?,chain:row.get(3)?,parser:row.get(4)?,revision:row.get(5)?,present:row.get(6)?,append,size:row.get(8)?})
+    }).optional()?;
+    let companions = if mode != ReadMode::Inventory {
         companions(origin, path)?
     } else {
         Vec::new()
     };
     let mut dependencies_changed = false;
-    if let Some((id, ..)) = &prior {
+    if let Some(previous) = &prior {
         let dependencies: Vec<(String, Option<String>)> = db
             .prepare("SELECT local_path,identity FROM dependency WHERE source_id=?1")?
-            .query_map([id], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .query_map([previous.id], |row| Ok((row.get(0)?, row.get(1)?)))?
             .collect::<rusqlite::Result<_>>()?;
         for (path, old) in dependencies {
             let current = match std::fs::metadata(path) {
-                Ok(m) => Some(identity(&m)),
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-                Err(e) => return Err(e.into()),
+                Ok(metadata) => Some(identity(&metadata)),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                Err(error) => return Err(error.into()),
             };
             dependencies_changed |= current != old;
         }
-    }
-    if let Some((id, ..)) = &prior {
         let known: BTreeSet<String> = db
             .prepare("SELECT path FROM dependency WHERE source_id=?1")?
-            .query_map([id], |r| r.get(0))?
+            .query_map([previous.id], |row| row.get(0))?
             .collect::<rusqlite::Result<_>>()?;
         for companion in &companions {
             dependencies_changed |=
                 !known.contains(&origin.original(companion)?.to_string_lossy().into_owned());
         }
     }
-    if prior
+    let unchanged = prior
         .as_ref()
-        .is_some_and(|(_, previous, _, _, _, _, present)| previous == &stamp && *present)
-        && !dependencies_changed
+        .is_some_and(|previous| previous.stamp == stamp && previous.present)
+        && !dependencies_changed;
+    let mut verified = true;
+    if let Some(previous) = &prior
+        && mode == ReadMode::Full
+        && previous.offset > 0
+        && (previous.append.verified_revision != previous.revision || !unchanged)
     {
+        verified = before.len() >= previous.offset
+            && verify_prefix(path, previous.offset, &previous.chain, stop)?;
+        if unchanged && verified {
+            let mut append = previous.append.clone();
+            append.verified_revision = previous.revision;
+            db.execute(
+                "UPDATE source SET append_state=?1 WHERE source_id=?2",
+                params![serde_json::to_string(&append)?, previous.id],
+            )?;
+            return Ok(false);
+        }
+    } else if unchanged {
         return Ok(false);
     }
-    let append = if let Some((_, _, offset, hash, _, _, present)) = &prior {
-        *present
+    let append = if let Some(previous) = &prior {
+        previous.present
+            && verified
             && !dependencies_changed
-            && *offset > 0
-            && before.len() >= *offset
-            && hash_prefix(path, *offset)? == *hash
+            && previous.offset > 0
+            && before.len() > previous.size
+            && previous.append.device == before.dev()
+            && previous.append.inode == before.ino()
+            && fingerprint(&mut file, previous.offset)?
+                == (previous.append.head.clone(), previous.append.tail.clone())
     } else {
         false
     };
     let mut state = if append {
-        serde_json::from_str(&prior.as_ref().context("Append needs previous state")?.4)?
+        serde_json::from_str(
+            &prior
+                .as_ref()
+                .context("Append needs previous state")?
+                .parser,
+        )?
     } else {
         normalize::State::default()
     };
     let mut offset = if append {
-        prior.as_ref().context("Append needs previous state")?.2
+        prior
+            .as_ref()
+            .context("Append needs previous state")?
+            .offset
     } else {
         0
     };
-    let revision = prior.as_ref().map_or(1, |p| p.5 + 1);
+    let revision = prior.as_ref().map_or(1, |previous| previous.revision + 1);
     let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     tx.execute("INSERT OR IGNORE INTO source(origin_host,provider,provider_home,path,local_path,file_identity,size,mtime_ns,ingested_offset,revision,present,prefix_hash,parser_state) VALUES(?1,?2,?3,?4,?5,'',0,0,0,0,1,'','{}')",params![origin.host,origin.provider,origin.provider_home.to_string_lossy(),original,path.to_string_lossy()])?;
     let source: i64 = tx.query_row(
         "SELECT source_id FROM source WHERE origin_host=?1 AND path=?2",
         params![origin.host, original],
-        |r| r.get(0),
+        |row| row.get(0),
     )?;
     if !append {
         tx.execute("DELETE FROM session WHERE source_id=?1", [source])?;
         tx.execute("DELETE FROM dependency WHERE source_id=?1", [source])?;
     }
-    let mut hash = blake3::Hasher::new();
-    std::io::copy(&mut File::open(path)?.take(offset), &mut hash)?;
+    let mut chain = if append {
+        prior
+            .as_ref()
+            .context("Append needs previous state")?
+            .chain
+            .parse::<blake3::Hash>()?
+    } else {
+        blake3::hash(&[])
+    };
     file.seek(SeekFrom::Start(offset))?;
-    let mut reader = BufReader::new(file.take(before.len() - offset));
+    let mut reader = BufReader::new((&mut file).take(before.len() - offset));
     let mut line = Vec::new();
     let mut records = 0;
     if origin.provider == "claude" && state.thread.is_none() {
@@ -416,10 +512,7 @@ fn ingest_source(
                 MAX_SESSION_RECORD_BYTES
             };
             let (read, kind) = read_bounded_line(&mut reader, &mut line, bound)?;
-            if read == 0 {
-                break;
-            }
-            if kind == LineKind::Partial {
+            if read == 0 || kind == LineKind::Partial {
                 break;
             }
             ensure!(
@@ -429,7 +522,7 @@ fn ingest_source(
             if !line.iter().all(u8::is_ascii_whitespace) {
                 let value: Value =
                     serde_json::from_slice(&line).context("Malformed complete session record")?;
-                let record = normalize::Record {
+                normalize::Record {
                     db: &tx,
                     origin,
                     source,
@@ -437,10 +530,10 @@ fn ingest_source(
                     path,
                     offset,
                     bytes: &line,
-                };
-                record.apply(&mut state, value)?;
+                }
+                .apply(&mut state, value)?;
             }
-            hash.update(&line);
+            chain = chain_record(chain, &line);
             offset += read;
             records += 1;
             if mode == ReadMode::Inventory {
@@ -454,6 +547,7 @@ fn ingest_source(
             }
         }
     }
+    drop(reader);
     for companion in companions {
         let metadata = std::fs::metadata(&companion)?;
         tx.execute(
@@ -466,15 +560,24 @@ fn ingest_source(
             ],
         )?;
     }
-    let prefix = hash.finalize().to_hex().to_string();
+    let prefix = chain.to_hex().to_string();
+    let (head, tail) = fingerprint(&mut file, offset)?;
     let after = std::fs::metadata(path)?;
     ensure!(
         before.dev() == after.dev() && before.ino() == after.ino() && before.len() <= after.len(),
         "Source replaced during ingestion"
     );
-    if FileRevision::from(before.clone()) != FileRevision::from(after.clone()) {
+    let stable = FileRevision::from(before.clone()) == FileRevision::from(after.clone());
+    if !stable && mode == ReadMode::Full {
         ensure!(
-            prefix == hash_prefix(path, offset)?,
+            verify_prefix(path, offset, &prefix, stop)?,
+            "Source changed during ingestion"
+        );
+    } else if !stable && append {
+        let previous = prior.as_ref().context("Append needs previous state")?;
+        ensure!(
+            fingerprint(&mut file, previous.offset)?
+                == (previous.append.head.clone(), previous.append.tail.clone()),
             "Source changed during ingestion"
         );
     }
@@ -482,7 +585,22 @@ fn ingest_source(
         state.thread.is_some() || offset == 0,
         "Transcript has no exact provider identity"
     );
-    tx.execute("UPDATE source SET local_path=?1,file_identity=?2,size=?3,mtime_ns=?4,ingested_offset=?5,revision=?6,present=1,prefix_hash=?7,parser_state=?8,failure=?9 WHERE source_id=?10",params![path.to_string_lossy(),if mode==ReadMode::Full {&stamp} else {""},i64::try_from(before.len())?,before.mtime()*1_000_000_000+before.mtime_nsec(),i64::try_from(offset)?,revision,prefix,serde_json::to_string(&state)?,if offset<before.len() {Some("partial_record")} else {None},source])?;
+    let verified_revision =
+        if mode == ReadMode::Full || (!append && stable && mode != ReadMode::Inventory) {
+            revision
+        } else {
+            prior
+                .as_ref()
+                .map_or(0, |previous| previous.append.verified_revision)
+        };
+    let append_state = AppendState {
+        device: before.dev(),
+        inode: before.ino(),
+        head,
+        tail,
+        verified_revision,
+    };
+    tx.execute("UPDATE source SET local_path=?1,file_identity=?2,size=?3,mtime_ns=?4,ingested_offset=?5,revision=?6,present=1,prefix_hash=?7,parser_state=?8,failure=?9,append_state=?10 WHERE source_id=?11",params![path.to_string_lossy(),if mode != ReadMode::Inventory {&stamp} else {""},i64::try_from(before.len())?,before.mtime()*1_000_000_000+before.mtime_nsec(),i64::try_from(offset)?,revision,prefix,serde_json::to_string(&state)?,if offset<before.len(){Some("partial_record")}else{None},serde_json::to_string(&append_state)?,source])?;
     tx.commit()?;
     Ok(true)
 }

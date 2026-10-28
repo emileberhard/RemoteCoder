@@ -1408,3 +1408,136 @@ fn sessions_thread_suffix_seeks_unique_ambiguous_and_missing_keys() {
             && step.contains("thread_id_reversed<?")
     ));
 }
+
+#[test]
+fn sessions_incremental_append_preserves_items_and_reconcile_verifies_the_chain() {
+    let f = fixture();
+    scan(&f);
+    let old_key = search(&f.store, "codexmiddle")["hits"][0]["itemKey"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let old_revision: i64 = f
+        .store
+        .reader()
+        .unwrap()
+        .query_row(
+            "SELECT revision FROM item WHERE item_key=?1",
+            [&old_key],
+            |row| row.get(0),
+        )
+        .unwrap();
+    for text in ["firstchainappend", "secondchainappend"] {
+        writeln!(OpenOptions::new().append(true).open(&f.codex).unwrap(), "{}", json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":text}]}})).unwrap();
+        let result = ingest::scan_scope(
+            &f.store,
+            &f.origins,
+            ingest::Scope::Changed(std::slice::from_ref(&f.codex)),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert_eq!(result["parseFailures"], 0);
+    }
+    let db = f.store.reader().unwrap();
+    let current_revision: i64 = db
+        .query_row(
+            "SELECT revision FROM item WHERE item_key=?1",
+            [&old_key],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(current_revision, old_revision);
+    let (chain, revision, verified): (String,i64,i64) = db.query_row("SELECT prefix_hash,revision,json_extract(append_state,'$.verified_revision') FROM source WHERE local_path=?1", [f.codex.to_string_lossy().as_ref()], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?))).unwrap();
+    assert!(verified < revision);
+    drop(db);
+    assert_eq!(scan(&f)["ingested"], 0);
+    let db = f.store.reader().unwrap();
+    let (current_chain, current_revision, verified): (String,i64,i64) = db.query_row("SELECT prefix_hash,revision,json_extract(append_state,'$.verified_revision') FROM source WHERE local_path=?1", [f.codex.to_string_lossy().as_ref()], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?))).unwrap();
+    assert_eq!(chain, current_chain);
+    assert_eq!(revision, current_revision);
+    assert_eq!(verified, revision);
+    drop(db);
+    let fresh = Store::open(f._directory.path().join("rebuilt/catalog.sqlite3")).unwrap();
+    ingest::scan(&fresh, &f.origins, &AtomicBool::new(false)).unwrap();
+    let rebuilt_chain: String = fresh
+        .reader()
+        .unwrap()
+        .query_row(
+            "SELECT prefix_hash FROM source WHERE local_path=?1",
+            [f.codex.to_string_lossy().as_ref()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(chain, rebuilt_chain);
+}
+
+#[test]
+fn sessions_reconcile_repairs_a_growing_rewrite_that_preserves_both_windows() {
+    use std::io::{Seek, SeekFrom};
+    let f = fixture();
+    scan(&f);
+    let raw = std::fs::read(&f.codex).unwrap();
+    let middle = raw
+        .windows(b"codexmiddle".len())
+        .position(|window| window == b"codexmiddle")
+        .unwrap();
+    assert!(middle > 64 << 10);
+    assert!(raw.len() - middle > 64 << 10);
+    let old_key = search(&f.store, "codexmiddle")["hits"][0]["itemKey"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let mut file = OpenOptions::new().write(true).open(&f.codex).unwrap();
+    file.seek(SeekFrom::Start(middle as u64)).unwrap();
+    file.write_all(b"rewritemid!").unwrap();
+    drop(file);
+    writeln!(OpenOptions::new().append(true).open(&f.codex).unwrap(),"{}",json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"afterhiddenrewrite"}]}})).unwrap();
+    let result = ingest::scan_scope(
+        &f.store,
+        &f.origins,
+        ingest::Scope::Changed(std::slice::from_ref(&f.codex)),
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+    assert_eq!(result["parseFailures"], 0);
+    assert_eq!(
+        search(&f.store, "afterhiddenrewrite")["hits"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        search(&f.store, "codexmiddle")["hits"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        query::read(
+            &f.store.reader().unwrap(),
+            query::ReadRequest {
+                target: old_key,
+                offset: 0,
+                length: None,
+                dependency: None
+            }
+        )
+        .is_err()
+    );
+    assert_eq!(scan(&f)["parseFailures"], 0);
+    assert!(
+        search(&f.store, "codexmiddle")["hits"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        search(&f.store, "rewritemid!")["hits"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+}

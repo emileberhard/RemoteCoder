@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS source (
  file_identity TEXT NOT NULL, size INTEGER NOT NULL, mtime_ns INTEGER NOT NULL,
  ingested_offset INTEGER NOT NULL, revision INTEGER NOT NULL, present INTEGER NOT NULL,
  prefix_hash TEXT NOT NULL, parser_state TEXT NOT NULL, failure TEXT,
+ append_state TEXT NOT NULL DEFAULT '{}',
  UNIQUE(origin_host,path));
 CREATE TABLE IF NOT EXISTS session (
  session_key TEXT PRIMARY KEY, origin_host TEXT NOT NULL, provider TEXT NOT NULL,

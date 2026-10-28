@@ -54,8 +54,7 @@ each batch of at most 32 sources. Missing sources reclaim their catalog rows
 and emit feed tombstones through this same ingest owner. An unavailable provider
 root preserves its rows and reports provider_unavailable instead of deletions. Source/dependency path
 indexes bound incremental discovery; exact and subtree paths use separate indexed ranges, and dependency-driven checks join their source by primary key. Unchanged history is not walked per event. It reuses the provider bounded-line reader
-and FileRevision. Changed prefixes rebuild one source transactionally; verified
-append prefixes continue at the last complete record. Malformed or oversized
+and FileRevision. Changed prefixes rebuild one source transactionally. Appends require the same device/inode, strict size growth, and matching 64 KiB head and tail windows of the previously accepted prefix. This bounds old-prefix reads to 128 KiB per check regardless of transcript length; short prefixes use one window. Only new complete records are parsed, and prefix_hash is a deterministic per-record hash chain, independent of event batching. Each ten-minute full reconcile verifies that chain for sources changed since their last full verification. A mid-file rewrite that preserves both windows and grows the file is detected within one reconcile interval; exact item reads still reject changed raw records immediately. Provider transcripts are append-only, so this is the deliberate bounded-lag trade. Companion discovery is limited to the changed source's subtree and capped at 100,000 evidence files. Malformed or oversized
 records retain accepted data and surface incomplete coverage. Missing dependencies
 prevent the complete watermark from advancing.
 
