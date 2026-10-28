@@ -516,6 +516,7 @@ async fn cluster_three_member_pinned_links_report_typed_load() {
                 .all(|member| member["reachability"]["state"] == "reachable")
         );
     }
+    b.gateway.shutdown_for_restart().await;
     b.stop().await;
     let page = rpc(&a, "cluster/list", json!({})).await;
     let members = page["members"].as_array().unwrap();
