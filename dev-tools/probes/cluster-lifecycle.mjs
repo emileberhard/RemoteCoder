@@ -296,7 +296,9 @@ async function main() {
             assert.equal(page.coverage.length, count);
             assert(page.coverage.every(row => row.state === "ok"), JSON.stringify(page.coverage));
         }
+        let parenting = null;
         if (count === 3) {
+            console.error("three-member: move the child's parent tag");
             const child = outward.children[0];
             const job = (await workers[1].rpc("agent/jobs/read", { jobId: child.id })).job;
             const address = { hostId: workers[1].info.hostId, threadId: terminal(job).execution.conversation.threadId };
@@ -316,14 +318,22 @@ async function main() {
                 const view = await workers[1].rpc("agent/jobs/read", {jobId:continued});
                 return ["accepted", "recorded"].includes(terminal(view.job)?.completion?.delivery?.kind);
             });
-            assert.equal((await observedCompletion(workers[2], root, continued)).length, 1);
+            const movedEntries = await waitFor(async () => {
+                const entries = await observedCompletion(workers[2], root, continued);
+                return entries.length ? entries : null;
+            });
+            assert.equal(movedEntries.length, 1);
             assert.equal((await observedCompletion(workers[0], child.parent, continued)).length, 0);
+            console.error("three-member: only the new parent received the continued result");
             const promoted = await workers[1].rpc("agent/parent/set", { protocol: 1, agent: address,
                 parent: null, caller: { kind: "operator" } });
             assert.equal(promoted.parent, null);
+            parenting = { agent: address, movedParent: { hostId: workers[2].info.hostId, threadId: root },
+                continuedJobId: continued, promoted: true };
+            console.error("three-member: promote the child to a root");
         }
         console.log(JSON.stringify({ members: count, crossMac: remote >= 0, outward, reverse,
-            completeCoverage: true, moveAndPromotion: count === 3 }));
+            completeCoverage: true, moveAndPromotion: count === 3, parenting }));
     } finally {
         for (const host of workers.reverse()) {
             try { await host.close(); } catch (error) { errors.push(String(error)); }
