@@ -35,7 +35,8 @@ content; unknown title, dates and ancestry remain absent until content supplies 
 any depth below a session's subagents directory own child identity, with that
 session as parent. Discovery accepts top-level project transcripts and those
 agent files; workflow journals and tool-result JSONL are evidence, not separate
-conversations. Schema 3 rebuilds earlier development catalogs to normalize these
+conversations. Native thread suffix resolution seeks the indexed reversed UTF-8 bytes, scoped to the owning host, and stops at two matches.
+Schema 3 rebuilds earlier development catalogs to normalize these
 provider layouts; no provider evidence is rewritten.
 
 The ingest worker is independent of jobs and retains one bounded provider record

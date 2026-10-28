@@ -92,18 +92,7 @@ pub(crate) fn inventory(
     );
     let mut statement=db.prepare("SELECT s.session_key,s.origin_host,s.provider,s.thread_id,s.cwd,s.title,s.started_at,s.last_at,s.parent_session_key,src.present FROM session s JOIN source src USING(source_id) WHERE s.session_key>?1 ORDER BY s.session_key LIMIT ?2")?;
     let rows = statement.query_map(params![after.unwrap_or(""), limit as i64 + 1], |r| {
-        Ok(SessionHeader {
-            session_key: r.get(0)?,
-            host_id: r.get(1)?,
-            provider: r.get(2)?,
-            thread_id: r.get(3)?,
-            cwd: r.get(4)?,
-            title: r.get(5)?,
-            started_at: r.get(6)?,
-            last_at: r.get(7)?,
-            parent_session_key: r.get(8)?,
-            source_present: r.get(9)?,
-        })
+        session_header(r)
     })?;
     let mut sessions = Vec::new();
     let mut bytes = 65536;
@@ -128,6 +117,44 @@ pub(crate) fn inventory(
         None
     };
     Ok(SessionPage { sessions, cursor })
+}
+
+fn session_header(r: &rusqlite::Row<'_>) -> rusqlite::Result<SessionHeader> {
+    Ok(SessionHeader {
+        session_key: r.get(0)?,
+        host_id: r.get(1)?,
+        provider: r.get(2)?,
+        thread_id: r.get(3)?,
+        cwd: r.get(4)?,
+        title: r.get(5)?,
+        started_at: r.get(6)?,
+        last_at: r.get(7)?,
+        parent_session_key: r.get(8)?,
+        source_present: r.get(9)?,
+    })
+}
+
+pub(super) const THREAD_SUFFIX_SQL: &str = "SELECT s.session_key,s.origin_host,s.provider,s.thread_id,s.cwd,s.title,s.started_at,s.last_at,s.parent_session_key,src.present FROM session s JOIN source src USING(source_id) WHERE s.origin_host=?1 AND s.thread_id_reversed>=?2 AND s.thread_id_reversed<?3 AND src.present=1 LIMIT 2";
+
+pub(crate) fn match_thread_suffix(
+    db: &super::store::Reader,
+    host: &str,
+    suffix: &str,
+) -> Result<Vec<SessionHeader>> {
+    ensure!(
+        !suffix.is_empty() && suffix.len() <= 512,
+        "Thread suffix must be 1..=512 UTF-8 bytes"
+    );
+    let lower: Vec<_> = suffix.bytes().rev().collect();
+    let mut upper = lower.clone();
+    let last = upper.last_mut().context("Empty thread suffix")?;
+    *last = last
+        .checked_add(1)
+        .context("Thread suffix has no upper bound")?;
+    Ok(db
+        .prepare(THREAD_SUFFIX_SQL)?
+        .query_map(params![host, lower, upper], session_header)?
+        .collect::<rusqlite::Result<_>>()?)
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]

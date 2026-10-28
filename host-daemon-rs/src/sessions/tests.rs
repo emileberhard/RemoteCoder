@@ -1346,10 +1346,65 @@ fn sessions_claude_empty_transcripts_keep_path_headers_through_content_ingest() 
     drop(db);
     assert_eq!(scan(&f)["parseFailures"], 0);
     let headers = query::inventory(&f.store.reader().unwrap(), None, 1000).unwrap();
-    assert!(
-        headers
-            .sessions
-            .iter()
-            .any(|header| header.thread_id == "claude_empty")
+    let header = headers
+        .sessions
+        .iter()
+        .find(|header| header.thread_id == "claude_empty")
+        .unwrap();
+    assert!(header.cwd.is_none());
+    assert!(header.title.is_none());
+    assert!(header.started_at.is_none());
+    assert!(header.last_at.is_none());
+    let turns: i64 = f
+        .store
+        .reader()
+        .unwrap()
+        .query_row(
+            "SELECT count(*) FROM turn WHERE session_key=?1",
+            [&header.session_key],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(turns, 0);
+}
+
+#[test]
+fn sessions_thread_suffix_seeks_unique_ambiguous_and_missing_keys() {
+    let f = fixture();
+    scan(&f);
+    let db = f.store.reader().unwrap();
+    let unique = query::match_thread_suffix(&db, "fixture", "codex-root").unwrap();
+    assert_eq!(unique.len(), 1);
+    assert_eq!(unique[0].thread_id, "codex-root");
+    assert_eq!(
+        query::match_thread_suffix(&db, "fixture", "root")
+            .unwrap()
+            .len(),
+        2
     );
+    assert!(
+        query::match_thread_suffix(&db, "fixture", "absent")
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        query::match_thread_suffix(&db, "other-host", "root")
+            .unwrap()
+            .is_empty()
+    );
+    assert!(query::match_thread_suffix(&db, "fixture", "").is_err());
+    let lower = b"toor";
+    let upper = b"toos";
+    let plan: Vec<String> = db
+        .prepare(&format!("EXPLAIN QUERY PLAN {}", query::THREAD_SUFFIX_SQL))
+        .unwrap()
+        .query_map(rusqlite::params!["fixture", lower, upper], |row| row.get(3))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert!(plan.iter().any(
+        |step| step.contains("SEARCH s USING INDEX session_thread_suffix")
+            && step.contains("thread_id_reversed>?")
+            && step.contains("thread_id_reversed<?")
+    ));
 }

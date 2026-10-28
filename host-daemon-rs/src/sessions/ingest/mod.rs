@@ -401,50 +401,52 @@ fn ingest_source(
         }
         .apply(&mut state, Value::Null)?;
     }
-    while mode != ReadMode::Inventory || origin.provider != "claude" {
-        ensure!(!stop.load(Ordering::Acquire), "Session ingestion cancelled");
-        line.clear();
-        let bound = if mode == ReadMode::Inventory {
-            8 << 20
-        } else {
-            MAX_SESSION_RECORD_BYTES
-        };
-        let (read, kind) = read_bounded_line(&mut reader, &mut line, bound)?;
-        if read == 0 {
-            break;
-        }
-        if kind == LineKind::Partial {
-            break;
-        }
-        ensure!(
-            kind != LineKind::Oversized,
-            "capacity: source record exceeds {MAX_SESSION_RECORD_BYTES} bytes; raw evidence retained"
-        );
-        if !line.iter().all(u8::is_ascii_whitespace) {
-            let value: Value =
-                serde_json::from_slice(&line).context("Malformed complete session record")?;
-            let record = normalize::Record {
-                db: &tx,
-                origin,
-                source,
-                revision,
-                path,
-                offset,
-                bytes: &line,
+    if mode != ReadMode::Inventory || origin.provider != "claude" {
+        loop {
+            ensure!(!stop.load(Ordering::Acquire), "Session ingestion cancelled");
+            line.clear();
+            let bound = if mode == ReadMode::Inventory {
+                8 << 20
+            } else {
+                MAX_SESSION_RECORD_BYTES
             };
-            record.apply(&mut state, value)?;
-        }
-        hash.update(&line);
-        offset += read;
-        records += 1;
-        if mode == ReadMode::Inventory {
-            if state.thread.is_some() {
+            let (read, kind) = read_bounded_line(&mut reader, &mut line, bound)?;
+            if read == 0 {
+                break;
+            }
+            if kind == LineKind::Partial {
                 break;
             }
             ensure!(
-                records < 128 && offset < 8 << 20,
-                "unavailable: identity exceeds inventory read budget"
+                kind != LineKind::Oversized,
+                "capacity: source record exceeds {MAX_SESSION_RECORD_BYTES} bytes; raw evidence retained"
             );
+            if !line.iter().all(u8::is_ascii_whitespace) {
+                let value: Value =
+                    serde_json::from_slice(&line).context("Malformed complete session record")?;
+                let record = normalize::Record {
+                    db: &tx,
+                    origin,
+                    source,
+                    revision,
+                    path,
+                    offset,
+                    bytes: &line,
+                };
+                record.apply(&mut state, value)?;
+            }
+            hash.update(&line);
+            offset += read;
+            records += 1;
+            if mode == ReadMode::Inventory {
+                if state.thread.is_some() {
+                    break;
+                }
+                ensure!(
+                    records < 128 && offset < 8 << 20,
+                    "unavailable: identity exceeds inventory read budget"
+                );
+            }
         }
     }
     for companion in companions {

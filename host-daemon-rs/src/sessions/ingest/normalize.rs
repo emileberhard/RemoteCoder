@@ -61,7 +61,7 @@ impl Record<'_> {
             self.claude(state, &value, timestamp.as_deref())?;
         }
         if let Some(thread) = &state.thread {
-            self.db.execute("INSERT INTO session(session_key,origin_host,provider,provider_home,thread_id,cwd,title,started_at,last_at,parent_session_key,source_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11) ON CONFLICT(session_key) DO UPDATE SET cwd=excluded.cwd,title=excluded.title,started_at=excluded.started_at,last_at=excluded.last_at,parent_session_key=excluded.parent_session_key WHERE session.source_id=excluded.source_id",params![super::super::session_key(self.origin,thread),self.origin.host,self.origin.provider,self.origin.provider_home.to_string_lossy(),thread,state.cwd,state.title,state.first,state.last,state.parent.as_ref().map(|p|super::super::session_key(self.origin,p)),self.source])?;
+            self.db.execute("INSERT INTO session(session_key,origin_host,provider,provider_home,thread_id,cwd,title,started_at,last_at,parent_session_key,source_id,thread_id_reversed) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12) ON CONFLICT(session_key) DO UPDATE SET cwd=excluded.cwd,title=excluded.title,started_at=excluded.started_at,last_at=excluded.last_at,parent_session_key=excluded.parent_session_key WHERE session.source_id=excluded.source_id",params![super::super::session_key(self.origin,thread),self.origin.host,self.origin.provider,self.origin.provider_home.to_string_lossy(),thread,state.cwd,state.title,state.first,state.last,state.parent.as_ref().map(|p|super::super::session_key(self.origin,p)),self.source,thread.bytes().rev().collect::<Vec<_>>()])?;
         }
         Ok(())
     }

@@ -10,10 +10,11 @@ CREATE TABLE IF NOT EXISTS source (
  UNIQUE(origin_host,path));
 CREATE TABLE IF NOT EXISTS session (
  session_key TEXT PRIMARY KEY, origin_host TEXT NOT NULL, provider TEXT NOT NULL,
- provider_home TEXT NOT NULL, thread_id TEXT NOT NULL, cwd TEXT, title TEXT,
+ provider_home TEXT NOT NULL, thread_id TEXT NOT NULL, thread_id_reversed BLOB NOT NULL, cwd TEXT, title TEXT,
  started_at TEXT, last_at TEXT, parent_session_key TEXT,
  source_id INTEGER NOT NULL UNIQUE REFERENCES source);
 CREATE INDEX IF NOT EXISTS session_thread ON session(thread_id,origin_host);
+CREATE INDEX IF NOT EXISTS session_thread_suffix ON session(origin_host,thread_id_reversed);
 CREATE TABLE IF NOT EXISTS turn (
  session_key TEXT NOT NULL REFERENCES session ON DELETE CASCADE, turn_id TEXT NOT NULL,
  seq INTEGER NOT NULL, started_at TEXT, ended_at TEXT, status TEXT, model TEXT,

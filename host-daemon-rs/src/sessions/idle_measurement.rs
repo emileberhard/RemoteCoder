@@ -65,6 +65,21 @@ pub(super) fn run(store: &Store, origins: &[Origin], mode: &str) -> Result<()> {
         "{}",
         json!({"phase":"readResolverPlan","steps":read_resolver_plan})
     );
+    let suffix_plan: Vec<String> = store
+        .reader()?
+        .prepare(&format!(
+            "EXPLAIN QUERY PLAN {}",
+            super::query::THREAD_SUFFIX_SQL
+        ))?
+        .query_map(rusqlite::params!["mini", b"toor", b"toos"], |row| {
+            row.get(3)
+        })?
+        .collect::<rusqlite::Result<_>>()?;
+    let old_read_plan: Vec<String> = store.reader()?.prepare("EXPLAIN QUERY PLAN SELECT src.local_path,src.present FROM session s JOIN source src USING(source_id) WHERE s.session_key=?1 OR s.thread_id=?1 OR s.origin_host||':'||s.thread_id=?1 LIMIT 2")?.query_map(["absent-session"], |row| row.get(3))?.collect::<rusqlite::Result<_>>()?;
+    println!(
+        "{}",
+        json!({"phase":"suffixPlan","steps":suffix_plan,"oldReadResolverPlan":old_read_plan})
+    );
     let stop = AtomicBool::new(false);
     let cpu = cpu_seconds();
     let started = Instant::now();
@@ -86,9 +101,23 @@ pub(super) fn run(store: &Store, origins: &[Origin], mode: &str) -> Result<()> {
         "{}",
         json!({"phase":"headers","elapsedSeconds":header_seconds,"complete":header_complete,"directories":directory_counts})
     );
+    let header_cpu = cpu_seconds() - cpu;
+    let mut discovery_times = Vec::new();
+    for _ in 0..10 {
+        let started = Instant::now();
+        discovery.refresh(origins, Some(started + Duration::from_secs(5)))?;
+        discovery_times.push(started.elapsed().as_secs_f64());
+    }
+    discovery_times.sort_by(f64::total_cmp);
+    println!(
+        "{}",
+        json!({"phase":"directoryDiscovery","p95Seconds":discovery_times[9],"directories":directory_counts})
+    );
+    let cpu = cpu_seconds();
+    let started = Instant::now();
     let initial = ingest::scan(store, origins, &stop)?;
-    let initial_seconds = started.elapsed().as_secs_f64();
-    let initial_cpu = cpu_seconds() - cpu;
+    let initial_seconds = header_seconds + started.elapsed().as_secs_f64();
+    let initial_cpu = header_cpu + cpu_seconds() - cpu;
     println!(
         "{}",
         json!({"phase":"initial","elapsedSeconds":initial_seconds,"cpuSeconds":initial_cpu,"outcome":initial})
@@ -98,13 +127,6 @@ pub(super) fn run(store: &Store, origins: &[Origin], mode: &str) -> Result<()> {
     let reconcile = ingest::scan(store, origins, &stop)?;
     let reconcile_seconds = started.elapsed().as_secs_f64();
     let reconcile_cpu = cpu_seconds() - cpu;
-    let mut discovery_times = Vec::new();
-    for _ in 0..10 {
-        let started = Instant::now();
-        discovery.refresh(origins, Some(started + Duration::from_secs(5)))?;
-        discovery_times.push(started.elapsed().as_secs_f64());
-    }
-    discovery_times.sort_by(f64::total_cmp);
     let origin = origins.iter().find(|o| o.provider == "codex").unwrap();
     let cold = origin.path().join("fleet-idle-cold.jsonl");
     let mut file = std::fs::OpenOptions::new()
@@ -194,7 +216,7 @@ pub(super) fn run(store: &Store, origins: &[Origin], mode: &str) -> Result<()> {
     append(&new, "fleetidlenewprobe")?;
     let new_seconds = wait_text(store, "fleet-idle-new", "fleetidlenewprobe", started)?;
     worker.stop()?;
-    let report = json!({"phase":mode,"readResolverPlan":read_resolver_plan,"headerSeconds":header_seconds,"headerComplete":header_complete,"directories":directory_counts,"directoryDiscoveryP95Seconds":discovery_times[9],"inventoryCatchupP95Seconds":inventory_times[9],"initialSeconds":initial_seconds,"initialCpuSeconds":initial_cpu,"initial":initial,"reconcileSeconds":reconcile_seconds,"reconcileCpuSeconds":reconcile_cpu,"outcome":reconcile,"cpuSeconds":idle_cpu,"elapsedSeconds":elapsed,"cpuSecondsPerMinute":idle_cpu*60.0/elapsed,"amortizedReconcileCpuSecondsPerMinute":reconcile_cpu/10.0,"databaseWrittenDuringQuiet":false,"coldAppendSeconds":append_seconds,"newFileSeconds":new_seconds});
+    let report = json!({"phase":mode,"readResolverPlan":read_resolver_plan,"oldReadResolverPlan":old_read_plan,"suffixPlan":suffix_plan,"headerSeconds":header_seconds,"headerComplete":header_complete,"directories":directory_counts,"directoryDiscoveryP95Seconds":discovery_times[9],"inventoryCatchupP95Seconds":inventory_times[9],"initialSeconds":initial_seconds,"initialCpuSeconds":initial_cpu,"initial":initial,"reconcileSeconds":reconcile_seconds,"reconcileCpuSeconds":reconcile_cpu,"outcome":reconcile,"cpuSeconds":idle_cpu,"elapsedSeconds":elapsed,"cpuSecondsPerMinute":idle_cpu*60.0/elapsed,"amortizedReconcileCpuSecondsPerMinute":reconcile_cpu/10.0,"databaseWrittenDuringQuiet":false,"coldAppendSeconds":append_seconds,"newFileSeconds":new_seconds});
     std::fs::write(
         std::env::var("RC_SESSIONS_MEASURE_REPORT")?,
         serde_json::to_vec_pretty(&report)?,
