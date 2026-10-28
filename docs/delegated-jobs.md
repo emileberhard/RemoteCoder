@@ -420,12 +420,13 @@ changing Start into Continue.
 ## Indexed lifecycle work
 
 JobStore owns the derived conversation, parent, current-head, active-agent,
-ordered-page and per-member pending-work indexes. Every persisted agent, job or
+ordered-page, reversed job-ID suffix and per-member pending-work indexes. Every persisted agent, job or
 intent transition publishes its index change in the same store critical section;
 startup rebuilds the indexes from retained records. Parent moves and promotions
 update the parent index and wake only members with affected pending deliveries.
 Ambiguous continuation branches retain an unresolved head. Ordinary head reads do
-not walk the continuation history.
+not walk the continuation history. Job suffix resolution uses an ordered reversed-ID
+range and returns at most two matches, keeping ambiguity explicit.
 
 Network workers subscribe to their member's coalesced watch and read only that
 member's pending jobs and intents. Delivery attempts that change only the retry

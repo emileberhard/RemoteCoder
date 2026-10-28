@@ -245,55 +245,54 @@ impl Gateway {
                 json!({"ownerHostId":identity.host_id,"jobId":view.job.job_id,"agentId":view.job.agent_id,"conversation":view.agent.map(|agent|agent.conversation)}),
             ));
         }
-        let mut cursor = None;
-        let mut found = std::collections::BTreeMap::<String, Value>::new();
-        loop {
-            let page = self
-                .jobs
-                .list(agent_jobs::ListParams {
-                    selector: agent_jobs::ListSelector::Recent,
-                    limit: 256,
-                    cursor,
-                })
-                .await?;
-            for row in page.jobs {
-                let session = match &row.conversation {
-                    ConversationBinding::Known { conversation } => {
-                        Some(conversation.thread_id.as_str())
-                    }
-                    _ => None,
-                };
-                if row.job_id.as_str().ends_with(target)
-                    || session.is_some_and(|thread| {
-                        thread == target || thread.strip_prefix("claude_") == Some(target)
-                    })
-                {
-                    let view = self.jobs.read(&row.job_id).await?;
-                    let selected = if row.job_id.as_str().ends_with(target) {
-                        row.job_id
-                    } else {
-                        view.agent
-                            .as_ref()
-                            .and_then(|agent| agent.latest_job_id.clone())
-                            .context("conversation latest job is unresolved")?
-                    };
-                    found.insert(row.agent_id.clone(),json!({"ownerHostId":identity.host_id,"jobId":selected,"agentId":row.agent_id,"conversation":row.conversation}));
-                    if found.len() > 1 {
-                        return Err(cluster_error(
-                            ErrorClass::Usage,
-                            "agent selector is ambiguous; use an exact address",
-                        )
-                        .into());
-                    }
-                }
-            }
-            cursor = page.next_cursor;
-            if cursor.is_none() {
-                break;
-            }
+        let store = self.jobs.store().await?;
+        let matches = store.job_suffix_matches(target.to_owned()).await?;
+        ensure!(
+            matches.len() < 2,
+            cluster_error(
+                ErrorClass::Usage,
+                "agent selector is ambiguous; use an exact address"
+            )
+        );
+        if let Some(id) = matches.into_iter().next() {
+            let view = self.jobs.read(&id).await?;
+            return Ok(Some(
+                json!({"ownerHostId":identity.host_id,"jobId":id,"agentId":view.job.agent_id,"conversation":view.agent.map(|agent|agent.conversation)}),
+            ));
         }
-        if let Some(row) = found.into_values().next() {
-            return Ok(Some(row));
+        let mut conversations = Vec::new();
+        if let Ok(conversation) = self.agent_conversation(target) {
+            conversations.push(conversation);
+        }
+        if crate::ids::is_session_uuid(target) {
+            conversations.push(self.agent_conversation(&format!("claude_{target}"))?);
+        }
+        let mut found = None;
+        for agent in store
+            .agents_for_conversations(conversations)
+            .await?
+            .into_values()
+        {
+            let Some(id) = agent.latest_job_id else {
+                ensure!(
+                    agent.origin_job_id.is_none(),
+                    "conversation latest job is unresolved"
+                );
+                continue;
+            };
+            ensure!(
+                found.is_none(),
+                cluster_error(
+                    ErrorClass::Usage,
+                    "agent selector is ambiguous; use an exact address"
+                )
+            );
+            found = Some(
+                json!({"ownerHostId":identity.host_id,"jobId":id,"agentId":agent.agent_id,"conversation":agent.conversation}),
+            );
+        }
+        if found.is_some() {
+            return Ok(found);
         }
         let mut cursor = None;
         let mut found = None;

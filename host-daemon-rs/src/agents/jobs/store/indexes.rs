@@ -13,6 +13,7 @@ pub(super) struct Indexes {
     pending_by_agent: HashMap<String, BTreeSet<JobId>>,
     working_agents: HashMap<String, usize>,
     pub successors: HashMap<JobId, BTreeSet<JobId>>,
+    reversed_jobs: BTreeMap<String, JobId>,
     heads: HashMap<String, ChainHead>,
     lineage: HashMap<JobId, u64>,
     members: HashMap<String, MemberWork>,
@@ -87,6 +88,8 @@ impl Indexes {
     }
 
     pub fn remove_job(&mut self, job: &JobRecord) {
+        self.reversed_jobs
+            .remove(&job.job_id.as_str().chars().rev().collect::<String>());
         if job.source == JobSource::Runtime
             && !matches!(
                 job.execution,
@@ -134,6 +137,10 @@ impl Indexes {
     }
 
     pub fn insert_job(&mut self, job: &JobRecord) {
+        self.reversed_jobs.insert(
+            job.job_id.as_str().chars().rev().collect(),
+            job.job_id.clone(),
+        );
         if job.source == JobSource::Runtime
             && !matches!(
                 job.execution,
@@ -459,6 +466,21 @@ impl Inner {
 }
 
 impl JobStore {
+    pub(crate) async fn job_suffix_matches(&self, suffix: String) -> Result<Vec<JobId>> {
+        self.access(move |inner| {
+            let prefix: String = suffix.chars().rev().collect();
+            Ok(inner
+                .indexes
+                .reversed_jobs
+                .range(prefix.clone()..)
+                .take_while(|(key, _)| key.starts_with(&prefix))
+                .take(2)
+                .map(|(_, id)| id.clone())
+                .collect())
+        })
+        .await
+    }
+
     pub(crate) async fn active_agent_count(&self) -> Result<usize> {
         self.access(|inner| Ok(inner.indexes.working_agents.len()))
             .await

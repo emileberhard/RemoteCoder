@@ -1152,3 +1152,44 @@ async fn cluster_store_indexes_follow_binding_move_promotion_and_reload() {
     let page = store.list(Selection::Recent, 1, None).await.unwrap();
     assert_eq!(page.jobs[0].job_id, original.job_id);
 }
+
+#[tokio::test]
+async fn cluster_job_suffix_range_preserves_ambiguity_after_reload() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().to_owned();
+    let store = JobStore::open(root.clone()).await.unwrap();
+    let first = job(93);
+    store.admit(first.clone()).await.unwrap();
+    assert_eq!(
+        store.job_suffix_matches("005d".into()).await.unwrap(),
+        vec![first.job_id.clone()]
+    );
+    assert!(
+        store
+            .job_suffix_matches("absent".into())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let mut second = job(94);
+    second.job_id = JobId::try_from("agent-codex-1793127141860775001-0000005d".to_owned()).unwrap();
+    second.agent_id = second.job_id.as_str().to_owned();
+    store.admit(second.clone()).await.unwrap();
+    assert_eq!(
+        store.job_suffix_matches("005d".into()).await.unwrap().len(),
+        2
+    );
+    drop(store);
+    let store = JobStore::open(root).await.unwrap();
+    assert_eq!(
+        store.job_suffix_matches("005d".into()).await.unwrap().len(),
+        2
+    );
+    assert_eq!(
+        store
+            .job_suffix_matches(first.job_id.as_str().to_owned())
+            .await
+            .unwrap(),
+        vec![first.job_id]
+    );
+}
