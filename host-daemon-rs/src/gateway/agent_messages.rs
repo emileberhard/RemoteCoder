@@ -39,6 +39,10 @@ impl Gateway {
     }
 
     async fn admit_job_message(&self, request: MessageParams) -> RpcResult {
+        let operation = self.jobs.operations.read().await;
+        if self.is_draining() {
+            return Err(RpcError::draining());
+        }
         if request
             .delivery_id
             .split_once(':')
@@ -56,10 +60,6 @@ impl Gateway {
             &serde_json::to_vec(&(&sender, &request.target, &request.text))
                 .map_err(anyhow::Error::from)?,
         );
-        let operation = self.jobs.operations.read().await;
-        if self.is_draining() {
-            return Err(RpcError::draining());
-        }
         let store = self.jobs.store().await?;
         let mut record = if let Some(record) = store
             .existing_message(request.delivery_id.clone(), request_fingerprint.clone())
