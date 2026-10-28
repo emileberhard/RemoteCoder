@@ -155,6 +155,7 @@ async function nativeCommand(host, thread, provider, command) {
     const text = provider === "codex" ? `RCJOB_SPAWN:${Buffer.from(command).toString("base64url")}`
         : `Run exactly this shell command once, then reply with ADMITTED. Do not call any other tools:\n${command}`;
     await host.rpc("turn/start", { threadId: thread,
+        ...(provider === "claude" ? { cwd: host.info.cwd, model: "sonnet" } : {}),
         input: [{ type: "text", text, text_elements: [] }] });
 }
 
