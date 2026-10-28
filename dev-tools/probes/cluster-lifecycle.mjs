@@ -181,14 +181,14 @@ async function remoteSpawn(parentHost, childHost, provider, name) {
     assert.equal(job.recipient.hostId, parentHost.info.hostId);
     await waitFor(async () => {
         const page = await parentHost.rpc("thread/items/list", {threadId:parent,limit:100,sortDirection:"asc"});
-        return JSON.stringify(page.data).includes(interimId);
+        return page.data.some(entry => entry.item?.type === "userMessage" && JSON.stringify(entry.item).includes(interimId));
     });
     return { id, parent, name, provider, interimId };
 }
 
 async function observedCompletion(host, thread, id) {
     const page = await host.rpc("thread/items/list", { threadId: thread, limit: 100, sortDirection: "asc" });
-    return page.data.filter(entry => JSON.stringify(entry).includes(`${id}:completion`));
+    return page.data.filter(entry => entry.item?.type === "userMessage" && JSON.stringify(entry.item).includes(`${id}:completion`));
 }
 
 async function journey(a, b, suffix) {
