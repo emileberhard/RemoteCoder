@@ -17,12 +17,21 @@ function syntheticCodexToken() {
     };
 }
 
-function startStubRouter() {
+export function startStubRouter(inference) {
     const server = Bun.serve({
-        hostname: "127.0.0.1", port: 0,
-        fetch: (request) => ["/codex/token", "/codex/renew"].includes(new URL(request.url).pathname)
-            ? Response.json(syntheticCodexToken())
-            : Response.json({ error: { code: "not_found" } }, { status: 404 }),
+        hostname: "127.0.0.1", port: 0, idleTimeout: 0,
+        fetch: async (request) => {
+            const url = new URL(request.url);
+            if (["/codex/token", "/codex/renew"].includes(url.pathname)) return Response.json(syntheticCodexToken());
+            if (!inference) return Response.json({ error: { code: "not_found" } }, { status: 404 });
+            const headers = new Headers(request.headers);
+            headers.delete("host");
+            headers.set("authorization", `Bearer ${inference.key}`);
+            if (headers.has("x-api-key")) headers.set("x-api-key", inference.key);
+            return fetch(inference.url + url.pathname + url.search, {
+                method: request.method, headers, body: request.body, duplex: "half",
+            });
+        },
     });
     server.unref();
     return server;

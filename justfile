@@ -522,9 +522,9 @@ gateway-e2e-upload-live:
 gateway-e2e-files-live *args:
     ./dev-tools/rc-gateway e2e-files-live {{ args }}
 
-# Run the conversation-agents acceptance against a built gateway and its matching configs checkout (MacBook only).
-gateway-e2e-conversation-agents-isolated candidate configs:
-    bun dev-tools/probes/conversation-agents.mjs "{{ candidate }}" "{{ configs }}"
+# Delegated jobs against a built gateway and its matched runtime package; each staged agent-jobs/v1 is read while held.
+gateway-e2e-delegated-jobs-isolated candidate package *staged:
+    bun dev-tools/probes/delegated-jobs.mjs "{{ candidate }}" "{{ package }}" {{ staged }}
 
 gateway-e2e-query-admission-isolated $candidate:
     bun dev-tools/probes/query-admission.mjs "$candidate"
