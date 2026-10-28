@@ -171,24 +171,38 @@ impl AgentService<'_> {
             selected.len() <= 512,
             "Runtime agent descendants exceed the view budget"
         );
-        let mut views = stream::iter(selected.into_values())
-            .map(|job_id| async move {
-                let view = self.gateway.jobs.read(&job_id).await?;
-                if let Some(latest) = view
-                    .agent
-                    .as_ref()
-                    .and_then(|agent| agent.latest_job_id.as_ref())
-                    && latest != &view.job.job_id
-                {
-                    return self.gateway.jobs.read(latest).await;
+        let results = stream::iter(selected)
+            .map(|(agent_id, job_id)| async move {
+                let result = async {
+                    let view = self.gateway.jobs.read(&job_id).await?;
+                    let selected = view.agent.as_ref().and_then(|agent| {
+                        agent
+                            .latest_job_id
+                            .as_ref()
+                            .or(agent.origin_job_id.as_ref())
+                    });
+                    if let Some(selected) = selected
+                        && selected != &view.job.job_id
+                    {
+                        return self.gateway.jobs.read(selected).await;
+                    }
+                    Ok(view)
                 }
-                Ok(view)
+                .await;
+                (agent_id, result)
             })
             .buffer_unordered(32)
-            .collect::<Vec<Result<JobView>>>()
-            .await
-            .into_iter()
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<Vec<(String, Result<JobView>)>>()
+            .await;
+        let mut views = Vec::new();
+        for (agent_id, result) in results {
+            match result {
+                Ok(view) => views.push(view),
+                Err(error) => warnings.push(format!(
+                    "Runtime agent {agent_id} is unavailable: {error:#}"
+                )),
+            }
+        }
         views.sort_by(|left, right| left.job.agent_id.cmp(&right.job.agent_id));
         let mut parents = HashMap::new();
         parents.insert(self.gateway.agent_conversation(root)?, None);
@@ -254,7 +268,16 @@ impl AgentService<'_> {
                 ),
                 SpecEvidence::Unknown { .. } => (None, None, false),
             };
-            let state = state(&view.job.execution);
+            let execution_known = view
+                .agent
+                .as_ref()
+                .is_none_or(|agent| agent.latest_job_id.is_some());
+            let state = if execution_known {
+                state(&view.job.execution)
+            } else {
+                warnings.push(format!("Runtime agent {} has conflicting continuation jobs; current execution is unknown", view.job.agent_id));
+                State::Unknown
+            };
             let continuation_known = view.agent.as_ref().is_some_and(|agent| {
                 agent.latest_job_id.as_ref() == Some(&view.job.job_id) && agent.tool_scope.is_some()
             });
@@ -273,19 +296,19 @@ impl AgentService<'_> {
                 title: title.unwrap_or_else(|| "Agent".into()),
                 model,
                 capabilities: Capabilities {
-                    inspect: true,
+                    inspect: execution_known,
                     open_conversation: thread.is_some(),
-                    message: thread.is_some() && state.is_running(),
+                    message: execution_known && thread.is_some() && state.is_running(),
                     continue_work: thread.is_some()
                         && settings_known
                         && continuation_known
                         && !state.may_be_running(),
-                    stop: state.may_be_running(),
+                    stop: execution_known && state.may_be_running(),
                     ..Capabilities::default()
                 },
                 state,
-                execution_id: Some(view.job.job_id.as_str().to_owned()),
-                last_active_at: Some(view.job.updated_at_ms / 1000),
+                execution_id: execution_known.then(|| view.job.job_id.as_str().to_owned()),
+                last_active_at: execution_known.then_some(view.job.updated_at_ms / 1000),
             });
         }
         Ok((projected, warnings))

@@ -51,7 +51,10 @@ activity in Unix seconds, or null when unknown. Codex reports the thread's
 `updatedAt`; Claude the newer of its latest event and its `subagents/`
 transcript write; external jobs use their authoritative record's mutation time.
 List and read do not resume execution. An unavailable provider or job store
-produces explicit incomplete coverage.
+produces explicit incomplete coverage. A conflicting historical continuation stays
+visible as an unknown agent without execution controls; other verified agents
+remain available. Retained continuation checkpoints and a single active runtime
+job resolve current execution without ordering jobs by timestamps.
 
 The list is capped at 512 agents. Native subtree expansion retains its existing
 bounded reads. External descendant selection includes at most 32 native roots,

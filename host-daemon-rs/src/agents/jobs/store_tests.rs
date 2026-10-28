@@ -470,3 +470,72 @@ async fn explicit_continuation_preserves_imported_unknown_outcome_and_origin() {
     assert_eq!(continued.tool_scope, agent.tool_scope);
     assert_eq!(continued.latest_job_id, Some(continuation.job_id));
 }
+
+#[tokio::test]
+async fn imported_forks_use_retained_checkpoint_or_single_active_runtime() {
+    for (checkpoint, active, expected) in [
+        (Some(2), false, Some(2)),
+        (None, false, None),
+        (None, true, Some(4)),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        drop(JobStore::open(directory.path().into()).await.unwrap());
+        let mut original = job(1);
+        original.source = JobSource::Imported;
+        original.execution = ExecutionState::Unknown {
+            conversation: Some(conversation()),
+            binding: None,
+            reason: "Historical outcome is unconfirmed".into(),
+        };
+        for sequence in 1..=if active { 4 } else { 3 } {
+            let mut record = original.clone();
+            record.job_id = job(sequence).job_id;
+            record.created_at_ms = Some(1000 - i64::from(sequence));
+            if sequence != 1 {
+                record.previous_job_id = Some(original.job_id.clone());
+                record.admission_origin = None;
+            }
+            if sequence == 4 {
+                record.source = JobSource::Runtime;
+                record.execution = ExecutionState::Running {
+                    binding: ExecutionBinding {
+                        conversation: conversation(),
+                        input_id: "active-input".into(),
+                        turn_id: "active-turn".into(),
+                    },
+                };
+            }
+            std::fs::write(
+                directory
+                    .path()
+                    .join("jobs")
+                    .join(format!("{}.json", record.job_id.as_str())),
+                serde_json::to_vec(&record).unwrap(),
+            )
+            .unwrap();
+        }
+        let agent = AgentRecord {
+            agent_id: original.agent_id.clone(),
+            conversation: ConversationBinding::Known {
+                conversation: conversation(),
+            },
+            origin: Origin::TopLevel,
+            tool_scope: Some(ToolScope::Full),
+            origin_job_id: Some(original.job_id),
+            latest_job_id: checkpoint.map(|sequence| job(sequence).job_id),
+        };
+        std::fs::write(
+            directory.path().join("agents").join(format!(
+                "{}.json",
+                super::store::fingerprint(agent.agent_id.as_bytes())
+            )),
+            serde_json::to_vec(&agent).unwrap(),
+        )
+        .unwrap();
+        let store = JobStore::open(directory.path().into()).await.unwrap();
+        assert_eq!(
+            store.agent(agent.agent_id).await.unwrap().latest_job_id,
+            expected.map(|sequence| job(sequence).job_id),
+        );
+    }
+}

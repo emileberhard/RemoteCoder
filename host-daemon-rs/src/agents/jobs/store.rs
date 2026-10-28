@@ -583,10 +583,38 @@ impl Inner {
             .get(id)
             .context("delegated agent does not exist")?
             .clone();
-        let Some(mut latest) = agent.origin_job_id.as_ref() else {
+        let mut active = self.jobs.values().filter(|job| {
+            job.agent_id == id
+                && job.source == JobSource::Runtime
+                && matches!(
+                    job.execution,
+                    ExecutionState::Admitted
+                        | ExecutionState::Bound { .. }
+                        | ExecutionState::Dispatching { .. }
+                        | ExecutionState::Running { .. }
+                        | ExecutionState::Recovering { .. }
+                )
+        });
+        if let Some(job) = active.next() {
+            ensure!(
+                active.next().is_none(),
+                "conversation has conflicting active runtime jobs"
+            );
+            agent.latest_job_id = Some(job.job_id.clone());
+            return Ok(agent);
+        }
+        let Some(mut latest) = agent
+            .latest_job_id
+            .as_ref()
+            .or(agent.origin_job_id.as_ref())
+        else {
             return Ok(agent);
         };
         for _ in 0..=self.jobs.len() {
+            ensure!(
+                self.job(latest)?.agent_id == id,
+                "continuation belongs to another agent"
+            );
             let mut successors = self
                 .jobs
                 .values()
@@ -595,10 +623,10 @@ impl Inner {
                 agent.latest_job_id = Some(latest.clone());
                 return Ok(agent);
             };
-            ensure!(
-                successors.next().is_none(),
-                "conversation has conflicting continuation jobs"
-            );
+            if successors.next().is_some() {
+                agent.latest_job_id = None;
+                return Ok(agent);
+            }
             latest = &next.job_id;
         }
         bail!("conversation continuation chain contains a cycle")
