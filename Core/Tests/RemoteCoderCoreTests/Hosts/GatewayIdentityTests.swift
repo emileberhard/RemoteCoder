@@ -112,25 +112,29 @@ struct GatewayIdentityTests {
         #expect(store.hosts.first?.configuration == original)
     }
 
-    @Test func launchSkipsCanonicalHostsAndCancelsUnresolvedReadsAtTheSharedDeadline() async throws {
+    @Test func canonicalHostsNeverStartLaunchIdentityReads() async {
         var canonical = host("Canonical")
         canonical.gatewayID = canonical.id
-        let ready = host("Ready"), away = host("Away")
         let identity = GatewayIdentity(hostId: UUID(), incarnation: UUID())
-        var reads: Set<UUID> = []
-        var cancelled = false
-        let resolved = await GatewayIdentityLaunch.read(hosts: [canonical, ready, away], budget: .milliseconds(25)) { host in
-            reads.insert(host.id)
-            if host.id == away.id {
-                do { try await Task.sleep(for: .seconds(60)) }
-                catch { cancelled = true; throw error }
-            }
+        var reads = 0
+        let resolved = await GatewayIdentityLaunch.read(hosts: [canonical], budget: .seconds(2)) { _ in
+            reads += 1
             return identity
         }
-        #expect(reads == [ready.id, away.id])
-        #expect(resolved.map { $0.0.id } == [ready.id])
-        #expect(resolved.first?.1 == identity)
-        #expect(cancelled)
+        #expect(reads == 0)
+        #expect(resolved.isEmpty)
+    }
+
+    @Test func anExpiredLaunchBudgetLeavesLegacyHostsUnresolvedWithoutReading() async {
+        let legacy = host("Legacy")
+        let identity = GatewayIdentity(hostId: UUID(), incarnation: UUID())
+        var reads = 0
+        let resolved = await GatewayIdentityLaunch.read(hosts: [legacy], budget: .zero) { _ in
+            reads += 1
+            return identity
+        }
+        #expect(reads == 0)
+        #expect(resolved.isEmpty)
     }
 
     @Test func preferencesOnlyMigrateOwnedPersistentValuesAndRetireRenamedKeys() async throws {

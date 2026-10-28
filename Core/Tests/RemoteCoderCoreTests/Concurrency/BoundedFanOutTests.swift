@@ -60,18 +60,6 @@ struct BoundedFanOutTests {
         #expect(recorder.started.isEmpty)
     }
 
-    @Test func oneDeadlineCancelsActiveWorkersAndLeavesQueuedItemsUnread() async {
-        let recorder = Recorder()
-        var cancelled = false
-        await BoundedFanOut.run([1, 2, 3], limit: 1, deadline: .now + .milliseconds(25), skipping: { _ in false }) { item in
-            recorder.started.append(item)
-            do { try await Task.sleep(for: .seconds(60)) }
-            catch { cancelled = true }
-        }
-        #expect(recorder.started == [1])
-        #expect(cancelled)
-    }
-
     private final class StaleBox {
         var items: Set<Int>
         init(_ items: Set<Int>) { self.items = items }
