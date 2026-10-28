@@ -65,6 +65,38 @@ struct SessionMetadataStatus: Sendable, Equatable {
 }
 
 protocol ConversationMetadataRemote: Sendable {
-    func fetchRemoteMetadata() async throws -> [String: ConversationMetadata]
+    func fetchRemoteMetadata(knownRevision: String?) async throws -> ConversationMetadataSnapshot
     func updateRemoteMetadata(_ mutation: ConversationMetadataMutation) async throws -> ConversationMetadata
+}
+
+enum ConversationMetadataSnapshot: Decodable, Sendable {
+    case full(entries: [String: ConversationMetadata], revision: String?)
+    case unchanged(revision: String)
+
+    private enum CodingKeys: String, CodingKey { case entries, revision, unchanged }
+
+    init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        let revision = try values.decodeIfPresent(String.self, forKey: .revision)
+        guard revision?.isEmpty != true else { throw GatewayClient.ClientError.invalidMessage }
+        if try values.decodeIfPresent(Bool.self, forKey: .unchanged) == true {
+            guard let revision, !values.contains(.entries) else { throw GatewayClient.ClientError.invalidMessage }
+            self = .unchanged(revision: revision)
+        } else {
+            let records = try values.decode([ConversationMetadataRecord].self, forKey: .entries)
+            var entries: [String: ConversationMetadata] = [:]
+            for record in records {
+                guard (record.serverRevision ?? 0) > 0, entries[record.sessionID] == nil else {
+                    throw GatewayClient.ClientError.invalidMessage
+                }
+                entries[record.sessionID] = ConversationMetadata(record)
+            }
+            self = .full(entries: entries, revision: revision)
+        }
+    }
+}
+
+struct ConversationMetadataRefreshContext: Equatable, Sendable {
+    let connectionID: UUID
+    let foregroundGeneration: Int
 }

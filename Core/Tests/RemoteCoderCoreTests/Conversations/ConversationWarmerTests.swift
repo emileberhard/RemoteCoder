@@ -49,24 +49,50 @@ struct ConversationWarmerTests {
         #expect(fixture.host.prepared.map(\.count) == [1, 1, 1, 1])
     }
 
-    @Test func unsupportedPreparationWarmsHistoryWithoutAContextAndContinuesThePass() async throws {
+    @Test(arguments: [false, true])
+    func unavailablePreparationWarmsHistoryAndResumesVisualsFromStoredTails(hot: Bool) async throws {
         let fixture = WarmingFixture()
         defer { fixture.cleanUp() }
         let (first, second) = (ConversationHeader.historyFixture(id: "first"), ConversationHeader.historyFixture(id: "second"))
         let warmer = fixture.warmer()
+        let hotIDs: Set<String> = hot ? [first.id, second.id] : []
 
-        fixture.host.outcomes = [.unsupported, .unsupported]
-        await warmer.warm([first, second].filter(warmer.needsWarm), hot: [], agentThreadIDs: [])
-        #expect(fixture.host.prepared.map { $0.map(\.digest) } == [[Self.digest], [Self.digest]])
+        fixture.host.htmlVisualPreparationContext = nil
+        await warmer.warm([first, second].filter(warmer.needsWarm), hot: hotIDs, agentThreadIDs: [])
+        #expect(fixture.host.prepared.isEmpty)
         #expect([first, second].filter(warmer.needsWarm).isEmpty)
 
-        await warmer.warm([first, second].filter(warmer.needsWarm), hot: [], agentThreadIDs: [])
+        await warmer.warm([first, second].filter(warmer.needsWarm), hot: hotIDs, agentThreadIDs: [])
         #expect(await fixture.gateway.itemReads == 2)
-        #expect(fixture.host.prepared.count == 2)
+        #expect(fixture.host.prepared.isEmpty)
 
         fixture.host.htmlVisualPreparationContext = HTMLVisualPreparationContext(width: 320, theme: HTMLVisualTheme(fontSize: 17,
             text: "#000", secondaryText: "#333", background: "#fff", surface: "#eee", accent: "#00f", isDark: false))
         #expect([first, second].filter(warmer.needsWarm).map(\.id) == ["first", "second"])
+        await warmer.warm([first, second].filter(warmer.needsWarm), hot: hotIDs, agentThreadIDs: [])
+        #expect([first, second].filter(warmer.needsWarm).isEmpty)
+        #expect(await fixture.gateway.itemReads == 2)
+        #expect(fixture.host.prepared.map { $0.map(\.digest) } == [[Self.digest], [Self.digest]])
+    }
+
+    @Test func cancellationAfterPreparationCannotClaimCoverageOrContinueThePass() async throws {
+        let fixture = WarmingFixture()
+        defer { fixture.cleanUp() }
+        let first = ConversationHeader.historyFixture(id: "first")
+        let second = ConversationHeader.historyFixture(id: "second")
+        let warmer = fixture.warmer()
+        var pass: Task<Void, Never>?
+        fixture.host.onPrepare = { pass?.cancel() }
+        pass = Task { await warmer.warm([first, second], hot: [], agentThreadIDs: []) }
+        await pass?.value
+        #expect(warmer.needsWarm(first))
+        #expect(warmer.needsWarm(second))
+        #expect(await fixture.gateway.itemReads == 1)
+
+        fixture.host.onPrepare = nil
+        await warmer.warm([first, second].filter(warmer.needsWarm), hot: [], agentThreadIDs: [])
+        #expect(!warmer.needsWarm(first) && !warmer.needsWarm(second))
+        #expect(await fixture.gateway.itemReads == 2)
     }
 
     @Test func aNewerHeaderRevisionIsReadAgainEvenWhenTheStoredTailLooksFresh() async throws {
@@ -122,7 +148,7 @@ private struct WarmingFixture {
 
     func warmer() -> ConversationWarmer {
         ConversationWarmer(host: host, conversations: sessions, history: GatewayHistoryService(gateway: gateway,
-            cache: HistoryPageCache(directory: temporary.storage.root.appending(path: "pages"))))
+            cache: HistoryPageCache(directory: temporary.storage.root.appending(path: "pages"), freshnessInterval: 0)))
     }
 
     func cleanUp() { temporary.cleanUp() }
@@ -132,13 +158,17 @@ private struct WarmingFixture {
 private final class WarmingHost: ConversationWarmingHost {
     var mayWarm: Bool { true }
     var presentedConversationIDs: Set<UUID> { [] }
-    var htmlVisualPreparationContext: HTMLVisualPreparationContext?
+    var htmlVisualPreparationContext: HTMLVisualPreparationContext? = HTMLVisualPreparationContext(width: 320,
+        theme: HTMLVisualTheme(fontSize: 17, text: "#000", secondaryText: "#333", background: "#fff",
+            surface: "#eee", accent: "#00f", isDark: false))
     var outcomes: [HTMLVisualPreparationOutcome] = []
+    var onPrepare: (@MainActor () -> Void)?
     private(set) var prepared: [[HTMLVisualReference]] = []
     func refreshAgents(threadID: String) async {}
     func didWarm(_ snapshot: ConversationSnapshot, session: ConversationSession) {}
     func prepareHTMLVisuals(_ references: [HTMLVisualReference]) async -> HTMLVisualPreparationOutcome {
         prepared.append(references)
+        onPrepare?()
         return outcomes.isEmpty ? .settled(stored: references.count, unpreparable: 0) : outcomes.removeFirst()
     }
 }

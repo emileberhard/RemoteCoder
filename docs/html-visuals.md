@@ -372,6 +372,15 @@ expanded view pins its instance. Pins are also reported through the existing
 `TranscriptRowPresentation` owner, so native Mac row virtualization retains
 an interacting visual without adding another visibility tracker.
 
+On iPhone, the outer HTML occurrence also reports scroll visibility. Automatic
+first admission waits until one percent is visible; explicit selection and pins
+bypass that gate. Once loading or live, the page keeps its existing row-scoped
+lifetime even when the occurrence itself leaves view. This avoids starting
+unseen blocks inside a visible message without introducing earlier JavaScript
+state resets. Near-viewport preparation and raster demand remain independent of
+this admission gate. iPad and Mac keep row-scoped admission.
+Automatic admission on iPhone requires an enclosing `ScrollView`.
+
 The workspace-owned `HTMLVisualRenderer` admits three live pages and at most sixteen
 waiting requests. Routine admission is FIFO. Explicit Interact or Load
 selection moves the selected waiting occurrence to the front and cancels the
@@ -399,6 +408,10 @@ Inline document viewport overflow is clipped in the isolated style bridge;
 SwiftUI's `scrollDisabled` does not disable the native WebKit scroll view.
 Inline WebViews use size-based horizontal and vertical bounce behavior.
 The expanded page's document scrolls.
+Admission and release records identify the page request, document digest prefix,
+surface, reason and visibility/pin state. Release adds lifetime and aggregate
+layout, settled-event and snapshot-capture counts and duration. These are owned
+by one admitted lifetime; they add no sampling timer or per-frame log.
 Inline content is clipped to at most 6,000 points multiplied by the interface
 scale, so a long document reads inline like Markdown; taller visuals expose
 Expand. `HTMLVisualInlineHeight` owns that limit for the inline view, the Mac
@@ -661,21 +674,31 @@ timeout is a recovery path: rows then mount with the cached height and the
 live page or placeholder, as before. Each wait reports whether it suspended,
 and its caller re-reads its snapshot or row state afterwards.
 
-Conversations that are not open get their visuals prepared before the first
-tap. `ConversationWarmer` scans each warmed opening tail off the main actor and
-awaits `prepareInBackground` on the key window's preparation, in chunks of at
-most 16 visuals. They get geometry and a stored snapshot only, never a decode.
+`ConversationWarmer` processes eligible conversations in drawer rank order,
+filtering completed coverage. The first two retain their existing hot-session policy. For a
+selected conversation, it first stores the opening tail. If no claimed, active,
+fully laid-out preparation surface permits background work, that history-only
+coverage completes without scanning visual references or retrying an impossible
+render. A temporary loss of capability does not erase stronger visual coverage
+for the same observation.
+
+Each screen reports a new usable background preparation context to the target.
+The target retains a request received during an active pass and drains it before
+ending. It reuses the covered stored tail, including hot conversations whose raw
+page-cache freshness has expired. With a usable surface, it scans visual
+references off the main actor and awaits `prepareInBackground` in chunks of at
+most 16. They get geometry and a stored snapshot only, never a decode.
 The outcome is `settled` only when every eligible visual is stored or recorded
 unpreparable; a visual whose render timed out leaves it `incomplete`, and the
 next warm pass retries it from the stored tail. Deactivation, energy
 conservation, a layout context change, `cancelDemand` and task cancellation
-return `interrupted`, which never counts as warmed. On the Mac, `unsupported`
-counts the conversation warmed for its history only, with no preparation
-context, and the pass continues. `HistoryWarmLedger`
+return `interrupted`, which never counts as warmed. Mac background capability is
+absent, so the warmer completes history only; the preparation API retains its
+explicit `unsupported` result. `HistoryWarmLedger`
 records the width and theme a conversation was warmed for, so a new context
 prepares it again without another history read. An agent message with a visual
 in a conversation that is not shown moves the thread's header revision, and
-the next warm pass reads and prepares it. Opening such a conversation reserves
+the next eligible warm pass reads and prepares it. Opening such a conversation reserves
 the final height at once and decodes the stored snapshot, so the block fades
 in without changing size. A visual that was never prepared still opens with a
 default-height placeholder and resizes once measured.

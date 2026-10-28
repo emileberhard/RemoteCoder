@@ -1733,12 +1733,16 @@ mod tests {
         .unwrap();
         assert!(journal["account"].is_null());
         assert_eq!(journal["items"][0]["recoveryId"], "pending");
-        let read = crate::conversations::ConversationMetadataStore::new(Some(
-            home.path().join(".remote-coder/session-metadata-v2.json"),
-        ))
-        .read()
-        .await
-        .unwrap();
+        let crate::conversations::Snapshot::Full { entries: read, .. } =
+            crate::conversations::ConversationMetadataStore::new(Some(
+                home.path().join(".remote-coder/session-metadata-v2.json"),
+            ))
+            .read(None)
+            .await
+            .unwrap()
+        else {
+            panic!("an unconditional read must return the snapshot");
+        };
         assert_eq!(read.len(), 2);
         let journal = crate::providers::claude::restart::Store::beside(
             &home.path().join(".remote-coder/active-codex-turns.json"),

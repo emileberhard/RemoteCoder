@@ -38,6 +38,20 @@ final class PerfHarness {
         URL.cachesDirectory.appending(path: "perf", directoryHint: .isDirectory)
     }
 
+    static func labHostStore(defaults: UserDefaults) -> HostStore {
+        do {
+            let data = try Data(contentsOf: directory.appending(path: "lab-config.json"))
+            let host = try JSONDecoder().decode(GatewayHostConfiguration.self, from: data)
+            guard host.isValid else { preconditionFailure("Invalid performance lab host") }
+            let store = HostStore(hosts: [host], activeHostID: host.id, defaults: defaults,
+                credentials: PerformanceReplayCredentials())
+            if let error = store.errorMessage { preconditionFailure(error) }
+            return store
+        } catch {
+            preconditionFailure("Performance lab configuration failed: \(error)")
+        }
+    }
+
     func start(workspace: ChatWorkspaceModel) {
         guard self.workspace == nil else { return }
         self.workspace = workspace
@@ -83,6 +97,8 @@ final class PerfHarness {
             )
         case "status":
             writeResult(["cmd": "status", "id": id, "status": status()])
+        case "sidebar":
+            setSidebarOpen(command["open"] as? Bool, commandID: id)
         case "scroll":
             guard let model = workspace?.selectedScreen,
                   let index = command["message"] as? Int, model.messages.indices.contains(index) else {
@@ -210,6 +226,37 @@ final class PerfHarness {
                 return
             }
             writeResult(["cmd": "open", "id": commandID])
+        }
+    }
+
+    private func setSidebarOpen(_ requested: Bool?, commandID: String) {
+        guard let requested, let window = workspace?.keyWindow else {
+            writeResult(["cmd": "sidebar", "id": commandID, "error": "provide open with an available window"])
+            return
+        }
+        Task {
+            let deadline = ContinuousClock.now + .seconds(2)
+            while window.performanceSidebar == nil {
+                guard ContinuousClock.now < deadline,
+                      (try? await Task.sleep(for: .milliseconds(16))) != nil else {
+                    writeResult(["cmd": "sidebar", "id": commandID, "error": "window commands unavailable"])
+                    return
+                }
+            }
+            guard let commands = window.performanceSidebar else {
+                writeResult(["cmd": "sidebar", "id": commandID, "error": "window commands unavailable"])
+                return
+            }
+            let previous = commands.isOpen
+            if previous != requested { commands.toggle() }
+            while window.performanceSidebar?.isOpen != requested || window.isHistoryDrawerOpen != requested {
+                guard ContinuousClock.now < deadline,
+                      (try? await Task.sleep(for: .milliseconds(16))) != nil else {
+                    writeResult(["cmd": "sidebar", "id": commandID, "error": "sidebar presentation did not change"])
+                    return
+                }
+            }
+            writeResult(["cmd": "sidebar", "id": commandID, "before": previous, "after": requested])
         }
     }
 

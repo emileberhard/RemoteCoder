@@ -66,7 +66,9 @@ final class HTMLVisualPreparation {
 
     let surface = HTMLVisualPreparationSurface()
     private(set) var layoutContext = HTMLVisualLayoutContext()
+    var onBackgroundPreparationReady: (@MainActor () -> Void)?
     private let renderer: HTMLVisualRenderer
+    private let pageDeadline: @Sendable () async throws -> Void
     private var active = false
     private var conservesEnergy = false
     private var waiters: [Waiter] = []
@@ -82,7 +84,6 @@ final class HTMLVisualPreparation {
     private static let maximumRequests = 16
     private static let maximumUnpreparable = 64
     private static let pinnedPixels = HTMLVisualRasterBudget.maximumPixels - HTMLVisualRasterBudget.maximumImagePixels
-    private static let pageTimeout = Duration.seconds(4)
     #if os(iOS)
     private static let preparesInBackground = true
     #else
@@ -90,8 +91,10 @@ final class HTMLVisualPreparation {
     #endif
     private static let logger = AppLogger(category: "HTMLVisual")
 
-    init(renderer: HTMLVisualRenderer) {
+    init(renderer: HTMLVisualRenderer,
+         pageDeadline: @escaping @Sendable () async throws -> Void = { try await Task.sleep(for: .seconds(4)) }) {
         self.renderer = renderer
+        self.pageDeadline = pageDeadline
     }
 
     isolated deinit {
@@ -100,6 +103,7 @@ final class HTMLVisualPreparation {
     }
 
     func updateLayoutContext(_ change: (inout HTMLVisualLayoutContext) -> Void) {
+        let previous = backgroundPreparationContext
         var context = layoutContext
         change(&context)
         guard layoutContext != context else { return }
@@ -110,10 +114,12 @@ final class HTMLVisualPreparation {
         #endif
         planNear()
         stateChanged()
+        notifyBackgroundPreparationReady(previous: previous)
     }
 
     func setActive(_ active: Bool, conservesEnergy: Bool) {
         guard self.active != active || self.conservesEnergy != conservesEnergy else { return }
+        let previous = backgroundPreparationContext
         self.active = active
         self.conservesEnergy = conservesEnergy
         if !active { interacting = false }
@@ -121,6 +127,16 @@ final class HTMLVisualPreparation {
         Self.logger.notice("html visual preparation active=\(active) conserving=\(conservesEnergy) uptime=\(ProcessInfo.processInfo.systemUptime)")
         #endif
         stateChanged()
+        notifyBackgroundPreparationReady(previous: previous)
+    }
+
+    var backgroundPreparationContext: HTMLVisualPreparationContext? {
+        guard Self.preparesInBackground, active, surface.host != nil, !conservesEnergy else { return nil }
+        return layoutContext.preparationContext
+    }
+
+    private func notifyBackgroundPreparationReady(previous: HTMLVisualPreparationContext?) {
+        if let context = backgroundPreparationContext, context != previous { onBackgroundPreparationReady?() }
     }
 
     func cancelDemand() {
@@ -389,7 +405,7 @@ final class HTMLVisualPreparation {
         }
         await withTaskGroup(of: Void.self) { group in
             group.addTask { for await _ in stored { return } }
-            group.addTask { try? await Task.sleep(for: Self.pageTimeout) }
+            group.addTask { [pageDeadline] in try? await pageDeadline() }
             await group.next()
             group.cancelAll()
         }

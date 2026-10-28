@@ -6,6 +6,53 @@ import Testing
 struct ChatHistoryReadTests {
     private let threadID = "claude_44444444-0000-0000-0000-000000000004"
 
+    @Test(.timeLimit(.minutes(1))) func preparationReadinessDuringAnEndingPassRetainsNewConversationDemand() async throws {
+        let gateway = HistoryGatewayFixture(threadID: "first")
+        await gateway.setHistory(.init(entries: [.init(turnId: "turn", item: .agentMessage(id: "answer", text: "Prepared tail"),
+            startedAtOrdinal: 1, isComplete: true)], turns: []))
+        await gateway.holdNextRead(.page)
+        let fixture = await WorkspaceFixture()
+        defer { await gateway.releaseHeldRead(); await fixture.cleanUp() }
+        let screen = try #require(fixture.workspace.selectedScreen)
+        let target = screen.target
+        let history = GatewayHistoryService(gateway: gateway, cache: HistoryPageCache(
+            directory: fixture.temporaryStorage.storage.root.appending(path: "held-history-pages")))
+        target.conversationWarmer = ConversationWarmer(host: target, conversations: target.conversations, history: history)
+        let preparation = screen.htmlVisualPreparation
+        let surfaceID = UUID()
+        try #require(preparation.surface.claim(surfaceID))
+        defer { preparation.setActive(false, conservesEnergy: false); preparation.surface.release(surfaceID) }
+        preparation.updateLayoutContext {
+            $0.width = 320
+            $0.theme = HTMLVisualTheme(fontSize: 17, text: "#000", secondaryText: "#333", background: "#fff",
+                surface: "#eee", accent: "#00f", isDark: false)
+            $0.displayScale = 2
+        }
+        let now = Int64(Date.now.timeIntervalSince1970)
+        let first = try fixture.thread("first", updatedAt: now)
+        _ = target.agents(threadID: first.id)
+        await target.conversationList.record(first)
+        let warm = try #require(target.warmConversationsIfIdle())
+        let readiness = Task { @MainActor in
+            defer { await gateway.releaseHeldRead() }
+            try #require(await gateway.waitForHeldRead(during: warm), "Warm pass ended before its held history read")
+            let second = try fixture.thread("second", updatedAt: now - 1)
+            _ = target.agents(threadID: second.id)
+            await target.conversationList.record(second)
+            #expect(target.conversationWarmer.needsWarm(first) && target.conversationWarmer.needsWarm(second))
+            preparation.setActive(true, conservesEnergy: false)
+            preparation.setActive(false, conservesEnergy: false)
+            preparation.setActive(true, conservesEnergy: false)
+            return second
+        }
+        defer { readiness.cancel() }
+        await warm.value
+        let second = try await readiness.value
+        #expect(!target.conversationWarmer.needsWarm(first) && !target.conversationWarmer.needsWarm(second))
+        let readThreadIDs = await gateway.requestedThreadIDs
+        #expect(Set(readThreadIDs) == [first.id, second.id])
+    }
+
     @Test(.timeLimit(.minutes(1))) func aLatePageFromAnInvalidatedOwnerCannotPopulateItsReplacement() async throws {
         let fixture = TargetModelFixture()
         defer { await fixture.cleanUp() }

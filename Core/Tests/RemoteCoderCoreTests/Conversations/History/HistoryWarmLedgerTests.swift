@@ -2,6 +2,22 @@ import Testing
 @testable import RemoteCoderCore
 
 struct HistoryWarmLedgerTests {
+    @Test func unavailablePreparationPreservesCompletedVisualCoverageForTheSameRevision() {
+        var ledger = HistoryWarmLedger()
+        let context = HTMLVisualPreparationContext(width: 320,
+            theme: HTMLVisualTheme(fontSize: 17, text: "#000", secondaryText: "#333", background: "#fff",
+                surface: "#eee", accent: "#00f", isDark: false))
+        let observation = ledger.observation(threadID: "t", revision: 1)
+        ledger.succeeded(threadID: "t", observation: observation, context: context)
+        #expect(!ledger.needsWarm(threadID: "t", revision: 1, context: nil))
+        ledger.succeeded(threadID: "t", observation: observation, context: nil)
+        #expect(!ledger.needsWarm(threadID: "t", revision: 1, context: context))
+
+        ledger.changed("t")
+        ledger.succeeded(threadID: "t", observation: ledger.observation(threadID: "t", revision: 1), context: nil)
+        #expect(ledger.needsWarm(threadID: "t", revision: 1, context: context))
+    }
+
     @Test func evictedHistoryCoverageCannotSatisfyALaterRead() {
         var ledger = HistoryWarmLedger()
         #expect(ledger.readCovers(threadID: "old", revision: 1) != true)

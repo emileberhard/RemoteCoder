@@ -41,7 +41,7 @@ actor HistoryGatewayFixture: CodexHistoryGateway, ConversationMarksRemote {
     private var shouldFail = false
     private var heldRead: HeldRead?
     private var readSuspension: CheckedContinuation<Void, Never>?
-    private var readArrival: CheckedContinuation<Void, Never>?
+    private var readArrival: (id: UUID, continuation: CheckedContinuation<Bool, Never>)?
     private var claudeListFails = false
     private(set) var marks = ConversationMarks(schemaVersion: 1, revision: 0, readBaseline: 1_000, threads: [:])
     private(set) var markUpdates: [[ConversationMarkChange]] = []
@@ -87,13 +87,28 @@ actor HistoryGatewayFixture: CodexHistoryGateway, ConversationMarksRemote {
     func failPages(_ value: Bool) { shouldFail = value }
     func holdNextRead(_ kind: HeldRead) { heldRead = kind }
     func waitForHeldRead() async {
-        if readSuspension == nil { await withCheckedContinuation { readArrival = $0 } }
+        if readSuspension == nil { _ = await withCheckedContinuation { readArrival = (UUID(), $0) } }
+    }
+    func waitForHeldRead(during task: Task<Void, Never>) async -> Bool {
+        if readSuspension != nil { return true }
+        let id = UUID()
+        let completion = Task {
+            await task.value
+            if readArrival?.id == id { finishReadArrival(held: false) }
+        }
+        defer { completion.cancel() }
+        return await withCheckedContinuation { readArrival = (id, $0) }
+    }
+    private func finishReadArrival(held: Bool) {
+        let arrival = readArrival
+        readArrival = nil
+        arrival?.continuation.resume(returning: held)
     }
     func releaseHeldRead() { readSuspension?.resume(); readSuspension = nil; heldRead = nil }
     private func suspendRead(_ kind: HeldRead) async {
         guard heldRead == kind else { return }
         heldRead = nil
-        await withCheckedContinuation { readSuspension = $0; readArrival?.resume(); readArrival = nil }
+        await withCheckedContinuation { readSuspension = $0; finishReadArrival(held: true) }
     }
     func rejectFirstItemPage(typed: Bool) { rejectFirstItems = typed }
     func failItemPagesWithCapacity() { itemPagesExceedCapacity = true }

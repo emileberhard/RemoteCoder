@@ -60,7 +60,7 @@ final class RemoteCoderAppModel {
             #if os(macOS)
             settings = PerfHarness.hostStore(defaults: defaults)
             #else
-            settings = HostStore(defaults: defaults)
+            settings = AppStorageScope.isPerformanceLab ? PerfHarness.labHostStore(defaults: defaults) : HostStore(defaults: defaults)
             #endif
         }
         #else

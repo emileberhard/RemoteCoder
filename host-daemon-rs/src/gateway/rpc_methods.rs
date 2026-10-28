@@ -105,11 +105,22 @@ impl Gateway {
     }
 
     async fn metadata_rpc(&self, method: &str, params: Value) -> RpcResult {
-        use crate::conversations::{Update, UpdateResult};
+        use crate::conversations::{Read, Snapshot, Update, UpdateResult};
         match method {
             "conversation/metadata/read" => {
-                let entries = self.metadata.read().await?;
-                Ok(json!({"entries": entries}))
+                let request: Read = if params.is_null() {
+                    Read::default()
+                } else {
+                    decode_params(params)?
+                };
+                Ok(match self.metadata.read(request.known_revision).await? {
+                    Snapshot::Full { entries, revision } => {
+                        json!({"entries": entries, "revision": revision})
+                    }
+                    Snapshot::Unchanged { revision } => {
+                        json!({"unchanged": true, "revision": revision})
+                    }
+                })
             }
             "conversation/metadata/update" => {
                 let request = serde_json::from_value::<Update>(params)

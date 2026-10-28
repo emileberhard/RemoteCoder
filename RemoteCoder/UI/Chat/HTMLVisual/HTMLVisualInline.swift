@@ -50,7 +50,10 @@ struct HTMLVisualInline: View {
     #endif
     @Environment(\.openURL) private var openURL
     @Environment(\.chatImageSource) private var files
-    @State private var instance = HTMLVisualInstance(surface: .inline)
+    @State var instance = HTMLVisualInstance(surface: .inline)
+    #if os(iOS)
+    @State private var occurrenceVisible = false
+    #endif
     @State private var inlineAnchor = HTMLVisualFrameAnchor()
     @State private var expandedAnchor = HTMLVisualFrameAnchor()
     @State private var expandedScope = UUID()
@@ -90,8 +93,24 @@ struct HTMLVisualInline: View {
     private static let activationSettle = Duration.milliseconds(150)
 
     private var active: Bool {
-        (rowVisibility?.isVisible == true || instance.pinned) && visible && scenePhase == .active && (!snapshotsOnly || instance.userSelected)
+        (rowVisibility?.isVisible == true || instance.pinned) && firstAdmissionAllowed
+            && visible && scenePhase == .active && (!snapshotsOnly || instance.userSelected)
             && (rowVisibility?.isScrolling != true || instance.pinned || instance.status == .live)
+    }
+    private var firstAdmissionAllowed: Bool {
+        #if os(iOS)
+        occurrenceVisible || instance.pinned || instance.userSelected || instance.status == .loading || instance.status == .live
+        #else
+        true
+        #endif
+    }
+    private var admissionDemand: HTMLVisualInstance.AdmissionDemand {
+        #if os(iOS)
+        let occurrence: Bool? = occurrenceVisible
+        #else
+        let occurrence: Bool? = nil
+        #endif
+        return .init(active: active, rowVisible: rowVisibility?.isVisible == true, occurrenceVisible: occurrence)
     }
     private var showsLivePage: Bool {
         rowVisibility?.isMoving != true || instance.pinned || Self.keepsLiveSurfaceDuringMotion
@@ -207,6 +226,10 @@ struct HTMLVisualInline: View {
                 .accessibilityLabel("Expand \(title)")
             }
         }
+        #if os(iOS)
+        .modifier(HTMLVisualOccurrenceVisibility(isVisible: $occurrenceVisible))
+        #endif
+        .onChange(of: admissionDemand, initial: true) { _, value in instance.admissionDemand = value }
         .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) {
             width = max(1, $0)
             let next = max(1, Int(width.rounded()))

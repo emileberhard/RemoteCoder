@@ -18,6 +18,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
     private static let warmingDwell = Duration.seconds(1)
     @ObservationIgnored lazy var conversationWarmer = ConversationWarmer(host: self, conversations: conversations, history: historyService)
     @ObservationIgnored var recentConversations = RecentConversationCache(capacity: 8)
+    @ObservationIgnored private var warmingRequested = false
     #if os(macOS) && RC_PERF_HARNESS
     @ObservationIgnored var switchFixtures: [String: SwitchFixture] = [:]
     #endif
@@ -71,7 +72,6 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
     @ObservationIgnored private(set) var pendingTerminationOperation: String?
     @ObservationIgnored private var retirementTask: Task<Void, Never>?
     @ObservationIgnored private let preparation = TargetPreparation()
-    @ObservationIgnored private var metadataConnectionID: UUID?
     @ObservationIgnored private var routeMoveLoop: Task<Void, Never>?
     @ObservationIgnored private var routeMoveRunning = false
     @ObservationIgnored private var routeMoveRequested = false
@@ -530,6 +530,8 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
         let metadataStarted = ContinuousClock.now
         await metadataService.bootstrap()
         guard acceptsWork else { return }
+        await refreshMetadataForCurrentConnection()
+        guard acceptsWork else { return }
         let metadataMs = metadataStarted.duration(to: .now) / .milliseconds(1)
         let historyStarted = ContinuousClock.now
         await conversationList.bootstrap()
@@ -616,7 +618,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
         // Discover active turns before the transcript refreshes below depend on them.
         await fetchActiveTurnsOnce()
         guard isLive() else { return }
-        await metadataService.syncInBackground()
+        await refreshMetadataForCurrentConnection()
         await refreshActiveConversationAfterDisconnectIfNeeded()
         guard isLive() else { return }
         await refreshTranscriptOnForegroundIfNeeded()
@@ -628,6 +630,13 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
         if isVisible { await directories.triggerForegroundRefresh() }
         guard !Task.isCancelled, lifecycle.isCurrent(generation) else { return }
         for screen in screens { screen.adoptRemoteHomeAsWorkingDirectoryIfUnset() }
+    }
+
+    private func refreshMetadataForCurrentConnection() async {
+        let generation = lifecycle.generation
+        guard let connection = await gateway.connectionIdentity,
+              acceptsConnectionReports, lifecycle.isCurrent(generation) else { return }
+        await metadataService.refreshInBackground(context: .init(connectionID: connection, foregroundGeneration: generation))
     }
 
     // MARK: - Screens
@@ -1054,16 +1063,25 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
     /// Prefetches the opening tails of every unsettled conversation in rank order
     /// at background priority and queues their HTML visuals; the top two also get
     /// a session, rendered Markdown and agent lists, so opening one paints from cache.
-    func warmConversationsIfIdle() {
-        guard !ownedTasks.isRunning(.warmConversations), shouldWarmConversations() else { return }
-        let unsettled = unsettledConversationsByRank()
-        let top = unsettled.prefix(2).map(\.id).filter(recentConversations.admitsWarmed)
-        let hot = top.filter { turns.turn(forThread: $0) == nil }
-        let candidates = unsettled.filter(conversationWarmer.needsWarm)
-        let agentCandidates = top.filter { recentConversations.agents(threadID: $0) == nil }
-        guard !candidates.isEmpty || !agentCandidates.isEmpty else { return }
-        ownedTasks.startBackground(.warmConversations) { [weak self] in
-            await self?.conversationWarmer.warm(Array(candidates), hot: Set(hot), agentThreadIDs: agentCandidates)
+    @discardableResult
+    func warmConversationsIfIdle() -> Task<Void, Never>? {
+        guard shouldWarmConversations() else { return nil }
+        warmingRequested = true
+        if let running = ownedTasks.task(.warmConversations) { return running }
+        return ownedTasks.startBackground(.warmConversations) { [weak self] in
+            guard let self else { return }
+            while !Task.isCancelled, self.shouldWarmConversations(), self.warmingRequested {
+                self.warmingRequested = false
+                let unsettled = self.unsettledConversationsByRank()
+                let top = unsettled.prefix(2).map(\.id).filter(self.recentConversations.admitsWarmed)
+                let hot = top.filter { self.turns.turn(forThread: $0) == nil }
+                let candidates = unsettled.filter(self.conversationWarmer.needsWarm)
+                let agentCandidates = top.filter { self.recentConversations.agents(threadID: $0) == nil }
+                guard !candidates.isEmpty || !agentCandidates.isEmpty else { continue }
+                let ranks = unsettled.prefix(5).enumerated().map { "\($0.offset + 1):\($0.element.id)" }.joined(separator: ",")
+                self.logger.notice("warm selection ranked=\(unsettled.count) candidates=\(candidates.count) ranks=\(ranks)")
+                await self.conversationWarmer.warm(Array(candidates), hot: Set(hot), agentThreadIDs: agentCandidates)
+            }
         }
     }
 
@@ -1106,11 +1124,15 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
     }
 
     var htmlVisualPreparationContext: HTMLVisualPreparationContext? {
-        presentingScreens.first?.htmlVisualPreparation.layoutContext.preparationContext
+        backgroundPreparationScreen?.htmlVisualPreparation.backgroundPreparationContext
+    }
+
+    private var backgroundPreparationScreen: ChatScreenModel? {
+        presentingScreens.first { $0.htmlVisualPreparation.backgroundPreparationContext != nil }
     }
 
     func prepareHTMLVisuals(_ references: [HTMLVisualReference]) async -> HTMLVisualPreparationOutcome {
-        guard let screen = presentingScreens.first else { return .interrupted }
+        guard let screen = backgroundPreparationScreen else { return .interrupted }
         return await screen.htmlVisualPreparation.prepareInBackground(references, documents: screen.htmlVisualDocuments)
     }
 
@@ -1373,10 +1395,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
             refreshQuestionScopes()
             if codexModels.hasFetched == false { startCodexModelRefresh() }
             ownedTasks.start(.marksSync) { [weak self] in await self?.conversationList.syncMarks() }
-            if metadataConnectionID != connection {
-                metadataConnectionID = connection
-                await metadataService.syncInBackground()
-            }
+            await refreshMetadataForCurrentConnection()
         }
         else {
             markActivityUnavailable()
@@ -1954,7 +1973,8 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
             guard let self else { return }
             defer { isResolvingMetadata = false }
             await metadataService.resolveConflict(sessionID: threadID, keepLocal: keepLocal)
-            await metadataService.sync()
+            if keepLocal { await metadataService.flushPendingChanges() }
+            else { await metadataService.sync() }
             guard acceptsWork, !Task.isCancelled, !keepLocal,
                   let shown = screenShowing(threadID), let thread = shown.activeConversation else { return }
             let saved = await metadataService.metadata(for: threadID)

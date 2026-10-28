@@ -54,7 +54,7 @@ final class ConversationWarmer {
     func clear() { ledger.clear() }
 
     func warm(_ threads: [ConversationHeader], hot: Set<String>, agentThreadIDs: [String]) async {
-        logger.notice("warm pass threads=\(threads.count) hot=\(hot.count) agents=\(agentThreadIDs.count)")
+        logger.notice("warm pass threads=\(threads.count) hot=\(hot.count) agents=\(agentThreadIDs.count) priority=\(Task.currentPriority.rawValue)")
         for threadID in agentThreadIDs {
             guard mayContinue else { return }
             await host?.refreshAgents(threadID: threadID)
@@ -72,15 +72,19 @@ final class ConversationWarmer {
                     try await session.restore()
                     guard mayContinue else { return }
                     let read = await session.beginHistoryRead()
-                    let page = try await history.openTail(header: thread, base: read.base, priority: .prefetch,
-                        bypassCache: covered != true)
+                    let stored = covered == true ? await history.cachedConversation(header: thread) : nil
+                    guard mayContinue else { return }
+                    let page = if let stored { stored } else {
+                        try await history.openTail(header: thread, base: read.base, priority: .prefetch,
+                            bypassCache: covered != true)
+                    }
                     guard mayContinue else { return }
                     let snapshot = await session.merge(page, read: read)
                     guard mayContinue else { return }
                     host?.didWarm(snapshot, session: session)
                     ledger.readSucceeded(threadID: thread.id, observation: observation)
                     tail = page.window
-                    source = "hot"
+                    source = "hot-\(String(describing: page.source))"
                 } else if let stored = await history.cachedConversation(header: thread),
                           covered ?? (stored.fetchedAt.timeIntervalSince1970 > Double(thread.updatedAt + 1)) {
                     tail = stored.window
@@ -91,9 +95,14 @@ final class ConversationWarmer {
                     ledger.readSucceeded(threadID: thread.id, observation: observation)
                     source = "read"
                 }
-                let references = await Self.visualReferences(in: tail)
                 guard mayContinue, let host else { return }
-                let context = host.htmlVisualPreparationContext
+                guard let context = host.htmlVisualPreparationContext else {
+                    ledger.succeeded(threadID: thread.id, observation: observation, context: nil)
+                    logger.notice("warmed thread=\(thread.id) revision=\(thread.updatedAt) source=\(source) outcome=historyOnly")
+                    continue
+                }
+                let references = await Self.visualReferences(in: tail)
+                guard mayContinue else { return }
                 let outcome = await host.prepareHTMLVisuals(references)
                 logger.notice("warmed thread=\(thread.id) revision=\(thread.updatedAt) source=\(source) visuals=\(references.count) outcome=\(String(describing: outcome))")
                 switch outcome {

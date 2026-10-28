@@ -62,13 +62,15 @@ struct HTMLVisualRendererTests {
             let visibility = TranscriptVisibility()
             visibility.setVisibleRowIDs(["first", "second"])
             let controller = UIHostingController(rootView:
-                VStack(spacing: 12) {
-                    HTMLVisualInline(url: fixture.url, title: "First")
-                        .environment(\.transcriptRowVisibility, TranscriptRowVisibility(rowID: "first", visibility: visibility))
-                    HTMLVisualInline(url: fixture.url, title: "Second")
-                        .environment(\.transcriptRowVisibility, TranscriptRowVisibility(rowID: "second", visibility: visibility))
+                ScrollView {
+                    VStack(spacing: 12) {
+                        HTMLVisualInline(url: fixture.url, title: "First")
+                            .environment(\.transcriptRowVisibility, TranscriptRowVisibility(rowID: "first", visibility: visibility))
+                        HTMLVisualInline(url: fixture.url, title: "Second")
+                            .environment(\.transcriptRowVisibility, TranscriptRowVisibility(rowID: "second", visibility: visibility))
+                    }
+                    .frame(width: 320)
                 }
-                .frame(width: 320)
                 .environment(\.htmlVisualSource, source)
                 .environment(\.htmlVisualTheme, theme)
                 .environment(\.htmlVisualCaptureAllowed, false)
@@ -631,6 +633,50 @@ struct HTMLVisualRendererTests {
     }
 
     @Test(.timeLimit(.minutes(1)))
+    func backgroundReadinessReportsUsableContextEdgesWithoutClearingNearDemand() async throws {
+        try await withFixture { fixture in
+            try await withPreparationHost(fixture) { host in
+                let preparation = host.preparation
+                var readinessEvents = 0
+                preparation.onBackgroundPreparationReady = { readinessEvents += 1 }
+                #expect(preparation.backgroundPreparationContext == nil)
+                preparation.updateLayoutContext { $0.width = 320 }
+                #expect(preparation.backgroundPreparationContext?.width == 320)
+                #expect(readinessEvents == 1)
+                preparation.updateNear(host.references, documents: host.source.documents)
+                preparation.setActive(false, conservesEnergy: false)
+                #expect(preparation.backgroundPreparationContext == nil)
+                preparation.setActive(true, conservesEnergy: false)
+                preparation.setActive(true, conservesEnergy: false)
+                #expect(readinessEvents == 2)
+                preparation.setActive(true, conservesEnergy: true)
+                #expect(preparation.backgroundPreparationContext == nil)
+                preparation.setActive(true, conservesEnergy: false)
+                preparation.updateLayoutContext { $0.width = 360 }
+                #expect(readinessEvents == 4)
+                try await wait { host.references.allSatisfy(preparation.isPresentable) }
+            }
+        }
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func cancellingBackgroundPreparationPreservesNearViewportPreparation() async throws {
+        try await withFixture { fixture in
+            try await withPreparationHost(fixture, access: RendererHoldingAccess()) { host in
+                let preparation = host.preparation
+                preparation.updateLayoutContext { $0.width = 320 }
+                let held = try Self.reference("<body>held background</body>")
+                let background = Task { await preparation.prepareInBackground([held], documents: host.source.documents) }
+                try await wait { preparation.surface.instance != nil }
+                preparation.updateNear(host.references, documents: host.source.documents)
+                background.cancel()
+                #expect(await background.value == .interrupted)
+                try await wait { host.references.allSatisfy(preparation.isPresentable) }
+            }
+        }
+    }
+
+    @Test(.timeLimit(.minutes(1)))
     func backgroundPreparationStoresEveryVisualAcrossChunksAndThenHasNothingLeft() async throws {
         let documents = (0..<18).map { "<body><div id='content' style='height:\(40 + $0)px'>\($0)</div></body>" }
         try await withFixture { fixture in
@@ -698,38 +744,8 @@ struct HTMLVisualRendererTests {
         }
     }
 
-    @Test(.timeLimit(.minutes(1)), .disabled(if: ProcessInfo.processInfo.environment["RC_HTML_VISUAL_FAULT_TESTS"] != "1", "Opt in only on an isolated GUI test host; spins WebContent processes"))
-    func pagesStillLoadingAtTheTimeoutReleaseTheirPagesAndAdmissionForTheNextVisual() async throws {
-        let neverLoad = (0..<HTMLVisualPageAdmission.maximumLivePages).map { "<body><script>/* \($0) */ while (true) {}</script></body>" }
-        let loadsLate = "<body><script>const end = Date.now() + 5000; while (Date.now() < end) {}</script><div style='height:47px'>late</div></body>"
-        let healthy = "<body><div style='height:48px'>after</div></body>"
-        try await withFixture { fixture in
-            try await withPreparationHost(fixture, documents: neverLoad + [loadsLate, healthy]) { host in
-                let preparation = host.preparation
-                preparation.updateLayoutContext { $0.width = 320 }
-                let key = { (reference: HTMLVisualReference) in HTMLVisualLayoutKey(digest: reference.digest, width: 320, theme: theme) }
-                let timedOut = Array(host.references.dropLast())
-                for reference in timedOut {
-                    let attempt = Task { await preparation.prepareInBackground([reference], documents: host.source.documents) }
-                    try await wait { preparation.surface.instance?.key == key(reference) }
-                    let instance = try #require(preparation.surface.instance)
-                    #expect(await attempt.value == .incomplete(missing: 1))
-                    #expect(instance.page == nil && instance.requestID == nil)
-                    try await wait { preparation.surface.instance == nil && webViews(in: host.view).isEmpty }
-                }
-                try await Task.sleep(for: .seconds(2))
-                let late = try #require(timedOut.last)
-                #expect(fixture.renderer.height(for: key(late)) == nil && !fixture.renderer.hasStoredSnapshot(for: key(late)))
-                let next = try #require(host.references.last)
-                #expect(await preparation.prepareInBackground([next], documents: host.source.documents)
-                    == .settled(stored: 1, unpreparable: 0))
-                #expect(fixture.renderer.height(for: key(next)) == 48)
-            }
-        }
-    }
-
     @Test(.timeLimit(.minutes(1)))
-    func anExplicitFailureSettlesButATimedOutVisualStaysIncomplete() async throws {
+    func anExplicitFailureSettlesAsUnpreparable() async throws {
         let missing = try Self.reference("<body>missing</body>")
         try await withFixture { fixture in
             try await withPreparationHost(fixture, documents: []) { host in
@@ -737,11 +753,39 @@ struct HTMLVisualRendererTests {
                 #expect(await host.preparation.prepareInBackground([missing], documents: host.source.documents)
                     == .settled(stored: 0, unpreparable: 1))
             }
-            let held = try Self.reference("<body>held</body>")
-            try await withPreparationHost(fixture, documents: [], access: RendererHoldingAccess()) { host in
-                host.preparation.updateLayoutContext { $0.width = 320 }
-                #expect(await host.preparation.prepareInBackground([held], documents: host.source.documents)
-                    == .incomplete(missing: 1))
+        }
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func consecutiveTimeoutsReleaseAdmissionWithoutPublishingLate() async throws {
+        let access = RendererHoldingAccess()
+        let deadline = RendererPageDeadline()
+        let held = try (0..<4).map { try Self.reference("<body>held \($0)</body>") }
+        try await withFixture { fixture in
+            let preparation = HTMLVisualPreparation(renderer: fixture.renderer, pageDeadline: { try await deadline.wait() })
+            try await withPreparationHost(fixture, access: access, preparation: preparation) { host in
+                preparation.updateLayoutContext { $0.width = 320 }
+                for reference in held {
+                    let attempt = Task { await preparation.prepareInBackground([reference], documents: host.source.documents) }
+                    await access.waitForRead(reference)
+                    let instance = try #require(preparation.surface.instance)
+                    try #require(instance.requestID != nil)
+                    await deadline.waitUntilArmed()
+                    await deadline.fire()
+                    #expect(await attempt.value == .incomplete(missing: 1))
+                    #expect(instance.requestID == nil && instance.page == nil && instance.activity == nil)
+                    #expect(preparation.surface.instance == nil)
+                    #expect(await access.cancelled.contains(reference))
+                }
+                let healthy = try #require(host.references.first)
+                #expect(await preparation.prepareInBackground([healthy], documents: host.source.documents)
+                    == .settled(stored: 1, unpreparable: 0))
+                #expect(fixture.renderer.height(for: HTMLVisualLayoutKey(digest: healthy.digest, width: 320, theme: theme)) == 80)
+                for reference in held {
+                    let key = HTMLVisualLayoutKey(digest: reference.digest, width: 320, theme: theme)
+                    #expect(fixture.renderer.height(for: key) == nil && !fixture.renderer.hasStoredSnapshot(for: key))
+                }
+                #expect(await access.cancelled == Set(held))
             }
         }
     }
@@ -756,6 +800,7 @@ struct HTMLVisualRendererTests {
     private func withPreparationHost(_ fixture: RendererLifecycleFixture, documents: [String]? = nil,
                                      access: any HostFileAccess = RendererCacheOnlyAccess(),
                                      energyPolicy: AppEnergyPolicy = Self.unconstrained,
+                                     preparation: HTMLVisualPreparation? = nil,
                                      _ operation: (PreparationHost) async throws -> Void) async throws {
         let hostID = UUID()
         let cache = HTMLVisualDocumentCache(directory: fixture.directory.appending(path: "documents-\(UUID().uuidString)"),
@@ -770,7 +815,7 @@ struct HTMLVisualRendererTests {
         }
         let store = HTMLVisualDocumentStore(hostID: hostID, access: access, cache: cache)
         let source = HTMLVisualSource(hostID: hostID, documents: store, renderer: fixture.renderer,
-            preparation: HTMLVisualPreparation(renderer: fixture.renderer))
+            preparation: preparation ?? HTMLVisualPreparation(renderer: fixture.renderer))
         let controller = UIHostingController(rootView: preparationHost(source, energyPolicy: energyPolicy))
         fixture.window.show(controller)
         do {
@@ -839,6 +884,83 @@ struct HTMLVisualRendererTests {
         return try #require(HTMLVisualReference(url: url))
     }
 
+    @Test(.timeLimit(.minutes(1)), .enabled { await MainActor.run { UIDevice.current.userInterfaceIdiom == .phone } }, arguments: [80, 6_000])
+    func occurrenceVisibilityGatesFirstAdmissionWhileNearPreparationAndAdmittedStateSurvive(height: Int) async throws {
+        try await withFixture { fixture in
+            let html = "<body style='margin:0'><div style='height:\(height)px'><input id='input'><span id='selection'>Retained selection</span></div></body>"
+            let reference = try Self.reference(html)
+            let url = try #require(URL(string: "rc-visual:" + reference.digest))
+            let hostID = UUID()
+            let documents = HTMLVisualDocumentCache(directory: fixture.directory.appending(path: "documents"),
+                writer: HTMLVisualDocumentFileWriter())
+            let file = fixture.directory.appending(path: "occurrence.html")
+            try await Self.write(html, to: file)
+            _ = try await documents.store(hostID: hostID, reference: reference, source: file)
+            let store = HTMLVisualDocumentStore(hostID: hostID, access: RendererCacheOnlyAccess(), cache: documents)
+            let source = HTMLVisualSource(hostID: hostID, documents: store, renderer: fixture.renderer,
+                preparation: HTMLVisualPreparation(renderer: fixture.renderer))
+            let scroll = InlineOccurrenceFixture()
+            scroll.visibility.setVisibleRowIDs(["same-message"])
+            let controller = UIHostingController(rootView: InlineOccurrenceView(fixture: scroll, url: url)
+                .environment(\.htmlVisualSource, source)
+                .environment(\.htmlVisualTheme, theme)
+                .environment(\.htmlVisualCaptureAllowed, false)
+                .environment(\.scenePhase, .active)
+                .environment(AppThemeStore())
+                .overlay { preparationHost(source) })
+            fixture.window.show(controller)
+            do {
+                try await wait { source.preparation.layoutContext.displayScale != nil && scroll.scroll != nil }
+                source.preparation.updateLayoutContext { $0.width = 320 }
+                let key = HTMLVisualLayoutKey(digest: reference.digest, width: 320, theme: theme)
+                source.preparation.updateNear([reference], documents: store)
+                try await wait {
+                    source.preparation.isPresentable(reference) && source.preparation.surface.instance == nil
+                        && webViews(in: controller.view).isEmpty
+                        && scroll.instance.admissionDemand?.occurrenceVisible == false
+                }
+                #expect(fixture.renderer.height(for: key) == Double(height))
+                #expect(scroll.instance.admissionDemand?.active == false)
+                #expect(scroll.instance.requestID == nil)
+
+                scroll.scroll?("visual")
+                try await wait {
+                    webViews(in: controller.view).first?.bounds.height == CGFloat(height)
+                        && webViews(in: controller.view).first.map { effectiveOpacity(of: $0) > 0.99 } == true
+                }
+                let original = try #require(webViews(in: controller.view).first)
+                let viewport = try #require(transcriptScrollView(in: controller.view))
+                _ = try await original.evaluateJavaScript("document.getElementById('input').value='Retained form';window.retainedToken='retained';")
+                scroll.scroll?("top")
+                try await wait {
+                    !original.convert(original.bounds, to: viewport).intersects(viewport.bounds)
+                        && scroll.instance.admissionDemand?.occurrenceVisible == false
+                }
+                #expect(scroll.instance.admissionDemand?.active == true)
+                #expect(webViews(in: controller.view).first === original)
+                #expect(try await original.evaluateJavaScript("document.getElementById('input').value") as? String == "Retained form")
+                #expect(try await original.evaluateJavaScript("window.retainedToken") as? String == "retained")
+
+                scroll.width = 670
+                scroll.scroll?("visual")
+                try await wait { original.bounds.width == 670 && original.convert(original.bounds, to: viewport).intersects(viewport.bounds) }
+                #expect(webViews(in: controller.view).first === original)
+                #expect(try await original.evaluateJavaScript("document.getElementById('input').value") as? String == "Retained form")
+                #expect(try await original.evaluateJavaScript("window.retainedToken") as? String == "retained")
+                scroll.visibility.setVisibleRowIDs([])
+                try await wait { webViews(in: controller.view).isEmpty }
+            } catch {
+                source.preparation.cancelDemand()
+                fixture.window.close()
+                await store.retire()
+                throw error
+            }
+            source.preparation.cancelDemand()
+            fixture.window.close()
+            await store.retire()
+        }
+    }
+
     @Test(.timeLimit(.minutes(1)))
     func inlineSuspensionPreservesRowHeight() async throws {
         try await withFixture { fixture in
@@ -853,9 +975,13 @@ struct HTMLVisualRendererTests {
                 preparation: HTMLVisualPreparation(renderer: fixture.renderer))
             let visibility = TranscriptVisibility()
             visibility.setVisibleRowIDs(["visual"])
+            let geometry = InlineGeometryFixture()
             let controller = UIHostingController(rootView:
-                HTMLVisualInline(url: fixture.url, title: "Height continuity")
-                    .frame(width: 320)
+                ScrollView {
+                    HTMLVisualInline(url: fixture.url, title: "Height continuity")
+                        .frame(width: 320)
+                        .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { geometry.height = $0 }
+                }
                     .environment(\.transcriptRowVisibility, TranscriptRowVisibility(rowID: "visual", visibility: visibility))
                     .environment(\.htmlVisualSource, source)
                     .environment(\.htmlVisualTheme, theme)
@@ -865,17 +991,17 @@ struct HTMLVisualRendererTests {
             do {
                 let key = HTMLVisualLayoutKey(digest: fixture.reference.digest, width: 320, theme: theme)
                 try await wait {
-                    webViews(in: controller.view).first?.bounds.height == 80
+                    webViews(in: controller.view).first?.bounds.height == 80 && geometry.height == 80
                         && fixture.renderer.snapshot(for: key).image != nil
                 }
-                let proposedSize = CGSize(width: 320, height: 1000)
-                let liveHeight = controller.sizeThatFits(in: proposedSize).height
+                let liveHeight = geometry.height
+                #expect(liveHeight == 80)
                 visibility.setVisibleRowIDs([])
                 try await wait { webViews(in: controller.view).isEmpty }
-                #expect(abs(controller.sizeThatFits(in: proposedSize).height - liveHeight) < 1)
+                #expect(abs(geometry.height - liveHeight) < 1)
                 visibility.setVisibleRowIDs(["visual"])
                 try await wait { webViews(in: controller.view).first?.bounds.height == 80 }
-                #expect(abs(controller.sizeThatFits(in: proposedSize).height - liveHeight) < 1)
+                #expect(abs(geometry.height - liveHeight) < 1)
             } catch {
                 visibility.setVisibleRowIDs([])
                 fixture.window.close()
@@ -1234,11 +1360,13 @@ struct HTMLVisualRendererTests {
         try await withFixture { fixture in
             let live = (0..<3).map { _ in fixture.start() }
             try await wait { live.allSatisfy { $0.status == .live } }
+            let displaced = try #require(live[0].activity)
             let selected = HTMLVisualInstance(surface: .inline)
             fixture.renderer.promote(selected)
             fixture.start(selected)
             try await wait { selected.status == .live }
             #expect(live[0].status == .suspended)
+            #expect(displaced.releaseReason == .selectedEviction)
             #expect(live[1].status == .live && live[2].status == .live)
             #expect(fixture.instances.filter { $0.page != nil }.count == 3)
         }
@@ -1256,9 +1384,10 @@ struct HTMLVisualRendererTests {
             let replacement = try #require(instance.page)
             #expect(replacement !== oldPage)
             let pinEvents = fixture.pins[ObjectIdentifier(instance)]?.count
+            #expect(try await oldPage.callJavaScript("return typeof window.webkit?.messageHandlers?.rcVisual === 'undefined';",
+                contentWorld: .defaultClient) as? Bool == true)
             _ = try await oldPage.callJavaScript("""
                 document.getElementById('content').style.height='420px';
-                globalThis.rcVisualMeasure(true);
                 const range=document.createRange();range.selectNodeContents(document.getElementById('content'));
                 document.getSelection().removeAllRanges();document.getSelection().addRange(range);
                 return new Promise(resolve=>setTimeout(()=>resolve(true),100));
@@ -1282,18 +1411,28 @@ struct HTMLVisualRendererTests {
         try await withFixture { fixture in
             let instance = fixture.start()
             try await wait { instance.status == .live && instance.measured }
-            try await Task.sleep(for: .milliseconds(250))
+            let activity = try #require(instance.activity)
+            #expect(activity.kind == .automatic)
+            #expect(activity.layoutEvents > 0)
+            #expect(activity.capturesStarted == 0)
+            #expect(instance.capture == nil && instance.needsSnapshot)
             #expect(instance.snapshot?.image == nil)
             fixture.renderer.setCaptureAllowed(instance, true)
             try await wait { instance.snapshot?.image != nil }
+            #expect(activity.capturesStarted >= activity.capturesCompleted)
+            #expect(activity.capturesCompleted > 0)
+            #expect(activity.captureDuration > .zero)
             fixture.renderer.setCaptureAllowed(instance, false)
             let revision = instance.snapshot?.revision
             let page = try #require(instance.page)
             _ = try await page.callJavaScript("document.getElementById('content').style.height='260px';globalThis.rcVisualMeasure(true);",
                 contentWorld: .defaultClient)
             try await wait { instance.height == 260 }
-            try await Task.sleep(for: .milliseconds(250))
+            #expect(instance.capture == nil && instance.needsSnapshot)
             #expect(instance.snapshot?.revision == revision)
+            await fixture.stop(instance)
+            #expect(instance.activity == nil)
+            #expect(activity.releaseReason == .cancelled)
         }
     }
 
@@ -1501,6 +1640,46 @@ private struct RendererLifecycleView: View {
 
 @MainActor
 @Observable
+private final class InlineGeometryFixture {
+    var height: CGFloat = 0
+}
+
+@MainActor
+@Observable
+private final class InlineOccurrenceFixture {
+    let visibility = TranscriptVisibility()
+    let instance = HTMLVisualInstance(surface: .inline)
+    var width: CGFloat = 320
+    @ObservationIgnored var scroll: ((String) -> Void)?
+}
+
+private struct InlineOccurrenceView: View {
+    let fixture: InlineOccurrenceFixture
+    let url: URL
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(spacing: 0) {
+                    Color.clear.frame(height: 1_200).id("top")
+                    HTMLVisualInline(url: url, title: "Occurrence", instance: fixture.instance)
+                        .environment(\.transcriptRowVisibility,
+                            TranscriptRowVisibility(rowID: "same-message", visibility: fixture.visibility))
+                        .id("visual")
+                    Color.clear.frame(height: 1_200)
+                }
+                .frame(width: fixture.width)
+            }
+            .frame(width: fixture.width, height: 240)
+            .onAppear { fixture.scroll = { proxy.scrollTo($0, anchor: .top) } }
+            .onDisappear { fixture.scroll = nil }
+        }
+        .dynamicTypeSize(.accessibility3)
+    }
+}
+
+@MainActor
+@Observable
 private final class InlineMotionFixture {
     let visibility = TranscriptVisibility()
     var showSecond = false
@@ -1519,17 +1698,19 @@ private struct InlineMotionView: View {
     }
 
     var body: some View {
-        VStack(spacing: 12) {
-            HTMLVisualInline(url: url, title: "First")
-                .environment(\.transcriptRowVisibility, firstVisibility)
-            if fixture.showSecond {
-                HTMLVisualInline(url: url, title: "Second")
-                    .environment(\.transcriptRowVisibility,
-                        TranscriptRowVisibility(rowID: "second", visibility: fixture.visibility))
-                    .onAppear { fixture.secondAppeared = true }
+        ScrollView {
+            VStack(spacing: 12) {
+                HTMLVisualInline(url: url, title: "First")
+                    .environment(\.transcriptRowVisibility, firstVisibility)
+                if fixture.showSecond {
+                    HTMLVisualInline(url: url, title: "Second")
+                        .environment(\.transcriptRowVisibility,
+                            TranscriptRowVisibility(rowID: "second", visibility: fixture.visibility))
+                        .onAppear { fixture.secondAppeared = true }
+                }
             }
+            .frame(width: fixture.width)
         }
-        .frame(width: fixture.width)
         .onChange(of: firstVisibility.isMoving, initial: true) { _, moving in fixture.observedMoving = moving }
         .onChange(of: firstVisibility.isScrolling, initial: true) { _, scrolling in fixture.observedScrolling = scrolling }
     }
@@ -1569,13 +1750,66 @@ private struct CompactVisualTranscriptView: View {
 }
 
 private actor RendererHoldingAccess: HostFileAccess {
+    private var reads: [HTMLVisualReference: (id: UUID, continuation: CheckedContinuation<HostFileLease, any Error>)] = [:]
+    private var arrivals: [HTMLVisualReference: CheckedContinuation<Void, Never>] = [:]
+    private(set) var cancelled: Set<HTMLVisualReference> = []
+
     func open(reference: HostFileReference, containingDirectory: String?, progress: @escaping @Sendable (HostFileProgress) -> Void) throws -> HostFileLease { throw HostFileError.unavailable }
     func openVisual(reference: HTMLVisualReference, progress: @escaping @Sendable (HostFileProgress) -> Void) async throws -> HostFileLease {
-        try await Task.sleep(for: .seconds(60))
-        throw HostFileError.unavailable
+        let id = UUID()
+        return try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            return try await withCheckedThrowingContinuation {
+                reads[reference] = (id, $0)
+                arrivals.removeValue(forKey: reference)?.resume()
+            }
+        } onCancel: {
+            Task { await self.cancel(reference, id: id) }
+        }
+    }
+    func waitForRead(_ reference: HTMLVisualReference) async {
+        if reads[reference] == nil { await withCheckedContinuation { arrivals[reference] = $0 } }
+    }
+    private func cancel(_ reference: HTMLVisualReference, id: UUID) {
+        guard reads[reference]?.id == id, let read = reads.removeValue(forKey: reference) else { return }
+        cancelled.insert(reference)
+        read.continuation.resume(throwing: CancellationError())
     }
     func cachedCopy(for reference: HostFileReference) -> HostFileLease? { nil }
     func release(_ lease: HostFileLease) {}
+}
+
+private actor RendererPageDeadline {
+    private var pending: (id: UUID, continuation: CheckedContinuation<Void, any Error>)?
+    private var arrival: CheckedContinuation<Void, Never>?
+
+    func wait() async throws {
+        let id = UUID()
+        try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            try await withCheckedThrowingContinuation {
+                pending = (id, $0)
+                arrival?.resume()
+                arrival = nil
+            }
+        } onCancel: {
+            Task { await self.cancel(id) }
+        }
+    }
+    func waitUntilArmed() async {
+        if pending == nil { await withCheckedContinuation { arrival = $0 } }
+    }
+    func fire() {
+        let continuation = pending?.continuation
+        pending = nil
+        continuation?.resume()
+    }
+    private func cancel(_ id: UUID) {
+        guard pending?.id == id else { return }
+        let continuation = pending?.continuation
+        pending = nil
+        continuation?.resume(throwing: CancellationError())
+    }
 }
 
 private actor RendererCacheOnlyAccess: HostFileAccess {

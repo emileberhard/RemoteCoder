@@ -145,6 +145,43 @@ class LeaseTests(unittest.TestCase):
                     self.fail("expired queue activated")
 
 
+class DeviceResolutionTests(unittest.TestCase):
+    def test_only_exact_configured_test_devices_are_admitted(self) -> None:
+        def inventory(command, **kwargs):
+            path = Path(command[command.index("--json-output") + 1])
+            path.write_text(json.dumps({"result": {"devices": [
+                {"identifier": "sim", "hardwareProperties": {"udid": "sim", "reality": "simulated", "deviceType": "iPhone"}},
+                {"identifier": "phone", "deviceProperties": {"name": "Test phone"},
+                 "hardwareProperties": {"udid": "phone-udid", "reality": "physical", "deviceType": "iPhone"},
+                 "connectionProperties": {"tunnelState": "connected"}},
+                {"identifier": "daily-phone", "hardwareProperties": {"udid": "daily-phone-udid", "reality": "physical", "deviceType": "iPhone"},
+                 "connectionProperties": {"tunnelState": "connected"}},
+                {"identifier": "disconnected", "hardwareProperties": {"udid": "disconnected", "reality": "physical", "deviceType": "iPad"},
+                 "connectionProperties": {"tunnelState": "unavailable"}},
+            ]}}))
+
+        with patch("maintainer_config.load", return_value={"testDeviceUDIDs": ["phone-udid", "disconnected", "sim"]}), \
+                patch.object(perf_harness, "run", side_effect=inventory) as run:
+            self.assertEqual(perf_harness.Device.resolve("phone-udid"), "phone-udid")
+            with self.assertRaisesRegex(SystemExit, "not reachable"):
+                perf_harness.Device.resolve("disconnected")
+            with self.assertRaisesRegex(SystemExit, "no physical device"):
+                perf_harness.Device.resolve("sim")
+            run.reset_mock()
+            for selector in ["phone", "Test phone", "daily-phone-udid"]:
+                with self.subTest(selector=selector), self.assertRaisesRegex(SystemExit, "exact UDID"):
+                    perf_harness.Device.resolve(selector)
+            run.assert_not_called()
+
+    def test_missing_or_invalid_test_device_configuration_fails_before_device_work(self) -> None:
+        for value in [None, [], "phone-udid", [None], [""]]:
+            config = {} if value is None else {"testDeviceUDIDs": value}
+            with self.subTest(value=value), patch("maintainer_config.load", return_value=config), \
+                    patch.object(perf_harness, "run") as run, self.assertRaisesRegex(SystemExit, "testDeviceUDIDs"):
+                perf_harness.Device.resolve("phone-udid")
+            run.assert_not_called()
+
+
 class DeviceCleanupTests(unittest.TestCase):
     def test_failed_uninstall_requires_proven_absence(self) -> None:
         device = object.__new__(perf_harness.Device)

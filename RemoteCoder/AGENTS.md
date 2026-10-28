@@ -23,11 +23,6 @@ holds the detailed history, recovery, voice and persistence contracts.
   that already has several gateways with cached conversations, so it has its
   own scheme and stays out of the default Mac-native suite. `just ios-simulator-test` runs the
   remaining app-hosted integration tests only when the root policy calls for them.
-  HTML visual fault tests that spin WebContent processes are opt-in through
-  `RC_HTML_VISUAL_FAULT_TESTS=1` in the hosted test process environment (for
-  example its test scheme), only on an isolated GUI test host. Never enable
-  them on a live service host. Select that host explicitly with
-  `RC_IOS_BUILD_HOST=<configured-gui-test-host>`.
 - App layout: `App/` (scenes, `RemoteCoderAppModel`, `ExternalEventRouter`,
   intents), `Workspace/` (workspace, `ChatWindowModel`, per-target registry and
   flows), `Chat/` (`ChatTargetModel`, `ChatScreenModel` and their owners), `UI/`
@@ -425,10 +420,15 @@ entrypoint linked above.
   local conversation UUIDs, so resumes and completion routing never rely on
   heuristics.
 - `ConversationMetadataService` owns acknowledged metadata and a durable local
-  outbox, through typed `conversation/metadata/read|update` RPCs that replaced
-  the remote Python whole-map writer. The gateway
-  owns `~/.remote-coder/session-metadata-v2.json`, revisions, idempotency and
-  cross-process locking. Stale edits need explicit conflict resolution.
+  outbox through typed `conversation/metadata/read|update` RPCs. Its one task
+  retains separate refresh and flush demand; unchanged reads still reconcile
+  observations and pending edits. The memory-only snapshot validator covers the
+  exact acknowledged map. Incremental changes go through `acknowledge(_:for:)`,
+  which invalidates the validator; a full refresh replaces both together. The gateway owns
+  `~/.remote-coder/session-metadata-v2.json`, content validators, revisions,
+  idempotency and cross-process locking. Stale edits need explicit conflict
+  resolution; [Metadata authority](../docs/owned-operations.md#metadata-authority)
+  owns refresh coalescing and compatibility.
 - `ConversationHeaderStore` is the actor-backed, per-host cache of known
   `ConversationHeader` values and the last successful refresh. Its retained window
   holds at most 1,024 root conversations; a delegated agent thread is admitted
@@ -503,30 +503,32 @@ entrypoint linked above.
     provider comparison coverage after a cancelled aggregate read. The discovery
     bounds and comparison contract live in `docs/system-architecture.md`,
     *History and live state*.
-  - After 1 s of continuous drawer visibility, the same loop warms every
-    unsettled drawer conversation in rank order
+  - After 1 s of continuous drawer visibility, the same loop requests warming
+    of unsettled drawer conversations in rank order
     (`ConversationDrawerRank`; delegated agent threads, and probe threads the
     drawer hides while they are not running, excluded) at background
     priority, running turns included, so a visual an agent posts in a
-    conversation that is not shown is prepared by the next pass that sees its
-    header revision move; there is no per-item hook. Each gets its opening tail
+    conversation that is not shown is prepared after its header
+    revision moves; there is no per-item hook. Completed coverage is filtered
+    before each pass. Each gets its opening tail
     in the history page cache, trusted while `HistoryWarmLedger` holds a read of
     that exact header revision, or without a ledger entry while the stored tail
-    is newer than the thread's `updatedAt`. The warmer then awaits preparation
-    of the tail's HTML visuals in chunks of at most 16, and the conversation is
-    warm only once every visual is stored or recorded unpreparable for the
-    current width and theme. An incomplete attempt is retried from the stored
-    tail on the next pass; an interrupted one ends the pass. The Mac prepares no
-    visuals ahead, so there preparation reports unsupported and the warm covers
-    history only, with no preparation context. The top two, while
+    is newer than the thread's `updatedAt`. History coverage completes even when
+    visual preparation is unavailable. A newly usable preparation context
+    explicitly requests missing visual work from stored tails; the target
+    retains requests arriving during an active pass. Incomplete renders wait
+    for another legitimate request, and cancellation never marks success.
+    Background warming must not cancel near-viewport preparation demand.
+    [HTML visuals](../docs/html-visuals.md#readiness-and-background-preparation)
+    owns capability, coverage and rendering completion. The top two, while
     no turn runs there, also get a session and pre-rendered Markdown in
     `RecentConversationCache`, but only into free slots, so warming never
     evicts a conversation the user opened, and their agent lists are read
     without a cached agents model, running turns included, so the subagents
-    pill is there on open. Keep the limit well below `HistoryWarmLedger`'s
-    capacity and the page cache budget: an all-unsettled pass (about 160 chats)
-    rewarmed evicted ledger entries in a circle and filled the 64 MiB page
-    cache.
+    pill is there on open. Keep retained coverage within `HistoryWarmLedger`'s
+    capacity and the page cache budget: eviction must not cause repeated warming
+    of unchanged history. Reducing speculative coverage must pass the same
+    ahead-of-opening visual readiness checks as the existing coverage.
 
 ## Conversation state and transcript
 
@@ -784,6 +786,9 @@ entrypoint linked above.
   owns one `HTMLVisualPreparation` with its layout context, demand, lane, waits
   and preparation surface, so window and conversation state never leak into
   another window's preparation.
+  - On iPhone, occurrence visibility gates first live admission only. Preserve
+    near-viewport preparation and the existing lifetime of loading/live pages;
+    earlier retirement can reset arbitrary JavaScript and form state.
   - A `WebPage` backs at most one `WebView`. Only the host that claimed a
     preparation surface renders it; never render a shared page from a second
     view.

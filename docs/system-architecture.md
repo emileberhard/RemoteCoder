@@ -1013,7 +1013,9 @@ coalesced persistence on its actor; startup loading never gates the transcript.
 `HTMLVisualEnvironment` prepares the shared theme once per relevant change.
 `HTMLVisualInline` consumes existing transcript visibility and
 scene state; focused controls, active pointers and expansion pin through
-`TranscriptRowPresentation`. A live page runs inline JavaScript inside a
+`TranscriptRowPresentation`. On iPhone, occurrence visibility gates first live
+admission only; already-loading/live pages keep their row-scoped lifetime, and
+near-viewport preparation remains independent. A live page runs inline JavaScript inside a
 nonpersistent, storage-free WebKit sandbox with network access and no
 host-file resources. Document prefetch creates
 no WebPage. Energy conservation limits automatic pages to one, explicit
@@ -1071,7 +1073,12 @@ counts without requiring transcript owners and merge records into existing owner
 Broker notifications and `ExternalEventRouter` retain completion delivery and
 navigation ownership. Voice preparation acquires its exact conversation explicitly.
 `HistoryWarmLedger` owns dirty and successful-read coverage for as many threads as
-`ConversationHeaderRetention` retains, so warming every unsettled header never cycles it.
+`ConversationHeaderRetention` retains. The warmer processes unsettled eligible
+conversations in drawer rank order, with the existing
+top-two hot-session policy. History-only completion remains valid while visual
+preparation is unavailable; a newly usable preparation context explicitly
+requests the missing work from stored tails. A request arriving during an active
+pass is retained, and temporary capability loss preserves stronger coverage.
 A read covers one exact header revision and the notifications seen since; a
 completed warm also covers the HTML visual preparation context (width and
 theme). Missing or evicted coverage requires an authoritative read. Monotonic observation

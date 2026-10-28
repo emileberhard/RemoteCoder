@@ -438,12 +438,12 @@ mod tests {
             crate::providers::claude::conversation_index::Parent::default(),
             "a user Stop and parent deliveries stay with the source"
         );
-        let metadata = fixture
-            .gateway
-            .metadata
-            .read()
-            .await
-            .unwrap()
+        let crate::conversations::Snapshot::Full { entries, .. } =
+            fixture.gateway.metadata.read(None).await.unwrap()
+        else {
+            panic!("an unconditional read must return the snapshot");
+        };
+        let metadata = entries
             .into_iter()
             .find(|record| record.selection.session_id == fork);
         let metadata = metadata.expect("the fork keeps its source's settings");

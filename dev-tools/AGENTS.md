@@ -188,13 +188,16 @@ compact JSON event per line.
 
 `perf-sim` runs repeatable performance windows against a `RC_PERF_HARNESS` build
 (`build`, then `install`) in its own simulator on the Mac that runs it or, with
-`--device`, on an iPad paired with that Mac. A device build is the Release
+`--device`, on an explicitly selected physical test device paired with that Mac.
+The argument must exactly match a UDID in the private maintainer configuration's
+`testDeviceUDIDs` list; names, aliases and unlisted devices are rejected before
+device work. A missing or invalid list fails closed. Fresh runs uninstall the
+app, so this list must never include the daily phone. A device build is the Release
 configuration signed with the release lane's ad hoc profiles, so it measures
 what ships; Debug adds `#if DEBUG` work, testability and unoptimized C.
 `build --signing development` keeps Release optimization but uses development
 profiles to permit profiling attachment; its reports compare only with each
-other. A simulator build is Debug at `-O`, good for checking a journey, not for numbers. It refuses phones, which the shared
-gateways notify. `stream` replays a recorded turn into an open
+other. A simulator build is Debug at `-O`, good for checking a journey, not for numbers. Harness builds never enroll shared-gateway notifications. `stream` replays a recorded turn into an open
 thread and `open-bench` opens a thread in a window that ends `--tail` seconds after
 its transcript loads. Both fresh-install per run and print one JSON window per run;
 a window is rejected unless the app stayed active at full energy and drew frames.
@@ -217,6 +220,10 @@ run. Summarize one with
 scrolling, compare its `motion` block, which covers only the transcript's
 `TranscriptScroll` signposts. The harness drives the app in-process, so its
 traces carry no XCTest automation, which `perf-trace` rejects.
+
+`cmd '{"cmd":"sidebar","open":true}'` drives the existing SwiftUI drawer
+control and waits for its published presentation state. Use the corresponding
+`false` command before measuring a warm-idle opening; it does not report HTML paint.
 
 To attribute a code change, alternate installs of both Release builds in one
 session (`xcrun devicectl device install app` between runs, same journey, at
@@ -289,6 +296,13 @@ separate fresh-process footprint control measures incremental process footprint,
 not exclusive journey allocations. Take Instruments recordings in separate runs
 of the same fixture, and compare
 the `journey` block of `perf-trace summarize`, not whole-trace totals.
+
+For a live HTML fixture, `launch --lab-config /private/host.json` stages one canonical
+`GatewayHostConfiguration` and launches with benchmark defaults/files and in-memory
+credentials. It never imports production or iCloud hosts. The file must be private,
+and the caller owns the isolated gateway, token and content. This mode uses the
+normal app networking and rendering paths; it does not relax the offline replay
+fixture’s external-network and HTML omissions.
 
 ## mac-bench
 
