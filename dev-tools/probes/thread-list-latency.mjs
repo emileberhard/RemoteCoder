@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { isAbsolute, resolve } from "node:path";
 import { IsolatedGateway } from "./isolated-gateway.mjs";
@@ -66,8 +66,15 @@ try {
     const records = (await readFile(rollout, "utf8")).split("\n").filter(Boolean).map(JSON.parse);
     const message = records.findLast(row => row.type === "response_item" && row.payload?.role === "assistant");
     assert(message, "Native fixture did not persist an assistant response");
-    await appendFile(rollout, JSON.stringify({ ...message, payload: { ...message.payload,
-        content: [{ type: "output_text", text: "x".repeat(11 * 1024 * 1024) }] } }) + "\n");
+    const original = message.payload.content.find(part => part.type === "output_text").text;
+    const large = "x".repeat(11 * 1024 * 1024);
+    const expand = value => {
+        if (value === original) return large;
+        if (Array.isArray(value)) return value.map(expand);
+        if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, part]) => [key, expand(part)]));
+        return value;
+    };
+    await writeFile(rollout, records.map(row => JSON.stringify(expand(row))).join("\n") + "\n", { mode: 0o600 });
     const store = lab.path(".remote-coder/agent-jobs/v1");
     await Promise.all([mkdir(`${store}/jobs`, { recursive: true }), mkdir(`${store}/agents`, { recursive: true })]);
     await Promise.all(Array.from({ length: 1000 }, async (_, sequence) => {
