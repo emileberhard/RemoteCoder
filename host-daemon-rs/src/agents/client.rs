@@ -771,6 +771,32 @@ fn update_settings(
     Ok(selected)
 }
 
+fn formatting_identity(
+    explicit: Option<&str>,
+    codex: Option<&str>,
+    claude: Option<&str>,
+) -> Result<(String, &'static str)> {
+    if let Some(explicit) = explicit {
+        return Ok((explicit.to_owned(), "native"));
+    }
+    match (
+        codex.filter(|id| !id.trim().is_empty()),
+        claude.filter(|id| !id.trim().is_empty()),
+    ) {
+        (Some(id), None) => Ok((id.to_owned(), "codex")),
+        (None, Some(id)) => Ok((
+            format!("claude_{}", id.strip_prefix("claude_").unwrap_or(id)),
+            "claude",
+        )),
+        (Some(_), Some(_)) => bail!(
+            "Formatting identity is ambiguous; pass --sender-id, --reply-tool and --reply-target"
+        ),
+        (None, None) => bail!(
+            "Formatting needs CODEX_THREAD_ID or CLAUDE_CODE_SESSION_ID, or explicit --sender-id, --reply-tool and --reply-target"
+        ),
+    }
+}
+
 fn host() -> Result<String> {
     Ok(nix::unistd::gethostname()?
         .to_string_lossy()
@@ -951,21 +977,18 @@ async fn execute(command: AgentCommand, env_file: Option<&Path>) -> Result<Value
     if let AgentCommand::Message(arguments) = &command {
         if arguments.format_only {
             let host = host()?;
+            let inferred = formatting_identity(
+                arguments.sender_id.as_deref(),
+                std::env::var("CODEX_THREAD_ID").ok().as_deref(),
+                std::env::var("CLAUDE_CODE_SESSION_ID").ok().as_deref(),
+            )?;
+            let reply_tool = format!("codex-threads send --host {host}");
             let sender = Sender {
-                agent_id: arguments
-                    .sender_id
-                    .as_deref()
-                    .context("Formatting requires --sender-id, --reply-tool and --reply-target")?,
-                provider: "native",
+                agent_id: &inferred.0,
+                provider: inferred.1,
                 host: &host,
-                reply_tool: arguments
-                    .reply_tool
-                    .as_deref()
-                    .context("Formatting requires --reply-tool")?,
-                reply_target: arguments
-                    .reply_target
-                    .as_deref()
-                    .context("Formatting requires --reply-target")?,
+                reply_tool: arguments.reply_tool.as_deref().unwrap_or(&reply_tool),
+                reply_target: arguments.reply_target.as_deref().unwrap_or(&inferred.0),
             };
             return Ok(Value::String(envelope::message(
                 arguments
@@ -1199,5 +1222,28 @@ pub(crate) async fn run(command: AgentCommand, env_file: Option<&Path>) -> Resul
             );
             Ok(exit)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn formatting_infers_exact_provider_identity_without_authenticated_capture() {
+        assert_eq!(
+            formatting_identity(None, Some("codex-thread"), None).unwrap(),
+            ("codex-thread".into(), "codex")
+        );
+        assert_eq!(
+            formatting_identity(None, None, Some("claude-session")).unwrap(),
+            ("claude_claude-session".into(), "claude")
+        );
+        assert!(formatting_identity(None, Some("a"), Some("b")).is_err());
+        assert!(formatting_identity(None, None, None).is_err());
+        assert_eq!(
+            formatting_identity(Some("/root/worker"), Some("a"), Some("b")).unwrap(),
+            ("/root/worker".into(), "native")
+        );
     }
 }
