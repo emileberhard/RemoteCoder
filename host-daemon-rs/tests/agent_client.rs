@@ -288,7 +288,7 @@ async fn agent_client_explicit_context_uses_authenticated_owner_despite_stale_so
         assert_eq!(request["params"]["deliveryId"], "stable-detached-message");
         socket
             .send(Message::Text(
-                json!({"id":1,"result":{"accepted":true}}).to_string(),
+                json!({"id":1,"result":{"deliveryId":"stable-detached-message","deliveryState":{"kind":"accepted","receipt":"fixture-native-custody"}}}).to_string(),
             ))
             .await
             .unwrap();
@@ -318,7 +318,8 @@ async fn agent_client_explicit_context_uses_authenticated_owner_despite_stale_so
         )
         .await;
     assert_eq!(exit, 0);
-    assert_eq!(payload["accepted"], true);
+    assert_eq!(payload["deliveryId"], "stable-detached-message");
+    assert_eq!(payload["deliveryState"]["kind"], "accepted");
     assert!(
         tokio::time::timeout(Duration::from_millis(100), stale.accept())
             .await
@@ -406,6 +407,7 @@ async fn agent_client_active_listing_skips_history_pages_and_warns_only_for_acti
     for (limit, expected_rows, expected_warnings) in [(200, 2, 0), (1, 1, 1)] {
         let output = tokio::process::Command::new(env!("CARGO_BIN_EXE_remote-coder-codex-gateway"))
             .env_clear()
+            .env("HOME", root.path())
             .arg("--env-file")
             .arg(root.path().join("gateway.env"))
             .args([
