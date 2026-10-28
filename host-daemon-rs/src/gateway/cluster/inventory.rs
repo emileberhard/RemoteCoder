@@ -423,7 +423,8 @@ mod tests {
                 .cluster_rpc(&Grant::Operator, method, params)
                 .await
                 .unwrap_err();
-            let encoded = serde_json::to_value(error).unwrap();
+            let response = error.response(&Value::Null);
+            let encoded = &response["error"];
             assert_eq!(encoded["data"]["class"], "unavailable");
             assert!(
                 encoded["message"]
