@@ -436,8 +436,8 @@ impl Record<'_> {
                 Ok(local) => local,
                 Err(_) => {
                     self.db.execute(
-                        "INSERT OR IGNORE INTO dependency VALUES(?1,?2,'','external_image',NULL,0)",
-                        params![self.source, path],
+                        "INSERT OR IGNORE INTO dependency(source_id,path,local_path,kind,identity,present,origin_host) VALUES(?1,?2,'','external_image',NULL,0,?3)",
+                        params![self.source, path, self.origin.host],
                     )?;
                     continue;
                 }
@@ -447,7 +447,7 @@ impl Record<'_> {
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
                 Err(e) => return Err(e.into()),
             };
-            self.db.execute("INSERT INTO dependency(source_id,path,local_path,kind,identity,present) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(source_id,path) DO UPDATE SET identity=excluded.identity,present=excluded.present",params![self.source,path,local.to_string_lossy(),if sidecars.contains(path) {"sidecar"} else {"image"},identity,identity.is_some()])?;
+            self.db.execute("INSERT INTO dependency(source_id,path,local_path,kind,identity,present,origin_host) VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(source_id,path) DO UPDATE SET identity=excluded.identity,present=excluded.present",params![self.source,path,local.to_string_lossy(),if sidecars.contains(path) {"sidecar"} else {"image"},identity,identity.is_some(),self.origin.host])?;
         }
         let reference = SourceRef {
             path: self

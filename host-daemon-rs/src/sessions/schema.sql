@@ -8,7 +8,7 @@ CREATE TABLE IF NOT EXISTS source (
  ingested_offset INTEGER NOT NULL, revision INTEGER NOT NULL, present INTEGER NOT NULL,
  prefix_hash TEXT NOT NULL, parser_state TEXT NOT NULL, failure TEXT,
  append_state TEXT NOT NULL DEFAULT '{}',
- UNIQUE(origin_host,path));
+ UNIQUE(origin_host,path), UNIQUE(source_id,origin_host));
 CREATE TABLE IF NOT EXISTS session (
  session_key TEXT PRIMARY KEY, origin_host TEXT NOT NULL, provider TEXT NOT NULL,
  provider_home TEXT NOT NULL, thread_id TEXT NOT NULL, thread_id_reversed BLOB NOT NULL, cwd TEXT, title TEXT,
@@ -57,9 +57,10 @@ CREATE TRIGGER IF NOT EXISTS item_au AFTER UPDATE OF text ON item BEGIN
  INSERT INTO item_fts(rowid,text) VALUES(new.rowid,new.text);
 END;
 CREATE TABLE IF NOT EXISTS dependency (
- source_id INTEGER NOT NULL REFERENCES source ON DELETE CASCADE, path TEXT NOT NULL,
+ source_id INTEGER NOT NULL, origin_host TEXT NOT NULL, path TEXT NOT NULL,
  local_path TEXT NOT NULL, kind TEXT NOT NULL, identity TEXT, present INTEGER NOT NULL,
- PRIMARY KEY(source_id,path));
+ PRIMARY KEY(source_id,path),
+ FOREIGN KEY(source_id,origin_host) REFERENCES source(source_id,origin_host) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS change (
  seq INTEGER PRIMARY KEY AUTOINCREMENT, entity TEXT NOT NULL, key TEXT NOT NULL,
  op TEXT NOT NULL CHECK(op IN ('upsert','tombstone')), revision INTEGER NOT NULL,
@@ -68,13 +69,14 @@ CREATE INDEX IF NOT EXISTS change_age ON change(committed_at);
 CREATE TABLE IF NOT EXISTS coverage (
  origin_host TEXT PRIMARY KEY, mode TEXT NOT NULL CHECK(mode IN ('local','mirror')),
  indexed_through TEXT, complete_through TEXT, stale_reason TEXT,
- parse_failures INTEGER NOT NULL DEFAULT 0);
+ parse_failures INTEGER NOT NULL DEFAULT 0, provider_roots TEXT NOT NULL DEFAULT '[]');
 CREATE TABLE IF NOT EXISTS mirror_file (
  origin_host TEXT NOT NULL, path TEXT NOT NULL, identity TEXT NOT NULL,
  size INTEGER NOT NULL, received INTEGER NOT NULL, local_path TEXT NOT NULL,
  PRIMARY KEY(origin_host,path));
 
 CREATE INDEX IF NOT EXISTS dependency_path ON dependency(path,source_id);
+CREATE INDEX IF NOT EXISTS dependency_origin_path ON dependency(origin_host,path,source_id);
 CREATE INDEX IF NOT EXISTS source_failures ON source(origin_host) WHERE failure IS NOT NULL;
 CREATE INDEX IF NOT EXISTS dependency_missing ON dependency(source_id) WHERE present=0;
 

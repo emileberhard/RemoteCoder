@@ -1620,3 +1620,101 @@ fn sessions_active_malformed_record_keeps_a_gap_and_indexes_following_appends() 
     assert_eq!(scan(&f)["ingested"], 0);
     assert_eq!(revision(), before);
 }
+
+#[test]
+fn sessions_mirror_pages_seek_before_stats_and_deduplicate_shared_evidence() {
+    let directory = tempfile::tempdir().unwrap();
+    let home = directory.path().join("codex");
+    let root = home.join("sessions");
+    std::fs::create_dir_all(&root).unwrap();
+    let actual = root.join("actual.jsonl");
+    std::fs::write(&actual, b"fixture\n").unwrap();
+    let store = Store::open(directory.path().join("state/catalog.sqlite3")).unwrap();
+    {
+        let mut db = store.writer().unwrap();
+        let tx = db.transaction().unwrap();
+        for index in 0..1001 {
+            let path = root.join(if index < 500 {
+                format!("a{index:04}.jsonl")
+            } else {
+                format!("z{:04}.jsonl", index - 500)
+            });
+            tx.execute("INSERT INTO source(origin_host,provider,provider_home,path,local_path,file_identity,size,mtime_ns,ingested_offset,revision,present,prefix_hash,parser_state) VALUES('fixture','codex',?1,?2,?3,'',0,0,0,0,1,'','{}')", rusqlite::params![home.to_string_lossy(),path.to_string_lossy(),if index<500 {"/dev/null/not-a-directory"}else{actual.to_str().unwrap()}]).unwrap();
+        }
+        for id in [1, 2] {
+            tx.execute(
+                "INSERT INTO dependency VALUES(?1,'fixture',?2,?3,'image',NULL,1)",
+                rusqlite::params![
+                    id,
+                    root.join("zz-shared").to_string_lossy(),
+                    actual.to_string_lossy()
+                ],
+            )
+            .unwrap();
+        }
+        tx.execute(
+            "INSERT INTO coverage(origin_host,mode,provider_roots) VALUES('fixture','local',?1)",
+            [serde_json::to_string(&vec![&root]).unwrap()],
+        )
+        .unwrap();
+        tx.commit().unwrap();
+    }
+    let first = mirror::list(
+        &store,
+        "fixture",
+        Some(root.join("a0499.jsonl").to_string_lossy().into_owned()),
+    )
+    .unwrap();
+    assert_eq!(first["files"].as_array().unwrap().len(), 500);
+    let second = mirror::list(
+        &store,
+        "fixture",
+        Some(first["cursor"].as_str().unwrap().into()),
+    )
+    .unwrap();
+    assert_eq!(second["files"].as_array().unwrap().len(), 2);
+    assert!(second["cursor"].is_null());
+    assert_eq!(second["files"][1]["dependency"], true);
+    let steps: Vec<String> = store
+        .reader()
+        .unwrap()
+        .prepare(&format!("EXPLAIN QUERY PLAN {}", mirror::LIST_SQL))
+        .unwrap()
+        .query_map(["fixture", ""], |r| r.get(3))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert!(
+        steps
+            .iter()
+            .any(|step| step.contains("source") && step.contains("origin_host=? AND path>?")),
+        "{steps:?}"
+    );
+    assert!(
+        steps
+            .iter()
+            .any(|step| step.contains("dependency_origin_path")
+                && step.contains("origin_host=? AND path>?")),
+        "{steps:?}"
+    );
+    assert!(
+        !steps.iter().any(|step| step.contains("AUTOMATIC")),
+        "{steps:?}"
+    );
+}
+
+#[test]
+fn sessions_mirror_refuses_unavailable_roots_even_on_an_empty_cursor_page() {
+    let f = fixture();
+    scan(&f);
+    let root = f.origins[0].path();
+    std::fs::rename(&root, root.with_file_name("unavailable")).unwrap();
+    for cursor in [None, Some("zzzz".into())] {
+        assert!(
+            mirror::list(&f.store, "fixture", cursor)
+                .unwrap_err()
+                .to_string()
+                .contains("mirror presence is unknown")
+        );
+    }
+}

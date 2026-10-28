@@ -315,7 +315,12 @@ pub(super) fn scan_serving(
         } else {
             None
         };
-        db.execute("INSERT INTO coverage(origin_host,mode,indexed_through,complete_through,stale_reason,parse_failures) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(origin_host) DO UPDATE SET indexed_through=excluded.indexed_through,complete_through=CASE WHEN excluded.stale_reason IS NULL AND excluded.mode='local' THEN excluded.complete_through ELSE coverage.complete_through END,stale_reason=excluded.stale_reason,parse_failures=excluded.parse_failures",params![host,if local {"local"}else{"mirror"},at,if local&&reason.is_none(){Some(&at)}else{None},reason,errors])?;
+        let roots: Vec<_> = origins
+            .iter()
+            .filter(|origin| origin.host == host)
+            .map(Origin::path)
+            .collect();
+        db.execute("INSERT INTO coverage(origin_host,mode,indexed_through,complete_through,stale_reason,parse_failures,provider_roots) VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(origin_host) DO UPDATE SET indexed_through=excluded.indexed_through,complete_through=CASE WHEN excluded.stale_reason IS NULL AND excluded.mode='local' THEN excluded.complete_through ELSE coverage.complete_through END,stale_reason=excluded.stale_reason,parse_failures=excluded.parse_failures,provider_roots=excluded.provider_roots",params![host,if local {"local"}else{"mirror"},at,if local&&reason.is_none(){Some(&at)}else{None},reason,errors,serde_json::to_string(&roots)?])?;
     }
     changes::prune(&db)?;
     db.execute_batch("PRAGMA wal_checkpoint(PASSIVE);")?;
