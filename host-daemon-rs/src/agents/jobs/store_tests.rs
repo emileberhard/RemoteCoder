@@ -104,7 +104,7 @@ async fn cluster_fault_commits_survive_restart_and_fence_parent_handover() {
     drop(store);
     let store = JobStore::open(root.clone()).await.unwrap();
     assert!(store.admit(original.clone()).await.unwrap().1);
-    assert_eq!(store.agent_rows().await.unwrap().len(), 1);
+    assert_eq!(store.agent_ids().await.unwrap().len(), 1);
     let done = store
         .advance(
             original.job_id.clone(),

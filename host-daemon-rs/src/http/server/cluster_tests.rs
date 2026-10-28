@@ -182,7 +182,7 @@ async fn cluster_fault_capacity_refuses_before_provider_custody() {
             .store()
             .await
             .unwrap()
-            .agent_rows()
+            .agent_ids()
             .await
             .unwrap()
             .len(),
@@ -248,7 +248,7 @@ async fn cluster_fault_admission_replay_fences_and_incarnation() {
             .store()
             .await
             .unwrap()
-            .agent_rows()
+            .agent_ids()
             .await
             .unwrap()
             .len(),
@@ -413,7 +413,7 @@ async fn cluster_fault_admission_replay_fences_and_incarnation() {
             .store()
             .await
             .unwrap()
-            .agent_rows()
+            .agent_ids()
             .await
             .unwrap()
             .len(),

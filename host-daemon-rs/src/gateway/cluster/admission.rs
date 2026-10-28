@@ -384,10 +384,7 @@ impl Gateway {
                     .await?;
             }
         }
-        for agent in store.agent_rows().await? {
-            let Some(id) = agent.latest_job_id else {
-                continue;
-            };
+        for id in store.pending_ids().await? {
             let job = store.read(id.clone()).await?;
             if job.admitted_membership.as_deref() == Some(membership)
                 && !matches!(job.execution, ExecutionState::Terminal { .. })
