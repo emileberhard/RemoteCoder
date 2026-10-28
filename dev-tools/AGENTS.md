@@ -26,6 +26,26 @@ advertised capability and a usable connection afterwards. It stops its own
 processes and removes the private root on success; failure retains the root as
 evidence. It never connects to an installed gateway or starts an agent turn.
 
+## Delegated-job isolation probe
+
+`bun dev-tools/probes/delegated-jobs.mjs <candidate> <matched-runtime-package>`
+uses `IsolatedGateway`, a loopback Responses model, and isolated provider homes.
+Its Claude child uses the host router without copying provider credentials.
+It checks message-to-finished continuation deduplication and failure receipts
+through the installed candidate CLI, including isolated gateway restart.
+
+Optional `--seed <absolute-private-manifest.json>` checks copied conversation
+agent projections through real RPC. The version-1 manifest has `snapshot: true`,
+`jobStore` (relative directory with bounded `jobs`, `agents`, `uncertainties`),
+`transcripts` (`threadId`, relative `path`), and `queries` (`threadId`,
+`expectedAgentIds`, optional `warningContains`). Capture the selected jobs,
+continuation branches and ancestors outside Git; include matching agent records.
+Provider homes and directory/transcript references are remapped into the lab.
+Copied jobs become imported snapshots with Stop intent cleared, preventing the
+job driver from executing historical work. The receipt names these alterations:
+this proves static projection and isolation, not historical execution state.
+The probe verifies the copied job records remain unchanged during reads.
+
 ## rc-gateway
 
 - **Config discovery:** CLI flags, then `RC_CODEX_GATEWAY_*` env vars, then the

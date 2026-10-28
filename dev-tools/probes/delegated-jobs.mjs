@@ -3,8 +3,12 @@ import { cp, mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import { randomBytes, randomInt, randomUUID } from "node:crypto";
 import { IsolatedGateway, startStubRouter } from "./isolated-gateway.mjs";
+import { installSeed, inspectSeed } from "./delegated-job-seed.mjs";
 
-const [binary, runtimePackage] = process.argv.slice(2);
+const [binary, runtimePackage, ...options] = process.argv.slice(2);
+assert(options.length === 0 || options.length === 2 && options[0] === "--seed" && isAbsolute(options[1]),
+    "Optional --seed requires an absolute private seed manifest path");
+const seedPath = options[1];
 assert(binary && isAbsolute(binary), "Pass the built gateway executable as an absolute path");
 assert(runtimePackage && isAbsolute(runtimePackage), "Pass the matched Codex runtime package directory");
 
@@ -53,7 +57,7 @@ function startModel() {
             const lastUser = input.findLastIndex(item => item.role === "user");
             const texts = input.filter(item => item.role === "user")
                 .map(item => (item.content ?? []).map(part => part.text ?? "").join("\n"));
-            const latest = texts.findLast(text => marker.test(text)) ?? texts.at(-1) ?? "";
+            const latest = texts.at(-1) ?? "";
             const answered = input.slice(lastUser + 1).some(item => item.type === "function_call_output");
             const [, kind, name] = latest.match(marker) ?? [];
             requests.push({ kind: kind ?? "other", name: name ?? null, answered });
@@ -167,8 +171,13 @@ async function runtimeFlows(lab, model) {
     assert(!started.error, `thread/start failed: ${JSON.stringify(started.error)}`);
     const parent = started.result.thread.id;
     receipt.parent = parent;
-    const spawn = (provider, model, prompt) => [binary, "--env-file", lab.path("gateway.env"), "agent", "spawn", provider,
-        model, prompt, "--job-id", jobId(provider), "--json"].map(part => `'${part.replaceAll("'", "'\\''")}'`).join(" ");
+    const childIds = new Set();
+    const spawn = (provider, model, prompt) => {
+        const id = jobId(provider);
+        childIds.add(id);
+        return [binary, "--env-file", lab.path("gateway.env"), "agent", "spawn", provider,
+        model, prompt, "--job-id", id, "--json"].map(part => `'${part.replaceAll("'", "'\\''")}'`).join(" ");
+    };
     const command = [
         spawn("codex", probeModel, "RCJOB_ECHO:codex-child"),
         spawn("claude", "sonnet", "Reply with exactly RCJOB_RESULT:claude-child and nothing else. Do not use tools."),
@@ -179,7 +188,7 @@ async function runtimeFlows(lab, model) {
 
     const children = await lab.waitFor(async () => {
         const list = await agent(lab, ["list", "--json", "--last", "10"]);
-        const rows = list.agents.filter(row => row.conversation?.conversation?.threadId !== parent);
+        const rows = list.agents.filter(row => childIds.has(row.run_id));
         return rows.length >= 2 ? rows : null;
     }, 120);
     for (const provider of ["codex", "claude"]) {
@@ -197,6 +206,8 @@ async function runtimeFlows(lab, model) {
         return children.every(row => text.includes(`${row.run_id}:completion`)) ? text : null;
     }, 120);
     receipt.parentCallbacks = children.map(row => items.includes(`${row.run_id}:completion`));
+
+    receipt.messages = await messageFlows(lab, receipt.codexChild.jobId);
 
     const stopId = jobId("codex");
     await agent(lab, ["spawn", "codex", probeModel, "RCJOB_HOLD:stop-child", "--job-id", stopId, "--operator", "--json"]);
@@ -226,6 +237,60 @@ async function runtimeFlows(lab, model) {
     return receipt;
 }
 
+async function messageFlows(lab, finishedJob) {
+    await settle(lab, finishedJob, job => terminal(job)?.cleanup === "complete");
+    const deliveryId = randomUUID();
+    const args = ["message", finishedJob, "RCJOB_ECHO:message-continuation", "--delivery-id", deliveryId, "--operator", "--json"];
+    const first = await agent(lab, args);
+    assert.equal(first.deliveryState.kind, "accepted", "Message to a finished job was not admitted as a continuation");
+    const successor = first.resolved?.continuation?.jobId;
+    assert(successor, "Message receipt has no exact continuation job ID");
+    const duplicate = await agent(lab, args);
+    assert.equal(duplicate.resolved.continuation.jobId, successor, "Duplicate message admitted another continuation");
+    const completed = await settle(lab, successor, job => terminal(job) !== null);
+    assert.equal(terminal(completed).outcome.kind, "completed");
+    assert(JSON.stringify(terminal(completed).result).includes("RCJOB_RESULT:message-continuation"));
+    const afterCompletion = await agent(lab, args);
+    assert.equal(afterCompletion.resolved.continuation.jobId, successor, "Retry after completion followed the newer job");
+    const stored = await agent(lab, ["receipt", deliveryId, "--json"]);
+    assert.deepEqual(stored, first, "Stored accepted message receipt changed after duplicate requests");
+    const list = await agent(lab, ["list", successor, "--json", "--last", "20"]);
+    const related = list.agents.filter(row => row.run_id === successor);
+    assert.equal(related.length, 1, "The continuation was missing or duplicated in the real list");
+
+    const unreachableId = randomUUID();
+    const unreachableSession = randomUUID();
+    const unreachableTarget = `claude_${unreachableSession}`;
+    const project = lab.path(`.claude/projects/${lab.path("work").replace(/[^a-zA-Z0-9]/g, "-")}`);
+    await mkdir(project, { recursive: true });
+    await writeFile(join(project, `${unreachableSession}.jsonl`), JSON.stringify({ type: "user", uuid: randomUUID(),
+        sessionId: unreachableSession, cwd: lab.path("work"), timestamp: new Date().toISOString(),
+        message: { role: "user", content: "Isolated native parent with no live route holder" } }) + "\n", { mode: 0o600 });
+    const unreachableArgs = ["message", unreachableTarget, "Isolated unreachable delivery fixture", "--delivery-id", unreachableId,
+        "--operator", "--json"];
+    const refused = await agent(lab, unreachableArgs, { allowFailure: true });
+    assert.notEqual(refused.status, 0, "Unreachable message command falsely exited successfully");
+    const refusedReceipt = await agent(lab, ["receipt", unreachableId, "--json"]);
+    assert(["unreachable", "failed", "blocked"].includes(refusedReceipt.deliveryState.kind),
+        "Refused delivery has no durable failure receipt");
+    await lab.stop();
+    await lab.start();
+    assert.deepEqual(await agent(lab, ["receipt", unreachableId, "--json"]), refusedReceipt,
+        "Failure receipt was lost across isolated gateway restart");
+    assert.deepEqual(await agent(lab, ["receipt", deliveryId, "--json"]), first,
+        "Accepted continuation receipt was lost across isolated gateway restart");
+    const retried = await agent(lab, unreachableArgs, { allowFailure: true });
+    assert.notEqual(retried.status, 0, "Unreachable retry falsely exited successfully");
+    const retryReceipt = await agent(lab, ["receipt", unreachableId, "--json"]);
+    assert.equal(retryReceipt.requestFingerprint, refusedReceipt.requestFingerprint);
+    assert.equal(retryReceipt.createdAtMs, refusedReceipt.createdAtMs);
+    assert.equal(retryReceipt.resolved?.continuation ?? null, null, "Failed retry admitted unrelated work");
+    return { deliveryId, successor, duplicateSuccessor: duplicate.resolved.continuation.jobId,
+        unreachableId, refusedExit: refused.status, retryExit: retried.status,
+        refusedState: refusedReceipt.deliveryState.kind, retryState: retryReceipt.deliveryState.kind,
+        persistedAcrossRestart: true };
+}
+
 const model = startModel();
 const inference = await hostRouter();
 const lab = await IsolatedGateway.create(binary);
@@ -234,6 +299,12 @@ try {
     await prepare(lab, model, inference);
     await lab.start();
     const receipt = { runtime: await runtimeFlows(lab, model) };
+    if (seedPath) {
+        await lab.stop();
+        const seed = await installSeed(lab, seedPath);
+        await lab.start();
+        receipt.seed = await inspectSeed(lab, seed);
+    }
     console.log(JSON.stringify(receipt, null, 1));
 } catch (error) {
     failure = error;
