@@ -123,6 +123,64 @@ impl ClaudeSupervisor {
         Ok(group)
     }
 
+    pub(super) async fn recover_stored_cwd(
+        &self,
+        request: &mut ClaudeTurnRequest,
+        launch: &super::jobs::LaunchPolicy,
+    ) -> Result<(), TurnStartError> {
+        match fs::metadata(&request.cwd) {
+            Ok(_) => return Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(TurnStartError {
+                    data: None,
+                    code: RpcCode::InvalidParams,
+                    message: format!(
+                        "Claude working directory {} is unavailable: {error}",
+                        request.cwd
+                    ),
+                });
+            }
+        }
+        if request.first_turn
+            || !matches!(launch.scope(), crate::agents::jobs::model::ToolScope::Full)
+        {
+            return Ok(());
+        }
+        let Some(path) = self.session_history(&request.cwd, &request.session_uuid) else {
+            return Ok(());
+        };
+        let session_uuid = request.session_uuid.clone();
+        let cwd = request.cwd.clone();
+        let replacement = tokio::task::spawn_blocking(move || {
+            crate::providers::claude::timeline::existing_recorded_cwd(&path, &session_uuid, &cwd)
+        })
+        .await
+        .map_err(|error| TurnStartError {
+            data: None,
+            code: RpcCode::Internal,
+            message: format!("Claude cwd recovery failed for {}: {error}", request.cwd),
+        })?
+        .map_err(|error| TurnStartError {
+            data: None,
+            code: RpcCode::Internal,
+            message: format!("Claude cwd recovery failed for {}: {error:#}", request.cwd),
+        })?;
+        if let Some(cwd) = replacement {
+            self.journal.runtime(
+                "cwd_recovered",
+                json!({
+                    "threadId": request.thread_id,
+                    "previousCwd": request.cwd,
+                    "cwd": cwd,
+                    "source": "exactSessionTranscript",
+                }),
+            );
+            request.cwd = cwd;
+        }
+        Ok(())
+    }
+
     pub(super) fn spawn_runtime(
         &self,
         request: &ClaudeTurnRequest,
@@ -145,11 +203,29 @@ impl ClaudeSupervisor {
                 message,
             });
         }
+        let metadata = fs::metadata(&request.cwd).map_err(|error| TurnStartError {
+            data: None,
+            code: RpcCode::InvalidParams,
+            message: format!(
+                "Claude working directory {} is unavailable: {error}",
+                request.cwd
+            ),
+        })?;
+        if !metadata.is_dir() {
+            return Err(TurnStartError {
+                data: None,
+                code: RpcCode::InvalidParams,
+                message: format!(
+                    "Claude working directory {} is not a directory",
+                    request.cwd
+                ),
+            });
+        }
         self.spawn_process(request, launch)
             .map_err(|err| TurnStartError {
                 data: None,
                 code: RpcCode::Internal,
-                message: format!("failed to spawn claude: {err}"),
+                message: format!("failed to spawn claude in {}: {err}", request.cwd),
             })
     }
 
@@ -184,6 +260,24 @@ impl ClaudeSupervisor {
             request,
             mcp.as_ref().map(|access| access.config_path.as_path()),
         );
+        if !request.first_turn {
+            let history = self
+                .session_history(&request.cwd, &request.session_uuid)
+                .ok_or_else(|| {
+                    std::io::Error::other("Claude session history disappeared before launch")
+                })?;
+            let expected = crate::providers::claude::timeline::session_path_for_cwd(
+                &self.settings.claude_home,
+                &request.cwd,
+                &request.session_uuid,
+            );
+            if history != expected && history.canonicalize().ok() != expected.canonicalize().ok() {
+                let resume = args
+                    .last_mut()
+                    .expect("Claude stream arguments include the session");
+                *resume = history.canonicalize()?.to_string_lossy().into_owned();
+            }
+        }
         launch.apply_args(&mut args);
         let mut command = claude_exec::command(&self.settings, &args)?;
         launch.apply_env(&mut command);

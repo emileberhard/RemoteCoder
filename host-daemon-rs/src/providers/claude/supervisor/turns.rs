@@ -88,6 +88,7 @@ impl ClaudeSupervisor {
         origin: TurnOrigin,
         policy: super::jobs::LaunchPolicy,
     ) -> Result<String, TurnStartError> {
+        self.recover_stored_cwd(&mut request, &policy).await?;
         request.input.client_id.get_or_insert_with(new_session_uuid);
         self.prepare_job_resume(&request, &policy).await?;
         let prepared = super::input_writer::InputWriter::prepare_input(&request.input)
@@ -779,5 +780,13 @@ impl ClaudeSupervisor {
                 )
             })
             .find(|path| path.is_file())
+            .or_else(|| {
+                crate::providers::claude::timeline::find_session_path(
+                    session_uuid,
+                    &self.settings.claude_home,
+                )
+                .ok()
+                .flatten()
+            })
     }
 }

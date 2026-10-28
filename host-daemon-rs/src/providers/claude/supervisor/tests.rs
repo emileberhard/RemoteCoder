@@ -875,6 +875,113 @@ async fn a_pending_start_holds_its_thread_and_cancellation_releases_it() {
 }
 
 #[tokio::test]
+async fn deleted_recorded_cwd_resumes_the_exact_transcript_in_an_existing_recorded_directory() {
+    let home = ClaudeSettings::isolated_for_test();
+    let cwd = home.root_path().join("repository");
+    fs::create_dir_all(&cwd).unwrap();
+    let missing = home.root_path().join("removed-worktree");
+    let stub = home.root_path().join("claude-stub");
+    fs::write(
+        &stub,
+        "#!/bin/sh\nprintf '%s\\n' \"$PWD\" \"$@\"\nexec cat\n",
+    )
+    .unwrap();
+    fs::set_permissions(&stub, std::os::unix::fs::PermissionsExt::from_mode(0o700)).unwrap();
+    let (tx, _rx) = mpsc::channel(16);
+    let agent = ClaudeSupervisor::new(
+        ClaudeSettings {
+            claude_path: stub,
+            ..home.settings.clone()
+        },
+        tx,
+        Journal::disabled(),
+        McpTokens::default(),
+    );
+    let mut turn = request("claude_a", false);
+    turn.cwd = missing.to_string_lossy().into_owned();
+    let transcript = crate::providers::claude::timeline::session_path_for_cwd(
+        &home.settings.claude_home,
+        &turn.cwd,
+        &turn.session_uuid,
+    );
+    fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+    fs::write(
+        &transcript,
+        format!(
+            "{}\n{}\n",
+            json!({"type":"user","sessionId":turn.session_uuid,"cwd":turn.cwd}),
+            json!({"type":"assistant","sessionId":turn.session_uuid,"cwd":cwd}),
+        ),
+    )
+    .unwrap();
+    let full = super::jobs::LaunchPolicy::Conversation {
+        scope: crate::agents::jobs::model::ToolScope::Full,
+    };
+    agent.recover_stored_cwd(&mut turn, &full).await.unwrap();
+    assert_eq!(Path::new(&turn.cwd), cwd);
+    let mut spawned = agent.spawn_runtime(&turn, &full).unwrap();
+    let mut lines = BufReader::new(&mut spawned.stdout).lines();
+    let observed = tokio::time::timeout(Duration::from_secs(5), async {
+        let mut lines_seen = Vec::new();
+        while let Some(line) = lines.next_line().await.unwrap() {
+            let done = lines_seen
+                .last()
+                .is_some_and(|previous| previous == "--resume");
+            lines_seen.push(line);
+            if done {
+                break;
+            }
+        }
+        lines_seen
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        Path::new(&observed[0]).canonicalize().unwrap(),
+        cwd.canonicalize().unwrap()
+    );
+    assert_eq!(
+        observed.last().unwrap(),
+        &transcript
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned()
+    );
+    assert!(
+        !observed
+            .iter()
+            .any(|arg| matches!(arg.as_str(), "--fork-session" | "--session-id"))
+    );
+    let mut arbitrary = request("claude_a", false);
+    arbitrary.cwd = home
+        .root_path()
+        .join("never-recorded")
+        .to_string_lossy()
+        .into_owned();
+    agent
+        .recover_stored_cwd(&mut arbitrary, &full)
+        .await
+        .unwrap();
+    let error = agent.spawn_runtime(&arbitrary, &full).err().unwrap();
+    assert_eq!(error.code, RpcCode::InvalidParams);
+    assert!(error.message.contains(&arbitrary.cwd));
+    let restricted = super::jobs::LaunchPolicy::Conversation {
+        scope: crate::agents::jobs::model::ToolScope::ReadOnly {
+            root: missing.clone(),
+        },
+    };
+    turn.cwd = missing.to_string_lossy().into_owned();
+    agent
+        .recover_stored_cwd(&mut turn, &restricted)
+        .await
+        .unwrap();
+    assert_eq!(Path::new(&turn.cwd), missing);
+    assert!(agent.spawn_runtime(&turn, &restricted).is_err());
+    drop(spawned);
+}
+
+#[tokio::test]
 async fn failed_spawn_releases_its_thread_reservation() {
     let claude_test = ClaudeSettings::isolated_for_test();
     let root = tempfile::tempdir().unwrap();

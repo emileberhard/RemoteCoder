@@ -1291,6 +1291,14 @@ Claude. The `RC_CLAUDE_*` settings are in
       bound. A restart captures an idle runtime whose hold is
       live and resumes it, so its crons come back with `--resume` and the
       notice asks the model to re-arm its `/loop`.
+- **Claude resume identity is independent of cwd.** A resumed conversation resolves
+  its exact UUID transcript inside the configured Claude home. A different launch
+  directory uses the absolute transcript path with `--resume`, never a fork or a
+  fresh session. If a full-access thread's recorded cwd disappeared, its exact
+  transcript may supply the latest existing recorded cwd; `cwd_recovered` records
+  both paths. Unrecorded missing overrides fail with their path. Read-only scopes
+  never recover into another directory. The runtime and saved parent selection
+  retain the effective launch cwd.
 - **Turns have no wall-clock cap**, in either provider. A turn ends when the
   agent ends it, when the process dies or when the user interrupts. Turns can
   legitimately run for hours, and a long silent tool call looks the same as a
