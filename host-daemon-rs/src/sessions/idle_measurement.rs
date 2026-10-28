@@ -47,6 +47,9 @@ fn wait_text(store: &Store, thread: &str, text: &str, since: Instant) -> Result<
 }
 
 pub(super) fn run(store: &Store, origins: &[Origin], mode: &str) -> Result<()> {
+    if mode == "active" {
+        return active(store, origins);
+    }
     ensure!(
         mode == "after",
         "The baseline uses its preserved executable"
@@ -229,6 +232,80 @@ pub(super) fn run(store: &Store, origins: &[Origin], mode: &str) -> Result<()> {
     let new_seconds = wait_text(store, "fleet-idle-new", "fleetidlenewprobe", started)?;
     worker.stop()?;
     let report = json!({"phase":mode,"readResolverPlan":read_resolver_plan,"sourceSelectionPlan":source_selection_plan,"oldReadResolverPlan":old_read_plan,"suffixPlan":suffix_plan,"headerSeconds":header_seconds,"headerComplete":header_complete,"directories":directory_counts,"directoryDiscoveryP95Seconds":discovery_times[9],"inventoryCatchupP95Seconds":inventory_times[9],"initialSeconds":initial_seconds,"initialCpuSeconds":initial_cpu,"initial":initial,"reconcileSeconds":reconcile_seconds,"reconcileCpuSeconds":reconcile_cpu,"outcome":reconcile,"cpuSeconds":idle_cpu,"elapsedSeconds":elapsed,"cpuSecondsPerMinute":idle_cpu*60.0/elapsed,"amortizedReconcileCpuSecondsPerMinute":reconcile_cpu/10.0,"databaseWrittenDuringQuiet":false,"coldAppendSeconds":append_seconds,"newFileSeconds":new_seconds});
+    std::fs::write(
+        std::env::var("RC_SESSIONS_MEASURE_REPORT")?,
+        serde_json::to_vec_pretty(&report)?,
+    )?;
+    println!("{report}");
+    Ok(())
+}
+
+fn active(store: &Store, origins: &[Origin]) -> Result<()> {
+    ensure!(
+        origins.len() == 1 && origins[0].provider == "codex",
+        "Active probe needs one isolated Codex origin"
+    );
+    let control = std::path::PathBuf::from(std::env::var("RC_SESSIONS_ACTIVE_CONTROL")?);
+    std::fs::create_dir_all(&control)?;
+    let path = origins[0].path().join("fleet-active.jsonl");
+    std::fs::create_dir_all(path.parent().unwrap())?;
+    let mut file = std::io::BufWriter::new(
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)?,
+    );
+    writeln!(
+        file,
+        "{}",
+        json!({"type":"session_meta","payload":{"id":"fleet-active"}})
+    )?;
+    let padding = json!({"type":"measurement_padding","padding":"x".repeat(1 << 20)}).to_string();
+    for _ in 0..200 {
+        writeln!(file, "{padding}")?;
+    }
+    file.flush()?;
+    drop(file);
+    ingest::scan(store, origins, &AtomicBool::new(false))?;
+    let prior: Option<String> =
+        store
+            .reader()?
+            .query_row("SELECT max(indexed_through) FROM coverage", [], |row| {
+                row.get(0)
+            })?;
+    let worker = Worker::start(store.clone(), origins.to_vec())?;
+    let waiting = Instant::now();
+    loop {
+        let current: Option<String> =
+            store
+                .reader()?
+                .query_row("SELECT max(indexed_through) FROM coverage", [], |row| {
+                    row.get(0)
+                })?;
+        if current != prior {
+            break;
+        }
+        ensure!(
+            waiting.elapsed() < Duration::from_secs(30),
+            "Active worker did not become ready"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let initial_bytes = path.metadata()?.len();
+    let started = Instant::now();
+    let cpu = cpu_seconds();
+    std::fs::write(control.join("ready"), b"ready")?;
+    while !control.join("done").exists() {
+        ensure!(
+            started.elapsed() < Duration::from_secs(90),
+            "Active driver did not finish"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let elapsed = started.elapsed().as_secs_f64();
+    let used = cpu_seconds() - cpu;
+    worker.stop()?;
+    let report = json!({"phase":"active","initialBytes":initial_bytes,"elapsedSeconds":elapsed,"cpuSeconds":used,"cpuSecondsPerMinute":used * 60.0 / elapsed});
     std::fs::write(
         std::env::var("RC_SESSIONS_MEASURE_REPORT")?,
         serde_json::to_vec_pretty(&report)?,
