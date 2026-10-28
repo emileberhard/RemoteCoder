@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 pub(crate) struct Store {
     pub path: PathBuf,
     pub storage: std::sync::Arc<super::storage::Storage>,
+    pub(super) worker: std::sync::Arc<std::sync::OnceLock<std::sync::Arc<super::worker::Mailbox>>>,
 }
 
 impl Store {
@@ -18,7 +19,11 @@ impl Store {
             .context("Session database needs a parent directory")?;
         private_state::ensure_private_directory(parent)?;
         let storage = std::sync::Arc::new(super::storage::Storage::new(&path)?);
-        let store = Self { path, storage };
+        let store = Self {
+            path,
+            storage,
+            worker: Default::default(),
+        };
         let mut db = store.writer()?;
         let version: u32 = db.pragma_query_value(None, "user_version", |r| r.get(0))?;
         if version != 0 && version != SCHEMA_VERSION {

@@ -444,6 +444,7 @@ fn sessions_previous_schema_rebuilds_projection_and_expires_cursor() {
 fn sessions_spawn_then_resolve_catches_up_before_worker_scan() {
     let f = fixture();
     scan(&f);
+    let worker = super::worker::Worker::start(f.store.clone(), f.origins.clone()).unwrap();
     let new = f.codex.with_file_name("newly-spawned.jsonl");
     write(
         &new,
@@ -452,9 +453,10 @@ fn sessions_spawn_then_resolve_catches_up_before_worker_scan() {
             json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"afteridentityneedle"}]}}),
         ],
     );
-    ingest::refresh_inventory(&f.store, &f.origins).unwrap();
+    ingest::refresh_inventory(&f.store).unwrap();
     let page = query::inventory(&f.store.reader().unwrap(), None, 1000).unwrap();
     assert!(page.sessions.iter().any(|h| h.thread_id == "newly-spawned"));
+    worker.stop().unwrap();
     scan(&f);
     assert_eq!(
         search(&f.store, "afteridentityneedle")["hits"]
@@ -463,8 +465,11 @@ fn sessions_spawn_then_resolve_catches_up_before_worker_scan() {
             .len(),
         1
     );
+    let next = Store::open(f.store.path.clone()).unwrap();
+    let worker = super::worker::Worker::start(next.clone(), f.origins.clone()).unwrap();
     std::fs::write(f.codex.with_file_name("pending-identity.jsonl"), b"{").unwrap();
-    assert!(ingest::refresh_inventory(&f.store, &f.origins).is_err());
+    assert!(ingest::refresh_inventory(&next).is_err());
+    worker.stop().unwrap();
 }
 
 #[test]

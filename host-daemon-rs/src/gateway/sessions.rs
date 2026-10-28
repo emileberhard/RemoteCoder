@@ -147,11 +147,10 @@ impl Gateway {
         let runtime = self.sessions_runtime().await?;
         let permit = runtime.readers.clone().acquire_owned().await?;
         let store = runtime.store.clone();
-        let origins = runtime.origins.clone();
         tokio::task::spawn_blocking(move || {
             let _permit = permit;
             if after.is_none() {
-                crate::sessions::ingest::refresh_inventory(&store, &origins)?;
+                crate::sessions::ingest::refresh_inventory(&store)?;
             }
             query::inventory(&store.reader()?, after.as_deref(), limit)
         })

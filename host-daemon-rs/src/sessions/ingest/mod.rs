@@ -125,8 +125,20 @@ pub(crate) fn scan_scope(
     scope: Scope<'_>,
     stop: &AtomicBool,
 ) -> Result<Value> {
+    scan_serving(store, origins, scope, stop, &mut |_| Ok(()))
+}
+
+pub(super) fn scan_serving(
+    store: &Store,
+    origins: &[Origin],
+    scope: Scope<'_>,
+    stop: &AtomicBool,
+    between: &mut impl FnMut(&mut Connection) -> Result<()>,
+) -> Result<Value> {
     let mut ingested = 0;
     let mut failures = 0;
+    let mut longest_source = 0.0_f64;
+    let mut slow_sources = 0;
     let mut changed_hosts = BTreeSet::new();
     let at = super::now();
     for origin in origins {
@@ -178,8 +190,10 @@ pub(crate) fn scan_scope(
                         params![origin.host, original],
                     )?;
                     tx.commit()?;
+                    between(&mut db)?;
                     continue;
                 }
+                let started = std::time::Instant::now();
                 match ingest(&mut db, origin, path, stop) {
                     Ok(changed) => ingested += usize::from(changed),
                     Err(error) => {
@@ -187,6 +201,10 @@ pub(crate) fn scan_scope(
                         db.execute("INSERT INTO source(origin_host,provider,provider_home,path,local_path,file_identity,size,mtime_ns,ingested_offset,revision,present,prefix_hash,parser_state,failure) VALUES(?1,?2,?3,?4,?5,'',0,0,0,0,1,'','{}',?6) ON CONFLICT(origin_host,path) DO UPDATE SET failure=excluded.failure",params![origin.host,origin.provider,origin.provider_home.to_string_lossy(),original,path.to_string_lossy(),format!("{error:#}")])?;
                     }
                 }
+                let elapsed = started.elapsed().as_secs_f64();
+                longest_source = longest_source.max(elapsed);
+                slow_sources += usize::from(elapsed > 5.0);
+                between(&mut db)?;
             }
         }
     }
@@ -217,39 +235,31 @@ pub(crate) fn scan_scope(
     }
     changes::prune(&db)?;
     db.execute_batch("PRAGMA wal_checkpoint(PASSIVE);")?;
-    Ok(serde_json::json!({"ingested":ingested,"parseFailures":failures}))
+    Ok(
+        serde_json::json!({"ingested":ingested,"parseFailures":failures,"longestSourceSeconds":longest_source,"sourcesOverFiveSeconds":slow_sources}),
+    )
 }
 
-pub(crate) fn refresh_inventory(store: &Store, origins: &[Origin]) -> Result<()> {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    let mut db = store.writer()?;
-    for origin in origins {
-        let known:BTreeSet<String>=db.prepare("SELECT path FROM source JOIN session USING(source_id) WHERE source.origin_host=?1 AND source.provider=?2 AND source.provider_home=?3 AND source.present=1")?.query_map(params![origin.host,origin.provider,origin.provider_home.to_string_lossy()],|r|r.get(0))?.collect::<rusqlite::Result<_>>()?;
-        for path in files(origin)? {
-            ensure!(
-                std::time::Instant::now() < deadline,
-                "unavailable: inventory catch-up exceeded five seconds"
-            );
-            let original = origin.original(&path)?.to_string_lossy().into_owned();
-            if !known.contains(&original) {
-                ingest_source(
-                    &mut db,
-                    origin,
-                    &path,
-                    &AtomicBool::new(false),
-                    ReadMode::Inventory,
-                )?;
-                let present:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM source JOIN session USING(source_id) WHERE source.origin_host=?1 AND source.path=?2)",params![origin.host,original],|r|r.get(0))?;
-                ensure!(
-                    present,
-                    "unavailable: transcript exists without a complete identity record"
-                );
-            }
-        }
-    }
+pub(crate) fn refresh_inventory(store: &Store) -> Result<()> {
+    store
+        .worker
+        .get()
+        .context("unavailable: session worker is not running")?
+        .inventory()
+}
+
+pub(super) fn header(
+    db: &mut Connection,
+    origin: &Origin,
+    path: &Path,
+    stop: &AtomicBool,
+) -> Result<()> {
+    ingest_source(db, origin, path, stop, ReadMode::Inventory)?;
+    let original = origin.original(path)?.to_string_lossy().into_owned();
+    let present: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM source JOIN session USING(source_id) WHERE source.origin_host=?1 AND source.path=?2)",params![origin.host,original],|r|r.get(0))?;
     ensure!(
-        std::time::Instant::now() < deadline,
-        "unavailable: inventory catch-up exceeded five seconds"
+        present,
+        "unavailable: transcript exists without a complete identity record"
     );
     Ok(())
 }

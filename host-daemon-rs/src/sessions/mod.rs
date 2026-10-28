@@ -1,5 +1,6 @@
 pub(crate) mod changes;
 pub(crate) mod cluster;
+mod discovery;
 pub(crate) mod ingest;
 pub(crate) mod mirror;
 pub(crate) mod query;

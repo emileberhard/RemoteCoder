@@ -7,10 +7,20 @@ It does not own semantic memory or agent execution.
 
 `Gateway::session_inventory` exposes paged canonical provider headers to lifecycle
 reads without introducing another transcript reader. The matching `sessions/list`
-RPC returns at most 1,000 headers and 8 MiB per page. The first page catches up
-new transcript identities through the same parser, with a five-second discovery
-deadline and an 8 MiB/128-record identity budget per new source. Partial identities
-and concurrent ingest return unavailable rather than a false empty inventory.
+RPC returns at most 1,000 headers and 8 MiB per page. First-page callers share a
+bounded worker mailbox (64 requests); one discovery pass serves the waiting
+callers. The worker alone writes local projection and identity changes, serving
+catch-up between atomic source saves. Directory revisions find new files before
+FSEvents delivery by statting known directories and enumerating only changed or
+new directories, including nested Codex date folders. Removed directories leave
+the map. Directory revisions and unresolved header paths are each capped at
+100,000; overflow reports capacity without an unbounded walk. Full background
+reconciles rebuild that discovery map and ingest missing headers before content.
+Identity reads use the same parser with an 8 MiB/128-record budget. Partial
+identities remain unavailable. A file created during an unusually long atomic
+source save can hit the explicit five-second inventory deadline; its rows never
+become a false empty result. Source-save durations are reported as aggregate
+longestSourceSeconds and sourcesOverFiveSeconds by ingestion.
 
 `schema.sql` is the versioned schema; `views.sql` provides analytics conveniences.
 `source.local_path` separates an origin path from a mirror path. Byte spans and
@@ -49,7 +59,9 @@ carry schema version, database epoch and monotonic sequence;
 updates and their feed records share a transaction. Retention never deletes raw
 provider evidence. The catalog, WAL, raw mirror and temporary copies share one
 64 GiB cap and a fixed 20 GiB free-space floor. One storage lock serializes disk
-mutations. Every flock lease explicitly unlocks before closing, so forked provider
+mutations. In-process contenders wait up to five seconds on the storage owner's
+admission gate; an independent process holding the flock still refuses admission.
+The mirror transfer owner never holds that lease across network I/O. Every flock lease explicitly unlocks before closing, so forked provider
 children cannot prolong a released lease. Cached raw-byte accounting is adjusted on each owned mutation; DB, WAL
 and SHM are measured by stat. Startup and bounded ten-minute reconciliation recover
 orphans, and a dirty marker forces reconciliation after incomplete accounting. Catalog writes reserve room for both database pages and a full WAL;
