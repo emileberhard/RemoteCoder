@@ -730,30 +730,38 @@ fn update_settings(
     Ok(selected)
 }
 
-fn formatting_identity(
-    explicit: Option<&str>,
-    codex: Option<&str>,
-    claude: Option<&str>,
-) -> Result<(String, &'static str)> {
-    if let Some(explicit) = explicit {
-        return Ok((explicit.to_owned(), "native"));
+async fn formatting_context(
+    arguments: &CallerArgs,
+    env_file: Option<&Path>,
+) -> Result<(ContextView, String)> {
+    if use_scoped(arguments) {
+        let view = serde_json::from_value(scoped(ScopedRequest::ReadSelf {}).await?)?;
+        return Ok((view, host()?.to_ascii_lowercase()));
     }
-    match (
-        codex.filter(|id| !id.trim().is_empty()),
-        claude.filter(|id| !id.trim().is_empty()),
-    ) {
-        (Some(id), None) => Ok((id.to_owned(), "codex")),
-        (None, Some(id)) => Ok((
-            format!("claude_{}", id.strip_prefix("claude_").unwrap_or(id)),
-            "claude",
-        )),
-        (Some(_), Some(_)) => bail!(
-            "Formatting identity is ambiguous; pass --sender-id, --reply-tool and --reply-target"
-        ),
-        (None, None) => bail!(
-            "Formatting needs CODEX_THREAD_ID or CLAUDE_CODE_SESSION_ID, or explicit --sender-id, --reply-tool and --reply-target"
-        ),
-    }
+    ensure!(
+        !arguments.operator,
+        "Inferred formatting requires a proven agent context; provide complete explicit sender metadata for native formatting"
+    );
+    let endpoint = endpoint(env_file)?;
+    let host: crate::wire::gateway::HostInfoResponse =
+        rpc(&endpoint, "host/info", json!({})).await?;
+    ensure!(
+        !host.hostname.trim().is_empty(),
+        "The owning gateway's hostname is unavailable"
+    );
+    ensure!(
+        arguments.caller_context.is_some() || host.hostname == self::host()?.to_ascii_lowercase(),
+        "Cannot prove this local process through another host's gateway; capture caller context on the owning host and pass --caller-context, or provide complete explicit formatting metadata"
+    );
+    let view = rpc(
+        &endpoint,
+        "agent/context/read",
+        ContextReadParams {
+            caller: caller(&endpoint, arguments).await?,
+        },
+    )
+    .await?;
+    Ok((view, host.hostname))
 }
 
 fn host() -> Result<String> {
@@ -939,19 +947,36 @@ async fn execute(command: AgentCommand, env_file: Option<&Path>) -> Result<Value
     }
     if let AgentCommand::Message(arguments) = &command {
         if arguments.format_only {
-            let host = host()?;
-            let inferred = formatting_identity(
-                arguments.sender_id.as_deref(),
-                std::env::var("CODEX_THREAD_ID").ok().as_deref(),
-                std::env::var("CLAUDE_CODE_SESSION_ID").ok().as_deref(),
-            )?;
-            let reply_tool = format!("codex-threads send --host {host}");
+            let context = if arguments.sender_id.is_none() {
+                Some(formatting_context(&arguments.caller, env_file).await?)
+            } else {
+                None
+            };
+            let view = context.as_ref().map(|(view, _)| view);
+            let host = match &context {
+                Some((_, host)) => host.clone(),
+                None => host()?,
+            };
             let sender = Sender {
-                agent_id: &inferred.0,
-                provider: inferred.1,
+                agent_id: arguments
+                    .sender_id
+                    .as_deref()
+                    .or_else(|| view.map(|view| view.sender_id.as_str()))
+                    .context("Formatting has no proven sender")?,
+                provider: view.map_or("native", |view| view.context.provider.as_str()),
                 host: &host,
-                reply_tool: arguments.reply_tool.as_deref().unwrap_or(&reply_tool),
-                reply_target: arguments.reply_target.as_deref().unwrap_or(&inferred.0),
+                reply_tool: arguments.reply_tool.as_deref().unwrap_or("message_agent"),
+                reply_target: arguments
+                    .reply_target
+                    .as_deref()
+                    .or_else(|| {
+                        view.map(|view| {
+                            view.job_id
+                                .as_ref()
+                                .map_or(view.conversation.thread_id.as_str(), JobId::as_str)
+                        })
+                    })
+                    .context("Formatting has no proven reply target")?,
             };
             return Ok(Value::String(envelope::message(
                 arguments
@@ -1328,24 +1353,6 @@ mod tests {
         assert_eq!(
             human_listing(&json!({"agents":[],"warnings":[]})).unwrap(),
             "No matching agents"
-        );
-    }
-
-    #[test]
-    fn formatting_infers_exact_provider_identity_without_authenticated_capture() {
-        assert_eq!(
-            formatting_identity(None, Some("codex-thread"), None).unwrap(),
-            ("codex-thread".into(), "codex")
-        );
-        assert_eq!(
-            formatting_identity(None, None, Some("claude-session")).unwrap(),
-            ("claude_claude-session".into(), "claude")
-        );
-        assert!(formatting_identity(None, Some("a"), Some("b")).is_err());
-        assert!(formatting_identity(None, None, None).is_err());
-        assert_eq!(
-            formatting_identity(Some("/root/worker"), Some("a"), Some("b")).unwrap(),
-            ("/root/worker".into(), "native")
         );
     }
 }
