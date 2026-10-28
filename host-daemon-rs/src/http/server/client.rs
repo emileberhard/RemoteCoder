@@ -36,6 +36,10 @@ pub(super) async fn version(_: Authorized) -> Json<&'static crate::build_identit
 }
 
 pub(super) async fn health(State(state): State<HttpState>, _: Authorized) -> Response {
+    let identity = match state.gateway.host_identity().await {
+        Ok(identity) => identity,
+        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"status":"error","message":"host identity unavailable"}))).into_response(),
+    };
     match state.gateway.daemon_ready().await {
         Ok(ready) => {
             let (active_turn_count, active_turn_inventory_available) =
@@ -44,6 +48,8 @@ pub(super) async fn health(State(state): State<HttpState>, _: Authorized) -> Res
                 StatusCode::OK,
                 Json(json!({
                 "status": "ok",
+                "hostId": identity.host_id,
+                "incarnation": identity.incarnation,
                 "codexPid": ready.codex_pid,
                 "codexVersion": state.codex_version,
                 "codexCodeModeHostPath": state.codex_code_mode_host_path,
@@ -68,7 +74,7 @@ pub(super) async fn health(State(state): State<HttpState>, _: Authorized) -> Res
         }
         Err(_) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"status":"error","message":"codex unavailable"})),
+            Json(json!({"status":"error","message":"codex unavailable","hostId":identity.host_id,"incarnation":identity.incarnation})),
         )
             .into_response(),
     }

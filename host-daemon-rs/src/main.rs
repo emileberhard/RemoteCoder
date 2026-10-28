@@ -15,6 +15,7 @@ mod files;
 mod gateway;
 mod http;
 mod ids;
+mod identity;
 mod navigation;
 mod notifications;
 mod observability;

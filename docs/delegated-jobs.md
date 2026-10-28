@@ -253,3 +253,20 @@ A nonempty `providerRetries` record and the `retryWaiting` execution state requi
 a gateway that understands this format. Once retries have written these records,
 keep a matching gateway reader during rollback; older gateways reject them.
 Never restore an older store snapshot over jobs admitted or changed afterwards.
+
+## Host identity
+
+Authorized `/health` includes top-level `hostId` and `incarnation`, each a UUID.
+The host UUID persists at `identity/v1` across restarts, address changes and key
+rotation. The incarnation fences the job store and delivery receipts. Each store
+has a random `.epoch` created once: `agent-jobs/v1/.epoch` and the configured
+Claude home's `remotecoder-history/.epoch`. Startup rotates the incarnation when
+an epoch is missing or differs from the retained identity record. An inconsistent
+job store also invalidates it before startup fails. Remote input must match the
+recipient's current incarnation before native delivery custody can have effects.
+
+Restoring bytes in place within the same epoch is not automatically detectable.
+After restoring backups, run `cluster reset-identity` before rejoining members.
+A full disk clone requires that same reset. Existing membership is removed before
+a new identity joins. Identity and epoch files use `storage/private_state` and
+never derive identity from a hostname, address or authentication key.

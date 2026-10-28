@@ -260,6 +260,7 @@ mod takeover;
 
 pub(crate) struct Gateway {
     user_name: Option<String>,
+    identity: tokio::sync::OnceCell<crate::identity::HostIdentity>,
     pub(crate) admission: Arc<crate::gateway::admission::ConversationAdmission>,
     external_auth: Option<external_auth::ExternalAuth>,
     external_providers: Option<Arc<ExternalProviders>>,
@@ -467,6 +468,7 @@ impl Gateway {
         let restart_journal = journal.clone();
         Arc::new_cyclic(|gateway| Self {
             user_name,
+            identity: tokio::sync::OnceCell::new(),
             claude_recovery_ready: AtomicBool::new(!claude_settings.enabled),
             review: conversation_review::Runtime::new(
                 gateway.clone(),
@@ -558,11 +560,26 @@ impl Gateway {
         })
     }
 
+    pub(crate) async fn host_identity(&self) -> Result<&crate::identity::HostIdentity> {
+        self.identity.get_or_try_init(|| async {
+            let state = self.turn_state_path.as_deref().and_then(Path::parent)
+                .context("host identity requires persistent state")?.to_owned();
+            let receipts = crate::identity::receipt_root(&self.claude_settings.claude_home);
+            tokio::task::spawn_blocking(move || crate::identity::open(&state, &receipts)).await?
+        }).await
+    }
+
     pub(crate) async fn start(self: &Arc<Self>) -> Result<()> {
         self.codex.verify_ready().await?;
         self.load_turn_state().await?;
         self.calls.load().await?;
-        self.jobs.initialize().await?;
+        self.host_identity().await?;
+        if let Err(error) = self.jobs.initialize().await {
+            if let Some(state) = self.turn_state_path.as_deref().and_then(Path::parent) {
+                crate::identity::invalidate(state)?;
+            }
+            return Err(error);
+        }
 
         // APNs is best-effort, but should be serialized/coalesced to avoid bursts and JWT churn.
         let (completion_tx, completion_rx) = mpsc::channel::<ApnsSend>(256);
