@@ -194,8 +194,10 @@ async function observedCompletion(host, thread, id) {
 async function journey(a, b, suffix) {
     const children = [];
     for (const provider of ["codex", "claude"]) {
+        console.error(`${suffix}: native ${provider} parent spawns a remote child`);
         children.push(await remoteSpawn(a, b, provider, `${provider}-${suffix}`));
     }
+    console.error(`${suffix}: receiver stops with remote children running`);
     await a.call("stop");
     await Promise.all(children.map(child => b.call("release", { name: child.name })));
     for (const child of children) {
@@ -205,6 +207,7 @@ async function journey(a, b, suffix) {
             return ["unreachable", "uncertain"].includes(terminal(job)?.completion?.delivery?.kind);
         });
     }
+    console.error(`${suffix}: receiver restarts for completion delivery`);
     const resumed = Date.now();
     await a.call("start");
     await a.rpc("agent/cluster/dispatch", { host: b.info.hostId, method: "agent/jobs/read",
@@ -220,6 +223,7 @@ async function journey(a, b, suffix) {
         });
         assert.equal(entries.length, 1, "Completion entered the parent's native history twice");
     }
+    console.error(`${suffix}: canonical parent inputs confirm one completion each`);
     return { children: children.map(({ id, parent, provider }) => ({ id, parent, provider })),
         callbackAfterReturnMs: Date.now() - resumed };
 }

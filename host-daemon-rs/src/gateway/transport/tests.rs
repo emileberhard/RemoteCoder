@@ -1659,3 +1659,93 @@ async fn explicit_claude_start_works_without_codex_connection() {
     assert_eq!(response["result"]["reasoningEffort"], "xhigh");
     assert!(gateway.request_budgets.command.try_acquire(1).is_some());
 }
+
+#[tokio::test]
+async fn thread_reads_preserve_untagged_bytes_and_project_a_promoted_parent() {
+    use crate::agents::jobs::model::*;
+    let gateway = TestGateway::new();
+    let native = "019e0b6a-b5cb-7b62-bd89-4c58f82fd1a7";
+    let promoted = "019e0b6a-b5cb-7b62-bd89-4c58f82fd1a8";
+    let store = gateway.jobs.store().await.unwrap();
+    let agent = store
+        .adopt_conversation(AgentRecord {
+            agent_id: "promoted-read".into(),
+            conversation: ConversationBinding::Known {
+                conversation: gateway.agent_conversation(promoted).unwrap(),
+            },
+            origin: Origin::TopLevel,
+            tool_scope: None,
+            origin_job_id: None,
+            latest_job_id: None,
+            parent: None,
+            parent_revision: 0,
+            parent_recipient: Some(Recipient::None),
+        })
+        .await
+        .unwrap();
+    store
+        .set_parent(agent.agent_id, None, Recipient::None)
+        .await
+        .unwrap();
+    let (tx, mut replies) = mpsc::channel(4);
+    let client = super::super::tests::test_client(1, tx);
+    let (upstream, mut forwarded) = mpsc::channel(4);
+    let pending: PendingRequests = Arc::default();
+    for (id, thread) in [(1, native), (2, promoted)] {
+        let raw = json!({"id":id,"method":"thread/read","params":{"threadId":thread,"includeTurns":true}}).to_string();
+        let DispatchPlan::Request(request) = DispatchPlan::parse(&raw) else {
+            panic!("request")
+        };
+        gateway
+            .forward_native_request(
+                1,
+                &client,
+                NativeRequest {
+                    _start_permit: None,
+                    raw,
+                    request,
+                    _admission: None,
+                },
+                Some(&upstream),
+                &pending,
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            forwarded.recv().await,
+            Some(UpstreamMessage::Text(_))
+        ));
+    }
+    assert_eq!(pending.lock().await.len(), 1);
+    let original = |id, thread| {
+        serde_json::to_string_pretty(&json!({"id":id,"result":{"thread":{
+        "id":thread,"parentThreadId":native,"turns":[{"id":"native-turn","items":[{"type":"agentMessage","text":"Exact native text 👩🏽‍💻"}]}],
+    }}})).unwrap()
+    };
+    let native_response = original(1, native);
+    let stream = buffered_codex_texts(vec![native_response.clone(), original(2, promoted)]).await;
+    gateway
+        .codex_to_client_loop(
+            1,
+            NotificationOrigin::Client {
+                id: 1,
+                opened_after: 0,
+            },
+            stream,
+            client,
+            upstream,
+            pending.clone(),
+        )
+        .await;
+    let ClientCommand::Text(received) = replies.recv().await.unwrap() else {
+        panic!("native response")
+    };
+    assert_eq!(received, native_response);
+    let ClientCommand::Text(received) = replies.recv().await.unwrap() else {
+        panic!("promoted response")
+    };
+    let response: Value = serde_json::from_str(&received).unwrap();
+    assert_eq!(response["result"]["thread"]["parent"], Value::Null);
+    assert_eq!(response["result"]["thread"]["parentThreadId"], Value::Null);
+    assert!(pending.lock().await.is_empty());
+}

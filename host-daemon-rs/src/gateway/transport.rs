@@ -953,11 +953,42 @@ impl Gateway {
             }
         };
 
-        if let Some(method) = correlated_method(Some(method.as_str())).or(match method.as_str() {
-            "thread/read" => Some("thread/read"),
-            "thread/list" => Some("thread/list"),
-            _ => None,
-        }) && let Some(id) = &id
+        let correlated = if method == "thread/read" {
+            let indexed = async {
+                let Some(conversation) = object
+                    .get("params")
+                    .and_then(|params| params["threadId"].as_str())
+                    .and_then(|thread| self.agent_conversation(thread).ok())
+                else {
+                    return Ok(false);
+                };
+                Ok::<_, anyhow::Error>(
+                    !self
+                        .jobs
+                        .store()
+                        .await?
+                        .parent_tags(vec![conversation])
+                        .await?
+                        .is_empty(),
+                )
+            }
+            .await;
+            match indexed {
+                Ok(true) => Some("thread/read"),
+                Ok(false) => None,
+                Err(error) => {
+                    self.send_error_to(out_tx, id.as_ref(), &RpcError::from(error))
+                        .await?;
+                    return Ok(());
+                }
+            }
+        } else if method == "thread/list" {
+            Some("thread/list")
+        } else {
+            correlated_method(Some(method.as_str()))
+        };
+        if let Some(method) = correlated
+            && let Some(id) = &id
         {
             let mut pending = pending_requests.lock().await;
             prune_pending_requests(&mut pending, Instant::now());
