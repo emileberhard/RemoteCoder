@@ -5,10 +5,12 @@ import { join, resolve } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 
 const routerCodexAccount = "probe-account";
+const routerCodexUser = "probe-user";
 
 function syntheticCodexToken() {
     const expiry = Math.floor(Date.now() / 1000) + 7200;
-    const claims = { exp: expiry, "https://api.openai.com/auth": { chatgpt_account_id: routerCodexAccount } };
+    const claims = { exp: expiry, jti: randomBytes(8).toString("hex"),
+        "https://api.openai.com/auth": { chatgpt_account_id: routerCodexAccount, chatgpt_user_id: routerCodexUser } };
     const access = `e30.${Buffer.from(JSON.stringify(claims)).toString("base64url")}.probe`;
     return {
         access_token: access, account_id: routerCodexAccount, plan_type: "pro",
