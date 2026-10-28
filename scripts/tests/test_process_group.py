@@ -33,8 +33,16 @@ class ProcessIdentityTests(unittest.TestCase):
         self.assertEqual(identity["ppid"], os.getppid())
         self.assertEqual(identity["pgid"], os.getpgrp())
         self.assertTrue(groups.audit_alive(identity))
-        executable = subprocess.check_output(['ps', '-p', str(os.getpid()), '-o', 'comm='], text=True).strip()
-        self.assertEqual(groups.audit_path(identity).resolve(), Path(executable).resolve())
+
+    def test_audit_path_is_the_executable_image_of_the_process(self):
+        with subprocess.Popen(["/bin/sleep", "60"]) as child:
+            try:
+                self.assertEqual(
+                    groups.audit_path(process_snapshot(child.pid)).resolve(),
+                    Path("/bin/sleep").resolve(),
+                )
+            finally:
+                child.kill()
 
     def test_lookup_to_signal_race_cannot_kill_replacement(self):
         with subprocess.Popen(

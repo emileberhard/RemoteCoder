@@ -214,7 +214,11 @@ class JobSleepAssertionTests(unittest.TestCase):
     def wait_for_record(self, owner, path):
         deadline = time.monotonic() + 15
         while not path.exists():
-            self.assertIsNone(owner.poll(), f"Owner exited before {path.name}")
+            if owner.poll() is not None:
+                self.fail(
+                    f"Owner exited {owner.returncode} before {path.name}: "
+                    + owner.stderr.read().decode(errors="replace")
+                )
             self.assertLess(time.monotonic(), deadline, path.name)
             time.sleep(0.01)
         return json.loads(path.read_text())
