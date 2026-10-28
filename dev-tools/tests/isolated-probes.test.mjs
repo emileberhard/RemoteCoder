@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { installSeed } from "../probes/delegated-job-seed.mjs";
 import { IsolatedGateway } from "../probes/isolated-gateway.mjs";
@@ -70,6 +70,9 @@ test("copied job seed remaps provider homes and disables execution without chang
     expect(copied.spec.cwd.startsWith(lab.path("work/seed/"))).toBe(true);
     expect(copied.spec.toolScope.root).toBe(copied.spec.cwd);
     expect(seeded.summary.importedSnapshots).toEqual([{ jobId: "fixture-job", source: "runtime", stop: "requested" }]);
+    await rm(lab.path(".remote-coder"), { recursive: true });
+    await writeFile(source, JSON.stringify({ ...job, previousJobId: "uncopied-predecessor" }));
+    await expect(installSeed(lab, manifest)).rejects.toThrow("Private seed is missing referenced job uncopied-predecessor");
   } finally {
     await lab.removeRoot();
   }

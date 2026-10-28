@@ -29,6 +29,8 @@ export async function installSeed(lab, manifestPath) {
     const destination = lab.path(".remote-coder/agent-jobs/v1");
     const snapshots = [];
     const altered = [];
+    const jobIds = new Set();
+    const referencedJobs = new Set();
     const homes = new Map();
     const directories = new Map();
     const directory = value => {
@@ -66,11 +68,15 @@ export async function installSeed(lab, manifestPath) {
             const original = JSON.parse(await bounded(await contained(root, join(manifest.jobStore, kind, name)), maxRecord));
             const record = remap(original);
             if (kind === "jobs") {
+                jobIds.add(record.jobId);
+                if (record.previousJobId) referencedJobs.add(record.previousJobId);
                 if (record.source !== "imported" || record.stop?.kind !== "notRequested") {
                     altered.push({ jobId: record.jobId, source: record.source, stop: record.stop?.kind });
                 }
                 record.source = "imported";
                 record.stop = { kind: "notRequested" };
+            } else if (kind === "agents") {
+                for (const id of [record.originJobId, record.latestJobId]) if (id) referencedJobs.add(id);
             }
             const path = join(destination, kind, name);
             const bytes = JSON.stringify(record);
@@ -79,6 +85,7 @@ export async function installSeed(lab, manifestPath) {
             count++;
         }
     }
+    for (const id of referencedJobs) assert(jobIds.has(id), `Private seed is missing referenced job ${id}`);
     for (const transcript of manifest.transcripts) {
         assert(/^claude_[a-f0-9-]{36}$/.test(transcript.threadId), "Seed transcript needs an exact Claude thread ID");
         const session = transcript.threadId.slice(7);
