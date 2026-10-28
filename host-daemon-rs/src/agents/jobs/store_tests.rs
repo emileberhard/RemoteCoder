@@ -464,7 +464,7 @@ async fn explicit_continuation_preserves_imported_unknown_outcome_and_origin() {
         spec.tool_scope = agent.tool_scope.clone().unwrap();
     }
     store.admit(continuation.clone()).await.unwrap();
-    assert_eq!(store.read(imported.job_id).await.unwrap(), imported);
+    assert_eq!(store.read(imported.job_id.clone()).await.unwrap(), imported);
     let continued = store.agent(agent.agent_id).await.unwrap();
     assert_eq!(continued.origin, agent.origin);
     assert_eq!(continued.tool_scope, agent.tool_scope);

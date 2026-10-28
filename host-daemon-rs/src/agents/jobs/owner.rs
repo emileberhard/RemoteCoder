@@ -240,7 +240,7 @@ impl JobOwner {
                 gateway
                     .job_provider_recovery_complete(conversation.provider)
                     .await?,
-                "Claude recovery is unresolved; continuation cannot prove idle"
+                "provider recovery is unresolved; continuation cannot prove idle"
             );
             ensure!(
                 gateway
