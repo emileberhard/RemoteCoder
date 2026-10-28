@@ -192,6 +192,7 @@ print(json.dumps({"workerHash": manifest["workerHash"], "identity": manifest["id
         finally:
             os.close(descriptor)
         if recovery is not None:
+            assert reader is not None
             assert reader.poll(10)
             assert reader.recv() == {"completed": True}
             recovery.join(5)
@@ -206,6 +207,7 @@ print(json.dumps({"workerHash": manifest["workerHash"], "identity": manifest["id
     finally:
         if recovery is not None:
             if recovery.is_alive():
+                assert recovery.pid is not None
                 os.killpg(recovery.pid, signal.SIGKILL)
             recovery.join(5)
         if uv_owner is not None and worker_artifact._owner_alive(uv_owner):

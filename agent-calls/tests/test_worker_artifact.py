@@ -165,11 +165,12 @@ def _install_in_child(request, root, admitted, release, result, attempting):
         contract = {"workerHash": request["workerHash"], "identity": request["identity"], "protocolVersion": 1}
         return subprocess.CompletedProcess(arguments, 0, json.dumps(contract), "")
 
-    worker_artifact.subprocess.run = complete
-    try:
-        result.put(worker_artifact.install(request, root))
-    except Exception:
-        result.put({"failure": traceback.format_exc()})
+    with pytest.MonkeyPatch.context() as patches:
+        patches.setattr(worker_artifact.subprocess, "run", complete)
+        try:
+            result.put(worker_artifact.install(request, root))
+        except Exception:
+            result.put({"failure": traceback.format_exc()})
 
 
 def test_queued_peer_installer_cannot_prune_a_read_back_pending_worker(tmp_path):
@@ -323,17 +324,17 @@ def _publish_worker_in_child(candidate, root, phase, ready, release):
         return dump(value, handle, *args, **kwargs)
 
     def interrupted_save(path, value):
-        if path == destination / "worker-build.json" and phase == "claim":
-            json.dump = interrupted_dump
-        try:
+        with pytest.MonkeyPatch.context() as patches:
+            if path == destination / "worker-build.json" and phase == "claim":
+                patches.setattr(json, "dump", interrupted_dump)
             return save_json(path, value)
-        finally:
-            json.dump = dump
 
-    Path.mkdir, Path.write_text = interrupted_mkdir, interrupted_write
-    worker_artifact._save_json = interrupted_save
-    worker_artifact.subprocess.run = _commands_for(candidate)
-    worker_artifact.install(candidate, root)
+    with pytest.MonkeyPatch.context() as patches:
+        patches.setattr(Path, "mkdir", interrupted_mkdir)
+        patches.setattr(Path, "write_text", interrupted_write)
+        patches.setattr(worker_artifact, "_save_json", interrupted_save)
+        patches.setattr(worker_artifact.subprocess, "run", _commands_for(candidate))
+        worker_artifact.install(candidate, root)
 
 
 @pytest.mark.parametrize("phase", ["mkdir", "claim"])
@@ -381,6 +382,7 @@ def _live_build_owner_in_child(candidate, root, metadata, ready, release):
     os.environ["TZ"] = "UTC"
     manifest = {"workerHash": candidate["workerHash"], "identity": candidate["identity"], "files": sorted(candidate["files"])}
     owner = worker_artifact._process_owner(os.getpid())
+    assert owner is not None
     worker_artifact._save_json(root / "worker-build.json", {"owner": owner, "manifest": manifest})
     if metadata:
         (root / f"references.json.{owner['pid']}.{owner['birth']}.{candidate['reservation']}").write_bytes(b'{"partial":')

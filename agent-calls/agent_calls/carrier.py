@@ -14,7 +14,14 @@ from urllib.parse import urlsplit
 from uuid import UUID
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SecretStr,
+    ValidationError,
+    field_validator,
+)
 
 API_BASE = "https://api.46elks.com/a1"
 TERMINAL_STATES = {"success", "busy", "failed"}
