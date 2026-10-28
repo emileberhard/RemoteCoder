@@ -431,9 +431,12 @@ range and returns at most two matches, keeping ambiguity explicit.
 Network workers subscribe to their member's coalesced watch and read only that
 member's pending jobs and intents. Delivery attempts that change only the retry
 receipt do not wake themselves and bypass backoff. Each watch retains one revision;
-record sets are derived from the retained store and share its 512 MiB admission
-cap. Runtime reservations and unconfirmed remote intents each cap at 256. Settled
-payloads expire after 30 days; receipt and identity metadata do not expire silently.
+record sets are derived from the retained store. New work has a 512 MiB storage
+admission budget; runtime reservations and unconfirmed remote intents each cap at
+256. Settled payloads expire after 30 days, but job records, receipt metadata and
+their indexes have no count-based retention or eviction policy. Their size grows
+with retained history even after payload expiry; record retention is separate
+follow-up work.
 
 Members owns one parsed immutable snapshot. Authentication and selector reads use
 its indexes without disk reads. Its atomic file transaction serializes mutations;
