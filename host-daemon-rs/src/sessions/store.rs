@@ -94,9 +94,7 @@ impl Store {
         let db = Connection::open(&self.path)?;
         db.busy_timeout(Duration::from_secs(5))?;
         db.execute_batch("PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON; PRAGMA cache_size=-32768; PRAGMA mmap_size=0; PRAGMA temp_store=MEMORY; PRAGMA journal_size_limit=16777216;")?;
-        let wal = std::path::PathBuf::from(self.path.to_string_lossy().into_owned() + "-wal")
-            .metadata()
-            .map_or(0, |metadata| metadata.len());
+        let wal = storage.wal_bytes()?;
         let before = storage.usage()?;
         super::storage::admit(before.used_bytes, wal, before.free_bytes)?;
         let (busy, _, _): (i64, i64, i64) =

@@ -38,7 +38,7 @@ impl Storage {
             let entry = entry?;
             if entry.file_type().is_file() {
                 used = used
-                    .checked_add(entry.metadata()?.len())
+                    .checked_add(file_bytes(entry.path())?)
                     .context("Session state size overflow")?;
             }
         }
@@ -51,20 +51,8 @@ impl Storage {
         );
         let stats = unsafe { stats.assume_init() };
         let free = stats.f_bavail as u64 * stats.f_frsize;
-        let database = self
-            .database
-            .metadata()
-            .map_or(0, |metadata| metadata.len());
-        let wal = PathBuf::from(
-            self.database
-                .as_os_str()
-                .to_owned()
-                .into_string()
-                .context("Session path is not UTF-8")?
-                + "-wal",
-        )
-        .metadata()
-        .map_or(0, |metadata| metadata.len());
+        let database = file_bytes(&self.database)?;
+        let wal = self.wal_bytes()?;
         let checkpoint = database
             .saturating_sub(wal)
             .saturating_add(database / 128)
@@ -80,6 +68,12 @@ impl Storage {
                 Some("budget")
             },
         })
+    }
+
+    pub fn wal_bytes(&self) -> Result<u64> {
+        let mut path = self.database.as_os_str().to_os_string();
+        path.push("-wal");
+        file_bytes(Path::new(&path))
     }
 
     pub fn lease(&self, incoming: u64) -> Result<File> {
@@ -111,4 +105,12 @@ pub(crate) fn admit(used: u64, incoming: u64, free: u64) -> Result<()> {
         "stale: budget; session state needs space within 64 GiB and a 20 GiB free-disk reserve"
     );
     Ok(())
+}
+
+fn file_bytes(path: &Path) -> Result<u64> {
+    match path.metadata() {
+        Ok(metadata) => Ok(metadata.len()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(0),
+        Err(error) => Err(error.into()),
+    }
 }
