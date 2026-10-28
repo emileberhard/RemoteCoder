@@ -383,39 +383,37 @@ impl Inner {
         let agent_id = job.agent_id.clone();
         let previous_id = job.previous_job_id.clone();
         let retained = self.jobs.insert(id.clone(), job);
-        if new {
-            if let Some(agent) = self.agents.get(&agent_id).cloned() {
-                let anchor = agent
-                    .latest_job_id
+        if new && let Some(agent) = self.agents.get(&agent_id).cloned() {
+            let anchor = agent
+                .latest_job_id
+                .as_ref()
+                .or(agent.origin_job_id.as_ref());
+            if anchor == Some(&id) {
+                self.indexes.heads.remove(&agent_id);
+                self.refresh_head(&agent);
+            } else if let Some(previous) = previous_id
+                && self
+                    .jobs
+                    .get(&previous)
+                    .is_some_and(|job| job.agent_id == agent_id)
+                && let Some(head) = self.indexes.heads.get_mut(&agent_id)
+                && self.indexes.lineage.get(&previous) == Some(&head.generation)
+            {
+                self.indexes.lineage.insert(id.clone(), head.generation);
+                head.value = if head
+                    .value
                     .as_ref()
-                    .or(agent.origin_job_id.as_ref());
-                if anchor == Some(&id) {
-                    self.indexes.heads.remove(&agent_id);
-                    self.refresh_head(&agent);
-                } else if let Some(previous) = previous_id
+                    .is_ok_and(|value| value.as_ref() == Some(&previous))
                     && self
-                        .jobs
+                        .indexes
+                        .successors
                         .get(&previous)
-                        .is_some_and(|job| job.agent_id == agent_id)
-                    && let Some(head) = self.indexes.heads.get_mut(&agent_id)
-                    && self.indexes.lineage.get(&previous) == Some(&head.generation)
+                        .is_some_and(|ids| ids.len() == 1)
                 {
-                    self.indexes.lineage.insert(id.clone(), head.generation);
-                    head.value = if head
-                        .value
-                        .as_ref()
-                        .is_ok_and(|value| value.as_ref() == Some(&previous))
-                        && self
-                            .indexes
-                            .successors
-                            .get(&previous)
-                            .is_some_and(|ids| ids.len() == 1)
-                    {
-                        Ok(Some(id))
-                    } else {
-                        Ok(None)
-                    };
-                }
+                    Ok(Some(id))
+                } else {
+                    Ok(None)
+                };
             }
         }
         retained

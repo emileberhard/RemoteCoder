@@ -329,6 +329,7 @@ impl JobStore {
         }).await
     }
 
+    #[cfg(test)]
     pub(crate) async fn agent_ids(&self) -> Result<Vec<String>> {
         self.access(|inner| {
             let mut ids: Vec<_> = inner.agents.keys().cloned().collect();
