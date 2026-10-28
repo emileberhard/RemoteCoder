@@ -250,6 +250,12 @@ async function main() {
         for (let i = 0; i < workers.length; i++) {
             for (let j = i + 1; j < workers.length; j++) await pair(workers[i], workers[j], `probe-${i}`, `probe-${j}`);
         }
+        await waitFor(async () => {
+            const pages = await Promise.all(workers.map(host => host.rpc("cluster/list")));
+            return pages.every(page => page.members.length === count - 1
+                && page.members.every(member => member.reachability.state === "reachable"
+                    && member.reachability.lastSeenAt));
+        });
         const outward = await journey(workers[0], workers[1], "outward");
         const reverse = await journey(workers[1], workers[0], "reverse");
         const pages = await Promise.all(workers.map(host => host.rpc("agent/cluster/list", { limit: 100 })));

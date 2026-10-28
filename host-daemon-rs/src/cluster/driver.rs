@@ -11,7 +11,6 @@ impl Gateway {
         let gateway = Arc::downgrade(self);
         let started = self.jobs.tasks.spawn_graceful("cluster_liveness", move |shutdown| async move {
             let mut previous = std::time::SystemTime::now();
-            let mut first = true;
             let mut tick = tokio::time::interval(Duration::from_secs(2));
             let mut route = tokio::process::Command::new("/sbin/route")
                 .args(["-n", "monitor"])
@@ -36,10 +35,9 @@ impl Gateway {
                         woke
                     }
                 };
-                if !changed && !first {
+                if !changed {
                     continue;
                 }
-                first = false;
                 let Some(gateway) = gateway.upgrade() else { break };
                 let link = gateway.cluster_link().await?;
                 let identity = gateway.host_identity().await?;
@@ -139,6 +137,7 @@ async fn member_worker(
     let mut due = tokio::time::Instant::now();
     let mut previous = String::new();
     let mut retry = false;
+    let mut introduced = false;
     loop {
         let Some(owner) = gateway.upgrade() else {
             break;
@@ -185,7 +184,19 @@ async fn member_worker(
                 .filter(|intent| intent.host == member.host)
                 .map(|intent| intent.request.job_id)
                 .collect::<std::collections::HashSet<_>>();
-            retry = owner.reconcile_cluster_member(&member.host).await?;
+            if !introduced && record.state == MemberState::Active {
+                let identity = owner.host_identity().await?;
+                introduced = link
+                    .call(
+                        &member.host,
+                        "cluster/hello",
+                        json!({"protocol":PROTOCOL,"host":identity.host_id,"incarnation":identity.incarnation}),
+                    )
+                    .await
+                    .is_ok();
+            }
+            retry = !introduced && record.state == MemberState::Active;
+            retry |= owner.reconcile_cluster_member(&member.host).await?;
             let outcomes=stream::iter(ids).map(|id| {
                 let owner=&owner;
                 let host=&member.host;

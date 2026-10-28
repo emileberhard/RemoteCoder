@@ -300,6 +300,8 @@ returns `HostIdentity {host_id, incarnation}`.
 `cluster/list` returns `self {hostId,name,incarnation,version,protocol}` and
 `members [{hostId,name,membership,state,reachability,version,protocol,load,routes}]`.
 Reachability has `state`, `since` and nullable `lastSeenAt`, with RFC 3339 times.
+It is the last observed state, not an on-demand probe; clients show when a
+reachable member was last seen. A failed member call updates the observation.
 Removed tombstones stay private. Load, when available, is
 `{cpuPercent,memoryPressure,activeAgents}`. Every job read/list and conversation
 agent row adds `ownerHostId`, `parent` and `recipient`. Parent references always
@@ -352,6 +354,8 @@ member. Each member link serializes its socket. A slow member cannot block local
 launches or another member. `cluster/hello` wakes that member's driver and resets
 its backoff. Both drivers belong to the gateway lifecycle and resume durable
 records after a planned restart. There is no separate remote outbox.
+Accepting membership wakes the driver, whose new member worker sends hello and
+retries an unavailable member with its bounded backoff.
 
 `list_agents` defaults to the cluster; `--local` narrows it. Every fan-out result
 includes per-host `coverage`, and `--cursor` resumes each host independently.

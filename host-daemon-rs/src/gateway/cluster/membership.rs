@@ -173,7 +173,12 @@ impl Gateway {
                     credential
                 }))
             }
-            "cluster/accept" => Ok(public_member(&link.store.accept(decode(params)?).await?)),
+            "cluster/accept" => {
+                let member = link.store.accept(decode(params)?).await?;
+                self.jobs.dirty();
+                link.wake_member(&member.host).await;
+                Ok(public_member(&member))
+            }
             "cluster/remove" => {
                 let request: RemoveParams = decode(params)?;
                 let record = link.store.remove(request.clone(), true).await?;
