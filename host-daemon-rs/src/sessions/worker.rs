@@ -271,7 +271,7 @@ impl Worker {
                     let batches = pending.take();
                     drop(pending);
                     let mut paths: Vec<_> = batches.into_iter().flatten().collect();
-                    let result = (|| {
+                    let result: Result<serde_json::Value> = (|| {
                         if !hot.is_empty() && Instant::now() >= next_hot {
                             paths.extend(hot.changed()?);
                             next_hot = Instant::now() + Duration::from_secs(1);
@@ -302,7 +302,7 @@ impl Worker {
                             }
                             Ok(())
                         })?;
-                        hot.observe(&store.reader()?, &origins)?;
+                        hot.observe(&*store.reader()?, &origins)?;
                         Ok(outcome)
                     })();
                     match result {
