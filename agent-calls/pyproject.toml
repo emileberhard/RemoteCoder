@@ -17,6 +17,9 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["agent_calls"]
 
+[tool.uv]
+exclude-newer = "12 hours"
+
 [tool.uv.sources]
 remotecoder-tools = { path = "../dev-tools", editable = true }
 
