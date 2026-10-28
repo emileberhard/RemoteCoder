@@ -11,4 +11,4 @@ pub(crate) mod routes;
 pub(crate) mod store;
 
 #[cfg(test)]
-mod store_tests;
+pub(crate) mod store_tests;

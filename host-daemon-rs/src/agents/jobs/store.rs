@@ -45,6 +45,7 @@ struct Inner {
 
 pub(crate) enum Selection {
     Recent,
+    Active,
     Agent(String),
     Children(crate::wire::cluster::AgentAddress),
     Descendants(crate::wire::cluster::AgentAddress),
@@ -284,6 +285,7 @@ impl JobStore {
                 _ => None,
             };
             let order = match &selection {
+                Selection::Active => Some(&inner.indexes.active_order),
                 Selection::Agent(id) => inner.indexes.by_agent.get(id),
                 _ => Some(&inner.indexes.order),
             };
@@ -726,7 +728,7 @@ impl Inner {
             title,
             model,
             state,
-            active: job.source == JobSource::Runtime && !is_terminal(job),
+            active: listing_active(job),
             created_at_ms: job.created_at_ms,
             updated_at_ms: job.updated_at_ms,
         })
@@ -1014,6 +1016,9 @@ fn tree_bytes(path: &Path) -> Result<u64> {
 
 fn is_terminal(job: &JobRecord) -> bool {
     matches!(job.execution, ExecutionState::Terminal { .. })
+}
+fn listing_active(job: &JobRecord) -> bool {
+    job.source == JobSource::Runtime && !is_terminal(job)
 }
 fn delivery_settled(delivery: &DeliveryState) -> bool {
     matches!(

@@ -10,6 +10,7 @@ pub(super) struct Indexes {
     pub order: BTreeSet<(Option<i64>, JobId)>,
     pub by_agent: HashMap<String, BTreeSet<(Option<i64>, JobId)>>,
     pub active: HashMap<String, BTreeSet<JobId>>,
+    pub active_order: BTreeSet<(Option<i64>, JobId)>,
     pending_by_agent: HashMap<String, BTreeSet<JobId>>,
     working_agents: HashMap<String, usize>,
     pub successors: HashMap<JobId, BTreeSet<JobId>>,
@@ -103,6 +104,8 @@ impl Indexes {
             }
         }
         self.order.remove(&(job.created_at_ms, job.job_id.clone()));
+        self.active_order
+            .remove(&(job.created_at_ms, job.job_id.clone()));
         if let Some(ids) = self.by_agent.get_mut(&job.agent_id) {
             ids.remove(&(job.created_at_ms, job.job_id.clone()));
             if ids.is_empty() {
@@ -150,6 +153,10 @@ impl Indexes {
             *self.working_agents.entry(job.agent_id.clone()).or_default() += 1;
         }
         self.order.insert((job.created_at_ms, job.job_id.clone()));
+        if listing_active(job) {
+            self.active_order
+                .insert((job.created_at_ms, job.job_id.clone()));
+        }
         self.by_agent
             .entry(job.agent_id.clone())
             .or_default()

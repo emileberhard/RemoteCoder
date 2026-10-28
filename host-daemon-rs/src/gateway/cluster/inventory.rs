@@ -129,22 +129,29 @@ impl Gateway {
             }
             None => Default::default(),
         };
+        let active = params["active"] == true;
+        if active {
+            cursor.sessions_done = true;
+        }
         let identity = self.host_identity().await?;
         let mut agents = Vec::new();
         if !cursor.jobs_done {
             let page = self
                 .jobs
-                .list(agent_jobs::ListParams {
-                    selector: agent_jobs::ListSelector::Recent,
-                    limit: 256.min(limit as u32),
-                    cursor: cursor.jobs.clone(),
-                })
+                .store()
+                .await?
+                .list(
+                    if active {
+                        crate::agents::jobs::store::Selection::Active
+                    } else {
+                        crate::agents::jobs::store::Selection::Recent
+                    },
+                    256.min(limit as u32),
+                    cursor.jobs.clone(),
+                )
                 .await?;
             for row in page.jobs {
                 cursor.jobs = Some(row.job_id.as_str().to_owned());
-                if params["active"] == true && !row.active {
-                    continue;
-                }
                 if let Some(provider) = params["provider"].as_str()
                     && provider != row.provider.as_str()
                 {
@@ -203,9 +210,6 @@ impl Gateway {
                     .as_ref()
                     .is_some_and(|agent| agent.latest_job_id.is_some())
                 {
-                    continue;
-                }
-                if params["active"] == true {
                     continue;
                 }
                 if let Some(provider) = params["provider"].as_str()
@@ -405,6 +409,162 @@ impl Gateway {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn cluster_active_listing_skips_history_pages_and_paginates_only_active_jobs() {
+        use crate::agents::jobs::model::*;
+        use crate::agents::jobs::store_tests::job;
+        use crate::storage::private_state;
+
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let jobs = root.join("agent-jobs/v1/jobs");
+        private_state::ensure_private_directory(&jobs).unwrap();
+        let finished = ExecutionState::Terminal {
+            terminal: Terminal {
+                at_ms: Some(3_000),
+                execution: None,
+                git: GitSnapshot::Unknown {
+                    reason: "fixture".into(),
+                },
+                outcome: JobOutcome::Completed,
+                result: ResultEvidence::Expired,
+                completion: Completion::NotRequired,
+                cleanup: CleanupState::Complete,
+            },
+        };
+        for sequence in 1..=128 {
+            let mut settled = job(sequence);
+            settled.created_at_ms = Some(1_000 + i64::from(sequence));
+            settled.updated_at_ms = 3_000;
+            settled.execution = finished.clone();
+            private_state::write_json(
+                &jobs.join(format!("{}.json", settled.job_id.as_str())),
+                &settled,
+            )
+            .unwrap();
+        }
+        let mut active = vec![job(201), job(202), job(203)];
+        active[1].execution = ExecutionState::WaitingForProvider {
+            provider: Provider::Codex,
+        };
+        active[2].execution = ExecutionState::Unknown {
+            conversation: None,
+            binding: None,
+            reason: "provider observation unavailable".into(),
+        };
+        for record in &active {
+            private_state::write_json(
+                &jobs.join(format!("{}.json", record.job_id.as_str())),
+                record,
+            )
+            .unwrap();
+        }
+        let mut imported = job(204);
+        imported.source = JobSource::Imported;
+        imported.admission_origin = None;
+        imported.execution = active[2].execution.clone();
+        imported.created_at_ms = Some(2_000);
+        private_state::write_json(
+            &jobs.join(format!("{}.json", imported.job_id.as_str())),
+            &imported,
+        )
+        .unwrap();
+
+        let sessions = root.join("codex/sessions/2026/10/28");
+        std::fs::create_dir_all(&sessions).unwrap();
+        for sequence in 0..128 {
+            let id = format!("00000000-0000-4000-8000-{sequence:012x}");
+            let metadata = json!({"type":"session_meta","timestamp":"2026-10-28T10:00:00Z","payload":{"id":id,"cwd":root,"source":"cli"}});
+            std::fs::write(
+                sessions.join(format!("{id}.jsonl")),
+                format!("{metadata}\n"),
+            )
+            .unwrap();
+        }
+        let gateway = crate::test_support::TestGateway::with_native_runtime(root);
+        gateway.sessions_runtime().await.unwrap();
+        gateway.stop_sessions().await;
+        assert_eq!(
+            gateway
+                .session_inventory(None, 1000)
+                .await
+                .unwrap()
+                .sessions
+                .len(),
+            128
+        );
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(root.join("sessions/v1/.storage.lock"))
+            .unwrap();
+        let _lease = crate::sessions::storage::Lease::acquire(file).unwrap();
+        assert!(gateway.session_inventory(None, 1).await.is_err());
+
+        let mut cursor = Value::Null;
+        let mut seen = Vec::new();
+        for expected in [2, 1] {
+            let page = gateway
+                .cluster_rpc(
+                    &Grant::Operator,
+                    "agent/cluster/list",
+                    json!({"local":true,"active":true,"limit":2,"cursor":cursor}),
+                )
+                .await
+                .unwrap();
+            assert_eq!(page["coverage"][0]["state"], "ok", "{page}");
+            assert_eq!(page["warnings"], json!([]));
+            let rows = page["agents"].as_array().unwrap();
+            assert_eq!(rows.len(), expected, "{page}");
+            for row in rows {
+                seen.push(row["run_id"].as_str().unwrap().to_owned());
+            }
+            cursor = page["nextCursor"].clone();
+            assert_eq!(cursor.is_null(), expected == 1);
+        }
+        assert_eq!(
+            seen,
+            active
+                .iter()
+                .rev()
+                .map(|record| record.job_id.as_str().to_owned())
+                .collect::<Vec<_>>()
+        );
+        let page = gateway
+            .cluster_rpc(
+                &Grant::Operator,
+                "agent/cluster/list",
+                json!({"local":true,"active":true,"limit":3}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(page["agents"].as_array().unwrap().len(), 3);
+        assert!(page["nextCursor"].is_null());
+        assert_eq!(page["warnings"], json!([]));
+        for record in active {
+            gateway
+                .jobs
+                .store()
+                .await
+                .unwrap()
+                .advance(record.job_id, 0, finished.clone(), 3_000)
+                .await
+                .unwrap();
+        }
+        let page = gateway
+            .cluster_rpc(
+                &Grant::Operator,
+                "agent/cluster/list",
+                json!({"local":true,"active":true,"limit":1}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(page["agents"], json!([]));
+        assert!(page["nextCursor"].is_null());
+        assert_eq!(page["coverage"][0]["state"], "ok");
+        assert_eq!(page["warnings"], json!([]));
+    }
 
     #[tokio::test]
     async fn cluster_inventory_writer_contention_preserves_unavailable_and_coverage() {

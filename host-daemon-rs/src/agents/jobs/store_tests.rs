@@ -1,7 +1,7 @@
 use super::model::*;
 use super::store::{JobStore, Selection};
 
-fn job(sequence: u8) -> JobRecord {
+pub(crate) fn job(sequence: u8) -> JobRecord {
     let job_id =
         JobId::try_from(format!("agent-codex-1793127141860775000-{sequence:08x}")).unwrap();
     JobRecord {
@@ -892,6 +892,10 @@ async fn provider_retries_retain_exact_bindings_due_time_and_budget_across_resta
                 ..
             }
         ));
+        let active = store.list(Selection::Active, 1, None).await.unwrap();
+        assert_eq!(active.jobs.len(), 1);
+        assert_eq!(active.jobs[0].job_id, current.job_id);
+        assert!(active.next_cursor.is_none());
         let dispatch = ExecutionState::Dispatching {
             conversation: conversation(),
             input_id: next_input.clone(),
