@@ -968,8 +968,7 @@ async fn runtime_inventory_keeps_healthy_agents_when_one_continuation_is_ambiguo
         }
     });
     let result = gateway
-        .agent_service()
-        .agents_rpc(
+        .cluster_agents_rpc(
             "conversation/agents/list",
             json!({"threadId":"8c43d12f-8038-5d28-be95-ef14cc47faf3"}),
         )

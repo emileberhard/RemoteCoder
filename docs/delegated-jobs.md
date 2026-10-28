@@ -353,7 +353,10 @@ records after a planned restart. There is no separate remote outbox.
 includes per-host `coverage`, and `--cursor` resumes each host independently.
 Bare IDs resolve locally first and then uniquely across members. Native session
 inventory comes from the sessions projection; unavailable inventory remains an
-error. Unknown native activity is excluded from `--active`. Native conversations
+error. Catalog schema 2 rebuilds provisional catalogs with UUID-scoped session
+keys. Incoming peer searches stay local; cluster coverage retains each link's
+unreachable, unsupported or refused state. Unknown native activity is excluded
+from `--active`. Native conversations
 can be inspected, messaged, stopped, adopted, moved or promoted. Continue refuses
 with `unsupported` when native permission evidence is unavailable; it does not
 invent a JobSpec from a thread header.

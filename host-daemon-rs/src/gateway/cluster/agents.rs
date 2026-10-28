@@ -100,7 +100,15 @@ impl Gateway {
             }
         }
         let store = self.jobs.store().await?;
-        for agent in store.agent_rows().await? {
+        let mut warnings = result["warnings"].as_array().cloned().unwrap_or_default();
+        for id in store.agent_ids().await? {
+            let agent = match store.agent(id.clone()).await {
+                Ok(agent) => agent,
+                Err(error) => {
+                    warnings.push(json!(format!("Agent {id} is unavailable: {error:#}")));
+                    continue;
+                }
+            };
             let ConversationBinding::Known { conversation } = &agent.conversation else {
                 continue;
             };
@@ -113,7 +121,13 @@ impl Gateway {
                 }
                 continue;
             }
-            let row = self.project_agent_record(&agent, &parent.thread_id).await?;
+            let row = match self.project_agent_record(&agent, &parent.thread_id).await {
+                Ok(row) => row,
+                Err(error) => {
+                    warnings.push(json!(format!("Agent {id} is unavailable: {error:#}")));
+                    continue;
+                }
+            };
             if let Some(index) = row_index {
                 rows[index] = row;
             } else {
@@ -135,6 +149,7 @@ impl Gateway {
             ))
         });
         result["agents"] = json!(rows);
+        result["warnings"] = json!(warnings);
         use sha2::{Digest, Sha256};
         result["revision"] = json!(format!(
             "{:x}",

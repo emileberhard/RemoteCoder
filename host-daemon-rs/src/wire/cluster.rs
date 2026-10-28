@@ -6,7 +6,12 @@ use crate::agents::jobs::model::{
 };
 
 pub(crate) const PROTOCOL: u32 = 1;
-pub(crate) const CAPABILITIES: &[&str] = &["cluster.v1", "agent.jobs.v1", "agent.parent.v1"];
+pub(crate) const CAPABILITIES: &[&str] = &[
+    "cluster.v1",
+    "agent.jobs.v1",
+    "agent.parent.v1",
+    "sessions.v1",
+];
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

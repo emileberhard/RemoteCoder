@@ -336,6 +336,11 @@ impl JobStore {
         }).await
     }
 
+    pub(crate) async fn agent_ids(&self) -> Result<Vec<String>> {
+        self.access(|inner| Ok(inner.agents.keys().cloned().collect()))
+            .await
+    }
+
     pub(crate) async fn agent_rows(&self) -> Result<Vec<AgentRecord>> {
         self.access(|inner| inner.agents.keys().map(|id| inner.agent_view(id)).collect())
             .await

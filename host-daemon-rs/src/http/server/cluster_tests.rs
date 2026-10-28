@@ -110,6 +110,36 @@ fn spec(root: &std::path::Path) -> JobSpec {
 }
 
 #[tokio::test]
+async fn cluster_peer_search_stays_local_without_recursive_coverage() {
+    let a = LanHarness::start().await;
+    let b = LanHarness::start().await;
+    pair(&a, &b, "a", "b").await;
+    let identity = b.gateway.host_identity().await.unwrap();
+    let result = a
+        .gateway
+        .cluster_link()
+        .await
+        .unwrap()
+        .call(
+            &identity.host_id,
+            "sessions/search",
+            json!({"query":"fixture","local":false}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(result["schemaVersion"], 1);
+    assert!(
+        result["coverage"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row.get("hostId").is_none())
+    );
+    a.stop().await;
+    b.stop().await;
+}
+
+#[tokio::test]
 async fn cluster_fault_capacity_refuses_before_provider_custody() {
     let a = LanHarness::start().await;
     let b = LanHarness::start().await;
