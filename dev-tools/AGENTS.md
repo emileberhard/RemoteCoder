@@ -52,7 +52,9 @@ evidence. It never connects to an installed gateway or starts an agent turn.
   exits 2. A 409 is a permanent rejection with the gateway
   response body. Turn connection
   setup failures, including configuration discovery before opening a socket,
-  write `dispatch.not_started` and their retryability to the event log. So does a thread/turn request the gateway refuses before dispatch: a
+  write `dispatch.not_started` and their retryability to the event log. TLS identity
+  discovery preserves retryable health connection refusal/reset, timeout and 5xx
+  failures; rejected authentication and malformed identity remain permanent. So does a thread/turn request the gateway refuses before dispatch: a
   JSON-RPC error with code -32600..-32602, -32001, -32002, -32003 or -32009 and no
   `data.kind` ending in `Uncertain`/`Unknown`; `data.retryable` wins, else the
   -3200x codes are retryable. Any other failure after handoff, including -32603
