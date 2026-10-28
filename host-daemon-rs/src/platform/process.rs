@@ -296,6 +296,10 @@ mod tests {
         let table = |pid| match pid {
             40 => Ok(Some(ProcessLink {
                 started_micros: 400,
+                parent_pid: 35,
+            })),
+            35 => Ok(Some(ProcessLink {
+                started_micros: 350,
                 parent_pid: 30,
             })),
             30 => Ok(Some(ProcessLink {
@@ -317,7 +321,11 @@ mod tests {
                 break;
             }
         }
-        assert_eq!(proof, [caller, owner]);
+        let middle = ProcessInstance {
+            pid: 35,
+            started_micros: 350,
+        };
+        assert_eq!(proof, [caller, middle, owner]);
         assert!(!reads.contains(&20));
         assert_eq!(
             walk_ancestry(caller, table)
@@ -326,7 +334,7 @@ mod tests {
                 .to_string(),
             "could not read the start time of pid 20: Operation not permitted"
         );
-        for unreadable in [40, 30] {
+        for unreadable in [40, 35, 30] {
             let error = walk_ancestry(caller, |pid| {
                 if pid == unreadable {
                     anyhow::bail!("unreadable process {pid}");
@@ -356,6 +364,7 @@ mod tests {
             chain,
             [
                 caller,
+                middle,
                 owner,
                 ProcessInstance {
                     pid: 20,
