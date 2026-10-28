@@ -13,6 +13,7 @@ actor HistoryGatewayFixture: CodexHistoryGateway, ConversationMarksRemote {
     let historyHostID = "history-fixture"
     let header: ConversationHeader
     private let wireHeader: CodexAppServerV2.Thread
+    private(set) var tailReads = 0
     var pageReads = 0
     private(set) var itemPageLimits: [Int] = []
     private var rejectFirstItems: Bool?
@@ -157,8 +158,10 @@ actor HistoryGatewayFixture: CodexHistoryGateway, ConversationMarksRemote {
                 "warnings": ids.contains(where: { unknownAncestry.contains($0) }) ? ["identityPending"] : []]])
         }
         pageReads += 1
-        if shouldFail { throw Failure.offline }
+        await suspendRead(.page)
         let fields = params.objectValue ?? [:]
+        if method == "thread/items/list", fields["cursor"]?.stringValue == nil { tailReads += 1 }
+        if shouldFail { throw Failure.offline }
         requestedThreadIDs.append(fields["threadId"]?.stringValue ?? "")
         await suspendRead(.page)
         if method == "thread/items/list" {
