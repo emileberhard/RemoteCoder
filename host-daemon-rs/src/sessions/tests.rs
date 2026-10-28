@@ -910,3 +910,56 @@ fn sessions_accounting_recovers_dirty_writes_without_request_walks() {
     assert!(error.is_err());
     assert!(!root.join(".accounting.dirty").exists());
 }
+
+#[test]
+#[ignore]
+fn sessions_measure_populated_mirror() -> Result<()> {
+    let store = Store::open(PathBuf::from(std::env::var("RC_SESSIONS_MEASURE_DB")?))?;
+    let mut times = Vec::new();
+    for _ in 0..10 {
+        for term in [
+            "SKILL.md",
+            "Process exited",
+            "codex-threads",
+            "permission",
+            "Continue target",
+            "pair-programming",
+            "PID start time",
+            "remote-coder",
+            "agents",
+            "FileRevision",
+        ] {
+            let started = Instant::now();
+            std::hint::black_box(query::search(
+                &store.reader()?,
+                &query::Search {
+                    query: term.into(),
+                    limit: Some(50),
+                    ..Default::default()
+                },
+            )?);
+            times.push(started.elapsed().as_secs_f64() * 1000.0);
+        }
+    }
+    times.sort_by(f64::total_cmp);
+    let db = store.reader()?;
+    let started = Instant::now();
+    let counts = query::rows(
+        &db,
+        "SELECT s.origin_host,CASE WHEN ?1 THEN 'top_level' ELSE 'all' END,count(DISTINCT s.session_key),count(DISTINCT CASE WHEN u.skill='agents' THEN s.session_key END),count(DISTINCT CASE WHEN u.skill='agents' AND u.outcome='ok' THEN s.session_key END),count(DISTINCT CASE WHEN u.skill='pair-programming' THEN s.session_key END) FROM session s LEFT JOIN skill_observation u USING(session_key) WHERE s.origin_host IN ('mini','macbook') AND (?1=0 OR s.parent_session_key IS NULL) GROUP BY s.origin_host",
+        [0],
+    )?;
+    let roots = query::rows(
+        &db,
+        "SELECT s.origin_host,'top_level',count(DISTINCT s.session_key),count(DISTINCT CASE WHEN u.skill='agents' THEN s.session_key END),count(DISTINCT CASE WHEN u.skill='agents' AND u.outcome='ok' THEN s.session_key END),count(DISTINCT CASE WHEN u.skill='pair-programming' THEN s.session_key END) FROM session s LEFT JOIN skill_observation u USING(session_key) WHERE s.origin_host IN ('mini','macbook') AND s.parent_session_key IS NULL GROUP BY s.origin_host",
+        [],
+    )?;
+    let skill_query_ms = started.elapsed().as_secs_f64() * 1000.0;
+    let report = json!({"searchP95Ms":times[94],"skillQueryMs":skill_query_ms,"all":counts,"topLevel":roots,"storage":store.storage.usage()?});
+    std::fs::write(
+        std::env::var("RC_SESSIONS_MEASURE_REPORT")?,
+        serde_json::to_vec_pretty(&report)?,
+    )?;
+    println!("{report}");
+    Ok(())
+}
