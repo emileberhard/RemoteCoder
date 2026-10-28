@@ -30,6 +30,10 @@ async fn missing_target_has_a_durable_failure_receipt_and_conflicting_retry_is_r
             .unwrap()
             .contains("does not exist")
     );
+    let reason = first["deliveryState"]["reason"].as_str().unwrap();
+    assert!(reason.contains("message_agent has no cross-host relay"));
+    assert!(reason.contains("codex-threads resolve <thread-id> --json"));
+    assert!(reason.contains("codex-threads send --host <host> <thread-id> '<message>'"));
     assert_eq!(
         gateway
             .agent_jobs_rpc(
@@ -571,4 +575,62 @@ async fn bare_codex_uuid_never_resolves_a_registered_claude_short_uuid() {
             .to_string()
             .contains("different native conversation")
     );
+}
+
+#[tokio::test]
+async fn missing_native_target_retains_peer_route_guidance_without_peer_discovery() {
+    use crate::test_support::FakeControl;
+    let gateway = TestGateway::new();
+    let mut control = FakeControl::attach(&gateway, 1).await.requests;
+    let owner = gateway.clone();
+    let caller = tokio::spawn(async move {
+        owner
+            .agent_jobs_rpc(
+                "agent/jobs/message",
+                request(
+                    MessageTarget::Selector {
+                        selector: "11111111-1111-4111-8111-111111111111".into(),
+                    },
+                    "missing-native-peer",
+                    "Fixture message",
+                ),
+            )
+            .await
+    });
+    let request: serde_json::Value = serde_json::from_str(&control.recv().await.unwrap()).unwrap();
+    assert_eq!(request["method"], "thread/read");
+    gateway
+        .control_requests
+        .lock()
+        .unwrap()
+        .remove(request["id"].as_str().unwrap())
+        .unwrap()
+        .send(Err(
+            json!({"code":-32600,"message":"thread is not present in this native home"})
+                .to_string(),
+        ))
+        .unwrap();
+    let receipt = caller.await.unwrap().unwrap();
+    assert_eq!(receipt["deliveryId"], "missing-native-peer");
+    assert_eq!(receipt["deliveryState"]["kind"], "failed");
+    let reason = receipt["deliveryState"]["reason"].as_str().unwrap();
+    assert!(reason.contains("thread is not present in this native home"));
+    assert!(reason.contains("message_agent has no cross-host relay"));
+    assert!(reason.contains("codex-threads resolve <thread-id> --json"));
+    assert!(reason.contains("codex-threads send --host <host> <thread-id> '<message>'"));
+    assert!(receipt["resolved"].is_null());
+    assert_eq!(
+        gateway
+            .agent_jobs_rpc(
+                "agent/messages/read",
+                json!({"deliveryId":"missing-native-peer"})
+            )
+            .await
+            .unwrap(),
+        receipt
+    );
+    assert!(matches!(
+        control.try_recv(),
+        Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+    ));
 }

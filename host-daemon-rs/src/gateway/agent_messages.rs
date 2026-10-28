@@ -11,6 +11,8 @@ use crate::rpc::error::RpcCode;
 use crate::rpc::{RpcError, RpcResult};
 use crate::wire::agent_jobs::*;
 
+const CROSS_HOST_MESSAGE_GUIDANCE: &str = "Target lookup is local to this gateway; message_agent has no cross-host relay. Use the canonical thread ID from its owning host's list_agents --json, then codex-threads resolve <thread-id> --json and codex-threads send --host <host> <thread-id> '<message>'";
+
 fn now_ms() -> i64 {
     (crate::time::unix_seconds() * 1000.0) as i64
 }
@@ -291,7 +293,7 @@ impl Gateway {
         };
         ensure!(
             self.agent_conversation(&resolved.conversation.thread_id)? == resolved.conversation,
-            "message target belongs to another provider home"
+            "message target belongs to another provider home; {CROSS_HOST_MESSAGE_GUIDANCE}"
         );
         Ok(resolved)
     }
@@ -375,14 +377,16 @@ impl Gateway {
             crate::agents::jobs::model::Provider::Claude => self
                 .claude_thread_response(&json!({"threadId":thread_id}))
                 .await
-                .map_err(|error| anyhow::anyhow!(error.message))?["thread"]
+                .map_err(|error| anyhow::anyhow!(error.message))
+                .context(CROSS_HOST_MESSAGE_GUIDANCE)?["thread"]
                 .clone(),
             crate::agents::jobs::model::Provider::Codex => self
                 .call_control(
                     "thread/read",
                     json!({"threadId":thread_id,"includeTurns":false}),
                 )
-                .await?["thread"]
+                .await
+                .context(CROSS_HOST_MESSAGE_GUIDANCE)?["thread"]
                 .clone(),
         };
         let conversation = crate::agents::conversation_from_header(&header)?;
@@ -412,7 +416,11 @@ impl Gateway {
         job_id: JobId,
         delivery_id: &str,
     ) -> Result<ResolvedMessage> {
-        let view = self.jobs.read(&job_id).await?;
+        let view = self
+            .jobs
+            .read(&job_id)
+            .await
+            .context(CROSS_HOST_MESSAGE_GUIDANCE)?;
         let agent = view.agent.context("target conversation is unresolved")?;
         ensure!(
             agent.latest_job_id.as_ref() == Some(&job_id),
