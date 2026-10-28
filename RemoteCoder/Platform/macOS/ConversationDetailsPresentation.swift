@@ -59,6 +59,7 @@ private struct ConversationInspector: View {
 
     @ViewBuilder
     private func agentRows(_ agents: ConversationAgentsModel) -> some View {
+        ClusterCoverageStrip(coverage: agents.coverage)
         let earlier = agents.sections.earlier
         links(agents, rows: agents.sections.recent)
         if !earlier.isEmpty {
@@ -72,7 +73,7 @@ private struct ConversationInspector: View {
     }
 
     private func links(_ agents: ConversationAgentsModel, rows: [ConversationAgentRow]) -> some View {
-        ConversationAgentLinks(model: agents, rows: rows, onParentRequest: { request in
+        ConversationAgentLinks(workspace: workspace, model: agents, rows: rows, onParentRequest: { request in
             try await workspace.sendToAgentParent(request, from: agents.address)
             onParentRequestSent()
         }, onOpenConversation: { agent in

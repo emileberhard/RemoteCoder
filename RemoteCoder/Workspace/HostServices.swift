@@ -32,7 +32,7 @@ final class HostServices {
         htmlVisualDocuments = HTMLVisualDocumentStore(hostID: host.id, access: files, cache: htmlVisuals.documents)
         htmlVisualRenderer = htmlVisuals.renderer
         #if os(iOS)
-        activities = ActiveTasksLiveActivityService(hostID: host.id, hostName: host.displayName)
+        activities = ActiveTasksLiveActivityService(hostID: host.id, hostName: host.displayName, legacyHostIDs: Set(host.legacyIDs))
         #endif
         registration = DeviceRegistration(
             appHostID: host.id, eventBaseURL: host.gatewayHTTPBaseURL()?.absoluteString, transport: gateway

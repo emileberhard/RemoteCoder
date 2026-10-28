@@ -129,8 +129,8 @@ struct AccountRetirementMigrationTests {
         try saveLegacyDraft(directory: source, thread: thread, attachments: [attachment])
         try saveLegacyDraft(directory: target, thread: thread, attachments: [attachment])
 
-        try ComposerDraftStore.importDrafts(from: source, into: target, conversationIDs: [:], hostID: UUID(), accountID: UUID())
-        try ComposerDraftStore.importDrafts(from: source, into: target, conversationIDs: [:], hostID: UUID(), accountID: UUID())
+        try ComposerDraftStore.importDrafts(from: source, into: target, conversationIDs: [:], scope: .retiredAccount(hostID: UUID(), accountID: UUID()))
+        try ComposerDraftStore.importDrafts(from: source, into: target, conversationIDs: [:], scope: .retiredAccount(hostID: UUID(), accountID: UUID()))
 
         let reopened = ComposerDraftStore(directory: target)
         let draft = try #require(await reopened.draft(for: .thread(thread)))

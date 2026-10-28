@@ -36,6 +36,13 @@ struct AppStorageScope: Sendable {
         if case .benchmark = domain { true } else { false }
     }
 
+    var defaultsDomainName: String {
+        switch domain {
+        case .production: Bundle.main.bundleIdentifier ?? ProcessInfo.processInfo.processName
+        case .benchmark(let id): "RemoteCoder.mac-bench.\(id.uuidString)"
+        }
+    }
+
     var defaults: UserDefaults {
         switch domain {
         case .production: return UserDefaults.standard

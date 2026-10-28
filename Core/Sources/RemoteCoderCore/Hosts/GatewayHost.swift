@@ -13,6 +13,8 @@ struct GatewayHostConfiguration: Identifiable, Codable, Equatable, Sendable {
     var port: Int
     var authToken: String
     var incomingCallHostID: UUID?
+    var gatewayID: UUID?
+    var legacyIDs: [UUID] = []
     var transport: GatewayTransport
 
     init(
@@ -32,7 +34,7 @@ struct GatewayHostConfiguration: Identifiable, Codable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, hostname, port, authToken, incomingCallHostID, transport
+        case id, name, hostname, port, authToken, incomingCallHostID, transport, gatewayID, legacyIDs
     }
 
     init(from decoder: any Decoder) throws {
@@ -43,6 +45,8 @@ struct GatewayHostConfiguration: Identifiable, Codable, Equatable, Sendable {
         port = try values.decode(Int.self, forKey: .port)
         authToken = try values.decode(String.self, forKey: .authToken)
         incomingCallHostID = try values.decodeIfPresent(UUID.self, forKey: .incomingCallHostID)
+        gatewayID = try values.decodeIfPresent(UUID.self, forKey: .gatewayID)
+        legacyIDs = try values.decodeIfPresent([UUID].self, forKey: .legacyIDs) ?? []
         // Legacy configurations used HTTP; preserve their established transport.
         transport = try values.decodeIfPresent(GatewayTransport.self, forKey: .transport) ?? .trustedNetwork
     }

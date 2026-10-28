@@ -13,6 +13,7 @@ struct GatewayRPCFailure: LocalizedError, Sendable {
         case conversationBusy(retryAfterMs: Int)
         case providerUnresponsive, inputDeliveryUncertain
         case providerUnavailable(provider: AgentProvider, reason: String)
+        case cluster(ClusterErrorClass)
         case unknown(String)
     }
     struct Details: Decodable, Sendable {
@@ -21,11 +22,18 @@ struct GatewayRPCFailure: LocalizedError, Sendable {
         let current: ConversationMetadataRecord?
 
         private enum CodingKeys: String, CodingKey {
+            case errorClass = "class"
             case kind, retryable, current, actualBytes, limitBytes, threadId, turnId, retryAfterMs, provider, reason
         }
 
         init(from decoder: Decoder) throws {
             let values = try decoder.container(keyedBy: CodingKeys.self)
+            if values.contains(.errorClass) {
+                kind = .cluster(try values.decode(ClusterErrorClass.self, forKey: .errorClass))
+                retryable = try values.decode(Bool.self, forKey: .retryable)
+                current = nil
+                return
+            }
             let name = try values.decode(String.self, forKey: .kind)
             switch name {
             case "metadataConflict": kind = .metadataConflict

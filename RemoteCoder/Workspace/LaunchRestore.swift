@@ -43,6 +43,11 @@ final class LaunchRestore {
         return draft.draftID
     }
 
+    func reloadPendingLocation() {
+        guard case .awaitingBootstrap = phase else { return }
+        phase = .awaitingBootstrap(Self.recorded(in: defaults))
+    }
+
     func restore(using host: any LaunchRestoreHost) {
         guard case .awaitingBootstrap(let location) = phase else { return }
         if case .newChat(let draft) = location, !host.hasPendingNotificationTap {

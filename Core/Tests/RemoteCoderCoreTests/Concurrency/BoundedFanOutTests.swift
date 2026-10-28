@@ -11,7 +11,7 @@ struct BoundedFanOutTests {
 
     @Test func neverRunsMoreThanTheLimitAtOnce() async {
         let recorder = Recorder()
-        await BoundedFanOut.run(Array(1...6), limit: 2, skipping: { _ in false }) { item in
+        await BoundedFanOut.run(Array(1...6), limit: 2, deadline: nil, skipping: { _ in false }) { item in
             recorder.started.append(item)
             recorder.active += 1
             recorder.peak = max(recorder.peak, recorder.active)
@@ -24,14 +24,14 @@ struct BoundedFanOutTests {
 
     @Test func aSingleWorkerKeepsTheGivenOrder() async {
         let recorder = Recorder()
-        await BoundedFanOut.run([3, 1, 2], limit: 1, skipping: { _ in false }) { recorder.started.append($0) }
+        await BoundedFanOut.run([3, 1, 2], limit: 1, deadline: nil, skipping: { _ in false }) { recorder.started.append($0) }
         #expect(recorder.started == [3, 1, 2])
     }
 
     @Test func anItemThatGoesStaleWhileQueuedIsSkipped() async {
         let recorder = Recorder()
         let staleBox = StaleBox([4])
-        await BoundedFanOut.run([1, 2, 3, 4], limit: 1, skipping: { staleBox.items.contains($0) }) { item in
+        await BoundedFanOut.run([1, 2, 3, 4], limit: 1, deadline: nil, skipping: { staleBox.items.contains($0) }) { item in
             if item == 2 { staleBox.items.insert(3) }
             recorder.started.append(item)
         }
@@ -41,7 +41,7 @@ struct BoundedFanOutTests {
     @Test func cancellingTheCallerStopsTheWorkersBeforeTheNextItem() async {
         let recorder = Recorder()
         let task = Task { @MainActor in
-            await BoundedFanOut.run([1, 2, 3], limit: 1, skipping: { _ in false }) { item in
+            await BoundedFanOut.run([1, 2, 3], limit: 1, deadline: nil, skipping: { _ in false }) { item in
                 recorder.started.append(item)
                 while !Task.isCancelled { await Task.yield() }
             }
@@ -50,6 +50,14 @@ struct BoundedFanOutTests {
         task.cancel()
         await task.value
         #expect(recorder.started == [1])
+    }
+
+    @Test func anExpiredDeadlineStartsNoWork() async {
+        let recorder = Recorder()
+        await BoundedFanOut.run([1, 2, 3], limit: 3, deadline: .now - .seconds(1), skipping: { _ in false }) {
+            recorder.started.append($0)
+        }
+        #expect(recorder.started.isEmpty)
     }
 
     private final class StaleBox {

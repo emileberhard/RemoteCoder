@@ -9,6 +9,11 @@ extension ConversationAgent.State {
         case .interrupted: "Stopped"
         case .failed: "Failed"
         case .unknown: "Status unavailable"
+        case .removed: "Removed"
         }
     }
+}
+
+extension ConversationAgent.IntentState {
+    var title: String { rawValue.replacingOccurrences(of: "_", with: " ").capitalized }
 }

@@ -11,6 +11,7 @@ actor ActiveTasksLiveActivityService {
     private let logger = AppLogger(category: "ActiveTasksLiveActivity")
 
     private let hostID: UUID
+    private let legacyHostIDs: Set<UUID>
     private let hostName: String
     private var observedPushTokenActivityID: String?
     private var pushTokenObserverTask: Task<Void, Never>?
@@ -18,8 +19,9 @@ actor ActiveTasksLiveActivityService {
     private var snapshot: ActiveTasksLiveActivitySnapshot?
     private var snapshotGeneration: UInt64 = 0
 
-    init(hostID: UUID, hostName: String) {
+    init(hostID: UUID, hostName: String, legacyHostIDs: Set<UUID>) {
         self.hostID = hostID
+        self.legacyHostIDs = legacyHostIDs
         self.hostName = hostName
     }
 
@@ -98,6 +100,7 @@ actor ActiveTasksLiveActivityService {
     private func endLegacyActivities() async {
         let legacy = Activity<RemoteCoderActiveTasksAttributes>.activities.filter {
             ActiveTasksLiveActivityScope.isLegacy(activityHostID: $0.attributes.hostID)
+                || $0.attributes.hostID.map { legacyHostIDs.contains($0) } == true
         }
         guard legacy.isEmpty == false else { return }
         for activity in legacy {

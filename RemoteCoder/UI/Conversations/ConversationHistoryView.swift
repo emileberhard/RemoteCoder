@@ -12,6 +12,7 @@ struct ConversationHistoryView: View {
     @Binding var layout: ConversationDrawerLayout?
     @Binding var notice: DrawerNotice?
 
+    @State private var movingAgent: ConversationAddress?
     @State private var sidebar: ConversationSidebarSnapshot?
     #if os(iOS)
     @State private var rising: Set<String> = []
@@ -36,6 +37,10 @@ struct ConversationHistoryView: View {
 
     var body: some View {
         historyList
+            .sheet(item: $movingAgent) { AgentPlacementPicker(agent: $0, workspace: workspace) }
+            .safeAreaInset(edge: .top) {
+                if isOpen { ClusterCoverageStrip(coverage: workspace.agentCoverage).padding(.horizontal) }
+            }
             .alert(pinNamePromptTitle, item: $pinNameIntent) { intent in
                 TextField("Pinned chat name", text: $pinNameDraft)
                     .onChange(of: pinNameDraft) { pinNameDraft = ConversationPinName.clamped(pinNameDraft) }
@@ -181,6 +186,7 @@ struct ConversationHistoryView: View {
                 }
             },
             fork: onFork,
+            moveUnder: { movingAgent = $0 },
             markRead: { addresses in
                 workspace.markRead(addresses)
                 HapticService.shared.play(.toggleOff)

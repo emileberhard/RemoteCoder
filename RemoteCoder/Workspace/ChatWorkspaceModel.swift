@@ -14,9 +14,10 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
     /// How many hosts bootstrap or refresh at once. A sleeping laptop must not
     /// delay the Mini's first rows, and an unbounded fan-out on a cold launch
     /// competes with the visible host's transcript load.
-    private static let refreshConcurrency = 3
+    private static let refreshConcurrency = BoundedFanOut.hostLimit
 
     let settings: HostStore
+    let cluster: ClusterModel
     @ObservationIgnored let htmlVisuals: HTMLVisualServices
     @ObservationIgnored let siteIcons: SiteIconStore
     @ObservationIgnored let retainedTranscripts = TranscriptSurfaceRetention(capacity: 3)
@@ -81,12 +82,18 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
     let events = ExternalEventRouter(now: { .now })
     @ObservationIgnored private let launchRestore: LaunchRestore
     @ObservationIgnored private var accountMigration: Task<Void, Never>?
+    @ObservationIgnored private var clusterRefreshTask: Task<Void, Never>?
+    @ObservationIgnored private var identityRetryTask: Task<Void, Never>?
+    @ObservationIgnored private var isVerifyingIdentity = false
     @ObservationIgnored private var isDiscoveringRetiredState = true
     @ObservationIgnored private var migratingHosts: Set<UUID> = []
     @ObservationIgnored private var admittedHosts: Set<UUID> = []
+    @ObservationIgnored private var pendingIdentityResumes: Set<UUID> = []
+    private var identityResumeFailures: [UUID: String] = [:]
     private var accountMigrationIssues: [String] = []
     var accountMigrationIssue: String? {
-        accountMigrationIssues.isEmpty ? nil : accountMigrationIssues.joined(separator: "\n")
+        let issues = accountMigrationIssues + Array(identityResumeFailures.values)
+        return issues.isEmpty ? nil : issues.joined(separator: "\n")
     }
 
     init(
@@ -107,6 +114,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         dictationLibrary: SharedDictationLibrary? = nil
     ) {
         self.settings = settings
+        cluster = ClusterModel(defaults: defaults)
         self.storage = storage
         self.dictationLibrary = dictationLibrary
         #if DEBUG
@@ -169,10 +177,18 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
     private func startAccountMigration() {
         isDiscoveringRetiredState = true
         let ledger = AccountRetirementMigration.Ledger(defaults: defaults)
-        let hostIDs = settings.hosts.map(\.id)
         let admittedHosts = admittedHosts
         let storage = storage
         accountMigration = Task { [weak self] in
+            guard let self else { return }
+            let originalIDs = self.settings.hosts.map(\.id)
+            let previous = await ledger.run(hosts: originalIDs, excluding: admittedHosts,
+                storage: storage, discovered: { _ in }, finishedHost: { _ in })
+            await self.resolveGatewayIdentities()
+            guard !Task.isCancelled else { return }
+            let hostIDs = self.settings.hosts.map(\.id)
+            self.launchRestore.reloadPendingLocation()
+            if Set(hostIDs) == Set(originalIDs) { self.finishAccountMigration(previous); return }
             let outcome = await ledger.run(hosts: hostIDs, excluding: admittedHosts, storage: storage, discovered: { [weak self] hosts in
                 self?.isDiscoveringRetiredState = false
                 self?.migratingHosts = hosts
@@ -181,8 +197,117 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
                 self?.migratingHosts.remove(host)
                 self?.reconcileHosts()
             })
-            self?.finishAccountMigration(outcome)
+            self.finishAccountMigration(.init(migrated: outcome.migrated, issues: previous.issues + outcome.issues))
         }
+    }
+
+    private func resolveGatewayIdentities() async {
+        let migration = GatewayIdentityMigration(storage: storage)
+        let candidates = settings.hosts.map(\.configuration).filter { !admittedHosts.contains($0.id) }
+        pendingIdentityResumes.formUnion(await migration.unfinishedImports(hosts: candidates))
+        let resolved = await GatewayIdentityLaunch.read(hosts: candidates, budget: .seconds(2)) { host in
+            let routes = GatewayRoutes(host: host, directory: self.storage.directory(for: .host(host.id)),
+                relayStorage: KeychainGatewayCredentials(scope: .relayRoute(hostID: host.id)),
+                policy: self.gatewayPolicy, observeLocalNetwork: GatewayRoutes.observeLocalNetwork)
+            do {
+                let identity = try await routes.identity()
+                await routes.retire()
+                return identity
+            } catch {
+                await routes.retire()
+                throw error
+            }
+        }
+        for (host, identity) in resolved {
+            do {
+                let sources = try self.settings.identityMigrationSources(identity, for: host).sorted { $0.uuidString < $1.uuidString }
+                for source in sources {
+                    try await migration.migrate(from: source, to: identity.hostId)
+                }
+                try Task.checkCancellation()
+                self.pendingIdentityResumes.insert(identity.hostId)
+                try await self.settings.adoptIdentity(identity, for: host)
+                for source in sources { try await migration.finish(from: source, to: identity.hostId) }
+                self.pendingIdentityResumes.remove(identity.hostId)
+            } catch is CancellationError {
+            } catch {
+                self.logger.notice("Gateway identity unresolved host=\(host.displayName): \(error.localizedDescription)")
+            }
+        }
+    }
+
+    private func retryGatewayIdentities() {
+        guard !isQuiescing, hasBootstrapped, accountMigration == nil, identityRetryTask == nil else { return }
+        let configured = Set(settings.hosts.map(\.id))
+        pendingIdentityResumes.formIntersection(configured)
+        identityResumeFailures = identityResumeFailures.filter { configured.contains($0.key) }
+        let hosts = settings.hosts.filter { $0.configuration.gatewayID != $0.id || pendingIdentityResumes.contains($0.id) }.map(\.id)
+        guard !hosts.isEmpty else { return }
+        identityRetryTask = Task { [weak self] in
+            guard let self else { return }
+            defer { self.identityRetryTask = nil }
+            let migration = GatewayIdentityMigration(storage: self.storage)
+            for hostID in hosts {
+                guard !Task.isCancelled else { return }
+                do {
+                    if self.pendingIdentityResumes.contains(hostID) {
+                        try await self.settings.resumeIdentityMigration(for: hostID, using: migration)
+                        try Task.checkCancellation()
+                        self.pendingIdentityResumes.remove(hostID)
+                        self.identityResumeFailures[hostID] = nil
+                        self.reconcileHosts()
+                        self.launchRestore.reloadPendingLocation()
+                        self.launchRestore.restore(using: self)
+                        self.refreshCluster()
+                    } else { try await self.verifyGatewayIdentity(hostID: hostID) }
+                }
+                catch is CancellationError { return }
+                catch {
+                    if self.pendingIdentityResumes.contains(hostID) {
+                        self.identityResumeFailures[hostID] = "Saved gateway state could not finish importing: \(error.localizedDescription)"
+                    }
+                    self.logger.notice("Gateway identity unresolved host=\(hostID): \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+
+    func verifyGatewayIdentity(hostID: UUID) async throws {
+        guard let host = settings.hosts.first(where: { $0.id == hostID })?.configuration else { return }
+        guard host.gatewayID != host.id else { return }
+        guard !isVerifyingIdentity else { throw GatewayIdentityMigration.MigrationFailure.verificationInProgress }
+        guard let source = model(for: hostID) else { throw ConversationAgentNavigationError.hostUnavailable }
+        isVerifyingIdentity = true
+        defer { isVerifyingIdentity = false }
+        let identity = try await source.hostServices.routes.identity()
+        try Task.checkCancellation()
+        try settings.verifyIdentity(identity, for: host)
+        guard host.id != identity.hostId || host.gatewayID != identity.hostId else { return }
+        guard !refusesSwitchWhileDictating, !voiceCalls.call.isActive else {
+            throw VoiceCallUnavailable(message: "Finish dictation or Voice Mode before migrating this host.")
+        }
+        let ids = Set(settings.hosts.filter { $0.id == hostID || $0.configuration.gatewayID == identity.hostId }.map(\.id))
+        let fenced = ids.union([identity.hostId])
+        migratingHosts.formUnion(fenced)
+        defer {
+            migratingHosts.subtract(fenced)
+            reconcileHosts()
+            launchRestore.restore(using: self)
+        }
+        for model in models where ids.contains(model.hostID) { retire(model, reason: "verified gateway identity") }
+        guard await targets.awaitRetirements() else { throw GatewayIdentityMigration.MigrationFailure.recovery }
+        admittedHosts.subtract(ids)
+        let ledger = AccountRetirementMigration.Ledger(defaults: defaults)
+        _ = await ledger.run(hosts: Array(ids), excluding: admittedHosts, storage: storage, discovered: { _ in }, finishedHost: { _ in })
+        let migration = GatewayIdentityMigration(storage: storage)
+        let sources = try settings.identityMigrationSources(identity, for: host)
+        for old in sources { try await migration.migrate(from: old, to: identity.hostId) }
+        try Task.checkCancellation()
+        pendingIdentityResumes.insert(identity.hostId)
+        try await settings.adoptIdentity(identity, for: host)
+        launchRestore.reloadPendingLocation()
+        for old in sources { try await migration.finish(from: old, to: identity.hostId) }
+        pendingIdentityResumes.remove(identity.hostId)
     }
 
     private func finishAccountMigration(_ outcome: AccountRetirementMigration.Outcome) {
@@ -195,7 +320,11 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         }
         isDiscoveringRetiredState = false
         reconcileHosts()
-        if hasBootstrapped { launchRestore.restore(using: self) }
+        if hasBootstrapped {
+            launchRestore.restore(using: self)
+            refreshCluster()
+            retryGatewayIdentities()
+        }
     }
 
     let automationDrafts = AutomationDraftStore()
@@ -268,9 +397,50 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
     }
 
     private func install(_ model: ChatTargetModel) {
+        model.agentHosts = { [weak self] in self?.conversationAgentHosts ?? [] }
+        model.agentCoverage = { [weak self] in self?.agentCoverage ?? [] }
         for window in windows { installScreen(of: model, in: window) }
         model.onConversationNavigation = { [weak self] in self?.supersedePendingNavigation() }
         model.onActiveSessionChange = { [weak self] _ in self?.openConversationDidChange() }
+        model.onGatewayReconnect = { [weak self] in self?.retryGatewayIdentities() }
+    }
+
+    var clusterHosts: [ClusterModel.Host] {
+        models.filter { $0.host.gatewayID == $0.hostID }.map { .init(configuration: $0.host, remote: $0.gatewayClient) }
+    }
+
+    var conversationAgentHosts: [ConversationAgentsHost] {
+        models.map { .init(id: $0.hostID, name: $0.hostDisplayName, gateway: $0.gatewayClient, supportsCrossHost: $0.host.gatewayID == $0.hostID) }
+    }
+
+    var agentCoverage: [ClusterCoverage] {
+        let byID = Dictionary(models.map { ($0.hostID, $0) }, uniquingKeysWith: { first, _ in first })
+        var coverage: [ClusterCoverage] = settings.hosts.map { host in
+            guard let model = byID[host.id] else {
+                return .init(hostId: host.id, name: host.displayName, state: .unknown)
+            }
+            let since = model.conversationList.lastSuccessfulRefreshAt
+            if model.gatewayConnectivity.route == nil {
+                return .init(hostId: host.id, name: host.displayName, state: .unreachable, since: model.gatewayUnreachableSince)
+            }
+            if model.conversationList.errorMessage != nil {
+                return .init(hostId: host.id, name: host.displayName, state: .stale, staleThrough: since)
+            }
+            return .init(hostId: host.id, name: host.displayName, state: .ok)
+        }
+        var seen = Set(coverage.map(\.id))
+        for member in cluster.membersByID.values where seen.insert(member.id).inserted {
+            coverage.append(.init(hostId: member.id, name: member.name, state: .unknown))
+        }
+        return coverage
+    }
+
+    private func refreshCluster() {
+        clusterRefreshTask?.cancel()
+        clusterRefreshTask = Task { [weak self] in
+            guard let self else { return }
+            await cluster.refresh(hosts: clusterHosts)
+        }
     }
 
     // MARK: - Selection
@@ -397,7 +567,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
     var models: [ChatTargetModel] { targets.models }
 
     func model(for hostID: UUID) -> ChatTargetModel? {
-        targets.model(for: hostID)
+        targets.model(for: settings.canonicalHostID(hostID))
     }
 
     func routes(for host: GatewayHostConfiguration) -> GatewayRoutes? {
@@ -483,7 +653,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
                 }
                 retire(existing, reason: "reconfigured")
             }
-            if isDiscoveringRetiredState || migratingHosts.contains(host.id) { continue }
+            if isDiscoveringRetiredState || migratingHosts.contains(host.id) || pendingIdentityResumes.contains(host.id) { continue }
             // Flush the predecessor before loading the same host-scoped files.
             if targets.hasRunningRetirement(hostID: host.id) || targets.isRetiring(ExecutionTarget(hostID: host.id)) { continue }
             admittedHosts.insert(host.id)
@@ -616,6 +786,8 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
             await self.prepareAndRegister(model)
         }
         events.setNavigationReady()
+        refreshCluster()
+        retryGatewayIdentities()
     }
 
     private func prepare(target: ExecutionTarget) {
@@ -653,6 +825,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         accountDirectory.startForeground()
         for model in connectedHostModels { model.directories.syncFavorites() }
         syncPreferences()
+        retryGatewayIdentities()
         foregroundFanOutTask?.cancel()
         let task = Task { @MainActor [weak self] in
             guard let self else { return }
@@ -685,6 +858,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         notificationSceneGeneration = UUID()
         notifications.dismiss()
         accountDirectory.stopForeground()
+        identityRetryTask?.cancel()
         siteIcons.stopFetching()
         // The app is leaving: a foreground pass still in flight would otherwise
         // resume and restart the very polling this is tearing down.
@@ -718,6 +892,9 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         foregroundFanOutTask = nil
         historyDrawerOpening?.cancel()
         historyDrawerOpening = nil
+        clusterRefreshTask?.cancel()
+        clusterRefreshTask = nil
+        identityRetryTask?.cancel()
         notifications.stop()
         for model in models {
             model.hostServices.beginFileRetirement()
@@ -730,7 +907,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         isQuiescing = true
         scenePhasePass += 1
         navigationGeneration = UUID()
-        terminationTasks = Array(prepareTasks.values) + [foregroundFanOutTask, notificationNavigationTask, conversationSwitch, accountMigration].compactMap { $0 }
+        terminationTasks = Array(prepareTasks.values) + [foregroundFanOutTask, notificationNavigationTask, conversationSwitch, accountMigration, clusterRefreshTask, identityRetryTask].compactMap { $0 }
         for task in terminationTasks { task.cancel() }
         accountDirectory.stop()
         terminationTargets = models + targets.retiringModels
@@ -806,7 +983,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         _ models: [ChatTargetModel],
         _ body: @escaping @MainActor (ChatTargetModel) async -> Void
     ) async {
-        await BoundedFanOut.run(prioritized(models), limit: Self.refreshConcurrency, skipping: { $0.isRetired }, body)
+        await BoundedFanOut.run(prioritized(models), limit: Self.refreshConcurrency, deadline: nil, skipping: { $0.isRetired }, body)
     }
 
     /// The selected host goes first; the rest keep their configured order.
@@ -1202,6 +1379,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
     var refusesSwitchWhileDictating: Bool { selectedModel?.voice.isRecording == true }
 
     func switchConversation(to address: ConversationAddress) -> ConversationSwitchOutcome {
+        let address = ConversationAddress(hostID: settings.canonicalHostID(address.hostID), threadID: address.threadID)
         let span = PerfBuild.span("switch.request"); defer { span.end() }
         let isShowing = isShowingConversation(at: address, on: selectedScreen)
         if !isShowing, refusesSwitchWhileDictating { return .refusedWhileDictating }
@@ -1227,7 +1405,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         guard let threadID = agent.threadId, agent.capabilities.openConversation else {
             throw ConversationAgentNavigationError.noConversation
         }
-        let owner = try activeOwner(hostID: parent.hostID)
+        let owner = try activeOwner(hostID: agent.ownerHostId ?? parent.hostID)
         supersedePendingNavigation()
         let generation = navigationGeneration
         let header: ConversationHeader
@@ -1239,7 +1417,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         }
         guard navigationIsCurrent(generation) else { return }
         guard !owner.isRetired else { throw CancellationError() }
-        let child = ConversationAddress(hostID: parent.hostID, threadID: threadID)
+        let child = ConversationAddress(hostID: agent.ownerHostId ?? parent.hostID, threadID: threadID)
         owner.resumeConversation(header)
         select(target: child.target)
         agentNavigation = AgentNavigation(parent: parent, child: child)
@@ -1270,9 +1448,40 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
     }
 
     func performAgentAction(_ action: ConversationAgentAction, on agent: ConversationAgent, in parent: ConversationAddress, text: String, mutationID: UUID) async throws {
-        let owner = try activeOwner(hostID: parent.hostID)
-        let threadID = parent.threadID
+        let owner = try activeOwner(hostID: agent.ownerHostId ?? parent.hostID)
+        let threadID = agent.ownerThreadId
         try await owner.target.gatewayClient.agentAction(threadID: threadID, agent: agent, action: action, text: text, mutationID: mutationID)
+    }
+
+    func moveAgent(_ address: ConversationAddress, under parent: ConversationAddress?) async throws {
+        guard let owner = model(for: address.hostID), owner.acceptsWork else { throw ConversationAgentNavigationError.hostUnavailable }
+        try await owner.gatewayClient.setAgentParent(agent: .init(hostId: address.hostID, threadId: address.threadID),
+            parent: parent.map { .init(hostId: $0.hostID, threadId: $0.threadID) })
+        try Task.checkCancellation()
+        guard !owner.isRetired else { throw CancellationError() }
+        await owner.conversationList.applyParent(parent, to: address.threadID)
+        await owner.conversationList.refresh(reason: "agent placement changed")
+        for model in models { model.invalidateAgentLists() }
+    }
+
+    func agentParentCandidates(excluding address: ConversationAddress, query: String) async -> [(address: ConversationAddress, title: String, hostName: String)] {
+        let inputs = models.map { ($0.hostID, $0.hostDisplayName, $0.conversationList.threads) }
+        return await Self.prepareParentCandidates(inputs, excluding: address, query: query)
+    }
+
+    @concurrent private static func prepareParentCandidates(_ inputs: [(UUID, String, [ConversationHeader])],
+        excluding address: ConversationAddress, query: String) async -> [(address: ConversationAddress, title: String, hostName: String)] {
+        var candidates: [(address: ConversationAddress, title: String, hostName: String)] = []
+        for (hostID, name, headers) in inputs {
+            for header in headers {
+                guard !Task.isCancelled else { return [] }
+                let candidate = ConversationAddress(hostID: hostID, threadID: header.id)
+                if candidate != address, query.isEmpty || header.displayTitle.localizedStandardContains(query) || name.localizedStandardContains(query) {
+                    candidates.append((candidate, header.displayTitle, name))
+                }
+            }
+        }
+        return candidates
     }
 
     private func activeOwner(hostID: UUID) throws -> ChatScreenModel {
@@ -1593,7 +1802,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         await accountMigration?.value
         guard navigationIsCurrent(generation) else { return }
         guard let target = TaskCompletionRouting.resolve(
-            payloadHostID: payload.hostID,
+            payloadHostID: settings.canonicalHostID(payload.hostID),
             targets: models.map(\.target)
         ) else {
             // Deliberately no fallback to the visible host: a smart match by

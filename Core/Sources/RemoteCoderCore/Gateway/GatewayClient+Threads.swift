@@ -315,6 +315,12 @@ extension GatewayClient {
         try await callDecodable(method: "conversation/agents/list", params: encodeToJSONValue(GatewayRequestParams.ThreadReference(threadId: threadID)), timeout: timeouts.history)
     }
 
+    func conversationAgents(parent: ClusterParent, crossHost: Bool) async throws -> ConversationAgentsPage {
+        if !crossHost { return try await conversationAgents(threadID: parent.threadId) }
+        return try await callDecodable(method: "conversation/agents/list", params: .object([
+            "protocol": .number(1), "parent": parent.json]), timeout: .seconds(10))
+    }
+
     func agentOutput(threadID: String, agentID: String) async throws -> ConversationAgentOutput {
         try await callDecodable(method: "conversation/agents/read",
             params: encodeToJSONValue(GatewayRequestParams.AgentRead(threadId: threadID, agentId: agentID)), timeout: timeouts.history)

@@ -65,7 +65,7 @@ struct GatewayEventPumpTests {
 
     @Test func aStalledRouteIsReplacedWithoutReportingALostLinkAndReplaysFromItsCursor() async throws {
         try await withRecordingPump(timeouts: GatewayClient.Timeouts()) { _, socket, sink in
-            #expect(await waitUntil { sink.links.last == .connected })
+            #expect(sink.links.last == .connected)
             try await socket.send(.notification(.init(method: "daemon/ready",
                 params: .object(["notificationEpoch": .string("fixture"), "notificationSequence": .number(5)]))))
             await socket.stallExistingConnections()
@@ -84,7 +84,7 @@ struct GatewayEventPumpTests {
 
     @Test func aPlannedRestartReadsAsRestartingUntilTheGatewayAdmitsTheClientAgain() async throws {
         try await withRecordingPump(timeouts: GatewayClient.Timeouts()) { _, socket, sink in
-            #expect(await waitUntil { sink.connectivity.last == .connected(.configured) })
+            #expect(sink.connectivity.last == .connected(.configured))
 
             await socket.closeBeforeReady(code: .privateCode(4012))
             await socket.closeConnections(code: .privateCode(4012))
@@ -101,7 +101,7 @@ struct GatewayEventPumpTests {
     @Test func aDegradedGatewayConnectsWithItsHealthAndReconnectsFullyAfterItsRestartClose() async throws {
         let codexDown = ProviderHealth([.codex: .unavailable(reason: "Codex sign-in needed"), .claude: .ready])
         try await withRecordingPump(timeouts: GatewayClient.Timeouts()) { client, socket, sink in
-            #expect(await waitUntil { sink.connectivity.last == .connected(.configured) && sink.healths == [nil] })
+            #expect(sink.connectivity.last == .connected(.configured) && sink.healths == [nil])
 
             await socket.advertiseProviders(.object([
                 "codex": .object(["state": .string("unavailable"), "reason": .string("Codex sign-in needed")]),
@@ -131,7 +131,7 @@ struct GatewayEventPumpTests {
         var timeouts = GatewayClient.Timeouts()
         timeouts.restartWindow = .seconds(1)
         try await withRecordingPump(timeouts: timeouts) { client, socket, sink in
-            try #require(await waitUntil(timeout: .seconds(30)) { sink.connectivity.last == .connected(.configured) })
+            try #require(sink.connectivity.last == .connected(.configured))
             var events = await client.connectionEvents().makeAsyncIterator()
             await socket.closeBeforeReady(code: .privateCode(4012))
             await socket.closeConnections(code: .privateCode(4012))
@@ -150,7 +150,7 @@ struct GatewayEventPumpTests {
         var timeouts = GatewayClient.Timeouts()
         timeouts.request = .seconds(1)
         try await withRecordingPump(timeouts: timeouts) { client, socket, sink in
-            try #require(await waitUntil { sink.connectivity.last == .connected(.configured) })
+            try #require(sink.connectivity.last == .connected(.configured))
             await socket.closeBeforeReady()
             await socket.closeConnections(code: .protocolCode(.internalServerError))
             try #require(await waitUntil { sink.connectivity.last == .disconnected })
@@ -188,6 +188,9 @@ struct GatewayEventPumpTests {
             for task in stopped { await task.value }
         }
         pump.startIfNeeded()
+        await sink.waitForConnectionStart()
+        try await client.connectIfNeeded()
+        await sink.waitForInitialReports()
         try await body(client, socket, sink)
     }
 }
@@ -200,16 +203,32 @@ private final class LinkRecordingSink: GatewayEventSink {
     private(set) var connectivity: [GatewayConnectivity] = []
     private(set) var replayedEvents = 0
     private(set) var healths: [ProviderHealth?] = []
+    private let changes = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
 
-    func gatewayConnectionChanged(_ link: GatewayEventPump.Link, connection: UUID?) { links.append(link) }
+    func waitForConnectionStart() async {
+        var updates = changes.stream.makeAsyncIterator()
+        while links.isEmpty { guard await updates.next() != nil else { return } }
+    }
+    func waitForInitialReports() async {
+        var updates = changes.stream.makeAsyncIterator()
+        while links.last != .connected || connectivity.last != .connected(.configured) || healths.isEmpty {
+            guard await updates.next() != nil else { return }
+        }
+    }
+    func gatewayConnectionChanged(_ link: GatewayEventPump.Link, connection: UUID?) {
+        links.append(link)
+        changes.continuation.yield(())
+    }
     func gatewayConnectivityChanged(_ connectivity: GatewayConnectivity) {
         if self.connectivity.last != connectivity { self.connectivity.append(connectivity) }
+        changes.continuation.yield(())
     }
     func gatewayNetworkPathChanged() {}
     func gatewayActivityRefreshRequested() {}
     func apply(gatewayEvent event: RoutedGatewayEvent, replay: Bool) async {
         if replay { replayedEvents += 1 }
         if case .providerHealth(let health) = event, !replay { healths.append(health) }
+        changes.continuation.yield(())
     }
     func gatewayThreadClosed(_ threadID: String, receipt: GatewayWireReceipt?) {}
     func gatewayQuestionsChanged(_ change: ServerNotification.QuestionsChanged) {}

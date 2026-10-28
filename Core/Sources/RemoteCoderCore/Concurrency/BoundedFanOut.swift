@@ -2,21 +2,27 @@ import Foundation
 
 @MainActor
 enum BoundedFanOut {
+    static let hostLimit = 3
     /// Shared cursor for the bounded fan-out. Main-actor state, so the workers
     /// hand it back and forth at their awaits without any locking.
     @MainActor
     private final class Queue<Item> {
-        private var pending: [Item]
+        private let pending: [Item]
+        private var cursor = 0
         private let isStale: @MainActor (Item) -> Bool
+        private let deadline: ContinuousClock.Instant?
 
-        init(_ items: [Item], isStale: @escaping @MainActor (Item) -> Bool) {
+        init(_ items: [Item], deadline: ContinuousClock.Instant?, isStale: @escaping @MainActor (Item) -> Bool) {
             pending = items
             self.isStale = isStale
+            self.deadline = deadline
         }
 
         func next() -> Item? {
-            while !pending.isEmpty {
-                let item = pending.removeFirst()
+            while cursor < pending.count {
+                if let deadline, ContinuousClock.now >= deadline { return nil }
+                let item = pending[cursor]
+                cursor += 1
                 // An item that went stale while the queue drained has no work left.
                 if !isStale(item) { return item }
             }
@@ -34,12 +40,13 @@ enum BoundedFanOut {
     static func run<Item>(
         _ items: [Item],
         limit: Int,
+        deadline: ContinuousClock.Instant?,
         skipping isStale: @escaping @MainActor (Item) -> Bool,
         _ body: @escaping @MainActor (Item) async -> Void
     ) async {
         precondition(limit > 0, "a fan-out needs at least one worker")
         guard !items.isEmpty else { return }
-        let queue = Queue(items, isStale: isStale)
+        let queue = Queue(items, deadline: deadline, isStale: isStale)
         let workers = (0..<min(limit, items.count)).map { _ in
             Task { @MainActor in
                 while let item = queue.next() {
@@ -48,10 +55,21 @@ enum BoundedFanOut {
                 }
             }
         }
+        let timeout = deadline.map { deadline in
+            Task {
+                do {
+                    try await Task.sleep(until: deadline, clock: .continuous)
+                    for worker in workers { worker.cancel() }
+                } catch {}
+            }
+        }
         await withTaskCancellationHandler {
             for worker in workers { await worker.value }
         } onCancel: {
             for worker in workers { worker.cancel() }
+            timeout?.cancel()
         }
+        timeout?.cancel()
+        await timeout?.value
     }
 }

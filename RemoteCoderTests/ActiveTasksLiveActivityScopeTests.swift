@@ -42,7 +42,7 @@ struct ActiveTasksLiveActivityScopeTests {
     @Test(arguments: [ActiveTasksLiveActivityContent.Attention.Reason.finishedUnread, .question])
     func attentionOnlyRequestsUseGatewayContentFromTheFirstFrame(reason: ActiveTasksLiveActivityContent.Attention.Reason) async throws {
         let host = UUID()
-        let service = ActiveTasksLiveActivityService(hostID: host, hostName: "Attention test")
+        let service = ActiveTasksLiveActivityService(hostID: host, hostName: "Attention test", legacyHostIDs: [])
         defer { await service.end() }
         let row = ActiveTasksLiveActivityContent.Attention(
             threadID: "attention", accountID: nil, title: "Needs you", reason: reason,
@@ -63,7 +63,7 @@ struct ActiveTasksLiveActivityScopeTests {
     }
     @Test func unavailableContentBlocksAStartFromThePreviousProjection() async {
         let host = UUID()
-        let service = ActiveTasksLiveActivityService(hostID: host, hostName: "Unavailable test")
+        let service = ActiveTasksLiveActivityService(hostID: host, hostName: "Unavailable test", legacyHostIDs: [])
         defer { await service.end() }
         let content = ActiveTasksLiveActivitySnapshot(
             epoch: "test", revision: 1,
@@ -78,7 +78,7 @@ struct ActiveTasksLiveActivityScopeTests {
 
     @Test func anOlderReadCannotClearANewerGatewayProjection() async throws {
         let host = UUID()
-        let service = ActiveTasksLiveActivityService(hostID: host, hostName: "Read fence test")
+        let service = ActiveTasksLiveActivityService(hostID: host, hostName: "Read fence test", legacyHostIDs: [])
         defer { await service.end() }
         let started = AsyncStream<Void>.makeStream()
         let responses = AsyncStream<ActiveTasksLiveActivitySnapshot?>.makeStream()
@@ -108,7 +108,7 @@ struct ActiveTasksLiveActivityScopeTests {
     }
     @Test func mainActivityCreationControl() async throws {
         let host = UUID()
-        let service = ActiveTasksLiveActivityService(hostID: host, hostName: "Main control")
+        let service = ActiveTasksLiveActivityService(hostID: host, hostName: "Main control", legacyHostIDs: [])
         defer { await service.end() }
         await service.receive(ActiveTasksLiveActivitySnapshot(
             epoch: "control", revision: 1,

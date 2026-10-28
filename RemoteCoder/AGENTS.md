@@ -204,6 +204,17 @@ entrypoint linked above.
   on a sliding window: each worker takes the next host as it finishes, so one sleeping
   laptop delays only itself. A failing host keeps its cached rows and owns its
   error. Every fan-out task is owned, so `teardown()` can cancel it.
+- Launch identity, cluster and agents reads reuse `BoundedFanOut.hostLimit`
+  (three). The owner enforces their shared deadlines: two seconds for launch
+  identity and ten seconds for cluster/agents refreshes. Cluster refreshes
+  coalesce matching inputs and fence replaced generations. Agent rows, hierarchy
+  and lookup indexes are prepared off the main actor, bounded to 512 rows per
+  host and published at most once per 80 ms with generation/revision fences.
+- Verified gateway identity imports finish only after canonical configuration
+  persistence and preference migration. Canonical launch checks only per-alias
+  receipts; unfinished imports resume through the owned identity retry task,
+  keeping that host's stores closed until cleanup completes. HostStore owns the
+  matching configurations and alias set for every identity adoption path.
 - `ConversationAddress` (host UUID + thread id) addresses everything, because
   thread ids are unique only within one gateway. Every row, selection check, pin
   command and action route carries the host. The pure

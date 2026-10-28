@@ -429,6 +429,16 @@ struct ConversationMarksReplica: Codable, Equatable, Sendable {
         pending = merged
     }
 
+    mutating func mergeSameGateway(_ other: ConversationMarksReplica) throws {
+        try prependPending(other.pending)
+        if let incoming = other.acknowledged {
+            if acknowledged == nil { acknowledged = incoming }
+            else { acknowledged?.apply(incoming) }
+        }
+        requiresRetirementRead = requiresRetirementRead == true || other.requiresRetirementRead == true
+        defaultScopeRetired = defaultScopeRetired == true || other.defaultScopeRetired == true
+    }
+
     private mutating func evictOldestPending() {
         if pending.count > Self.pendingLimit { pending.removeFirst(pending.count - Self.pendingLimit) }
     }

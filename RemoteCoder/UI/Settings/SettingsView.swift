@@ -1,7 +1,7 @@
 import Observation
 import SwiftUI
 
-enum SettingsPane: String { case chat, accounts, hosts, automations, location, audio }
+enum SettingsPane: String { case chat, accounts, hosts, cluster, automations, location, audio }
 
 struct SettingsView: View {
     @Environment(\.scenePhase) private var scenePhase
@@ -62,6 +62,10 @@ struct SettingsView: View {
                         dismiss()
                         return true
                     })
+            }
+
+            Tab("Cluster", systemImage: "square.stack.3d.up", value: SettingsPane.cluster) {
+                ClusterSettingsView(workspace: workspace)
             }
 
             #if os(iOS)

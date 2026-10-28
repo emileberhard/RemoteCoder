@@ -289,7 +289,7 @@ enum AccountRetirementMigration {
         let draftsURL = folder.appending(path: "drafts")
         if FileManager.default.fileExists(atPath: draftsURL.appending(path: "drafts.store").path) {
             try ComposerDraftStore.importDrafts(from: draftsURL, into: host.appending(path: "drafts"),
-                                               conversationIDs: replacements, hostID: hostID, accountID: accountID)
+                                               conversationIDs: replacements, scope: .retiredAccount(hostID: hostID, accountID: accountID))
         }
         try migrateMetadata(from: folder.appending(path: "codex-session-metadata.json"), to: host.appending(path: "codex-session-metadata.json"))
         try migrateVoiceHistory(from: folder.appending(path: "realtime-voice-history.json"), to: host.appending(path: "realtime-voice-history.json"))
@@ -299,6 +299,12 @@ enum AccountRetirementMigration {
     private static func storedMarks(in directory: URL) throws -> ConversationMarksReplica {
         try ConversationMarksStore.storedFile(in: directory)
             .map { try JSONDecoder().decode(ConversationMarksReplica.self, from: Data(contentsOf: $0)) } ?? ConversationMarksReplica()
+    }
+
+    static func mergeHostFiles(from source: URL, into target: URL) throws {
+        try migrateMetadata(from: source.appending(path: "codex-session-metadata.json"), to: target.appending(path: "codex-session-metadata.json"))
+        try migrateVoiceHistory(from: source.appending(path: "realtime-voice-history.json"), to: target.appending(path: "realtime-voice-history.json"))
+        try mergeStagedFiles(from: source.appending(path: "upload-staging"), into: target.appending(path: "upload-staging"))
     }
 
     private static func migrateMarks(from source: URL?, to target: URL, pins: [String: String], accountID: UUID?) throws -> ConversationMarksReplica {

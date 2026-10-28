@@ -7,10 +7,14 @@ struct GatewayHostsSettings<Page: View>: View {
     @State private var editor: HostEditor?
     @State private var gatewayVersions: [UUID: BuildIdentity?] = [:]
     @State private var relayAnswers: [UUID: Bool] = [:]
+    @State private var verifyingHost: UUID?
+    @State private var identityFailure: String?
 
     var body: some View {
         page(GatewayHostsSettingsSection(settings: settings, workspace: workspace, editor: $editor,
-                                         gatewayVersions: gatewayVersions, relayAnswers: relayAnswers))
+                                         gatewayVersions: gatewayVersions, relayAnswers: relayAnswers,
+                                         identityFailure: identityFailure, verifyingHost: verifyingHost,
+                                         verifyIdentity: { verifyingHost = $0 }))
             .sheet(item: $editor) { destination in
                 GatewayHostEditorView(host: destination.host, defaultPort: settings.localConfiguration.codexGatewayPort ?? 8787) { host in
                     settings.upsert(host) ? nil : (settings.errorMessage ?? "The gateway could not be saved.")
@@ -19,7 +23,7 @@ struct GatewayHostsSettings<Page: View>: View {
             .task(id: settings.hosts.map(\.configuration)) {
                 gatewayVersions = [:]
                 relayAnswers = [:]
-                await BoundedFanOut.run(settings.hosts.map(\.configuration), limit: 2, skipping: { _ in false }) { host in
+                await BoundedFanOut.run(settings.hosts.map(\.configuration), limit: 2, deadline: nil, skipping: { _ in false }) { host in
                     let routes = workspace.model(for: host.id)?.hostServices.routes
                     let identity = try? await routes?.version()
                     guard !Task.isCancelled else { return }
@@ -28,6 +32,14 @@ struct GatewayHostsSettings<Page: View>: View {
                     guard !Task.isCancelled else { return }
                     relayAnswers[host.id] = relayAnswered
                 }
+            }
+            .task(id: verifyingHost) {
+                guard let verifyingHost else { return }
+                defer { self.verifyingHost = nil }
+                do {
+                    try await workspace.verifyGatewayIdentity(hostID: verifyingHost)
+                    identityFailure = nil
+                } catch { if !Task.isCancelled { identityFailure = error.localizedDescription } }
             }
     }
 }
@@ -57,9 +69,13 @@ struct GatewayHostsSettingsSection: View {
     @Binding fileprivate var editor: HostEditor?
     let gatewayVersions: [UUID: BuildIdentity?]
     let relayAnswers: [UUID: Bool]
+    let identityFailure: String?
+    let verifyingHost: UUID?
+    let verifyIdentity: (UUID) -> Void
 
     var body: some View {
         Section {
+            if let identityFailure { AgentNote(text: identityFailure) }
             if let error = settings.errorMessage {
                 Label(error, systemImage: "exclamationmark.triangle")
                     .foregroundStyle(.red)
@@ -174,6 +190,10 @@ struct GatewayHostsSettingsSection: View {
                     }
                 }
                 Button("Edit", systemImage: "pencil") { editor = .existing(host) }
+                if host.gatewayID != host.id {
+                    Button("Verify identity", systemImage: "checkmark.shield") { verifyIdentity(host.id) }
+                        .disabled(verifyingHost != nil)
+                }
                 if settings.hosts.count > 1 {
                     Button("Delete", systemImage: "trash", role: .destructive) {
                         HapticService.shared.play(settings.delete(host) ? .commit : .error)
