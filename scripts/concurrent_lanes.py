@@ -53,9 +53,10 @@ def run_lanes(lanes, cwd, record=lambda *_: None, output=None):
                     command, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT
                 )
                 running[name] = process
-            for line in iter(process.stdout.readline, b""):
-                emit(prefix, line if line.endswith(b"\n") else line + b"\n")
-            status = process.wait()
+            with process:
+                for line in iter(process.stdout.readline, b""):
+                    emit(prefix, line if line.endswith(b"\n") else line + b"\n")
+                status = process.wait()
             with state_lock:
                 del running[name]
                 if failure:

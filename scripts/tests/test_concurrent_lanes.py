@@ -1,8 +1,10 @@
+import gc
 import io
 import sys
 import tempfile
 import time
 import unittest
+import warnings
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parents[1]
@@ -60,6 +62,18 @@ class ConcurrentLanesTests(unittest.TestCase):
         )
         self.assertEqual(status, 2)
         self.assertLess(time.monotonic() - started, 3)
+
+    def test_a_finished_lane_closes_its_output_pipe(self):
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always", ResourceWarning)
+            status = run_lanes(
+                {"only": [("print", python("print('done')"))]}, ".", output=io.BytesIO()
+            )
+            gc.collect()
+        self.assertEqual(status, 0)
+        self.assertEqual(
+            [str(w.message) for w in caught if issubclass(w.category, ResourceWarning)], []
+        )
 
     def test_a_step_that_cannot_start_fails_the_run(self):
         output = io.BytesIO()
