@@ -24,6 +24,7 @@ surface:
 |---|---|
 | History reads, native pages, `daemon/activeTurns` (read-only) | `just gateway-e2e-reads`, optionally `e2e_thread=<id>` |
 | Owned read burst, exact query cancellation and ready capability (isolated gateway) | `just gateway-e2e-query-admission-isolated /absolute/gateway/binary` |
+| Delegated jobs: Codex and Claude children spawned from a parent's tool process, results, parent callbacks, Stop, restart recovery and same-ID retry; optionally held reads of staged stores (isolated gateway, deterministic Codex model, host router for Claude) | `just gateway-e2e-delegated-jobs-isolated /absolute/gateway/binary /absolute/runtime/package [/absolute/staged/agent-jobs/v1 ...]` |
 | First-party-first new conversation admission and last-resort effort clamping (isolated gateway, host router; logged-out Codex xhigh runs on Opus, then unavailable Claude forces Argon high, including a resumed Fast request) | `just gateway-e2e-provider-fallback-isolated /absolute/gateway/binary` |
 | `thread/fork(lastTurnId:)` boundaries (creates threads) | `just gateway-e2e-fork-live`, `just gateway-e2e-claude-fork-live` |
 | Claude steering folds into one completion (router-backed Sonnet; one completion plus an empty active-turn snapshot) | `just gateway-e2e-claude-steer-live` |
@@ -46,6 +47,23 @@ keep the returned owner alive for the test's scope. Only the ignored live
 router probes may name the live Claude home, and they do so explicitly.
 Use `test_support::TestGateway` for gateway fixtures; its clones retain that
 owner until the last fixture is dropped.
+
+## Delegated jobs
+
+`agents::jobs::JobOwner` owns external work through the existing gateway,
+provider supervisors and restart owners. `docs/delegated-jobs.md` owns the
+Agent/Job/execution model, exact process attribution, durable Stop, result and
+delivery invariants. The installed binary's `agent` subcommand is the client;
+no launcher process, second ancestry registry or runtime legacy reader exists.
+Native terminal Claude holders own only their process-lifetime inbox route.
+
+Temporary cutover interlock: `agent-jobs/v1/cutover.hold` is installed only while
+the old writers are drained, before starting the candidate gateway. It survives
+restart and holds admission, dispatch, recovery and callback delivery while
+reads and durable Stop remain available. Its private owner is
+RemoteCoder-deploy's agent-runtime migration. Remove the hold check, test and
+this paragraph after both hosts accept the final migrated store and coordinated
+cutover evidence is complete; do not make it a permanent public control API.
 
 ## Process model
 
@@ -765,27 +783,14 @@ owner until the last fixture is dropped.
   projection with its two-second bound. Verified children are silent for every
   outcome and question. Missing identity, unavailable ancestry and timeouts
   suppress delivery with fixed journal reasons, never a guessed root or raw
-  launcher error. Verified roots still deliver when unrelated launcher records
-  have warnings. This gate changes only user alerts: completion state,
-  `sent_turn_keys`, child question cards and parent callbacks stay intact.
-  The matching reviewed `agent-work` CLI is required; an older or missing CLI
-  cannot prove a root. The gate requests fresh schema-v2 `classify` coverage for
-  the exact provider home and thread. Only that subject's complete `root`
-  relation plus valid native Codex non-child proof can deliver. A Claude thread
-  this gateway minted in `thread/start` is proven a root by its durable creation
-  record instead, so an unresolved launch in the same home cannot silence it; a
-  thread the gateway only resumed or opened keeps the launcher classification,
-  and an unreadable record suppresses as `creationRecordUnreadable`. Summary status,
-  display rows, parent routability, warning strings and the UI inventory cache
-  never establish root eligibility. Known child relations can suppress even
-  without a routable parent. Missing, duplicate, malformed or future coverage
-  remains unavailable. Each lookup journals fixed coverage codes and duration.
-  Ready index status is not proof that any particular root is covered:
-  unresolved launch attempts can still make that subject incomplete. One
-  host-owned preflight task refreshes every minute, journals status/reason
-  transitions, and cancels on replacement or stop; requests share its
-  diagnostic owner. This task never alters top-level `status`, `codexPid`,
-  draining, or restart authority.
+  execution error. The job owner's exact Agent origin is authoritative for
+  external workers. Native provider ancestry and typed Claude creation records
+  supply other roots; scoped imported uncertainty remains unknown. A delegated
+  Claude creation is `SessionOrigin::Job`, never a root-producing bare marker.
+  Reads call this in-process owner, not an agent-work CLI or periodic ancestry
+  preflight. Display caches, parent routability and message text never establish
+  root eligibility. Each lookup journals coverage and duration. This gate changes
+  only user alerts; completion evidence and parent callbacks remain intact.
   Native Claude children share the root runtime's MCP
   identity, so a runtime-owned `PreToolUse` hook supplies their provider-generated
   `agent_id` before MCP dispatch. Only `mcp__remotecoder__notify_user` matches.
@@ -1543,20 +1548,16 @@ Claude. The `RC_CLAUDE_*` settings are in
   captured Stop generation prevents late input acknowledgement from clearing
   a newer parent tombstone. Planned suspension also retires atomically through
   the registry without waiting for the exchange lock.
-- **`claude/message` delivery is durable and idempotent.** A launcher child's
-  message wakes its Claude parent even with no warm runtime, such as after a
-  gateway restart. Each thread's small parent record
-  (`remotecoder-history/<key>.parent`) holds the cwd, model, effort and Fast of its
-  latest turn or settings change, a ledger of its latest 256 deliveries and the
-  Stop tombstone. The gateway resumes the session with that selection; a
-  thread that never ran a turn through a gateway has no selection and is
-  refused. The input uuid derives from the thread and `deliveryId`, and a
-  `deliveryId` already in the ledger returns its recorded receipt as a
-  duplicate without reading the session file, so launchers retry the same
-  `deliveryId` freely. Transient refusals (turn busy, draining) carry
-  `data.retryAfterMs`. A user Stop sets the tombstone, which
-  survives restarts; the parent refuses deliveries until the user's
-  next turn clears it.
+- **Claude parent delivery has one durable receiver owner.** Gateway-owned
+  parents use their supervised message path; terminal parents use a verified
+  native holder. The parent record owns selection, route evidence, Stop and
+  delivery intent. A prepared payload and deterministic UUID precede submission;
+  canonical session evidence reconciles an uncertain write even after receipt
+  compaction. An ID with changed payload is rejected. Native socket loss never
+  authorizes takeover or a second delivery route. Stop survives restart and
+  blocks callbacks until the user's next turn. Accepted/submitted is distinct
+  from recorded input and model consumption. `docs/delegated-jobs.md` owns the
+  job-level obligation and immutable completion contract.
 - **Historical identifier admission.** Session record UUIDs, assistant message
   IDs, queued-prompt source UUIDs and tool-use/result IDs use a 4 KiB limit,
   shared with live assistant and tool-use IDs, before the projection retains

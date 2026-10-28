@@ -240,6 +240,30 @@ async fn command_diagnostics_are_bounded_and_mark_coverage_incomplete() {
     assert!(error.to_string().contains("incomplete coverage"));
 }
 
+#[tokio::test]
+async fn a_timed_out_command_takes_its_descendants_with_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let pid_file = dir.path().join("lookup.pid");
+    let script = format!("sleep 30 & echo $! > '{}'; wait", pid_file.display());
+    let error = output(shell(&script)).await.unwrap_err();
+    assert!(error.to_string().contains("timed out"));
+    let lookup = nix::unistd::Pid::from_raw(
+        std::fs::read_to_string(&pid_file)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap(),
+    );
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while nix::sys::signal::kill(lookup, None).is_ok() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the orphaned lookup survived its command"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
 #[test]
 fn an_inventory_above_the_session_limit_is_unavailable_not_truncated() {
     assert!(ensure_inventory_within_limit(MAXIMUM_INVENTORY_SESSIONS).is_ok());

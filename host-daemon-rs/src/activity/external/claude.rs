@@ -21,6 +21,8 @@ use crate::storage::file_revision::FileRevision;
 use crate::time::parse_rfc3339_seconds;
 
 const MAX_LISTING_AGE: Duration = Duration::from_secs(30);
+#[cfg(target_os = "macos")]
+const KEYCHAIN_STATUS_LIMIT: Duration = Duration::from_secs(2);
 
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -36,6 +38,8 @@ struct ClaudeSession {
 #[derive(Default)]
 pub(super) struct ClaudeInventory {
     listing: Option<Listing>,
+    #[cfg(target_os = "macos")]
+    keychain_check: Option<tokio::task::JoinHandle<Result<bool>>>,
 }
 
 struct Listing {
@@ -55,6 +59,22 @@ impl ClaudeInventory {
                 .filter_map(|session| session.pid)
                 .all(process_exists);
         current.then_some(listing.sessions.as_slice())
+    }
+
+    #[cfg(target_os = "macos")]
+    async fn ensure_keychain_unlocked(&mut self) -> Result<()> {
+        let mut check = self.keychain_check.take().unwrap_or_else(|| {
+            tokio::task::spawn_blocking(crate::platform::macos::keychain::lookup_would_prompt)
+        });
+        let Ok(joined) = tokio::time::timeout(KEYCHAIN_STATUS_LIMIT, &mut check).await else {
+            self.keychain_check = Some(check);
+            anyhow::bail!("the login keychain status did not respond");
+        };
+        anyhow::ensure!(
+            !joined.context("keychain status check failed")??,
+            "the login keychain is locked; listing Claude sessions would raise a keychain prompt"
+        );
+        Ok(())
     }
 }
 
@@ -99,6 +119,8 @@ pub(super) async fn claude_sessions(
     {
         sessions
     } else {
+        #[cfg(target_os = "macos")]
+        inventory.ensure_keychain_unlocked().await?;
         let command =
             crate::providers::claude::exec::command(settings, &["agents".into(), "--json".into()])?;
         let sessions: Vec<ClaudeSession> =
@@ -296,6 +318,7 @@ mod tests {
                 registry,
                 listed_at: Instant::now() - age,
             }),
+            ..ClaudeInventory::default()
         }
     }
 

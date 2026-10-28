@@ -1,6 +1,10 @@
 mod account_resets;
 mod agent_actions;
+mod agent_delivery;
 mod agent_gateway;
+mod agent_jobs;
+pub(crate) mod agent_jobs_codex;
+mod agent_routes;
 mod question_gateway;
 
 use crate::agents::mcp::McpTokens;
@@ -259,6 +263,7 @@ pub(crate) struct Gateway {
     external_providers: Option<Arc<ExternalProviders>>,
     questions: question_gateway::Runtime,
     agents: agent_gateway::Runtime,
+    pub(crate) jobs: Arc<crate::agents::jobs::owner::JobOwner>,
     codex: Arc<CodexAppServer>,
     apns: Arc<PushService>,
     clients: DashMap<u64, ClientTx>,
@@ -311,6 +316,7 @@ pub(crate) struct Gateway {
     side_question_forks: side_question::Forks,
     device_tools: Arc<device_tools::DeviceTools>,
     tool_claims: crate::agents::tools::claims::ToolClaims,
+    job_routes: agent_routes::ParentHolders,
     tool_tasks: crate::tasks::owned_tasks::OwnedTasks,
     command_tasks: crate::tasks::owned_tasks::OwnedTasks,
     voice_tasks: crate::tasks::owned_tasks::OwnedTasks,
@@ -469,6 +475,13 @@ impl Gateway {
             external_providers,
             admission: Arc::clone(&admission),
             agents: agent_gateway::Runtime::default(),
+            jobs: Arc::new(crate::agents::jobs::owner::JobOwner::new(
+                turn_state_path
+                    .as_deref()
+                    .and_then(Path::parent)
+                    .map(|root| root.join("agent-jobs/v1")),
+                gateway.clone(),
+            )),
             questions: question_gateway::Runtime::new(
                 turn_state_path
                     .as_ref()
@@ -532,6 +545,7 @@ impl Gateway {
             request_budgets,
             device_tools,
             tool_claims: crate::agents::tools::claims::ToolClaims::default(),
+            job_routes: Default::default(),
             tool_tasks: crate::tasks::owned_tasks::OwnedTasks::default(),
             command_tasks: crate::tasks::owned_tasks::OwnedTasks::default(),
             voice_tasks: crate::tasks::owned_tasks::OwnedTasks::default(),
@@ -544,7 +558,7 @@ impl Gateway {
         self.codex.verify_ready().await?;
         self.load_turn_state().await?;
         self.calls.load().await?;
-        self.start_notification_ancestry_preflight().await;
+        self.jobs.initialize().await?;
 
         // APNs is best-effort, but should be serialized/coalesced to avoid bursts and JWT churn.
         let (completion_tx, completion_rx) = mpsc::channel::<ApnsSend>(256);
@@ -605,9 +619,13 @@ impl Gateway {
                 )
             };
             *self.claude_notification_task.lock().await = Some(claude_notification_task);
+            self.jobs
+                .apply_pending_stops(crate::agents::jobs::model::Provider::Claude)
+                .await?;
             self.spawn_claude_restart_recovery().await;
         }
 
+        self.jobs.start_driver()?;
         Ok(())
     }
 
@@ -792,8 +810,10 @@ impl Gateway {
 
     pub(crate) async fn stop(&self) -> Result<()> {
         self.draining.store(true, Ordering::Release);
+        self.jobs.quiesce().await;
+        self.job_routes.stop().await;
+        self.jobs.close_endpoints().await;
         self.stop_voice_for_shutdown().await;
-        self.stop_notification_ancestry_preflight().await;
         // Accepted command work is gateway-owned, not tied to a socket. Finish
         // its cancellation before taking away provider/control resources.
         self.review.stop().await;
@@ -837,7 +857,6 @@ impl Gateway {
             let _ = task.await;
         }
         self.stop_activity_publisher().await;
-        self.stop_agent_inventory().await;
         let task = self.apns_completion_task.lock().await.take();
         if let Some(task) = task {
             task.abort();

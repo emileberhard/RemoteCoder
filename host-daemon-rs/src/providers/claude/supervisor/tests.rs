@@ -112,13 +112,15 @@ fn an_echo_or_a_frame_that_lists_an_input_marks_it_consumed() {
 fn a_dispatched_turn_skips_only_a_result_that_answers_other_work() {
     let queue = UnconsumedInputs::default();
     for id in ["earlier", "prompt", "steer"] {
-        queue.queue(
-            Some(ClaudeUserInput {
-                client_id: Some(id.to_owned()),
-                ..ClaudeUserInput::text(id)
-            }),
-            || (),
-        );
+        queue
+            .queue(
+                Some(ClaudeUserInput {
+                    client_id: Some(id.to_owned()),
+                    ..ClaudeUserInput::text(id)
+                }),
+                || (),
+            )
+            .unwrap();
     }
     let awaiting = || RuntimeTurn {
         agent_initiated: false,
@@ -565,6 +567,13 @@ async fn placeholder_runtime(
         input: InputWriter::spawn(stdin),
         pending_controls: HashMap::new(),
         process_group_id,
+        process_started_micros: crate::platform::process::identify(process_group_id)
+            .unwrap()
+            .map(|identity| identity.started_micros),
+        reaped: tokio::sync::watch::channel(super::process::ReapState::Running).1,
+        launch: super::jobs::LaunchPolicy::Conversation {
+            scope: crate::agents::jobs::model::ToolScope::Full,
+        },
         session_uuid: request.session_uuid.clone(),
         settings: Some(ClaudeRuntimeSettings::requested(request)),
         cwd: request.cwd.clone(),

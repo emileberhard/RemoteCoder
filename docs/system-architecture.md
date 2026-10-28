@@ -2005,12 +2005,11 @@ clients read `thread/queue/list` after it, on reconnect and after relaunch.
 `host-daemon-rs/AGENTS.md` (*Gateway RPCs*) owns the contract.
 
 Conversation agent inspection preserves collected native headers when optional
-execution enrichment or external discovery is incomplete. The Agents owner
-shares immutable launcher selections by exact host-default provider homes. Bounded
-inventory tasks outlive waiting callers; inventory, alert classification and
-mutations use independent host-shared budgets. Invalidation fences old work.
-[`docs/conversation-agents.md`](conversation-agents.md) owns deadlines, limits,
-cache policy and coverage semantics.
+execution enrichment is incomplete. External jobs and exact ancestry come from
+the gateway's `JobOwner`; no launcher process or duplicate ancestry index sits
+on the read path. [`docs/conversation-agents.md`](conversation-agents.md) owns
+view bounds and coverage; [`docs/delegated-jobs.md`](delegated-jobs.md) owns
+execution, recovery, completion and caller identity.
 
 `daemon/activeTurns` also returns `externalActivity`, a separate inventory for sessions
 outside the gateway, from the publisher's latest background refresh. Gateway

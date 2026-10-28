@@ -16,6 +16,15 @@ impl ClaudeSupervisor {
         process_group_id: i32,
         lifecycle_generation: u64,
     ) {
+        if self
+            .runtimes
+            .lock()
+            .await
+            .get(&thread_id)
+            .is_some_and(|runtime| runtime.launch.job().is_some())
+        {
+            return;
+        }
         let (idle, cancelled) = {
             let mut runtimes = self.runtimes.lock().await;
             let Some(runtime) = runtimes.get_mut(&thread_id).filter(|runtime| {
@@ -279,6 +288,18 @@ impl ClaudeSupervisor {
         status: &str,
         stopped_turn: Option<StoppedTurn>,
     ) {
+        if let Some(handle) = runtime.launch.job() {
+            if let Err(error) = self.conversation_index.update_job(thread_id, handle, |saved| {
+                if matches!(saved.phase, crate::providers::claude::conversation_index::job::JobPhase::Executing
+                    | crate::providers::claude::conversation_index::job::JobPhase::Closing) {
+                    saved.phase = crate::providers::claude::conversation_index::job::JobPhase::Interrupted;
+                }
+                Ok(())
+            }).await {
+                warn!(thread_id, %error, "Could not preserve interrupted Claude job evidence");
+            }
+            self.job_changes.send_replace(());
+        }
         let status = if runtime
             .active_turn
             .as_ref()

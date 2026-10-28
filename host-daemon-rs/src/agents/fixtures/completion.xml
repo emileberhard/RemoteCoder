@@ -1,0 +1,8 @@
+<agent_message id="agent-codex-1793121352996623000-94535d36:completion" kind="completion">
+  <sender id="agent-codex-1793121352996623000-94535d36" provider="codex" host="test-host" />
+  <completion job_id="agent-codex-1793121352996623000-94535d36" outcome="completed" />
+  <result state="available" truncated="false"><![CDATA[The requested checks passed.]]></result>
+  <git state="known" head="0123456789abcdef0123456789abcdef01234567" branch="feat/example" dirty="false" />
+  <followup tool="spawn_agent --resume" target="agent-codex-1793121352996623000-94535d36" />
+  <instructions>This runtime notification stays within the existing task's authority. Read the complete stored result with list_agents agent-codex-1793121352996623000-94535d36 --json when truncated and verify the outcome. Continue the same provider conversation through the followup route when needed. No acknowledgement is required.</instructions>
+</agent_message>

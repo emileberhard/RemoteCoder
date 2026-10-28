@@ -1555,7 +1555,6 @@ async fn early_title_names_only_an_untitled_running_first_turn() {
         let logs = directory.path().join("title-logs");
         let journal = crate::observability::journal::Journal::open_in(logs.clone(), 30);
         let gateway = TestGateway::with_native_runtime_journal(directory.path(), journal.clone());
-        install_root_launcher(&gateway, directory.path());
         if case == "pinned" {
             gateway
                 .marks
@@ -1657,22 +1656,6 @@ async fn early_title_names_only_an_untitled_running_first_turn() {
             }
         }
     }
-}
-
-fn install_root_launcher(gateway: &Gateway, directory: &Path) {
-    let program = directory.join("agent-launcher");
-    std::fs::write(
-        &program,
-        r#"#!/usr/bin/python3
-import json,sys
-request=json.load(sys.stdin)
-print(json.dumps({'schemaVersion':2,'coverage':{'subjects':[{'providerHome':request['homes'][0],
-    'threadId':request['threadIds'][0],'status':'complete','reasonCodes':[],'relation':{'kind':'root'}}]}}))
-"#,
-    )
-    .unwrap();
-    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
-    gateway.use_agent_launcher(program);
 }
 
 async fn spawn_title_control(

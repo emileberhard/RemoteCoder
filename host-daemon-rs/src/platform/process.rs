@@ -19,6 +19,73 @@ pub(crate) struct ProcessIdentity {
     pub executable: PathBuf,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ProcessInstance {
+    pub pid: i32,
+    pub started_micros: u64,
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn unix_peer_identity(
+    stream: &tokio::net::UnixStream,
+) -> Result<(i32, ProcessIdentity)> {
+    use anyhow::Context;
+    let pid = nix::sys::socket::getsockopt(stream, nix::sys::socket::sockopt::LocalPeerPid)
+        .context("Unix socket peer process identity is unavailable")?;
+    let identity = identify(pid)?.context("Unix socket peer process exited")?;
+    Ok((pid, identity))
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn unix_peer_identity(_: &tokio::net::UnixStream) -> Result<(i32, ProcessIdentity)> {
+    anyhow::bail!("verified Unix socket peer identity is unavailable on this platform")
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn ancestry(process: ProcessInstance) -> Result<Vec<ProcessInstance>> {
+    use anyhow::{Context, ensure};
+    let mut chain = Vec::new();
+    let mut current = process;
+    while current.pid > 1 {
+        ensure!(
+            chain.len() < 64 && !chain.contains(&current),
+            "caller process ancestry exceeds its bounded proof"
+        );
+        let child = process_info(current.pid)?
+            .context("caller process exited during ancestry verification")?;
+        ensure!(
+            info_start(&child)? == current.started_micros,
+            "caller process identity is stale"
+        );
+        chain.push(current);
+        let parent_pid = i32::try_from(child.pbi_ppid)?;
+        if parent_pid <= 1 {
+            break;
+        }
+        let parent = process_info(parent_pid)?
+            .context("caller parent exited during ancestry verification")?;
+        let parent_start = info_start(&parent)?;
+        let recheck = process_info(current.pid)?
+            .context("caller process exited during ancestry verification")?;
+        ensure!(
+            info_start(&recheck)? == current.started_micros
+                && recheck.pbi_ppid == child.pbi_ppid
+                && parent_start <= current.started_micros,
+            "caller process ancestry changed during verification"
+        );
+        current = ProcessInstance {
+            pid: parent_pid,
+            started_micros: parent_start,
+        };
+    }
+    Ok(chain)
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn ancestry(_: ProcessInstance) -> Result<Vec<ProcessInstance>> {
+    anyhow::bail!("verified caller process ancestry is unavailable on this platform")
+}
+
 /// Reads `pid`'s identity. `Ok(None)` means the process no longer runs (it
 /// exited, is a zombie, or was replaced while being read). Every other
 /// failure is an error: an unreadable process is unknown, never absent.
@@ -47,7 +114,12 @@ pub(crate) fn identify(pid: i32) -> Result<Option<ProcessIdentity>> {
 
 #[cfg(target_os = "macos")]
 fn start_micros(pid: i32) -> Result<Option<u64>> {
-    use anyhow::{Context, bail};
+    process_info(pid)?.map(|info| info_start(&info)).transpose()
+}
+
+#[cfg(target_os = "macos")]
+fn process_info(pid: i32) -> Result<Option<libc::proc_bsdinfo>> {
+    use anyhow::bail;
 
     if pid <= 0 {
         bail!("pid {pid} does not name an application process");
@@ -76,11 +148,21 @@ fn start_micros(pid: i32) -> Result<Option<u64>> {
     if info.pbi_status == libc::SZOMB {
         return Ok(None);
     }
+    Ok(Some(info))
+}
+
+#[cfg(target_os = "macos")]
+fn info_start(info: &libc::proc_bsdinfo) -> Result<u64> {
+    use anyhow::Context;
     info.pbi_start_tvsec
         .checked_mul(1_000_000)
         .and_then(|micros| micros.checked_add(info.pbi_start_tvusec))
-        .map(Some)
-        .with_context(|| format!("pid {pid} reported an unrepresentable start time"))
+        .with_context(|| {
+            format!(
+                "pid {} reported an unrepresentable start time",
+                info.pbi_pid
+            )
+        })
 }
 
 #[cfg(target_os = "macos")]

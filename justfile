@@ -365,6 +365,10 @@ codex-fork-run codex_source +command:
     set -euo pipefail
     source_dir="$(cd "$1" && pwd)"
     shift
+    source_commit="$(git -C "$source_dir" rev-parse HEAD)"
+    source_status="$(git -C "$source_dir" status --porcelain --untracked-files=normal)"
+    source_modified=0
+    [[ -z "$source_status" ]] || source_modified=1
     host="${RC_GATEWAY_BUILD_HOST:-$(python3 -c 'import sys; from pathlib import Path; sys.path.insert(0, "scripts"); from build_hosts import build_host; print(build_host(Path.cwd()))')}"
     local_host="$(python3 -c 'import sys; sys.path.insert(0, "scripts"); from build_hosts import is_local; print(int(is_local(sys.argv[1])))' "$host")"
     on_builder() {
@@ -385,9 +389,9 @@ codex-fork-run codex_source +command:
     fi
     on_builder "mkdir -p $cache/src $cache/$run/.remotecoder-build-tools"
     trap 'on_builder "rm -rf $cache/$run"' EXIT
-    rsync -a scripts/rusty-v8-artifacts.py scripts/build_support.py scripts/job_power.py scripts/process_group.py scripts/codex-cache.py scripts/rsync-source.py "${destination}.remotecoder-build-tools/"
+    rsync -a scripts/rusty-v8-artifacts.py scripts/build_support.py scripts/job_power.py scripts/process_group.py scripts/build_cache.py scripts/codex-cache.py scripts/rsync-source.py "${destination}.remotecoder-build-tools/"
     "${sync[@]}" --exclude target --exclude .git --link-dest=../../src "$source_dir/" "$destination"
-    on_builder "cd $cache && bash -s -- $(printf '%q ' "$run" "$@")" <<'REMOTE'
+    on_builder "cd $cache && bash -s -- $(printf '%q ' "$run" "$source_commit" "$source_modified" "$@")" <<'REMOTE'
     set -euo pipefail
     tools="$PWD/$1/.remotecoder-build-tools"
     exec python3 "$tools/build_support.py" --background --lease "$PWD/build.lock" -- bash -s -- "$PWD" "$tools" "$@" <<'OWNED'
@@ -395,13 +399,36 @@ codex-fork-run codex_source +command:
     cache_root="$1"
     tools="$2"
     run="$3"
-    shift 3
+    source_commit="$4"
+    source_modified="$5"
+    shift 5
     cd "$cache_root"
     python3 "$tools/rsync-source.py" sync --delete --exclude .remotecoder-build-tools "$run/" src/
     # Version changes never wipe warm artifacts. Admission failures preserve them.
     python3 "$tools/codex-cache.py" target
+    record_compilation() {
+        python3 - "$cache_root" "$tools" "$run" "$source_commit" "$source_modified" "$1" <<'RECORD'
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, sys.argv[2])
+    from build_cache import record_compilation
+    root = Path(sys.argv[1])
+    record_compilation(root.parent, [root / "target"], Path(sys.argv[3]).name,
+                       sys.argv[6] == "1", {"sourceCommit": sys.argv[4], "sourceModified": sys.argv[5] == "1"})
+    RECORD
+    }
+    finish_compilation() {
+        status=$?
+        trap - EXIT
+        if ! record_compilation 0; then
+            [[ "$status" -ne 0 ]] || status=1
+        fi
+        touch "$cache_root/build.lock"
+        exit "$status"
+    }
     touch "$cache_root/build.lock"
-    trap 'touch "$cache_root/build.lock"' EXIT
+    trap finish_compilation EXIT
+    record_compilation 1
     eval "$(python3 "$tools/rusty-v8-artifacts.py" --codex-repo src --cache-dir ../rusty_v8)"
     ulimit -n 8192
     export CARGO_TARGET_DIR="$PWD/target"
@@ -495,9 +522,9 @@ gateway-e2e-upload-live:
 gateway-e2e-files-live *args:
     ./dev-tools/rc-gateway e2e-files-live {{ args }}
 
-# Run the conversation-agents acceptance against a built gateway and its matching configs checkout (MacBook only).
-gateway-e2e-conversation-agents-isolated candidate configs:
-    bun dev-tools/probes/conversation-agents.mjs "{{ candidate }}" "{{ configs }}"
+# Delegated jobs against a built gateway and its matched runtime package; each staged agent-jobs/v1 is read while held.
+gateway-e2e-delegated-jobs-isolated candidate package *staged:
+    bun dev-tools/probes/delegated-jobs.mjs "{{ candidate }}" "{{ package }}" {{ staged }}
 
 gateway-e2e-query-admission-isolated $candidate:
     bun dev-tools/probes/query-admission.mjs "$candidate"

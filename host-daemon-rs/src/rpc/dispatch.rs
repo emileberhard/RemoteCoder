@@ -100,6 +100,8 @@ pub(crate) enum OwnedRoute {
     NativeQueue,
     NativeCompaction,
     Agents,
+    AgentJobs,
+    AgentRoutes,
     Calls,
     Voice,
     VoiceSession,
@@ -193,6 +195,78 @@ macro_rules! prefix_spec {
 }
 
 const METHOD_SPECS: &[MethodSpec] = &[
+    spec!(
+        "agent/routes/register",
+        AgentRoutes,
+        Some(RequestLifetime::Connection),
+        0
+    ),
+    spec!(
+        "agent/routes/ack",
+        AgentRoutes,
+        Some(RequestLifetime::Connection),
+        0
+    ),
+    spec!(
+        "agent/context/capture",
+        AgentJobs,
+        Some(RequestLifetime::Query),
+        0
+    ),
+    spec!(
+        "agent/context/read",
+        AgentJobs,
+        Some(RequestLifetime::Query),
+        0
+    ),
+    spec!(
+        "agent/context/setTitle",
+        AgentJobs,
+        Some(RequestLifetime::Command),
+        0
+    ),
+    spec!(
+        "agent/jobs/start",
+        AgentJobs,
+        Some(RequestLifetime::Command),
+        NEW_WORK
+    ),
+    spec!(
+        "agent/jobs/continue",
+        AgentJobs,
+        Some(RequestLifetime::Command),
+        NEW_WORK
+    ),
+    spec!(
+        "agent/jobs/read",
+        AgentJobs,
+        Some(RequestLifetime::Query),
+        0
+    ),
+    spec!(
+        "agent/jobs/list",
+        AgentJobs,
+        Some(RequestLifetime::Query),
+        0
+    ),
+    spec!(
+        "agent/jobs/message",
+        AgentJobs,
+        Some(RequestLifetime::Command),
+        NEW_WORK
+    ),
+    spec!(
+        "agent/jobs/stop",
+        AgentJobs,
+        Some(RequestLifetime::Urgent),
+        0
+    ),
+    spec!(
+        "agent/jobs/dismiss",
+        AgentJobs,
+        Some(RequestLifetime::Command),
+        0
+    ),
     spec!("turn/inspect", Execution, Some(RequestLifetime::Query), 0),
     spec!(
         "device/tools/declare",

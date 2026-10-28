@@ -291,6 +291,23 @@ impl TurnLedger {
         self.pending.remove(request_key)
     }
 
+    pub(crate) fn bind_pending_acceptance(
+        &mut self,
+        request_key: &str,
+        turn_id: &str,
+        now: f64,
+    ) -> bool {
+        let Some(pending) = self.pending.get(request_key).cloned() else {
+            return false;
+        };
+        let key = TurnKey::new(&pending.thread_id, turn_id);
+        if self.contexts.contains_key(&key) {
+            return false;
+        }
+        self.start_from_pending(pending, turn_id, now, None);
+        true
+    }
+
     pub(crate) fn take_pending_matching(
         &mut self,
         request_key: &str,
@@ -525,7 +542,8 @@ impl TurnLedger {
         client_user_message_id: &str,
     ) -> bool {
         let queued = self.take_queued(key.thread_id(), client_user_message_id);
-        let consumed = queued.is_some();
+        let pending = self.take_pending_with_message(key.thread_id(), client_user_message_id);
+        let consumed = queued.is_some() || pending.is_some();
         if !self
             .contexts
             .get(key)
@@ -535,9 +553,7 @@ impl TurnLedger {
         }
         let prompt = match queued {
             Some(submission) => Some(submission.context),
-            None => self
-                .take_pending_with_message(key.thread_id(), client_user_message_id)
-                .map(|pending| pending.context),
+            None => pending.map(|pending| pending.context),
         };
         match prompt {
             Some(prompt) => {
@@ -609,6 +625,18 @@ impl TurnLedger {
             .entry(thread_id.to_owned())
             .or_default() += 1;
         Ok(())
+    }
+
+    pub(crate) fn queued_input(
+        &self,
+        thread_id: &str,
+        input_id: &str,
+    ) -> Option<&QueuedSubmission> {
+        self.queues
+            .get(thread_id)?
+            .submissions
+            .iter()
+            .find(|submission| submission.client_user_message_id == input_id)
     }
 
     pub(crate) fn finish_queue_add(&mut self, thread_id: &str) {

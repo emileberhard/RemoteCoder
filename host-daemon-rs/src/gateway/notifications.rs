@@ -56,6 +56,7 @@ impl Gateway {
             return None;
         }
         let method = message.get("method").and_then(Value::as_str)?;
+        self.jobs.notify_provider_event(message);
         if !should_store_notification_method(method) {
             return None;
         }
