@@ -61,6 +61,10 @@ pub(super) fn run(store: &Store, origins: &[Origin], mode: &str) -> Result<()> {
             row.get(3)
         })?
         .collect::<rusqlite::Result<_>>()?;
+    println!(
+        "{}",
+        json!({"phase":"readResolverPlan","steps":read_resolver_plan})
+    );
     let stop = AtomicBool::new(false);
     let cpu = cpu_seconds();
     let started = Instant::now();

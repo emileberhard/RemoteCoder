@@ -29,7 +29,9 @@ item timestamps and unobserved execution outcomes remain NULL. Claude historical
 prompt UUIDs use the `record:` namespace when no provider turn ID was recorded;
 these are analytical references and never control identities.
 
-Claude transcript filenames own top-level identity. Native agent filenames at
+Claude transcript filenames own top-level identity, including an empty transcript.
+Its inventory header uses that same path normalization without parsing message
+content; unknown title, dates and ancestry remain absent until content supplies them. Native agent filenames at
 any depth below a session's subagents directory own child identity, with that
 session as parent. Discovery accepts top-level project transcripts and those
 agent files; workflow journals and tool-result JSONL are evidence, not separate

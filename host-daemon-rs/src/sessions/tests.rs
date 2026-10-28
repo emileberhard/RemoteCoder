@@ -1335,3 +1335,21 @@ fn sessions_read_seeks_all_address_forms_and_rejects_ambiguous_ids() {
     assert!(read("fixture:codex-root").is_ok());
     assert!(read("other:codex-root").is_ok());
 }
+
+#[test]
+fn sessions_claude_empty_transcripts_keep_path_headers_through_content_ingest() {
+    let f = fixture();
+    let path = f.claude.with_file_name("empty.jsonl");
+    std::fs::write(&path, b"").unwrap();
+    let mut db = f.store.writer().unwrap();
+    ingest::header(&mut db, &f.origins[1], &path, &AtomicBool::new(false)).unwrap();
+    drop(db);
+    assert_eq!(scan(&f)["parseFailures"], 0);
+    let headers = query::inventory(&f.store.reader().unwrap(), None, 1000).unwrap();
+    assert!(
+        headers
+            .sessions
+            .iter()
+            .any(|header| header.thread_id == "claude_empty")
+    );
+}

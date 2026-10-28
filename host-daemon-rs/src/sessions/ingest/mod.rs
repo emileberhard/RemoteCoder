@@ -389,7 +389,19 @@ fn ingest_source(
     let mut reader = BufReader::new(file.take(before.len() - offset));
     let mut line = Vec::new();
     let mut records = 0;
-    loop {
+    if origin.provider == "claude" && state.thread.is_none() {
+        normalize::Record {
+            db: &tx,
+            origin,
+            source,
+            revision,
+            path,
+            offset,
+            bytes: &[],
+        }
+        .apply(&mut state, Value::Null)?;
+    }
+    while mode != ReadMode::Inventory || origin.provider != "claude" {
         ensure!(!stop.load(Ordering::Acquire), "Session ingestion cancelled");
         line.clear();
         let bound = if mode == ReadMode::Inventory {
