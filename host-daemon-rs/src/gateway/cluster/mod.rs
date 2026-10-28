@@ -98,12 +98,19 @@ impl Gateway {
                     "membership was removed"
                 );
             }
-            return if method == "agent/cluster/inventory" {
+            let result = if method == "agent/cluster/inventory" {
                 self.local_agent_inventory(params).await
             } else {
                 self.resolve_cluster_agent(params, matches!(grant, Grant::Peer { .. }))
                     .await
             };
+            return result.map_err(|error| {
+                if error.is::<RpcError>() || error.is::<crate::cluster::link::LinkError>() {
+                    error
+                } else {
+                    cluster_error(ErrorClass::Unavailable, format!("{error:#}")).into()
+                }
+            });
         }
         if method == "agent/cluster/list" {
             ensure!(

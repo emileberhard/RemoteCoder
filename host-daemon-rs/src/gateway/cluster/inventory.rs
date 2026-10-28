@@ -389,3 +389,73 @@ impl Gateway {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn cluster_inventory_writer_contention_preserves_unavailable_and_coverage() {
+        let gateway = crate::test_support::TestGateway::new();
+        gateway.sessions_runtime().await.unwrap();
+        gateway.stop_sessions().await;
+        let root = gateway
+            .turn_state_path
+            .as_ref()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("sessions/v1");
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(root.join(".storage.lock"))
+            .unwrap();
+        let lease = crate::sessions::storage::Lease::acquire(file).unwrap();
+        for (method, params) in [
+            ("agent/cluster/inventory", json!({"limit":100})),
+            (
+                "agent/cluster/resolve",
+                json!({"target":"unmatched-conversation","local":true}),
+            ),
+        ] {
+            let error = gateway
+                .cluster_rpc(&Grant::Operator, method, params)
+                .await
+                .unwrap_err();
+            let encoded = serde_json::to_value(error).unwrap();
+            assert_eq!(encoded["data"]["class"], "unavailable");
+            assert!(
+                encoded["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("another session writer owns the storage budget")
+            );
+        }
+        let page = gateway
+            .cluster_rpc(
+                &Grant::Operator,
+                "agent/cluster/list",
+                json!({"local":true}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(page["coverage"][0]["state"], "unreachable");
+        assert!(
+            page["warnings"][0]
+                .as_str()
+                .unwrap()
+                .contains("another session writer owns the storage budget")
+        );
+        drop(lease);
+        let page = gateway
+            .cluster_rpc(
+                &Grant::Operator,
+                "agent/cluster/list",
+                json!({"local":true}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(page["coverage"][0]["state"], "ok");
+    }
+}
