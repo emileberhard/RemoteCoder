@@ -979,6 +979,20 @@ async fn deleted_recorded_cwd_resumes_the_exact_transcript_in_an_existing_record
     assert_eq!(Path::new(&turn.cwd), missing);
     assert!(agent.spawn_runtime(&turn, &restricted).is_err());
     drop(spawned);
+    turn.cwd = cwd.to_string_lossy().into_owned();
+    let duplicate = crate::providers::claude::timeline::session_path_for_cwd(
+        &home.settings.claude_home,
+        &turn.cwd,
+        &turn.session_uuid,
+    );
+    fs::create_dir_all(duplicate.parent().unwrap()).unwrap();
+    fs::copy(&transcript, &duplicate).unwrap();
+    let error = agent.spawn_runtime(&turn, &full).err().unwrap();
+    assert!(
+        error.message.contains("duplicate Claude session UUID"),
+        "{}",
+        error.message
+    );
 }
 
 #[tokio::test]
