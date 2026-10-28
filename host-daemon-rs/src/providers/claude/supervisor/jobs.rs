@@ -385,7 +385,7 @@ impl ClaudeSupervisor {
                     saved.stop_generation == generation,
                     "Claude Stop superseded provider retry"
                 );
-                if saved.current_input() == &next {
+                if saved.input == next {
                     ensure!(
                         !matches!(saved.phase, JobPhase::Stopping),
                         "Claude retry is stopped"

@@ -401,7 +401,7 @@ pub(crate) struct JobRecord {
     pub updated_at_ms: i64,
     pub revision: u64,
     pub previous_job_id: Option<JobId>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub provider_retries: Vec<ProviderRetry>,
     pub source: JobSource,
     pub admission_origin: Option<Origin>,
