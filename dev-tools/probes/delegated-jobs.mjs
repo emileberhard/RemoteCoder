@@ -482,6 +482,7 @@ try {
         const seed = await installSeed(lab, seedPath);
         await lab.start();
         receipt.seed = await inspectSeed(lab, seed);
+        await lab.write(lab.path("acceptance-receipt.json"), JSON.stringify(receipt, null, 1));
         const gc = Bun.spawn(["python3", join(import.meta.dir, "worktree-gc-candidate.py"), "--binary", binary,
             "--env-file", lab.path("gateway.env"), "--isolated-home", lab.root, "--configs", join(lab.realHome, "configs")],
             { env: process.env, cwd: lab.root, stdout: "pipe", stderr: "pipe" });
