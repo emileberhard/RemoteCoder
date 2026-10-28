@@ -9,16 +9,34 @@ struct ClusterParent: Codable, Equatable, Sendable {
 }
 
 struct ClusterReachability: Decodable, Equatable, Sendable {
-    let state: String
-    let since: String?
-    let lastSeenAt: String?
+    enum State: String, Decodable, Sendable {
+        case reachable, unreachable, unsupported, unknown
+
+        init(from decoder: any Decoder) throws {
+            self = Self(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .unknown
+        }
+    }
+
+    let state: State
+    let since: Date?
+    let lastSeenAt: Date?
+
+    private enum CodingKeys: String, CodingKey { case state, since, lastSeenAt }
 }
 
 struct ClusterMember: Decodable, Equatable, Sendable, Identifiable {
     let hostId: UUID
     let membership: UUID
     let name: String
-    let state: String
+    enum State: String, Decodable, Sendable {
+        case active, removePending = "remove_pending", unknown
+
+        init(from decoder: any Decoder) throws {
+            self = Self(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .unknown
+        }
+    }
+
+    let state: State
     let version: String?
     let load: ClusterLoad?
     let reachability: ClusterReachability
@@ -29,7 +47,15 @@ struct ClusterMember: Decodable, Equatable, Sendable, Identifiable {
 
 struct ClusterLoad: Decodable, Equatable, Sendable {
     let cpuPercent: Double?
-    let memoryPressure: String?
+    enum MemoryPressure: String, Decodable, Sendable {
+        case normal, warn, critical, unknown
+
+        init(from decoder: any Decoder) throws {
+            self = Self(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .unknown
+        }
+    }
+
+    let memoryPressure: MemoryPressure?
     let activeAgents: Int?
 }
 
@@ -58,16 +84,48 @@ struct ClusterIssuedCredential: Decodable, Sendable {
 
 struct ClusterCoverage: Decodable, Equatable, Sendable, Identifiable {
     enum State: String, Decodable, Sendable {
-        case ok, unreachable, unsupported, stale, unknown, removed, refused
+        case ok, unreachable, unsupported, stale, unknown, refused
+
+        init(from decoder: any Decoder) throws {
+            self = Self(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .unknown
+        }
     }
 
     let hostId: UUID
     let name: String?
     let state: State
-    var since: String?
-    var staleThrough: String?
+    var since: Date?
+    var staleThrough: Date?
 
     var id: UUID { hostId }
+    private enum CodingKeys: String, CodingKey { case hostId, name, state, since, staleThrough }
+}
+
+extension ClusterReachability {
+    init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        state = try values.decode(State.self, forKey: .state)
+        since = try values.clusterDateIfPresent(forKey: .since)
+        lastSeenAt = try values.clusterDateIfPresent(forKey: .lastSeenAt)
+    }
+}
+
+extension ClusterCoverage {
+    init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        hostId = try values.decode(UUID.self, forKey: .hostId)
+        name = try values.decodeIfPresent(String.self, forKey: .name)
+        state = try values.decode(State.self, forKey: .state)
+        since = try values.clusterDateIfPresent(forKey: .since)
+        staleThrough = try values.clusterDateIfPresent(forKey: .staleThrough)
+    }
+}
+
+private extension KeyedDecodingContainer {
+    func clusterDateIfPresent(forKey key: Key) throws -> Date? {
+        guard let value = try decodeIfPresent(String.self, forKey: key) else { return nil }
+        return try Date.ISO8601FormatStyle().parse(value)
+    }
 }
 
 protocol ClusterRemote: Actor {

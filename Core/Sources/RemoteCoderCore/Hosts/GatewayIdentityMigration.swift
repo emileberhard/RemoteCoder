@@ -32,21 +32,18 @@ actor GatewayIdentityMigration {
         if files.fileExists(atPath: accounts.path),
            try !files.contentsOfDirectory(atPath: accounts.path).isEmpty { throw MigrationFailure.retiredAccounts }
         let entries = try ConversationIndex.loadIndex(from: source.appending(path: "session-index.json"))
-        if files.fileExists(atPath: source.path) {
-            if !files.fileExists(atPath: target.path) {
-                try files.copyItem(at: source, to: target)
-            } else {
-                try await merge(from: source, into: target, sourceID: sourceID, gatewayID: gatewayID)
-            }
+        let targetExists = files.fileExists(atPath: target.path)
+        if files.fileExists(atPath: source.path), !targetExists {
+            try files.copyItem(at: source, to: target)
+        }
+        let replacements = try await mergeCheckpoints(from: storage.root.appending(path: "conversations-v1/\(sourceID)"),
+            sourceID: sourceID, gatewayID: gatewayID, entries: entries, target: target)
+        if targetExists {
+            try merge(from: source, into: target, replacements: replacements)
         }
         let history = storage.root.appending(path: "codex-thread-history/\(sourceID).json")
         if files.fileExists(atPath: history.path) {
             try ConversationHeaderStore.adoptRetiredAccountHistory(from: history, hostID: gatewayID, storage: storage, pinned: [])
-        }
-        let oldCheckpoints = storage.root.appending(path: "conversations-v1/\(sourceID)")
-        if files.fileExists(atPath: oldCheckpoints.path) {
-            try await mergeCheckpoints(from: oldCheckpoints, sourceID: sourceID, gatewayID: gatewayID,
-                                       entries: entries, target: target)
         }
         try files.createDirectory(at: marker.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data().write(to: marker, options: .atomic)
@@ -80,10 +77,7 @@ actor GatewayIdentityMigration {
         try Data().write(to: finished, options: .atomic)
     }
 
-    private func merge(from source: URL, into target: URL, sourceID: UUID, gatewayID: UUID) async throws {
-        let entries = try ConversationIndex.loadIndex(from: source.appending(path: "session-index.json"))
-        let replacements = try await mergeCheckpoints(from: storage.root.appending(path: "conversations-v1/\(sourceID)"), sourceID: sourceID,
-                                                       gatewayID: gatewayID, entries: entries, target: target)
+    private func merge(from source: URL, into target: URL, replacements: [UUID: UUID]) throws {
         let drafts = source.appending(path: "drafts")
         if FileManager.default.fileExists(atPath: drafts.appending(path: "drafts.store").path) {
             try ComposerDraftStore.importDrafts(from: drafts, into: target.appending(path: "drafts"),
@@ -101,7 +95,6 @@ actor GatewayIdentityMigration {
         try copyMissing(from: source, into: target, excluding: ["drafts", "conversations", "session-index.json", "accounts"])
     }
 
-    @discardableResult
     private func mergeCheckpoints(from source: URL, sourceID: UUID, gatewayID: UUID,
                                   entries: [String: UUID], target: URL) async throws -> [UUID: UUID] {
         var current = try ConversationIndex.loadIndex(from: target.appending(path: "session-index.json"))
@@ -153,11 +146,12 @@ actor GatewayIdentityMigration {
     }
 
     enum MigrationFailure: LocalizedError {
-        case recovery, retiredAccounts
+        case recovery, retiredAccounts, verificationInProgress
         var errorDescription: String? {
             switch self {
             case .recovery: "Saved conversations need recovery before this gateway's identity can be migrated."
             case .retiredAccounts: "Saved accounts must finish importing before this gateway's identity can be migrated."
+            case .verificationInProgress: "Another gateway identity is being verified. Retry when it finishes."
             }
         }
     }
@@ -165,26 +159,36 @@ actor GatewayIdentityMigration {
 
 @MainActor
 enum GatewayIdentityPreferences {
-    static func migrate(from source: UUID, to target: UUID, defaults: UserDefaults) {
+    static func migrate(from source: UUID, to target: UUID, defaults: UserDefaults, domainName: String) {
         guard source != target else { return }
         let sourceText = source.uuidString
         let targetText = target.uuidString
         let marker = "gateway.identityPreferences.v1.\(sourceText)"
-        guard defaults.string(forKey: marker) != targetText else { return }
-        for (key, value) in defaults.dictionaryRepresentation() where key != "gateway.hosts" {
-            let renamed = key.replacingOccurrences(of: sourceText, with: targetText, options: .caseInsensitive)
-            let remapped = remap(value, source: source, target: target)
-            if renamed != key {
-                if let incoming = remapped as? [String: Any], let current = defaults.dictionary(forKey: renamed) {
-                    defaults.set(incoming.merging(current) { _, current in current }, forKey: renamed)
-                } else if defaults.object(forKey: renamed) == nil {
-                    defaults.set(remapped, forKey: renamed)
-                }
-            } else if !NSDictionary(dictionary: ["value": value]).isEqual(to: ["value": remapped]) {
-                defaults.set(remapped, forKey: key)
+        let domain = defaults.persistentDomain(forName: domainName) ?? [:]
+        let completed = domain[marker] as? String == targetText
+        var migrated = domain
+        if !completed {
+            for (key, value) in domain where key != "gateway.hosts" {
+                migrated[key] = remap(value, source: source, target: target)
             }
         }
-        defaults.set(targetText, forKey: marker)
+        for key in domain.keys where key != "gateway.hosts" {
+            let renamed = key.replacingOccurrences(of: sourceText, with: targetText, options: .caseInsensitive)
+            guard renamed != key else { continue }
+            let incoming = migrated.removeValue(forKey: key)
+            guard !completed else { continue }
+            if let incoming = incoming as? [String: Any], let current = migrated[renamed] as? [String: Any] {
+                migrated[renamed] = incoming.merging(current) { _, current in current }
+            } else if migrated[renamed] == nil {
+                migrated[renamed] = incoming
+            }
+        }
+        migrated[marker] = targetText
+        for (key, value) in migrated {
+            if let previous = domain[key], NSDictionary(dictionary: ["value": previous]).isEqual(to: ["value": value]) { continue }
+            defaults.set(value, forKey: key)
+        }
+        for key in domain.keys where migrated[key] == nil { defaults.removeObject(forKey: key) }
     }
 
     private static func remap(_ value: Any, source: UUID, target: UUID) -> Any {

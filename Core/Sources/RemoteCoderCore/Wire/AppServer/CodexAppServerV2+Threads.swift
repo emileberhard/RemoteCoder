@@ -29,8 +29,11 @@ extension CodexAppServerV2 {
         var parentThreadId: String? = nil
         var canAcceptDirectInput: Bool? = nil
         var agentRelation: ConversationAgentRelation? = nil
-        var parent: ClusterParent? = nil
-        var hasParentTag = false
+        var parentTag = ParentTag.absent
+    }
+
+    enum ParentTag: Sendable, Equatable {
+        case absent, root, child(ClusterParent)
     }
 
     enum ThreadPreview: Sendable {
@@ -240,8 +243,9 @@ extension CodexAppServerV2.Thread: Codable {
         parentThreadId = try container.decodeIfPresent(String.self, forKey: .parentThreadId)
         canAcceptDirectInput = try container.decodeIfPresent(Bool.self, forKey: .canAcceptDirectInput)
         agentRelation = try container.decodeIfPresent(ConversationAgentRelation.self, forKey: .agentRelation)
-        parent = try container.decodeIfPresent(ClusterParent.self, forKey: .parent)
-        hasParentTag = container.contains(.parent)
+        if !container.contains(.parent) { parentTag = .absent }
+        else if try container.decodeNil(forKey: .parent) { parentTag = .root }
+        else { parentTag = .child(try container.decode(ClusterParent.self, forKey: .parent)) }
     }
 
     func encode(to encoder: Encoder) throws {
@@ -264,7 +268,11 @@ extension CodexAppServerV2.Thread: Codable {
         try container.encodeIfPresent(parentThreadId, forKey: .parentThreadId)
         try container.encodeIfPresent(canAcceptDirectInput, forKey: .canAcceptDirectInput)
         try container.encodeIfPresent(agentRelation, forKey: .agentRelation)
-        if hasParentTag { try container.encode(parent, forKey: .parent) }
+        switch parentTag {
+        case .absent: break
+        case .root: try container.encodeNil(forKey: .parent)
+        case .child(let parent): try container.encode(parent, forKey: .parent)
+        }
     }
 }
 

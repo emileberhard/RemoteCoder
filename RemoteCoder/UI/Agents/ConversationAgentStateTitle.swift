@@ -13,3 +13,7 @@ extension ConversationAgent.State {
         }
     }
 }
+
+extension ConversationAgent.IntentState {
+    var title: String { rawValue.replacingOccurrences(of: "_", with: " ").capitalized }
+}

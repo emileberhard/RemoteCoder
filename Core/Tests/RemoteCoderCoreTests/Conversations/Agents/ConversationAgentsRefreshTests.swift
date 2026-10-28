@@ -137,7 +137,7 @@ struct ConversationAgentsRefreshTests {
         let parent: JSONValue = .object(["hostId": .string(parentHost.uuidString), "threadId": .string("parent")])
         let stub: JSONValue = .object(["kind": .string("remote_intent"), "jobId": .string("job"),
             "ownerHostId": .string(childHost.uuidString), "parent": parent, "intentState": .string("admitted"),
-            "createdAt": .string("2026-10-28T10:00:00Z")])
+            "lastActiveAt": .number(1_793_181_600)])
         var real = try #require(page.objectValue?["agents"]?.arrayValue?.first?.objectValue)
         real["jobId"] = .string("job")
         real["ownerHostId"] = .string(childHost.uuidString)
@@ -154,7 +154,7 @@ struct ConversationAgentsRefreshTests {
             await model.refresh()
             #expect(model.agents.count == 1)
             #expect(model.agents.first?.threadId == "child")
-            #expect(model.agents.first?.hostName == "Child")
+            #expect(model.coverage.first { $0.id == childHost }?.name == "Child")
             #expect(model.coverage.allSatisfy { $0.state == .ok })
             await childFixture.failCapacity("conversation/agents/list", count: 1, retryable: false)
             await model.refresh()

@@ -14,7 +14,7 @@ struct GatewayIdentityTests {
         let gateway = UUID()
         let credentials = MemoryGatewayCredentials()
         let store = HostStore(hosts: [first, second, unreachable], activeHostID: second.id,
-                              defaults: defaults, credentials: credentials)
+                              defaults: defaults, credentials: credentials, defaultsDomain: suite)
         defaults.set(["thread": "Pinned"], forKey: ConversationPinStore.storageKey(hostID: first.id))
         defaults.set(["host": first.id.uuidString, "thread": "thread"], forKey: "workspace.open-conversation.v1")
         let identity = GatewayIdentity(hostId: gateway, incarnation: UUID())
@@ -26,6 +26,7 @@ struct GatewayIdentityTests {
         #expect(store.activeHostID == gateway)
         #expect(store.hosts.first { $0.id == unreachable.id }?.configuration.gatewayID == nil)
         #expect(ConversationPinStore.scoped(hostID: gateway, defaults: defaults).load() == ["thread": "Pinned"])
+        #expect(defaults.persistentDomain(forName: suite)?[ConversationPinStore.storageKey(hostID: first.id)] == nil)
         #expect(defaults.dictionary(forKey: "workspace.open-conversation.v1")?["host"] as? String == gateway.uuidString)
         let saved = try HostStore.load(defaults: defaults, credentials: credentials)
         #expect(saved.hosts.first { $0.id == gateway }?.configuration.gatewayID == gateway)
@@ -105,10 +106,53 @@ struct GatewayIdentityTests {
         defer { defaults.removePersistentDomain(forName: suite) }
         let original = host("Original")
         let credentials = MemoryGatewayCredentials()
-        let store = HostStore(hosts: [original], activeHostID: original.id, defaults: defaults, credentials: credentials)
+        let store = HostStore(hosts: [original], activeHostID: original.id, defaults: defaults, credentials: credentials, defaultsDomain: suite)
         credentials.fail(with: -50)
         #expect(throws: (any Error).self) { try store.adoptIdentity(.init(hostId: UUID(), incarnation: UUID()), for: original) }
         #expect(store.hosts.first?.configuration == original)
+    }
+
+    @Test func launchSkipsCanonicalHostsAndCancelsUnresolvedReadsAtTheSharedDeadline() async throws {
+        var canonical = host("Canonical")
+        canonical.gatewayID = canonical.id
+        let ready = host("Ready"), away = host("Away")
+        let identity = GatewayIdentity(hostId: UUID(), incarnation: UUID())
+        var reads: Set<UUID> = []
+        var cancelled = false
+        let resolved = await GatewayIdentityLaunch.read(hosts: [canonical, ready, away], budget: .milliseconds(25)) { host in
+            reads.insert(host.id)
+            if host.id == away.id {
+                do { try await Task.sleep(for: .seconds(60)) }
+                catch { cancelled = true; throw error }
+            }
+            return identity
+        }
+        #expect(reads == [ready.id, away.id])
+        #expect(resolved.map { $0.0.id } == [ready.id])
+        #expect(resolved.first?.1 == identity)
+        #expect(cancelled)
+    }
+
+    @Test func preferencesOnlyMigrateOwnedPersistentValuesAndRetireRenamedKeys() throws {
+        let suite = "GatewayIdentityTests.\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let source = UUID(), target = UUID()
+        let oldKey = "pins.\(source)", newKey = "pins.\(target)"
+        let registeredKey = "registered.\(source)"
+        defaults.register(defaults: [registeredKey: ["host": source.uuidString]])
+        defaults.set(["old": "retained", "same": "older"], forKey: oldKey)
+        defaults.set(["same": "newer", "host": source.uuidString], forKey: newKey)
+        GatewayIdentityPreferences.migrate(from: source, to: target, defaults: defaults, domainName: suite)
+        let saved = try #require(defaults.persistentDomain(forName: suite))
+        #expect(saved[oldKey] == nil)
+        #expect(saved[newKey] as? [String: String] == ["old": "retained", "same": "newer", "host": target.uuidString])
+        #expect(saved[registeredKey] == nil)
+        #expect(saved["registered.\(target)"] == nil)
+        #expect(defaults.dictionary(forKey: registeredKey)?["host"] as? String == source.uuidString)
+        defaults.removeObject(forKey: newKey)
+        GatewayIdentityPreferences.migrate(from: source, to: target, defaults: defaults, domainName: suite)
+        #expect(defaults.persistentDomain(forName: suite)?[newKey] == nil)
     }
 
     private func host(_ name: String) -> GatewayHostConfiguration {

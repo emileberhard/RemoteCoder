@@ -12,6 +12,7 @@ final class HostStore {
     private(set) var configurationIssue: String?
     private(set) var localConfiguration = LocalConfiguration()
     @ObservationIgnored private let defaults: UserDefaults
+    @ObservationIgnored private let defaultsDomain: String
     @ObservationIgnored private let credentials: any GatewayCredentialStorage
     @ObservationIgnored private let sharedDirectory: SharedHostDirectory?
     @ObservationIgnored private var configurations: [GatewayHostConfiguration] = []
@@ -49,8 +50,9 @@ final class HostStore {
     }
 
     init(defaults: UserDefaults, credentials: any GatewayCredentialStorage, sharedDirectory: any GatewayCredentialStorage,
-         configuration: Result<LocalConfiguration, any Error>) {
+         configuration: Result<LocalConfiguration, any Error>, defaultsDomain: String = AppStorageScope.current.defaultsDomainName) {
         self.defaults = defaults
+        self.defaultsDomain = defaultsDomain
         self.credentials = credentials
         self.sharedDirectory = SharedHostDirectory(storage: sharedDirectory)
         switch configuration {
@@ -64,8 +66,9 @@ final class HostStore {
     }
 
     init(hosts: [GatewayHostConfiguration], activeHostID: UUID?, defaults: UserDefaults,
-         credentials: any GatewayCredentialStorage) {
+         credentials: any GatewayCredentialStorage, defaultsDomain: String = AppStorageScope.current.defaultsDomainName) {
         self.defaults = defaults
+        self.defaultsDomain = defaultsDomain
         self.credentials = credentials
         sharedDirectory = nil
         var directory = HostDirectory()
@@ -258,7 +261,7 @@ final class HostStore {
         let matchingIDs = Set(matching.map(\.id))
         let active = activeHostID.map { matchingIDs.contains($0) ? host.id : $0 }
         try persist(configurations.filter { !matchingIDs.contains($0.id) } + [host], activeHostID: active, directory: directory)
-        for old in host.legacyIDs { GatewayIdentityPreferences.migrate(from: old, to: host.id, defaults: defaults) }
+        for old in host.legacyIDs { GatewayIdentityPreferences.migrate(from: old, to: host.id, defaults: defaults, domainName: defaultsDomain) }
         requestSync()
     }
 

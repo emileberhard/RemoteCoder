@@ -5,6 +5,7 @@ struct ClusterSettingsView: View {
     @Environment(HostStore.self) private var settings
     @Environment(\.scenePhase) private var scenePhase
     @State private var operation: Operation?
+    @State private var removingMember: ClusterMember?
 
     private enum Operation: Equatable {
         case join(UUID), remove(UUID), retry(UUID)
@@ -63,6 +64,12 @@ struct ClusterSettingsView: View {
                 } header: { Text(pair.operation == .join ? "Join" : "Remove") }
             }
         }
+        .confirmationDialog("Remove \(removingMember?.name ?? "host") from the cluster?",
+                            isPresented: Binding(get: { removingMember != nil }, set: { if !$0 { removingMember = nil } }),
+                            titleVisibility: .visible, presenting: removingMember) { member in
+            Button("Remove", role: .destructive) { operation = .remove(member.id) }
+            Button("Cancel", role: .cancel) {}
+        }
         .task(id: RefreshKey(hosts: settings.hosts.map(\.configuration), phase: scenePhase)) {
             guard scenePhase == .active else { return }
             await model.refresh(hosts: workspace.clusterHosts)
@@ -90,31 +97,42 @@ struct ClusterSettingsView: View {
         settings.hosts.first { $0.id == id }?.displayName ?? members.first { $0.id == id }?.name ?? id.uuidString
     }
 
+    private func reachabilityTitle(_ state: ClusterReachability.State) -> String {
+        switch state {
+        case .reachable: "Reachable"
+        case .unreachable: "Unreachable"
+        case .unsupported: "Too old"
+        case .unknown: "Unknown"
+        }
+    }
+
     private func memberRow(_ member: ClusterMember) -> some View {
         HStack {
             VStack(alignment: .leading, spacing: 4) {
                 Text(member.name)
                 HStack {
-                    Label(member.reachability.state == "reachable" ? "Reachable" : member.reachability.state == "unsupported" ? "Too old" : "Unreachable",
-                          systemImage: member.reachability.state == "reachable" ? "checkmark.circle" : "network.slash")
+                    Label(reachabilityTitle(member.reachability.state),
+                          systemImage: member.reachability.state == .reachable ? "checkmark.circle" : "network.slash")
                     if let version = member.version { Text(version) }
                 }
                 .scaledFont(.caption).foregroundStyle(.secondary)
                 if let load = member.load {
                     HStack {
                         if let cpu = load.cpuPercent { Text("CPU \(cpu, specifier: "%.0f")%") }
-                        if let pressure = load.memoryPressure { Text("Memory \(pressure)") }
+                        if let pressure = load.memoryPressure, pressure == .warn || pressure == .critical {
+                            Text(pressure == .warn ? "Memory warning" : "Memory critical")
+                        }
                         if let active = load.activeAgents { Text("\(active) active") }
                     }
                     .scaledFont(.caption).foregroundStyle(.secondary)
                 }
-                if member.state == "remove_pending" {
+                if member.state == .removePending {
                     Label("Remove pending", systemImage: "clock").scaledFont(.caption).foregroundStyle(.orange)
                 }
             }
             Spacer()
             if writable {
-                Button("Remove", role: .destructive) { operation = .remove(member.id) }
+                Button("Remove", role: .destructive) { removingMember = member }
                     .disabled(operation != nil)
             }
         }

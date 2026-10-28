@@ -10,11 +10,12 @@ struct ClusterAgentRelationTests {
         let stub = try decode([
             "kind": "remote_intent", "jobId": "job", "ownerHostId": host.uuidString,
             "intentState": "unknown", "parent": ["hostId": parent.uuidString, "threadId": "parent"],
-            "createdAt": "2026-10-28T10:00:00Z"
+            "lastActiveAt": 1_793_181_600
         ])
         let real = try decode(row(host: host, parent: parent))
         let separate = try decode(row(host: other, parent: parent))
         #expect(stub.state == .unknown)
+        #expect(stub.lastActiveAt == 1_793_181_600)
         #expect(stub.parent?.address == .init(hostID: parent, threadID: "parent"))
         for input in [[stub, real, separate], [real, stub, separate]] {
             let result = ConversationAgentsProjection.merge(input)
@@ -24,7 +25,7 @@ struct ClusterAgentRelationTests {
         }
         var removedFields: [String: Any] = ["kind": "remote_intent", "jobId": "removed", "ownerHostId": host.uuidString,
             "intentState": "removed", "parent": ["hostId": parent.uuidString, "threadId": "parent"]]
-        removedFields["createdAt"] = "2026-10-28T10:00:00Z"
+        removedFields["lastActiveAt"] = 1_793_181_600
         #expect(try decode(removedFields).state == .removed)
     }
 
@@ -44,6 +45,34 @@ struct ClusterAgentRelationTests {
         #expect(root.agentParentThreadID == nil)
         let stored = try JSONDecoder().decode(ConversationHeader.self, from: JSONEncoder().encode(root))
         #expect(!stored.isDelegatedAgent)
+    }
+
+    @Test func parentTagsRoundTripAbsentRootAndChildWithoutContradictoryFlags() throws {
+        let parent = ClusterParent(hostId: UUID(), threadId: "parent")
+        let fields: [String: Any] = ["id": "worker", "preview": "", "createdAt": 1, "updatedAt": 2, "cwd": "/tmp", "source": "cli"]
+        let thread = try JSONDecoder().decode(CodexAppServerV2.Thread.self, from: JSONSerialization.data(withJSONObject: fields))
+        #expect(thread.parentTag == .absent)
+        for tag in [CodexAppServerV2.ParentTag.absent, .root, .child(parent)] {
+            var updated = thread
+            updated.parentTag = tag
+            let encoded = try JSONEncoder().encode(updated)
+            #expect(try JSONDecoder().decode(CodexAppServerV2.Thread.self, from: encoded).parentTag == tag)
+            let object = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+            if tag == .absent { #expect(object["parent"] == nil) }
+            if tag == .root { #expect(object["parent"] is NSNull) }
+        }
+    }
+
+    @Test func intentRowsUseTheSameEpochTimeAndUnknownStateAsRealRows() throws {
+        let host = UUID(), parent = UUID()
+        var fields = row(host: host, parent: parent)
+        fields["lastActiveAt"] = 1_793_181_600
+        let real = try decode(fields)
+        let stub = try decode(["kind": "remote_intent", "jobId": "job", "ownerHostId": host.uuidString,
+            "intentState": "future", "parent": ["hostId": parent.uuidString, "threadId": "parent"],
+            "lastActiveAt": 1_793_181_600])
+        #expect(stub.lastActiveAt == real.lastActiveAt)
+        #expect(stub.intentState == .unknown)
     }
 
     private func row(host: UUID, parent: UUID) -> [String: Any] {

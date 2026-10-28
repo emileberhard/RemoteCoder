@@ -4,6 +4,12 @@ struct ClusterCoverageStrip: View {
     let coverage: [ClusterCoverage]
 
     var body: some View {
+        if coverage.contains(where: { $0.state != .ok }) {
+            badges
+        }
+    }
+
+    private var badges: some View {
         ScrollView(.horizontal) {
             HStack(spacing: 12) {
                 ForEach(coverage) { member in
@@ -27,11 +33,10 @@ struct ClusterCoverageStrip: View {
     private func status(_ member: ClusterCoverage) -> String {
         switch member.state {
         case .ok: "OK"
-        case .unreachable: member.since.map { "Unreachable since \($0)" } ?? "Unreachable"
+        case .unreachable: member.since.map { "Unreachable since \($0.formatted(date: .abbreviated, time: .shortened))" } ?? "Unreachable"
         case .unsupported: "Too old"
-        case .stale: member.staleThrough.map { "Stale through \($0)" } ?? "Stale"
+        case .stale: member.staleThrough.map { "Stale through \($0.formatted(date: .abbreviated, time: .shortened))" } ?? "Stale"
         case .unknown: "Unknown"
-        case .removed: "Removed"
         case .refused: "Refused"
         }
     }
@@ -42,7 +47,7 @@ struct ClusterCoverageStrip: View {
         case .unreachable: "network.slash"
         case .unsupported, .stale: "clock.badge.exclamationmark"
         case .unknown: "questionmark.circle"
-        case .removed, .refused: "minus.circle"
+        case .refused: "minus.circle"
         }
     }
 }

@@ -14,7 +14,9 @@ struct ConversationAgentsView: View {
             let recent = model.sections.recent
             let earlier = model.sections.earlier
             List {
-                Section { ClusterCoverageStrip(coverage: model.coverage) }
+                if model.coverage.contains(where: { $0.state != .ok }) {
+                    Section { ClusterCoverageStrip(coverage: model.coverage) }
+                }
                 Group {
                     if !recent.isEmpty {
                         Section { agentLinks(recent) }
@@ -74,7 +76,7 @@ struct ConversationAgentLinks: View {
             NavigationLink {
                 ConversationAgentDetail(workspace: workspace, model: model, agentID: row.id, onParentRequest: onParentRequest, onOpenConversation: onOpenConversation, onAction: onAction)
             } label: {
-                AgentRow(row: row)
+                AgentRow(row: row, coverage: row.agent.ownerHostId.flatMap { host in model.coverage.first { $0.id == host } })
             }
             .accessibilityIdentifier("agent-\(row.id)")
         }
@@ -153,6 +155,7 @@ struct SubagentsPill: View {
 
 private struct AgentRow: View {
     let row: ConversationAgentRow
+    let coverage: ClusterCoverage?
     @InterfaceScaledMetric(relativeTo: .body) private var indent: CGFloat = 20
 
     var body: some View {
@@ -160,11 +163,11 @@ private struct AgentRow: View {
             AgentStateSymbol(state: row.agent.state)
             VStack(alignment: .leading, spacing: 4) {
                 Text(row.agent.title).lineLimit(2)
-                if let host = row.agent.hostName {
-                    AgentHostBadge(name: host, reachability: row.agent.reachability)
+                if let coverage {
+                    AgentHostBadge(name: coverage.name ?? coverage.hostId.uuidString, reachability: coverage.state)
                 }
                 if let state = row.agent.intentState {
-                    Text(state.replacingOccurrences(of: "_", with: " ").capitalized)
+                    Text(state.title)
                         .scaledFont(.caption).foregroundStyle(.secondary)
                 }
             }
@@ -176,7 +179,7 @@ private struct AgentRow: View {
 
 private struct AgentHostBadge: View {
     let name: String
-    let reachability: String?
+    let reachability: ClusterCoverage.State
 
     var body: some View {
         Label(label, systemImage: symbol)
@@ -185,19 +188,23 @@ private struct AgentHostBadge: View {
 
     private var label: String {
         switch reachability {
-        case "reachable": name
-        case "unreachable": "\(name) · Unreachable"
-        case "unsupported": "\(name) · Too old"
-        default: "\(name) · Unknown"
+        case .ok: name
+        case .unreachable: "\(name) · Unreachable"
+        case .unsupported: "\(name) · Too old"
+        case .stale: "\(name) · Stale"
+        case .refused: "\(name) · Refused"
+        case .unknown: "\(name) · Unknown"
         }
     }
 
     private var symbol: String {
         switch reachability {
-        case "reachable": "server.rack"
-        case "unreachable": "network.slash"
-        case "unsupported": "clock.badge.exclamationmark"
-        default: "questionmark.circle"
+        case .ok: "server.rack"
+        case .unreachable: "network.slash"
+        case .unsupported: "clock.badge.exclamationmark"
+        case .stale: "clock.badge.exclamationmark"
+        case .refused: "minus.circle"
+        case .unknown: "questionmark.circle"
         }
     }
 }
@@ -369,7 +376,7 @@ private struct ConversationAgentDetail: View {
             AgentStateSymbol(state: agent.state)
                 .scaledFont(.title2)
             VStack(alignment: .leading, spacing: 2) {
-                Text(agent.intentState.map { $0.replacingOccurrences(of: "_", with: " ").capitalized } ?? agent.state.title)
+                Text(agent.intentState.map(\.title) ?? agent.state.title)
                     .scaledFont(.headline)
                 Text(agent.model ?? agent.provider.displayName)
                     .scaledFont(.subheadline)

@@ -40,6 +40,14 @@ struct ConversationAgent: Decodable, Sendable, Identifiable, Equatable {
         }
     }
 
+    enum IntentState: String, Decodable, Sendable {
+        case pending, admitted, abandoned, stopRequested = "stop_requested", unknown, removed
+
+        init(from decoder: any Decoder) throws {
+            self = Self(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .unknown
+        }
+    }
+
     let id: String
     let parentId: String?
     let ownerThreadId: String
@@ -56,18 +64,15 @@ struct ConversationAgent: Decodable, Sendable, Identifiable, Equatable {
     var ownerHostId: UUID? = nil
     var jobId: String? = nil
     var parent: ClusterParent? = nil
-    var intentState: String? = nil
-    var hostName: String? = nil
+    var intentState: IntentState? = nil
     var parentHostID: UUID? = nil
-    var reachability: String? = nil
     var isStub: Bool? = nil
 
     private enum CodingKeys: String, CodingKey {
         case id, parentId, ownerThreadId, threadId, provider, source, title, model, state, capabilities
-        case executionId, accountId, lastActiveAt, ownerHostId, jobId, parent, intentState, kind, createdAt
-        case hostName, parentHostID, reachability, isStub
+        case executionId, accountId, lastActiveAt, ownerHostId, jobId, parent, intentState, kind
+        case parentHostID
     }
-
 
     var identity: String { ownerHostId.map { "\($0.uuidString)|\(jobId ?? id)" } ?? id }
 
@@ -83,7 +88,8 @@ extension ConversationAgent {
         ownerHostId = try values.decodeIfPresent(UUID.self, forKey: .ownerHostId)
         jobId = try values.decodeIfPresent(String.self, forKey: .jobId)
         parent = try values.decodeIfPresent(ClusterParent.self, forKey: .parent)
-        intentState = try values.decodeIfPresent(String.self, forKey: .intentState)
+        intentState = try values.decodeIfPresent(IntentState.self, forKey: .intentState)
+        lastActiveAt = try values.decodeIfPresent(Int64.self, forKey: .lastActiveAt)
         if kind == "remote_intent" {
             ownerHostId = try values.decode(UUID.self, forKey: .ownerHostId)
             parent = try values.decode(ClusterParent.self, forKey: .parent)
@@ -95,13 +101,10 @@ extension ConversationAgent {
             source = kind ?? "remote_intent"
             title = try values.decodeIfPresent(String.self, forKey: .title) ?? "Remote agent"
             model = nil
-            state = intentState == "removed" ? .removed : .unknown
+            state = intentState == .removed ? .removed : .unknown
             capabilities = .init(inspect: false, openConversation: false, message: false, continueWork: false, stop: false, askParent: false)
             executionId = nil
             accountId = nil
-            if let createdAt = try values.decodeIfPresent(String.self, forKey: .createdAt) {
-                lastActiveAt = ISO8601DateFormatter().date(from: createdAt).map { Int64($0.timeIntervalSince1970) }
-            } else { lastActiveAt = nil }
             isStub = true
         } else {
             isStub = false
@@ -117,13 +120,9 @@ extension ConversationAgent {
             capabilities = try values.decode(Capabilities.self, forKey: .capabilities)
             executionId = try values.decodeIfPresent(String.self, forKey: .executionId)
             accountId = try values.decodeIfPresent(String.self, forKey: .accountId)
-            lastActiveAt = try values.decodeIfPresent(Int64.self, forKey: .lastActiveAt)
         }
         parentHostID = try parent?.hostId ?? values.decodeIfPresent(UUID.self, forKey: .parentHostID)
-        hostName = try values.decodeIfPresent(String.self, forKey: .hostName)
-        reachability = try values.decodeIfPresent(String.self, forKey: .reachability)
     }
-
 }
 
 struct ConversationAgentOutput: Decodable, Sendable {

@@ -75,18 +75,16 @@ final class ClusterModel {
     }
 
     func isMember(_ host: UUID, of anchor: UUID) -> Bool {
-        host == anchor || listings[anchor]?.members.contains { $0.hostId == host && $0.state == "active" } == true
+        host == anchor || listings[anchor]?.members.contains { $0.hostId == host && $0.state == .active } == true
     }
 
     func join(_ hostID: UUID, anchor: UUID, hosts: [Host]) async {
         guard persistenceFailure == nil else { return }
-        let members = hosts.filter { $0.id == anchor || isMember($0.id, of: anchor) }
-        for member in members where member.id != hostID {
-            guard let host = hosts.first(where: { $0.id == hostID }),
-                  !host.configuration.usesInstallationCredential, !member.configuration.usesInstallationCredential else { continue }
-            guard !isMember(hostID, of: member.id) else { continue }
-            let existing = pairs.first { $0.includes(hostID) && $0.includes(member.id) && $0.operation == .join && !$0.complete }
-            let pair = existing ?? Pair(first: member.id, second: hostID, membership: UUID(), operation: .join)
+        let members = Set([anchor] + (listings[anchor]?.members.filter { $0.state == .active }.map(\.id) ?? []))
+        for member in members.sorted(by: { $0.uuidString < $1.uuidString }) where member != hostID {
+            guard !isMember(hostID, of: member) else { continue }
+            let existing = pairs.first { $0.includes(hostID) && $0.includes(member) && $0.operation == .join && !$0.complete }
+            let pair = existing ?? Pair(first: member, second: hostID, membership: UUID(), operation: .join)
             if existing == nil {
                 guard reservePair() else { return }
                 pairs.append(pair)
@@ -100,8 +98,8 @@ final class ClusterModel {
     func remove(_ hostID: UUID, hosts: [Host]) async {
         guard persistenceFailure == nil else { return }
         for host in hosts where host.id != hostID {
-            let member = listings[host.id]?.members.first { $0.hostId == hostID && $0.state != "removed" }
-                ?? listings[hostID]?.members.first { $0.hostId == host.id && $0.state != "removed" }
+            let member = listings[host.id]?.members.first { $0.hostId == hostID }
+                ?? listings[hostID]?.members.first { $0.hostId == host.id }
             guard let member else { continue }
             let existing = pairs.first { $0.membership == member.membership }
             if existing == nil, !reservePair() { return }
@@ -120,15 +118,13 @@ final class ClusterModel {
 
     func retry(_ id: UUID, hosts: [Host]) async {
         guard persistenceFailure == nil, !running.contains(id), var pair = pairs.first(where: { $0.id == id }) else { return }
-        let first = hosts.first { $0.id == pair.first }
-        let second = hosts.first { $0.id == pair.second }
         running.insert(id)
         defer { running.remove(id) }
         do {
             switch pair.operation {
             case .join:
-                guard let first, let second, !first.configuration.usesInstallationCredential,
-                      !second.configuration.usesInstallationCredential else { throw ClusterFailure.operatorRequired }
+                let first = try operatorHost(pair.first, hosts: hosts)
+                let second = try operatorHost(pair.second, hosts: hosts)
                 let issuedFirst = try await first.remote.clusterIssue(for: second.id, name: second.configuration.displayName, membership: pair.membership)
                 let issuedSecond = try await second.remote.clusterIssue(for: first.id, name: first.configuration.displayName, membership: pair.membership)
                 guard issuedFirst.host == first.id, issuedSecond.host == second.id,
@@ -147,7 +143,7 @@ final class ClusterModel {
                 var errors: [String] = []
                 if !pair.firstComplete {
                     do {
-                        guard let first, !first.configuration.usesInstallationCredential else { throw ClusterFailure.operatorRequired }
+                        let first = try operatorHost(pair.first, hosts: hosts)
                         try await first.remote.clusterRemove(host: pair.second, membership: pair.membership)
                         pair.firstComplete = true
                         replace(pair)
@@ -155,7 +151,7 @@ final class ClusterModel {
                 }
                 if !pair.secondComplete {
                     do {
-                        guard let second, !second.configuration.usesInstallationCredential else { throw ClusterFailure.operatorRequired }
+                        let second = try operatorHost(pair.second, hosts: hosts)
                         try await second.remote.clusterRemove(host: pair.first, membership: pair.membership)
                         pair.secondComplete = true
                     } catch { errors.append(error.localizedDescription) }
@@ -165,6 +161,13 @@ final class ClusterModel {
             if pair.complete { pair.error = nil }
         } catch { pair.error = error.localizedDescription }
         replace(pair)
+    }
+
+    private func operatorHost(_ id: UUID, hosts: [Host]) throws -> Host {
+        let name = listings.values.flatMap(\.members).first { $0.id == id }?.name ?? id.uuidString
+        guard let host = hosts.first(where: { $0.id == id }) else { throw ClusterFailure.connectionRequired(name) }
+        guard !host.configuration.usesInstallationCredential else { throw ClusterFailure.operatorRequired(host.configuration.displayName) }
+        return host
     }
 
     private func replace(_ pair: Pair) {
@@ -190,11 +193,13 @@ final class ClusterModel {
     }
 
     enum ClusterFailure: LocalizedError {
-        case identityChanged, operatorRequired
+        case identityChanged
+        case operatorRequired(String), connectionRequired(String)
         var errorDescription: String? {
             switch self {
             case .identityChanged: "The gateway's verified identity changed. Reconnect before joining."
-            case .operatorRequired: "An operator connection to this host is required."
+            case .operatorRequired(let name): "Connect to \(name) with an operator credential, then retry."
+            case .connectionRequired(let name): "Add \(name) in Hosts with an operator credential, verify its identity, then retry."
             }
         }
     }

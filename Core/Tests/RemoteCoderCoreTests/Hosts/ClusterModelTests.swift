@@ -51,9 +51,60 @@ struct ClusterModelTests {
         var installation = host(first, remote: left).configuration
         installation.authToken = "rc1.installation"
         await model.join(second, anchor: first, hosts: [.init(configuration: installation, remote: left), host(second, remote: right)])
-        #expect(model.pairs.isEmpty)
+        #expect(model.pairs.count == 1)
+        #expect(model.pairs.first?.complete == false)
+        #expect(model.pairs.first?.error?.contains("operator credential") == true)
         #expect(await left.issued.isEmpty)
         #expect(await right.issued.isEmpty)
+    }
+
+    @Test func missingAndInstallationOnlyMembersRemainVisibleAsPendingPairs() async throws {
+        let suite = "ClusterModelTests.\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let first = UUID(), second = UUID(), missing = UUID(), installationID = UUID()
+        let left = MemberRemote(host: first), right = MemberRemote(host: second), installationRemote = MemberRemote(host: installationID)
+        await left.setMembers([member(missing, name: "Missing"), member(installationID, name: "Installation")])
+        var installation = host(installationID, remote: installationRemote).configuration
+        installation.authToken = "rc1.fixture"
+        let hosts = [host(first, remote: left), host(second, remote: right), ClusterModel.Host(configuration: installation, remote: installationRemote)]
+        let model = ClusterModel(defaults: defaults)
+        await model.refresh(hosts: hosts)
+        await model.join(second, anchor: first, hosts: hosts)
+        #expect(model.pairs.count == 3)
+        #expect(model.pairs.first { $0.includes(first) }?.complete == true)
+        #expect(model.pairs.first { $0.includes(missing) }?.error?.contains("Add Missing in Hosts") == true)
+        #expect(model.pairs.first { $0.includes(installationID) }?.error?.contains("operator credential") == true)
+        let missingPair = try #require(model.pairs.first { $0.includes(missing) })
+        let missingRemote = MemberRemote(host: missing)
+        await model.retry(missingPair.id, hosts: hosts + [host(missing, remote: missingRemote)])
+        #expect(model.pairs.first { $0.id == missingPair.id }?.complete == true)
+        #expect(await missingRemote.accepted == [missingPair.membership])
+    }
+
+    @Test func futureStatesAndFractionalCoverageDatesDecodeWithoutLosingMeaning() throws {
+        let hostID = UUID()
+        let fields: [String: Any] = ["hostId": hostID.uuidString, "membership": UUID().uuidString, "name": "Newer",
+            "state": "future", "reachability": ["state": "future", "since": "2026-10-28T10:00:00.123456789Z",
+                "lastSeenAt": "2026-10-28T10:00:00Z"], "load": ["memoryPressure": "future"]]
+        let member = try JSONDecoder().decode(ClusterMember.self, from: JSONSerialization.data(withJSONObject: fields))
+        #expect(member.state == .unknown)
+        #expect(member.reachability.state == .unknown)
+        #expect(member.load?.memoryPressure == .unknown)
+        let since = try #require(member.reachability.since)
+        let lastSeen = try #require(member.reachability.lastSeenAt)
+        #expect(abs(since.timeIntervalSince(lastSeen) - 0.123456789) < 0.000001)
+        let coverage = try JSONDecoder().decode(ClusterCoverage.self, from: JSONSerialization.data(withJSONObject:
+            ["hostId": hostID.uuidString, "state": "future", "since": "2026-10-28T10:00:00.123456789Z",
+             "staleThrough": "2026-10-28T10:00:00Z"]))
+        #expect(coverage.state == .unknown)
+        #expect(coverage.since == since)
+        #expect(coverage.staleThrough == lastSeen)
+    }
+
+    private func member(_ id: UUID, name: String) -> ClusterMember {
+        .init(hostId: id, membership: UUID(), name: name, state: .active, version: nil, load: nil,
+              reachability: .init(state: .reachable, since: nil, lastSeenAt: nil), protocol: 1)
     }
 
     private func host(_ id: UUID, remote: MemberRemote) -> ClusterModel.Host {
@@ -73,6 +124,7 @@ private actor MemberRemote: ClusterRemote {
     private var removeFailure = false
 
     init(host: UUID) { self.host = host }
+    func setMembers(_ members: [ClusterMember]) { self.members = members }
     func setAcceptFailure(_ value: Bool) { acceptFailure = value }
     func setRemoveFailure(_ value: Bool) { removeFailure = value }
 
@@ -86,8 +138,9 @@ private actor MemberRemote: ClusterRemote {
     func clusterAccept(_ issued: ClusterIssuedCredential, name: String, membership: UUID) throws {
         if acceptFailure { throw URLError(.cannotConnectToHost) }
         accepted.append(membership)
-        members = [.init(hostId: issued.host, membership: membership, name: name, state: "active", version: "1.0.0", load: nil,
-                         reachability: .init(state: "reachable", since: nil, lastSeenAt: nil), protocol: 1)]
+        members.removeAll { $0.hostId == issued.host }
+        members.append(.init(hostId: issued.host, membership: membership, name: name, state: .active, version: "1.0.0", load: nil,
+                         reachability: .init(state: .reachable, since: nil, lastSeenAt: nil), protocol: 1))
     }
     func clusterRemove(host: UUID, membership: UUID) throws {
         if removeFailure { throw URLError(.cannotConnectToHost) }

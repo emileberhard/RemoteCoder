@@ -100,6 +100,8 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
     @ObservationIgnored private let ownedTasks = OwnedTasks<OwnedTask>()
     /// Supersedes pending workspace navigation when another conversation opens.
     @ObservationIgnored var onConversationNavigation: (@MainActor () -> Void)?
+    @ObservationIgnored var onGatewayReconnect: (@MainActor () -> Void)?
+    @ObservationIgnored private var hasConnectedGateway = false
     /// Set by the workspace to retire a banner when its conversation is opened.
     @ObservationIgnored var onActiveSessionChange: (@MainActor (ChatTargetModel) -> Void)?
 
@@ -1441,6 +1443,8 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
             return
         }
         guard !wasConnected else { return }
+        if hasConnectedGateway { onGatewayReconnect?() }
+        hasConnectedGateway = true
         hostServices.automations.connectivityChanged(true)
         directories.connectionChanged()
         _ = try? await directories.resolveHomePath()

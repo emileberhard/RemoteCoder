@@ -132,7 +132,6 @@ final class ConversationAgentsModel: Identifiable {
             rowsByHost[host.id] = page.agents.map { agent in
                 var row = agent
                 row.ownerHostId = row.ownerHostId ?? host.id
-                row.hostName = row.hostName ?? (row.ownerHostId == host.id ? host.name : nil)
                 return row
             }
             warningsByHost[host.id] = page.warnings
@@ -158,14 +157,14 @@ final class ConversationAgentsModel: Identifiable {
             } else { transportFailure = false }
             let state: ClusterCoverage.State = unsupported ? .unsupported : transportFailure ? .unreachable : .stale
             item = .init(hostId: host.id, name: host.name, state: state,
-                         since: state == .unreachable ? previous?.since ?? ISO8601DateFormatter().string(from: now()) : nil,
-                         staleThrough: successfulReads[host.id].map { ISO8601DateFormatter().string(from: $0) })
+                         since: state == .unreachable ? previous?.since ?? now() : nil,
+                         staleThrough: successfulReads[host.id])
             if host.id == address.hostID { error = failure.localizedDescription }
         }
         coverage = coverage.map { $0.id == host.id ? item : $0 }
         for row in rowsByHost[host.id] ?? [] {
             if let owner = row.ownerHostId, !coverage.contains(where: { $0.id == owner }) {
-                coverage.append(.init(hostId: owner, name: row.hostName, state: .unknown))
+                coverage.append(.init(hostId: owner, name: nil, state: .unknown))
             }
         }
         let hosts = Set(coverage.map(\.id))
@@ -174,16 +173,10 @@ final class ConversationAgentsModel: Identifiable {
         warningsByHost = warningsByHost.filter { hosts.contains($0.key) }
         warnings = Array(Set(warningsByHost.values.flatMap { $0 })).sorted()
         let coverageByHost = Dictionary(coverage.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        let rows = coverage.flatMap { rowsByHost[$0.id] ?? [] }.map { row in
-            var row = row
-            if let owner = row.ownerHostId, let coverage = coverageByHost[owner] {
-                row.hostName = coverage.name
-                row.reachability = coverage.state == .ok ? "reachable" : coverage.state.rawValue
-            }
-            return row
-        }
+        let rows = coverage.flatMap { rowsByHost[$0.id] ?? [] }
         let unavailableIntents = Set(rows.filter {
-            $0.isStub == true && ($0.intentState == "unknown" || $0.intentState == "removed") && $0.reachability != "reachable"
+            $0.isStub == true && ($0.intentState == .unknown || $0.intentState == .removed)
+                && $0.ownerHostId.flatMap { coverageByHost[$0]?.state } != .ok
         }.map(\.identity))
         agents = ConversationAgentsProjection.merge(rows.filter { $0.isStub == true || !unavailableIntents.contains($0.identity) })
         sections = ConversationAgentSections(agents: agents, activeSince: Self.activeSince)

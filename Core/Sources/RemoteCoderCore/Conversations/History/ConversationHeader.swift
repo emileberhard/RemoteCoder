@@ -63,10 +63,11 @@ struct ConversationHeader: Codable, Identifiable, Equatable, Sendable {
         nativeParentThreadID = thread.parentThreadId ?? spawn?["parent_thread_id"]?.stringValue
         canAcceptDirectInput = thread.canAcceptDirectInput
         agentClassification = thread.agentRelation.map(ConversationAgentClassification.child) ?? .unresolved
-        if thread.hasParentTag {
-            agentClassification = thread.parent.map {
-                .child(.init(parentHostID: $0.hostId, parentThreadId: $0.threadId, parentAccountId: nil, agentId: thread.id))
-            } ?? .root
+        switch thread.parentTag {
+        case .absent: break
+        case .root: agentClassification = .root
+        case .child(let parent):
+            agentClassification = .child(.init(parentHostID: parent.hostId, parentThreadId: parent.threadId, parentAccountId: nil, agentId: thread.id))
         }
     }
 
