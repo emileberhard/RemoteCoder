@@ -135,7 +135,7 @@ async fn read_only_parent_messages_use_immutable_native_ancestry_without_authori
         .store()
         .await
         .unwrap()
-        .set_parent(
+        .set_parent_for_test(
             "readonly-child".into(),
             Some(AgentAddress {
                 host_id: host,
