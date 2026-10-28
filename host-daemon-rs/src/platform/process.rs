@@ -43,6 +43,26 @@ pub(crate) fn unix_peer_identity(_: &tokio::net::UnixStream) -> Result<(i32, Pro
 
 #[cfg(target_os = "macos")]
 pub(crate) fn ancestry(process: ProcessInstance) -> Result<Vec<ProcessInstance>> {
+    verified_ancestry(process, None)
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn ancestry_to(
+    process: ProcessInstance,
+    owner: ProcessInstance,
+) -> Result<Vec<ProcessInstance>> {
+    anyhow::ensure!(
+        owner.pid > 1,
+        "agent tool owner is not an application process"
+    );
+    verified_ancestry(process, Some(owner))
+}
+
+#[cfg(target_os = "macos")]
+fn verified_ancestry(
+    process: ProcessInstance,
+    owner: Option<ProcessInstance>,
+) -> Result<Vec<ProcessInstance>> {
     use anyhow::{Context, ensure};
     let mut chain = Vec::new();
     let mut current = process;
@@ -58,6 +78,9 @@ pub(crate) fn ancestry(process: ProcessInstance) -> Result<Vec<ProcessInstance>>
             "caller process identity is stale"
         );
         chain.push(current);
+        if owner == Some(current) {
+            return Ok(chain);
+        }
         let parent_pid = i32::try_from(child.pbi_ppid)?;
         if parent_pid <= 1 {
             break;
@@ -78,7 +101,16 @@ pub(crate) fn ancestry(process: ProcessInstance) -> Result<Vec<ProcessInstance>>
             started_micros: parent_start,
         };
     }
+    ensure!(
+        owner.is_none(),
+        "native tool owner is outside the verified caller ancestry"
+    );
     Ok(chain)
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn ancestry_to(_: ProcessInstance, _: ProcessInstance) -> Result<Vec<ProcessInstance>> {
+    anyhow::bail!("verified caller process ancestry is unavailable on this platform")
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -213,6 +245,46 @@ mod tests {
         );
         assert_eq!(identify(pid).expect("readable"), Some(first));
         assert_eq!(identify(i32::MAX).expect("absence is not an error"), None);
+    }
+
+    #[test]
+    fn exact_owner_proof_stops_before_unrelated_launcher_ancestry() {
+        let pid = std::process::id() as i32;
+        let owner = ProcessInstance {
+            pid,
+            started_micros: identify(pid).unwrap().unwrap().started_micros,
+        };
+        assert_eq!(ancestry_to(owner, owner).unwrap(), vec![owner]);
+        let mut child = std::process::Command::new("/bin/cat")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let child_pid = child.id() as i32;
+        let child_instance = ProcessInstance {
+            pid: child_pid,
+            started_micros: identify(child_pid).unwrap().unwrap().started_micros,
+        };
+        let proof = ancestry_to(child_instance, owner);
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert_eq!(proof.unwrap(), vec![child_instance, owner]);
+        let stale = ProcessInstance {
+            started_micros: owner.started_micros + 1,
+            ..owner
+        };
+        assert!(ancestry_to(stale, owner).is_err());
+        assert!(ancestry_to(owner, stale).is_err());
+        assert!(
+            ancestry_to(
+                owner,
+                ProcessInstance {
+                    pid: 1,
+                    started_micros: 0
+                }
+            )
+            .is_err()
+        );
     }
 
     #[test]

@@ -65,6 +65,9 @@ Native terminal Claude holders own only their process-lifetime inbox route.
 Scoped caller coordination belongs to the gateway lifetime, namespaced by its
 job-store root; it proves the actual provider process and resolves the current
 job from the conversation. Finishing a job must not remove that shared route.
+Native caller proof validates the peer before provider lookup and verifies ancestry
+only through the daemon's exact tool root; unrelated launcher ancestors above
+that owner are outside the proof.
 
 Manual message receipts share `JobStore` and its cap. Their frozen sender,
 requested target, envelope, resolved conversation and target job survive retries;

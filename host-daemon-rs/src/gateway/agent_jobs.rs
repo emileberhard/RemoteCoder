@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 use super::Gateway;
 use crate::agents::jobs::context::ProvenCaller;
 use crate::agents::jobs::model::{ConversationIdentity, Origin, Provider, ProviderHome};
-use crate::platform::process::{ProcessInstance, ancestry};
+use crate::platform::process::{ProcessInstance, ancestry, ancestry_to};
 use crate::rpc::error::RpcCode;
 use crate::rpc::{RpcError, RpcResult};
 use crate::wire::agent_jobs::*;
@@ -162,6 +162,7 @@ impl Gateway {
         &self,
         process: ProcessInstance,
     ) -> Result<ProvenCaller> {
+        tokio::task::spawn_blocking(move || ancestry_to(process, process)).await??;
         tokio::time::timeout(std::time::Duration::from_secs(3), async {
             loop {
                 if let Some(caller) = self.find_job_process_context(process).await? {
@@ -176,11 +177,6 @@ impl Gateway {
         &self,
         process: ProcessInstance,
     ) -> Result<Option<ProvenCaller>> {
-        let chain = tokio::task::spawn_blocking(move || ancestry(process)).await??;
-        ensure!(
-            !chain.is_empty(),
-            "caller has no verifiable process ancestry"
-        );
         let native = tokio::time::timeout(
             std::time::Duration::from_secs(3),
             self.call_control(
@@ -202,6 +198,19 @@ impl Gateway {
             ),
             Err(error) => (None, Some(error)),
         };
+        let owner = native.as_ref().map(|context| ProcessInstance {
+            pid: context.root_process_identity.pid,
+            started_micros: context.root_process_identity.started_at_unix_micros,
+        });
+        let chain = tokio::task::spawn_blocking(move || match owner {
+            Some(owner) => ancestry_to(process, owner),
+            None => ancestry(process),
+        })
+        .await??;
+        ensure!(
+            !chain.is_empty(),
+            "caller has no verifiable process ancestry"
+        );
         let native_position = native
             .as_ref()
             .map(|context| {

@@ -163,7 +163,11 @@ a bare identifier cannot establish its provider when another provider is unavail
 ## Caller authority and read-only work
 
 Caller capture checks kernel PID/birth ancestry against actual provider-owned
-tool processes. It never trusts `AGENT_ID`, provider environment IDs or tmux's
+tool processes. Native proof stops at the daemon's exact tool root after checking
+its live birth identity and every intervening parent link. Unrelated launcher
+ancestors above that owner may be unreadable and carry no additional authority.
+Without an authoritative native owner, complete ancestry and Claude owner checks
+retain their existing fail-closed behavior. It never trusts `AGENT_ID`, provider environment IDs or tmux's
 global environment. Capture briefly rechecks an unpublished process entry,
 without changing the requested identity. The ephemeral captured handle is
 revalidated before every mutation; detached work must pass it explicitly and
