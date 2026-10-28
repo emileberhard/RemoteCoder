@@ -4,6 +4,19 @@ use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+#[derive(Debug)]
+pub(super) struct IdentityConflict {
+    pub key: String,
+}
+
+impl std::fmt::Display for IdentityConflict {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("Conflicting provider session identity in different source files")
+    }
+}
+
+impl std::error::Error for IdentityConflict {}
+
 #[derive(Clone, Default, Debug, Serialize, Deserialize)]
 pub(super) struct State {
     pub thread: Option<String>,
@@ -367,10 +380,9 @@ impl Record<'_> {
                 |r| r.get(0),
             )
             .optional()?;
-        anyhow::ensure!(
-            existing.is_none_or(|id| id == self.source),
-            "Conflicting provider session identity in different source files"
-        );
+        if existing.is_some_and(|id| id != self.source) {
+            return Err(IdentityConflict { key }.into());
+        }
         self.db.execute("INSERT OR IGNORE INTO session(session_key,origin_host,provider,provider_home,thread_id,source_id) VALUES(?1,?2,?3,?4,?5,?6)",params![key,self.origin.host,self.origin.provider,self.origin.provider_home.to_string_lossy(),thread,self.source])?;
         Ok(())
     }

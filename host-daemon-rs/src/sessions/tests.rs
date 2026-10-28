@@ -1155,3 +1155,41 @@ fn sessions_missing_provider_root_preserves_rows_without_tombstones() {
         .unwrap();
     assert_eq!(reason, "provider_unavailable");
 }
+
+#[test]
+fn sessions_inventory_accepts_known_exact_duplicates_without_transferring_ownership() {
+    let f = fixture();
+    scan(&f);
+    let duplicate = f.codex.with_file_name("duplicate.jsonl");
+    std::fs::copy(&f.codex, &duplicate).unwrap();
+    assert_eq!(scan(&f)["parseFailures"], 1);
+    let mut db = f.store.writer().unwrap();
+    let owner: i64 = db
+        .query_row(
+            "SELECT source_id FROM session WHERE thread_id='codex-root'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    ingest::header(&mut db, &f.origins[0], &duplicate, &AtomicBool::new(false)).unwrap();
+    let after: i64 = db
+        .query_row(
+            "SELECT source_id FROM session WHERE thread_id='codex-root'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(owner, after);
+    let failures: i64 = db
+        .query_row(
+            "SELECT count(*) FROM source WHERE failure IS NOT NULL",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(failures, 1);
+    let headers: i64 = db
+        .query_row("SELECT count(*) FROM session", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(headers, 4);
+}

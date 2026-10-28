@@ -11,7 +11,6 @@ use tokio::sync::{Mutex, Semaphore};
 pub(super) struct Runtime {
     store: Store,
     worker: Arc<Worker>,
-    origins: Vec<Origin>,
     readers: Arc<Semaphore>,
     mirror_lock: Mutex<()>,
     mirror_stop: tokio_util::sync::CancellationToken,
@@ -51,7 +50,6 @@ impl Gateway {
                     Ok(Arc::new(Runtime {
                         store,
                         worker,
-                        origins,
                         readers: Arc::new(Semaphore::new(16)),
                         mirror_lock: Mutex::new(()),
                         mirror_stop: tokio_util::sync::CancellationToken::new(),

@@ -25,6 +25,7 @@ fn hash_prefix(path: &Path, length: u64) -> Result<String> {
     Ok(hash.finalize().to_hex().to_string())
 }
 
+#[cfg(test)]
 pub(crate) fn files(origin: &Origin) -> Result<Vec<PathBuf>> {
     if !origin.path().exists() {
         return Ok(Vec::new());
@@ -254,7 +255,19 @@ pub(super) fn header(
     path: &Path,
     stop: &AtomicBool,
 ) -> Result<()> {
-    ingest_source(db, origin, path, stop, ReadMode::Inventory)?;
+    if let Err(error) = ingest_source(db, origin, path, stop, ReadMode::Inventory) {
+        if let Some(conflict) = error.downcast_ref::<normalize::IdentityConflict>() {
+            let known: bool = db.query_row(
+                "SELECT EXISTS(SELECT 1 FROM session WHERE session_key=?1)",
+                [&conflict.key],
+                |row| row.get(0),
+            )?;
+            if known {
+                return Ok(());
+            }
+        }
+        return Err(error);
+    }
     let original = origin.original(path)?.to_string_lossy().into_owned();
     let present: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM source JOIN session USING(source_id) WHERE source.origin_host=?1 AND source.path=?2)",params![origin.host,original],|r|r.get(0))?;
     ensure!(

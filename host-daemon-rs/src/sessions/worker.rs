@@ -565,7 +565,7 @@ mod tests {
         let mut discovery = Discovery::default();
         discovery.refresh(std::slice::from_ref(&origin), None)?;
         discovery.headers(
-            &mut store.writer()?,
+            &mut *store.writer()?,
             std::slice::from_ref(&origin),
             &mailbox.stop,
             None,
