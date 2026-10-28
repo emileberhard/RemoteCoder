@@ -25,9 +25,14 @@ initial scan, stays armed through reconciliation, and queues at most 512
 deduplicated paths per origin. Overflow collapses to a common subtree within
 that origin; rescan flags recursively reconcile the affected subtree. Quiet
 waits touch neither the filesystem nor the database. A full reconciliation runs
-every ten minutes, and pending events survive scans. One storage writer serves
+every ten minutes, and pending events survive scans. Watches cover only existing
+provider roots and are rearmed before each full scan. notify 8.2.1 can discard
+an ancestor-level FSEvents rescan before delivery; the ten-minute full reconcile
+bounds this upstream gap. Persistent scan errors back off from two seconds to
+ten minutes, resetting on success. One storage writer serves
 each batch of at most 32 sources. Missing sources reclaim their catalog rows
-and emit feed tombstones through this same ingest owner. Source/dependency path
+and emit feed tombstones through this same ingest owner. An unavailable provider
+root preserves its rows and reports provider_unavailable instead of deletions. Source/dependency path
 indexes bound incremental discovery; unchanged history is not walked per event. It reuses the provider bounded-line reader
 and FileRevision. Changed prefixes rebuild one source transactionally; verified
 append prefixes continue at the last complete record. Malformed or oversized

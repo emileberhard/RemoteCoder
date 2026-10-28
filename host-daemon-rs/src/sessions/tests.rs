@@ -257,9 +257,11 @@ fn sessions_evidence_survives_append_rewrite_and_exact_paging() {
     );
     std::fs::remove_file(&f.claude).unwrap();
     scan(&f);
-    assert_eq!(
-        search(&f.store, "sidecarrewritten")["hits"][0]["sourceDeleted"],
-        true
+    assert!(
+        search(&f.store, "sidecarrewritten")["hits"]
+            .as_array()
+            .unwrap()
+            .is_empty()
     );
 }
 
@@ -596,7 +598,7 @@ async fn sessions_mirror_preserves_sidecars_and_refuses_over_budget() {
         .unwrap();
     assert!(watermark.is_some());
     assert_eq!(watermark, previous);
-    std::fs::remove_dir_all(f.origins[1].path()).unwrap();
+    std::fs::remove_dir_all(f.claude.parent().unwrap()).unwrap();
     scan(&f);
     mirror::sync(
         &target,
@@ -1111,4 +1113,40 @@ fn sessions_scoped_reconcile_reclaims_deleted_sources_and_updates_sidecars() {
         )
         .unwrap();
     assert_eq!(count, 0);
+}
+
+#[test]
+fn sessions_missing_provider_root_preserves_rows_without_tombstones() {
+    let f = fixture();
+    scan(&f);
+    let counts = || {
+        f.store.reader().unwrap().query_row(
+            "SELECT (SELECT count(*) FROM session), (SELECT count(*) FROM source), (SELECT count(*) FROM change WHERE op='tombstone')",
+            [],
+            |row| Ok((row.get::<_,i64>(0)?, row.get::<_,i64>(1)?, row.get::<_,i64>(2)?)),
+        ).unwrap()
+    };
+    let before = counts();
+    std::fs::remove_dir_all(f.origins[0].path()).unwrap();
+    scan(&f);
+    assert_eq!(counts(), before);
+    ingest::scan_scope(
+        &f.store,
+        &f.origins,
+        ingest::Scope::Changed(&[f.origins[0].path()]),
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+    assert_eq!(counts(), before);
+    let reason: String = f
+        .store
+        .reader()
+        .unwrap()
+        .query_row(
+            "SELECT stale_reason FROM coverage WHERE origin_host='fixture'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(reason, "provider_unavailable");
 }

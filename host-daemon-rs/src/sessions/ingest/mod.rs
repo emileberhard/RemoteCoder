@@ -76,37 +76,18 @@ pub(crate) enum Scope<'a> {
     Changed(&'a [PathBuf]),
 }
 
-fn selected(store: &Store, origin: &Origin, scope: &Scope<'_>) -> Result<BTreeSet<PathBuf>> {
-    let root = origin.path();
-    let paths = match scope {
-        Scope::Full => vec![root.clone()],
-        Scope::Changed(paths) => paths
-            .iter()
-            .filter_map(|path| {
-                if path.starts_with(&root) {
-                    Some(path.clone())
-                } else if root.starts_with(path) {
-                    Some(root.clone())
-                } else {
-                    None
-                }
-            })
-            .collect(),
-    };
+fn selected(store: &Store, origin: &Origin, paths: &[PathBuf]) -> Result<BTreeSet<PathBuf>> {
     let mut selected = BTreeSet::new();
-    if paths.is_empty() {
-        return Ok(selected);
-    }
     let db = store.reader()?;
     for path in paths {
-        match std::fs::symlink_metadata(&path) {
+        match std::fs::symlink_metadata(path) {
             Ok(metadata)
                 if metadata.is_file() && path.extension().is_some_and(|e| e == "jsonl") =>
             {
                 selected.insert(path.clone());
             }
             Ok(metadata) if metadata.is_dir() => {
-                for entry in WalkDir::new(&path).follow_links(false) {
+                for entry in WalkDir::new(path).follow_links(false) {
                     let entry = entry?;
                     if entry.file_type().is_file()
                         && entry.path().extension().is_some_and(|e| e == "jsonl")
@@ -123,7 +104,7 @@ fn selected(store: &Store, origin: &Origin, scope: &Scope<'_>) -> Result<BTreeSe
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(error.into()),
         }
-        let original = origin.original(&path)?.to_string_lossy().into_owned();
+        let original = origin.original(path)?.to_string_lossy().into_owned();
         let low = format!("{original}/");
         let high = format!("{original}0");
         let known: Vec<String> = db.prepare("SELECT path FROM source WHERE origin_host=?1 AND (path=?2 OR (path>=?3 AND path<?4)) UNION SELECT s.path FROM dependency d JOIN source s USING(source_id) WHERE s.origin_host=?1 AND s.present=1 AND (d.path=?2 OR (d.path>=?3 AND d.path<?4))")?.query_map(params![origin.host,original,low,high],|r|r.get(0))?.collect::<rusqlite::Result<_>>()?;
@@ -149,11 +130,30 @@ pub(crate) fn scan_scope(
     let mut changed_hosts = BTreeSet::new();
     let at = super::now();
     for origin in origins {
-        let paths: Vec<_> = selected(store, origin, &scope)?.into_iter().collect();
-        if paths.is_empty() && !matches!(scope, Scope::Full) {
+        let root = origin.path();
+        let scopes = match &scope {
+            Scope::Full => vec![root.clone()],
+            Scope::Changed(paths) => paths
+                .iter()
+                .filter_map(|path| {
+                    if path.starts_with(&root) {
+                        Some(path.clone())
+                    } else if root.starts_with(path) {
+                        Some(root.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect(),
+        };
+        if scopes.is_empty() {
             continue;
         }
         changed_hosts.insert(origin.host.clone());
+        if !root.is_dir() {
+            continue;
+        }
+        let paths: Vec<_> = selected(store, origin, &scopes)?.into_iter().collect();
         for batch in paths.chunks(32) {
             let mut db = store.writer()?;
             for path in batch {
@@ -167,6 +167,9 @@ pub(crate) fn scan_scope(
                     Err(error) => return Err(error.into()),
                 };
                 if gone {
+                    if !root.is_dir() {
+                        break;
+                    }
                     let tx =
                         db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
                     tx.execute("DELETE FROM session WHERE source_id IN (SELECT source_id FROM source WHERE origin_host=?1 AND path=?2)",params![origin.host,original])?;
@@ -198,13 +201,13 @@ pub(crate) fn scan_scope(
         let absent = origins
             .iter()
             .filter(|o| o.host == host)
-            .any(|o| !o.path().exists());
+            .any(|o| !o.path().is_dir());
         let errors:i64=db.query_row("SELECT count(*) FROM source WHERE origin_host=?1 AND failure IS NOT NULL AND failure<>'partial_record'",[&host],|r|r.get(0))?;
         let unavailable:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM source WHERE origin_host=?1 AND failure IS NOT NULL) OR EXISTS(SELECT 1 FROM dependency d JOIN source s USING(source_id) WHERE s.origin_host=?1 AND d.present=0)",[&host],|r|r.get(0))?;
-        let reason = if errors > 0 {
-            Some("parse_failure")
-        } else if absent {
+        let reason = if absent {
             Some("provider_unavailable")
+        } else if errors > 0 {
+            Some("parse_failure")
         } else if unavailable {
             Some("incomplete_evidence")
         } else {

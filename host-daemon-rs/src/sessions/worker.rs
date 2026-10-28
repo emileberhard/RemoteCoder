@@ -32,7 +32,7 @@ impl Pending {
                     common.pop();
                 }
             }
-            assert!(common.starts_with(root));
+            debug_assert!(common.starts_with(root));
             paths.clear();
             paths.insert(common);
         }
@@ -104,8 +104,10 @@ fn watch(
         let canonical = std::fs::canonicalize(existing)?;
         let relative = origin.local_home.strip_prefix(existing)?;
         let local = canonical.join(relative);
-        roots.insert(canonical);
         origin.local_home = local;
+        if origin.path().is_dir() {
+            roots.insert(origin.path());
+        }
     }
     let observed = origins.to_vec();
     let mut watcher = notify::recommended_watcher(move |event| {
@@ -133,13 +135,12 @@ impl Worker {
         );
         let stop = Arc::new(AtomicBool::new(false));
         let wake = Arc::new((Mutex::new(Pending::default()), Condvar::new()));
-        let watcher = watch(&mut origins, wake.clone())?;
         let flag = stop.clone();
         let signal = wake.clone();
         let thread = std::thread::Builder::new()
             .name("sessions-ingest".into())
             .spawn(move || {
-                let _watcher = watcher;
+                let mut _watcher = None;
                 #[cfg(target_os = "macos")]
                 if unsafe {
                     libc::pthread_set_qos_class_self_np(libc::qos_class_t::QOS_CLASS_UTILITY, 0)
@@ -152,6 +153,7 @@ impl Worker {
                     tracing::warn!(%error,"Session skill catalog unavailable");
                 }
                 let mut next_reconcile = Instant::now();
+                let mut retry_delay = Duration::from_secs(2);
                 while !flag.load(Ordering::Acquire) {
                     let mut pending = signal.0.lock().expect("Session worker wake poisoned");
                     pending = signal
@@ -174,8 +176,15 @@ impl Worker {
                     } else {
                         ingest::Scope::Changed(&paths)
                     };
-                    match ingest::scan_scope(&store, &origins, scope, &flag) {
+                    let result = (|| {
+                        if full {
+                            _watcher = Some(watch(&mut origins, signal.clone())?);
+                        }
+                        ingest::scan_scope(&store, &origins, scope, &flag)
+                    })();
+                    match result {
                         Ok(_) => {
+                            retry_delay = Duration::from_secs(2);
                             if full {
                                 next_reconcile = Instant::now() + RECONCILE;
                             }
@@ -191,12 +200,16 @@ impl Worker {
                                     }
                                 }
                             }
+                            if full {
+                                next_reconcile = Instant::now() + retry_delay;
+                            }
                             let _pending = signal
                                 .1
-                                .wait_timeout_while(pending, Duration::from_secs(2), |_| {
+                                .wait_timeout_while(pending, retry_delay, |_| {
                                     !flag.load(Ordering::Acquire)
                                 })
                                 .expect("Session worker wake poisoned");
+                            retry_delay = (retry_delay * 2).min(RECONCILE);
                         }
                     }
                 }
