@@ -248,6 +248,12 @@ async fn stopping_an_agent_card_also_stops_that_agents_descendants() {
             root: "root".into(),
             at: Instant::now(),
             agents: vec![Agent {
+                owner_host_id: "fixture-host".into(),
+                job_id: None,
+                parent: None,
+                recipient: None,
+                kind: None,
+                intent_state: None,
                 id: "codex:working".into(),
                 thread_id: Some("working".into()),
                 title: "Working".into(),
@@ -381,6 +387,12 @@ fn native_non_child_proof_requires_a_valid_exact_thread_header() {
 
 fn native_agent(state: State) -> Agent {
     Agent {
+        owner_host_id: "fixture-host".into(),
+        job_id: None,
+        parent: None,
+        recipient: None,
+        kind: None,
+        intent_state: None,
         id: "codex:child".into(),
         parent_id: None,
         owner_thread_id: "root".into(),
@@ -473,6 +485,7 @@ fn seed_origin(
         agent_id: agent_id.clone(),
         request_fingerprint: None,
         unconfirmed_result: None,
+        attention: None,
         notices: Vec::new(),
         created_at_ms: Some(1),
         updated_at_ms: 1,
@@ -480,6 +493,10 @@ fn seed_origin(
         previous_job_id: None,
         provider_retries: Vec::new(),
         source: JobSource::Imported,
+        admitted_membership: None,
+        remote_fingerprint: None,
+        parent_revision: 0,
+        initial_parent: None,
         admission_origin: Some(origin.clone()),
         spec: SpecEvidence::Unknown {
             reason: "No execution fixture".into(),
@@ -503,6 +520,9 @@ fn seed_origin(
         stop: StopState::NotRequested,
     };
     let agent = AgentRecord {
+        parent: None,
+        parent_revision: 0,
+        parent_recipient: None,
         agent_id: agent_id.clone(),
         conversation: ConversationBinding::Known { conversation },
         origin,
@@ -958,4 +978,152 @@ async fn runtime_inventory_keeps_healthy_agents_when_one_continuation_is_ambiguo
             .iter()
             .any(|warning| warning.as_str().unwrap().contains("cycle"))
     );
+}
+
+#[tokio::test]
+async fn current_parent_tag_overrides_native_provenance_in_headers_and_classification() {
+    use crate::agents::jobs::model::*;
+    use crate::wire::cluster::AgentAddress;
+    let gateway = gateway();
+    let identity = gateway.host_identity().await.unwrap();
+    let conversation = gateway.agent_conversation("native-child").unwrap();
+    let original_parent = gateway.agent_conversation("native-parent").unwrap();
+    let origin = Origin::Parent {
+        conversation: original_parent.clone(),
+    };
+    let store = gateway.jobs.store().await.unwrap();
+    let agent = store
+        .adopt_conversation(AgentRecord {
+            agent_id: "native-child-tag".into(),
+            conversation: ConversationBinding::Known { conversation },
+            origin: origin.clone(),
+            tool_scope: None,
+            origin_job_id: None,
+            latest_job_id: None,
+            parent: Some(AgentAddress {
+                host_id: identity.host_id.clone(),
+                thread_id: "native-parent".into(),
+            }),
+            parent_revision: 0,
+            parent_recipient: Some(Recipient::Conversation {
+                conversation: original_parent,
+            }),
+        })
+        .await
+        .unwrap();
+    store
+        .set_parent(agent.agent_id.clone(), None, Recipient::None)
+        .await
+        .unwrap();
+    let mut header = json!({"thread":{"id":"native-child","parentThreadId":"native-parent"}});
+    gateway.apply_parent_tags(&mut header).await.unwrap();
+    assert!(header["thread"]["parent"].is_null());
+    assert!(header["thread"]["parentThreadId"].is_null());
+    assert!(!gateway.is_agent_thread("native-child").await.unwrap());
+    let classified = gateway
+        .agent_service()
+        .classify_runtime(vec!["native-child".into()])
+        .await
+        .unwrap();
+    assert_eq!(classified["knownRoots"], json!(["native-child"]));
+    let address = AgentAddress {
+        host_id: crate::ids::new_session_uuid(),
+        thread_id: "remote-parent".into(),
+    };
+    let parent = ConversationIdentity {
+        provider: Provider::Codex,
+        provider_home: ProviderHome::Known {
+            path: "/remote/codex".into(),
+        },
+        thread_id: address.thread_id.clone(),
+    };
+    store
+        .set_parent(
+            agent.agent_id.clone(),
+            Some(address.clone()),
+            Recipient::Remote {
+                host: address.host_id.clone(),
+                incarnation: crate::ids::new_session_uuid(),
+                conversation: parent,
+            },
+        )
+        .await
+        .unwrap();
+    let mut header = json!({"thread":{"id":"native-child","parentThreadId":"native-parent"}});
+    gateway.apply_parent_tags(&mut header).await.unwrap();
+    assert_eq!(header["thread"]["parent"], json!(address));
+    assert!(header["thread"]["parentThreadId"].is_null());
+    assert!(header["thread"].get("parentHostID").is_none());
+    assert!(gateway.is_agent_thread("native-child").await.unwrap());
+    let classified = gateway
+        .agent_service()
+        .classify_runtime(vec!["native-child".into()])
+        .await
+        .unwrap();
+    assert_eq!(
+        classified["relations"]["native-child"]["parentHostID"],
+        address.host_id
+    );
+    assert_eq!(
+        classified["relations"]["native-child"]["parentThreadId"],
+        address.thread_id
+    );
+    assert_eq!(store.agent(agent.agent_id).await.unwrap().origin, origin);
+}
+
+#[tokio::test]
+async fn remote_parent_pages_have_stable_revisions_and_non_null_titles() {
+    use crate::agents::jobs::model::*;
+    use crate::wire::cluster::AgentAddress;
+    let gateway = gateway();
+    let root = gateway
+        .turn_state_path
+        .as_ref()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("agent-jobs/v1");
+    let conversation = gateway.agent_conversation("remote-page-child").unwrap();
+    seed_origin(&root, conversation.clone(), Origin::TopLevel, 77);
+    let store = gateway.jobs.store().await.unwrap();
+    let agent = store
+        .agent_for_conversation(conversation)
+        .await
+        .unwrap()
+        .unwrap();
+    let address = AgentAddress {
+        host_id: crate::ids::new_session_uuid(),
+        thread_id: "other-host-parent".into(),
+    };
+    store
+        .set_parent(
+            agent.agent_id.clone(),
+            Some(address.clone()),
+            Recipient::Unknown {
+                reason: "fixture remote receiver".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let page = gateway
+        .cluster_agents_rpc("conversation/agents/list", json!({"parent":address}))
+        .await
+        .unwrap();
+    assert_eq!(page["agents"][0]["title"], "Agent");
+    assert!(page["revision"].is_string());
+    let unchanged = gateway
+        .cluster_agents_rpc("conversation/agents/list", json!({"parent":address}))
+        .await
+        .unwrap();
+    assert_eq!(page["revision"], unchanged["revision"]);
+    store
+        .set_parent(agent.agent_id, None, Recipient::None)
+        .await
+        .unwrap();
+    let empty = gateway
+        .cluster_agents_rpc("conversation/agents/list", json!({"parent":address}))
+        .await
+        .unwrap();
+    assert!(empty["agents"].as_array().unwrap().is_empty());
+    assert_ne!(page["revision"], empty["revision"]);
 }

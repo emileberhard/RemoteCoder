@@ -119,3 +119,65 @@ impl Gateway {
         Ok(json!({"deliveryId":delivery_id,"deliveryState":state}))
     }
 }
+
+impl Gateway {
+    pub(crate) async fn deliver_job_recipient(
+        self: &Arc<Self>,
+        recipient: &crate::agents::jobs::model::Recipient,
+        id: &str,
+        text: &str,
+    ) -> anyhow::Result<DeliveryState> {
+        use crate::agents::jobs::model::Recipient;
+        match recipient {
+            Recipient::Conversation { conversation } => {
+                let result = self
+                    .deliver_job_input(conversation, id, text, None)
+                    .await
+                    .map_err(|error| anyhow::anyhow!(error.message))?;
+                Ok(serde_json::from_value(result["deliveryState"].clone())?)
+            }
+            Recipient::Remote {
+                host,
+                incarnation,
+                conversation,
+            } => {
+                let request = crate::wire::cluster::DeliverParams {
+                    protocol: crate::wire::cluster::PROTOCOL,
+                    conversation: conversation.clone(),
+                    incarnation: incarnation.clone(),
+                    delivery_id: id.to_owned(),
+                    text: text.to_owned(),
+                };
+                match self
+                    .cluster_link()
+                    .await?
+                    .call(host, "agent/jobs/deliver", json!(request))
+                    .await
+                {
+                    Ok(response) => Ok(serde_json::from_value(response["deliveryState"].clone())?),
+                    Err(error) => Ok(match error.class {
+                        crate::wire::cluster::ErrorClass::Unavailable if !error.transmitted => {
+                            DeliveryState::Unreachable {
+                                reason: error.message,
+                            }
+                        }
+                        crate::wire::cluster::ErrorClass::Refused
+                        | crate::wire::cluster::ErrorClass::Unsupported
+                        | crate::wire::cluster::ErrorClass::Conflict => DeliveryState::Failed {
+                            reason: error.message,
+                        },
+                        _ => DeliveryState::Uncertain {
+                            reason: error.message,
+                        },
+                    }),
+                }
+            }
+            Recipient::None => Ok(DeliveryState::Dismissed {
+                reason: "agent was promoted; result remains available to the user".into(),
+            }),
+            Recipient::Unknown { reason } => Ok(DeliveryState::Uncertain {
+                reason: reason.clone(),
+            }),
+        }
+    }
+}

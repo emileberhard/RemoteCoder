@@ -20,7 +20,12 @@ impl JobOwner {
     pub(super) async fn reconcile_job(&self, id: JobId) -> Result<bool> {
         let gateway = self.gateway()?;
         let store = self.store().await?;
-        let notices_pending = self.deliver_notices(&id).await?;
+        let current = store.read(id.clone()).await?;
+        let notices_pending = if matches!(current.recipient, Recipient::Remote { .. }) {
+            false
+        } else {
+            self.deliver_notices(&id).await?
+        };
         for _ in 0..8 {
             let job = store.read(id.clone()).await?;
             if let ExecutionState::Terminal { terminal } = &job.execution {
@@ -42,7 +47,16 @@ impl JobOwner {
                         .await?;
                     continue;
                 }
-                return Ok(self.deliver_completion(&job, terminal).await? || notices_pending);
+                let current = store.retarget_delivery(job.job_id.clone()).await?;
+                if let Recipient::Remote { host, .. } = &current.recipient
+                    && gateway.remote_receiver_active(host).await?
+                {
+                    return Ok(false);
+                }
+                let ExecutionState::Terminal { terminal } = &current.execution else {
+                    unreachable!()
+                };
+                return Ok(self.deliver_completion(&current, terminal).await? || notices_pending);
             }
             if matches!(job.stop, StopState::Requested { .. }) {
                 self.stop_execution(&gateway, &job).await?;
@@ -515,7 +529,10 @@ impl JobOwner {
         {
             return Ok(());
         }
-        let notice = if matches!(job.recipient, Recipient::Conversation { .. }) {
+        let notice = if matches!(
+            job.recipient,
+            Recipient::Conversation { .. } | Recipient::Remote { .. }
+        ) {
             let host = self.gateway()?.job_host_name()?;
             Some(crate::agents::envelope::message(
                 &format!("{}:notice:observation", job.job_id.as_str()),
@@ -568,7 +585,7 @@ impl JobOwner {
                 let text = crate::agents::envelope::completion(
                     &job.job_id,
                     provider(job)?,
-                    &gateway.job_host_name()?,
+                    &gateway.host_identity().await?.host_id,
                     &outcome,
                     &result,
                     &git,

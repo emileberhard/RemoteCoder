@@ -46,6 +46,7 @@ pub(super) const CONTROL: NotificationOrigin = NotificationOrigin::Control { ope
 
 pub(super) fn test_client(id: u64, tx: mpsc::Sender<ClientCommand>) -> ClientTx {
     ClientTx {
+        grant: crate::auth::installation_credentials::Grant::Operator,
         content_subscriptions: Arc::default(),
         query_response: None,
         installation_id: None,

@@ -102,6 +102,7 @@ pub(crate) enum OwnedRoute {
     Agents,
     AgentJobs,
     Sessions,
+    Cluster,
     AgentRoutes,
     Calls,
     Voice,
@@ -196,6 +197,26 @@ macro_rules! prefix_spec {
 }
 
 const METHOD_SPECS: &[MethodSpec] = &[
+    prefix_spec!("cluster/", Cluster, Some(RequestLifetime::Command)),
+    prefix_spec!("agent/cluster/", Cluster, Some(RequestLifetime::Command)),
+    prefix_spec!("agent/parent/", Cluster, Some(RequestLifetime::Command)),
+    prefix_spec!(
+        "agent/conversation/",
+        Cluster,
+        Some(RequestLifetime::Command)
+    ),
+    spec!(
+        "agent/jobs/admit",
+        Cluster,
+        Some(RequestLifetime::Command),
+        NEW_WORK
+    ),
+    spec!(
+        "agent/jobs/deliver",
+        Cluster,
+        Some(RequestLifetime::Command),
+        0
+    ),
     spec!(
         "agent/routes/register",
         AgentRoutes,

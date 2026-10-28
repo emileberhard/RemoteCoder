@@ -203,6 +203,11 @@ retained provider environments no longer name per-job sockets. Full-access clien
 credential owner for other operations. This preserves the current same-user
 trust boundary, not a hostile same-UID security sandbox.
 
+Local and remote starts share caller proof and scope inheritance. An unrestricted
+native caller uses the existing full-access coordination contract; a managed
+read-only caller's child retains that root and cannot widen its scope on a hop.
+The receiver validates target paths inside that root. Parent tags grant no scope.
+
 Codex read-only uses its native sandbox, core-only tool environment and disabled
 inherited MCP/hooks/apps/plugins. Claude read-only preserves the limited tool
 set and Bash policy but is honestly tool-limited, not an enforced sandbox.
@@ -297,7 +302,7 @@ agent row adds `ownerHostId`, `parent` and `recipient`. Parent references always
 use `{hostId,threadId}`. A cross-host conversation-agent query uses
 `{parent:{hostId,threadId}}`; omitted `hostId` means this host. The parent's own
 host adds `kind:"remote_intent"` stub rows with `jobId`, `ownerHostId`,
-`intentState`, `parent`, `createdAt` and optional `title`. An owner's real row
+`intentState`, `parent`, `lastActiveAt` in epoch seconds and string `title`. An owner's real row
 replaces its stub by `(ownerHostId,jobId)`.
 
 Cluster-wide CLI reads include `coverage [{hostId,state,since?,staleThrough?}]`,
@@ -307,3 +312,70 @@ the agent's owner and returns the updated row. A cycle is `usage`; an unreachabl
 parent-chain hop is `unavailable`. Provenance and authority never change with the
 tag. The caller starting a new turn receives its result; moving a tag transfers
 unaccepted results to its new parent or to the user when promoted.
+
+A move changes the parent tag immediately. Positively unaccepted completion
+obligations follow the current tag. An uncertain send retains its frozen old
+receiver and delivery identity until reconciliation proves non-acceptance; it
+then follows the current tag. If that reconciliation cannot finish because the
+old member was removed or its 24-hour receiver window expires, the delivery
+stays uncertain and visible to the user with its saved result. It is never
+readdressed to another parent or silently discarded. A promoted result remains
+available to the user. Unknown native acceptance never authorizes another turn.
+
+The authorized health response includes top-level `hostId` and `incarnation`
+UUID strings. Operator key rotation changes neither. Cluster protocol 1 uses
+`cluster/issue`, `cluster/accept` and `cluster/remove` with a membership UUID;
+only a local operator can mutate membership. Each side stores its issued digest,
+the other side's credential, direct `wss` routes and SPKI pin. Issue is idempotent
+per membership. Removal revokes existing sockets, retains a tombstone, stops work
+admitted by that membership and retains results. An unreachable half stays
+`remove_pending`. Joining again requires a new membership UUID.
+
+`agent/jobs/admit` returns the normal admission receipt plus `protocol`,
+`ownerHostId`, `jobId`, `address`, typed `state` and `incarnation`. `address` is
+null until a provider binds the exact conversation. The stable admission key is
+`(ownerHostId, jobId)`. The parent's host saves a bounded RemoteIntent before
+sending admission bytes. Uncertain admissions retry the same identity and
+fingerprint. A definitive refusal closes the intent; a changed incarnation
+makes it unknown. Stop is durable before transport, and a CancelFence on the
+receiver prevents a delayed admission from starting native work. A confirmed
+Stop closes transport retries without removing its retained receipt.
+
+The execution driver owns provider custody and local delivery. The cluster
+driver owns member network work, with independent member backoff, at most 64
+members doing network work concurrently and at most 64 delivery operations per
+member. Each member link serializes its socket. A slow member cannot block local
+launches or another member. `cluster/hello` wakes that member's driver and resets
+its backoff. Both drivers belong to the gateway lifecycle and resume durable
+records after a planned restart. There is no separate remote outbox.
+
+`list_agents` defaults to the cluster; `--local` narrows it. Every fan-out result
+includes per-host `coverage`, and `--cursor` resumes each host independently.
+Bare IDs resolve locally first and then uniquely across members. Native session
+inventory comes from the sessions projection; unavailable inventory remains an
+error. Unknown native activity is excluded from `--active`. Native conversations
+can be inspected, messaged, stopped, adopted, moved or promoted. Continue refuses
+with `unsupported` when native permission evidence is unavailable; it does not
+invent a JobSpec from a thread header.
+
+Every agent row includes `ownerHostId`, the current nullable `parent` address
+and its turn's `recipient`. Native ancestry stays immutable provenance. Thread
+headers expose `parent: {hostId, threadId} | null`; relation JSON exposes
+`parentHostID` and `parentThreadId`. Promotion classifies the conversation as a
+root. Parent changes invalidate ancestry and agent-view caches. Remote-intent
+stub rows use `lastActiveAt` in epoch seconds, matching real rows, and every
+conversation-agent page carries a revision derived from its final rows.
+
+`cluster add SSH_HOST` enrolls every pair through each host's operator SSH route,
+skips active pairs and reports per-pair JSON. Partial enrollment exits 5;
+rerunning finishes existing membership IDs. Peer credentials cannot issue or
+accept another membership. `cluster list --json` reports reachability, version,
+protocol and measured CPU percentage, typed memory pressure and active agents.
+
+A failed first `hello` lookup returns unavailable (exit 5) before an immutable
+admission or intent exists; nothing is queued for later transmission. Abandoned
+applies after a complete immutable admission exists but cannot be sent. Admission
+uses one typed operation, `start(JobSpec)` or `continue(ContinueParams)`, through
+`agent/jobs/admit`; its fingerprint includes the operation kind and full payload.
+Reusing a job ID with different admission inputs is conflict (exit 8), including
+changing Start into Continue.

@@ -1,12 +1,12 @@
-use std::sync::Arc;
 use base64::{Engine, engine::general_purpose::STANDARD};
-use sha2::{Digest,Sha256};
-use tokio_rustls::rustls;
-use rustls::client::danger::{HandshakeSignatureValid,ServerCertVerified,ServerCertVerifier};
-use rustls::crypto::{CryptoProvider,verify_tls12_signature,verify_tls13_signature};
-use rustls::pki_types::{CertificateDer,ServerName,UnixTime};
+use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
+use rustls::crypto::{CryptoProvider, verify_tls12_signature, verify_tls13_signature};
+use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::server::ParsedCertificate;
-use rustls::{CertificateError,DigitallySignedStruct,SignatureScheme};
+use rustls::{CertificateError, DigitallySignedStruct, SignatureScheme};
+use sha2::{Digest, Sha256};
+use std::sync::Arc;
+use tokio_rustls::rustls;
 
 #[derive(Debug)]
 pub(crate) struct SpkiPin {
@@ -67,4 +67,3 @@ impl ServerCertVerifier for SpkiPin {
             .supported_schemes()
     }
 }
-

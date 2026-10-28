@@ -1,12 +1,14 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::agents::jobs::model::{ConversationIdentity, JobId, JobSpec, Origin, Recipient, ToolScope};
+use crate::agents::jobs::model::{
+    ConversationIdentity, JobId, JobSpec, Origin, Recipient, ToolScope,
+};
 
 pub(crate) const PROTOCOL: u32 = 1;
 pub(crate) const CAPABILITIES: &[&str] = &["cluster.v1", "agent.jobs.v1", "agent.parent.v1"];
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct AgentAddress {
     pub host_id: String,
@@ -99,6 +101,7 @@ pub(crate) struct HelloParams {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct HelloReceipt {
+    pub version: String,
     pub protocol: u32,
     pub host: String,
     pub incarnation: String,
@@ -111,7 +114,7 @@ pub(crate) struct HelloReceipt {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct HostLoad {
     pub cpu_percent: Option<f64>,
-    pub memory_pressure: Option<String>,
+    pub memory_pressure: Option<MemoryPressure>,
     pub active_agents: u32,
 }
 
@@ -119,7 +122,22 @@ pub(crate) struct HostLoad {
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) enum CallerAuthority {
     Operator,
-    Agent { conversation: ConversationIdentity, scope: ToolScope },
+    Agent {
+        conversation: ConversationIdentity,
+        scope: ToolScope,
+    },
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(
+    tag = "kind",
+    content = "input",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub(crate) enum AdmissionOperation {
+    Start(JobSpec),
+    Continue(crate::wire::agent_jobs::ContinueParams),
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -131,19 +149,8 @@ pub(crate) struct AdmitParams {
     pub incarnation: String,
     pub origin: Origin,
     pub recipient: Recipient,
-    pub input: JobSpec,
+    pub operation: AdmissionOperation,
     pub caller_authority: CallerAuthority,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct AdmitReceipt {
-    pub protocol: u32,
-    pub job_id: JobId,
-    pub address: AgentAddress,
-    pub state: String,
-    pub incarnation: String,
-    pub duplicate: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -166,6 +173,7 @@ pub(crate) struct StopParams {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct ForwardParams {
+    pub incarnation: String,
     pub protocol: u32,
     pub caller_authority: CallerAuthority,
     pub request: Value,
@@ -191,6 +199,8 @@ pub(crate) struct RemoteIntent {
     pub incarnation: String,
     pub request: AdmitParams,
     pub state: IntentState,
+    #[serde(default)]
+    pub stop_confirmed: bool,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -212,4 +222,12 @@ pub(crate) struct CancelFence {
     pub membership: String,
     pub job_id: JobId,
     pub at: i64,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum MemoryPressure {
+    Normal,
+    Warn,
+    Critical,
 }

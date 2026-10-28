@@ -19,8 +19,13 @@ async fn register_job(gateway: &Gateway, sequence: u8, previous: Option<&JobReco
         previous_job_id: previous.map(|job| job.job_id.clone()),
         provider_retries: Vec::new(),
         source: JobSource::Runtime,
+        admitted_membership: None,
+        remote_fingerprint: None,
+        parent_revision: 0,
+        initial_parent: None,
         admission_origin: previous.is_none().then_some(Origin::TopLevel),
         unconfirmed_result: None,
+        attention: None,
         notices: Vec::new(),
         recipient: Recipient::None,
         spec: SpecEvidence::Known {

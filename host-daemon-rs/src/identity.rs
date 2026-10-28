@@ -29,7 +29,10 @@ fn read(path: &Path) -> Result<Option<Vec<u8>>> {
 }
 
 fn uuid(value: &str) -> Result<()> {
-    ensure!(crate::ids::parse_uuid(value).is_some(), "invalid host identity UUID");
+    ensure!(
+        crate::ids::parse_uuid(value).is_some(),
+        "invalid host identity UUID"
+    );
     Ok(())
 }
 
@@ -39,8 +42,14 @@ fn epoch(root: &Path) -> Result<String> {
     if read(&path)?.is_none() {
         private_state::create_new(&path, crate::ids::new_session_uuid().as_bytes())?;
     }
-    let value = String::from_utf8(read(&path)?.context("store epoch disappeared")?)?;
-    uuid(&value)?;
+    let bytes = read(&path)?.context("store epoch disappeared")?;
+    if let Ok(value) = String::from_utf8(bytes)
+        && crate::ids::parse_uuid(&value).is_some()
+    {
+        return Ok(value);
+    }
+    let value = crate::ids::new_session_uuid();
+    private_state::replace(&path, value.as_bytes())?;
     Ok(value)
 }
 
@@ -49,7 +58,11 @@ pub(crate) fn open(state: &Path, receipt_root: &Path) -> Result<HostIdentity> {
     private_state::transaction(
         &path,
         "identity path has no parent",
-        |path| read(path)?.map(|bytes| serde_json::from_slice::<Document>(&bytes).map_err(Into::into)).transpose(),
+        |path| {
+            read(path)?
+                .map(|bytes| serde_json::from_slice::<Document>(&bytes).map_err(Into::into))
+                .transpose()
+        },
         |document| {
             let job_epoch = epoch(&state.join("agent-jobs/v1"))?;
             let receipt_epoch = epoch(receipt_root)?;
@@ -58,12 +71,18 @@ pub(crate) fn open(state: &Path, receipt_root: &Path) -> Result<HostIdentity> {
                 changed = true;
                 Document {
                     schema_version: 1,
-                    identity: HostIdentity { host_id: crate::ids::new_session_uuid(), incarnation: crate::ids::new_session_uuid() },
+                    identity: HostIdentity {
+                        host_id: crate::ids::new_session_uuid(),
+                        incarnation: crate::ids::new_session_uuid(),
+                    },
                     job_epoch: job_epoch.clone(),
                     receipt_epoch: receipt_epoch.clone(),
                 }
             });
-            ensure!(document.schema_version == 1, "unsupported host identity version");
+            ensure!(
+                document.schema_version == 1,
+                "unsupported host identity version"
+            );
             uuid(&document.identity.host_id)?;
             uuid(&document.identity.incarnation)?;
             if document.job_epoch != job_epoch || document.receipt_epoch != receipt_epoch {
@@ -83,10 +102,33 @@ pub(crate) fn invalidate(state: &Path) -> Result<()> {
     private_state::transaction(
         &path,
         "identity path has no parent",
-        |path| serde_json::from_slice::<Document>(&read(path)?.context("host identity is missing")?).map_err(Into::into),
+        |path| {
+            serde_json::from_slice::<Document>(&read(path)?.context("host identity is missing")?)
+                .map_err(Into::into)
+        },
         |document| {
             document.identity.incarnation = crate::ids::new_session_uuid();
             Ok(((), true))
+        },
+        |path, document| private_state::write_json(path, document),
+    )
+}
+
+pub(crate) fn reset(state: &Path) -> Result<HostIdentity> {
+    let path = state.join("identity/v1");
+    private_state::transaction(
+        &path,
+        "identity path has no parent",
+        |path| {
+            serde_json::from_slice::<Document>(&read(path)?.context("host identity missing")?)
+                .map_err(Into::into)
+        },
+        |document| {
+            document.identity = HostIdentity {
+                host_id: crate::ids::new_session_uuid(),
+                incarnation: crate::ids::new_session_uuid(),
+            };
+            Ok((document.identity.clone(), true))
         },
         |path, document| private_state::write_json(path, document),
     )
@@ -111,15 +153,30 @@ mod tests {
         assert_eq!(open(&state, &receipts).unwrap(), first);
         for store in [state.join("agent-jobs/v1"), receipts.clone()] {
             let previous = open(&state, &receipts).unwrap();
-            private_state::replace(&store.join(".epoch"), crate::ids::new_session_uuid().as_bytes()).unwrap();
+            private_state::replace(
+                &store.join(".epoch"),
+                crate::ids::new_session_uuid().as_bytes(),
+            )
+            .unwrap();
             let restored = open(&state, &receipts).unwrap();
             assert_eq!(restored.host_id, first.host_id);
             assert_ne!(restored.incarnation, previous.incarnation);
         }
         let previous = open(&state, &receipts).unwrap();
         std::fs::remove_file(receipts.join(".epoch")).unwrap();
-        assert_ne!(open(&state, &receipts).unwrap().incarnation, previous.incarnation);
+        assert_ne!(
+            open(&state, &receipts).unwrap().incarnation,
+            previous.incarnation
+        );
+        let previous = open(&state, &receipts).unwrap();
+        private_state::replace(&receipts.join(".epoch"), b"inconsistent").unwrap();
+        let repaired = open(&state, &receipts).unwrap();
+        assert_eq!(repaired.host_id, first.host_id);
+        assert_ne!(repaired.incarnation, previous.incarnation);
         invalidate(&state).unwrap();
-        assert_ne!(open(&state, &receipts).unwrap().incarnation, first.incarnation);
+        assert_ne!(
+            open(&state, &receipts).unwrap().incarnation,
+            first.incarnation
+        );
     }
 }

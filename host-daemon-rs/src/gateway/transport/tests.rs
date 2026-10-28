@@ -783,6 +783,7 @@ async fn forwarded_codex_input_changes_the_driver_only_on_its_exact_success_resp
     let gateway = TestGateway::new();
     let (outbound, mut replies) = mpsc::channel(16);
     let client = ClientTx {
+        grant: crate::auth::installation_credentials::Grant::Operator,
         content_subscriptions: Arc::default(),
         query_response: None,
         id: 2,
@@ -792,6 +793,7 @@ async fn forwarded_codex_input_changes_the_driver_only_on_its_exact_success_resp
     };
     let (phone_outbound, _phone_replies) = mpsc::channel(4);
     let phone = ClientTx {
+        grant: crate::auth::installation_credentials::Grant::Operator,
         content_subscriptions: Arc::default(),
         query_response: None,
         id: 1,

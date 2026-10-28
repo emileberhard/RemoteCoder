@@ -1927,3 +1927,23 @@ Existing threads never migrate. Managed Claude is ineligible for restricted
 Codex requests. Voice and internal starts keep their realtime/native contract.
 `docs/provider-health.md` owns readiness evidence, effort adaptation and the
 no-replay boundary. Keep this policy in the gateway rather than client retries.
+
+Cluster identity belongs to `identity.rs`: the host UUID is stable, the ledger
+incarnation fences job and receipt store epochs, and same-epoch backup restores
+require `cluster reset-identity`. Membership and pinned links belong to
+`cluster/`. Membership mutations require the local operator; every peer request
+rechecks the retained membership, including on existing sockets. Cluster
+credentials are journal-redacted.
+
+`agents/jobs` remains the only job, intent, fence and result owner. The execution
+driver owns native custody and local delivery; `cluster/driver.rs` owns network
+reconciliation. Parent tags decide current placement, notification classification
+and `message_agent parent`; immutable origin never grants authority. Delivery
+with uncertain acceptance stays on its frozen receiver and identity until
+reconciled. Thread headers expose the current nested parent address. The flat
+parent thread ID is only a compatibility projection for local parents.
+
+Use the sessions projection for native conversation inventory and resolution;
+never add another transcript reader. An unavailable projection is not an empty
+inventory. Native parent moves need no JobSpec; continuing unknown native
+permissions fails closed.

@@ -13,10 +13,11 @@ use crate::agents::{Agent, Capabilities, Output, State};
 use crate::wire::agent_jobs::{
     Caller, ContinueParams, ContinueRecipient, JobView, MessageParams, MessageTarget, StopParams,
 };
+use crate::wire::cluster::AgentAddress;
 
 pub(in crate::gateway) enum ThreadRelation {
     Root,
-    Child(Option<ConversationIdentity>),
+    Child(Option<AgentAddress>),
 }
 
 impl AgentService<'_> {
@@ -37,7 +38,7 @@ impl AgentService<'_> {
                     None if identity.provider == Provider::Codex => format!("codex:{id}"),
                     None => bail!("Child has no authoritative agent identity"),
                 };
-                Ok(Some(json!({"parentThreadId":parent.thread_id,"parentAccountId":null,"agentId":agent_id})))
+                Ok(Some(json!({"parentThreadId":parent.thread_id,"parentHostID":parent.host_id,"parentAccountId":null,"agentId":agent_id})))
             }.await;
             (id, result)
         }).buffer_unordered(32).collect::<Vec<(String, Result<Option<Value>>)>>().await;
@@ -61,16 +62,10 @@ impl AgentService<'_> {
     pub(in crate::gateway) async fn parent_for_thread(
         &self,
         thread: &str,
-    ) -> Result<Option<ConversationIdentity>> {
+    ) -> Result<Option<AgentAddress>> {
         match self.thread_relation(thread).await? {
             ThreadRelation::Root => Ok(None),
-            ThreadRelation::Child(Some(parent)) => {
-                ensure!(
-                    self.gateway.agent_conversation(&parent.thread_id)? == parent,
-                    "Recorded parent belongs to another provider home"
-                );
-                Ok(Some(parent))
-            }
+            ThreadRelation::Child(Some(parent)) => Ok(Some(parent)),
             ThreadRelation::Child(None) => bail!("Native child has no exact parent identity"),
         }
     }
@@ -78,13 +73,15 @@ impl AgentService<'_> {
     pub(in crate::gateway) async fn thread_relation(&self, thread: &str) -> Result<ThreadRelation> {
         let identity = self.gateway.agent_conversation(thread)?;
         let exact = self.gateway.jobs.agent_for_conversation(&identity).await?;
-        match exact.map(|agent| agent.origin) {
-            Some(Origin::TopLevel) => return Ok(ThreadRelation::Root),
-            Some(Origin::Parent { conversation }) => {
-                return Ok(ThreadRelation::Child(Some(conversation)));
+        let host = self.gateway.host_identity().await?.host_id;
+        if let Some(agent) = exact {
+            if agent.parent_recipient.is_some() {
+                return Ok(match agent.parent {
+                    Some(parent) => ThreadRelation::Child(Some(parent)),
+                    None => ThreadRelation::Root,
+                });
             }
-            Some(Origin::Unknown { reason }) => bail!("Recorded agent origin is unknown: {reason}"),
-            None => {}
+            return origin_relation(agent.origin, &host);
         }
         if identity.provider == Provider::Claude {
             let uuid = crate::providers::claude::session_uuid_from_thread_id(thread)
@@ -104,7 +101,7 @@ impl AgentService<'_> {
                 .classify(&identity, created_at_ms(&header))
                 .await?
             {
-                return origin_relation(origin);
+                return origin_relation(origin, &host);
             }
             use crate::providers::claude::conversation_index::SessionOrigin;
             if let Some(runtime) = self.gateway.claude_agent() {
@@ -131,12 +128,13 @@ impl AgentService<'_> {
             .classify(&identity, created_at_ms(&header["thread"]))
             .await?
         {
-            return origin_relation(origin);
+            return origin_relation(origin, &host);
         }
         if super::super::native_agent_relation(&header, thread)? {
-            let parent = super::native_parent(&header["thread"])
-                .map(|parent| self.gateway.agent_conversation(parent))
-                .transpose()?;
+            let parent = super::native_parent(&header["thread"]).map(|parent| AgentAddress {
+                host_id: host.clone(),
+                thread_id: parent.to_owned(),
+            });
             return Ok(ThreadRelation::Child(parent));
         }
         Ok(ThreadRelation::Root)
@@ -231,16 +229,15 @@ impl AgentService<'_> {
             if !seen.insert(view.job.agent_id.clone()) {
                 continue;
             }
-            let origin = view
-                .agent
-                .as_ref()
-                .map(|agent| &agent.origin)
-                .or(view.job.admission_origin.as_ref());
-            let Some(Origin::Parent { conversation }) = origin else {
-                warnings.push("Runtime agent origin is unresolved".into());
+            let parent = view.agent.as_ref().and_then(|agent| agent.parent.as_ref());
+            let Some(parent) = parent else {
                 continue;
             };
-            let Some(parent_id) = parents.get(conversation).cloned() else {
+            if parent.host_id != self.gateway.host_identity().await?.host_id {
+                continue;
+            }
+            let conversation = self.gateway.agent_conversation(&parent.thread_id)?;
+            let Some(parent_id) = parents.get(&conversation).cloned() else {
                 warnings.push("Runtime agent parent is outside this view's verified scope".into());
                 continue;
             };
@@ -282,6 +279,12 @@ impl AgentService<'_> {
                 agent.latest_job_id.as_ref() == Some(&view.job.job_id) && agent.tool_scope.is_some()
             });
             projected.push(Agent {
+                owner_host_id: self.gateway.host_identity().await?.host_id,
+                job_id: Some(view.job.job_id.as_str().into()),
+                parent: view.parent.clone(),
+                recipient: Some(view.job.recipient.clone()),
+                kind: None,
+                intent_state: None,
                 id: format!("job:{}", view.job.agent_id),
                 parent_id,
                 owner_thread_id: root.to_owned(),
@@ -314,7 +317,7 @@ impl AgentService<'_> {
         Ok((projected, warnings))
     }
 
-    pub(super) async fn read_runtime_agent(&self, node: &Agent) -> Result<Value> {
+    pub(in crate::gateway) async fn read_runtime_agent(&self, node: &Agent) -> Result<Value> {
         let id = JobId::try_from(
             node.execution_id
                 .clone()
@@ -342,7 +345,7 @@ impl AgentService<'_> {
         Ok(serde_json::to_value(output)?)
     }
 
-    pub(super) async fn act_on_runtime_agent(
+    pub(in crate::gateway) async fn act_on_runtime_agent(
         &self,
         node: &Agent,
         params: ActionParams,
@@ -395,7 +398,7 @@ impl AgentService<'_> {
                         settings: None,
                         expected_previous_job_id: Some(job_id),
                         intent: crate::wire::agent_jobs::ContinueIntent::Explicit,
-                        recipient: ContinueRecipient::Previous,
+                        recipient: ContinueRecipient::Current,
                         caller: Caller::Operator,
                     })?,
                 )
@@ -435,10 +438,19 @@ fn created_at_ms(header: &Value) -> Option<i64> {
         .and_then(|seconds| seconds.checked_mul(1000))
 }
 
-fn origin_relation(origin: Origin) -> Result<ThreadRelation> {
+fn origin_relation(origin: Origin, host: &str) -> Result<ThreadRelation> {
     match origin {
         Origin::TopLevel => Ok(ThreadRelation::Root),
-        Origin::Parent { conversation } => Ok(ThreadRelation::Child(Some(conversation))),
+        Origin::Parent { conversation } => Ok(ThreadRelation::Child(Some(AgentAddress {
+            host_id: host.into(),
+            thread_id: conversation.thread_id,
+        }))),
+        Origin::RemoteParent { host, conversation } => {
+            Ok(ThreadRelation::Child(Some(AgentAddress {
+                host_id: host,
+                thread_id: conversation.thread_id,
+            })))
+        }
         Origin::Unknown { reason } => bail!("Recorded agent origin is unknown: {reason}"),
     }
 }

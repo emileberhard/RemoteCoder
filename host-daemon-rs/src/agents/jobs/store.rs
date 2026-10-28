@@ -1,3 +1,4 @@
+pub(crate) mod cluster;
 mod execution;
 pub(crate) mod messages;
 
@@ -34,13 +35,15 @@ struct Inner {
     agents: BTreeMap<String, AgentRecord>,
     uncertainties: Vec<ImportedUncertainty>,
     messages: BTreeMap<String, messages::MessageRecord>,
+    intents: BTreeMap<JobId, crate::wire::cluster::RemoteIntent>,
+    fences: BTreeMap<String, crate::wire::cluster::CancelFence>,
 }
 
 pub(crate) enum Selection {
     Recent,
     Agent(String),
-    Children(ConversationIdentity),
-    Descendants(ConversationIdentity),
+    Children(crate::wire::cluster::AgentAddress),
+    Descendants(crate::wire::cluster::AgentAddress),
 }
 
 impl JobStore {
@@ -56,8 +59,8 @@ impl JobStore {
                 .custom_flags(libc::O_NOFOLLOW)
                 .open(root.join("owner.lock"))?;
             lease.try_lock().context("another process owns the delegated-job store")?;
-            let mut inner = Inner { root, _lease: lease, jobs: BTreeMap::new(), agents: BTreeMap::new(), uncertainties: Vec::new(), messages: BTreeMap::new() };
-            for name in ["jobs", "agents", "evidence", "uncertainties", "messages"] {
+            let mut inner = Inner { root, _lease: lease, jobs: BTreeMap::new(), agents: BTreeMap::new(), uncertainties: Vec::new(), messages: BTreeMap::new(), intents: BTreeMap::new(), fences: BTreeMap::new() };
+            for name in ["jobs", "agents", "evidence", "uncertainties", "messages", "remote-intents", "cancel-fences"] {
                 private_state::ensure_private_directory(&inner.root.join(name))?;
             }
             File::open(&inner.root)?.sync_all()?;
@@ -90,6 +93,7 @@ impl JobStore {
                 inner.uncertainties.push(evidence);
             }
             inner.load_messages()?;
+            inner.load_cluster()?;
             inner.validate_slots()?;
             let accounted = inner.accounted_bytes()?;
             if accounted + MUTATION_RESERVE > MAX_STORE_BYTES {
@@ -242,12 +246,17 @@ impl JobStore {
         cursor: Option<String>,
     ) -> Result<ListPage> {
         self.access(move |inner| {
-            ensure!((1..=256).contains(&limit), "job page limit must be between 1 and 256");
-            let before = cursor.map(|id| {
-                let id = JobId::try_from(id).map_err(anyhow::Error::msg)?;
-                let job = inner.job(&id)?;
-                Ok::<_, anyhow::Error>((job.created_at_ms, id))
-            }).transpose()?;
+            ensure!(
+                (1..=256).contains(&limit),
+                "job page limit must be between 1 and 256"
+            );
+            let before = cursor
+                .map(|id| {
+                    let id = JobId::try_from(id).map_err(anyhow::Error::msg)?;
+                    let job = inner.job(&id)?;
+                    Ok::<_, anyhow::Error>((job.created_at_ms, id))
+                })
+                .transpose()?;
             let included = match &selection {
                 Selection::Children(parent) | Selection::Descendants(parent) => {
                     let mut parents = std::collections::HashSet::from([parent.clone()]);
@@ -255,36 +264,69 @@ impl JobStore {
                     loop {
                         let mut changed = false;
                         for agent in inner.agents.values() {
-                            if matches!(&agent.origin, Origin::Parent { conversation } if parents.contains(conversation)) && included.insert(agent.agent_id.clone()) {
+                            if agent
+                                .parent
+                                .as_ref()
+                                .is_some_and(|parent| parents.contains(parent))
+                                && included.insert(agent.agent_id.clone())
+                            {
                                 changed = true;
                                 if matches!(selection, Selection::Descendants(_))
-                                    && let ConversationBinding::Known { conversation } = &agent.conversation
+                                    && let ConversationBinding::Known { conversation } =
+                                        &agent.conversation
                                 {
-                                    parents.insert(conversation.clone());
+                                    parents.insert(crate::wire::cluster::AgentAddress {
+                                        host_id: parent.host_id.clone(),
+                                        thread_id: conversation.thread_id.clone(),
+                                    });
                                 }
                             }
                         }
-                        if !changed || matches!(selection, Selection::Children(_)) { break; }
+                        if !changed || matches!(selection, Selection::Children(_)) {
+                            break;
+                        }
                     }
                     Some(included)
                 }
                 _ => None,
             };
-            let mut records: Vec<_> = inner.jobs.values().filter(|job| {
-                let matches = match &selection {
-                    Selection::Recent => true,
-                    Selection::Agent(id) => &job.agent_id == id,
-                    _ => included.as_ref().is_some_and(|ids| ids.contains(&job.agent_id)),
-                };
-                matches && before.as_ref().is_none_or(|before| (job.created_at_ms, &job.job_id) < (before.0, &before.1))
-            }).collect();
-            records.sort_by(|left, right| (right.created_at_ms, &right.job_id).cmp(&(left.created_at_ms, &left.job_id)));
+            let mut records: Vec<_> = inner
+                .jobs
+                .values()
+                .filter(|job| {
+                    let matches = match &selection {
+                        Selection::Recent => true,
+                        Selection::Agent(id) => &job.agent_id == id,
+                        _ => included
+                            .as_ref()
+                            .is_some_and(|ids| ids.contains(&job.agent_id)),
+                    };
+                    matches
+                        && before.as_ref().is_none_or(|before| {
+                            (job.created_at_ms, &job.job_id) < (before.0, &before.1)
+                        })
+                })
+                .collect();
+            records.sort_by(|left, right| {
+                (right.created_at_ms, &right.job_id).cmp(&(left.created_at_ms, &left.job_id))
+            });
             let more = records.len() > limit as usize;
             records.truncate(limit as usize);
-            let next_cursor = more.then(|| records.last().expect("nonempty bounded page").job_id.as_str().to_owned());
-            let jobs = records.into_iter().map(|job| inner.summary(job)).collect::<Result<Vec<_>>>()?;
+            let next_cursor = more.then(|| {
+                records
+                    .last()
+                    .expect("nonempty bounded page")
+                    .job_id
+                    .as_str()
+                    .to_owned()
+            });
+            let jobs = records
+                .into_iter()
+                .map(|job| inner.summary(job))
+                .collect::<Result<Vec<_>>>()?;
             Ok(ListPage { jobs, next_cursor })
-        }).await
+        })
+        .await
     }
 
     pub(crate) async fn evidence_root(&self, id: JobId) -> Result<PathBuf> {
@@ -311,7 +353,7 @@ impl JobStore {
 
     async fn admit_with_stop_fence(
         &self,
-        job: JobRecord,
+        mut job: JobRecord,
         require_unstopped: bool,
     ) -> Result<(JobRecord, bool)> {
         let _previous = match &job.previous_job_id {
@@ -320,6 +362,9 @@ impl JobStore {
         };
         self.access(move |inner| {
             let _previous = _previous;
+            if job.admitted_membership.is_some() && let Some(fence)=inner.fences.values().find(|fence|fence.job_id==job.job_id && job.admitted_membership.as_deref()==Some(fence.membership.as_str())) {
+                job.stop=StopState::Requested {mutation_id:format!("cluster:{}",fence.membership),at_ms:fence.at};
+            }
             validate_job(&job)?;
             ensure!(job.source == JobSource::Runtime && job.revision == 0, "new admission requires an initial runtime job");
             if let Some(previous) = inner.existing_request(&job.job_id, job.request_fingerprint.as_deref().context("new admission requires its request fingerprint")?)? {
@@ -578,10 +623,16 @@ impl Inner {
         self.jobs
             .get(id)
             .map(|previous| {
-                ensure!(
-                    previous.request_fingerprint.as_deref() == Some(fingerprint),
-                    "jobId was already used for a different or unverifiable request"
-                );
+                if previous.request_fingerprint.as_deref() != Some(fingerprint) {
+                    return Err(crate::rpc::RpcError::new(
+                        crate::rpc::error::RpcCode::Conflict,
+                        "jobId was already used for a different or unverifiable request",
+                    )
+                    .with_data(crate::rpc::error::RpcData::Raw(
+                        serde_json::json!({"class":"conflict"}),
+                    ))
+                    .into());
+                }
                 Ok(previous.clone())
             })
             .transpose()
@@ -635,6 +686,12 @@ impl Inner {
             },
         };
         Ok(JobSummary {
+            owner_host_id: None,
+            parent: self
+                .agents
+                .get(&job.agent_id)
+                .and_then(|agent| agent.parent.clone()),
+            recipient: Some(job.recipient.clone()),
             job_id: job.job_id.clone(),
             agent_id: job.agent_id.clone(),
             conversation,
@@ -744,6 +801,9 @@ impl Inner {
             return Ok(());
         };
         let agent = AgentRecord {
+            parent: job.initial_parent.clone(),
+            parent_revision: job.parent_revision,
+            parent_recipient: Some(job.recipient.clone()),
             agent_id: job.agent_id.clone(),
             conversation: ConversationBinding::Unknown {
                 reason: "provider conversation is not yet bound".into(),

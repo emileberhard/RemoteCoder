@@ -91,7 +91,9 @@ impl Gateway {
                 if self.is_draining() {
                     return Err(RpcError::draining());
                 }
-                let request: StartParams = decode(params)?;
+                let mut request: StartParams = decode(params)?;
+                let authority = self.cluster_authority(&request.caller).await?;
+                Self::inherit_job_scope(&authority, &mut request.spec)?;
                 let origin = self.resolve_job_caller(&request.caller).await?;
                 Ok(json!(self.jobs.start(request, origin).await?))
             }
@@ -100,6 +102,8 @@ impl Gateway {
                     return Err(RpcError::draining());
                 }
                 let request: ContinueParams = decode(params)?;
+                self.authorize_existing(&request.agent_id, &request.caller)
+                    .await?;
                 let origin = self.resolve_job_caller(&request.caller).await?;
                 Ok(json!(self.jobs.continue_job(request, origin).await?))
             }
@@ -300,6 +304,17 @@ impl Gateway {
     pub(super) async fn resolve_job_caller(&self, caller: &Caller) -> Result<Origin> {
         match caller {
             Caller::Operator => Ok(Origin::TopLevel),
+            Caller::Forwarded {
+                host, authority, ..
+            } => Ok(match authority {
+                crate::wire::cluster::CallerAuthority::Operator => Origin::TopLevel,
+                crate::wire::cluster::CallerAuthority::Agent { conversation, .. } => {
+                    Origin::RemoteParent {
+                        host: host.clone(),
+                        conversation: conversation.clone(),
+                    }
+                }
+            }),
             Caller::Captured { context_id } => {
                 let saved = self.jobs.contexts.get(context_id).await?;
                 let current = self.job_process_context(saved.process).await?;
@@ -315,6 +330,23 @@ impl Gateway {
     }
 
     pub(super) async fn job_context_view(&self, caller: Caller) -> Result<ContextView> {
+        if let Caller::Forwarded { authority, .. } = &caller {
+            let crate::wire::cluster::CallerAuthority::Agent { conversation, .. } = authority
+            else {
+                anyhow::bail!("operator has no sender conversation");
+            };
+            return Ok(ContextView {
+                context: CapturedContext {
+                    context_id: String::new(),
+                    provider: conversation.provider,
+                    thread_id: conversation.thread_id.clone(),
+                    turn_id: None,
+                },
+                conversation: conversation.clone(),
+                sender_id: conversation.thread_id.clone(),
+                job_id: None,
+            });
+        }
         let Caller::Captured { context_id } = &caller else {
             anyhow::bail!("operator intent has no agent sender identity")
         };

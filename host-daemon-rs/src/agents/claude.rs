@@ -403,7 +403,7 @@ impl Projection {
         }
     }
 
-    pub(crate) fn agents(&self, root: &str, live: bool) -> Vec<Agent> {
+    pub(crate) fn agents(&self, root: &str, live: bool, host: &str) -> Vec<Agent> {
         self.children
             .values()
             .map(|child| {
@@ -423,6 +423,15 @@ impl Projection {
                     child.state.clone()
                 };
                 Agent {
+                    owner_host_id: host.into(),
+                    job_id: None,
+                    parent: Some(crate::wire::cluster::AgentAddress {
+                        host_id: host.into(),
+                        thread_id: root.into(),
+                    }),
+                    recipient: None,
+                    kind: None,
+                    intent_state: None,
                     id: child.public_id(root),
                     parent_id: parent.map(|c| c.public_id(root)),
                     owner_thread_id: root.into(),
@@ -510,7 +519,7 @@ mod tests {
         live.ingest(&result("new-tool"));
         assert_eq!(live.children.len(), 1);
         restored.overlay(live);
-        let agents = restored.agents("claude_root", true);
+        let agents = restored.agents("claude_root", true, "fixture-host");
         assert_eq!(agents.len(), 1);
         assert_eq!(agents[0].id, "claude:claude_root:stable-agent");
         assert_eq!(agents[0].execution_id.as_deref(), Some("a-new"));
@@ -603,7 +612,7 @@ mod tests {
         projection.ingest(&tool("tool-child", Some("tool-parent")));
         projection.ingest(&json!({"type":"system","subtype":"task_started","task_type":"local_agent","task_id":"task-parent","tool_use_id":"tool-parent"}));
         projection.ingest(&json!({"type":"system","subtype":"task_notification","task_id":"task-parent","status":"completed","summary":"Reviewed"}));
-        let agents = projection.agents("claude_root", true);
+        let agents = projection.agents("claude_root", true, "fixture-host");
         assert_eq!(agents.len(), 2);
         assert_eq!(projection.children["task-parent"].state, State::Completed);
         assert_eq!(
@@ -617,7 +626,7 @@ mod tests {
         );
         assert_eq!(
             projection
-                .agents("claude_root", false)
+                .agents("claude_root", false, "fixture-host")
                 .iter()
                 .find(|a| a.id == "claude:claude_root:tool-child")
                 .unwrap()

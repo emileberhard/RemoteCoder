@@ -96,11 +96,13 @@ impl Gateway {
         let (tx, out_rx) = mpsc::channel::<ClientCommand>(CLIENT_OUTBOUND_QUEUE_SIZE);
         let (lane_tx, lane_rx) = mpsc::channel::<UpstreamFrame>(CLIENT_UPSTREAM_QUEUE_SIZE);
         let out_tx = ClientTx {
+            grant: grant.clone(),
             query_response: None,
             content_subscriptions: Arc::default(),
             installation_id: match grant {
                 crate::auth::installation_credentials::Grant::Installation { id, .. } => Some(id),
-                crate::auth::installation_credentials::Grant::Operator | crate::auth::installation_credentials::Grant::Peer { .. } => None,
+                crate::auth::installation_credentials::Grant::Operator
+                | crate::auth::installation_credentials::Grant::Peer { .. } => None,
             },
             id: client_id,
             tx,
@@ -564,6 +566,50 @@ impl Gateway {
             queries: _,
         } = requests;
         let id = request.object.get("id").cloned();
+        if let Err(error) = self.validate_member_grant(&out_tx.grant).await {
+            self.send_error_to(out_tx, id.as_ref(), &error).await?;
+            return Ok(());
+        }
+        if matches!(
+            out_tx.grant,
+            crate::auth::installation_credentials::Grant::Peer { .. }
+        ) {
+            let method = request.method.as_str();
+            let allowed = method.starts_with("cluster/")
+                || method.starts_with("agent/cluster/")
+                || method.starts_with("agent/parent/")
+                || matches!(
+                    method,
+                    "agent/jobs/admit"
+                        | "agent/jobs/deliver"
+                        | "agent/jobs/stop"
+                        | "agent/jobs/read"
+                        | "agent/jobs/list"
+                        | "agent/jobs/message"
+                        | "agent/conversation/operate"
+                        | "sessions/list"
+                        | "sessions/search"
+                        | "sessions/mirror/list"
+                        | "sessions/mirror/fetch"
+                        | "$/cancelRequest"
+                );
+            if !allowed || method == "sessions/search" && request.object["params"]["local"] != true
+            {
+                self.send_error_to(
+                    out_tx,
+                    id.as_ref(),
+                    &crate::rpc::RpcError::new(
+                        crate::rpc::error::RpcCode::InvalidRequest,
+                        "member credential cannot invoke this method",
+                    )
+                    .with_data(crate::rpc::error::RpcData::Raw(
+                        serde_json::json!({"class":"refused"}),
+                    )),
+                )
+                .await?;
+                return Ok(());
+            }
+        }
         if request.method == "$/cancelRequest" {
             if id.is_some() {
                 return self
@@ -850,6 +896,10 @@ impl Gateway {
             _admission,
         } = request;
         let id = object.get("id").cloned();
+        if let Err(error) = self.validate_member_grant(&out_tx.grant).await {
+            let _ = self.send_error_to(out_tx, id.as_ref(), &error).await;
+            return Ok(());
+        }
         let mut object = object;
         let mut params = object.remove("params").unwrap_or(Value::Null);
         let mut selected = false;
@@ -1154,6 +1204,19 @@ impl Gateway {
                         .and_then(|(message, request)| tag_upstream_error(message, request));
                     let mut reencode = tagged.is_some();
                     let mut parsed = tagged.or(parsed);
+                    if matches!(history_method, Some("thread/read" | "thread/list"))
+                        && let Some(result) = parsed
+                            .as_mut()
+                            .and_then(|message| message.get_mut("result"))
+                    {
+                        match self.apply_parent_tags(result).await {
+                            Ok(changed) => reencode |= changed,
+                            Err(error) => {
+                                warn!(client_id,%error,"parent tags could not be applied");
+                                return;
+                            }
+                        }
+                    }
                     if request
                         .as_ref()
                         .is_some_and(|request| request.bounded_preview)

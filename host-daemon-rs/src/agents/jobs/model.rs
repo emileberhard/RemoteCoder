@@ -107,18 +107,34 @@ pub(crate) enum ProviderHome {
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) enum Origin {
     TopLevel,
-    RemoteParent { host: String, conversation: ConversationIdentity },
-    Parent { conversation: ConversationIdentity },
-    Unknown { reason: String },
+    RemoteParent {
+        host: String,
+        conversation: ConversationIdentity,
+    },
+    Parent {
+        conversation: ConversationIdentity,
+    },
+    Unknown {
+        reason: String,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) enum Recipient {
     None,
-    Conversation { conversation: ConversationIdentity },
-    Remote { #[serde(rename = "hostId")] host: String, incarnation: String, conversation: ConversationIdentity },
-    Unknown { reason: String },
+    Conversation {
+        conversation: ConversationIdentity,
+    },
+    Remote {
+        #[serde(rename = "hostId")]
+        host: String,
+        incarnation: String,
+        conversation: ConversationIdentity,
+    },
+    Unknown {
+        reason: String,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -394,6 +410,13 @@ pub(crate) struct ProviderRetry {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) enum Attention {
+    Pending { reason: String },
+    Surfaced { reason: String },
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct JobRecord {
     pub job_id: JobId,
@@ -406,8 +429,18 @@ pub(crate) struct JobRecord {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub provider_retries: Vec<ProviderRetry>,
     pub source: JobSource,
+    #[serde(default)]
+    pub admitted_membership: Option<String>,
+    #[serde(default)]
+    pub remote_fingerprint: Option<String>,
+    #[serde(default)]
+    pub parent_revision: u64,
+    #[serde(default)]
+    pub initial_parent: Option<crate::wire::cluster::AgentAddress>,
     pub admission_origin: Option<Origin>,
     pub unconfirmed_result: Option<JobResult>,
+    #[serde(default)]
+    pub attention: Option<Attention>,
     pub notices: Vec<JobNotice>,
     pub spec: SpecEvidence,
     pub recipient: Recipient,
@@ -455,6 +488,10 @@ pub(crate) struct AgentRecord {
     pub agent_id: String,
     #[serde(default)]
     pub parent: Option<crate::wire::cluster::AgentAddress>,
+    #[serde(default)]
+    pub parent_revision: u64,
+    #[serde(default)]
+    pub parent_recipient: Option<Recipient>,
     pub conversation: ConversationBinding,
     pub origin: Origin,
     pub tool_scope: Option<ToolScope>,

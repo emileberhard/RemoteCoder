@@ -5,7 +5,9 @@ pub(super) const CONTINUATION_PROMPT: &str = "The previous attempt ended with a 
 
 pub(super) fn is_transient(error: &Value) -> bool {
     match error["codexErrorInfo"].as_str() {
-        Some("serverOverloaded" | "flexUnavailable" | "rateLimitExceeded" | "internalServerError") => true,
+        Some(
+            "serverOverloaded" | "flexUnavailable" | "rateLimitExceeded" | "internalServerError",
+        ) => true,
         Some(
             "httpConnectionFailed"
             | "responseStreamConnectionFailed"

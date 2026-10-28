@@ -14,8 +14,13 @@ fn job(sequence: u8) -> JobRecord {
         previous_job_id: None,
         provider_retries: Vec::new(),
         source: JobSource::Runtime,
+        admitted_membership: None,
+        remote_fingerprint: None,
+        parent_revision: 0,
+        initial_parent: None,
         admission_origin: Some(Origin::TopLevel),
         unconfirmed_result: None,
+        attention: None,
         notices: Vec::new(),
         spec: SpecEvidence::Known {
             spec: JobSpec {
@@ -46,6 +51,132 @@ fn conversation() -> ConversationIdentity {
         },
         thread_id: "thread-fixture".into(),
     }
+}
+
+#[tokio::test]
+async fn cluster_fault_commits_survive_restart_and_fence_parent_handover() {
+    use crate::wire::cluster::*;
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().to_owned();
+    let store = JobStore::open(root.clone()).await.unwrap();
+    let mut original = job(90);
+    let receiver = Recipient::Remote {
+        host: "host-a".into(),
+        incarnation: "inc-a".into(),
+        conversation: conversation(),
+    };
+    original.recipient = receiver.clone();
+    original.initial_parent = Some(AgentAddress {
+        host_id: "host-a".into(),
+        thread_id: conversation().thread_id,
+    });
+    let SpecEvidence::Known { spec } = &original.spec else {
+        unreachable!()
+    };
+    let intent = RemoteIntent {
+        protocol: PROTOCOL,
+        host: "host-b".into(),
+        membership: "member".into(),
+        incarnation: "inc-b".into(),
+        request: AdmitParams {
+            protocol: PROTOCOL,
+            job_id: original.job_id.clone(),
+            fingerprint: "immutable".into(),
+            incarnation: "inc-b".into(),
+            origin: Origin::TopLevel,
+            recipient: receiver.clone(),
+            operation: AdmissionOperation::Start(spec.clone()),
+            caller_authority: CallerAuthority::Operator,
+        },
+        parent: original.initial_parent.clone(),
+        created_at: crate::cluster::link::timestamp(),
+        state: IntentState::Pending,
+        stop_confirmed: false,
+    };
+    store.put_intent(intent.clone()).await.unwrap();
+    drop(store);
+    let store = JobStore::open(root.clone()).await.unwrap();
+    assert_eq!(
+        store.intents().await.unwrap()[0].request.fingerprint,
+        "immutable"
+    );
+    store.admit(original.clone()).await.unwrap();
+    drop(store);
+    let store = JobStore::open(root.clone()).await.unwrap();
+    assert!(store.admit(original.clone()).await.unwrap().1);
+    assert_eq!(store.agent_rows().await.unwrap().len(), 1);
+    let done = store
+        .advance(
+            original.job_id.clone(),
+            0,
+            ExecutionState::Terminal {
+                terminal: Terminal {
+                    at_ms: Some(101),
+                    execution: None,
+                    git: GitSnapshot::Unknown {
+                        reason: "fixture".into(),
+                    },
+                    outcome: JobOutcome::Completed,
+                    result: ResultEvidence::Available {
+                        result: JobResult {
+                            text: "retained result".into(),
+                            truncated: false,
+                        },
+                    },
+                    completion: Completion::Required {
+                        payload: CompletionPayload::HistoricalUnreplayable {
+                            delivery_id: Some("immutable-delivery".into()),
+                            fingerprint: None,
+                            reason: "fixture".into(),
+                        },
+                        delivery: DeliveryState::Uncertain {
+                            reason: "reply lost".into(),
+                        },
+                    },
+                    cleanup: CleanupState::Complete,
+                },
+            },
+            101,
+        )
+        .await
+        .unwrap();
+    store
+        .set_parent(original.agent_id.clone(), None, Recipient::None)
+        .await
+        .unwrap();
+    let frozen = store.retarget_delivery(done.job_id.clone()).await.unwrap();
+    assert_eq!(frozen.recipient, receiver);
+    drop(store);
+    let store = JobStore::open(root).await.unwrap();
+    let recovered = store.read(original.job_id.clone()).await.unwrap();
+    assert!(matches!(
+        recovered.execution,
+        ExecutionState::Terminal { .. }
+    ));
+    assert_eq!(recovered.recipient, receiver);
+    let rejected = store
+        .delivery(
+            original.job_id.clone(),
+            recovered.revision,
+            DeliveryState::Unreachable {
+                reason: "receiver proved no acceptance".into(),
+            },
+            102,
+        )
+        .await
+        .unwrap();
+    let moved = store.retarget_delivery(rejected.job_id).await.unwrap();
+    assert_eq!(moved.recipient, Recipient::None);
+    store
+        .intent_state(original.job_id.clone(), IntentState::Unknown)
+        .await
+        .unwrap();
+    assert!(
+        store
+            .intent_state(original.job_id, IntentState::Pending)
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]
@@ -427,6 +558,9 @@ async fn explicit_continuation_preserves_imported_unknown_outcome_and_origin() {
         reason: "historical outcome is unconfirmed".into(),
     };
     let agent = AgentRecord {
+        parent: None,
+        parent_revision: 0,
+        parent_recipient: None,
         agent_id: imported.agent_id.clone(),
         conversation: ConversationBinding::Known {
             conversation: conversation(),
@@ -557,6 +691,9 @@ async fn imported_forks_use_retained_checkpoint_or_single_active_runtime() {
             .unwrap();
         }
         let agent = AgentRecord {
+            parent: None,
+            parent_revision: 0,
+            parent_recipient: None,
             agent_id: original.agent_id.clone(),
             conversation: ConversationBinding::Known {
                 conversation: conversation(),

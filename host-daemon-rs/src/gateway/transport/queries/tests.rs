@@ -332,6 +332,7 @@ async fn failed_query_tasks_answer_internal_once_and_release_permits() {
         ));
         if response_committed {
             let out = ClientTx {
+                grant: crate::auth::installation_credentials::Grant::Operator,
                 query_response: Some(Arc::clone(&connection.queries.running[0].response)),
                 ..connection.requests.out_tx.clone()
             };
@@ -474,6 +475,7 @@ async fn response_already_enqueued_wins_over_cancellation_and_deadline() {
     ));
     let running = &connection.queries.running[0];
     let out = ClientTx {
+        grant: crate::auth::installation_credentials::Grant::Operator,
         query_response: Some(Arc::clone(&running.response)),
         ..connection.requests.out_tx.clone()
     };

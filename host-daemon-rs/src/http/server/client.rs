@@ -38,7 +38,13 @@ pub(super) async fn version(_: Authorized) -> Json<&'static crate::build_identit
 pub(super) async fn health(State(state): State<HttpState>, _: Authorized) -> Response {
     let identity = match state.gateway.host_identity().await {
         Ok(identity) => identity,
-        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"status":"error","message":"host identity unavailable"}))).into_response(),
+        Err(_) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"status":"error","message":"host identity unavailable"})),
+            )
+                .into_response();
+        }
     };
     match state.gateway.daemon_ready().await {
         Ok(ready) => {

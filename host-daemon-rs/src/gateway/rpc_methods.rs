@@ -29,6 +29,12 @@ impl Gateway {
         object: &serde_json::Map<String, Value>,
     ) -> Result<()> {
         let id = object.get("id").cloned().unwrap_or(Value::Null);
+        if let Err(error) = self.validate_member_grant(&out.grant).await {
+            return self
+                .respond(out, id, Err(error), Some(method))
+                .await
+                .map(|_| ());
+        }
         let params = object.get("params").cloned().unwrap_or(Value::Null);
         let route = match target {
             OwnedTarget::Claude(claude) => {
@@ -45,7 +51,16 @@ impl Gateway {
             OwnedRoute::NativeCompaction => {
                 self.codex_compact_start(client_id, object, params).await
             }
-            OwnedRoute::Agents => self.agent_service().agents_rpc(method, params).await,
+            OwnedRoute::Agents => self.cluster_agents_rpc(method, params).await,
+            OwnedRoute::Cluster => self.cluster_rpc(&out.grant, method, params).await,
+            OwnedRoute::AgentJobs
+                if matches!(
+                    &out.grant,
+                    crate::auth::installation_credentials::Grant::Peer { .. }
+                ) =>
+            {
+                self.cluster_rpc(&out.grant, method, params).await
+            }
             OwnedRoute::Sessions => self.sessions_rpc(method, params).await,
             OwnedRoute::AgentJobs => self.agent_jobs_rpc(method, params).await,
             OwnedRoute::AgentRoutes => self.agent_routes_rpc(client_id, out, method, params).await,
@@ -941,7 +956,7 @@ impl Gateway {
         if let Some(phase) = phase {
             phase.complete();
         }
-        Ok(serde_json::json!({
+        let mut response = serde_json::json!({
             "thread": thread,
             "model": thread["model"],
             "modelProvider": "claude",
@@ -949,7 +964,11 @@ impl Gateway {
             "approvalPolicy": "never",
             "sandbox": { "type": "dangerFullAccess" },
             "reasoningEffort": thread["reasoningEffort"],
-        }))
+        });
+        self.apply_parent_tags(&mut response)
+            .await
+            .map_err(RpcError::from)?;
+        Ok(response)
     }
 
     pub(crate) async fn claude_active_turn_id(&self, thread_id: &str) -> Option<String> {

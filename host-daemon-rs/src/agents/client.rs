@@ -1,4 +1,5 @@
 mod automations;
+mod cluster;
 mod models;
 pub(crate) mod native_parent;
 pub(crate) mod sessions;
@@ -28,6 +29,16 @@ const MAX_INVENTORY_PAGES: usize = 50;
 
 #[derive(Clone, Debug, Subcommand)]
 pub(crate) enum AgentCommand {
+    Cluster {
+        #[command(subcommand)]
+        command: cluster::ClusterCommand,
+    },
+    SetParent {
+        agent: String,
+        parent: String,
+        #[command(flatten)]
+        caller: CallerArgs,
+    },
     Spawn(SpawnArgs),
     List(ListArgs),
     Read {
@@ -40,6 +51,8 @@ pub(crate) enum AgentCommand {
     Message(MessageArgs),
     Stop {
         target: String,
+        #[arg(long)]
+        host: Option<String>,
         #[arg(long)]
         mutation_id: Option<String>,
     },
@@ -66,12 +79,16 @@ pub(crate) enum AgentCommand {
     Items {
         target: String,
         #[arg(long)]
+        host: Option<String>,
+        #[arg(long)]
         json: bool,
     },
 }
 
 #[derive(Clone, Debug, Args)]
 pub(crate) struct CallerArgs {
+    #[arg(long)]
+    host: Option<String>,
     #[arg(long, conflicts_with = "caller_context")]
     operator: bool,
     #[arg(long, conflicts_with = "operator")]
@@ -103,8 +120,6 @@ pub(crate) struct SpawnArgs {
     title: Option<String>,
     #[arg(long)]
     job_id: Option<String>,
-    #[arg(long, value_parser = ["original", "current"], requires = "resume")]
-    parent: Option<String>,
     #[command(flatten)]
     caller: CallerArgs,
     #[arg(long)]
@@ -113,6 +128,12 @@ pub(crate) struct SpawnArgs {
 
 #[derive(Clone, Debug, Args)]
 pub(crate) struct ListArgs {
+    #[arg(long)]
+    host: Option<String>,
+    #[arg(long)]
+    local: bool,
+    #[arg(long)]
+    cursor: Option<String>,
     target: Option<String>,
     #[arg(long)]
     active: bool,
@@ -120,7 +141,7 @@ pub(crate) struct ListArgs {
     provider: Option<String>,
     #[arg(long)]
     automations: bool,
-    #[arg(long, default_value_t = 20, value_parser = clap::value_parser!(u32).range(1..=200))]
+    #[arg(long, default_value_t = 20, value_parser = clap::value_parser!(u32).range(1..=10000))]
     last: u32,
     #[arg(long)]
     json: bool,
@@ -146,19 +167,13 @@ pub(crate) struct MessageArgs {
     json: bool,
 }
 
-#[derive(Debug)]
-struct RpcFailure(Value);
-
-#[derive(Debug)]
-struct NoMatchingJob;
-
-impl std::fmt::Display for NoMatchingJob {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("No job matches this selector")
-    }
+struct Endpoint {
+    local: GatewayEndpoint,
+    host: Option<String>,
 }
 
-impl std::error::Error for NoMatchingJob {}
+#[derive(Debug)]
+struct RpcFailure(Value);
 
 impl std::fmt::Display for RpcFailure {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -178,7 +193,7 @@ impl std::fmt::Display for RequestIdentity {
 }
 
 async fn admission<P: Serialize>(
-    endpoint: &GatewayEndpoint,
+    endpoint: &Endpoint,
     method: &str,
     job_id: JobId,
     params: P,
@@ -200,11 +215,27 @@ fn response_value(response: Value) -> Result<Value> {
 }
 
 async fn rpc<P: Serialize, R: DeserializeOwned>(
-    endpoint: &GatewayEndpoint,
+    endpoint: &Endpoint,
     method: &str,
     params: P,
 ) -> Result<R> {
-    let response = transport::call(endpoint, method, serde_json::to_value(params)?).await?;
+    let params = serde_json::to_value(params)?;
+    let response = if let Some(host) = &endpoint.host
+        && !method.starts_with("agent/context/")
+    {
+        let caller = params
+            .get("caller")
+            .cloned()
+            .unwrap_or(json!({"kind":"operator"}));
+        transport::call(
+            &endpoint.local,
+            "agent/cluster/dispatch",
+            json!({"host":host,"method":method,"request":params,"caller":caller}),
+        )
+        .await?
+    } else {
+        transport::call(&endpoint.local, method, params).await?
+    };
     Ok(serde_json::from_value(response_value(response)?)?)
 }
 
@@ -216,7 +247,7 @@ async fn scoped(request: ScopedRequest) -> Result<Value> {
 }
 
 async fn mutation<P: Serialize>(
-    endpoint: &GatewayEndpoint,
+    endpoint: &Endpoint,
     method: &str,
     request_id: String,
     params: P,
@@ -236,13 +267,16 @@ fn use_scoped(caller: &CallerArgs) -> bool {
         && std::env::var_os(SCOPED_SOCKET_ENV).is_some()
 }
 
-fn endpoint(env_file: Option<&Path>) -> Result<GatewayEndpoint> {
+fn endpoint(env_file: Option<&Path>) -> Result<Endpoint> {
     let default_file = HostPaths::from_env()?.state("codex-gateway.env");
     let env_file = env_file.or_else(|| default_file.exists().then_some(default_file.as_path()));
-    GatewayEndpoint::load(&ConfigSources::load(env_file)?)
+    Ok(Endpoint {
+        local: GatewayEndpoint::load(&ConfigSources::load(env_file)?)?,
+        host: None,
+    })
 }
 
-async fn capture(endpoint: &GatewayEndpoint) -> Result<CapturedContext> {
+async fn capture(endpoint: &Endpoint) -> Result<CapturedContext> {
     let pid = std::process::id();
     let identity = crate::platform::process::identify(i32::try_from(pid)?)?
         .context("The caller process no longer has a verifiable identity")?;
@@ -252,7 +286,7 @@ async fn capture(endpoint: &GatewayEndpoint) -> Result<CapturedContext> {
     }).await.context("Cannot prove the calling agent; capture context before detaching, pass --caller-context explicitly, or select --operator for deliberate standalone work")
 }
 
-async fn caller(endpoint: &GatewayEndpoint, arguments: &CallerArgs) -> Result<Caller> {
+async fn caller(endpoint: &Endpoint, arguments: &CallerArgs) -> Result<Caller> {
     if arguments.operator {
         return Ok(Caller::Operator);
     }
@@ -301,7 +335,7 @@ fn new_job_id(provider: Provider, supplied: Option<String>) -> Result<JobId> {
     JobId::try_from(value).map_err(anyhow::Error::msg)
 }
 
-async fn model_catalog(endpoint: &GatewayEndpoint) -> Result<Vec<models::Model>> {
+async fn model_catalog(endpoint: &Endpoint) -> Result<Vec<models::Model>> {
     let mut cursor = Value::Null;
     let mut models = Vec::new();
     for _ in 0..MAX_INVENTORY_PAGES {
@@ -323,7 +357,7 @@ async fn model_catalog(endpoint: &GatewayEndpoint) -> Result<Vec<models::Model>>
 }
 
 async fn settings(
-    endpoint: &GatewayEndpoint,
+    endpoint: &Endpoint,
     provider: Provider,
     model: &str,
     effort: Option<&str>,
@@ -361,92 +395,26 @@ async fn settings(
     }
 }
 
-async fn list_page(
-    endpoint: &GatewayEndpoint,
-    cursor: Option<String>,
-    limit: u32,
-) -> Result<ListPage> {
-    rpc(
+async fn resolve(endpoint: &Endpoint, target: &str) -> Result<JobId> {
+    if let Ok(id) = JobId::try_from(target.to_owned()) {
+        return Ok(id);
+    }
+    let resolved: Value = rpc(
         endpoint,
-        "agent/jobs/list",
-        ListParams {
-            selector: ListSelector::Recent,
-            limit,
-            cursor,
-        },
+        "agent/cluster/resolve",
+        json!({"target":target,"local":true}),
     )
-    .await
+    .await?;
+    JobId::try_from(
+        resolved["jobId"]
+            .as_str()
+            .context("target has no job identity")?
+            .to_owned(),
+    )
+    .map_err(anyhow::Error::msg)
 }
 
-fn summary_matches(summary: &JobSummary, target: &str) -> bool {
-    summary.job_id.as_str().ends_with(target)
-        || match &summary.conversation {
-            ConversationBinding::Known { conversation } => {
-                conversation.thread_id == target
-                    || (crate::ids::parse_uuid(target).is_none()
-                        && conversation.thread_id.strip_prefix("claude_") == Some(target))
-            }
-            ConversationBinding::Unknown { .. } => false,
-        }
-}
-
-async fn resolve(endpoint: &GatewayEndpoint, target: &str) -> Result<JobId> {
-    if let Ok(job_id) = JobId::try_from(target.to_owned()) {
-        return Ok(job_id);
-    }
-    ensure!(
-        target.len() >= 4,
-        "Use an exact run ID, provider session ID or suffix of at least four characters"
-    );
-    let mut cursor = None;
-    let mut matches = Vec::new();
-    for _ in 0..MAX_INVENTORY_PAGES {
-        let page = list_page(endpoint, cursor, 200).await?;
-        matches.extend(
-            page.jobs
-                .into_iter()
-                .filter(|summary| summary_matches(summary, target)),
-        );
-        cursor = page.next_cursor;
-        if cursor.is_none() {
-            let run_matches = matches
-                .iter()
-                .filter(|row| row.job_id.as_str().ends_with(target))
-                .collect::<Vec<_>>();
-            if let [row] = run_matches.as_slice() {
-                return Ok(row.job_id.clone());
-            }
-            if run_matches.is_empty()
-                && matches
-                    .first()
-                    .is_some_and(|first| matches.iter().all(|row| row.agent_id == first.agent_id))
-            {
-                let view: JobView = rpc(
-                    endpoint,
-                    "agent/jobs/read",
-                    ReadParams {
-                        job_id: matches[0].job_id.clone(),
-                    },
-                )
-                .await?;
-                return view
-                    .agent
-                    .context(
-                        "Conversation history has no resolved agent identity; use an exact run ID",
-                    )?
-                    .latest_job_id
-                    .context("Conversation latest job is unresolved; use an exact run ID");
-            }
-            return match matches.as_slice() {
-                [] => Err(NoMatchingJob.into()),
-                _ => bail!("Job selector {target:?} is ambiguous; use an exact run ID"),
-            };
-        }
-    }
-    bail!("Job discovery is incomplete after 10,000 entries; use an exact run ID")
-}
-
-async fn read(endpoint: &GatewayEndpoint, target: &str) -> Result<JobView> {
+async fn read(endpoint: &Endpoint, target: &str) -> Result<JobView> {
     rpc(
         endpoint,
         "agent/jobs/read",
@@ -480,11 +448,11 @@ fn receipt(receipt: AdmissionReceipt) -> Value {
         .execution
         .conversation()
         .map(|conversation| conversation.thread_id.as_str());
-    json!({"run_id":receipt.job.job_id,"agent_id":receipt.job.agent_id,"previous_run_id":receipt.job.previous_job_id,
+    json!({"ownerHostId":receipt.owner_host_id,"address":format!("{}:{}",receipt.owner_host_id,receipt.job.job_id.as_str()),"run_id":receipt.job.job_id,"agent_id":receipt.job.agent_id,"previous_run_id":receipt.job.previous_job_id,
         "provider_session_id":provider_session_id,"status":execution_status(&receipt.job),"duplicate":receipt.duplicate,"job":receipt.job})
 }
 
-async fn spawn(endpoint: &GatewayEndpoint, arguments: SpawnArgs) -> Result<Value> {
+async fn spawn(endpoint: &Endpoint, arguments: SpawnArgs) -> Result<Value> {
     let caller = caller(endpoint, &arguments.caller).await?;
     let tier = if arguments.fast {
         Some("fast")
@@ -608,11 +576,7 @@ async fn spawn(endpoint: &GatewayEndpoint, arguments: SpawnArgs) -> Result<Value
             settings,
             expected_previous_job_id: Some(source.job.job_id),
             intent: ContinueIntent::Explicit,
-            recipient: if arguments.parent.as_deref() == Some("current") {
-                ContinueRecipient::Current
-            } else {
-                ContinueRecipient::Previous
-            },
+            recipient: ContinueRecipient::Current,
             caller,
         };
         return admission(
@@ -638,11 +602,18 @@ async fn spawn(endpoint: &GatewayEndpoint, arguments: SpawnArgs) -> Result<Value
             .prompt
             .context("A fresh agent requires a prompt")?,
     )?;
-    let cwd = arguments
-        .cwd
-        .unwrap_or(std::env::current_dir()?)
-        .canonicalize()?;
-    ensure!(cwd.is_dir(), "Working directory must be a directory");
+    let requested_cwd = arguments.cwd.unwrap_or(std::env::current_dir()?);
+    let cwd = if endpoint.host.is_some() {
+        ensure!(
+            requested_cwd.is_absolute(),
+            "remote --cwd must be an absolute path on the target host"
+        );
+        requested_cwd
+    } else {
+        let cwd = requested_cwd.canonicalize()?;
+        ensure!(cwd.is_dir(), "Working directory must be a directory");
+        cwd
+    };
     let tool_scope = match arguments.preset.as_deref().unwrap_or("full-access") {
         "full-access" => {
             ensure!(
@@ -652,12 +623,18 @@ async fn spawn(endpoint: &GatewayEndpoint, arguments: SpawnArgs) -> Result<Value
             ToolScope::Full
         }
         "read-only" => {
-            let root = arguments
+            let requested_root = arguments
                 .sandbox_root
-                .context("Read-only agents require --sandbox-root")?
-                .canonicalize()?;
+                .context("Read-only agents require --sandbox-root")?;
+            let root = if endpoint.host.is_some() {
+                requested_root
+            } else {
+                requested_root.canonicalize()?
+            };
             ensure!(
-                root.is_dir() && cwd.starts_with(&root),
+                root.is_absolute()
+                    && cwd.starts_with(&root)
+                    && (endpoint.host.is_some() || root.is_dir()),
                 "Working directory must be inside the read-only sandbox root"
             );
             ToolScope::ReadOnly { root }
@@ -786,11 +763,7 @@ fn host() -> Result<String> {
         .to_owned())
 }
 
-async fn message(
-    endpoint: &GatewayEndpoint,
-    arguments: MessageArgs,
-    text: String,
-) -> Result<Value> {
+async fn message(endpoint: &Endpoint, arguments: MessageArgs, text: String) -> Result<Value> {
     let delivery_id = arguments
         .delivery_id
         .unwrap_or_else(crate::ids::new_session_uuid);
@@ -835,7 +808,7 @@ async fn message(
     .await
 }
 
-async fn items(endpoint: &GatewayEndpoint, target: &str) -> Result<Value> {
+async fn items(endpoint: &Endpoint, target: &str) -> Result<Value> {
     let view = read(endpoint, target).await?;
     let agent = view
         .agent
@@ -888,7 +861,7 @@ async fn items(endpoint: &GatewayEndpoint, target: &str) -> Result<Value> {
     Ok(json!({"jobId":view.job.job_id,"conversation":conversation,"items":output}))
 }
 
-async fn execute(command: AgentCommand, env_file: Option<&Path>) -> Result<Value> {
+async fn execute(mut command: AgentCommand, env_file: Option<&Path>) -> Result<Value> {
     if matches!(&command, AgentCommand::NativeParent) {
         if std::env::var_os(SCOPED_SOCKET_ENV).is_some() {
             let view: ContextView =
@@ -1038,8 +1011,20 @@ async fn execute(command: AgentCommand, env_file: Option<&Path>) -> Result<Value
         )
         .await;
     }
-    let endpoint = endpoint(env_file)?;
+    let mut endpoint = endpoint(env_file)?;
+    endpoint.host = cluster::command_host(&mut command)?;
+    if let Some(thread) = cluster::resolve_command(&mut endpoint, &mut command).await?
+        && !matches!(command, AgentCommand::SetParent { .. })
+    {
+        return cluster::native_operation(&endpoint, &thread, command, prepared_message).await;
+    }
     match command {
+        AgentCommand::Cluster { command } => cluster::execute(&endpoint, command).await,
+        AgentCommand::SetParent {
+            agent,
+            parent,
+            caller,
+        } => cluster::set_parent(&endpoint, &agent, &parent, caller).await,
         AgentCommand::Spawn(arguments) => spawn(&endpoint, arguments).await,
         AgentCommand::Read {
             target,
@@ -1066,35 +1051,7 @@ async fn execute(command: AgentCommand, env_file: Option<&Path>) -> Result<Value
                 );
                 return Ok(serde_json::to_value(read(&endpoint, target).await?)?);
             }
-            let mut cursor = None;
-            let mut rows = Vec::new();
-            for _ in 0..MAX_INVENTORY_PAGES {
-                let page = list_page(&endpoint, cursor, 200).await?;
-                rows.extend(page.jobs.into_iter().filter(|row| {
-                    (!arguments.active || row.active)
-                        && arguments
-                            .provider
-                            .as_deref()
-                            .is_none_or(|provider| row.provider.as_str() == provider)
-                }));
-                cursor = page.next_cursor;
-                if cursor.is_none() || rows.len() > arguments.last as usize {
-                    break;
-                }
-            }
-            ensure!(
-                cursor.is_none() || rows.len() > arguments.last as usize,
-                "Job discovery is incomplete; use an exact selector"
-            );
-            let truncated = cursor.is_some() || rows.len() > arguments.last as usize;
-            rows.truncate(arguments.last as usize);
-            let rows = rows.into_iter().map(|row| {
-                let provider_session_id = match &row.conversation { ConversationBinding::Known { conversation } => Some(conversation.thread_id.strip_prefix("claude_").unwrap_or(&conversation.thread_id)), ConversationBinding::Unknown { .. } => None };
-                json!({"run_id":row.job_id,"agent_id":row.agent_id,"provider":row.provider,"provider_session_id":provider_session_id,"cwd":row.cwd,"model":row.model,"title":row.title,"state":row.state,"status":row.state,"created_at_epoch_ms":row.created_at_ms,"last_active_at_epoch_ms":row.updated_at_ms,"conversation":row.conversation})
-            }).collect::<Vec<_>>();
-            Ok(
-                json!({"agents":rows,"warnings":if truncated { vec!["Agent list is limited; more matching history may exist"] } else { Vec::<&str>::new() }}),
-            )
+            rpc(&endpoint,"agent/cluster/list",json!({"local":arguments.local,"active":arguments.active,"provider":arguments.provider,"limit":arguments.last,"cursor":arguments.cursor})).await
         }
         AgentCommand::Message(arguments) => {
             message(
@@ -1107,6 +1064,7 @@ async fn execute(command: AgentCommand, env_file: Option<&Path>) -> Result<Value
         AgentCommand::Stop {
             target,
             mutation_id,
+            ..
         } => {
             let mutation_id = mutation_id.unwrap_or_else(crate::ids::new_session_uuid);
             mutation(
@@ -1182,7 +1140,14 @@ fn human_listing(result: &Value) -> Result<String> {
             .map(|row| {
                 format!(
                     "{}  {}  {}  {}\n  {}",
-                    value(row, "run_id"),
+                    format!(
+                        "{}:{}",
+                        value(row, "ownerHostId"),
+                        row["run_id"]
+                            .as_str()
+                            .or_else(|| row["provider_session_id"].as_str())
+                            .unwrap_or("unknown")
+                    ),
                     value(row, "status"),
                     value(row, "provider"),
                     value(row, "model"),
@@ -1251,7 +1216,9 @@ fn human_listing(result: &Value) -> Result<String> {
 fn message_exit(result: &Value) -> i32 {
     match result["deliveryState"]["kind"].as_str() {
         Some("submitted" | "accepted" | "recorded") => 0,
-        _ => 69,
+        Some("uncertain" | "sending" | "pending") => 6,
+        Some("unreachable") => 5,
+        _ => 4,
     }
 }
 
@@ -1279,37 +1246,35 @@ pub(crate) async fn run(command: AgentCommand, env_file: Option<&Path>) -> Resul
         }
         Ok(result) => {
             let exit = if is_message { message_exit(&result) } else { 0 };
-            println!(
-                "{}",
-                if compact {
-                    serde_json::to_string(&result)?
-                } else {
-                    serde_json::to_string_pretty(&result)?
-                }
-            );
+            let encoded = if compact {
+                serde_json::to_string(&result)?
+            } else {
+                serde_json::to_string_pretty(&result)?
+            };
+            if exit == 0 {
+                println!("{encoded}");
+            } else {
+                eprintln!("{encoded}");
+            }
             Ok(exit)
         }
         Err(error) => {
             let (exit, payload) = if let Some(error) = error.downcast_ref::<RpcFailure>() {
-                let exit = if error.0["retryable"] == true || error.0["data"]["retryable"] == true {
-                    75
-                } else {
-                    69
-                };
+                let exit = cluster::error_exit(&error.0);
                 (exit, error.0.clone())
             } else if let Some(error) = error.downcast_ref::<transport::TransportError>() {
                 (
                     if error.submission == transport::Submission::Uncertain {
-                        75
+                        6
                     } else {
-                        69
+                        5
                     },
                     json!({"kind":if error.submission == transport::Submission::Uncertain {"submissionUncertain"} else {"unavailable"},"message":error.to_string(),"retryable":false}),
                 )
             } else {
                 (
-                    64,
-                    json!({"kind":"invalidRequest","message":format!("{error:#}"),"retryable":false}),
+                    2,
+                    json!({"kind":"usage","message":format!("{error:#}"),"retryable":false}),
                 )
             };
             let request_id = error

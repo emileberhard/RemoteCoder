@@ -9,6 +9,14 @@ use crate::agents::jobs::model::{
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) enum Caller {
     Operator,
+    #[serde(skip_deserializing)]
+    Forwarded {
+        host: String,
+        membership: String,
+        incarnation: String,
+        authority: crate::wire::cluster::CallerAuthority,
+        admission_fingerprint: Option<String>,
+    },
     Captured {
         #[serde(rename = "contextId")]
         context_id: String,
@@ -129,6 +137,12 @@ pub(crate) struct DismissParams {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct AdmissionReceipt {
+    pub protocol: u32,
+    pub owner_host_id: String,
+    pub job_id: JobId,
+    pub address: Option<crate::wire::cluster::AgentAddress>,
+    pub state: crate::agents::State,
+    pub incarnation: String,
     pub job: JobRecord,
     pub duplicate: bool,
 }
@@ -136,6 +150,12 @@ pub(crate) struct AdmissionReceipt {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct JobView {
+    #[serde(default)]
+    pub owner_host_id: Option<String>,
+    #[serde(default)]
+    pub parent: Option<crate::wire::cluster::AgentAddress>,
+    #[serde(default)]
+    pub recipient: Option<crate::agents::jobs::model::Recipient>,
     pub job: JobRecord,
     pub agent: Option<AgentRecord>,
 }
@@ -143,6 +163,12 @@ pub(crate) struct JobView {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct JobSummary {
+    #[serde(default)]
+    pub owner_host_id: Option<String>,
+    #[serde(default)]
+    pub parent: Option<crate::wire::cluster::AgentAddress>,
+    #[serde(default)]
+    pub recipient: Option<crate::agents::jobs::model::Recipient>,
     pub job_id: JobId,
     pub agent_id: String,
     pub conversation: ConversationBinding,
