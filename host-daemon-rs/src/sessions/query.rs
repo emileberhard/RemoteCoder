@@ -210,7 +210,7 @@ pub(crate) struct SourceRef {
     pub sidecars: Vec<String>,
 }
 
-pub(crate) fn read(db: &Connection, request: ReadRequest) -> Result<Value> {
+pub(crate) fn read(db: &super::store::Reader, request: ReadRequest) -> Result<Value> {
     let length = request.length.unwrap_or(64 * 1024);
     ensure!(
         (1..=4 * 1024 * 1024).contains(&length),
