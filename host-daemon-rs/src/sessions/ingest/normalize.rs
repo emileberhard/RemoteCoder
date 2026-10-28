@@ -387,7 +387,7 @@ impl Record<'_> {
         if existing.is_some_and(|id| id != self.source) {
             return Err(IdentityConflict { key }.into());
         }
-        self.db.execute("INSERT OR IGNORE INTO session(session_key,origin_host,provider,provider_home,thread_id,source_id) VALUES(?1,?2,?3,?4,?5,?6)",params![key,self.origin.host,self.origin.provider,self.origin.provider_home.to_string_lossy(),thread,self.source])?;
+        self.db.execute("INSERT OR IGNORE INTO session(session_key,origin_host,provider,provider_home,thread_id,source_id,thread_id_reversed) VALUES(?1,?2,?3,?4,?5,?6,?7)",params![key,self.origin.host,self.origin.provider,self.origin.provider_home.to_string_lossy(),thread,self.source,thread.bytes().rev().collect::<Vec<_>>()])?;
         Ok(())
     }
 
