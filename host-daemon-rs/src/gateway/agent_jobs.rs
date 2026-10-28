@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 use super::Gateway;
 use crate::agents::jobs::context::ProvenCaller;
 use crate::agents::jobs::model::{ConversationIdentity, Origin, Provider, ProviderHome};
-use crate::platform::process::{ProcessInstance, ancestry, ancestry_to};
+use crate::platform::process::{ProcessInstance, ancestry};
 use crate::rpc::error::RpcCode;
 use crate::rpc::{RpcError, RpcResult};
 use crate::wire::agent_jobs::*;
@@ -169,7 +169,10 @@ impl Gateway {
         &self,
         process: ProcessInstance,
     ) -> Result<ProvenCaller> {
-        tokio::task::spawn_blocking(move || ancestry_to(process, process)).await??;
+        ancestry(process)
+            .next()
+            .transpose()?
+            .context("caller process is not a live application process")?;
         tokio::time::timeout(std::time::Duration::from_secs(3), async {
             loop {
                 if let Some(caller) = self.find_job_process_context(process).await? {
@@ -208,7 +211,10 @@ impl Gateway {
         let claude_home = self.claude_settings.claude_home.clone();
         let mut found_process = false;
         for candidate in ancestry(process) {
-            let candidate = candidate?;
+            let candidate = candidate.map_err(|error| {
+                let message = format!("No Codex tool root or Claude session owner was proved below the failing process: {error:#}");
+                error.context(message)
+            })?;
             found_process = true;
             if native.as_ref().is_some_and(|context| {
                 candidate.pid == context.root_process_identity.pid

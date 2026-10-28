@@ -137,31 +137,6 @@ fn walk_ancestry(
     })
 }
 
-#[cfg(target_os = "macos")]
-pub(crate) fn ancestry_to(
-    process: ProcessInstance,
-    owner: ProcessInstance,
-) -> Result<Vec<ProcessInstance>> {
-    anyhow::ensure!(
-        owner.pid > 1,
-        "agent tool owner is not an application process"
-    );
-    let mut chain = Vec::new();
-    for candidate in ancestry(process) {
-        let candidate = candidate?;
-        chain.push(candidate);
-        if candidate == owner {
-            return Ok(chain);
-        }
-    }
-    anyhow::bail!("native tool owner is outside the verified caller ancestry")
-}
-
-#[cfg(not(target_os = "macos"))]
-pub(crate) fn ancestry_to(_: ProcessInstance, _: ProcessInstance) -> Result<Vec<ProcessInstance>> {
-    anyhow::bail!("verified caller process ancestry is unavailable on this platform")
-}
-
 #[cfg(not(target_os = "macos"))]
 pub(crate) fn ancestry(_: ProcessInstance) -> impl Iterator<Item = Result<ProcessInstance>> {
     std::iter::once(Err(anyhow::anyhow!(
@@ -390,13 +365,13 @@ mod tests {
     }
 
     #[test]
-    fn exact_owner_proof_stops_before_unrelated_launcher_ancestry() {
+    fn lazy_ancestry_verifies_live_parent_links_and_stale_instances() {
         let pid = std::process::id() as i32;
         let owner = ProcessInstance {
             pid,
             started_micros: identify(pid).unwrap().unwrap().started_micros,
         };
-        assert_eq!(ancestry_to(owner, owner).unwrap(), vec![owner]);
+        assert_eq!(ancestry(owner).next().transpose().unwrap(), Some(owner));
         let mut child = std::process::Command::new("/bin/cat")
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::null())
@@ -407,7 +382,7 @@ mod tests {
             pid: child_pid,
             started_micros: identify(child_pid).unwrap().unwrap().started_micros,
         };
-        let proof = ancestry_to(child_instance, owner);
+        let proof = ancestry(child_instance).take(2).collect::<Result<Vec<_>>>();
         child.kill().unwrap();
         child.wait().unwrap();
         assert_eq!(proof.unwrap(), vec![child_instance, owner]);
@@ -415,18 +390,7 @@ mod tests {
             started_micros: owner.started_micros + 1,
             ..owner
         };
-        assert!(ancestry_to(stale, owner).is_err());
-        assert!(ancestry_to(owner, stale).is_err());
-        assert!(
-            ancestry_to(
-                owner,
-                ProcessInstance {
-                    pid: 1,
-                    started_micros: 0
-                }
-            )
-            .is_err()
-        );
+        assert!(ancestry(stale).next().unwrap().is_err());
     }
 
     #[test]
