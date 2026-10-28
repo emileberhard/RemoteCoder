@@ -32,7 +32,11 @@ origin or provider scope stays unknown rather than becoming a root.
 Admission, exact conversation binding and ancestry commit before useful provider
 work starts. The initial input has a deterministic UUID derived from the JobId.
 A job moves through admitted, bound, dispatching, running or recovering, and a
-terminal outcome. Unknown is nonterminal. Connection loss, process signals,
+terminal outcome. Unknown is nonterminal. `JobSummary.active` describes an owned nonterminal runtime
+lifecycle, independently of its observed state. `agent list --active` uses that
+fact; imported historical uncertainty remains unknown and is excluded from the
+active list. Native provider activity retains its separate inventory owner.
+Connection loss, process signals,
 idleness and time alone never mean completion and never free its slot.
 
 Stop is persisted before the provider interrupt. It works after the client is

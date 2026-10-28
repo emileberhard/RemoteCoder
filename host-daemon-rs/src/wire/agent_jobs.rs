@@ -151,6 +151,7 @@ pub(crate) struct JobSummary {
     pub title: Option<String>,
     pub model: Option<String>,
     pub state: crate::agents::State,
+    pub active: bool,
     pub created_at_ms: Option<i64>,
     pub updated_at_ms: i64,
 }

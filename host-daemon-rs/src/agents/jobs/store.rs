@@ -643,6 +643,7 @@ impl Inner {
             title,
             model,
             state,
+            active: job.source == JobSource::Runtime && !is_terminal(job),
             created_at_ms: job.created_at_ms,
             updated_at_ms: job.updated_at_ms,
         })

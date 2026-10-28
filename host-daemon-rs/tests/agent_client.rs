@@ -368,3 +368,66 @@ fn agent_client_format_only_reserves_stdout_for_envelopes() {
     assert!(envelope.contains("Fixture message"));
     assert!(envelope.trim_end().ends_with("</agent_message>"));
 }
+
+#[tokio::test]
+async fn agent_client_active_listing_skips_history_pages_and_warns_only_for_active_truncation() {
+    let root = tempfile::tempdir().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    configuration(root.path(), listener.local_addr().unwrap().port());
+    let server = tokio::spawn(async move {
+        for _ in 0..4 {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            initialize(&mut socket).await;
+            let Message::Text(text) = socket.next().await.unwrap().unwrap() else {
+                panic!("No list request");
+            };
+            let request: Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(request["method"], "agent/jobs/list");
+            let first_page = request["params"]["cursor"].is_null();
+            let rows = if first_page { 0..200 } else { 200..202 };
+            let jobs: Vec<_> = rows.map(|sequence| json!({
+                "jobId": format!("agent-codex-1793127141860775000-{sequence:08x}"),
+                "agentId": format!("fixture-{sequence}"),
+                "conversation": {"kind":"unknown","reason":"historical identity unavailable"},
+                "provider":"codex", "cwd":null,"title":null,"model":null,
+                "state":if first_page { "unknown" } else { "working" },
+                "active":!first_page,"createdAtMs":null,"updatedAtMs":1793153277624_i64,
+            })).collect();
+            let result = json!({"jobs":jobs,"nextCursor":if first_page { Some("agent-codex-1793127141860775000-000000c7") } else { None }});
+            socket
+                .send(Message::Text(
+                    json!({"id":request["id"],"result":result}).to_string(),
+                ))
+                .await
+                .unwrap();
+        }
+    });
+    for (limit, expected_rows, expected_warnings) in [(200, 2, 0), (1, 1, 1)] {
+        let output = tokio::process::Command::new(env!("CARGO_BIN_EXE_remote-coder-codex-gateway"))
+            .env_clear()
+            .arg("--env-file")
+            .arg(root.path().join("gateway.env"))
+            .args([
+                "agent",
+                "list",
+                "--active",
+                "--last",
+                &limit.to_string(),
+                "--json",
+            ])
+            .output()
+            .await
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+        let agents = result["agents"].as_array().unwrap();
+        assert_eq!(agents.len(), expected_rows);
+        assert!(agents.iter().all(|agent| agent["state"] == "working"));
+        assert_eq!(
+            result["warnings"].as_array().unwrap().len(),
+            expected_warnings
+        );
+    }
+    server.await.unwrap();
+}

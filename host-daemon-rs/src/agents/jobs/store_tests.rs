@@ -1,5 +1,5 @@
 use super::model::*;
-use super::store::JobStore;
+use super::store::{JobStore, Selection};
 
 fn job(sequence: u8) -> JobRecord {
     let job_id =
@@ -465,6 +465,47 @@ async fn explicit_continuation_preserves_imported_unknown_outcome_and_origin() {
         spec.tool_scope = agent.tool_scope.clone().unwrap();
     }
     store.admit(continuation.clone()).await.unwrap();
+    let bound = store
+        .bind(continuation.job_id.clone(), 0, conversation(), 101)
+        .await
+        .unwrap();
+    let dispatching = store
+        .advance(
+            continuation.job_id.clone(),
+            bound.revision,
+            ExecutionState::Dispatching {
+                conversation: conversation(),
+                input_id: continuation.initial_input_id(),
+            },
+            102,
+        )
+        .await
+        .unwrap();
+    store
+        .record_uncertainty(
+            continuation.job_id.clone(),
+            dispatching.revision,
+            "runtime observation unavailable".into(),
+            None,
+            103,
+        )
+        .await
+        .unwrap();
+    let page = store.list(Selection::Recent, 200, None).await.unwrap();
+    let historical = page
+        .jobs
+        .iter()
+        .find(|row| row.job_id == imported.job_id)
+        .unwrap();
+    let current = page
+        .jobs
+        .iter()
+        .find(|row| row.job_id == continuation.job_id)
+        .unwrap();
+    assert_eq!(historical.state, crate::agents::State::Unknown);
+    assert!(!historical.active);
+    assert_eq!(current.state, crate::agents::State::Unknown);
+    assert!(current.active);
     assert_eq!(store.read(imported.job_id.clone()).await.unwrap(), imported);
     let continued = store.agent(agent.agent_id).await.unwrap();
     assert_eq!(continued.origin, agent.origin);

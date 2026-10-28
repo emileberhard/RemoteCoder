@@ -1033,7 +1033,7 @@ async fn execute(command: AgentCommand, env_file: Option<&Path>) -> Result<Value
             for _ in 0..MAX_INVENTORY_PAGES {
                 let page = list_page(&endpoint, cursor, 200).await?;
                 rows.extend(page.jobs.into_iter().filter(|row| {
-                    (!arguments.active || row.state.may_be_running())
+                    (!arguments.active || row.active)
                         && arguments
                             .provider
                             .as_deref()
