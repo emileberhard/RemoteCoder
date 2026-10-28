@@ -1089,7 +1089,7 @@ async fn execute(command: AgentCommand, env_file: Option<&Path>) -> Result<Value
             rows.truncate(arguments.last as usize);
             let rows = rows.into_iter().map(|row| {
                 let provider_session_id = match &row.conversation { ConversationBinding::Known { conversation } => Some(conversation.thread_id.strip_prefix("claude_").unwrap_or(&conversation.thread_id)), ConversationBinding::Unknown { .. } => None };
-                json!({"run_id":row.job_id,"agent_id":row.agent_id,"provider":row.provider,"provider_session_id":provider_session_id,"cwd":row.cwd,"model":row.model,"title":row.title,"state":row.state,"created_at_epoch_ms":row.created_at_ms,"last_active_at_epoch_ms":row.updated_at_ms,"conversation":row.conversation})
+                json!({"run_id":row.job_id,"agent_id":row.agent_id,"provider":row.provider,"provider_session_id":provider_session_id,"cwd":row.cwd,"model":row.model,"title":row.title,"state":row.state,"status":row.state,"created_at_epoch_ms":row.created_at_ms,"last_active_at_epoch_ms":row.updated_at_ms,"conversation":row.conversation})
             }).collect::<Vec<_>>();
             Ok(
                 json!({"agents":rows,"warnings":if truncated { vec!["Agent list is limited; more matching history may exist"] } else { Vec::<&str>::new() }}),
@@ -1163,8 +1163,85 @@ async fn execute(command: AgentCommand, env_file: Option<&Path>) -> Result<Value
     }
 }
 
+fn human_listing(result: &Value) -> Result<String> {
+    fn value<'a>(row: &'a Value, field: &str) -> &'a str {
+        row[field].as_str().unwrap_or("unknown")
+    }
+    if let Some(rows) = result["agents"].as_array() {
+        let mut lines = rows
+            .iter()
+            .map(|row| {
+                format!(
+                    "{}  {}  {}  {}\n  {}",
+                    value(row, "run_id"),
+                    value(row, "status"),
+                    value(row, "provider"),
+                    value(row, "model"),
+                    value(row, "title")
+                )
+            })
+            .collect::<Vec<_>>();
+        if rows.is_empty() {
+            lines.push("No matching agents".into());
+        }
+        if let Some(warnings) = result["warnings"].as_array() {
+            lines.extend(warnings.iter().filter_map(Value::as_str).map(str::to_owned));
+        }
+        return Ok(lines.join("\n"));
+    }
+    let view: JobView = serde_json::from_value(result.clone())?;
+    let (model, cwd) = match &view.job.spec {
+        SpecEvidence::Known { spec } => (Some(&spec.settings), Some(&spec.cwd)),
+        SpecEvidence::Expired { settings, cwd, .. } => (Some(settings), Some(cwd)),
+        SpecEvidence::Unknown { .. } => (None, None),
+    };
+    let model = model
+        .map(|settings| match settings {
+            ExecutionSettings::Codex { model, .. } | ExecutionSettings::Claude { model, .. } => {
+                model.as_str()
+            }
+        })
+        .unwrap_or("unknown");
+    let mut lines = vec![
+        format!(
+            "{}  {}",
+            view.job.job_id.as_str(),
+            execution_status(&view.job)
+        ),
+        format!("Model: {model}"),
+        format!(
+            "Directory: {}",
+            cwd.map(|cwd| cwd.display().to_string())
+                .unwrap_or_else(|| "unknown".into())
+        ),
+    ];
+    if let Some(agent) = view.agent {
+        match agent.conversation {
+            ConversationBinding::Known { conversation } => lines.push(format!(
+                "Conversation: {} ({})",
+                conversation.thread_id,
+                conversation.provider.as_str()
+            )),
+            ConversationBinding::Unknown { reason } => {
+                lines.push(format!("Conversation: unknown ({reason})"))
+            }
+        }
+    }
+    match &view.job.execution {
+        ExecutionState::Unknown { reason, .. } => lines.push(format!("Status evidence: {reason}")),
+        ExecutionState::Terminal { terminal } => {
+            if let super::jobs::model::ResultEvidence::Available { result } = &terminal.result {
+                lines.push(result.text.clone());
+            }
+        }
+        _ => {}
+    }
+    Ok(lines.join("\n"))
+}
+
 pub(crate) async fn run(command: AgentCommand, env_file: Option<&Path>) -> Result<i32> {
     let format_only = matches!(&command, AgentCommand::Message(arguments) if arguments.format_only);
+    let human_list = matches!(&command, AgentCommand::List(arguments) if !arguments.json && !arguments.automations && !arguments.target.as_deref().is_some_and(|target| target.starts_with("automation:")));
     let compact = match &command {
         AgentCommand::Spawn(arguments) => arguments.json,
         AgentCommand::Message(arguments) => arguments.json,
@@ -1175,6 +1252,10 @@ pub(crate) async fn run(command: AgentCommand, env_file: Option<&Path>) -> Resul
     match execute(command, env_file).await {
         Ok(Value::String(text)) if format_only => {
             println!("{text}");
+            Ok(0)
+        }
+        Ok(result) if human_list => {
+            println!("{}", human_listing(&result)?);
             Ok(0)
         }
         Ok(result) => {
@@ -1228,6 +1309,17 @@ pub(crate) async fn run(command: AgentCommand, env_file: Option<&Path>) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn human_list_preserves_unknown_status_and_missing_model() {
+        let output = human_listing(&json!({"agents":[{"run_id":"agent-claude-old","status":"unknown","provider":"claude","model":null,"title":null}],"warnings":[]})).unwrap();
+        assert!(output.contains("agent-claude-old  unknown  claude  unknown"));
+        assert!(!output.contains("null"));
+        assert_eq!(
+            human_listing(&json!({"agents":[],"warnings":[]})).unwrap(),
+            "No matching agents"
+        );
+    }
 
     #[test]
     fn formatting_infers_exact_provider_identity_without_authenticated_capture() {
