@@ -685,3 +685,84 @@ async fn agent_client_format_only_reads_scoped_proof_without_bearer_credentials(
         .unwrap()
         .unwrap();
 }
+
+#[tokio::test]
+async fn agent_client_resume_agent_id_continues_latest_but_explicit_stale_jobs_stay_fenced() {
+    let root = tempfile::tempdir().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    configuration(root.path(), listener.local_addr().unwrap().port());
+    let first = "agent-claude-1793127141860775000-00000001";
+    let stale = "agent-claude-1793127141860775000-00000002";
+    let latest = "agent-claude-1793127141860775000-00000003";
+    let next = "agent-claude-1793127141860775000-00000004";
+    let server = tokio::spawn(async move {
+        let job = |id: &str| json!({
+            "jobId":id,"agentId":first,"requestFingerprint":null,"createdAtMs":100,
+            "updatedAtMs":100,"revision":0,"previousJobId":null,"source":"imported",
+            "admissionOrigin":null,"unconfirmedResult":null,"notices":[],
+            "spec":{"kind":"known","spec":{"prompt":"fixture","cwd":"/tmp",
+                "settings":{"provider":"claude","model":"opus","effort":"high","fast":false},
+                "toolScope":{"kind":"full"},"title":null}},
+            "recipient":{"kind":"none"},"execution":{"kind":"admitted"},"stop":{"kind":"notRequested"}
+        });
+        for target in [first, stale] {
+            let mut source_id = target;
+            for method in if target == first {
+                vec!["agent/jobs/read", "agent/jobs/read", "agent/jobs/continue"]
+            } else {
+                vec!["agent/jobs/read", "agent/jobs/continue"]
+            } {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+                initialize(&mut socket).await;
+                let Message::Text(text) = socket.next().await.unwrap().unwrap() else {
+                    panic!("No request");
+                };
+                let request: Value = serde_json::from_str(&text).unwrap();
+                assert_eq!(request["method"], method);
+                let response = if method == "agent/jobs/read" {
+                    assert_eq!(request["params"]["jobId"], source_id);
+                    let result = json!({"job":job(source_id),"agent":{
+                        "agentId":first,"conversation":{"kind":"unknown","reason":"fixture"},
+                        "origin":{"kind":"topLevel"},"toolScope":{"kind":"full"},
+                        "originJobId":first,"latestJobId":latest
+                    }});
+                    source_id = latest;
+                    json!({"result":result})
+                } else {
+                    let expected = if target == first { latest } else { stale };
+                    assert_eq!(request["params"]["expectedPreviousJobId"], expected);
+                    if target == first {
+                        let mut continued = job(next);
+                        continued["previousJobId"] = json!(latest);
+                        json!({"result":{"job":continued,"duplicate":false}})
+                    } else {
+                        json!({"error":{"code":-32603,"message":"Continue target was superseded"}})
+                    }
+                };
+                let mut response = response;
+                response["id"] = request["id"].clone();
+                socket.send(Message::Text(response.to_string())).await.unwrap();
+            }
+        }
+    });
+    for target in [first, stale] {
+        let output = tokio::process::Command::new(env!("CARGO_BIN_EXE_remote-coder-codex-gateway"))
+            .env_clear().env("HOME", root.path())
+            .arg("--env-file").arg(root.path().join("gateway.env"))
+            .args(["agent","spawn","--resume",target,"Continue fixture","--operator","--json","--job-id",next])
+            .output().await.unwrap();
+        if target == first {
+            assert!(output.status.success(), "{output:?}");
+            assert!(output.stderr.is_empty());
+            let receipt: Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(receipt["previous_run_id"], latest);
+        } else {
+            assert_eq!(output.status.code(), Some(69));
+            assert!(output.stdout.is_empty());
+            let error: Value = serde_json::from_slice(&output.stderr).unwrap();
+            assert_eq!(error["error"]["message"], "Continue target was superseded");
+        }
+    }
+    server.await.unwrap();
+}

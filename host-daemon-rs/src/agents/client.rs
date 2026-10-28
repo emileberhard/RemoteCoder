@@ -480,7 +480,7 @@ fn receipt(receipt: AdmissionReceipt) -> Value {
         .execution
         .conversation()
         .map(|conversation| conversation.thread_id.as_str());
-    json!({"run_id":receipt.job.job_id,"agent_id":receipt.job.agent_id,
+    json!({"run_id":receipt.job.job_id,"agent_id":receipt.job.agent_id,"previous_run_id":receipt.job.previous_job_id,
         "provider_session_id":provider_session_id,"status":execution_status(&receipt.job),"duplicate":receipt.duplicate,"job":receipt.job})
 }
 
@@ -500,7 +500,18 @@ async fn spawn(endpoint: &GatewayEndpoint, arguments: SpawnArgs) -> Result<Value
             arguments.cwd.is_none() && arguments.title.is_none(),
             "Continuation keeps the existing conversation's directory and title"
         );
-        let source = read(endpoint, target).await?;
+        let mut source = read(endpoint, target).await?;
+        if let Some(agent) = &source.agent
+            && agent.agent_id == *target
+        {
+            let latest = agent
+                .latest_job_id
+                .clone()
+                .context("Conversation latest job is unresolved; use an exact run ID")?;
+            if latest != source.job.job_id {
+                source = rpc(endpoint, "agent/jobs/read", ReadParams { job_id: latest }).await?;
+            }
+        }
         let historical;
         let (original_settings, original_scope) = match &source.job.spec {
             SpecEvidence::Known { spec } => (&spec.settings, &spec.tool_scope),
