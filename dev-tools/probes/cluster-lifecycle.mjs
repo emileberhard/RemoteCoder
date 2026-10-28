@@ -193,6 +193,7 @@ async function remoteSpawn(parentHost, childHost, provider, name) {
     assert.equal(job.admissionOrigin.host, parentHost.info.hostId);
     assert.equal(job.admissionOrigin.conversation.threadId, parent);
     assert.equal(job.recipient.hostId, parentHost.info.hostId);
+    assert.deepEqual(job.spec.spec.toolScope, { kind: "full" });
     await waitFor(async () => {
         return (await observedInput(parentHost, parent, interimId)).length;
     });
@@ -242,7 +243,8 @@ async function journey(a, b, suffix) {
         assert.equal(entries.length, 1, "Completion entered the parent's native history twice");
     }
     console.error(`${suffix}: canonical parent inputs confirm one completion each`);
-    return { children: children.map(({ id, parent, provider }) => ({ id, parent, provider })),
+    return { parentHostId: a.info.hostId, ownerHostId: b.info.hostId,
+        children: children.map(({ id, parent, provider, interimId }) => ({ id, parent, provider, interimId })),
         callbackAfterReturnMs: Date.now() - resumed };
 }
 
