@@ -73,6 +73,7 @@ actor FakeGatewayServer {
     private var heldPage: CheckedContinuation<Void, Never>?
     private var pageArrival: CheckedContinuation<Void, Never>?
     private var holdsTailPages = false
+    private var nextHeldTailThreadID: String?
     private var heldTailPage: CheckedContinuation<Void, Never>?
     private var tailPageArrival: CheckedContinuation<Void, Never>?
     private var claudeAccounts: ClaudeRouterAccountList?
@@ -279,11 +280,13 @@ actor FakeGatewayServer {
     }
 
     func holdTailPages() { holdsTailPages = true }
+    func holdNextTailPage(for threadID: String) { nextHeldTailThreadID = threadID }
     func waitForHeldTailPage() async {
         if heldTailPage == nil { await withCheckedContinuation { tailPageArrival = $0 } }
     }
     func releaseHeldTailPage() {
         holdsTailPages = false
+        nextHeldTailThreadID = nil
         heldTailPage?.resume()
         heldTailPage = nil
     }
@@ -301,7 +304,8 @@ actor FakeGatewayServer {
         if cursor != nil, holdsCursorPages {
             await withCheckedContinuation { heldPage = $0; pageArrival?.resume(); pageArrival = nil }
         }
-        if cursor == nil, holdsTailPages {
+        if cursor == nil, holdsTailPages || nextHeldTailThreadID.map({ $0 == params["threadId"]?.stringValue }) == true {
+            nextHeldTailThreadID = nil
             await withCheckedContinuation { heldTailPage = $0; tailPageArrival?.resume(); tailPageArrival = nil }
         }
         let step = params["sortDirection"]?.stringValue == "asc" ? 1 : -1

@@ -10,7 +10,7 @@ struct ChatHistoryReadTests {
         let gateway = try FakeGatewayServer(threadID: "first", model: "opus")
         await gateway.serveHistory([.init(turnId: "turn", item: .agentMessage(id: "answer", text: "Prepared tail"),
             startedAtOrdinal: 1, isComplete: true)])
-        await gateway.holdTailPages()
+        await gateway.holdNextTailPage(for: "first")
         let fixture = await WorkspaceFixture(miniGatewayPort: try await gateway.start())
         defer { await gateway.releaseHeldTailPage(); await fixture.cleanUp(); await gateway.stop() }
         let screen = try #require(fixture.workspace.selectedScreen)
@@ -28,7 +28,7 @@ struct ChatHistoryReadTests {
         let now = Int64(Date.now.timeIntervalSince1970)
         let first = try fixture.thread("first", updatedAt: now)
         await target.conversationList.record(first)
-        target.warmConversationsIfIdle()
+        let warm = try #require(target.warmConversationsIfIdle())
         await gateway.waitForHeldTailPage()
 
         let second = try fixture.thread("second", updatedAt: now - 1)
@@ -36,7 +36,6 @@ struct ChatHistoryReadTests {
         preparation.setActive(true, conservesEnergy: false)
         preparation.setActive(false, conservesEnergy: false)
         preparation.setActive(true, conservesEnergy: false)
-        let warm = try #require(target.warmConversationsIfIdle())
         await gateway.releaseHeldTailPage()
         await warm.value
         #expect(!target.conversationWarmer.needsWarm(first) && !target.conversationWarmer.needsWarm(second))
