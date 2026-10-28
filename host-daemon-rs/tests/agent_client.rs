@@ -326,3 +326,45 @@ async fn agent_client_explicit_context_uses_authenticated_owner_despite_stale_so
     );
     server.await.unwrap();
 }
+
+#[test]
+fn agent_client_format_only_reserves_stdout_for_envelopes() {
+    let binary = env!("CARGO_BIN_EXE_remote-coder-codex-gateway");
+    for text in ["", "Fixture message"] {
+        let output = Command::new(binary)
+            .env_clear()
+            .args(["agent", "message", "parent", text, "--format-only"])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(64));
+        assert!(output.stdout.is_empty());
+        let diagnostic: Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert_eq!(diagnostic["ok"], false);
+        assert_eq!(diagnostic["error"]["kind"], "invalidRequest");
+    }
+    let output = Command::new(binary)
+        .env_clear()
+        .args([
+            "agent",
+            "message",
+            "parent",
+            "Fixture message",
+            "--format-only",
+            "--sender-id",
+            "/root/fixture",
+            "--reply-tool",
+            "collaboration.send_message",
+            "--reply-target",
+            "/root/fixture",
+            "--delivery-id",
+            "format-fixture",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    let envelope = String::from_utf8(output.stdout).unwrap();
+    assert!(envelope.starts_with("<agent_message"));
+    assert!(envelope.contains("Fixture message"));
+    assert!(envelope.trim_end().ends_with("</agent_message>"));
+}

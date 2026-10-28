@@ -1277,12 +1277,14 @@ pub(crate) async fn run(command: AgentCommand, env_file: Option<&Path>) -> Resul
             let request_id = error
                 .downcast_ref::<RequestIdentity>()
                 .map(|identity| identity.0.as_str());
-            println!(
-                "{}",
-                serde_json::to_string(
-                    &json!({"ok":false,"request_id":request_id,"error":payload})
-                )?
-            );
+            let diagnostic = serde_json::to_string(
+                &json!({"ok":false,"request_id":request_id,"error":payload}),
+            )?;
+            if format_only {
+                eprintln!("{diagnostic}");
+            } else {
+                println!("{diagnostic}");
+            }
             Ok(exit)
         }
     }
