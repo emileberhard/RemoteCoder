@@ -59,6 +59,19 @@ async function worker(binary, runtimePackage) {
                     case "stop": await lab.stop(); result = true; break;
                     case "start": await lab.start(); client = await lab.connect(); result = true; break;
                     case "requests": result = model.requests; break;
+                    case "inputs": {
+                        assert(/^claude_[0-9a-f-]{36}$/.test(params.thread));
+                        const rows = [];
+                        for await (const path of new Bun.Glob(`**/${params.thread.slice(7)}.jsonl`).scan({ cwd: lab.path(".claude/projects"), absolute: true })) {
+                            for (const line of (await readFile(path, "utf8")).split("\n").filter(Boolean)) {
+                                const row = JSON.parse(line);
+                                if (row.type === "user" && JSON.stringify(row.message).includes(params.needle)) {
+                                    rows.push({ id: row.uuid, source: "claudeTranscript" });
+                                }
+                            }
+                        }
+                        result = rows; break;
+                    }
                     case "agent": {
                         const child = Bun.spawn([binary, "--env-file", lab.path("gateway.env"), "agent", ...params.args], {
                             env: lab.safeEnv, cwd: lab.path("work"), stdout: "pipe", stderr: "pipe" });
@@ -181,15 +194,19 @@ async function remoteSpawn(parentHost, childHost, provider, name) {
     assert.equal(job.admissionOrigin.conversation.threadId, parent);
     assert.equal(job.recipient.hostId, parentHost.info.hostId);
     await waitFor(async () => {
-        const page = await parentHost.rpc("thread/items/list", {threadId:parent,limit:100,sortDirection:"asc"});
-        return page.data.some(entry => entry.item?.type === "userMessage" && JSON.stringify(entry.item).includes(interimId));
+        return (await observedInput(parentHost, parent, interimId)).length;
     });
     return { id, parent, name, provider, interimId };
 }
 
-async function observedCompletion(host, thread, id) {
+async function observedInput(host, thread, needle) {
+    if (thread.startsWith("claude_")) return host.call("inputs", { thread, needle });
     const page = await host.rpc("thread/items/list", { threadId: thread, limit: 100, sortDirection: "asc" });
-    return page.data.filter(entry => entry.item?.type === "userMessage" && JSON.stringify(entry.item).includes(`${id}:completion`));
+    return page.data.filter(entry => entry.item?.type === "userMessage" && JSON.stringify(entry.item).includes(needle));
+}
+
+async function observedCompletion(host, thread, id) {
+    return observedInput(host, thread, `${id}:completion`);
 }
 
 async function journey(a, b, suffix) {
