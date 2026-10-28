@@ -1,5 +1,6 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result, ensure};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -8,6 +9,7 @@ use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
+use tokio::sync::{OnceCell, watch};
 
 use crate::storage::private_state::{self, ReadError};
 use crate::wire::cluster::*;
@@ -17,12 +19,48 @@ const MAX_BYTES: u64 = 2 * 1024 * 1024;
 #[derive(Clone)]
 pub(crate) struct Members {
     path: PathBuf,
+    snapshot: Arc<OnceCell<Mutex<Arc<Snapshot>>>>,
+    changes: watch::Sender<u64>,
 }
 
-#[derive(Default, Deserialize, Serialize)]
+#[derive(Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Document {
     records: BTreeMap<String, MemberRecord>,
+}
+
+struct Snapshot {
+    document: Document,
+    selectors: HashMap<String, Vec<String>>,
+}
+
+impl Snapshot {
+    fn new(document: Document) -> Result<Self> {
+        ensure!(
+            document.records.len() <= 4096,
+            "membership capacity reached"
+        );
+        let mut selectors: HashMap<String, Vec<String>> = HashMap::new();
+        for (membership, record) in &document.records {
+            if record.state == MemberState::Removed {
+                continue;
+            }
+            selectors
+                .entry(record.host.clone())
+                .or_default()
+                .push(membership.clone());
+            if record.name != record.host {
+                selectors
+                    .entry(record.name.clone())
+                    .or_default()
+                    .push(membership.clone());
+            }
+        }
+        Ok(Self {
+            document,
+            selectors,
+        })
+    }
 }
 
 pub(crate) fn digest(token: &str) -> String {
@@ -63,37 +101,91 @@ impl Members {
     pub(crate) fn new(state: &Path) -> Self {
         Self {
             path: state.join("cluster/v1/members.json"),
+            snapshot: Arc::new(OnceCell::new()),
+            changes: watch::channel(0).0,
         }
+    }
+
+    async fn snapshot(&self) -> Result<Arc<Snapshot>> {
+        let cache = self
+            .snapshot
+            .get_or_try_init(|| async {
+                let path = self.path.clone();
+                tokio::task::spawn_blocking(move || {
+                    Ok::<_, anyhow::Error>(Mutex::new(Arc::new(Snapshot::new(load(&path)?)?)))
+                })
+                .await?
+            })
+            .await?;
+        let snapshot = cache
+            .lock()
+            .map_err(|_| anyhow::anyhow!("membership snapshot lock poisoned"))?
+            .clone();
+        Ok(snapshot)
+    }
+
+    pub(crate) async fn changes(&self) -> watch::Receiver<u64> {
+        self.changes.subscribe()
     }
 
     async fn transaction<T: Send + 'static>(
         &self,
         operation: impl FnOnce(&mut Document) -> Result<(T, bool)> + Send + 'static,
     ) -> Result<T> {
+        self.snapshot().await?;
         let path = self.path.clone();
-        tokio::task::spawn_blocking(move || private_state::transaction(&path, "membership path has no parent", load, operation, |path, document| {
-            ensure!(serde_json::to_vec(document)?.len() as u64 <= MAX_BYTES, "membership capacity exceeded; retained removal tombstones cannot be discarded");
-            private_state::write_json(path, document)
-        })).await?
+        let snapshot = self.snapshot.clone();
+        let changes = self.changes.clone();
+        tokio::task::spawn_blocking(move || {
+            let cache = snapshot.get().context("membership snapshot not initialized")?;
+            private_state::transaction(
+                &path,
+                "membership path has no parent",
+                |_| {
+                    let current = cache.lock().map_err(|_| anyhow::anyhow!("membership snapshot lock poisoned"))?.clone();
+                    Ok(current)
+                },
+                |current| {
+                    let mut document = current.document.clone();
+                    let (result, changed) = operation(&mut document)?;
+                    if changed {
+                        *current = Arc::new(Snapshot::new(document)?);
+                    }
+                    Ok((result, changed))
+                },
+                |path, current| {
+                    ensure!(serde_json::to_vec(&current.document)?.len() as u64 <= MAX_BYTES, "membership capacity exceeded; retained removal tombstones cannot be discarded");
+                    private_state::write_json(path, &current.document)?;
+                    let previous = {
+                        let mut cached = cache.lock().map_err(|_| anyhow::anyhow!("membership snapshot lock poisoned"))?;
+                        std::mem::replace(&mut *cached, current.clone())
+                    };
+                    drop(previous);
+                    changes.send_modify(|revision| *revision = revision.wrapping_add(1));
+                    Ok(())
+                },
+            )
+        }).await?
     }
 
     pub(crate) async fn all(&self) -> Result<Vec<MemberRecord>> {
-        self.transaction(|document| Ok((document.records.values().cloned().collect(), false)))
-            .await
+        let snapshot = self.snapshot().await?;
+        Ok(snapshot.document.records.values().cloned().collect())
     }
 
     pub(crate) async fn resolve(&self, selector: &str) -> Result<MemberRecord> {
-        let selector = selector.to_owned();
-        self.transaction(move |document| {
-            let mut records = document.records.values().filter(|record| {
-                record.state != MemberState::Removed
-                    && (record.host == selector || record.name == selector)
-            });
-            let record = records.next().context("unknown or removed member")?.clone();
-            ensure!(records.next().is_none(), "member selector is ambiguous");
-            Ok((record, false))
-        })
-        .await
+        let snapshot = self.snapshot().await?;
+        let memberships = snapshot
+            .selectors
+            .get(selector)
+            .context("unknown or removed member")?;
+        ensure!(memberships.len() == 1, "member selector is ambiguous");
+        snapshot
+            .document
+            .records
+            .get(&memberships[0])
+            .cloned()
+            .context("member selector index is inconsistent")
     }
 
     pub(crate) async fn issue(&self, request: IssueParams) -> Result<String> {
@@ -247,6 +339,7 @@ impl Members {
         validate_uuid(&request.host)?;
         validate_uuid(&request.membership)?;
         self.transaction(move |document| {
+            let existed = document.records.contains_key(&request.membership);
             let record = document
                 .records
                 .entry(request.membership.clone())
@@ -265,15 +358,18 @@ impl Members {
                 record.host == request.host,
                 "membership belongs to another host"
             );
-            record.state = if pending {
+            let state = if pending {
                 MemberState::RemovePending
             } else {
                 MemberState::Removed
             };
+            let changed =
+                !existed || record.state != state || (!pending && record.credential.is_some());
+            record.state = state;
             if !pending {
                 record.credential = None;
             }
-            Ok((record.clone(), true))
+            Ok((record.clone(), changed))
         })
         .await
     }
@@ -286,37 +382,105 @@ impl Members {
         if parts.len() != 4 || parts[0] != "rcp1" || token.len() > 256 {
             return Ok(None);
         }
-        let (host, membership, hash) = (parts[1].to_owned(), parts[2].to_owned(), digest(token));
-        self.transaction(move |document| {
-            let valid = document.records.get(&membership).is_some_and(|record| {
+        let (host, membership, hash) = (parts[1], parts[2], digest(token));
+        let snapshot = self.snapshot().await?;
+        let valid = snapshot
+            .document
+            .records
+            .get(membership)
+            .is_some_and(|record| {
                 record.host == host
                     && record.state == MemberState::Active
                     && bool::from(record.issued_digest.as_bytes().ct_eq(hash.as_bytes()))
             });
-            Ok((
-                valid.then_some(crate::auth::installation_credentials::Grant::Peer {
-                    host,
-                    membership,
-                    digest: hash,
-                }),
-                false,
-            ))
-        })
-        .await
+        Ok(
+            valid.then(|| crate::auth::installation_credentials::Grant::Peer {
+                host: host.to_owned(),
+                membership: membership.to_owned(),
+                digest: hash,
+            }),
+        )
     }
 
     pub(crate) async fn valid(&self, host: &str, membership: &str, hash: &str) -> Result<bool> {
-        let (host, membership, hash) = (host.to_owned(), membership.to_owned(), hash.to_owned());
-        self.transaction(move |document| {
-            Ok((
-                document.records.get(&membership).is_some_and(|record| {
-                    record.host == host
-                        && record.state == MemberState::Active
-                        && bool::from(record.issued_digest.as_bytes().ct_eq(hash.as_bytes()))
-                }),
-                false,
-            ))
-        })
-        .await
+        let snapshot = self.snapshot().await?;
+        Ok(snapshot
+            .document
+            .records
+            .get(membership)
+            .is_some_and(|record| {
+                record.host == host
+                    && record.state == MemberState::Active
+                    && bool::from(record.issued_digest.as_bytes().ct_eq(hash.as_bytes()))
+            }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn cached_reads_and_failed_writes_preserve_committed_membership() {
+        let directory = tempfile::tempdir().unwrap();
+        let members = Members::new(directory.path());
+        let mut changes = members.changes().await;
+        let host = "00000000-0000-4000-8000-000000000001";
+        let membership = "00000000-0000-4000-8000-000000000002";
+        let request = IssueParams {
+            protocol: PROTOCOL,
+            r#for: host.to_owned(),
+            name: "test-host".to_owned(),
+            membership: membership.to_owned(),
+        };
+        let token = members.issue(request.clone()).await.unwrap();
+        assert!(changes.has_changed().unwrap());
+        changes.borrow_and_update();
+        assert_eq!(members.issue(request).await.unwrap(), token);
+        assert!(!changes.has_changed().unwrap());
+
+        std::fs::remove_file(&members.path).unwrap();
+        std::fs::create_dir(&members.path).unwrap();
+        assert!(members.authenticate(&token).await.unwrap().is_some());
+        assert!(
+            members
+                .valid(host, membership, &digest(&token))
+                .await
+                .unwrap()
+        );
+        assert_eq!(members.resolve(host).await.unwrap().membership, membership);
+        assert_eq!(members.resolve("test-host").await.unwrap().host, host);
+        assert_eq!(members.all().await.unwrap().len(), 1);
+        assert!(!changes.has_changed().unwrap());
+
+        let removal = RemoveParams {
+            protocol: PROTOCOL,
+            host: host.to_owned(),
+            membership: membership.to_owned(),
+        };
+        assert!(members.remove(removal.clone(), false).await.is_err());
+        assert!(members.authenticate(&token).await.unwrap().is_some());
+        assert_eq!(
+            members.resolve(host).await.unwrap().state,
+            MemberState::Active
+        );
+        assert!(!changes.has_changed().unwrap());
+
+        std::fs::remove_dir(&members.path).unwrap();
+        members.remove(removal.clone(), false).await.unwrap();
+        assert!(changes.has_changed().unwrap());
+        changes.borrow_and_update();
+        assert!(members.authenticate(&token).await.unwrap().is_none());
+        assert!(members.resolve(host).await.is_err());
+        members.remove(removal, false).await.unwrap();
+        assert!(!changes.has_changed().unwrap());
+
+        let reopened = Members::new(directory.path());
+        assert!(reopened.authenticate(&token).await.unwrap().is_none());
+        assert!(reopened.resolve("test-host").await.is_err());
+        let records = reopened.all().await.unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].membership, membership);
+        assert_eq!(records[0].state, MemberState::Removed);
     }
 }
