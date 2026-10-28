@@ -7,7 +7,6 @@ use std::time::Duration;
 
 impl Gateway {
     pub(crate) fn start_cluster_liveness(self: &Arc<Self>) -> Result<()> {
-        use futures_util::{StreamExt, stream};
         let gateway = Arc::downgrade(self);
         let started = self.jobs.tasks.spawn_graceful("cluster_liveness", move |shutdown| async move {
             let mut previous = std::time::SystemTime::now();
@@ -40,16 +39,7 @@ impl Gateway {
                 }
                 let Some(gateway) = gateway.upgrade() else { break };
                 let link = gateway.cluster_link().await?;
-                let identity = gateway.host_identity().await?;
-                let members = link.members().await?;
-                stream::iter(members.into_iter().filter(|member| member.state == MemberState::Active))
-                    .for_each_concurrent(64, |member| {
-                        let link = link.clone();
-                        let identity = identity.clone();
-                        async move {
-                            let _ = link.call(&member.host, "cluster/hello", json!({"protocol":PROTOCOL,"host":identity.host_id,"incarnation":identity.incarnation})).await;
-                        }
-                    }).await;
+                link.refresh_members().await?;
                 gateway.jobs.dirty();
                 previous = std::time::SystemTime::now();
             }

@@ -516,7 +516,21 @@ async fn cluster_three_member_pinned_links_report_typed_load() {
                 .all(|member| member["reachability"]["state"] == "reachable")
         );
     }
-    a.stop().await;
     b.stop().await;
+    let page = rpc(&a, "cluster/list", json!({})).await;
+    let members = page["members"].as_array().unwrap();
+    assert_eq!(
+        members
+            .iter()
+            .filter(|member| member["reachability"]["state"] == "unreachable")
+            .count(),
+        1
+    );
+    assert!(
+        members
+            .iter()
+            .all(|member| member["reachability"]["lastSeenAt"].is_string())
+    );
+    a.stop().await;
     c.stop().await;
 }

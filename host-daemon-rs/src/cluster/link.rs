@@ -176,6 +176,46 @@ impl Link {
             .collect())
     }
 
+    pub(crate) async fn refresh_members(&self) -> Result<()> {
+        use futures_util::stream;
+        let identity = self.identity.read().await.clone();
+        stream::iter(
+            self.store
+                .all()
+                .await?
+                .into_iter()
+                .filter(|member| member.state == MemberState::Active),
+        )
+        .for_each_concurrent(64, |member| {
+            let identity = &identity;
+            async move {
+                if tokio::time::timeout(
+                    Duration::from_secs(2),
+                    self.call(
+                        &member.host,
+                        "cluster/hello",
+                        json!({"protocol":PROTOCOL,"host":identity.host_id,"incarnation":identity.incarnation}),
+                    ),
+                )
+                .await
+                .is_err()
+                {
+                    self.observe_failure(
+                        &member,
+                        &LinkError {
+                            class: ErrorClass::Uncertain,
+                            transmitted: true,
+                            message: "member hello deadline exceeded".into(),
+                        },
+                    )
+                    .await;
+                }
+            }
+        })
+        .await;
+        Ok(())
+    }
+
     pub(crate) async fn call(
         &self,
         host: &str,
@@ -407,6 +447,8 @@ impl Link {
                 routes: record.routes.clone(),
             },
         );
+        drop(observations);
+        self.wake_member(&record.host).await;
     }
 
     async fn observe_failure(&self, record: &MemberRecord, error: &LinkError) {

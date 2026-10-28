@@ -63,6 +63,7 @@ impl Gateway {
         let identity = self.host_identity().await?.clone();
         let link = self.cluster_link().await?;
         if method == "cluster/list" {
+            link.refresh_members().await?;
             return Ok(
                 json!({"self":{"hostId":identity.host_id,"name":self.job_host_name()?,"incarnation":identity.incarnation,"version":version(),"protocol":PROTOCOL},"members":link.members().await?}),
             );
