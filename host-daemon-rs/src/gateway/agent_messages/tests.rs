@@ -292,14 +292,14 @@ async fn concurrent_different_messages_cannot_continue_a_newer_invocation() {
 }
 
 #[tokio::test]
-async fn unregistered_bare_native_selector_keeps_provider_identity_unknown() {
+async fn noncanonical_native_selector_keeps_provider_identity_unknown() {
     let gateway = TestGateway::new();
     let response = gateway
         .agent_jobs_rpc(
             "agent/jobs/message",
             request(
                 MessageTarget::Selector {
-                    selector: "11111111-1111-4111-8111-111111111111".into(),
+                    selector: "not-a-native-thread".into(),
                 },
                 "unknown-native-provider",
                 "Read-only fixture message",
@@ -310,7 +310,7 @@ async fn unregistered_bare_native_selector_keeps_provider_identity_unknown() {
     assert_eq!(response["deliveryState"]["kind"], "failed");
     let reason = response["deliveryState"]["reason"].as_str().unwrap();
     assert!(reason.contains("provider is unknown"));
-    assert!(reason.contains("claude_UUID or codex:UUID"));
+    assert!(reason.contains("canonical Codex UUID or claude_UUID"));
     assert!(response["resolved"].is_null());
     assert_eq!(
         gateway
@@ -514,4 +514,61 @@ async fn canceled_message_caller_cannot_release_execution_before_provider_admiss
             Err(tokio::sync::mpsc::error::TryRecvError::Empty)
         ));
     }
+}
+
+#[tokio::test]
+async fn bare_codex_uuid_never_resolves_a_registered_claude_short_uuid() {
+    use crate::test_support::FakeControl;
+    let gateway = TestGateway::new();
+    let claude_job = finished_job(&gateway).await;
+    let view = gateway.jobs.read(&claude_job).await.unwrap();
+    let ConversationBinding::Known { conversation } = view.agent.unwrap().conversation else {
+        panic!("Fixture has no conversation")
+    };
+    let uuid = conversation.thread_id.strip_prefix("claude_").unwrap();
+    let home = gateway.job_codex_home().unwrap();
+    let mut control = FakeControl::attach(&gateway, 2).await.requests;
+    for selector in [uuid.to_owned(), format!("codex:{uuid}")] {
+        let owner = gateway.clone();
+        let task = tokio::spawn(async move {
+            owner
+                .resolve_message_selector(&selector, "fixture-id")
+                .await
+        });
+        let request: serde_json::Value =
+            serde_json::from_str(&control.recv().await.unwrap()).unwrap();
+        assert_eq!(request["method"], "thread/read");
+        assert_eq!(request["params"]["threadId"], uuid);
+        gateway
+            .control_requests
+            .lock()
+            .unwrap()
+            .remove(request["id"].as_str().unwrap())
+            .unwrap()
+            .send(Ok(
+                json!({"thread":{"id":uuid,"path":home.join("sessions/fixture.jsonl")}}),
+            ))
+            .unwrap();
+        let resolved = task.await.unwrap().unwrap();
+        assert_eq!(resolved.conversation.provider, Provider::Codex);
+        assert_eq!(resolved.conversation.thread_id, uuid);
+        assert!(resolved.target_job_id.is_none());
+    }
+    let owner = gateway.clone();
+    let selector = uuid.to_owned();
+    let task = tokio::spawn(async move {
+        owner
+            .resolve_message_selector(&selector, "fixture-id")
+            .await
+    });
+    let request: serde_json::Value = serde_json::from_str(&control.recv().await.unwrap()).unwrap();
+    gateway.control_requests.lock().unwrap().remove(request["id"].as_str().unwrap()).unwrap()
+        .send(Ok(json!({"thread":{"id":conversation.thread_id,"path":"/fixture/claude/projects/session.jsonl"}}))).unwrap();
+    assert!(
+        task.await
+            .unwrap()
+            .unwrap_err()
+            .to_string()
+            .contains("different native conversation")
+    );
 }

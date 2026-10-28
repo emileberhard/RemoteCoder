@@ -382,7 +382,8 @@ fn summary_matches(summary: &JobSummary, target: &str) -> bool {
         || match &summary.conversation {
             ConversationBinding::Known { conversation } => {
                 conversation.thread_id == target
-                    || conversation.thread_id.strip_prefix("claude_") == Some(target)
+                    || (crate::ids::parse_uuid(target).is_none()
+                        && conversation.thread_id.strip_prefix("claude_") == Some(target))
             }
             ConversationBinding::Unknown { .. } => false,
         }

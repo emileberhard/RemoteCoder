@@ -317,7 +317,7 @@ impl Gateway {
                 .await?
                 .list(crate::agents::jobs::store::Selection::Recent, 200, cursor)
                 .await?;
-            matches.extend(page.jobs.into_iter().filter(|row| row.job_id.as_str().ends_with(selector) || matches!(&row.conversation, ConversationBinding::Known { conversation } if conversation.thread_id == selector || conversation.thread_id.strip_prefix("claude_") == Some(selector))));
+            matches.extend(page.jobs.into_iter().filter(|row| row.job_id.as_str().ends_with(selector) || matches!(&row.conversation, ConversationBinding::Known { conversation } if conversation.thread_id == selector)));
             cursor = page.next_cursor;
             if cursor.is_none() {
                 break;
@@ -360,25 +360,34 @@ impl Gateway {
                 )
                 .await;
         }
-        let header = if selector.starts_with("claude_") {
-            self.claude_thread_response(&json!({"threadId":selector}))
-                .await
-                .map_err(|error| anyhow::anyhow!(error.message))?["thread"]
-                .clone()
+        let (provider, thread_id) = if selector.starts_with("claude_") {
+            (crate::agents::jobs::model::Provider::Claude, selector)
         } else if let Some(id) = selector.strip_prefix("codex:") {
-            self.call_control("thread/read", json!({"threadId":id,"includeTurns":false}))
-                .await?["thread"]
-                .clone()
+            (crate::agents::jobs::model::Provider::Codex, id)
+        } else if crate::ids::parse_uuid(selector).is_some() {
+            (crate::agents::jobs::model::Provider::Codex, selector)
         } else {
             bail!(
-                "native conversation provider is unknown; use an explicit claude_UUID or codex:UUID selector"
+                "native conversation provider is unknown; use a canonical Codex UUID or claude_UUID selector"
             );
+        };
+        let header = match provider {
+            crate::agents::jobs::model::Provider::Claude => self
+                .claude_thread_response(&json!({"threadId":thread_id}))
+                .await
+                .map_err(|error| anyhow::anyhow!(error.message))?["thread"]
+                .clone(),
+            crate::agents::jobs::model::Provider::Codex => self
+                .call_control(
+                    "thread/read",
+                    json!({"threadId":thread_id,"includeTurns":false}),
+                )
+                .await?["thread"]
+                .clone(),
         };
         let conversation = crate::agents::conversation_from_header(&header)?;
         ensure!(
-            conversation.thread_id == selector
-                || conversation.thread_id.strip_prefix("claude_") == Some(selector)
-                || selector.strip_prefix("codex:") == Some(conversation.thread_id.as_str()),
+            conversation.provider == provider && conversation.thread_id == thread_id,
             "provider returned a different native conversation"
         );
         if let Some(agent) = self.jobs.agent_for_conversation(&conversation).await? {
