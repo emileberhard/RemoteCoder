@@ -195,10 +195,9 @@ impl Gateway {
                     .jobs
                     .store()
                     .await?
-                    .intents()
+                    .find_intent(stop.job_id.clone())
                     .await?
-                    .iter()
-                    .any(|intent| intent.request.job_id == stop.job_id)
+                    .is_some()
                 {
                     self.jobs
                         .store()
@@ -238,10 +237,8 @@ impl Gateway {
                     .jobs
                     .store()
                     .await?
-                    .intents()
+                    .find_intent(intent.request.job_id.clone())
                     .await?
-                    .into_iter()
-                    .find(|record| record.request.job_id == intent.request.job_id)
                     .context("intent disappeared")?;
                 if current.state == IntentState::StopRequested {
                     self.jobs.dirty();
@@ -287,12 +284,8 @@ impl Gateway {
         let mut retry = false;
         let link = self.cluster_link().await?;
         let identity = self.host_identity().await?;
-        for member in link
-            .members()
-            .await?
-            .into_iter()
-            .filter(|member| member.host == host && member.state == MemberState::RemovePending)
-        {
+        let member = link.store.resolve(host).await?;
+        if member.state == MemberState::RemovePending {
             if link.call(&member.host,"cluster/removed",json!({"protocol":PROTOCOL,"host":identity.host_id,"membership":member.membership})).await.is_ok() {
                 link.store.remove(RemoveParams {protocol:PROTOCOL,host:member.host,membership:member.membership},false).await?;
             } else {retry=true;}
@@ -356,7 +349,13 @@ impl Gateway {
         host: &str,
         incarnation: &str,
     ) -> Result<()> {
-        for intent in self.jobs.store().await?.intents().await? {
+        for intent in self
+            .jobs
+            .store()
+            .await?
+            .changed_incarnation_intents(host.to_owned(), Some(incarnation.to_owned()))
+            .await?
+        {
             if intent.host == host
                 && intent.incarnation != incarnation
                 && matches!(
@@ -376,7 +375,10 @@ impl Gateway {
 
     pub(super) async fn remove_member_work(&self, membership: &str, host: &str) -> Result<()> {
         let store = self.jobs.store().await?;
-        for intent in store.intents().await? {
+        for intent in store
+            .changed_incarnation_intents(host.to_owned(), None)
+            .await?
+        {
             if intent.membership == membership
                 && intent.host == host
                 && !matches!(

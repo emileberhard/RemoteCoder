@@ -33,7 +33,7 @@ struct Inner {
     root: PathBuf,
     _lease: File,
     indexes: indexes::Indexes,
-    jobs: BTreeMap<JobId, JobRecord>,
+    jobs: HashMap<JobId, JobRecord>,
     agents: HashMap<String, AgentRecord>,
     parents:
         std::collections::HashMap<ConversationIdentity, Option<crate::wire::cluster::AgentAddress>>,
@@ -63,7 +63,7 @@ impl JobStore {
                 .custom_flags(libc::O_NOFOLLOW)
                 .open(root.join("owner.lock"))?;
             lease.try_lock().context("another process owns the delegated-job store")?;
-            let mut inner = Inner { root, _lease: lease, indexes: indexes::Indexes::default(), jobs: BTreeMap::new(), agents: HashMap::new(), parents:Default::default(), uncertainties: Vec::new(), messages: BTreeMap::new(), intents: BTreeMap::new(), fences: BTreeMap::new() };
+            let mut inner = Inner { root, _lease: lease, indexes: indexes::Indexes::default(), jobs: HashMap::new(), agents: HashMap::new(), parents:Default::default(), uncertainties: Vec::new(), messages: BTreeMap::new(), intents: BTreeMap::new(), fences: BTreeMap::new() };
             for name in ["jobs", "agents", "evidence", "uncertainties", "messages", "remote-intents", "cancel-fences"] {
                 private_state::ensure_private_directory(&inner.root.join(name))?;
             }
@@ -170,7 +170,7 @@ impl JobStore {
 
     pub(crate) async fn pending_ids(&self) -> Result<Vec<JobId>> {
         self.access(|inner| {
-            Ok(inner
+            let mut ids: Vec<_> = inner
                 .jobs
                 .values()
                 .filter(|job| {
@@ -178,7 +178,9 @@ impl JobStore {
                         || !is_terminal(job) && matches!(job.stop, StopState::Requested { .. })
                 })
                 .map(|job| job.job_id.clone())
-                .collect())
+                .collect();
+            ids.sort();
+            Ok(ids)
         })
         .await
     }
@@ -235,14 +237,8 @@ impl JobStore {
         &self,
         conversation: ConversationIdentity,
     ) -> Result<Option<AgentRecord>> {
-        self.access(move |inner| {
-            inner
-                .indexes
-                .agent(&conversation)?
-                .map(|id| inner.agent_view(id))
-                .transpose()
-        })
-        .await
+        self.access(move |inner| inner.conversation_agent(&conversation))
+            .await
     }
 
     pub(crate) async fn list(
@@ -822,12 +818,13 @@ impl Inner {
     }
 
     fn recover_agents(&mut self) -> Result<()> {
-        let initial: Vec<_> = self
+        let mut initial: Vec<_> = self
             .jobs
             .values()
             .filter(|job| job.source == JobSource::Runtime && job.previous_job_id.is_none())
             .cloned()
             .collect();
+        initial.sort_by(|left, right| left.job_id.cmp(&right.job_id));
         for job in initial {
             self.ensure_agent(&job)?;
         }

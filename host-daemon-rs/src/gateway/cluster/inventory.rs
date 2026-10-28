@@ -168,8 +168,8 @@ impl Gateway {
                     (limit as usize - agents.len()).min(1000),
                 )
                 .await?;
-            for session in page.sessions {
-                cursor.sessions = Some(session.session_key.clone());
+            let mut identities = std::collections::HashMap::new();
+            for session in &page.sessions {
                 if session.host_id != identity.host_id || !session.source_present {
                     continue;
                 }
@@ -185,7 +185,20 @@ impl Gateway {
                     } else {
                         self.agent_conversation(&session.thread_id)?
                     };
-                let agent = self.jobs.agent_for_conversation(&conversation).await?;
+                identities.insert(session.thread_id.clone(), conversation);
+            }
+            let mut indexed = self
+                .jobs
+                .store()
+                .await?
+                .agents_for_conversations(identities.values().cloned().collect())
+                .await?;
+            for session in page.sessions {
+                cursor.sessions = Some(session.session_key.clone());
+                let Some(conversation) = identities.remove(&session.thread_id) else {
+                    continue;
+                };
+                let agent = indexed.remove(&conversation);
                 if agent
                     .as_ref()
                     .is_some_and(|agent| agent.latest_job_id.is_some())

@@ -214,6 +214,7 @@ impl JobStore {
         .await
     }
 
+    #[cfg(test)]
     pub(crate) async fn intents(&self) -> Result<Vec<RemoteIntent>> {
         self.access(|inner| Ok(inner.intents.values().cloned().collect()))
             .await

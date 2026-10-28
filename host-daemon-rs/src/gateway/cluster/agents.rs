@@ -101,44 +101,48 @@ impl Gateway {
         }
         let store = self.jobs.store().await?;
         let mut warnings = result["warnings"].as_array().cloned().unwrap_or_default();
-        for id in store.agent_ids().await? {
-            let agent = match store.agent(id.clone()).await {
-                Ok(agent) => agent,
-                Err(error) => {
-                    warnings.push(json!(format!("Agent {id} is unavailable: {error:#}")));
-                    continue;
-                }
-            };
+        let identities = rows
+            .iter()
+            .filter_map(|row| row.thread_id.as_deref())
+            .filter_map(|id| self.agent_conversation(id).ok())
+            .collect();
+        let tags = store.parent_tags(identities).await?;
+        rows.retain(|row| {
+            row.thread_id
+                .as_deref()
+                .and_then(|id| self.agent_conversation(id).ok())
+                .and_then(|conversation| tags.get(&conversation))
+                .is_none_or(|tag| tag.as_ref() == Some(&parent))
+        });
+        let mut by_thread: std::collections::HashMap<_, _> = rows
+            .iter()
+            .enumerate()
+            .filter_map(|(index, row)| row.thread_id.clone().map(|id| (id, index)))
+            .collect();
+        for agent in store.agents_with_parent(parent.clone()).await? {
             let ConversationBinding::Known { conversation } = &agent.conversation else {
                 continue;
             };
-            let row_index = rows
-                .iter()
-                .position(|row| row.thread_id.as_deref() == Some(&conversation.thread_id));
-            if agent.parent.as_ref() != Some(&parent) {
-                if let Some(index) = row_index {
-                    rows.remove(index);
-                }
-                continue;
-            }
             let row = match self.project_agent_record(&agent, &parent.thread_id).await {
                 Ok(row) => row,
                 Err(error) => {
-                    warnings.push(json!(format!("Agent {id} is unavailable: {error:#}")));
+                    warnings.push(json!(format!(
+                        "Agent {} is unavailable: {error:#}",
+                        agent.agent_id
+                    )));
                     continue;
                 }
             };
-            if let Some(index) = row_index {
+            if let Some(index) = by_thread.get(&conversation.thread_id).copied() {
                 rows[index] = row;
             } else {
+                by_thread.insert(conversation.thread_id.clone(), rows.len());
                 rows.push(row);
             }
         }
         if parent.host_id == identity.host_id {
-            for intent in store.intents().await? {
-                if intent.parent.as_ref() == Some(&parent) {
-                    rows.push(intent_row(&intent)?);
-                }
+            for intent in store.parent_intents(parent.clone()).await? {
+                rows.push(intent_row(&intent)?);
             }
         }
         rows.sort_by(|left, right| {

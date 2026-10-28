@@ -1074,6 +1074,17 @@ async fn cluster_store_indexes_follow_binding_move_promotion_and_reload() {
         .await
         .unwrap();
     assert!(a.has_changed().unwrap());
+    assert_eq!(
+        store
+            .agents_with_parent(AgentAddress {
+                host_id: "host-b".into(),
+                thread_id: "parent-b".into()
+            })
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
     store.retarget_delivery(bound.job_id.clone()).await.unwrap();
     assert!(
         store
@@ -1091,6 +1102,16 @@ async fn cluster_store_indexes_follow_binding_move_promotion_and_reload() {
         .set_parent(original.agent_id.clone(), None, Recipient::None)
         .await
         .unwrap();
+    assert!(
+        store
+            .agents_with_parent(AgentAddress {
+                host_id: "host-b".into(),
+                thread_id: "parent-b".into()
+            })
+            .await
+            .unwrap()
+            .is_empty()
+    );
     store
         .retarget_delivery(original.job_id.clone())
         .await
@@ -1110,6 +1131,16 @@ async fn cluster_store_indexes_follow_binding_move_promotion_and_reload() {
         .unwrap()
         .unwrap();
     assert_eq!(agent.parent, None);
+    assert!(
+        store
+            .agents_with_parent(AgentAddress {
+                host_id: "host-b".into(),
+                thread_id: "parent-b".into()
+            })
+            .await
+            .unwrap()
+            .is_empty()
+    );
     assert_eq!(agent.latest_job_id, Some(original.job_id.clone()));
     assert!(
         store

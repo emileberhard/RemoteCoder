@@ -4,10 +4,14 @@ use std::collections::{BTreeSet, HashMap};
 #[derive(Default)]
 pub(super) struct Indexes {
     conversations: HashMap<ConversationIdentity, BTreeSet<String>>,
+    parents: HashMap<crate::wire::cluster::AgentAddress, BTreeSet<String>>,
+    intents_by_parent: HashMap<crate::wire::cluster::AgentAddress, BTreeSet<JobId>>,
+    open_intents: HashMap<String, HashMap<String, BTreeSet<JobId>>>,
     pub order: BTreeSet<(Option<i64>, JobId)>,
     pub by_agent: HashMap<String, BTreeSet<(Option<i64>, JobId)>>,
     pub active: HashMap<String, BTreeSet<JobId>>,
     pending_by_agent: HashMap<String, BTreeSet<JobId>>,
+    working_agents: HashMap<String, usize>,
     pub successors: HashMap<JobId, BTreeSet<JobId>>,
     heads: HashMap<String, ChainHead>,
     lineage: HashMap<JobId, u64>,
@@ -49,6 +53,14 @@ impl Indexes {
     }
 
     pub fn remove_agent(&mut self, agent: &AgentRecord) {
+        if let Some(parent) = &agent.parent
+            && let Some(ids) = self.parents.get_mut(parent)
+        {
+            ids.remove(&agent.agent_id);
+            if ids.is_empty() {
+                self.parents.remove(parent);
+            }
+        }
         if let ConversationBinding::Known { conversation } = &agent.conversation
             && let Some(ids) = self.conversations.get_mut(conversation)
         {
@@ -60,6 +72,12 @@ impl Indexes {
     }
 
     pub fn insert_agent(&mut self, agent: &AgentRecord) {
+        if let Some(parent) = &agent.parent {
+            self.parents
+                .entry(parent.clone())
+                .or_default()
+                .insert(agent.agent_id.clone());
+        }
         if let ConversationBinding::Known { conversation } = &agent.conversation {
             self.conversations
                 .entry(conversation.clone())
@@ -69,6 +87,18 @@ impl Indexes {
     }
 
     pub fn remove_job(&mut self, job: &JobRecord) {
+        if job.source == JobSource::Runtime
+            && !matches!(
+                job.execution,
+                ExecutionState::Terminal { .. } | ExecutionState::Unknown { .. }
+            )
+            && let Some(count) = self.working_agents.get_mut(&job.agent_id)
+        {
+            *count -= 1;
+            if *count == 0 {
+                self.working_agents.remove(&job.agent_id);
+            }
+        }
         self.order.remove(&(job.created_at_ms, job.job_id.clone()));
         if let Some(ids) = self.by_agent.get_mut(&job.agent_id) {
             ids.remove(&(job.created_at_ms, job.job_id.clone()));
@@ -104,6 +134,14 @@ impl Indexes {
     }
 
     pub fn insert_job(&mut self, job: &JobRecord) {
+        if job.source == JobSource::Runtime
+            && !matches!(
+                job.execution,
+                ExecutionState::Terminal { .. } | ExecutionState::Unknown { .. }
+            )
+        {
+            *self.working_agents.entry(job.agent_id.clone()).or_default() += 1;
+        }
         self.order.insert((job.created_at_ms, job.job_id.clone()));
         self.by_agent
             .entry(job.agent_id.clone())
@@ -145,7 +183,48 @@ impl Indexes {
         }
     }
 
+    fn remove_intent(&mut self, intent: &crate::wire::cluster::RemoteIntent) {
+        if let Some(parent) = &intent.parent
+            && let Some(ids) = self.intents_by_parent.get_mut(parent)
+        {
+            ids.remove(&intent.request.job_id);
+            if ids.is_empty() {
+                self.intents_by_parent.remove(parent);
+            }
+        }
+        if let Some(incarnations) = self.open_intents.get_mut(&intent.host) {
+            if let Some(ids) = incarnations.get_mut(&intent.incarnation) {
+                ids.remove(&intent.request.job_id);
+                if ids.is_empty() {
+                    incarnations.remove(&intent.incarnation);
+                }
+            }
+            if incarnations.is_empty() {
+                self.open_intents.remove(&intent.host);
+            }
+        }
+    }
+
     pub fn intent_changed(&mut self, intent: &crate::wire::cluster::RemoteIntent) {
+        if let Some(parent) = &intent.parent {
+            self.intents_by_parent
+                .entry(parent.clone())
+                .or_default()
+                .insert(intent.request.job_id.clone());
+        }
+        if matches!(
+            intent.state,
+            crate::wire::cluster::IntentState::Pending
+                | crate::wire::cluster::IntentState::Admitted
+                | crate::wire::cluster::IntentState::StopRequested
+        ) {
+            self.open_intents
+                .entry(intent.host.clone())
+                .or_default()
+                .entry(intent.incarnation.clone())
+                .or_default()
+                .insert(intent.request.job_id.clone());
+        }
         let work = self.members.entry(intent.host.clone()).or_default();
         if matches!(
             intent.state,
@@ -345,6 +424,9 @@ impl Inner {
             .is_none_or(|previous| {
                 previous.state != intent.state || previous.stop_confirmed != intent.stop_confirmed
             });
+        if let Some(previous) = self.intents.get(&intent.request.job_id) {
+            self.indexes.remove_intent(previous);
+        }
         self.indexes.intent_changed(&intent);
         if changed {
             self.indexes.wake(&intent.host);
@@ -364,7 +446,117 @@ impl Indexes {
     }
 }
 
+impl Inner {
+    fn conversation_agent(
+        &self,
+        conversation: &ConversationIdentity,
+    ) -> Result<Option<AgentRecord>> {
+        self.indexes
+            .agent(conversation)?
+            .map(|id| self.agent_view(id))
+            .transpose()
+    }
+}
+
 impl JobStore {
+    pub(crate) async fn active_agent_count(&self) -> Result<usize> {
+        self.access(|inner| Ok(inner.indexes.working_agents.len()))
+            .await
+    }
+
+    pub(crate) async fn agents_for_conversations(
+        &self,
+        conversations: Vec<ConversationIdentity>,
+    ) -> Result<HashMap<ConversationIdentity, AgentRecord>> {
+        self.access(move |inner| {
+            conversations
+                .into_iter()
+                .filter_map(
+                    |conversation| match inner.conversation_agent(&conversation) {
+                        Ok(Some(agent)) => Some(Ok((conversation, agent))),
+                        Ok(None) => None,
+                        Err(error) => Some(Err(error)),
+                    },
+                )
+                .collect()
+        })
+        .await
+    }
+
+    pub(crate) async fn agents_with_parent(
+        &self,
+        parent: crate::wire::cluster::AgentAddress,
+    ) -> Result<Vec<AgentRecord>> {
+        self.access(move |inner| {
+            inner
+                .indexes
+                .parents
+                .get(&parent)
+                .into_iter()
+                .flatten()
+                .map(|id| inner.agent_view(id))
+                .collect()
+        })
+        .await
+    }
+
+    pub(crate) async fn find_intent(
+        &self,
+        id: JobId,
+    ) -> Result<Option<crate::wire::cluster::RemoteIntent>> {
+        self.access(move |inner| Ok(inner.intents.get(&id).cloned()))
+            .await
+    }
+
+    pub(crate) async fn parent_intents(
+        &self,
+        parent: crate::wire::cluster::AgentAddress,
+    ) -> Result<Vec<crate::wire::cluster::RemoteIntent>> {
+        self.access(move |inner| {
+            inner
+                .indexes
+                .intents_by_parent
+                .get(&parent)
+                .into_iter()
+                .flatten()
+                .map(|id| {
+                    inner
+                        .intents
+                        .get(id)
+                        .cloned()
+                        .context("parent intent index has no record")
+                })
+                .collect()
+        })
+        .await
+    }
+
+    pub(crate) async fn changed_incarnation_intents(
+        &self,
+        host: String,
+        incarnation: Option<String>,
+    ) -> Result<Vec<crate::wire::cluster::RemoteIntent>> {
+        self.access(move |inner| {
+            inner
+                .indexes
+                .open_intents
+                .get(&host)
+                .into_iter()
+                .flat_map(|versions| versions.iter())
+                .filter(|(version, _)| incarnation.as_ref() != Some(*version))
+                .flat_map(|(_, ids)| ids.iter())
+                .map(|id| {
+                    inner
+                        .intents
+                        .get(id)
+                        .cloned()
+                        .context("open intent index has no record")
+                })
+                .collect()
+        })
+        .await
+    }
+
     pub(crate) async fn member_changes(
         &self,
         host: String,

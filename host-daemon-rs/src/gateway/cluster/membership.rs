@@ -2,19 +2,7 @@ use super::*;
 
 impl Gateway {
     pub(super) async fn cluster_load(&self) -> Result<HostLoad> {
-        let store = self.jobs.store().await?;
-        let mut active = std::collections::HashSet::new();
-        for id in store.pending_ids().await? {
-            let job = store.read(id).await?;
-            if job.source == crate::agents::jobs::model::JobSource::Runtime
-                && !matches!(
-                    job.execution,
-                    ExecutionState::Terminal { .. } | ExecutionState::Unknown { .. }
-                )
-            {
-                active.insert(job.agent_id);
-            }
-        }
+        let active = self.jobs.store().await?.active_agent_count().await?;
         let (cpu_percent, memory_pressure) = tokio::task::spawn_blocking(|| {
             let cores = std::thread::available_parallelism()
                 .ok()
@@ -51,7 +39,7 @@ impl Gateway {
         Ok(HostLoad {
             cpu_percent,
             memory_pressure,
-            active_agents: u32::try_from(active.len())?,
+            active_agents: u32::try_from(active)?,
         })
     }
 }
