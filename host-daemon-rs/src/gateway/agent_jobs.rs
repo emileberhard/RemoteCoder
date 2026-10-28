@@ -346,10 +346,12 @@ impl Gateway {
                     .await?
                     .verify_legacy_socket(proven.conversation.clone(), socket)
                     .await?;
-                ensure!(
-                    !matches!(*request, ScopedRequest::Legacy { .. }),
-                    "nested scoped migration is not permitted"
-                );
+                if matches!(*request, ScopedRequest::Legacy { .. }) {
+                    return Err(RpcError::new(
+                        RpcCode::InvalidParams,
+                        "nested scoped migration is not permitted",
+                    ));
+                }
                 *request
             }
             request => request,
@@ -359,10 +361,12 @@ impl Gateway {
             context_id: context.context_id.clone(),
         };
         let view = self.job_context_view(caller.clone()).await?;
-        ensure!(
-            view.job_id.is_some(),
-            "scoped route has no registered calling job"
-        );
+        if view.job_id.is_none() {
+            return Err(RpcError::new(
+                RpcCode::InvalidRequest,
+                "scoped route has no registered calling job",
+            ));
+        }
         match request {
             ScopedRequest::Legacy { .. } => Err(RpcError::new(
                 RpcCode::InvalidParams,
