@@ -205,35 +205,16 @@ impl Gateway {
             ),
             Err(error) => (None, Some(error)),
         };
-        let owner = native.as_ref().map(|context| ProcessInstance {
-            pid: context.root_process_identity.pid,
-            started_micros: context.root_process_identity.started_at_unix_micros,
-        });
-        let chain = tokio::task::spawn_blocking(move || match owner {
-            Some(owner) => ancestry_to(process, owner),
-            None => ancestry(process),
-        })
-        .await??;
-        ensure!(
-            !chain.is_empty(),
-            "caller has no verifiable process ancestry"
-        );
-        let native_position = native
-            .as_ref()
-            .map(|context| {
-                chain
-                    .iter()
-                    .position(|candidate| {
-                        candidate.pid == context.root_process_identity.pid
-                            && candidate.started_micros
-                                == context.root_process_identity.started_at_unix_micros
-                    })
-                    .context("native tool owner is outside the verified caller ancestry")
-            })
-            .transpose()?;
         let claude_home = self.claude_settings.claude_home.clone();
-        for (position, candidate) in chain.iter().enumerate() {
-            if native_position == Some(position) {
+        let mut found_process = false;
+        for candidate in ancestry(process) {
+            let candidate = candidate?;
+            found_process = true;
+            if native.as_ref().is_some_and(|context| {
+                candidate.pid == context.root_process_identity.pid
+                    && candidate.started_micros
+                        == context.root_process_identity.started_at_unix_micros
+            }) {
                 let context = native.as_ref().context("native caller owner disappeared")?;
                 ensure!(
                     !context.thread_id.is_empty()
@@ -249,7 +230,7 @@ impl Gateway {
                         },
                         thread_id: context.thread_id.clone(),
                     },
-                    process: *candidate,
+                    process: candidate,
                     turn_id: Some(context.turn_id.clone()),
                     tool_call_id: Some(context.tool_call_id.clone()),
                 }));
@@ -265,7 +246,7 @@ impl Gateway {
                         provider_home: ProviderHome::Known { path: claude_home },
                         thread_id,
                     },
-                    process: *candidate,
+                    process: candidate,
                     turn_id,
                     tool_call_id: None,
                 }));
@@ -283,12 +264,17 @@ impl Gateway {
                         provider_home: ProviderHome::Known { path: claude_home },
                         thread_id: crate::providers::claude::claude_thread_id(&owner.session_uuid),
                     },
-                    process: *candidate,
+                    process: candidate,
                     turn_id: None,
                     tool_call_id: None,
                 }));
             }
         }
+        ensure!(found_process, "caller has no verifiable process ancestry");
+        ensure!(
+            native.is_none(),
+            "native tool owner is outside the verified caller ancestry"
+        );
         if let Some(error) = native_failure {
             return Err(error).context("caller could not be proved; native process mapping was unavailable and no Claude owner matched");
         }

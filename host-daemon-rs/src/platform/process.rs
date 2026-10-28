@@ -42,8 +42,99 @@ pub(crate) fn unix_peer_identity(_: &tokio::net::UnixStream) -> Result<(i32, Pro
 }
 
 #[cfg(target_os = "macos")]
-pub(crate) fn ancestry(process: ProcessInstance) -> Result<Vec<ProcessInstance>> {
-    verified_ancestry(process, None)
+pub(crate) fn ancestry(process: ProcessInstance) -> impl Iterator<Item = Result<ProcessInstance>> {
+    walk_ancestry(process, |pid| {
+        process_info(pid)?
+            .map(|info| {
+                Ok(ProcessLink {
+                    started_micros: info_start(&info)?,
+                    parent_pid: i32::try_from(info.pbi_ppid)?,
+                })
+            })
+            .transpose()
+    })
+}
+
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct ProcessLink {
+    started_micros: u64,
+    parent_pid: i32,
+}
+
+#[cfg(target_os = "macos")]
+fn walk_ancestry(
+    process: ProcessInstance,
+    mut read: impl FnMut(i32) -> Result<Option<ProcessLink>>,
+) -> impl Iterator<Item = Result<ProcessInstance>> {
+    use anyhow::{Context, ensure};
+    let mut first = Some(process);
+    let mut previous: Option<(ProcessInstance, ProcessLink)> = None;
+    let mut chain = Vec::new();
+    let mut ended = false;
+    std::iter::from_fn(move || {
+        if ended {
+            return None;
+        }
+        let step = (|| -> Result<Option<ProcessInstance>> {
+            let next_pid = first
+                .map(|process| process.pid)
+                .or_else(|| previous.map(|(_, info)| info.parent_pid))
+                .context("process ancestry lost its next instance")?;
+            if next_pid <= 1 {
+                return Ok(None);
+            }
+            ensure!(
+                chain.len() < 64,
+                "caller process ancestry exceeds its bounded proof"
+            );
+            let (current, info) = if let Some(current) = first.take() {
+                let info = read(current.pid)?
+                    .context("caller process exited during ancestry verification")?;
+                ensure!(
+                    info.started_micros == current.started_micros,
+                    "caller process identity is stale"
+                );
+                (current, info)
+            } else {
+                let (child, child_info) =
+                    previous.context("process ancestry lost its previous instance")?;
+                let parent = read(child_info.parent_pid)?
+                    .context("caller parent exited during ancestry verification")?;
+                let recheck = read(child.pid)?
+                    .context("caller process exited during ancestry verification")?;
+                ensure!(
+                    recheck == child_info && parent.started_micros <= child.started_micros,
+                    "caller process ancestry changed during verification"
+                );
+                (
+                    ProcessInstance {
+                        pid: child_info.parent_pid,
+                        started_micros: parent.started_micros,
+                    },
+                    parent,
+                )
+            };
+            ensure!(
+                !chain.contains(&current),
+                "caller process ancestry exceeds its bounded proof"
+            );
+            chain.push(current);
+            previous = Some((current, info));
+            Ok(Some(current))
+        })();
+        match step {
+            Ok(Some(process)) => Some(Ok(process)),
+            Ok(None) => {
+                ended = true;
+                None
+            }
+            Err(error) => {
+                ended = true;
+                Some(Err(error))
+            }
+        }
+    })
 }
 
 #[cfg(target_os = "macos")]
@@ -55,57 +146,15 @@ pub(crate) fn ancestry_to(
         owner.pid > 1,
         "agent tool owner is not an application process"
     );
-    verified_ancestry(process, Some(owner))
-}
-
-#[cfg(target_os = "macos")]
-fn verified_ancestry(
-    process: ProcessInstance,
-    owner: Option<ProcessInstance>,
-) -> Result<Vec<ProcessInstance>> {
-    use anyhow::{Context, ensure};
     let mut chain = Vec::new();
-    let mut current = process;
-    while current.pid > 1 {
-        ensure!(
-            chain.len() < 64 && !chain.contains(&current),
-            "caller process ancestry exceeds its bounded proof"
-        );
-        let child = process_info(current.pid)?
-            .context("caller process exited during ancestry verification")?;
-        ensure!(
-            info_start(&child)? == current.started_micros,
-            "caller process identity is stale"
-        );
-        chain.push(current);
-        if owner == Some(current) {
+    for candidate in ancestry(process) {
+        let candidate = candidate?;
+        chain.push(candidate);
+        if candidate == owner {
             return Ok(chain);
         }
-        let parent_pid = i32::try_from(child.pbi_ppid)?;
-        if parent_pid <= 1 {
-            break;
-        }
-        let parent = process_info(parent_pid)?
-            .context("caller parent exited during ancestry verification")?;
-        let parent_start = info_start(&parent)?;
-        let recheck = process_info(current.pid)?
-            .context("caller process exited during ancestry verification")?;
-        ensure!(
-            info_start(&recheck)? == current.started_micros
-                && recheck.pbi_ppid == child.pbi_ppid
-                && parent_start <= current.started_micros,
-            "caller process ancestry changed during verification"
-        );
-        current = ProcessInstance {
-            pid: parent_pid,
-            started_micros: parent_start,
-        };
     }
-    ensure!(
-        owner.is_none(),
-        "native tool owner is outside the verified caller ancestry"
-    );
-    Ok(chain)
+    anyhow::bail!("native tool owner is outside the verified caller ancestry")
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -114,8 +163,10 @@ pub(crate) fn ancestry_to(_: ProcessInstance, _: ProcessInstance) -> Result<Vec<
 }
 
 #[cfg(not(target_os = "macos"))]
-pub(crate) fn ancestry(_: ProcessInstance) -> Result<Vec<ProcessInstance>> {
-    anyhow::bail!("verified caller process ancestry is unavailable on this platform")
+pub(crate) fn ancestry(_: ProcessInstance) -> impl Iterator<Item = Result<ProcessInstance>> {
+    std::iter::once(Err(anyhow::anyhow!(
+        "verified caller process ancestry is unavailable on this platform"
+    )))
 }
 
 /// Reads `pid`'s identity. `Ok(None)` means the process no longer runs (it
@@ -231,6 +282,88 @@ fn absent_or_error<T>(pid: i32, what: &str) -> Result<Option<T>> {
 mod tests {
     use super::*;
     use crate::platform::macos::application::request_quit;
+
+    #[test]
+    fn claude_owner_stops_before_privileged_launchers_without_hiding_proof_errors() {
+        let caller = ProcessInstance {
+            pid: 40,
+            started_micros: 400,
+        };
+        let owner = ProcessInstance {
+            pid: 30,
+            started_micros: 300,
+        };
+        let table = |pid| match pid {
+            40 => Ok(Some(ProcessLink {
+                started_micros: 400,
+                parent_pid: 30,
+            })),
+            30 => Ok(Some(ProcessLink {
+                started_micros: 300,
+                parent_pid: 20,
+            })),
+            20 => anyhow::bail!("could not read the start time of pid 20: Operation not permitted"),
+            _ => panic!("unexpected process {pid}"),
+        };
+        let mut reads = Vec::new();
+        let mut proof = Vec::new();
+        for candidate in walk_ancestry(caller, |pid| {
+            reads.push(pid);
+            table(pid)
+        }) {
+            let candidate = candidate.unwrap();
+            proof.push(candidate);
+            if candidate == owner {
+                break;
+            }
+        }
+        assert_eq!(proof, [caller, owner]);
+        assert!(!reads.contains(&20));
+        assert_eq!(
+            walk_ancestry(caller, table)
+                .collect::<Result<Vec<_>>>()
+                .unwrap_err()
+                .to_string(),
+            "could not read the start time of pid 20: Operation not permitted"
+        );
+        for unreadable in [40, 30] {
+            let error = walk_ancestry(caller, |pid| {
+                if pid == unreadable {
+                    anyhow::bail!("unreadable process {pid}");
+                }
+                table(pid)
+            })
+            .collect::<Result<Vec<_>>>()
+            .unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                format!("unreadable process {unreadable}")
+            );
+        }
+        let chain = walk_ancestry(caller, |pid| {
+            if pid == 20 {
+                Ok(Some(ProcessLink {
+                    started_micros: 200,
+                    parent_pid: 1,
+                }))
+            } else {
+                table(pid)
+            }
+        })
+        .collect::<Result<Vec<_>>>()
+        .unwrap();
+        assert_eq!(
+            chain,
+            [
+                caller,
+                owner,
+                ProcessInstance {
+                    pid: 20,
+                    started_micros: 200
+                }
+            ]
+        );
+    }
 
     #[test]
     fn a_live_process_has_a_stable_identity_and_a_missing_one_has_none() {

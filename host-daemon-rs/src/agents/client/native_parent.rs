@@ -279,8 +279,8 @@ async fn native_ancestor(
     home: &Path,
     process: ProcessInstance,
 ) -> Result<Option<NativeSessionOwner>> {
-    let ancestors = tokio::task::spawn_blocking(move || ancestry(process)).await??;
-    for process in ancestors {
+    for process in ancestry(process) {
+        let process = process?;
         if let Some(owner) = prove_owner(home, process.pid, process.started_micros).await? {
             return Ok(Some(owner));
         }

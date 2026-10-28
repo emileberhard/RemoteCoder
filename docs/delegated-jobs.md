@@ -188,17 +188,21 @@ capacity refusal names the retained obligations that prevent admission. The
 existing provider receiver owns reconciliation and Stop fences. Canonical native
 selectors are `claude_UUID` for Claude and a bare UUID for Codex; `codex:UUID`
 also selects Codex. A raw Claude session UUID never substitutes for its canonical
-thread ID. Local lookup failures explain how to resolve the owning host and use
-`codex-threads send --host <host>`; the gateway does not relay between hosts.
+thread ID. Cross-host operations use the exact owning member and its pinned
+cluster link; lookup failures never guess a host or fall back to an SSH send.
 
 ## Caller authority and read-only work
 
 Caller capture checks kernel PID/birth ancestry against actual provider-owned
-tool processes. Native proof stops at the daemon's exact tool root after checking
-its live birth identity and every intervening parent link. Unrelated launcher
+tool processes. One lazy walker stops at the first proven Codex tool root or
+Claude session owner after checking its live birth identity and every intervening
+parent link. Unrelated launcher
 ancestors above that owner may be unreadable and carry no additional authority.
-Without an authoritative native owner, complete ancestry and Claude owner checks
-retain their existing fail-closed behavior. It never trusts `AGENT_ID`, provider environment IDs or tmux's
+Without a proven owner, the complete walk retains its existing fail-closed
+behavior. An unreadable caller, intervening process or owner retains its exact
+error. This fixes the SSH-launched Claude caller failure present in 3.74.0 and
+`aa96ebb`: their eager walk could reach a privileged SSH launcher before checking
+the valid Claude owner. It never trusts `AGENT_ID`, provider environment IDs or tmux's
 global environment. Capture briefly rechecks an unpublished process entry,
 without changing the requested identity. The ephemeral captured handle is
 revalidated before every mutation; detached work must pass it explicitly and
