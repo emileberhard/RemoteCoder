@@ -364,6 +364,16 @@ impl Gateway {
                 || selector.strip_prefix("codex:") == Some(conversation.thread_id.as_str()),
             "provider returned a different native conversation"
         );
+        if let Some(agent) = self.jobs.agent_for_conversation(&conversation).await? {
+            return self
+                .resolve_message_job(
+                    agent
+                        .latest_job_id
+                        .context("conversation's latest job is unresolved")?,
+                    delivery_id,
+                )
+                .await;
+        }
         Ok(ResolvedMessage {
             conversation,
             target_job_id: None,
