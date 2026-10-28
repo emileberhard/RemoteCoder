@@ -45,12 +45,9 @@ impl Gateway {
                         local_home: claude,
                     },
                 ];
-                let skills = crate::config::HostPaths::from_env()?
-                    .home()
-                    .join("configs/skills");
                 tokio::task::spawn_blocking(move || -> Result<Arc<Runtime>> {
                     let store = Store::open(root.join("catalog.sqlite3"))?;
-                    let worker = Arc::new(Worker::start(store.clone(), origins.clone(), skills)?);
+                    let worker = Arc::new(Worker::start(store.clone(), origins.clone())?);
                     Ok(Arc::new(Runtime {
                         store,
                         worker,

@@ -12,7 +12,15 @@ pub(crate) struct Worker {
 }
 
 impl Worker {
-    pub fn start(store: Store, origins: Vec<Origin>, skills: std::path::PathBuf) -> Result<Self> {
+    pub fn start(store: Store, origins: Vec<Origin>) -> Result<Self> {
+        let home = crate::config::HostPaths::from_env()?.home().to_owned();
+        let mut skills = vec![home.join(".agents/skills")];
+        skills.extend(
+            origins
+                .iter()
+                .filter(|o| o.provider == "claude")
+                .map(|o| o.local_home.join("skills")),
+        );
         let stop = Arc::new(AtomicBool::new(false));
         let wake = Arc::new((Mutex::new(()), Condvar::new()));
         let flag = stop.clone();

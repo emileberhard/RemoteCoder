@@ -302,6 +302,34 @@ fn sessions_feed_restart_expiry_and_atomic_rejection() {
 }
 
 #[test]
+fn sessions_skill_catalog_deduplicates_provider_symlinks() {
+    let root = tempfile::tempdir().unwrap();
+    let actual = root.path().join("shared");
+    std::fs::create_dir_all(actual.join("agents")).unwrap();
+    std::fs::write(actual.join("agents/SKILL.md"), "fixture").unwrap();
+    let roots: Vec<_> = ["codex", "agents", "claude"]
+        .into_iter()
+        .map(|name| {
+            let path = root.path().join(name);
+            std::os::unix::fs::symlink(&actual, &path).unwrap();
+            path
+        })
+        .collect();
+    let store = Store::open(root.path().join("state/catalog.sqlite3")).unwrap();
+    let db = store.writer().unwrap();
+    ingest::catalog(&db, &roots).unwrap();
+    assert_eq!(
+        db.query_row("SELECT count(*) FROM skill WHERE present=1", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    let cursor = changes::cursor(&db).unwrap();
+    ingest::catalog(&db, &roots).unwrap();
+    assert_eq!(changes::cursor(&db).unwrap(), cursor);
+}
+
+#[test]
 fn sessions_timestamps_preserve_fractional_order() {
     let whole = super::timestamp("2026-10-28T10:00:00Z").unwrap();
     let fraction = super::timestamp("2026-10-28T11:00:00.1+01:00").unwrap();
@@ -568,7 +596,10 @@ fn sessions_measure_corpus() -> Result<()> {
     let sessions: i64 = db.query_row("SELECT count(*) FROM session", [], |r| r.get(0))?;
     ingest::catalog(
         &db,
-        &PathBuf::from(std::env::var("HOME")?).join("configs/skills"),
+        &[
+            PathBuf::from(std::env::var("HOME")?).join(".agents/skills"),
+            PathBuf::from(std::env::var("HOME")?).join(".claude/skills"),
+        ],
     )?;
     let skill_started = Instant::now();
     let unused_query = query::rows(

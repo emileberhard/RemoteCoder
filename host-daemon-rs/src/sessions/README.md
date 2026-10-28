@@ -49,3 +49,8 @@ lane L's identity and link merge. Its replacement is the single integration seam
 no cluster transport, member credentials, or identity owner is duplicated here.
 The CLI is `remote-coder-codex-gateway sessions`; `--local` and `--database`
 permit gateway-independent reads. All output is JSON; errors go to stderr.
+
+The installed skill catalog uses the user roots `.agents/skills` for Codex and
+`.claude/skills` for Claude. Resolved paths deduplicate symlinks. The catalog
+contains at most 10,000 skills; first_seen is the first catalog observation, so
+newly discovered skills are excluded from claims about an earlier unused period.

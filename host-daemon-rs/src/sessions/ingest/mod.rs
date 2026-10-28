@@ -462,23 +462,48 @@ pub(super) fn dependencies(
     Ok((images.into_iter().collect(), sidecars.into_iter().collect()))
 }
 
-pub(crate) fn catalog(db: &Connection, root: &Path) -> Result<()> {
-    if !root.exists() {
-        return Ok(());
+pub(crate) fn catalog(db: &Connection, roots: &[PathBuf]) -> Result<()> {
+    let mut paths = BTreeSet::new();
+    let mut skills = BTreeMap::new();
+    let roots: BTreeSet<PathBuf> = roots
+        .iter()
+        .filter(|r| r.exists())
+        .map(std::fs::canonicalize)
+        .collect::<std::io::Result<_>>()?;
+    for root in roots {
+        for entry in WalkDir::new(root).follow_links(true) {
+            let entry = entry?;
+            if entry.file_type().is_file() && entry.file_name() == "SKILL.md" {
+                let path = std::fs::canonicalize(entry.path())?;
+                if !paths.insert(path.clone()) {
+                    continue;
+                }
+                ensure!(
+                    paths.len() <= 10000,
+                    "capacity: more than 10000 installed skills"
+                );
+                let name = path
+                    .parent()
+                    .and_then(|p| p.file_name())
+                    .context("Skill directory")?
+                    .to_string_lossy()
+                    .into_owned();
+                skills.entry(name).or_insert(path);
+            }
+        }
     }
     let tx = db.unchecked_transaction()?;
-    tx.execute("UPDATE skill SET present=0 WHERE present<>0", [])?;
-    for entry in WalkDir::new(root).follow_links(false) {
-        let entry = entry?;
-        if entry.file_type().is_file() && entry.file_name() == "SKILL.md" {
-            let name = entry
-                .path()
-                .parent()
-                .and_then(|p| p.file_name())
-                .context("Skill directory")?
-                .to_string_lossy();
-            tx.execute("INSERT INTO skill(name,path,first_seen,present) VALUES(?1,?2,?3,1) ON CONFLICT(name) DO UPDATE SET path=excluded.path,present=1",params![name,entry.path().to_string_lossy(),super::now()])?;
+    let known: Vec<String> = tx
+        .prepare("SELECT name FROM skill WHERE present=1")?
+        .query_map([], |r| r.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    for name in known {
+        if !skills.contains_key(&name) {
+            tx.execute("UPDATE skill SET present=0 WHERE name=?1", [name])?;
         }
+    }
+    for (name, path) in skills {
+        tx.execute("INSERT INTO skill(name,path,first_seen,present) VALUES(?1,?2,?3,1) ON CONFLICT(name) DO UPDATE SET path=excluded.path,present=1 WHERE skill.path<>excluded.path OR skill.present=0",params![name,path.to_string_lossy(),super::now()])?;
     }
     tx.commit()?;
     Ok(())
