@@ -3,7 +3,7 @@ import Testing
 @testable import RemoteCoder
 
 actor HistoryGatewayFixture: CodexHistoryGateway, ConversationMarksRemote {
-    enum HeldRead: Sendable { case header, classification, list }
+    enum HeldRead: Sendable { case header, classification, list, page }
     enum Failure: Error { case offline }
     struct History: Sendable {
         var entries: [CodexAppServerV2.ThreadItemsListResponse.Entry]
@@ -145,6 +145,7 @@ actor HistoryGatewayFixture: CodexHistoryGateway, ConversationMarksRemote {
         if shouldFail { throw Failure.offline }
         let fields = params.objectValue ?? [:]
         requestedThreadIDs.append(fields["threadId"]?.stringValue ?? "")
+        await suspendRead(.page)
         if method == "thread/items/list" {
             if case .number(let limit)? = fields["limit"] { itemPageLimits.append(Int(limit)) }
             if itemPagesExceedCapacity {
