@@ -290,3 +290,36 @@ async fn concurrent_different_messages_cannot_continue_a_newer_invocation() {
         .unwrap();
     assert_eq!(jobs.jobs.len(), 2);
 }
+
+#[tokio::test]
+async fn unregistered_bare_native_selector_keeps_provider_identity_unknown() {
+    let gateway = TestGateway::new();
+    let response = gateway
+        .agent_jobs_rpc(
+            "agent/jobs/message",
+            request(
+                MessageTarget::Selector {
+                    selector: "11111111-1111-4111-8111-111111111111".into(),
+                },
+                "unknown-native-provider",
+                "Read-only fixture message",
+            ),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response["deliveryState"]["kind"], "failed");
+    let reason = response["deliveryState"]["reason"].as_str().unwrap();
+    assert!(reason.contains("provider is unknown"));
+    assert!(reason.contains("claude_UUID or codex:UUID"));
+    assert!(response["resolved"].is_null());
+    assert_eq!(
+        gateway
+            .agent_jobs_rpc(
+                "agent/messages/read",
+                json!({"deliveryId":"unknown-native-provider"})
+            )
+            .await
+            .unwrap(),
+        response
+    );
+}

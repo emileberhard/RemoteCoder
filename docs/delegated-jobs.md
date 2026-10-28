@@ -139,10 +139,17 @@ the deliberate restart operation. Parent callbacks retain their existing native
 or gateway receiver and never take over a terminal parent.
 
 Message records share the store's 512 MiB cap and process lease. Admission reserves
-record and mutation space; unresolved receipts remain pinned. Accepted/recorded
-payloads expire after 30 days, retaining identity, hashes and receipts. Diagnostics
-are bounded, and capacity refusal names the retained obligations that prevent
-admission. The existing provider receiver owns reconciliation and Stop fences.
+record and mutation space. Submitted, accepted and recorded receipts release
+unresolved capacity immediately; submitted proves transport custody, not provider
+acceptance or consumption. A failed lookup with no resolved target is also a
+terminal receipt because no effect was attempted. These immutable receipts retain
+their identity, hashes and delivery evidence while payloads expire after 30 days.
+Blocked, unreachable, provider-side failures with a resolved target, and uncertain
+receipts remain pinned for exact-ID reconciliation. Diagnostics are bounded, and
+capacity refusal names the retained obligations that prevent admission. The
+existing provider receiver owns reconciliation and Stop fences. Unregistered
+native conversations require explicit `claude_UUID` or `codex:UUID` selectors;
+a bare identifier cannot establish its provider when another provider is unavailable.
 
 ## Caller authority and read-only work
 

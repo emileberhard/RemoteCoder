@@ -116,3 +116,103 @@ async fn successful_payload_expiry_preserves_receipts_and_pins_unresolved_text()
             .is_err()
     );
 }
+
+#[tokio::test]
+async fn terminal_transport_and_lookup_receipts_do_not_exhaust_unresolved_capacity() {
+    let root = tempfile::tempdir().unwrap();
+    let store = JobStore::open(root.path().into()).await.unwrap();
+    for index in 0..=MAX_UNSETTLED_JOBS {
+        let id = format!("settled-{index}");
+        store.admit_message(message(&id, 100)).await.unwrap();
+        let state = if index % 2 == 0 {
+            DeliveryState::Submitted {
+                route: "claudeNative".into(),
+            }
+        } else {
+            DeliveryState::Failed {
+                reason: "target does not exist".into(),
+            }
+        };
+        store.update_message(id, state, 101).await.unwrap();
+    }
+    store
+        .admit_message(message("still-available", 102))
+        .await
+        .unwrap();
+    store
+        .admit_message(message("trigger-expiry", 102 + RETENTION_MS))
+        .await
+        .unwrap();
+    for id in ["settled-0", "settled-1"] {
+        let record = store.message(id.into()).await.unwrap();
+        assert!(record.text.is_none());
+        assert_eq!(
+            record.payload_fingerprint,
+            fingerprint(b"frozen original envelope")
+        );
+        assert!(
+            store
+                .update_message(id.into(), DeliveryState::Pending, 103 + RETENTION_MS)
+                .await
+                .is_err()
+        );
+    }
+    assert_eq!(
+        store
+            .message("settled-0".into())
+            .await
+            .unwrap()
+            .delivery_state,
+        DeliveryState::Submitted {
+            route: "claudeNative".into()
+        }
+    );
+    assert_eq!(
+        store
+            .message("settled-1".into())
+            .await
+            .unwrap()
+            .delivery_state,
+        DeliveryState::Failed {
+            reason: "target does not exist".into()
+        }
+    );
+}
+
+#[tokio::test]
+async fn uncertain_and_retryable_delivery_payloads_remain_pinned_after_retention() {
+    let root = tempfile::tempdir().unwrap();
+    let store = JobStore::open(root.path().into()).await.unwrap();
+    for (id, state) in [
+        (
+            "uncertain",
+            DeliveryState::Uncertain {
+                reason: "native acknowledgement lost".into(),
+            },
+        ),
+        (
+            "blocked",
+            DeliveryState::Blocked {
+                reason: "provider unavailable".into(),
+            },
+        ),
+        (
+            "unreachable",
+            DeliveryState::Unreachable {
+                reason: "native holder unavailable".into(),
+            },
+        ),
+    ] {
+        store.admit_message(message(id, 100)).await.unwrap();
+        store.update_message(id.into(), state, 101).await.unwrap();
+    }
+    store
+        .admit_message(message("after-retention", 102 + RETENTION_MS))
+        .await
+        .unwrap();
+    for id in ["uncertain", "blocked", "unreachable"] {
+        let record = store.message(id.into()).await.unwrap();
+        assert_eq!(record.text.as_deref(), Some("frozen original envelope"));
+        assert!(!record.settled());
+    }
+}

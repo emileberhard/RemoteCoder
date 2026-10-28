@@ -100,7 +100,7 @@ impl Gateway {
                 })
                 .await?
         };
-        if record.acknowledged() {
+        if record.settled() {
             return Ok(json!(record));
         }
         if record.resolved.is_none() {
@@ -343,24 +343,9 @@ impl Gateway {
                 .await?["thread"]
                 .clone()
         } else {
-            let claude_params = json!({"threadId":format!("claude_{selector}")});
-            let (claude, codex) = tokio::join!(
-                self.claude_thread_response(&claude_params),
-                self.call_control(
-                    "thread/read",
-                    json!({"threadId":selector,"includeTurns":false})
-                )
+            bail!(
+                "native conversation provider is unknown; use an explicit claude_UUID or codex:UUID selector"
             );
-            match (claude, codex) {
-                (Ok(_), Ok(_)) => {
-                    bail!("native conversation is ambiguous; use claude_UUID or codex:UUID")
-                }
-                (Ok(response), Err(_)) | (Err(_), Ok(response)) => response["thread"].clone(),
-                (Err(claude), Err(codex)) => bail!(
-                    "no native conversation resolved; use claude_UUID or codex:UUID (Claude: {}; Codex: {codex:#})",
-                    claude.message
-                ),
-            }
         };
         let conversation = crate::agents::conversation::conversation_from_header(&header)?;
         ensure!(

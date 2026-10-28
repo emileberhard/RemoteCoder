@@ -68,13 +68,15 @@ impl MessageRecord {
         )
     }
 
+    pub(crate) fn settled(&self) -> bool {
+        self.acknowledged()
+            || matches!(self.delivery_state, DeliveryState::Dismissed { .. })
+            || (self.resolved.is_none()
+                && matches!(self.delivery_state, DeliveryState::Failed { .. }))
+    }
+
     fn reserved(&self) -> bool {
-        !matches!(
-            self.delivery_state,
-            DeliveryState::Accepted { .. }
-                | DeliveryState::Recorded { .. }
-                | DeliveryState::Dismissed { .. }
-        )
+        !self.settled()
     }
 }
 
@@ -169,10 +171,7 @@ impl JobStore {
                 .get(&id)
                 .cloned()
                 .context("message receipt does not exist")?;
-            ensure!(
-                !record.acknowledged(),
-                "acknowledged message receipt is immutable"
-            );
+            ensure!(!record.settled(), "settled message receipt is immutable");
             record.delivery_state = bound_state(state);
             record.updated_at_ms = at_ms;
             inner.write_message(&record)?;
