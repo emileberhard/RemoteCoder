@@ -396,7 +396,8 @@ mod tests {
 
     #[tokio::test]
     async fn cluster_inventory_writer_contention_preserves_unavailable_and_coverage() {
-        let gateway = crate::test_support::TestGateway::new();
+        let directory = tempfile::tempdir().unwrap();
+        let gateway = crate::test_support::TestGateway::with_native_runtime(directory.path());
         gateway.sessions_runtime().await.unwrap();
         gateway.stop_sessions().await;
         let root = gateway
@@ -457,6 +458,6 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(page["coverage"][0]["state"], "ok");
+        assert_eq!(page["coverage"][0]["state"], "ok", "{page}");
     }
 }
