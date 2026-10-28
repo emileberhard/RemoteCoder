@@ -853,10 +853,15 @@ fn sessions_normalize_protocol_outcomes_without_guessing_text() {
 fn sessions_budget_counts_catalog_wal_and_temporary_mirrors() {
     let f = fixture();
     let root = f.store.path.parent().unwrap();
-    let storage = super::storage::Storage::new(&f.store.path).unwrap();
+    let storage = &f.store.storage;
     let before = storage.usage().unwrap().used_bytes;
-    std::fs::write(root.join("mirror.partial"), vec![0; 4096]).unwrap();
-    assert_eq!(storage.usage().unwrap().used_bytes, before + 4096);
+    let partial = root.join("mirror.partial");
+    storage
+        .mutate(&[&partial], 4096, || {
+            Ok(std::fs::write(&partial, vec![0; 4096])?)
+        })
+        .unwrap();
+    assert!((before + 4096..=before + 4200).contains(&storage.usage().unwrap().used_bytes));
     let lease = storage.lease(1).unwrap();
     assert!(f.store.writer().is_err());
     drop(lease);
@@ -879,4 +884,29 @@ fn sessions_mirror_role_defaults_off() {
     assert!(mirror::role(&f.store.path).unwrap());
     std::fs::write(&path, r#"{"enabled":"yes"}"#).unwrap();
     assert!(mirror::role(&f.store.path).is_err());
+}
+
+#[test]
+fn sessions_accounting_recovers_dirty_writes_without_request_walks() {
+    let f = fixture();
+    let storage = &f.store.storage;
+    let root = f.store.path.parent().unwrap();
+    let before = storage.usage().unwrap().used_bytes;
+    std::fs::write(root.join("orphan.partial"), vec![0; 8192]).unwrap();
+    assert_eq!(storage.usage().unwrap().used_bytes, before);
+    std::fs::write(root.join(".accounting.dirty"), b"1").unwrap();
+    assert_eq!(
+        storage.usage().unwrap().stale_reason,
+        Some("accounting_incomplete")
+    );
+    drop(storage.lease(0).unwrap());
+    assert!(storage.usage().unwrap().used_bytes >= before + 8192);
+    assert_eq!(storage.usage().unwrap().stale_reason, None);
+    let path = root.join("failed.partial");
+    let error = storage.mutate(&[&path], 1024, || -> Result<()> {
+        std::fs::write(&path, vec![0; 1024])?;
+        anyhow::bail!("fixture interrupted after write")
+    });
+    assert!(error.is_err());
+    assert!(!root.join(".accounting.dirty").exists());
 }

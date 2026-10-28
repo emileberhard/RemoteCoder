@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 #[derive(Clone)]
 pub(crate) struct Store {
     pub path: PathBuf,
+    pub storage: std::sync::Arc<super::storage::Storage>,
 }
 
 impl Store {
@@ -16,7 +17,8 @@ impl Store {
             .parent()
             .context("Session database needs a parent directory")?;
         private_state::ensure_private_directory(parent)?;
-        let store = Self { path };
+        let storage = std::sync::Arc::new(super::storage::Storage::new(&path)?);
+        let store = Self { path, storage };
         let mut db = store.writer()?;
         let version: u32 = db.pragma_query_value(None, "user_version", |r| r.get(0))?;
         if version != 0 && version != SCHEMA_VERSION {
@@ -89,7 +91,7 @@ impl Store {
     }
 
     pub fn writer(&self) -> Result<Writer> {
-        let storage = super::storage::Storage::new(&self.path)?;
+        let storage = &self.storage;
         let lease = storage.lease(0)?;
         let db = Connection::open(&self.path)?;
         db.busy_timeout(Duration::from_secs(5))?;
@@ -128,12 +130,34 @@ impl Store {
         Ok(Writer { db, _lease: lease })
     }
 
-    pub fn reader(&self) -> Result<Connection> {
-        reader(&self.path)
+    pub fn reader(&self) -> Result<Reader> {
+        Ok(Reader {
+            db: reader_connection(&self.path)?,
+            storage: self.storage.clone(),
+        })
     }
 }
 
-pub(crate) fn reader(path: &Path) -> Result<Connection> {
+pub(crate) fn reader(path: &Path) -> Result<Reader> {
+    Ok(Reader {
+        db: reader_connection(path)?,
+        storage: std::sync::Arc::new(super::storage::Storage::new(path)?),
+    })
+}
+
+pub(crate) struct Reader {
+    db: Connection,
+    pub storage: std::sync::Arc<super::storage::Storage>,
+}
+
+impl std::ops::Deref for Reader {
+    type Target = Connection;
+    fn deref(&self) -> &Connection {
+        &self.db
+    }
+}
+
+fn reader_connection(path: &Path) -> Result<Connection> {
     let mut db = Connection::open_with_flags(
         path,
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
@@ -181,7 +205,7 @@ pub(crate) fn reader(path: &Path) -> Result<Connection> {
 
 pub(crate) struct Writer {
     db: Connection,
-    _lease: std::fs::File,
+    _lease: super::storage::Lease,
 }
 
 impl std::ops::Deref for Writer {

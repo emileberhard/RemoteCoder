@@ -16,7 +16,7 @@ pub(crate) fn cursor(db: &Connection) -> Result<String> {
     Ok(format!("1:{epoch}:{seq}"))
 }
 
-pub(crate) fn read(db: &Connection, request: Request) -> Result<Value> {
+pub(crate) fn read(db: &super::store::Reader, request: Request) -> Result<Value> {
     let tx = db.unchecked_transaction()?;
     let head = cursor(&tx)?;
     let prefix = head.rsplit_once(':').expect("generated change cursor").0;
@@ -58,7 +58,7 @@ pub(crate) fn read(db: &Connection, request: Request) -> Result<Value> {
     response["cursor"] = json!(format!("{prefix}:{last}"));
     response["hasMore"] = json!(last < high);
     response["schemaVersion"] = json!(1);
-    response["coverage"] = query::coverage(&tx)?;
+    response["coverage"] = query::coverage(db)?;
     Ok(response)
 }
 

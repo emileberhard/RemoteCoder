@@ -36,14 +36,17 @@ carry schema version, database epoch and monotonic sequence;
 updates and their feed records share a transaction. Retention never deletes raw
 provider evidence. The catalog, WAL, raw mirror and temporary copies share one
 64 GiB cap and a fixed 20 GiB free-space floor. One storage lock serializes disk
-mutations. Catalog writes reserve room for both database pages and a full WAL;
+mutations. Every flock lease explicitly unlocks before closing, so forked provider
+children cannot prolong a released lease. Cached raw-byte accounting is adjusted on each owned mutation; DB, WAL
+and SHM are measured by stat. Startup and bounded ten-minute reconciliation recover
+orphans, and a dirty marker forces reconciliation after incomplete accounting. Catalog writes reserve room for both database pages and a full WAL;
 raw transfers admit each chunk. Refusal appears in coverage without growing the
 store. SQLite temporary query state stays in memory. The ingest worker is one
 utility-QoS thread, separate from the live agent runtime.
 
 Mirroring requires an explicit host role, off by default. Private operations
 projects `sessions/mirror-role.json` with `{"enabled":true}` on the always-on
-mirror host. `sessions mirror on` cannot enable copying without that role.
+mirror host. The private role alone enables copying; the CLI reports status.
 The MacBook keeps only its own catalog and reads the Mini live.
 
 The mirror reclaims its copies after the origin reports deletion or a complete

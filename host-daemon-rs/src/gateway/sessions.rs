@@ -105,9 +105,7 @@ impl Gateway {
 
     async fn sync_session_mirror(&self) -> Result<Value> {
         let runtime = self.sessions_runtime().await?;
-        if !mirror::role(&runtime.store.path)?
-            || !runtime.store.path.with_file_name("mirror.enabled").exists()
-        {
+        if !mirror::role(&runtime.store.path)? {
             return Ok(json!({"enabled":false}));
         }
         let Some(_guard) = runtime.mirror_lock.try_lock().ok() else {
@@ -174,29 +172,8 @@ impl Gateway {
                     .await?,
             )?);
         }
-        if method == "sessions/mirror/set" {
-            #[derive(serde::Deserialize)]
-            #[serde(deny_unknown_fields)]
-            struct Enabled {
-                enabled: bool,
-            }
-            let enabled: Enabled = serde_json::from_value(params)?;
-            let path = runtime.store.path.with_file_name("mirror.enabled");
-            if enabled.enabled {
-                anyhow::ensure!(
-                    mirror::role(&runtime.store.path)?,
-                    "refused: this host has no sessions mirror role"
-                );
-                crate::storage::private_state::replace(&path, b"1")?;
-            } else if path.exists() {
-                std::fs::remove_file(path)?;
-            }
-            return Ok(json!({"enabled":enabled.enabled}));
-        }
         if method == "sessions/mirror/status" {
-            return Ok(
-                json!({"role":mirror::role(&runtime.store.path)?,"enabled":mirror::role(&runtime.store.path)? && runtime.store.path.with_file_name("mirror.enabled").exists(),"coverage":query::coverage(&runtime.store.reader()?)?}),
-            );
+            return Ok(json!({"role":mirror::role(&runtime.store.path)?}));
         }
         let permit = runtime.readers.clone().acquire_owned().await?;
         let store = runtime.store.clone();

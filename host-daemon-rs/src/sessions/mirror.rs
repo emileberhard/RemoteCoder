@@ -191,10 +191,10 @@ async fn sync_owned(
         .mode(0o600)
         .custom_flags(libc::O_NOFOLLOW)
         .open(root.join(".lock"))?;
-    lock.try_lock()
+    let _mirror_lease = super::storage::Lease::acquire(lock)
         .context("Mirror is already owned by another worker")?;
     let mut cursor = None;
-    let storage = super::storage::Storage::new(&store.path)?;
+    let storage = &store.storage;
     let mut origins = BTreeMap::new();
     let mut retained = std::collections::BTreeSet::new();
     let mut complete = true;
@@ -242,11 +242,9 @@ async fn sync_owned(
                 retained.insert(target.clone());
             }
             if !entry.present {
-                let _lease = storage.lease(0)?;
                 if target.is_file() {
-                    std::fs::remove_file(&target)?;
+                    storage.mutate(&[&target], 0, || Ok(std::fs::remove_file(&target)?))?;
                 }
-                drop(_lease);
                 store.writer()?.execute(
                     "DELETE FROM mirror_file WHERE origin_host=?1 AND path=?2",
                     params![host, entry.path.to_string_lossy()],
@@ -285,7 +283,7 @@ async fn sync_owned(
                 continue;
             }
             if temporary.exists() {
-                std::fs::remove_file(&temporary)?;
+                storage.mutate(&[&temporary], 0, || Ok(std::fs::remove_file(&temporary)?))?;
             }
             let existing = if target.exists() {
                 target.metadata()?.len()
@@ -321,8 +319,7 @@ async fn sync_owned(
                 )
                 .await;
             }
-            {
-                let _lease = storage.lease(offset)?;
+            storage.mutate(&[&temporary], offset, || {
                 if offset > 0 {
                     std::fs::copy(&target, &temporary)?;
                 } else {
@@ -332,7 +329,8 @@ async fn sync_owned(
                         .mode(0o600)
                         .open(&temporary)?;
                 }
-            }
+                Ok(())
+            })?;
             let mut output = OpenOptions::new().append(true).open(&temporary)?;
             loop {
                 ensure!(!stop.is_cancelled(), "Mirror stopped");
@@ -346,10 +344,9 @@ async fn sync_owned(
                     bytes.len() <= CHUNK && offset + bytes.len() as u64 <= entry.size,
                     "Mirror response exceeds admitted file size"
                 );
-                {
-                    let _lease = storage.lease(bytes.len() as u64)?;
-                    output.write_all(&bytes)?;
-                }
+                storage.mutate(&[&temporary], bytes.len() as u64, || {
+                    Ok(output.write_all(&bytes)?)
+                })?;
                 offset += bytes.len() as u64;
                 if offset == entry.size {
                     break;
@@ -373,7 +370,9 @@ async fn sync_owned(
             }
             output.sync_all()?;
             drop(output);
-            std::fs::rename(&temporary, &target)?;
+            storage.mutate(&[&temporary, &target], 0, || {
+                Ok(std::fs::rename(&temporary, &target)?)
+            })?;
             store.writer()?.execute("INSERT INTO mirror_file VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(origin_host,path) DO UPDATE SET identity=excluded.identity,size=excluded.size,received=excluded.received,local_path=excluded.local_path",params![host,entry.path.to_string_lossy(),entry.revision,i64::try_from(entry.size)?,i64::try_from(offset)?,target.to_string_lossy()])?;
             origins.insert(
                 format!("{}:{scope}", entry.provider),
@@ -394,11 +393,12 @@ async fn sync_owned(
     if complete {
         let host_root = root.join(blake3::hash(host.as_bytes()).to_hex().as_str());
         if host_root.exists() {
-            let _lease = storage.lease(0)?;
             for entry in walkdir::WalkDir::new(&host_root).follow_links(false) {
                 let entry = entry?;
                 if entry.file_type().is_file() && !retained.contains(entry.path()) {
-                    std::fs::remove_file(entry.path())?;
+                    storage.mutate(&[entry.path()], 0, || {
+                        Ok(std::fs::remove_file(entry.path())?)
+                    })?;
                 }
             }
         }

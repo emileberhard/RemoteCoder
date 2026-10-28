@@ -51,8 +51,6 @@ enum Operation {
 
 #[derive(Clone, Debug, Subcommand)]
 enum Mirror {
-    On,
-    Off,
     Status,
 }
 
@@ -123,8 +121,6 @@ fn request(command: &Command) -> Result<(&'static str, Value)> {
             })?,
         ),
         Operation::Mirror { action } => match action {
-            Mirror::On => ("sessions/mirror/set", json!({"enabled":true})),
-            Mirror::Off => ("sessions/mirror/set", json!({"enabled":false})),
             Mirror::Status => ("sessions/mirror/status", json!({})),
         },
     })

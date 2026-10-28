@@ -7,16 +7,13 @@ use serde_json::{Value, json};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 
-pub(crate) fn coverage(db: &Connection) -> Result<Value> {
+pub(crate) fn coverage(db: &super::store::Reader) -> Result<Value> {
     let mut result = rows(
         db,
         "SELECT origin_host,mode,indexed_through,complete_through,stale_reason,parse_failures FROM coverage ORDER BY origin_host",
         [],
     )?;
-    let storage = super::storage::Storage::new(std::path::Path::new(
-        db.path().context("Session database path missing")?,
-    ))?;
-    result["storage"] = serde_json::to_value(storage.usage()?)?;
+    result["storage"] = serde_json::to_value(db.storage.usage()?)?;
     Ok(result)
 }
 
@@ -53,12 +50,12 @@ pub(crate) fn rows(db: &Connection, sql: &str, params: impl Params) -> Result<Va
     Ok(json!({"columns":columns,"rows":result,"truncated":truncated}))
 }
 
-pub(crate) fn sql(db: &Connection, sql: &str) -> Result<Value> {
+pub(crate) fn sql(db: &super::store::Reader, sql: &str) -> Result<Value> {
     let tx = db.unchecked_transaction()?;
     let mut result = rows(&tx, sql, [])?;
     result["changeCursor"] = json!(changes::cursor(&tx)?);
     result["schemaVersion"] = json!(1);
-    result["coverage"] = coverage(&tx)?;
+    result["coverage"] = coverage(db)?;
     Ok(result)
 }
 
@@ -84,7 +81,11 @@ pub(crate) struct SessionPage {
     pub cursor: Option<String>,
 }
 
-pub(crate) fn inventory(db: &Connection, after: Option<&str>, limit: usize) -> Result<SessionPage> {
+pub(crate) fn inventory(
+    db: &super::store::Reader,
+    after: Option<&str>,
+    limit: usize,
+) -> Result<SessionPage> {
     ensure!(
         (1..=1000).contains(&limit),
         "Inventory limit must be 1..=1000"
@@ -140,7 +141,7 @@ pub(crate) struct Search {
     pub local: bool,
 }
 
-pub(crate) fn search(db: &Connection, request: &Search) -> Result<Value> {
+pub(crate) fn search(db: &super::store::Reader, request: &Search) -> Result<Value> {
     ensure!(
         request.query.chars().count() >= 3 && request.query.len() <= 4096,
         "search needs 3..=4096 UTF-8 bytes"
