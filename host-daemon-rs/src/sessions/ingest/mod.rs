@@ -103,7 +103,7 @@ fn selected(store: &Store, origin: &Origin, paths: &[PathBuf]) -> Result<BTreeSe
         let original = origin.original(path)?.to_string_lossy().into_owned();
         let low = format!("{original}/");
         let high = format!("{original}0");
-        let known: Vec<String> = db.prepare("SELECT path FROM source WHERE origin_host=?1 AND (path=?2 OR (path>=?3 AND path<?4)) UNION SELECT s.path FROM dependency d JOIN source s USING(source_id) WHERE s.origin_host=?1 AND s.present=1 AND (d.path=?2 OR (d.path>=?3 AND d.path<?4))")?.query_map(params![origin.host,original,low,high],|r|r.get(0))?.collect::<rusqlite::Result<_>>()?;
+        let known: Vec<String> = db.prepare("SELECT path FROM source WHERE origin_host=?1 AND path=?2 UNION SELECT path FROM source WHERE origin_host=?1 AND path>=?3 AND path<?4 UNION SELECT s.path FROM dependency d CROSS JOIN source s USING(source_id) WHERE d.path=?2 AND s.origin_host=?1 AND s.present=1 UNION SELECT s.path FROM dependency d CROSS JOIN source s USING(source_id) WHERE d.path>=?3 AND d.path<?4 AND s.origin_host=?1 AND s.present=1")?.query_map(params![origin.host,original,low,high],|r|r.get(0))?.collect::<rusqlite::Result<_>>()?;
         for path in known {
             selected.insert(origin.local(Path::new(&path))?);
             ensure!(
