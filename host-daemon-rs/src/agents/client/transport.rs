@@ -57,6 +57,7 @@ pub(super) async fn scoped(path: &Path, request: &ScopedRequest) -> Result<Value
 }
 
 const REQUEST_DEADLINE: Duration = Duration::from_secs(30);
+const CLOSE_DEADLINE: Duration = Duration::from_secs(1);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Submission {
@@ -130,6 +131,7 @@ async fn exchange(
                         response.get("result").is_some() ^ response.get("error").is_some(),
                         "gateway returned an invalid RPC response"
                     );
+                    let _ = tokio::time::timeout(CLOSE_DEADLINE, socket.close(None)).await;
                     return Ok(response);
                 }
             }
