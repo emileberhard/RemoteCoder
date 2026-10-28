@@ -1,4 +1,4 @@
-use super::{Origin, discovery::Discovery, ingest, store::Store};
+use super::{Origin, discovery::Discovery, hot::Hot, ingest, store::Store};
 use anyhow::{Context, Result};
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::collections::BTreeSet;
@@ -162,8 +162,8 @@ impl Pending {
     fn is_empty(&self) -> bool {
         self.0.iter().all(BTreeSet::is_empty) && self.1.is_empty()
     }
-    fn take(&mut self) -> Vec<PathBuf> {
-        self.0.iter_mut().flat_map(std::mem::take).collect()
+    fn take(&mut self) -> Vec<BTreeSet<PathBuf>> {
+        std::mem::take(&mut self.0)
     }
 }
 
@@ -237,6 +237,8 @@ impl Worker {
             .spawn(move || {
                 let mut _watcher = None;
                 let mut discovery = Discovery::default();
+                let mut hot = Hot::default();
+                let mut next_hot = Instant::now();
                 #[cfg(target_os = "macos")]
                 if unsafe {
                     libc::pthread_set_qos_class_self_np(libc::qos_class_t::QOS_CLASS_UTILITY, 0)
@@ -252,11 +254,12 @@ impl Worker {
                 let mut retry_delay = Duration::from_secs(2);
                 while !flag.load(Ordering::Acquire) {
                     let mut pending = signal.0.lock().expect("Session worker wake poisoned");
+                    let deadline = if hot.is_empty() {next_reconcile} else {next_reconcile.min(next_hot)};
                     pending = signal
                         .1
                         .wait_timeout_while(
                             pending,
-                            next_reconcile.saturating_duration_since(Instant::now()),
+                            deadline.saturating_duration_since(Instant::now()),
                             |p| p.is_empty() && !flag.load(Ordering::Acquire),
                         )
                         .expect("Session worker wake poisoned")
@@ -265,14 +268,18 @@ impl Worker {
                         break;
                     }
                     let full = Instant::now() >= next_reconcile;
-                    let paths = pending.take();
+                    let batches = pending.take();
                     drop(pending);
-                    let scope = if full {
-                        ingest::Scope::Full
-                    } else {
-                        ingest::Scope::Changed(&paths)
-                    };
+                    let mut paths: Vec<_> = batches.into_iter().flatten().collect();
                     let result = (|| {
+                        if !hot.is_empty() && Instant::now() >= next_hot {
+                            paths.extend(hot.changed()?);
+                            next_hot = Instant::now() + Duration::from_secs(1);
+                        }
+                        if !full && paths.is_empty() && !endpoint.requested() {
+                            return Ok(serde_json::json!({"ingested":0,"parseFailures":0}));
+                        }
+                        let scope = if full {ingest::Scope::Full} else {ingest::Scope::Changed(&paths)};
                         if full {
                             _watcher = Some(watch(&mut origins, signal.clone())?);
                             discovery.reconcile();
@@ -282,14 +289,21 @@ impl Worker {
                                 tracing::warn!(%error,"Session inventory has incomplete identities");
                             }
                             endpoint.serve(&mut db, &origins, &mut discovery);
+                            hot.observe(&db, &origins)?;
                         } else if endpoint.requested() {
                             let mut db = store.writer()?;
                             endpoint.serve(&mut db, &origins, &mut discovery);
+                            hot.observe(&db, &origins)?;
                         }
-                        ingest::scan_serving(&store, &origins, scope, &flag, &mut |db| {
-                            endpoint.serve(db, &origins, &mut discovery);
+                        let outcome = ingest::scan_serving(&store, &origins, scope, &flag, &mut |db| {
+                            if endpoint.requested() {
+                                endpoint.serve(db, &origins, &mut discovery);
+                                hot.observe(db, &origins)?;
+                            }
                             Ok(())
-                        })
+                        })?;
+                        hot.observe(&store.reader()?, &origins)?;
+                        Ok(outcome)
                     })();
                     match result {
                         Ok(_) => {
@@ -461,7 +475,7 @@ mod tests {
                 .set_flag(notify::event::Flag::Rescan)),
         );
         assert_eq!(pending.0[0], BTreeSet::from([origin.path()]));
-        let paths = pending.take();
+        let paths: Vec<_> = pending.take().into_iter().flatten().collect();
         assert_eq!(paths.len(), 2);
         assert!(pending.is_empty());
     }
@@ -497,7 +511,7 @@ mod tests {
             !pending.is_empty(),
             "Append during ingestion was not queued"
         );
-        let paths = pending.take();
+        let paths: Vec<_> = pending.take().into_iter().flatten().collect();
         drop(pending);
         ingest::scan_scope(
             &store,
@@ -543,6 +557,37 @@ mod tests {
         worker.stop()?;
         Ok(())
     }
+    #[test]
+    fn sessions_hot_worker_observes_appends_while_the_writer_fd_stays_open() -> Result<()> {
+        let (_directory, store, origin, path) = fixture();
+        std::fs::File::open(&path)?.set_modified(std::time::SystemTime::now())?;
+        let worker = Worker::start(store.clone(), vec![origin])?;
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while store.reader()?.query_row(
+            "SELECT count(*) FROM coverage WHERE indexed_through IS NOT NULL",
+            [],
+            |row| row.get::<_, i64>(0),
+        )? == 0
+        {
+            ensure!(Instant::now() < deadline, "Initial source did not finish");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let mut file = std::fs::OpenOptions::new().append(true).open(path)?;
+        writeln!(
+            file,
+            "{}",
+            json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"stillopenappend"}]}})
+        )?;
+        file.flush()?;
+        ensure!(
+            wait_text(&store, "stillopenappend") < Duration::from_secs(2),
+            "Hot append exceeded two seconds"
+        );
+        worker.stop()?;
+        drop(file);
+        Ok(())
+    }
+
     #[test]
     fn sessions_concurrent_inventory_coalesces_during_content_ingest() -> Result<()> {
         const CALLERS: usize = 8;

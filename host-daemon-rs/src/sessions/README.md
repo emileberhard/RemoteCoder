@@ -43,8 +43,7 @@ The ingest worker is independent of jobs and retains one bounded provider record
 at a time. notify 8.2.1 uses FSEvents on macOS. The watcher is armed before the
 initial scan, stays armed through reconciliation, and queues at most 512
 deduplicated paths per origin. Overflow collapses to a common subtree within
-that origin; rescan flags recursively reconcile the affected subtree. Quiet
-waits touch neither the filesystem nor the database. A full reconciliation runs
+that origin; rescan flags recursively reconcile the affected subtree. A hot set covers macOS writers that keep their transcript fd open, where FSEvents reports content modifications on close. Recent source revisions seed at most 64 paths through the source_recent index; the worker stats only these paths once per second, evicts the least recent on overflow, and removes entries after ten minutes without a revision change. Empty hot sets have no timer, filesystem work or database work. A long-idle transcript resumed with a continuously open fd can wait for the next ten-minute reconcile before entering the set; create/close events and inventory-discovered files enter sooner. Quiet waits with an empty set touch neither the filesystem nor the database. A full reconciliation runs
 every ten minutes, and pending events survive scans. Watches cover only existing
 provider roots and are rearmed before each full scan. notify 8.2.1 can discard
 an ancestor-level FSEvents rescan before delivery; the ten-minute full reconcile
