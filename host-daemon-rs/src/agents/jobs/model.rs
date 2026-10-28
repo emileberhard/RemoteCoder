@@ -107,6 +107,7 @@ pub(crate) enum ProviderHome {
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) enum Origin {
     TopLevel,
+    RemoteParent { host: String, conversation: ConversationIdentity },
     Parent { conversation: ConversationIdentity },
     Unknown { reason: String },
 }
@@ -116,6 +117,7 @@ pub(crate) enum Origin {
 pub(crate) enum Recipient {
     None,
     Conversation { conversation: ConversationIdentity },
+    Remote { #[serde(rename = "hostId")] host: String, incarnation: String, conversation: ConversationIdentity },
     Unknown { reason: String },
 }
 
@@ -451,6 +453,8 @@ pub(crate) enum ConversationBinding {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct AgentRecord {
     pub agent_id: String,
+    #[serde(default)]
+    pub parent: Option<crate::wire::cluster::AgentAddress>,
     pub conversation: ConversationBinding,
     pub origin: Origin,
     pub tool_scope: Option<ToolScope>,

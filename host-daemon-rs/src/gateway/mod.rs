@@ -261,6 +261,7 @@ mod takeover;
 pub(crate) struct Gateway {
     user_name: Option<String>,
     identity: tokio::sync::OnceCell<crate::identity::HostIdentity>,
+    cluster_link: tokio::sync::OnceCell<Arc<crate::cluster::link::Link>>,
     pub(crate) admission: Arc<crate::gateway::admission::ConversationAdmission>,
     external_auth: Option<external_auth::ExternalAuth>,
     external_providers: Option<Arc<ExternalProviders>>,
@@ -469,6 +470,7 @@ impl Gateway {
         Arc::new_cyclic(|gateway| Self {
             user_name,
             identity: tokio::sync::OnceCell::new(),
+            cluster_link: tokio::sync::OnceCell::new(),
             claude_recovery_ready: AtomicBool::new(!claude_settings.enabled),
             review: conversation_review::Runtime::new(
                 gateway.clone(),
@@ -558,6 +560,15 @@ impl Gateway {
             reset_tasks: crate::tasks::owned_tasks::OwnedTasks::default(),
             reset_capacity: Arc::new(tokio::sync::Semaphore::new(16)),
         })
+    }
+
+    pub(crate) async fn cluster_link(&self) -> Result<Arc<crate::cluster::link::Link>> {
+        let link = self.cluster_link.get_or_try_init(|| async {
+            let state = self.turn_state_path.as_deref().and_then(Path::parent)
+                .context("cluster membership requires persistent state")?;
+            Ok::<_,anyhow::Error>(Arc::new(crate::cluster::link::Link::new(state,self.host_identity().await?.clone())))
+        }).await?;
+        Ok(Arc::clone(link))
     }
 
     pub(crate) async fn host_identity(&self) -> Result<&crate::identity::HostIdentity> {

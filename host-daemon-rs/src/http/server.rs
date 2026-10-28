@@ -161,6 +161,7 @@ pub(crate) async fn run_http_server(
     state: HttpState,
     lan: Option<LanListener>,
 ) -> Result<()> {
+    state.gateway.cluster_link().await?.set_endpoint(state.lan_endpoint.clone()).await;
     let shutdown_gateway = Arc::clone(&state.gateway);
     let shutdown_state = state.clone();
     let app = router(state);

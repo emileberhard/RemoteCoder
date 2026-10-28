@@ -270,3 +270,40 @@ After restoring backups, run `cluster reset-identity` before rejoining members.
 A full disk clone requires that same reset. Existing membership is removed before
 a new identity joins. Identity and epoch files use `storage/private_state` and
 never derive identity from a hostname, address or authentication key.
+
+## Cluster v1 contract
+
+`wire::cluster` owns the versioned member, intent, cancel-fence, caller-authority
+and protocol records. Remote provenance is `Origin::RemoteParent`; each Agent
+has a separate nullable `parent` tag `{hostId, threadId}`. A per-job remote
+recipient carries `hostId`, `incarnation` and the exact provider conversation.
+Membership credentials prove `Grant::Peer {host, membership, digest}`; request
+fields cannot choose that principal. Membership removal retains its tombstone.
+
+Other modules use `Gateway::cluster_link().await` to obtain an `Arc<Link>`.
+`Link::members().await` returns public `MemberView` rows; `host` is the UUID
+(serialized as `hostId`), and `name` is its alias. `Link::call(host, method,
+params).await` uses one pooled, pinned TLS connection per membership. A
+`LinkError` retains `class` and `transmitted`; only `transmitted == false`
+proves that the requested method was never sent. `Gateway::host_identity().await`
+returns `HostIdentity {host_id, incarnation}`.
+
+`cluster/list` returns `self {hostId,name,incarnation,version,protocol}` and
+`members [{hostId,name,membership,state,reachability,version,protocol,load,routes}]`.
+Reachability has `state`, `since` and nullable `lastSeenAt`, with RFC 3339 times.
+Removed tombstones stay private. Load, when available, is
+`{cpuPercent,memoryPressure,activeAgents}`. Every job read/list and conversation
+agent row adds `ownerHostId`, `parent` and `recipient`. Parent references always
+use `{hostId,threadId}`. A cross-host conversation-agent query uses
+`{parent:{hostId,threadId}}`; omitted `hostId` means this host. The parent's own
+host adds `kind:"remote_intent"` stub rows with `jobId`, `ownerHostId`,
+`intentState`, `parent`, `createdAt` and optional `title`. An owner's real row
+replaces its stub by `(ownerHostId,jobId)`.
+
+Cluster-wide CLI reads include `coverage [{hostId,state,since?,staleThrough?}]`,
+where state is `ok`, `unreachable`, `unsupported` or `refused`.
+`agent/parent/set {agent:{hostId,threadId},parent:{hostId,threadId}|null}` goes to
+the agent's owner and returns the updated row. A cycle is `usage`; an unreachable
+parent-chain hop is `unavailable`. Provenance and authority never change with the
+tag. The caller starting a new turn receives its result; moving a tag transfers
+unaccepted results to its new parent or to the user when promoted.

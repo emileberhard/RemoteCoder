@@ -100,7 +100,7 @@ impl Gateway {
             content_subscriptions: Arc::default(),
             installation_id: match grant {
                 crate::auth::installation_credentials::Grant::Installation { id, .. } => Some(id),
-                crate::auth::installation_credentials::Grant::Operator => None,
+                crate::auth::installation_credentials::Grant::Operator | crate::auth::installation_credentials::Grant::Peer { .. } => None,
             },
             id: client_id,
             tx,

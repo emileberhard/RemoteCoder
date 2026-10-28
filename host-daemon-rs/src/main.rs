@@ -6,6 +6,7 @@ mod automations;
 mod build_identity;
 mod call_worker;
 mod config;
+mod cluster;
 mod conversation_marks;
 mod conversation_projects;
 mod conversations;

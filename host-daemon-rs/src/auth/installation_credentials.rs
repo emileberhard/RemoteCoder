@@ -76,6 +76,7 @@ pub(crate) struct InstallationCredentials {
 #[derive(Clone)]
 pub(crate) enum Grant {
     Operator,
+    Peer { host: String, membership: String, digest: String },
     Installation { id: String, digest: String },
 }
 
@@ -115,6 +116,10 @@ impl InstallationCredentials {
         if operator_matches(token, operator) {
             return Ok(Some(Grant::Operator));
         }
+        if token.starts_with("rcp1.") {
+            let state = self.path.parent().context("credential store has no parent")?;
+            return crate::cluster::members::Members::new(state).authenticate(token).await;
+        }
         let Some(rest) = token.strip_prefix("rc1.") else {
             return Ok(None);
         };
@@ -132,6 +137,10 @@ impl InstallationCredentials {
     }
 
     pub(crate) async fn is_valid(&self, grant: &Grant) -> Result<bool> {
+        if let Grant::Peer { host, membership, digest } = grant {
+            let state = self.path.parent().context("credential store has no parent")?;
+            return crate::cluster::members::Members::new(state).valid(host,membership,digest).await;
+        }
         let Grant::Installation { id, digest } = grant else {
             return Ok(true);
         };
