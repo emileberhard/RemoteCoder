@@ -34,12 +34,21 @@ epoch; provider evidence and mirrored raw files remain intact. Change cursors
 carry schema version, database epoch and monotonic sequence;
 30-day expiry requires a SQL snapshot and its changeCursor. Item and source
 updates and their feed records share a transaction. Retention never deletes raw
-provider evidence. The projection has a 32 GiB page cap and refuses further
-indexing at capacity, reporting stale coverage.
+provider evidence. The catalog, WAL, raw mirror and temporary copies share one
+64 GiB cap and a fixed 20 GiB free-space floor. One storage lock serializes disk
+mutations. Catalog writes reserve room for both database pages and a full WAL;
+raw transfers admit each chunk. Refusal appears in coverage without growing the
+store. SQLite temporary query state stays in memory. The ingest worker is one
+utility-QoS thread, separate from the live agent runtime.
 
-The mirror counts final and temporary files against 50 GiB and preserves a free
-reserve of max(20 GiB, 10% of the volume). It refuses data at budget rather than
-evicting evidence. Identity and revision fences protect each fetch; a verified
+Mirroring requires an explicit host role, off by default. Private operations
+projects `sessions/mirror-role.json` with `{"enabled":true}` on the always-on
+mirror host. `sessions mirror on` cannot enable copying without that role.
+The MacBook keeps only its own catalog and reads the Mini live.
+
+The mirror reclaims its copies after the origin reports deletion or a complete
+listing no longer includes them. Agent Memory's archive is independent retained
+evidence and is never deleted here. Identity and revision fences protect each fetch; a verified
 prefix permits append, while a rewrite restarts the file. SQL always runs on one
 database and reports its covered origins. Search fans out, deduplicates mirrored
 items and reports unreachable members without hiding successful results.

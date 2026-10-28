@@ -3,6 +3,7 @@ pub(crate) mod cluster;
 pub(crate) mod ingest;
 pub(crate) mod mirror;
 pub(crate) mod query;
+pub(crate) mod storage;
 pub(crate) mod store;
 pub(crate) mod worker;
 
@@ -13,7 +14,6 @@ use std::path::{Path, PathBuf};
 pub(crate) const SCHEMA_VERSION: u32 = 1;
 pub(crate) const PAGE_BYTES: usize = 8 << 20;
 pub(crate) const PAGE_ROWS: usize = 10_000;
-pub(crate) const PROJECTION_BYTES: u64 = 32 << 30;
 pub(crate) const CHANGE_DAYS: i64 = 30;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -96,6 +96,8 @@ pub(crate) fn error_data(error: &anyhow::Error) -> serde_json::Value {
         ("not_found", "not_found")
     } else if message.starts_with("unsupported:") {
         ("unsupported", "unsupported")
+    } else if message.starts_with("refused:") {
+        ("refused", "refused")
     } else if message.starts_with("unavailable:") {
         ("unavailable", "unavailable")
     } else if message.starts_with("capacity:") || message.starts_with("stale: budget") {

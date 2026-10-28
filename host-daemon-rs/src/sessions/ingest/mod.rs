@@ -68,9 +68,6 @@ fn companions(path: &Path) -> Result<Vec<PathBuf>> {
 }
 
 pub(crate) fn scan(store: &Store, origins: &[Origin], stop: &AtomicBool) -> Result<Value> {
-    let mut db = store.writer()?;
-    let pages = i64::try_from(super::PROJECTION_BYTES / 4096)?;
-    db.pragma_update(None, "max_page_count", pages)?;
     let mut ingested = 0;
     let mut failures = 0;
     let mut hosts = BTreeMap::<String, (bool, usize, bool)>::new();
@@ -86,18 +83,17 @@ pub(crate) fn scan(store: &Store, origins: &[Origin], stop: &AtomicBool) -> Resu
             }
             let original = origin.original(&path)?.to_string_lossy().into_owned();
             paths.insert(original.clone());
+            let mut db = store.writer()?;
             match ingest(&mut db, origin, &path, stop) {
                 Ok(changed) => ingested += usize::from(changed),
                 Err(error) => {
                     failures += 1;
                     status.1 += 1;
-                    db.execute(
-                        "UPDATE source SET failure=?1 WHERE origin_host=?2 AND path=?3",
-                        params![format!("{error:#}"), origin.host, original],
-                    )?;
+                    db.execute("INSERT INTO source(origin_host,provider,provider_home,path,local_path,file_identity,size,mtime_ns,ingested_offset,revision,present,prefix_hash,parser_state,failure) VALUES(?1,?2,?3,?4,?5,'',0,0,0,0,1,'','{}',?6) ON CONFLICT(origin_host,path) DO UPDATE SET failure=excluded.failure",params![origin.host,origin.provider,origin.provider_home.to_string_lossy(),original,path.to_string_lossy(),format!("{error:#}")])?;
                 }
             }
         }
+        let db = store.writer()?;
         let missing:Vec<(i64,String)>=db.prepare("SELECT source_id,path FROM source WHERE origin_host=?1 AND provider=?2 AND provider_home=?3 AND present=1")?.query_map(params![origin.host,origin.provider,origin.provider_home.to_string_lossy()],|r|Ok((r.get(0)?,r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
         for (id, path) in missing {
             if !paths.contains(&path) && !origin.local(Path::new(&path))?.exists() {
@@ -106,6 +102,7 @@ pub(crate) fn scan(store: &Store, origins: &[Origin], stop: &AtomicBool) -> Resu
         }
         status.2 |= !origin.path().exists();
     }
+    let db = store.writer()?;
     for (host, (local, failures, absent)) in hosts {
         let unavailable: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM source s WHERE s.origin_host=?1 AND s.failure IS NOT NULL) OR EXISTS(SELECT 1 FROM dependency d JOIN source s USING(source_id) WHERE s.origin_host=?1 AND d.present=0)",[&host],|r|r.get(0))?;
         let reason = if failures > 0 {
@@ -180,7 +177,6 @@ fn ingest_source(
     stop: &AtomicBool,
     mode: ReadMode,
 ) -> Result<bool> {
-    let _lease = super::store::ingest_lease(db)?;
     let mut file = File::open(path)?;
     let before = file.metadata()?;
     ensure!(before.is_file(), "Session source is not a regular file");
@@ -374,7 +370,12 @@ pub(super) fn skills(tool: &str, input: &Value) -> Vec<(String, &'static str)> {
 }
 
 pub(super) fn outcome(value: &Value, text: &str) -> (Option<bool>, Option<i64>, Option<i64>) {
-    let parsed = serde_json::from_str::<Value>(text).ok();
+    let payload = if text.starts_with("Script completed\n") {
+        text.split_once("Output:\n").map_or(text, |(_, body)| body)
+    } else {
+        text
+    };
+    let parsed = serde_json::from_str::<Value>(payload).ok();
     let root = parsed.as_ref().unwrap_or(value);
     let exit = [
         root.pointer("/exit_code"),

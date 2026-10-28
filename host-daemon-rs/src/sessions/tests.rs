@@ -119,7 +119,19 @@ fn search(store: &Store, term: &str) -> Value {
 #[test]
 fn sessions_evidence_survives_append_rewrite_and_exact_paging() {
     let f = fixture();
-    assert_eq!(scan(&f)["parseFailures"], 0);
+    assert_eq!(
+        scan(&f)["parseFailures"],
+        0,
+        "{:?}",
+        f.store
+            .reader()
+            .unwrap()
+            .prepare("SELECT failure FROM source WHERE failure IS NOT NULL")
+            .unwrap()
+            .query_map([], |r| r.get::<_, String>(0))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+    );
     for term in ["codexmiddle", "sidecarmiddle"] {
         let found = search(&f.store, term);
         assert_eq!(found["hits"].as_array().unwrap().len(), 1);
@@ -584,10 +596,10 @@ async fn sessions_mirror_preserves_sidecars_and_refuses_over_budget() {
         .unwrap();
     assert!(watermark.is_some());
     assert_eq!(watermark, previous);
-    assert!(mirror::admit(50 << 30, 1, 100 << 30, 100 << 30).is_err());
-    assert!(mirror::admit(0, 1, 19 << 30, 100 << 30).is_err());
-    assert!(mirror::admit(0, 1, 30 << 30, 400 << 30).is_err());
-    assert!(mirror::admit(0, 1, 50 << 30, 400 << 30).is_ok());
+    assert!(super::storage::admit(64 << 30, 1, 100 << 30).is_err());
+    assert!(super::storage::admit(0, 1, 19 << 30).is_err());
+    assert!(super::storage::admit(0, 1, 30 << 30).is_ok());
+    assert!(super::storage::admit(0, 1, 50 << 30).is_ok());
 }
 
 #[tokio::test]
@@ -737,4 +749,134 @@ fn sessions_measure_corpus() -> Result<()> {
     )?;
     println!("{report}");
     Ok(())
+}
+
+#[test]
+#[ignore]
+fn sessions_audit_rejected_sources() -> Result<()> {
+    let origins: Vec<Origin> = serde_json::from_slice(&std::fs::read(std::env::var(
+        "RC_SESSIONS_MEASURE_ORIGINS",
+    )?)?)?;
+    let store = Store::open(PathBuf::from(std::env::var("RC_SESSIONS_MEASURE_DB")?))?;
+    let mut db = store.writer()?;
+    let mut errors = std::collections::BTreeMap::<String, usize>::new();
+    for origin in origins.iter().filter(|o| o.provider == "claude") {
+        for path in ingest::files(origin)? {
+            let known: bool = db.query_row(
+                "SELECT EXISTS(SELECT 1 FROM source WHERE origin_host=?1 AND path=?2)",
+                rusqlite::params![origin.host, origin.original(&path)?.to_string_lossy()],
+                |r| r.get(0),
+            )?;
+            if !known
+                && let Err(error) = ingest::ingest(&mut db, origin, &path, &AtomicBool::new(false))
+            {
+                *errors.entry(format!("{error:#}")).or_default() += 1;
+            }
+        }
+    }
+    println!("{}", serde_json::to_string(&errors)?);
+    Ok(())
+}
+
+#[test]
+fn sessions_keep_owning_identity_and_binary_evidence() {
+    let f = fixture();
+    let owner = "00000000-0000-0000-0000-000000000001";
+    let path = f.codex.with_file_name(format!("rollout-{owner}.jsonl"));
+    write(
+        &path,
+        &[codex_meta(owner, None), codex_meta("inherited-id", None)],
+    );
+    std::fs::write(&f.sidecar, [0xff, 0xfe, 0x00, 0x80]).unwrap();
+    assert_eq!(scan(&f)["parseFailures"], 0);
+    let db = f.store.reader().unwrap();
+    assert_eq!(
+        db.query_row(
+            "SELECT count(*) FROM session WHERE thread_id=?1",
+            [owner],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        1
+    );
+    assert_eq!(
+        db.query_row(
+            "SELECT count(*) FROM session WHERE thread_id='inherited-id'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        0
+    );
+    let key=db.query_row("SELECT item_key FROM tool_result r JOIN item i USING(item_key) JOIN session s USING(session_key) WHERE s.provider='claude'",[],|r|r.get::<_,String>(0)).unwrap();
+    let result = query::read(
+        &db,
+        query::ReadRequest {
+            target: key,
+            offset: 0,
+            length: Some(64),
+            dependency: Some(f.sidecar.to_string_lossy().into_owned()),
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        base64::engine::general_purpose::STANDARD
+            .decode(result["base64"].as_str().unwrap())
+            .unwrap(),
+        [0xff, 0xfe, 0x00, 0x80]
+    );
+}
+
+#[test]
+fn sessions_normalize_protocol_outcomes_without_guessing_text() {
+    assert_eq!(ingest::outcome(&Value::Null,"Script completed\nWall time: 1\nOutput:\n{\"chunk_id\":\"fixture\",\"exit_code\":0,\"output\":\"fixture\"}").1,Some(0));
+    assert_eq!(
+        ingest::outcome(&Value::Null, "Transcript mentions exit_code: 0").1,
+        None
+    );
+    let f = fixture();
+    let mut records: Vec<Value> = std::fs::read_to_string(&f.claude)
+        .unwrap()
+        .lines()
+        .map(|s| serde_json::from_str(s).unwrap())
+        .collect();
+    records[2]["message"]["content"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("is_error");
+    write(&f.claude, &records);
+    scan(&f);
+    assert_eq!(f.store.reader().unwrap().query_row("SELECT count(*) FROM skill_observation u JOIN session s USING(session_key) WHERE s.provider='claude' AND outcome='ok'",[],|r|r.get::<_,i64>(0)).unwrap(),1);
+}
+
+#[test]
+fn sessions_budget_counts_catalog_wal_and_temporary_mirrors() {
+    let f = fixture();
+    let root = f.store.path.parent().unwrap();
+    let storage = super::storage::Storage::new(&f.store.path).unwrap();
+    let before = storage.usage().unwrap().used_bytes;
+    std::fs::write(root.join("mirror.partial"), vec![0; 4096]).unwrap();
+    assert_eq!(storage.usage().unwrap().used_bytes, before + 4096);
+    let lease = storage.lease(1).unwrap();
+    assert!(f.store.writer().is_err());
+    drop(lease);
+    assert!(f.store.writer().is_ok());
+}
+
+#[test]
+fn sessions_mirror_role_defaults_off() {
+    let f = fixture();
+    assert!(!mirror::role(&f.store.path).unwrap());
+    let path = f
+        .store
+        .path
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("mirror-role.json");
+    std::fs::write(&path, r#"{"enabled":true}"#).unwrap();
+    assert!(mirror::role(&f.store.path).unwrap());
+    std::fs::write(&path, r#"{"enabled":"yes"}"#).unwrap();
+    assert!(mirror::role(&f.store.path).is_err());
 }

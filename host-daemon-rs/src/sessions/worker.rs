@@ -28,6 +28,14 @@ impl Worker {
         let thread = std::thread::Builder::new()
             .name("sessions-ingest".into())
             .spawn(move || {
+                #[cfg(target_os = "macos")]
+                if unsafe {
+                    libc::pthread_set_qos_class_self_np(libc::qos_class_t::QOS_CLASS_UTILITY, 0)
+                } != 0
+                {
+                    tracing::warn!("Session worker cannot enter utility QoS; ingestion stopped");
+                    return;
+                }
                 if let Err(error) = store
                     .writer()
                     .and_then(|db| super::ingest::catalog(&db, &skills))

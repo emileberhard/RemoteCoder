@@ -8,11 +8,16 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 
 pub(crate) fn coverage(db: &Connection) -> Result<Value> {
-    rows(
+    let mut result = rows(
         db,
         "SELECT origin_host,mode,indexed_through,complete_through,stale_reason,parse_failures FROM coverage ORDER BY origin_host",
         [],
-    )
+    )?;
+    let storage = super::storage::Storage::new(std::path::Path::new(
+        db.path().context("Session database path missing")?,
+    ))?;
+    result["storage"] = serde_json::to_value(storage.usage()?)?;
+    Ok(result)
 }
 
 pub(crate) fn rows(db: &Connection, sql: &str, params: impl Params) -> Result<Value> {

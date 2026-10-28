@@ -11,9 +11,31 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
 
-pub(crate) const BUDGET_BYTES: u64 = 50 << 30;
-const RESERVE_BYTES: u64 = 20 << 30;
 const CHUNK: usize = 1 << 20;
+
+pub(crate) fn role(database: &Path) -> Result<bool> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Role {
+        enabled: bool,
+    }
+    let path = database
+        .parent()
+        .and_then(Path::parent)
+        .context("Session mirror role has no owner")?
+        .join("mirror-role.json");
+    let bytes = crate::storage::private_state::read_bounded(&path, 1024).map_err(|error| {
+        anyhow::anyhow!("unavailable: cannot read session mirror role: {error:?}")
+    })?;
+    bytes
+        .map(|bytes| {
+            serde_json::from_slice::<Role>(&bytes)
+                .map(|role| role.enabled)
+                .context("Invalid session mirror role")
+        })
+        .transpose()
+        .map(|role| role.unwrap_or(false))
+}
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -134,49 +156,6 @@ pub(crate) fn fetch(store: &Store, host: &str, request: Fetch) -> Result<Value> 
     )
 }
 
-pub(crate) fn usage(root: &Path) -> Result<u64> {
-    if !root.exists() {
-        return Ok(0);
-    }
-    let mut bytes = 0u64;
-    for entry in walkdir::WalkDir::new(root).follow_links(false) {
-        let entry = entry?;
-        if entry.file_type().is_file() {
-            bytes = bytes
-                .checked_add(entry.metadata()?.len())
-                .context("Mirror byte count overflow")?;
-        }
-    }
-    Ok(bytes)
-}
-
-pub(crate) fn admit(used: u64, incoming: u64, free: u64, total: u64) -> Result<()> {
-    ensure!(
-        used.checked_add(incoming)
-            .is_some_and(|bytes| bytes <= BUDGET_BYTES)
-            && free.saturating_sub(incoming) >= RESERVE_BYTES.max(total / 10),
-        "stale: budget; mirror needs space within 50 GiB and its free-disk reserve"
-    );
-    Ok(())
-}
-
-fn available(root: &Path) -> Result<(u64, u64)> {
-    use std::ffi::CString;
-    let path = CString::new(root.as_os_str().as_encoded_bytes())?;
-    let mut stats = std::mem::MaybeUninit::<libc::statvfs>::uninit();
-    let result = unsafe { libc::statvfs(path.as_ptr(), stats.as_mut_ptr()) };
-    ensure!(
-        result == 0,
-        "Cannot measure mirror free disk: {}",
-        std::io::Error::last_os_error()
-    );
-    let stats = unsafe { stats.assume_init() };
-    Ok((
-        stats.f_bavail as u64 * stats.f_frsize,
-        stats.f_blocks as u64 * stats.f_frsize,
-    ))
-}
-
 pub(crate) type Call =
     std::sync::Arc<dyn Fn(&'static str, Value) -> BoxFuture<'static, Result<Value>> + Send + Sync>;
 
@@ -215,8 +194,9 @@ async fn sync_owned(
     lock.try_lock()
         .context("Mirror is already owned by another worker")?;
     let mut cursor = None;
-    let mut used = usage(&root)?;
+    let storage = super::storage::Storage::new(&store.path)?;
     let mut origins = BTreeMap::new();
+    let mut retained = std::collections::BTreeSet::new();
     let mut complete = true;
     let mut total_files = 0;
     let mut through: Option<String> = None;
@@ -240,10 +220,6 @@ async fn sync_owned(
                 entry.origin_host == host,
                 "Mirror origin does not match the authenticated member"
             );
-            if !entry.present {
-                complete = false;
-                continue;
-            }
             let relative = entry
                 .path
                 .strip_prefix(&entry.provider_home)
@@ -262,6 +238,21 @@ async fn sync_owned(
                 .join(&entry.provider)
                 .join(&scope[..16]);
             let target = home.join(relative);
+            if entry.present {
+                retained.insert(target.clone());
+            }
+            if !entry.present {
+                let _lease = storage.lease(0)?;
+                if target.is_file() {
+                    std::fs::remove_file(&target)?;
+                }
+                drop(_lease);
+                store.writer()?.execute(
+                    "DELETE FROM mirror_file WHERE origin_host=?1 AND path=?2",
+                    params![host, entry.path.to_string_lossy()],
+                )?;
+                continue;
+            }
             let temporary = target.with_extension(format!(
                 "{}.partial",
                 target
@@ -295,7 +286,6 @@ async fn sync_owned(
             }
             if temporary.exists() {
                 std::fs::remove_file(&temporary)?;
-                used = usage(&root)?;
             }
             let existing = if target.exists() {
                 target.metadata()?.len()
@@ -309,8 +299,7 @@ async fn sync_owned(
                 std::io::copy(&mut File::open(&target)?, &mut hash)?;
                 prefix = Some(hash.finalize().to_hex().to_string());
             }
-            let (free, total) = available(&root)?;
-            admit(used, entry.size, free, total)?;
+            drop(storage.lease(entry.size)?);
             let first = Fetch {
                 path: entry.path.to_string_lossy().into_owned(),
                 identity: entry.identity.clone(),
@@ -332,10 +321,17 @@ async fn sync_owned(
                 )
                 .await;
             }
-            if offset > 0 {
-                std::fs::copy(&target, &temporary)?;
-            } else {
-                File::create(&temporary)?;
+            {
+                let _lease = storage.lease(offset)?;
+                if offset > 0 {
+                    std::fs::copy(&target, &temporary)?;
+                } else {
+                    OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .mode(0o600)
+                        .open(&temporary)?;
+                }
             }
             let mut output = OpenOptions::new().append(true).open(&temporary)?;
             loop {
@@ -350,7 +346,10 @@ async fn sync_owned(
                     bytes.len() <= CHUNK && offset + bytes.len() as u64 <= entry.size,
                     "Mirror response exceeds admitted file size"
                 );
-                output.write_all(&bytes)?;
+                {
+                    let _lease = storage.lease(bytes.len() as u64)?;
+                    output.write_all(&bytes)?;
+                }
                 offset += bytes.len() as u64;
                 if offset == entry.size {
                     break;
@@ -375,7 +374,6 @@ async fn sync_owned(
             output.sync_all()?;
             drop(output);
             std::fs::rename(&temporary, &target)?;
-            used = used.saturating_sub(existing) + entry.size;
             store.writer()?.execute("INSERT INTO mirror_file VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(origin_host,path) DO UPDATE SET identity=excluded.identity,size=excluded.size,received=excluded.received,local_path=excluded.local_path",params![host,entry.path.to_string_lossy(),entry.revision,i64::try_from(entry.size)?,i64::try_from(offset)?,target.to_string_lossy()])?;
             origins.insert(
                 format!("{}:{scope}", entry.provider),
@@ -391,6 +389,18 @@ async fn sync_owned(
         cursor = page["cursor"].as_str().map(str::to_owned);
         if cursor.is_none() {
             break;
+        }
+    }
+    if complete {
+        let host_root = root.join(blake3::hash(host.as_bytes()).to_hex().as_str());
+        if host_root.exists() {
+            let _lease = storage.lease(0)?;
+            for entry in walkdir::WalkDir::new(&host_root).follow_links(false) {
+                let entry = entry?;
+                if entry.file_type().is_file() && !retained.contains(entry.path()) {
+                    std::fs::remove_file(entry.path())?;
+                }
+            }
         }
     }
     let origins: Vec<_> = origins.into_values().collect();

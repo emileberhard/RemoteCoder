@@ -57,7 +57,31 @@ impl Record<'_> {
         let p = &v["payload"];
         match v["type"].as_str() {
             Some("session_meta") => {
-                state.thread = string(&p["id"]).or_else(|| string(&p["session_id"]));
+                if let Some(id) = p["id"].as_str().or_else(|| p["session_id"].as_str()) {
+                    let stem = self
+                        .path
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or_default();
+                    let exact = stem
+                        .get(stem.len().saturating_sub(36)..)
+                        .is_some_and(|suffix| {
+                            suffix.len() == 36
+                                && suffix.chars().enumerate().all(|(i, c)| {
+                                    if matches!(i, 8 | 13 | 18 | 23) {
+                                        c == '-'
+                                    } else {
+                                        c.is_ascii_hexdigit()
+                                    }
+                                })
+                        });
+                    if exact && !stem.ends_with(id) {
+                        return Ok(());
+                    }
+                }
+                if state.thread.is_none() {
+                    state.thread = string(&p["id"]).or_else(|| string(&p["session_id"]));
+                }
                 state.cwd = string(&p["cwd"]);
                 state.parent = p
                     .pointer("/source/subagent/thread_spawn/parent_thread_id")
@@ -247,6 +271,9 @@ impl Record<'_> {
                     }
                     Some("tool_result") => {
                         let mut result = part.clone();
+                        if result.get("is_error").is_none() {
+                            result["is_error"] = Value::Bool(false);
+                        }
                         result["metadata"] = v
                             .get("toolUseResult")
                             .or(v.get("tool_use_result"))
@@ -379,8 +406,9 @@ impl Record<'_> {
             if let Some(bytes) = crate::providers::claude::records::read_record(
                 &local,
                 crate::providers::claude::records::MAX_SESSION_RECORD_BYTES,
-            )? {
-                text = String::from_utf8(bytes).context("Tool result sidecar is not UTF-8")?;
+            )? && let Ok(content) = String::from_utf8(bytes)
+            {
+                text = content;
             }
         }
         for path in images

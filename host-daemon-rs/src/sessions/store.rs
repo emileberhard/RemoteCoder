@@ -20,7 +20,6 @@ impl Store {
         let mut db = store.writer()?;
         let version: u32 = db.pragma_query_value(None, "user_version", |r| r.get(0))?;
         if version != 0 && version != SCHEMA_VERSION {
-            let _lease = ingest_lease(&db)?;
             db.pragma_update(None, "foreign_keys", false)?;
             let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
             let objects:Vec<(String,String)>=tx.prepare("SELECT name,type FROM sqlite_schema WHERE type IN ('trigger','view','table') AND name NOT LIKE 'sqlite_%' ORDER BY CASE type WHEN 'trigger' THEN 0 WHEN 'view' THEN 1 ELSE CASE WHEN sql LIKE 'CREATE VIRTUAL TABLE%' THEN 2 ELSE 3 END END")?.query_map([],|r|Ok((r.get(0)?,r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
@@ -89,11 +88,46 @@ impl Store {
         Ok(store)
     }
 
-    pub fn writer(&self) -> Result<Connection> {
+    pub fn writer(&self) -> Result<Writer> {
+        let storage = super::storage::Storage::new(&self.path)?;
+        let lease = storage.lease(0)?;
         let db = Connection::open(&self.path)?;
         db.busy_timeout(Duration::from_secs(5))?;
-        db.execute_batch("PRAGMA foreign_keys=ON; PRAGMA cache_size=-32768; PRAGMA mmap_size=0; PRAGMA temp_store=FILE; PRAGMA journal_size_limit=16777216;")?;
-        Ok(db)
+        db.execute_batch("PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON; PRAGMA cache_size=-32768; PRAGMA mmap_size=0; PRAGMA temp_store=MEMORY; PRAGMA journal_size_limit=16777216;")?;
+        let wal = std::path::PathBuf::from(self.path.to_string_lossy().into_owned() + "-wal")
+            .metadata()
+            .map_or(0, |metadata| metadata.len());
+        let before = storage.usage()?;
+        super::storage::admit(before.used_bytes, wal, before.free_bytes)?;
+        let (busy, _, _): (i64, i64, i64) =
+            db.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            })?;
+        ensure!(
+            busy == 0,
+            "unavailable: session snapshot prevents reclaiming its WAL"
+        );
+        let usage = storage.usage()?;
+        let size = self.path.metadata()?.len();
+        let other = usage.used_bytes.saturating_sub(size);
+        let space = super::storage::CAP_BYTES
+            .saturating_sub(other)
+            .min(
+                usage
+                    .free_bytes
+                    .saturating_sub(super::storage::RESERVE_BYTES)
+                    .saturating_add(size),
+            )
+            .saturating_sub(65536);
+        let page_size: u32 = db.pragma_query_value(None, "page_size", |r| r.get(0))?;
+        let page_count: u32 = db.pragma_query_value(None, "page_count", |r| r.get(0))?;
+        let limit = space / (2 * u64::from(page_size) + 24);
+        ensure!(
+            u64::from(page_count) <= limit,
+            "stale: budget; catalog cannot reserve its database and WAL within the shared cap"
+        );
+        db.pragma_update(None, "max_page_count", i64::try_from(limit)?)?;
+        Ok(Writer { db, _lease: lease })
     }
 
     pub fn reader(&self) -> Result<Connection> {
@@ -112,7 +146,7 @@ pub(crate) fn reader(path: &Path) -> Result<Connection> {
         version == SCHEMA_VERSION,
         "Unsupported sessions schema {version}"
     );
-    db.execute_batch("PRAGMA query_only=ON; PRAGMA cache_size=-8192; PRAGMA mmap_size=0; PRAGMA trusted_schema=OFF;")?;
+    db.execute_batch("PRAGMA query_only=ON; PRAGMA cache_size=-8192; PRAGMA mmap_size=0; PRAGMA trusted_schema=OFF; PRAGMA temp_store=MEMORY;")?;
     db.set_limit(Limit::SQLITE_LIMIT_ATTACHED, 0)?;
     db.set_limit(Limit::SQLITE_LIMIT_LENGTH, 64 << 20)?;
     db.set_limit(Limit::SQLITE_LIMIT_SQL_LENGTH, 64 * 1024)?;
@@ -147,17 +181,20 @@ pub(crate) fn reader(path: &Path) -> Result<Connection> {
     Ok(db)
 }
 
-pub(crate) fn ingest_lease(db: &Connection) -> Result<std::fs::File> {
-    use std::os::unix::fs::OpenOptionsExt;
-    let lock = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(db.path().context("Ingest database has no path")?.to_owned() + ".ingest.lock")?;
-    lock.try_lock()
-        .context("unavailable: another session ingest owns the source transaction")?;
-    Ok(lock)
+pub(crate) struct Writer {
+    db: Connection,
+    _lease: std::fs::File,
+}
+
+impl std::ops::Deref for Writer {
+    type Target = Connection;
+    fn deref(&self) -> &Connection {
+        &self.db
+    }
+}
+
+impl std::ops::DerefMut for Writer {
+    fn deref_mut(&mut self) -> &mut Connection {
+        &mut self.db
+    }
 }
