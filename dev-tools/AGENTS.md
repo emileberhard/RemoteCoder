@@ -37,7 +37,10 @@ It also copies its completed Claude probe child's transcript into a deleted-cwd
 fixture, resumes that exact session through RPC, and requires both the unique
 input UUID and the new response in that same copied transcript. This fixture
 changes the first user cwd and project directory; it never executes a copied
-historical task.
+historical task. A second stage marks only that completed lab job imported with
+unknown settings, preserves its known conversation and scope, then continues it
+through the real installed candidate CLI. Its exact input and response must
+appear in the same copied transcript.
 
 Optional `--seed <absolute-private-manifest.json>` checks copied conversation
 agent projections through real RPC. The version-1 manifest has `snapshot: true`,

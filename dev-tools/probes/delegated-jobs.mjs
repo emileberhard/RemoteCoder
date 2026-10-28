@@ -13,7 +13,7 @@ assert(binary && isAbsolute(binary), "Pass the built gateway executable as an ab
 assert(runtimePackage && isAbsolute(runtimePackage), "Pass the matched Codex runtime package directory");
 
 const marker = /^RCJOB_(SPAWN|HOLD|ECHO):(\S+)/;
-const jobId = provider => `agent-${provider}-${BigInt(Date.now()) * 1_000_000n + BigInt(randomInt(1_000_000))}-${randomBytes(4).toString("hex")}`;
+const newJobId = provider => `agent-${provider}-${BigInt(Date.now()) * 1_000_000n + BigInt(randomInt(1_000_000))}-${randomBytes(4).toString("hex")}`;
 const shellTools = ["exec_command", "shell_command", "shell"];
 const probeProvider = "probe";
 const probeModel = "rcjob-mock";
@@ -173,7 +173,7 @@ async function runtimeFlows(lab, model) {
     receipt.parent = parent;
     const childIds = new Set();
     const spawn = (provider, model, prompt) => {
-        const id = jobId(provider);
+        const id = newJobId(provider);
         childIds.add(id);
         return [binary, "--env-file", lab.path("gateway.env"), "agent", "spawn", provider,
         model, prompt, "--job-id", id, "--json"].map(part => `'${part.replaceAll("'", "'\\''")}'`).join(" ");
@@ -210,7 +210,7 @@ async function runtimeFlows(lab, model) {
     receipt.messages = await messageFlows(lab, receipt.codexChild.jobId);
     receipt.scopedTitle = await scopedTitleFlow(lab, receipt.codexChild.jobId);
 
-    const stopId = jobId("codex");
+    const stopId = newJobId("codex");
     await agent(lab, ["spawn", "codex", probeModel, "RCJOB_HOLD:stop-child", "--job-id", stopId, "--operator", "--json"]);
     await settle(lab, stopId, running);
     await agent(lab, ["stop", stopId]);
@@ -219,7 +219,7 @@ async function runtimeFlows(lab, model) {
     model.release("stop-child");
     receipt.stop = terminal(stopped).outcome;
 
-    const restartId = jobId("codex");
+    const restartId = newJobId("codex");
     await agent(lab, ["spawn", "codex", probeModel, "RCJOB_HOLD:restart-child", "--job-id", restartId, "--operator", "--json"]);
     const before = await settle(lab, restartId, running);
     await lab.stop();
@@ -295,8 +295,36 @@ async function cwdResumeFlow(lab, jobId) {
     });
     const released = await client.rpc("claude/thread/release", { threadId });
     assert(!released.error);
+    await lab.stop();
+    const jobPath = lab.path(`.remote-coder/agent-jobs/v1/jobs/${jobId}.json`);
+    const imported = JSON.parse(await readFile(jobPath, "utf8"));
+    const originalScope = imported.spec.spec.toolScope;
+    imported.source = "imported";
+    imported.spec = { kind: "unknown", reason: "Isolated historical-settings reconstruction fixture" };
+    await writeFile(jobPath, JSON.stringify(imported), { mode: 0o600 });
+    await lab.start();
+    const continuationId = newJobId("claude");
+    const importedMarker = `RCJOB_IMPORTED_RESUMED_${randomUUID()}`;
+    await agent(lab, ["spawn", "--resume", jobId, `Reply with exactly ${importedMarker} and nothing else. Do not use tools.`,
+        "--job-id", continuationId, "--operator", "--json"]);
+    const continued = await settle(lab, continuationId, job => terminal(job)?.cleanup === "complete", 180);
+    assert.equal(terminal(continued).outcome.kind, "completed");
+    assert.deepEqual(terminal(continued).execution.conversation, terminal(job).execution.conversation,
+        "Imported settings reconstruction switched provider conversation or home");
+    assert.deepEqual(continued.spec.spec.toolScope, originalScope, "Imported Continue changed permission scope");
+    const continuedRecords = (await readFile(copied, "utf8")).trimEnd().split("\n").map(line => JSON.parse(line));
+    const continuedInput = continuedRecords.findIndex(row => row.type === "user" && row.sessionId === session
+        && row.uuid === terminal(continued).execution.inputId);
+    assert(continuedInput >= 0, "Imported Continue input was not consumed by the exact copied transcript");
+    assert(continuedRecords.slice(continuedInput + 1).some(row => row.type === "assistant" && row.sessionId === session
+        && (row.message?.content ?? []).some(part => part.type === "text" && part.text.includes(importedMarker))),
+        "Imported Continue response was absent from the exact copied transcript");
+    assert(!(await Bun.file(original).exists()), "Imported Continue wrote another transcript path");
     return { threadId, turnId, ...evidence, originalTask: "completed isolated probe child",
-        copiedTranscript: true, changedFixtureFields: ["first user cwd", "project directory"], exactCopiedPath: true };
+        copiedTranscript: true, changedFixtureFields: ["first user cwd", "project directory"], exactCopiedPath: true,
+        importedContinue: { jobId: continuationId, previousJobId: jobId,
+            changedFixtureFields: ["job source", "execution settings evidence"], inputId: terminal(continued).execution.inputId,
+            sameConversation: true, sameScope: true, exactCopiedPath: true } };
 }
 
 async function messageFlows(lab, finishedJob) {
