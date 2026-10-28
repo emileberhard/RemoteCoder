@@ -141,3 +141,13 @@ staged canonical records before activation. Unknown outcomes, timestamps,
 ancestry and delivery certainty remain unknown. No runtime legacy reader,
 second registry or import RPC remains. Provider history and rollback snapshots
 are retained data, not an alternative execution path.
+
+Explicit Continue can start a new job after an imported Claude record whose old
+outcome remains unknown. Admission requires the recorded exact conversation and
+provider home, retained permission scope, authoritative native model and working
+directory, completed provider recovery, no gateway active turn and a successful
+external-client inventory showing no other owner. Missing evidence refuses
+admission. The old job and immutable ancestry remain unchanged. Historical
+settings are resolved for the new invocation from native history; standard mode
+is the new invocation default unless explicitly overridden, rather than an
+assertion about the old run's speed setting.

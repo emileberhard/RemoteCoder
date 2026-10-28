@@ -1,5 +1,6 @@
 pub mod claude;
 pub(crate) mod client;
+mod conversation;
 pub(crate) mod envelope;
 pub(crate) mod jobs;
 pub mod mcp;

@@ -408,3 +408,65 @@ async fn settled_notice_payload_expires_but_its_identity_survives() {
         "an already expired settled job is not rewritten by later admissions"
     );
 }
+
+#[tokio::test]
+async fn explicit_continuation_preserves_imported_unknown_outcome_and_origin() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = JobStore::open(directory.path().into()).await.unwrap();
+    drop(store);
+    let mut imported = job(81);
+    imported.source = JobSource::Imported;
+    imported.admission_origin = None;
+    imported.spec = SpecEvidence::Unknown {
+        reason: "historical prompt is unavailable".into(),
+    };
+    imported.execution = ExecutionState::Unknown {
+        conversation: Some(conversation()),
+        binding: None,
+        reason: "historical outcome is unconfirmed".into(),
+    };
+    let agent = AgentRecord {
+        agent_id: imported.agent_id.clone(),
+        conversation: ConversationBinding::Known {
+            conversation: conversation(),
+        },
+        origin: Origin::Unknown {
+            reason: "historical ancestry is unavailable".into(),
+        },
+        tool_scope: Some(ToolScope::ReadOnly {
+            root: "/tmp/job-fixture".into(),
+        }),
+        origin_job_id: Some(imported.job_id.clone()),
+        latest_job_id: Some(imported.job_id.clone()),
+    };
+    std::fs::write(
+        directory
+            .path()
+            .join("jobs")
+            .join(format!("{}.json", imported.job_id.as_str())),
+        serde_json::to_vec(&imported).unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        directory.path().join("agents").join(format!(
+            "{}.json",
+            super::store::fingerprint(agent.agent_id.as_bytes())
+        )),
+        serde_json::to_vec(&agent).unwrap(),
+    )
+    .unwrap();
+    let store = JobStore::open(directory.path().into()).await.unwrap();
+    let mut continuation = job(82);
+    continuation.agent_id = imported.agent_id.clone();
+    continuation.previous_job_id = Some(imported.job_id.clone());
+    continuation.admission_origin = None;
+    if let SpecEvidence::Known { spec } = &mut continuation.spec {
+        spec.tool_scope = agent.tool_scope.clone().unwrap();
+    }
+    store.admit(continuation.clone()).await.unwrap();
+    assert_eq!(store.read(imported.job_id).await.unwrap(), imported);
+    let continued = store.agent(agent.agent_id).await.unwrap();
+    assert_eq!(continued.origin, agent.origin);
+    assert_eq!(continued.tool_scope, agent.tool_scope);
+    assert_eq!(continued.latest_job_id, Some(continuation.job_id));
+}

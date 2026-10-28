@@ -20,7 +20,7 @@ fn continues_existing_thread(method: &str) -> bool {
 }
 
 impl Gateway {
-    pub(super) async fn other_client_refusal(
+    pub(crate) async fn other_client_refusal(
         &self,
         method: &str,
         object: &Map<String, Value>,

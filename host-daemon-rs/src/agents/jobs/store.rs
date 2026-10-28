@@ -285,7 +285,7 @@ impl JobStore {
             ensure!(!inner.jobs.values().any(|existing| existing.agent_id == job.agent_id && existing.source == JobSource::Runtime && !is_terminal(existing)), "conversation already has an unresolved runtime job");
             if let Some(previous_id) = &job.previous_job_id {
                 let previous = inner.job(previous_id)?;
-                ensure!(previous.agent_id == job.agent_id && matches!(&previous.execution, ExecutionState::Terminal { terminal } if terminal.cleanup == CleanupState::Complete), "Continue waits until the previous terminal result is acknowledged by its provider");
+                ensure!(previous.agent_id == job.agent_id && (previous.source == JobSource::Imported || matches!(&previous.execution, ExecutionState::Terminal { terminal } if terminal.cleanup == CleanupState::Complete)), "Continue waits until the previous terminal result is acknowledged by its provider");
                 ensure!(inner.agent_view(&job.agent_id)?.latest_job_id.as_ref() == Some(previous_id), "Continue was based on a superseded job");
                 ensure!(job.admission_origin.is_none(), "Continue cannot replace original ancestry");
             } else {

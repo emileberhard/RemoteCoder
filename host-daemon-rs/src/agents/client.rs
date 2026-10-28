@@ -13,6 +13,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
+use super::conversation::conversation_from_header;
 use super::envelope::{self, Sender};
 use super::jobs::model::{
     ConversationBinding, ConversationIdentity, ExecutionSettings, ExecutionState, JobId, JobRecord,
@@ -447,46 +448,6 @@ async fn read(endpoint: &GatewayEndpoint, target: &str) -> Result<JobView> {
     .await
 }
 
-fn conversation_from_header(header: &Value) -> Result<ConversationIdentity> {
-    let thread_id = header["id"]
-        .as_str()
-        .context("Conversation has no exact ID")?;
-    let provider = if thread_id.starts_with("claude_") {
-        Provider::Claude
-    } else {
-        Provider::Codex
-    };
-    let path = Path::new(
-        header["path"]
-            .as_str()
-            .context("Conversation has no authoritative history path")?,
-    );
-    ensure!(
-        path.is_absolute(),
-        "Conversation history path is not absolute"
-    );
-    let directory = match provider {
-        Provider::Claude => "projects",
-        Provider::Codex => "sessions",
-    };
-    let home = path
-        .ancestors()
-        .find(|path| {
-            path.file_name().is_some_and(|name| {
-                name == directory || (provider == Provider::Codex && name == "archived_sessions")
-            })
-        })
-        .and_then(Path::parent)
-        .context("Conversation history path does not identify a provider home")?;
-    Ok(ConversationIdentity {
-        provider,
-        provider_home: ProviderHome::Known {
-            path: home.to_owned(),
-        },
-        thread_id: thread_id.to_owned(),
-    })
-}
-
 async fn native_recipient(
     endpoint: &GatewayEndpoint,
     target: &str,
@@ -580,6 +541,7 @@ async fn spawn(endpoint: &GatewayEndpoint, arguments: SpawnArgs) -> Result<Value
             "Continuation keeps the existing conversation's directory and title"
         );
         let source = read(endpoint, target).await?;
+        let historical;
         let (original_settings, original_scope) = match &source.job.spec {
             SpecEvidence::Known { spec } => (&spec.settings, &spec.tool_scope),
             SpecEvidence::Expired {
@@ -587,9 +549,46 @@ async fn spawn(endpoint: &GatewayEndpoint, arguments: SpawnArgs) -> Result<Value
                 tool_scope,
                 ..
             } => (settings, tool_scope),
-            SpecEvidence::Unknown { .. } => bail!(
-                "Historical execution settings are unknown; continuation needs resolved provider evidence"
-            ),
+            SpecEvidence::Unknown { .. } => {
+                let agent = source
+                    .agent
+                    .as_ref()
+                    .context("Historical agent identity is unresolved")?;
+                let ConversationBinding::Known { conversation } = &agent.conversation else {
+                    bail!("Historical provider conversation is unresolved");
+                };
+                ensure!(
+                    conversation.provider == Provider::Claude,
+                    "Historical Codex execution settings are unresolved"
+                );
+                let response: Value = rpc(
+                    endpoint,
+                    "thread/read",
+                    json!({"threadId":conversation.thread_id,"includeTurns":false}),
+                )
+                .await?;
+                ensure!(
+                    conversation_from_header(&response["thread"])? == *conversation,
+                    "Provider history resolved a different conversation or home"
+                );
+                historical = ExecutionSettings::Claude {
+                    model: response["thread"]["model"]
+                        .as_str()
+                        .context("Historical model is unknown")?
+                        .to_owned(),
+                    effort: response["thread"]["reasoningEffort"]
+                        .as_str()
+                        .map(str::to_owned),
+                    fast: false,
+                };
+                (
+                    &historical,
+                    agent
+                        .tool_scope
+                        .as_ref()
+                        .context("Historical permission scope is unresolved")?,
+                )
+            }
         };
         if let Some(preset) = &arguments.preset {
             ensure!(

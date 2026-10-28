@@ -226,6 +226,45 @@ impl JobOwner {
                     .context("conversation's latest job is unresolved")?,
             )
             .await?;
+        if previous.source == JobSource::Imported {
+            let ConversationBinding::Known { conversation } = &agent.conversation else {
+                bail!("historical provider conversation is unresolved");
+            };
+            ensure!(
+                conversation.provider == Provider::Claude
+                    || matches!(&previous.execution, ExecutionState::Terminal { .. }),
+                "historical Codex continuation needs a confirmed terminal result"
+            );
+            let gateway = self.gateway()?;
+            ensure!(
+                gateway
+                    .job_provider_recovery_complete(conversation.provider)
+                    .await?,
+                "Claude recovery is unresolved; continuation cannot prove idle"
+            );
+            ensure!(
+                gateway
+                    .claude_active_turn_id(&conversation.thread_id)
+                    .await
+                    .is_none(),
+                "historical conversation is still running"
+            );
+            let object = serde_json::json!({"params":{"threadId":conversation.thread_id}});
+            if let Some(error) = gateway
+                .other_client_refusal(
+                    "thread/resume",
+                    object
+                        .as_object()
+                        .context("continuation request is not an object")?,
+                )
+                .await
+            {
+                bail!(
+                    "historical continuation cannot acquire this conversation: {}",
+                    error.message
+                );
+            }
+        }
         let (cwd, original_settings, tool_scope, title) = match &previous.spec {
             SpecEvidence::Known { spec } => (
                 spec.cwd.clone(),
@@ -244,9 +283,55 @@ impl JobOwner {
                 tool_scope.clone(),
                 title.clone(),
             ),
-            SpecEvidence::Unknown { .. } => bail!(
-                "historical execution settings are unresolved; this conversation cannot continue until they are proven"
-            ),
+            SpecEvidence::Unknown { .. } => {
+                ensure!(
+                    previous.source == JobSource::Imported,
+                    "runtime job has no execution specification"
+                );
+                let ConversationBinding::Known { conversation } = &agent.conversation else {
+                    bail!("historical provider conversation is unresolved");
+                };
+                ensure!(
+                    conversation.provider == Provider::Claude,
+                    "historical Codex execution settings are unresolved"
+                );
+                let response = self
+                    .gateway()?
+                    .claude_thread_response(&serde_json::json!({"threadId":conversation.thread_id}))
+                    .await
+                    .map_err(|error| anyhow::anyhow!(error.message))?;
+                let header = &response["thread"];
+                ensure!(
+                    crate::agents::conversation::conversation_from_header(header)? == *conversation,
+                    "provider history resolved a different conversation or home"
+                );
+                let cwd = PathBuf::from(
+                    header["cwd"]
+                        .as_str()
+                        .context("historical working directory is unknown")?,
+                );
+                ensure!(
+                    cwd.is_absolute(),
+                    "historical working directory is unavailable"
+                );
+                let settings = ExecutionSettings::Claude {
+                    model: header["model"]
+                        .as_str()
+                        .context("historical model is unknown")?
+                        .to_owned(),
+                    effort: header["reasoningEffort"].as_str().map(str::to_owned),
+                    fast: false,
+                };
+                (
+                    cwd,
+                    settings,
+                    agent
+                        .tool_scope
+                        .clone()
+                        .context("historical permission scope is unresolved")?,
+                    header["name"].as_str().map(str::to_owned),
+                )
+            }
         };
         ensure!(
             matches!(
