@@ -61,6 +61,7 @@ struct ChatHistoryReadTests {
         await gateway.releaseHeldRead()
         await read.value
         #expect(chat.historyEdges.isIdle)
+        try #require(chat.hasHistoryEdge(.older))
         #expect(await gateway.pageReads == pages)
         workspace.setHistoryDrawerOpen(false, overlaysTranscript: true, in: workspace.keyWindow)
         #expect(!chat.historyEdges.isIdle)
