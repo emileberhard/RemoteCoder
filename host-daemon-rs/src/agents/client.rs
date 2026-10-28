@@ -1238,8 +1238,16 @@ fn human_listing(result: &Value) -> Result<String> {
     Ok(lines.join("\n"))
 }
 
+fn message_exit(result: &Value) -> i32 {
+    match result["deliveryState"]["kind"].as_str() {
+        Some("submitted" | "accepted" | "recorded") => 0,
+        _ => 69,
+    }
+}
+
 pub(crate) async fn run(command: AgentCommand, env_file: Option<&Path>) -> Result<i32> {
     let format_only = matches!(&command, AgentCommand::Message(arguments) if arguments.format_only);
+    let is_message = matches!(&command, AgentCommand::Message(_));
     let human_list = matches!(&command, AgentCommand::List(arguments) if !arguments.json && !arguments.automations && !arguments.target.as_deref().is_some_and(|target| target.starts_with("automation:")));
     let compact = match &command {
         AgentCommand::Spawn(arguments) => arguments.json,
@@ -1258,6 +1266,7 @@ pub(crate) async fn run(command: AgentCommand, env_file: Option<&Path>) -> Resul
             Ok(0)
         }
         Ok(result) => {
+            let exit = if is_message { message_exit(&result) } else { 0 };
             println!(
                 "{}",
                 if compact {
@@ -1266,7 +1275,7 @@ pub(crate) async fn run(command: AgentCommand, env_file: Option<&Path>) -> Resul
                     serde_json::to_string_pretty(&result)?
                 }
             );
-            Ok(0)
+            Ok(exit)
         }
         Err(error) => {
             let (exit, payload) = if let Some(error) = error.downcast_ref::<RpcFailure>() {
@@ -1308,6 +1317,32 @@ pub(crate) async fn run(command: AgentCommand, env_file: Option<&Path>) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn message_delivery_failures_return_nonzero_without_changing_receipt() {
+        for kind in [
+            "unreachable",
+            "blocked",
+            "uncertain",
+            "failed",
+            "sending",
+            "pending",
+        ] {
+            assert_eq!(
+                message_exit(
+                    &json!({"deliveryId":"same-id","deliveryState":{"kind":kind,"reason":"not accepted"}})
+                ),
+                69
+            );
+        }
+        for kind in ["submitted", "accepted", "recorded"] {
+            assert_eq!(
+                message_exit(&json!({"deliveryId":"same-id","deliveryState":{"kind":kind}})),
+                0
+            );
+        }
+        assert_eq!(message_exit(&json!({"deliveryId":"same-id"})), 69);
+    }
 
     #[test]
     fn human_list_preserves_unknown_status_and_missing_model() {
