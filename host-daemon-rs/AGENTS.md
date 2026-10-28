@@ -57,6 +57,12 @@ delivery invariants. The installed binary's `agent` subcommand is the client;
 no launcher process, second ancestry registry or runtime legacy reader exists.
 Native terminal Claude holders own only their process-lifetime inbox route.
 
+Manual message receipts share `JobStore` and its cap. Their frozen sender,
+requested target, envelope, resolved conversation and target job survive retries;
+never resolve a retry against a newer invocation. Message-driven Continue uses
+the atomic previous-job and Stop fence. `agent/messages/read` is the read owner;
+scoped receipt reads require the exact sender conversation.
+
 ## Process model
 
 - One version-matched default `codex app-server` per host listens on the

@@ -250,6 +250,12 @@ const METHOD_SPECS: &[MethodSpec] = &[
         0
     ),
     spec!(
+        "agent/messages/read",
+        AgentJobs,
+        Some(RequestLifetime::Query),
+        0
+    ),
+    spec!(
         "agent/jobs/message",
         AgentJobs,
         Some(RequestLifetime::Command),

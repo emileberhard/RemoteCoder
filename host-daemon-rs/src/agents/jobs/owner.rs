@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::sync::Weak;
+use std::sync::{Arc, Weak};
 
 use anyhow::{Context, Result, bail, ensure};
 use tokio::sync::{Mutex, OnceCell, RwLock, watch};
@@ -19,6 +19,7 @@ pub(crate) struct JobOwner {
         Mutex<std::collections::HashMap<JobId, super::routes::ScopedEndpointLease>>,
     pub(super) root: Option<PathBuf>,
     store: OnceCell<JobStore>,
+    message_claims: Mutex<std::collections::HashMap<String, Weak<Mutex<()>>>>,
     gateway: Weak<Gateway>,
     changed: watch::Sender<u64>,
 }
@@ -34,6 +35,7 @@ impl JobOwner {
             endpoints: Default::default(),
             root,
             store: OnceCell::new(),
+            message_claims: Default::default(),
             gateway,
             changed: watch::channel(0).0,
         }
@@ -46,7 +48,7 @@ impl JobOwner {
         self.store().await.map(|_| ())
     }
 
-    pub(super) async fn store(&self) -> Result<&JobStore> {
+    pub(crate) async fn store(&self) -> Result<&JobStore> {
         self.store
             .get_or_try_init(|| async {
                 JobStore::open(
@@ -57,6 +59,25 @@ impl JobOwner {
                 .await
             })
             .await
+    }
+
+    pub(crate) async fn claim_message(&self, id: &str) -> Result<tokio::sync::OwnedMutexGuard<()>> {
+        let lock = {
+            let mut claims = self.message_claims.lock().await;
+            claims.retain(|_, claim| claim.strong_count() > 0);
+            if let Some(lock) = claims.get(id).and_then(Weak::upgrade) {
+                lock
+            } else {
+                ensure!(
+                    claims.len() < MAX_UNSETTLED_JOBS,
+                    "message delivery concurrency is at capacity; inspect existing receipts before retrying"
+                );
+                let lock = Arc::new(Mutex::new(()));
+                claims.insert(id.to_owned(), Arc::downgrade(&lock));
+                lock
+            }
+        };
+        Ok(lock.lock_owned().await)
     }
 
     pub(crate) fn gateway(&self) -> Result<std::sync::Arc<Gateway>> {
@@ -202,13 +223,35 @@ impl JobOwner {
             ContinueRecipient::Previous => None,
             ContinueRecipient::Current => Some(recipient(&caller)),
         };
-        let request_fingerprint = fingerprint(&serde_json::to_vec(&(
-            &request.agent_id,
-            &request.prompt,
-            &request.settings,
-            &request.recipient,
-            &current_recipient,
-        ))?);
+        let request_bytes = if request.intent == ContinueIntent::Message {
+            serde_json::to_vec(&(
+                &request.agent_id,
+                &request.prompt,
+                &request.settings,
+                &request.recipient,
+                &current_recipient,
+                &request.expected_previous_job_id,
+                &request.intent,
+            ))?
+        } else if request.expected_previous_job_id.is_some() {
+            serde_json::to_vec(&(
+                &request.agent_id,
+                &request.prompt,
+                &request.settings,
+                &request.recipient,
+                &current_recipient,
+                &request.expected_previous_job_id,
+            ))?
+        } else {
+            serde_json::to_vec(&(
+                &request.agent_id,
+                &request.prompt,
+                &request.settings,
+                &request.recipient,
+                &current_recipient,
+            ))?
+        };
+        let request_fingerprint = fingerprint(&request_bytes);
         if let Some(job) = store
             .existing_request(request.job_id.clone(), request_fingerprint.clone())
             .await?
@@ -227,6 +270,13 @@ impl JobOwner {
                     .context("conversation's latest job is unresolved")?,
             )
             .await?;
+        ensure!(
+            request
+                .expected_previous_job_id
+                .as_ref()
+                .is_none_or(|expected| expected == &previous.job_id),
+            "Continue target was superseded; inspect its latest job before sending more work"
+        );
         if previous.source == JobSource::Imported {
             let ConversationBinding::Known { conversation } = &agent.conversation else {
                 bail!("historical provider conversation is unresolved");
@@ -407,7 +457,10 @@ impl JobOwner {
             execution: ExecutionState::Admitted,
             stop: StopState::NotRequested,
         };
-        let (job, duplicate) = store.admit(job).await?;
+        let (job, duplicate) = match request.intent {
+            ContinueIntent::Explicit => store.admit(job).await?,
+            ContinueIntent::Message => store.admit_message_continuation(job).await?,
+        };
         self.dirty();
         Ok(AdmissionReceipt { job, duplicate })
     }

@@ -112,6 +112,38 @@ selection. Only that exact persisted selection plus a freshly available native
 inventory proving no external client may restore its gateway route. A native
 route is never converted, and restoration preserves Stop and its generation.
 
+## Sender message receipts
+
+`JobStore` also owns manual sender receipts under `agent-jobs/v1/messages/`.
+Admission freezes the proven sender, exact requested target, raw-request hash,
+envelope and envelope hash before target lookup. Lookup failure is a durable
+failed receipt. Resolution freezes the exact conversation and target job before
+effects; a later sender job or selector match cannot rewrite them. Per-ID claims
+serialize only duplicate requests, and are acquired before the shutdown gate.
+
+The same delivery ID, sender, target and raw text reuse the retained receipt;
+changed input conflicts. Sending is persisted before the native receiver acts.
+Submitted, accepted and recorded receipts are never replayed. Explicit retries
+reconcile unresolved native delivery using its original ID and envelope; a
+superseded frozen target stays uncertain instead of receiving fresh input in a
+newer invocation. There is no message scheduler or second provider registry.
+`agent/messages/read` and `agent receipt ID --json` inspect the stored receipt.
+A scoped client may read only receipts from its exact proven sender conversation.
+
+A message to the latest completed or failed job admits one explicit successor
+through the existing Continue owner, with a JobId derived from the delivery ID.
+The expected previous job is checked again atomically at storage admission.
+Accepted means that successor was admitted, not that the model consumed it.
+Automatic message continuation cannot clear Stop; an explicit Continue remains
+the deliberate restart operation. Parent callbacks retain their existing native
+or gateway receiver and never take over a terminal parent.
+
+Message records share the store's 512 MiB cap and process lease. Admission reserves
+record and mutation space; unresolved receipts remain pinned. Accepted/recorded
+payloads expire after 30 days, retaining identity, hashes and receipts. Diagnostics
+are bounded, and capacity refusal names the retained obligations that prevent
+admission. The existing provider receiver owns reconciliation and Stop fences.
+
 ## Caller authority and read-only work
 
 Caller capture checks kernel PID/birth ancestry against actual provider-owned

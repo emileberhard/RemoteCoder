@@ -16,8 +16,8 @@ use serde_json::{Value, json};
 use super::conversation::conversation_from_header;
 use super::envelope::{self, Sender};
 use super::jobs::model::{
-    ConversationBinding, ConversationIdentity, ExecutionSettings, ExecutionState, JobId, JobRecord,
-    JobSpec, Provider, ProviderHome, SpecEvidence, ToolScope,
+    ConversationBinding, ExecutionSettings, ExecutionState, JobId, JobRecord, JobSpec, Provider,
+    ProviderHome, SpecEvidence, ToolScope,
 };
 use crate::config::{ConfigSources, GatewayEndpoint, HostPaths};
 use crate::wire::agent_jobs::*;
@@ -56,6 +56,11 @@ pub(crate) enum AgentCommand {
         caller: CallerArgs,
     },
     Capture,
+    Receipt {
+        delivery_id: String,
+        #[arg(long)]
+        json: bool,
+    },
     NativeParent,
     Items {
         target: String,
@@ -448,56 +453,6 @@ async fn read(endpoint: &GatewayEndpoint, target: &str) -> Result<JobView> {
     .await
 }
 
-async fn native_recipient(
-    endpoint: &GatewayEndpoint,
-    target: &str,
-) -> Result<ConversationIdentity> {
-    if target.starts_with("claude_") || target.starts_with("codex:") {
-        let id = target.strip_prefix("codex:").unwrap_or(target);
-        let response: Value = rpc(
-            endpoint,
-            "thread/read",
-            json!({"threadId":id,"includeTurns":false}),
-        )
-        .await?;
-        ensure!(
-            response["thread"]["id"] == id,
-            "Gateway returned a different conversation"
-        );
-        return conversation_from_header(&response["thread"]);
-    }
-    let mut cursor = Value::Null;
-    let mut matches = Vec::new();
-    for _ in 0..MAX_INVENTORY_PAGES {
-        let page: Value = rpc(
-            endpoint,
-            "thread/list",
-            json!({"limit":200,"cursor":cursor}),
-        )
-        .await?;
-        for header in page["data"]
-            .as_array()
-            .context("Gateway returned no conversation page")?
-        {
-            let id = header["id"]
-                .as_str()
-                .context("Conversation has no exact ID")?;
-            if id == target || id.strip_prefix("claude_") == Some(target) {
-                matches.push(conversation_from_header(header)?);
-            }
-        }
-        cursor = page["nextCursor"].clone();
-        if cursor.is_null() {
-            return match matches.as_slice() {
-                [conversation] => Ok(conversation.clone()),
-                [] => bail!("No job or native conversation matches {target:?}"),
-                _ => bail!("Native conversation is ambiguous; use claude_UUID or codex:UUID"),
-            };
-        }
-    }
-    bail!("Native conversation discovery exceeded its page budget; use claude_UUID or codex:UUID")
-}
-
 fn execution_status(job: &JobRecord) -> &'static str {
     match &job.execution {
         ExecutionState::Admitted => "admitted",
@@ -636,6 +591,8 @@ async fn spawn(endpoint: &GatewayEndpoint, arguments: SpawnArgs) -> Result<Value
             agent_id: source.job.agent_id,
             prompt: text(&arguments.provider_or_prompt)?,
             settings,
+            expected_previous_job_id: Some(source.job.job_id),
+            intent: ContinueIntent::Explicit,
             recipient: if arguments.parent.as_deref() == Some("current") {
                 ContinueRecipient::Current
             } else {
@@ -837,12 +794,8 @@ async fn message(
     let target = if arguments.target == "parent" {
         MessageTarget::Parent
     } else {
-        match resolve(endpoint, &arguments.target).await {
-            Ok(job_id) => MessageTarget::Job { job_id },
-            Err(error) if error.is::<NoMatchingJob>() => MessageTarget::Conversation {
-                conversation: native_recipient(endpoint, &arguments.target).await?,
-            },
-            Err(error) => return Err(error),
+        MessageTarget::Selector {
+            selector: arguments.target,
         }
     };
     mutation(
@@ -968,6 +921,14 @@ async fn execute(command: AgentCommand, env_file: Option<&Path>) -> Result<Value
     } else {
         None
     };
+    if let AgentCommand::Receipt { delivery_id, .. } = &command
+        && std::env::var_os(SCOPED_SOCKET_ENV).is_some()
+    {
+        return scoped(ScopedRequest::ReadMessage {
+            delivery_id: delivery_id.clone(),
+        })
+        .await;
+    }
     if let AgentCommand::Read { target, caller, .. } = &command
         && target == "self"
         && use_scoped(caller)
@@ -1155,6 +1116,14 @@ async fn execute(command: AgentCommand, env_file: Option<&Path>) -> Result<Value
             )
             .await
         }
+        AgentCommand::Receipt { delivery_id, .. } => {
+            rpc(
+                &endpoint,
+                "agent/messages/read",
+                MessageReadParams { delivery_id },
+            )
+            .await
+        }
         AgentCommand::Capture => Ok(serde_json::to_value(capture(&endpoint).await?)?),
         AgentCommand::Items { target, .. } => items(&endpoint, &target).await,
         AgentCommand::NativeParent => {
@@ -1248,13 +1217,15 @@ fn message_exit(result: &Value) -> i32 {
 
 pub(crate) async fn run(command: AgentCommand, env_file: Option<&Path>) -> Result<i32> {
     let format_only = matches!(&command, AgentCommand::Message(arguments) if arguments.format_only);
-    let is_message = matches!(&command, AgentCommand::Message(_));
+    let is_message = matches!(&command, AgentCommand::Message(arguments) if !arguments.target.starts_with("automation:"));
     let human_list = matches!(&command, AgentCommand::List(arguments) if !arguments.json && !arguments.automations && !arguments.target.as_deref().is_some_and(|target| target.starts_with("automation:")));
     let compact = match &command {
         AgentCommand::Spawn(arguments) => arguments.json,
         AgentCommand::Message(arguments) => arguments.json,
         AgentCommand::List(arguments) => arguments.json,
-        AgentCommand::Read { json, .. } | AgentCommand::Items { json, .. } => *json,
+        AgentCommand::Read { json, .. }
+        | AgentCommand::Items { json, .. }
+        | AgentCommand::Receipt { json, .. } => *json,
         _ => true,
     };
     match execute(command, env_file).await {

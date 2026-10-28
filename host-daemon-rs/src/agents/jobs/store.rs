@@ -1,3 +1,5 @@
+pub(crate) mod messages;
+
 use std::collections::BTreeMap;
 use std::fs::{File, OpenOptions};
 use std::os::unix::fs::OpenOptionsExt;
@@ -29,6 +31,7 @@ struct Inner {
     jobs: BTreeMap<JobId, JobRecord>,
     agents: BTreeMap<String, AgentRecord>,
     uncertainties: Vec<ImportedUncertainty>,
+    messages: BTreeMap<String, messages::MessageRecord>,
 }
 
 pub(crate) enum Selection {
@@ -51,8 +54,8 @@ impl JobStore {
                 .custom_flags(libc::O_NOFOLLOW)
                 .open(root.join("owner.lock"))?;
             lease.try_lock().context("another process owns the delegated-job store")?;
-            let mut inner = Inner { root, _lease: lease, jobs: BTreeMap::new(), agents: BTreeMap::new(), uncertainties: Vec::new() };
-            for name in ["jobs", "agents", "evidence", "uncertainties"] {
+            let mut inner = Inner { root, _lease: lease, jobs: BTreeMap::new(), agents: BTreeMap::new(), uncertainties: Vec::new(), messages: BTreeMap::new() };
+            for name in ["jobs", "agents", "evidence", "uncertainties", "messages"] {
                 private_state::ensure_private_directory(&inner.root.join(name))?;
             }
             File::open(&inner.root)?.sync_all()?;
@@ -84,6 +87,7 @@ impl JobStore {
                 ensure!(entry.path().file_stem().and_then(|name| name.to_str()) == Some(fingerprint(evidence.evidence_id.as_bytes()).as_str()), "historical uncertainty filename differs from its identity");
                 inner.uncertainties.push(evidence);
             }
+            inner.load_messages()?;
             inner.validate_slots()?;
             let accounted = inner.accounted_bytes()?;
             if accounted + MUTATION_RESERVE > MAX_STORE_BYTES {
@@ -273,6 +277,21 @@ impl JobStore {
     }
 
     pub(crate) async fn admit(&self, job: JobRecord) -> Result<(JobRecord, bool)> {
+        self.admit_with_stop_fence(job, false).await
+    }
+
+    pub(crate) async fn admit_message_continuation(
+        &self,
+        job: JobRecord,
+    ) -> Result<(JobRecord, bool)> {
+        self.admit_with_stop_fence(job, true).await
+    }
+
+    async fn admit_with_stop_fence(
+        &self,
+        job: JobRecord,
+        require_unstopped: bool,
+    ) -> Result<(JobRecord, bool)> {
         self.access(move |inner| {
             validate_job(&job)?;
             ensure!(job.source == JobSource::Runtime && job.revision == 0, "new admission requires an initial runtime job");
@@ -285,6 +304,7 @@ impl JobStore {
             ensure!(!inner.jobs.values().any(|existing| existing.agent_id == job.agent_id && existing.source == JobSource::Runtime && !is_terminal(existing)), "conversation already has an unresolved runtime job");
             if let Some(previous_id) = &job.previous_job_id {
                 let previous = inner.job(previous_id)?;
+                ensure!(!require_unstopped || (matches!(previous.stop, StopState::NotRequested) && !matches!(&previous.execution, ExecutionState::Terminal { terminal } if matches!(terminal.outcome, JobOutcome::Stopped { .. }))), "automatic message continuation cannot clear Stop; use explicit Continue to restart deliberately");
                 ensure!(previous.agent_id == job.agent_id && ((previous.source == JobSource::Imported && !matches!(&previous.execution, ExecutionState::Terminal { terminal } if terminal.cleanup == CleanupState::Pending)) || matches!(&previous.execution, ExecutionState::Terminal { terminal } if terminal.cleanup == CleanupState::Complete)), "Continue waits until the previous terminal result is acknowledged by its provider");
                 ensure!(inner.agent_view(&job.agent_id)?.latest_job_id.as_ref() == Some(previous_id), "Continue was based on a superseded job");
                 ensure!(job.admission_origin.is_none(), "Continue cannot replace original ancestry");
@@ -783,10 +803,12 @@ impl Inner {
             let owned = job_bytes + evidence_bytes;
             accounted += RUNTIME_RESERVATION.saturating_sub(owned);
         }
+        accounted += self.message_reservations()?;
         Ok(accounted)
     }
 
     fn reclaim(&mut self, now: i64, incoming: u64) -> Result<()> {
+        self.reclaim_messages(now)?;
         let mut candidates: Vec<_> = self
             .jobs
             .values()

@@ -393,6 +393,8 @@ impl AgentService<'_> {
                         agent_id: agent.agent_id,
                         prompt: params.text.context("Continuation text is required")?,
                         settings: None,
+                        expected_previous_job_id: Some(job_id),
+                        intent: crate::wire::agent_jobs::ContinueIntent::Explicit,
                         recipient: ContinueRecipient::Previous,
                         caller: Caller::Operator,
                     })?,

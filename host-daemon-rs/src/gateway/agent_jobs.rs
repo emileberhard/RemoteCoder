@@ -4,10 +4,7 @@ use serde_json::{Value, json};
 
 use super::Gateway;
 use crate::agents::jobs::context::ProvenCaller;
-use crate::agents::jobs::model::{
-    ConversationBinding, ConversationIdentity, ExecutionState, JobId, Origin, Provider,
-    ProviderHome, Recipient,
-};
+use crate::agents::jobs::model::{ConversationIdentity, JobId, Origin, Provider, ProviderHome};
 use crate::platform::process::{ProcessInstance, ancestry};
 use crate::rpc::error::RpcCode;
 use crate::rpc::{RpcError, RpcResult};
@@ -130,6 +127,16 @@ impl Gateway {
             }
             "agent/jobs/stop" => Ok(json!(self.jobs.stop(decode(params)?).await?)),
             "agent/jobs/dismiss" => Ok(json!(self.jobs.dismiss(decode(params)?).await?)),
+            "agent/messages/read" => {
+                let request: MessageReadParams = decode(params)?;
+                Ok(json!(
+                    self.jobs
+                        .store()
+                        .await?
+                        .message(request.delivery_id)
+                        .await?
+                ))
+            }
             "agent/jobs/message" => self.job_message(decode(params)?).await,
             _ => Err(RpcError::new(
                 RpcCode::MethodNotFound,
@@ -345,6 +352,16 @@ impl Gateway {
                 sender_id: id.as_str().into(),
                 job_id: Some(id)
             })),
+            ScopedRequest::ReadMessage { delivery_id } => {
+                let record = self.jobs.store().await?.message(delivery_id).await?;
+                if record.sender != (Origin::Parent { conversation }) {
+                    return Err(RpcError::new(
+                        RpcCode::InvalidRequest,
+                        "scoped message inspection requires the exact sender conversation",
+                    ));
+                }
+                Ok(json!(record))
+            }
             ScopedRequest::MessageParent { delivery_id, text } => {
                 self.job_message(MessageParams {
                     target: MessageTarget::Parent,
@@ -366,136 +383,5 @@ impl Gateway {
                 .await
             }
         }
-    }
-
-    async fn running_job_conversation(
-        &self,
-        job_id: &JobId,
-    ) -> Result<ConversationIdentity, RpcError> {
-        let view = self.jobs.read(job_id).await?;
-        let agent = view.agent.context("target conversation is unresolved")?;
-        if agent.latest_job_id.as_ref() != Some(job_id) {
-            return Err(RpcError::new(
-                RpcCode::Conflict,
-                "target job has been superseded; use its latest job",
-            ));
-        }
-        if !matches!(
-            view.job.execution,
-            ExecutionState::Running { .. } | ExecutionState::Recovering { .. }
-        ) {
-            return Err(RpcError::new(
-                RpcCode::InvalidRequest,
-                "target job is not running; resolve unknown work or use explicit Continue",
-            ));
-        }
-        match agent.conversation {
-            ConversationBinding::Known { conversation } => Ok(conversation),
-            ConversationBinding::Unknown { .. } => Err(RpcError::new(
-                RpcCode::InvalidRequest,
-                "target provider identity is unresolved",
-            )),
-        }
-    }
-
-    async fn job_message(&self, request: MessageParams) -> RpcResult {
-        let _operation = self.jobs.operations.read().await;
-        if self.is_draining() {
-            return Err(RpcError::draining());
-        }
-        if request
-            .delivery_id
-            .split_once(':')
-            .is_some_and(|(prefix, _)| JobId::try_from(prefix.to_owned()).is_ok())
-        {
-            return Err(RpcError::new(
-                RpcCode::InvalidParams,
-                "job delivery IDs are reserved for the runtime; use a distinct message ID",
-            ));
-        }
-        crate::agents::envelope::validate_message_text(&request.text)
-            .map_err(|error| RpcError::new(RpcCode::InvalidParams, error.to_string()))?;
-        self.jobs
-            .ensure_new_message_id(&request.delivery_id)
-            .await
-            .map_err(|error| RpcError::new(RpcCode::Conflict, error.to_string()))?;
-        let caller = self.resolve_job_caller(&request.caller).await?;
-        let target = match &request.target {
-            MessageTarget::Conversation { conversation } => {
-                match self.jobs.agent_for_conversation(conversation).await? {
-                    Some(agent) => {
-                        let latest = agent
-                            .latest_job_id
-                            .context("target conversation's current job is unresolved")?;
-                        self.running_job_conversation(&latest).await?
-                    }
-                    None => conversation.clone(),
-                }
-            }
-            MessageTarget::Job { job_id } => self.running_job_conversation(job_id).await?,
-            MessageTarget::Parent => {
-                let Origin::Parent { conversation } = &caller else {
-                    return Err(RpcError::new(
-                        RpcCode::InvalidRequest,
-                        "operator intent has no parent",
-                    ));
-                };
-                let agent = self
-                    .jobs
-                    .agent_for_conversation(conversation)
-                    .await?
-                    .context("caller has no delegated-agent recipient")?;
-                let latest = agent
-                    .latest_job_id
-                    .context("caller's current job is unresolved")?;
-                match self.jobs.read(&latest).await?.job.recipient {
-                    Recipient::Conversation { conversation } => conversation,
-                    _ => {
-                        return Err(RpcError::new(
-                            RpcCode::InvalidRequest,
-                            "caller has no proven parent recipient",
-                        ));
-                    }
-                }
-            }
-        };
-        if self.agent_conversation(&target.thread_id)? != target {
-            return Err(RpcError::new(
-                RpcCode::InvalidRequest,
-                "message target belongs to another provider home",
-            ));
-        }
-        let text = match caller {
-            Origin::TopLevel => request.text,
-            Origin::Parent { .. } => {
-                let view = self.job_context_view(request.caller).await?;
-                let host = self.job_host_name()?;
-                crate::agents::envelope::message(
-                    &request.delivery_id,
-                    &crate::agents::envelope::Sender {
-                        agent_id: &view.sender_id,
-                        provider: view.context.provider.as_str(),
-                        host: &host,
-                        reply_tool: "message_agent",
-                        reply_target: view
-                            .job_id
-                            .as_ref()
-                            .map_or(view.conversation.thread_id.as_str(), JobId::as_str),
-                    },
-                    &request.text,
-                )
-                .map_err(|error| RpcError::new(RpcCode::InvalidParams, error.to_string()))?
-            }
-            Origin::Unknown { .. } => {
-                return Err(RpcError::new(
-                    RpcCode::InvalidRequest,
-                    "message sender is unproven",
-                ));
-            }
-        };
-        self.jobs
-            .gateway()?
-            .deliver_job_input(&target, &request.delivery_id, &text)
-            .await
     }
 }
