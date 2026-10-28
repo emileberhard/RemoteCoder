@@ -138,8 +138,9 @@ pub(super) enum DesktopReason {
     Healthy,
     /// No ChatGPT process at all; Launch Services must open one.
     AppAbsent,
-    /// A readable process is provably attached to something other than the
-    /// managed socket.
+    /// A readable process provably lacks the managed launch environment: it
+    /// is attached to something other than the managed socket, or can update
+    /// itself.
     EnvironmentMismatch,
     /// The bundle does not carry the approved Codex version.
     IncompatibleVersion,

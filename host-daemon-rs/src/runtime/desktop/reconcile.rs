@@ -211,7 +211,7 @@ pub(super) async fn check_chatgpt(
         DesktopReason::Healthy => verify_recent_thread_compatibility(app_server).await,
         DesktopReason::AppAbsent => bail!("ChatGPT is not running"),
         DesktopReason::EnvironmentMismatch => {
-            bail!("ChatGPT lacks the managed WebSocket environment")
+            bail!("ChatGPT lacks the managed launch environment")
         }
         DesktopReason::ObservationFailed => {
             bail!("ChatGPT's shared-daemon attachment could not be observed")

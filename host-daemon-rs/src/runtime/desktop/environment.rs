@@ -18,6 +18,15 @@ impl ChatGptEnvironment {
         })
     }
 
+    pub(super) fn launch_variables(&self) -> [(&'static str, &str); 3] {
+        [
+            ("CODEX_APP_SERVER_WS_URL", &self.app_server_ws_url),
+            // Managed lifecycle operations cannot wait for Desktop's quit dialog.
+            ("CODEX_ELECTRON_DISABLE_QUIT_CONFIRMATION", "1"),
+            ("CODEX_SPARKLE_ENABLED", "false"),
+        ]
+    }
+
     /// Reduces a `ps eww` command line to the allowlisted fields
     /// reconciliation is allowed to compare and record. The raw line carries
     /// the process's whole environment; only what this returns may reach a
@@ -29,6 +38,8 @@ impl ChatGptEnvironment {
             if let Some(value) = token.strip_prefix("CODEX_APP_SERVER_WS_URL=") {
                 observed.app_server_ws_url = Some(desktop_journal::sanitize_detail(value));
                 observed.app_server_ws_url_matches |= token == expected_ws_url;
+            } else if token == "CODEX_SPARKLE_ENABLED=false" {
+                observed.updater_disabled = true;
             } else if token.starts_with("CODEX_APP_SERVER_FORCE_CLI=") {
                 observed.force_cli_present = true;
             } else if token.starts_with("CODEX_APP_SERVER_USE_LOCAL_DAEMON=") {
@@ -42,22 +53,24 @@ impl ChatGptEnvironment {
 /// The allowlisted, non-secret fields reconciliation compares. `ps eww`
 /// returns the whole process environment, so this is deliberately the only
 /// shape that crosses into a journal record: the public managed attachment
-/// address, plus presence flags for the obsolete private-daemon controls.
+/// address, whether the in-app updater is off, plus presence flags for the
+/// obsolete private-daemon controls.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(in crate::runtime) struct ObservedEnvironment {
     app_server_ws_url: Option<String>,
     app_server_ws_url_matches: bool,
+    updater_disabled: bool,
     pub(in crate::runtime) force_cli_present: bool,
     pub(in crate::runtime) use_local_daemon_present: bool,
 }
 
 impl ObservedEnvironment {
-    /// `CODEX_APP_SERVER_USE_LOCAL_DAEMON` is recorded but not decisive, so
-    /// this predicate stays exactly the attachment test the launcher has
-    /// always applied.
+    /// `CODEX_APP_SERVER_USE_LOCAL_DAEMON` is recorded but not decisive. An
+    /// app that can update itself is a mismatch even when attached, because
+    /// an update replaces the bundled Codex the shared runtime is paired with.
     pub(in crate::runtime) fn matches(&self) -> bool {
-        self.app_server_ws_url_matches && !self.force_cli_present
+        self.app_server_ws_url_matches && self.updater_disabled && !self.force_cli_present
     }
 }
 
@@ -114,9 +127,9 @@ async fn set_launchctl_environment(key: &str, value: &str) -> Result<()> {
 }
 
 pub(super) async fn configure_chatgpt_environment(environment: &ChatGptEnvironment) -> Result<()> {
-    set_launchctl_environment("CODEX_APP_SERVER_WS_URL", &environment.app_server_ws_url).await?;
-    // Managed lifecycle operations cannot wait for Desktop's quit dialog.
-    set_launchctl_environment("CODEX_ELECTRON_DISABLE_QUIT_CONFIRMATION", "1").await?;
+    for (key, value) in environment.launch_variables() {
+        set_launchctl_environment(key, value).await?;
+    }
     Ok(())
 }
 
