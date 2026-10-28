@@ -345,11 +345,11 @@ fn agent_client_format_only_reserves_stdout_for_envelopes() {
             .args(["agent", "message", "parent", text, "--format-only"])
             .output()
             .unwrap();
-        assert_eq!(output.status.code(), Some(64));
+        assert_eq!(output.status.code(), Some(2));
         assert!(output.stdout.is_empty());
         let diagnostic: Value = serde_json::from_slice(&output.stderr).unwrap();
         assert_eq!(diagnostic["ok"], false);
-        assert_eq!(diagnostic["error"]["kind"], "invalidRequest");
+        assert_eq!(diagnostic["error"]["kind"], "usage");
     }
     let output = Command::new(binary)
         .env_clear()
@@ -773,7 +773,7 @@ async fn agent_client_resume_agent_id_continues_latest_but_explicit_stale_jobs_s
                     if target == first {
                         let mut continued = job(next);
                         continued["previousJobId"] = json!(latest);
-                        json!({"result":{"protocol":1,"ownerHostId":"fixture-host","jobId":next,"address":null,"state":"admitted","incarnation":"fixture-incarnation","job":continued,"duplicate":false}})
+                        json!({"result":{"protocol":1,"ownerHostId":"fixture-host","jobId":next,"address":null,"state":"waiting","incarnation":"fixture-incarnation","job":continued,"duplicate":false}})
                     } else {
                         json!({"error":{"code":-32603,"message":"Continue target was superseded"}})
                     }
