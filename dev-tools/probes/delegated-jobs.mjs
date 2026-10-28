@@ -211,7 +211,6 @@ async function runtimeFlows(lab, model) {
     const restartId = jobId("codex");
     await agent(lab, ["spawn", "codex", probeModel, "RCJOB_HOLD:restart-child", "--job-id", restartId, "--operator", "--json"]);
     const before = await settle(lab, restartId, running);
-    client.close();
     await lab.stop();
     await lab.start();
     const after = await read(lab, restartId);
