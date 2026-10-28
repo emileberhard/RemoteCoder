@@ -478,6 +478,7 @@ fn seed_origin(
         updated_at_ms: 1,
         revision: 0,
         previous_job_id: None,
+        provider_retries: Vec::new(),
         source: JobSource::Imported,
         admission_origin: Some(origin.clone()),
         spec: SpecEvidence::Unknown {

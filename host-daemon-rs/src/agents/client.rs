@@ -505,6 +505,7 @@ fn execution_status(job: &JobRecord) -> &'static str {
         ExecutionState::Dispatching { .. } => "dispatchUncertain",
         ExecutionState::Running { .. } => "running",
         ExecutionState::Recovering { .. } => "recovering",
+        ExecutionState::RetryWaiting { .. } => "retryWaiting",
         ExecutionState::Unknown { .. } => "unknown",
         ExecutionState::Terminal { terminal } => match terminal.outcome {
             super::jobs::model::JobOutcome::Completed => "completed",

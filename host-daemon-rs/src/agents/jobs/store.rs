@@ -336,7 +336,46 @@ impl JobStore {
         self.access(move |inner| {
             let mut job = inner.current(&id, revision)?;
             validate_transition(&job, &execution)?;
+            if let ExecutionState::RetryWaiting { retry_at_ms, .. } = &job.execution
+                && matches!(execution, ExecutionState::Dispatching { .. })
+            {
+                ensure!(at_ms >= *retry_at_ms, "provider retry is not due");
+            }
             job.execution = execution;
+            inner.commit(job, at_ms)
+        })
+        .await
+    }
+
+    pub(crate) async fn schedule_provider_retry(
+        &self,
+        id: JobId,
+        revision: u64,
+        binding: ExecutionBinding,
+        reason: String,
+        retry_at_ms: i64,
+        at_ms: i64,
+    ) -> Result<JobRecord> {
+        self.access(move |inner| {
+            let mut job = inner.current(&id, revision)?;
+            ensure!(
+                job.provider_retries.len() < super::retry::MAX_PROVIDER_RETRIES,
+                "provider retry budget exhausted"
+            );
+            ensure!(
+                job.execution.conversation() == Some(&binding.conversation),
+                "retry changed the exact failed conversation"
+            );
+            let next = ExecutionState::RetryWaiting {
+                binding: binding.clone(),
+                retry_at_ms,
+            };
+            validate_transition(&job, &next)?;
+            job.provider_retries.push(ProviderRetry {
+                binding,
+                outcome: JobOutcome::Failed { reason },
+            });
+            job.execution = next;
             inner.commit(job, at_ms)
         })
         .await
@@ -527,9 +566,9 @@ impl Inner {
                 reason: "historical provider conversation is unresolved".into(),
             });
         let state = match &job.execution {
-            ExecutionState::Admitted | ExecutionState::Bound { .. } => {
-                crate::agents::State::Waiting
-            }
+            ExecutionState::Admitted
+            | ExecutionState::Bound { .. }
+            | ExecutionState::RetryWaiting { .. } => crate::agents::State::Waiting,
             ExecutionState::Running { .. } | ExecutionState::Recovering { .. } => {
                 crate::agents::State::Working
             }
@@ -879,6 +918,30 @@ fn live_reservation(job: &JobRecord) -> bool {
 }
 
 fn validate_job(job: &JobRecord) -> Result<()> {
+    ensure!(
+        job.provider_retries.len() <= super::retry::MAX_PROVIDER_RETRIES,
+        "provider retry budget exceeded"
+    );
+    for retry in &job.provider_retries {
+        ensure!(
+            matches!(retry.outcome, JobOutcome::Failed { .. }),
+            "provider retry predecessor must have failed"
+        );
+        ensure!(
+            job.execution
+                .conversation()
+                .is_none_or(|conversation| conversation == &retry.binding.conversation),
+            "provider retry changed its conversation"
+        );
+    }
+    if let ExecutionState::RetryWaiting { binding, .. } = &job.execution {
+        ensure!(
+            job.provider_retries
+                .last()
+                .is_some_and(|retry| &retry.binding == binding),
+            "provider retry waiting lost its predecessor"
+        );
+    }
     if let ExecutionState::Unknown {
         conversation,
         binding: Some(binding),
@@ -965,8 +1028,8 @@ fn validate_job(job: &JobRecord) -> Result<()> {
     if job.source == JobSource::Runtime {
         if let ExecutionState::Dispatching { input_id, .. } = &job.execution {
             ensure!(
-                *input_id == job.initial_input_id(),
-                "dispatch input differs from the job's immutable initial input identity"
+                *input_id == job.current_input_id(),
+                "dispatch input differs from the job's immutable current input identity"
             );
         }
         if let ExecutionState::Terminal { terminal } = &job.execution {
@@ -1062,6 +1125,14 @@ fn validate_transition(job: &JobRecord, next: &ExecutionState) -> Result<()> {
         ) | (
             ExecutionState::Recovering { .. },
             ExecutionState::Recovering { .. }
+        ) | (
+            ExecutionState::Running { .. }
+                | ExecutionState::Recovering { .. }
+                | ExecutionState::Unknown { .. },
+            ExecutionState::RetryWaiting { .. }
+        ) | (
+            ExecutionState::RetryWaiting { .. },
+            ExecutionState::Dispatching { .. }
         ) | (_, ExecutionState::Terminal { .. })
     );
     ensure!(valid, "invalid delegated-job execution transition");

@@ -73,7 +73,7 @@ pub(crate) async fn start(gateway: &Arc<Gateway>, job: &JobRecord) -> Result<Exe
     let SpecEvidence::Known { spec } = &job.spec else {
         bail!("the original Codex input specification is unavailable");
     };
-    let input_id = job.initial_input_id();
+    let input_id = job.current_input_id();
     if let ExecutionState::Dispatching {
         input_id: retained, ..
     } = &job.execution
@@ -107,7 +107,7 @@ pub(crate) async fn start(gateway: &Arc<Gateway>, job: &JobRecord) -> Result<Exe
         .job_start_codex_input(json!({
             "threadId":conversation.thread_id,
             "clientUserMessageId":input_id,
-            "input":[{"type":"text","text":spec.prompt}],
+            "input":[{"type":"text","text":if job.provider_retries.is_empty() { spec.prompt.as_str() } else { super::retry::CONTINUATION_PROMPT }}],
             "cwd":spec.cwd,
             "model":model,
             "effort":effort,
@@ -141,7 +141,7 @@ pub(crate) async fn start(gateway: &Arc<Gateway>, job: &JobRecord) -> Result<Exe
 pub(crate) async fn inspect(gateway: &Arc<Gateway>, job: &JobRecord) -> Result<Inspection> {
     let conversation = conversation(job)?;
     verify_home(gateway, conversation)?;
-    let input_id = job.initial_input_id();
+    let input_id = job.current_input_id();
     let Some(accepted) = gateway
         .job_read_codex_acceptance(&conversation.thread_id, &input_id)
         .await?
@@ -216,11 +216,35 @@ pub(crate) async fn inspect(gateway: &Arc<Gateway>, job: &JobRecord) -> Result<I
     if inspected["outcome"]["state"] == "known" {
         let outcome = match inspected["outcome"]["status"].as_str() {
             Some("completed") => JobOutcome::Completed,
+            Some("failed")
+                if accepted.has(NativeInputFact::Recorded)
+                    && super::retry::is_transient(&inspected["outcome"]["error"])
+                    && job.provider_retries.len() < super::retry::MAX_PROVIDER_RETRIES =>
+            {
+                return Ok(Inspection::TransientFailure {
+                    binding,
+                    reason: inspected["outcome"]["error"]["message"]
+                        .as_str()
+                        .unwrap_or("transient native provider failure")
+                        .to_owned(),
+                });
+            }
             Some("failed") => JobOutcome::Failed {
-                reason: inspected["outcome"]["error"]["message"]
-                    .as_str()
-                    .unwrap_or("the native turn failed without a recorded error message")
-                    .to_owned(),
+                reason: {
+                    let reason = inspected["outcome"]["error"]["message"]
+                        .as_str()
+                        .unwrap_or("the native turn failed without a recorded error message");
+                    if job.provider_retries.len() == super::retry::MAX_PROVIDER_RETRIES
+                        && super::retry::is_transient(&inspected["outcome"]["error"])
+                    {
+                        format!(
+                            "provider retry budget exhausted after {} retries: {reason}",
+                            job.provider_retries.len()
+                        )
+                    } else {
+                        reason.to_owned()
+                    }
+                },
             },
             Some("interrupted") => JobOutcome::Stopped {
                 effects: EffectEvidence::MayHaveRun,
@@ -258,7 +282,7 @@ pub(crate) async fn inspect(gateway: &Arc<Gateway>, job: &JobRecord) -> Result<I
 pub(crate) async fn recover(gateway: &Arc<Gateway>, job: &JobRecord) -> Result<ExecutionBinding> {
     let target = conversation(job)?;
     let accepted = gateway
-        .job_read_codex_acceptance(&target.thread_id, &job.initial_input_id())
+        .job_read_codex_acceptance(&target.thread_id, &job.current_input_id())
         .await?
         .context("native input recovery has no exact acceptance evidence")?;
     ensure!(
@@ -273,7 +297,7 @@ pub(crate) async fn recover(gateway: &Arc<Gateway>, job: &JobRecord) -> Result<E
 pub(crate) async fn stop(gateway: &Arc<Gateway>, job: &JobRecord) -> Result<()> {
     let target = conversation(job)?;
     verify_home(gateway, target)?;
-    let input_id = job.initial_input_id();
+    let input_id = job.current_input_id();
     gateway
         .job_stop_codex_input(&target.thread_id, &input_id)
         .await

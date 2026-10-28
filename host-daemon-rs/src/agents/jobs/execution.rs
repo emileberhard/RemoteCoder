@@ -85,6 +85,25 @@ impl JobOwner {
                         .bind(id.clone(), job.revision, conversation, now_ms())
                         .await?;
                 }
+                ExecutionState::RetryWaiting {
+                    binding,
+                    retry_at_ms,
+                } => {
+                    if now_ms() < *retry_at_ms {
+                        return Ok(true);
+                    }
+                    store
+                        .advance(
+                            id.clone(),
+                            job.revision,
+                            ExecutionState::Dispatching {
+                                conversation: binding.conversation.clone(),
+                                input_id: job.current_input_id(),
+                            },
+                            now_ms(),
+                        )
+                        .await?;
+                }
                 ExecutionState::Bound { conversation } => {
                     if conversation.provider == Provider::Claude && job.previous_job_id.is_none() {
                         gateway
@@ -99,7 +118,7 @@ impl JobOwner {
                             job.revision,
                             ExecutionState::Dispatching {
                                 conversation: conversation.clone(),
-                                input_id: job.initial_input_id(),
+                                input_id: job.current_input_id(),
                             },
                             now_ms(),
                         )
@@ -284,6 +303,26 @@ impl JobOwner {
                             self.record_unknown(&job, reason).await?;
                             return Ok(false);
                         }
+                        Inspection::TransientFailure { binding, reason } => {
+                            use rand_core::RngCore;
+                            let at = now_ms();
+                            let retry_at = super::retry::retry_at_ms(
+                                at,
+                                job.provider_retries.len(),
+                                rand_core::OsRng.next_u64(),
+                            );
+                            store
+                                .schedule_provider_retry(
+                                    id.clone(),
+                                    job.revision,
+                                    binding,
+                                    reason,
+                                    retry_at,
+                                    at,
+                                )
+                                .await?;
+                            return Ok(true);
+                        }
                         Inspection::Finished { outcome, result } => {
                             self.finalize(&job, outcome, result).await?;
                         }
@@ -353,7 +392,9 @@ impl JobOwner {
         }
         if matches!(
             job.execution,
-            ExecutionState::Admitted | ExecutionState::Bound { .. }
+            ExecutionState::Admitted
+                | ExecutionState::Bound { .. }
+                | ExecutionState::RetryWaiting { .. }
         ) {
             return Ok(());
         }
@@ -528,7 +569,7 @@ fn input_id(job: &JobRecord) -> Result<String> {
         ExecutionState::Running { binding } | ExecutionState::Recovering { binding, .. } => {
             Ok(binding.input_id.clone())
         }
-        ExecutionState::Unknown { .. } => Ok(job.initial_input_id()),
+        ExecutionState::Unknown { .. } => Ok(job.current_input_id()),
         _ => bail!("job has no dispatched input identity"),
     }
 }

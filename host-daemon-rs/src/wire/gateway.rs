@@ -7,6 +7,8 @@ use serde_json::Value;
 pub(crate) struct TerminalError {
     pub message: Option<String>,
     pub codex_error_info: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub http_status_code: Option<u16>,
 }
 
 impl TerminalError {
@@ -19,8 +21,23 @@ impl TerminalError {
                 .map(|message| message.chars().take(2048).collect()),
             codex_error_info: error
                 .get("codexErrorInfo")
-                .and_then(Value::as_str)
+                .and_then(|info| {
+                    info.as_str().or_else(|| {
+                        let object = info.as_object()?;
+                        (object.len() == 1)
+                            .then(|| object.keys().next().map(String::as_str))
+                            .flatten()
+                    })
+                })
                 .map(|code| code.chars().take(128).collect()),
+            http_status_code: error
+                .get("codexErrorInfo")
+                .and_then(Value::as_object)
+                .filter(|object| object.len() == 1)
+                .and_then(|object| object.values().next())
+                .and_then(|details| details.get("httpStatusCode"))
+                .and_then(Value::as_u64)
+                .and_then(|status| u16::try_from(status).ok()),
         })
     }
 }
@@ -317,5 +334,28 @@ mod tests {
         let request: RealtimeVoiceStartRequest = serde_json::from_value(raw).expect("request DTO");
 
         assert!(request.validate().is_err());
+    }
+}
+
+#[cfg(test)]
+mod terminal_error_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn terminal_error_preserves_typed_http_status_without_classifying_message_text() {
+        let error = TerminalError::from_wire(Some(&json!({
+            "message":"a provider failure", "codexErrorInfo":{"responseTooManyFailedAttempts":{"httpStatusCode":503}}
+        }))).unwrap();
+        assert_eq!(
+            error.codex_error_info.as_deref(),
+            Some("responseTooManyFailedAttempts")
+        );
+        assert_eq!(error.http_status_code, Some(503));
+        let legacy: TerminalError = serde_json::from_value(
+            json!({"message":"old record","codexErrorInfo":"serverOverloaded"}),
+        )
+        .unwrap();
+        assert_eq!(legacy.http_status_code, None);
     }
 }

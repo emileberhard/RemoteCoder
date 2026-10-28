@@ -12,6 +12,7 @@ fn job(sequence: u8) -> JobRecord {
         updated_at_ms: 100,
         revision: 0,
         previous_job_id: None,
+        provider_retries: Vec::new(),
         source: JobSource::Runtime,
         admission_origin: Some(Origin::TopLevel),
         unconfirmed_result: None,
@@ -538,4 +539,203 @@ async fn imported_forks_use_retained_checkpoint_or_single_active_runtime() {
             expected.map(|sequence| job(sequence).job_id),
         );
     }
+}
+
+async fn running_retry_fixture(store: &JobStore, sequence: u8) -> JobRecord {
+    let original = job(sequence);
+    store.admit(original.clone()).await.unwrap();
+    let bound = store
+        .bind(original.job_id.clone(), 0, conversation(), 101)
+        .await
+        .unwrap();
+    let dispatched = store
+        .advance(
+            bound.job_id.clone(),
+            bound.revision,
+            ExecutionState::Dispatching {
+                conversation: conversation(),
+                input_id: bound.current_input_id(),
+            },
+            102,
+        )
+        .await
+        .unwrap();
+    store
+        .advance(
+            dispatched.job_id.clone(),
+            dispatched.revision,
+            ExecutionState::Running {
+                binding: ExecutionBinding {
+                    conversation: conversation(),
+                    input_id: dispatched.current_input_id(),
+                    turn_id: "failed-0".into(),
+                },
+            },
+            103,
+        )
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn provider_retries_retain_exact_bindings_due_time_and_budget_across_restart() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = JobStore::open(directory.path().into()).await.unwrap();
+    let mut current = running_retry_fixture(&store, 41).await;
+    let original_input = current.current_input_id();
+    for attempt in 0..super::retry::MAX_PROVIDER_RETRIES {
+        let failed = current.execution.binding().unwrap().clone();
+        current = store
+            .schedule_provider_retry(
+                current.job_id.clone(),
+                current.revision,
+                failed.clone(),
+                "Selected model is at capacity".into(),
+                2_000,
+                1_000,
+            )
+            .await
+            .unwrap();
+        assert_eq!(current.provider_retries[attempt].binding, failed);
+        assert_ne!(current.current_input_id(), original_input);
+        let next_input = current.current_input_id();
+        drop(store);
+        store = JobStore::open(directory.path().into()).await.unwrap();
+        current = store.read(current.job_id.clone()).await.unwrap();
+        assert_eq!(current.current_input_id(), next_input);
+        assert!(matches!(
+            current.execution,
+            ExecutionState::RetryWaiting {
+                retry_at_ms: 2_000,
+                ..
+            }
+        ));
+        let dispatch = ExecutionState::Dispatching {
+            conversation: conversation(),
+            input_id: next_input.clone(),
+        };
+        assert!(
+            store
+                .advance(
+                    current.job_id.clone(),
+                    current.revision,
+                    dispatch.clone(),
+                    1_999
+                )
+                .await
+                .is_err()
+        );
+        current = store
+            .advance(current.job_id.clone(), current.revision, dispatch, 2_000)
+            .await
+            .unwrap();
+        current = store
+            .advance(
+                current.job_id.clone(),
+                current.revision,
+                ExecutionState::Running {
+                    binding: ExecutionBinding {
+                        conversation: conversation(),
+                        input_id: next_input,
+                        turn_id: format!("failed-{}", attempt + 1),
+                    },
+                },
+                2_001,
+            )
+            .await
+            .unwrap();
+    }
+    assert!(
+        store
+            .schedule_provider_retry(
+                current.job_id.clone(),
+                current.revision,
+                current.execution.binding().unwrap().clone(),
+                "still unavailable".into(),
+                3_000,
+                2_002
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        store
+            .read(current.job_id.clone())
+            .await
+            .unwrap()
+            .provider_retries
+            .len(),
+        5
+    );
+    let final_binding = current.execution.binding().cloned();
+    let completed = store
+        .advance(
+            current.job_id.clone(),
+            current.revision,
+            ExecutionState::Terminal {
+                terminal: Terminal {
+                    at_ms: Some(2_003),
+                    execution: final_binding,
+                    git: GitSnapshot::Unknown {
+                        reason: "fixture".into(),
+                    },
+                    outcome: JobOutcome::Completed,
+                    result: ResultEvidence::Available {
+                        result: JobResult {
+                            text: "completed once".into(),
+                            truncated: false,
+                        },
+                    },
+                    completion: Completion::NotRequired,
+                    cleanup: CleanupState::Complete,
+                },
+            },
+            2_003,
+        )
+        .await
+        .unwrap();
+    assert!(
+        matches!(completed.execution, ExecutionState::Terminal { terminal } if terminal.outcome == JobOutcome::Completed)
+    );
+}
+
+#[tokio::test]
+async fn stop_during_provider_backoff_survives_restart_and_blocks_successor_dispatch() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = JobStore::open(directory.path().into()).await.unwrap();
+    let current = running_retry_fixture(&store, 42).await;
+    let waiting = store
+        .schedule_provider_retry(
+            current.job_id.clone(),
+            current.revision,
+            current.execution.binding().unwrap().clone(),
+            "overloaded".into(),
+            2_000,
+            1_000,
+        )
+        .await
+        .unwrap();
+    store
+        .request_stop(waiting.job_id.clone(), "stop-during-backoff".into(), 1_001)
+        .await
+        .unwrap();
+    drop(store);
+    let store = JobStore::open(directory.path().into()).await.unwrap();
+    let stopped = store.read(waiting.job_id).await.unwrap();
+    assert!(
+        store
+            .advance(
+                stopped.job_id.clone(),
+                stopped.revision,
+                ExecutionState::Dispatching {
+                    conversation: conversation(),
+                    input_id: stopped.current_input_id(),
+                },
+                2_001
+            )
+            .await
+            .is_err()
+    );
+    assert!(matches!(stopped.stop, StopState::Requested { .. }));
+    assert_eq!(stopped.provider_retries.len(), 1);
 }
