@@ -164,9 +164,11 @@ their identity, hashes and delivery evidence while payloads expire after 30 days
 Blocked, unreachable, provider-side failures with a resolved target, and uncertain
 receipts remain pinned for exact-ID reconciliation. Diagnostics are bounded, and
 capacity refusal names the retained obligations that prevent admission. The
-existing provider receiver owns reconciliation and Stop fences. Unregistered
-native conversations require explicit `claude_UUID` or `codex:UUID` selectors;
-a bare identifier cannot establish its provider when another provider is unavailable.
+existing provider receiver owns reconciliation and Stop fences. Canonical native
+selectors are `claude_UUID` for Claude and a bare UUID for Codex; `codex:UUID`
+also selects Codex. A raw Claude session UUID never substitutes for its canonical
+thread ID. Local lookup failures explain how to resolve the owning host and use
+`codex-threads send --host <host>`; the gateway does not relay between hosts.
 
 ## Caller authority and read-only work
 
