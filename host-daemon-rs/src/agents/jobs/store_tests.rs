@@ -184,6 +184,7 @@ async fn uncertain_notice_keeps_its_receiver_until_non_acceptance_is_proven() {
     let directory = tempfile::tempdir().unwrap();
     let store = JobStore::open(directory.path().into()).await.unwrap();
     let mut original = job(91);
+    let delivery_id = format!("{}:notice:fixture", original.job_id.as_str());
     let receiver = Recipient::Conversation {
         conversation: conversation(),
     };
@@ -191,8 +192,8 @@ async fn uncertain_notice_keeps_its_receiver_until_non_acceptance_is_proven() {
     original.notices.push(JobNotice {
         at_ms: Some(100),
         payload: CompletionPayload::Prepared {
-            delivery_id: "retained-notice".into(),
-            fingerprint: "fixture".into(),
+            delivery_id: delivery_id.clone(),
+            fingerprint: super::store::fingerprint(b"Notice"),
             text: "Notice".into(),
         },
         delivery: DeliveryState::Uncertain {
@@ -213,7 +214,7 @@ async fn uncertain_notice_keeps_its_receiver_until_non_acceptance_is_proven() {
         .notice_delivery(
             original.job_id.clone(),
             frozen.revision,
-            "retained-notice".into(),
+            delivery_id,
             DeliveryState::Unreachable {
                 reason: "not accepted".into(),
             },

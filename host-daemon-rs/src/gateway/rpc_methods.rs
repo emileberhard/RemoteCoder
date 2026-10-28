@@ -1541,7 +1541,9 @@ pub(super) fn decode_params<T: serde::de::DeserializeOwned>(params: Value) -> Re
         .map_err(|error| RpcError::new(RpcCode::InvalidParams, error.to_string()))
 }
 
-fn claude_history_error(error: crate::providers::claude::projection::HistoryError) -> RpcError {
+pub(super) fn claude_history_error(
+    error: crate::providers::claude::projection::HistoryError,
+) -> RpcError {
     use crate::providers::claude::projection::HistoryError;
     match error {
         HistoryError::InvalidRequest(message) => RpcError::new(RpcCode::InvalidParams, message),

@@ -41,7 +41,12 @@ impl ClaudeSettings {
     #[cfg(test)]
     pub(crate) fn isolated_for_test() -> ClaudeTestSettings {
         let root = tempfile::tempdir().expect("test Claude home");
-        let claude_home = root.path().join("claude");
+        let claude_home = root
+            .path()
+            .canonicalize()
+            .expect("canonical test home")
+            .join("claude");
+        fs::create_dir(&claude_home).expect("test Claude directory");
         let router_key_file = root.path().join("router-key");
         fs::write(&router_key_file, "test-router-key").expect("test router key");
         use std::os::unix::fs::PermissionsExt;

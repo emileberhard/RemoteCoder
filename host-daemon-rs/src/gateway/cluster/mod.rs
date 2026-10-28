@@ -11,8 +11,7 @@ use serde_json::{Value, json};
 
 use super::Gateway;
 use crate::agents::jobs::model::{
-    ConversationBinding, ConversationIdentity, DeliveryState, ExecutionState, JobId, Origin,
-    Recipient, ToolScope,
+    ConversationBinding, ConversationIdentity, ExecutionState, JobId, Origin, Recipient, ToolScope,
 };
 use crate::agents::{Agent, AgentKind, Capabilities, State};
 use crate::auth::installation_credentials::Grant;
@@ -48,7 +47,7 @@ impl Gateway {
         method: &str,
         params: Value,
     ) -> RpcResult {
-        let result = self.cluster_request(grant, method, params).await;
+        let result = Box::pin(self.cluster_request(grant, method, params)).await;
         result.map_err(|error| {
             if let Some(error) = error.downcast_ref::<crate::cluster::link::LinkError>() {
                 return cluster_error(error.class.clone(), error.message.clone());

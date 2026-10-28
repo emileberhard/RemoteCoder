@@ -65,16 +65,14 @@ impl Gateway {
             membership,
             digest,
         } = grant
-        {
-            if !self
+            && !self
                 .cluster_link()
                 .await?
                 .store
                 .valid(host, membership, digest)
                 .await?
-            {
-                return Err(cluster_error(ErrorClass::Refused, "membership was removed"));
-            }
+        {
+            return Err(cluster_error(ErrorClass::Refused, "membership was removed"));
         }
         Ok(())
     }
@@ -111,7 +109,7 @@ impl Gateway {
             .execution
             .conversation()
             .map(|conversation| conversation.thread_id.as_str());
-        let payload = json!({"ownerHostId":identity.host_id,"jobId":id,"reason":reason,"eventID":format!("{}:{id}:result-attention",identity.host_id),"source":"agentResult","sessionID":thread,"createdAtUnixSeconds":crate::time::unix_seconds()});
+        let payload = json!({"ownerHostId":identity.host_id,"jobId":id,"reason":reason,"eventID":format!("{}:{}:result-attention",identity.host_id,id.as_str()),"source":"agentResult","sessionID":thread,"createdAtUnixSeconds":crate::time::unix_seconds()});
         self.broadcast_json_or_drop(
             &json!({"method":"agent/jobs/attention","params":payload}),
             crate::observability::journal::Source::Gateway,
@@ -121,7 +119,7 @@ impl Gateway {
         if self.apns.check_alert_registration("alert").await.is_ok() {
             self.apns
                 .send_task_completion(
-                    &format!("job:{id}"),
+                    &format!("job:{}", id.as_str()),
                     "Agent result needs attention",
                     "",
                     reason,

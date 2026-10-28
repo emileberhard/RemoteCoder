@@ -93,7 +93,7 @@ pub(crate) fn open(state: &Path, receipt_root: &Path) -> Result<HostIdentity> {
             }
             Ok((document.identity.clone(), changed))
         },
-        |path, document| private_state::write_json(path, document),
+        private_state::write_json,
     )
 }
 
@@ -110,7 +110,7 @@ pub(crate) fn invalidate(state: &Path) -> Result<()> {
             document.identity.incarnation = crate::ids::new_session_uuid();
             Ok(((), true))
         },
-        |path, document| private_state::write_json(path, document),
+        private_state::write_json,
     )
 }
 
@@ -130,7 +130,7 @@ pub(crate) fn reset(state: &Path) -> Result<HostIdentity> {
             };
             Ok((document.identity.clone(), true))
         },
-        |path, document| private_state::write_json(path, document),
+        private_state::write_json,
     )
 }
 

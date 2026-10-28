@@ -49,14 +49,10 @@ impl Gateway {
             .context("Claude provider is unavailable")
     }
 
-    pub(crate) fn job_new_claude_conversation(&self) -> ConversationIdentity {
-        ConversationIdentity {
-            provider: Provider::Claude,
-            provider_home: ProviderHome::Known {
-                path: self.claude_settings.claude_home.clone(),
-            },
-            thread_id: crate::providers::claude::claude_thread_id(&crate::ids::new_session_uuid()),
-        }
+    pub(crate) fn job_new_claude_conversation(&self) -> Result<ConversationIdentity> {
+        self.agent_conversation(&crate::providers::claude::claude_thread_id(
+            &crate::ids::new_session_uuid(),
+        ))
     }
 
     pub(crate) async fn job_provider_recovery_complete(&self, provider: Provider) -> Result<bool> {

@@ -28,9 +28,6 @@ impl Gateway {
                     header["thread"]["id"] == conversation.thread_id,
                     "native read returned another conversation"
                 );
-                let Ok(conversation) = self.agent_conversation(id) else {
-                    return;
-                };
                 let native_parent = crate::gateway::agent_gateway::native_parent(&header["thread"]);
                 let parent = native_parent.map(|thread| AgentAddress {
                     host_id: identity.host_id.clone(),

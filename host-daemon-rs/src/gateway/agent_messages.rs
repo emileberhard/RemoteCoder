@@ -28,16 +28,6 @@ fn bounded_reason(reason: &str) -> String {
 
 impl Gateway {
     pub(super) async fn job_message(&self, request: MessageParams) -> RpcResult {
-        let target = match &request.target {
-            MessageTarget::Job { job_id } => Some(job_id.clone()),
-            MessageTarget::Selector { selector } => JobId::try_from(selector.clone()).ok(),
-            _ => None,
-        };
-        if let Some(id) = target {
-            let view = self.jobs.read(&id).await?;
-            self.authorize_existing(&view.job.agent_id, &request.caller)
-                .await?;
-        }
         let claim = self.jobs.claim_message(&request.delivery_id).await?;
         let gateway = self.jobs.gateway()?;
         tokio::spawn(async move {

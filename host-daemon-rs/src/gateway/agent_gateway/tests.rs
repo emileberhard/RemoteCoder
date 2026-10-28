@@ -19,7 +19,7 @@ async fn sidecar_and_unrecognized_ids_never_route_to_codex() {
         let error = gateway.agent_conversation(thread).unwrap_err();
         let error = error.downcast_ref::<RpcError>().unwrap();
         assert_eq!(
-            serde_json::to_value(error).unwrap()["data"]["class"],
+            error.response(&Value::Null)["error"]["data"]["class"],
             "unsupported"
         );
     }
@@ -842,7 +842,11 @@ async fn stalled_ancestry_is_bounded_and_cannot_authorize_an_alert() {
     let _control = crate::test_support::FakeControl::attach(&gateway, 1).await;
     let result = tokio::time::timeout(
         Duration::from_secs(3),
-        gateway.check_user_alert_ownership(Some("stalled"), "alert", Some("event")),
+        gateway.check_user_alert_ownership(
+            Some("11111111-2222-4333-8444-555555555555"),
+            "alert",
+            Some("event"),
+        ),
     )
     .await
     .unwrap();
@@ -1056,7 +1060,10 @@ async fn current_parent_tag_overrides_native_provenance_in_headers_and_classific
     );
     let classified = gateway
         .agent_service()
-        .classify_runtime(vec!["0e1a0399-0e3d-5aa4-ace7-0ed28835d55f".into()])
+        .agents_rpc(
+            "conversation/agents/classify",
+            json!({"threadIds":["0e1a0399-0e3d-5aa4-ace7-0ed28835d55f"]}),
+        )
         .await
         .unwrap();
     assert_eq!(
@@ -1099,7 +1106,10 @@ async fn current_parent_tag_overrides_native_provenance_in_headers_and_classific
     );
     let classified = gateway
         .agent_service()
-        .classify_runtime(vec!["0e1a0399-0e3d-5aa4-ace7-0ed28835d55f".into()])
+        .agents_rpc(
+            "conversation/agents/classify",
+            json!({"threadIds":["0e1a0399-0e3d-5aa4-ace7-0ed28835d55f"]}),
+        )
         .await
         .unwrap();
     assert_eq!(

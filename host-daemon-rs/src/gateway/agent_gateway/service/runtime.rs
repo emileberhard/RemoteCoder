@@ -6,8 +6,8 @@ use serde_json::{Value, json};
 
 use super::{ActionParams, AgentService};
 use crate::agents::jobs::model::{
-    ConversationBinding, ConversationIdentity, ExecutionState, JobId, JobOutcome, Origin, Provider,
-    ResultEvidence, SpecEvidence,
+    ConversationBinding, ExecutionState, JobId, JobOutcome, Origin, Provider, ResultEvidence,
+    SpecEvidence,
 };
 use crate::agents::{Agent, Capabilities, Output, State};
 use crate::wire::agent_jobs::{

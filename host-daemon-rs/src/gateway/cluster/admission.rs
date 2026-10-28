@@ -506,14 +506,13 @@ impl Gateway {
             .await?
             .find_job(request.job_id.clone())
             .await?
+            && existing.remote_fingerprint.as_deref() != Some(&request.fingerprint)
         {
-            if existing.remote_fingerprint.as_deref() != Some(&request.fingerprint) {
-                return Err(cluster_error(
-                    ErrorClass::Conflict,
-                    "job ID was reused with different inputs",
-                )
-                .into());
-            }
+            return Err(cluster_error(
+                ErrorClass::Conflict,
+                "job ID was reused with different inputs",
+            )
+            .into());
         }
         let receipt = match request.operation {
             AdmissionOperation::Start(mut spec) => {

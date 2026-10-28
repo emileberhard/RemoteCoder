@@ -76,7 +76,8 @@ impl Gateway {
                     projection.turns_page(file, params)
                 }
             })
-            .await?;
+            .await
+            .map_err(crate::gateway::rpc_methods::claude_history_error)?;
         Ok(page)
     }
 }

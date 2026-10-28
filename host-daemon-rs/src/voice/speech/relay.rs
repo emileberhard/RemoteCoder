@@ -317,6 +317,7 @@ impl SpeechRelay {
     ) -> Result<Admitted, Rejection> {
         let principal = match grant {
             Grant::Operator => "operator".to_owned(),
+            Grant::Peer { host, .. } => format!("peer:{host}"),
             Grant::Installation { id, .. } => id.clone(),
         };
         let target = uri

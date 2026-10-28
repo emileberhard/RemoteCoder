@@ -757,12 +757,15 @@ impl AgentService<'_> {
                 let reads = futures_util::stream::iter(missing)
                     .map(|thread| {
                         async move {
-                            let host = self.gateway.host_identity().await?.host_id;
-                            let parent = self.parent_for_thread(&thread).await.map(|parent| {
-                                parent
-                                    .filter(|parent| parent.host_id == host)
-                                    .map(|parent| parent.thread_id)
-                            });
+                            let parent = async {
+                                let host = self.gateway.host_identity().await?.host_id;
+                                self.parent_for_thread(&thread).await.map(|parent| {
+                                    parent
+                                        .filter(|parent| parent.host_id == host)
+                                        .map(|parent| parent.thread_id)
+                                })
+                            }
+                            .await;
                             (thread, parent)
                         }
                         .boxed()

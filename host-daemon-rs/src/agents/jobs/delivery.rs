@@ -173,24 +173,23 @@ impl JobOwner {
                 .await?;
             return Ok(false);
         }
-        if let ExecutionState::Terminal { terminal } = &job.execution {
-            if let Completion::Required { delivery, .. } = &terminal.completion {
-                if terminal
-                    .at_ms
-                    .is_some_and(|at| now_ms().saturating_sub(at) >= 24 * 60 * 60 * 1000)
-                    && matches!(
-                        delivery,
-                        DeliveryState::Unreachable { .. } | DeliveryState::Uncertain { .. }
-                    )
-                {
-                    if matches!(delivery, DeliveryState::Unreachable { .. }) {
-                        self.store().await?.delivery(job.job_id.clone(),job.revision,DeliveryState::Uncertain {reason:"receiver could not be reconciled within 24 hours; result requires user attention".into()},now_ms()).await?;
-                    }
-                    gateway.surface_job_result(&job.job_id,"receiver could not be reconciled within 24 hours; result requires user attention").await?;
-                    return Ok(false);
-                }
+        if let ExecutionState::Terminal { terminal } = &job.execution
+            && let Completion::Required { delivery, .. } = &terminal.completion
+            && terminal
+                .at_ms
+                .is_some_and(|at| now_ms().saturating_sub(at) >= 24 * 60 * 60 * 1000)
+            && matches!(
+                delivery,
+                DeliveryState::Unreachable { .. } | DeliveryState::Uncertain { .. }
+            )
+        {
+            if matches!(delivery, DeliveryState::Unreachable { .. }) {
+                self.store().await?.delivery(job.job_id.clone(),job.revision,DeliveryState::Uncertain {reason:"receiver could not be reconciled within 24 hours; result requires user attention".into()},now_ms()).await?;
             }
+            gateway.surface_job_result(&job.job_id,"receiver could not be reconciled within 24 hours; result requires user attention").await?;
+            return Ok(false);
         }
+
         let gateway = self.gateway()?;
         if gateway.is_draining() {
             return Ok(false);

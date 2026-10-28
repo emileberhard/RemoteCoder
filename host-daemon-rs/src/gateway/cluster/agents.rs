@@ -153,7 +153,7 @@ impl Gateway {
         use sha2::{Digest, Sha256};
         result["revision"] = json!(format!(
             "{:x}",
-            Sha256::digest(serde_json::to_vec(&result["agents"]).map_err(RpcError::from)?)
+            Sha256::digest(serde_json::to_vec(&result["agents"]).map_err(anyhow::Error::from)?)
         ));
         Ok(result)
     }
@@ -197,7 +197,6 @@ fn job_state(job: &crate::agents::jobs::model::JobRecord) -> crate::agents::Stat
 }
 
 fn runtime_row(owner: &str, root: &str, view: &agent_jobs::JobView) -> Agent {
-    let state = job_state(&view.job);
     let thread = view
         .agent
         .as_ref()
@@ -209,6 +208,11 @@ fn runtime_row(owner: &str, root: &str, view: &agent_jobs::JobView) -> Agent {
         .agent
         .as_ref()
         .is_some_and(|agent| agent.latest_job_id.as_ref() == Some(&view.job.job_id));
+    let state = if known {
+        job_state(&view.job)
+    } else {
+        State::Unknown
+    };
     let provider = if view.job.job_id.as_str().starts_with("agent-codex-") {
         "codex"
     } else {
@@ -302,7 +306,11 @@ impl Gateway {
         root: &str,
     ) -> Result<Agent> {
         let identity = self.host_identity().await?;
-        if let Some(id) = &agent.latest_job_id {
+        if let Some(id) = agent
+            .latest_job_id
+            .as_ref()
+            .or(agent.origin_job_id.as_ref())
+        {
             return Ok(runtime_row(
                 &identity.host_id,
                 root,

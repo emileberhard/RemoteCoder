@@ -255,10 +255,10 @@ async fn cluster_fault_admission_replay_fences_and_incarnation() {
         1
     );
     let mut changed = intent.request.clone();
-    let AdmissionOperation::Start(spec) = &mut changed.operation else {
+    let AdmissionOperation::Start(changed_spec) = &mut changed.operation else {
         unreachable!()
     };
-    spec.prompt = "Changed inputs".into();
+    changed_spec.prompt = "Changed inputs".into();
     let conflict = link
         .call(&identity.host_id, "agent/jobs/admit", json!(changed))
         .await

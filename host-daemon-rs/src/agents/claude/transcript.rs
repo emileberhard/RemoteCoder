@@ -310,9 +310,10 @@ mod tests {
                 .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(seconds))
                 .unwrap();
         }
-        let agents = history(directory.path(), root, &session)
-            .unwrap()
-            .agents(root, false);
+        let agents =
+            history(directory.path(), root, &session)
+                .unwrap()
+                .agents(root, false, "fixture-host");
         let activity = |id: &str| {
             agents
                 .iter()
@@ -362,9 +363,10 @@ mod tests {
                 std::fs::write(transcript.with_extension("meta.json"), meta.to_string()).unwrap();
             }
         }
-        let agents = history(directory.path(), root, &session)
-            .unwrap()
-            .agents(root, false);
+        let agents =
+            history(directory.path(), root, &session)
+                .unwrap()
+                .agents(root, false, "fixture-host");
         let agent = |name: &str| {
             agents
                 .iter()
@@ -414,9 +416,10 @@ mod tests {
         )
         .unwrap();
 
-        let agents = history(directory.path(), root, &session)
-            .unwrap()
-            .agents(root, false);
+        let agents =
+            history(directory.path(), root, &session)
+                .unwrap()
+                .agents(root, false, "fixture-host");
         let state = |name: &str| {
             agents
                 .iter()

@@ -94,7 +94,7 @@ impl JobOwner {
                         ConversationBinding::Known { conversation } => conversation,
                         ConversationBinding::Unknown { .. } => match spec.settings.provider() {
                             Provider::Codex => super::codex::create(&gateway, spec).await?,
-                            Provider::Claude => gateway.job_new_claude_conversation(),
+                            Provider::Claude => gateway.job_new_claude_conversation()?,
                         },
                     };
                     store

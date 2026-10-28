@@ -1139,15 +1139,12 @@ fn human_listing(result: &Value) -> Result<String> {
             .iter()
             .map(|row| {
                 format!(
-                    "{}  {}  {}  {}\n  {}",
-                    format!(
-                        "{}:{}",
-                        value(row, "ownerHostId"),
-                        row["run_id"]
-                            .as_str()
-                            .or_else(|| row["provider_session_id"].as_str())
-                            .unwrap_or("unknown")
-                    ),
+                    "{}:{}  {}  {}  {}\n  {}",
+                    value(row, "ownerHostId"),
+                    row["run_id"]
+                        .as_str()
+                        .or_else(|| row["provider_session_id"].as_str())
+                        .unwrap_or("unknown"),
                     value(row, "status"),
                     value(row, "provider"),
                     value(row, "model"),

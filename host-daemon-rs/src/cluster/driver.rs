@@ -112,7 +112,8 @@ pub(crate) fn start(gateway: &Arc<Gateway>) -> Result<()> {
             }
             shutdown.cancel();
             while let Some(result) = workers.join_next().await {
-                result?;
+                let (_, outcome) = result?;
+                outcome?;
             }
             Ok(())
         });
