@@ -4,11 +4,11 @@ updates:
     directory: /
     schedule:
       interval: weekly
-    open-pull-requests-limit: 1
+    open-pull-requests-limit: 2
     cooldown:
       default-days: 1
     groups:
-      dependencies:
+      actions:
         patterns: ['*']
   - package-ecosystem: cargo
     directory: /host-daemon-rs
