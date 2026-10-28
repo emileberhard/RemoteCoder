@@ -365,7 +365,7 @@ mod tests {
                     append(&target, "duringinitialscan");
                 }
             },
-        ));
+        ))?;
         ingest::ingest(&mut db, &origin, &path, &AtomicBool::new(false))?;
         assert!(injected.load(Ordering::SeqCst));
         drop(db);
