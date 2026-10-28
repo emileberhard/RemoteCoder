@@ -51,8 +51,9 @@ impl Gateway {
             }
         }).buffer_unordered(64).collect::<Vec<_>>().await;
         let mut coverage = Vec::new();
+        let mut warnings = Vec::new();
         let mut pages=pages.into_iter().filter_map(|(host,result)| match result {
-            Err(error)=> {coverage.push(json!({"hostId":host,"state":match error.class {ErrorClass::Unsupported=>"unsupported",ErrorClass::Refused=>"refused",_=>"unreachable"}}));None}
+            Err(error)=> {warnings.push(format!("{host}: {error}"));coverage.push(json!({"hostId":host,"state":match error.class {ErrorClass::Unsupported=>"unsupported",ErrorClass::Refused=>"refused",_=>"unreachable"}}));None}
             Ok(page)=> {coverage.push(json!({"hostId":host,"state":"ok"}));Some((host,page["agents"].as_array().cloned().unwrap_or_default().into_iter().collect::<std::collections::VecDeque<_>>(),page["nextCursor"].as_str().map(str::to_owned)))}
         }).collect::<Vec<_>>();
         pages.sort_by(|left, right| left.0.cmp(&right.0));
@@ -93,7 +94,7 @@ impl Gateway {
         } else {
             None
         };
-        Ok(json!({"agents":rows,"coverage":coverage,"nextCursor":next_cursor,"warnings":[]}))
+        Ok(json!({"agents":rows,"coverage":coverage,"nextCursor":next_cursor,"warnings":warnings}))
     }
 }
 

@@ -286,9 +286,15 @@ async function main() {
         const outward = await journey(workers[0], workers[1], "outward");
         const reverse = await journey(workers[1], workers[0], "reverse");
         const pages = await Promise.all(workers.map(host => host.rpc("agent/cluster/list", { limit: 100 })));
+        if (pages.some(page => page.coverage.some(row => row.state !== "ok"))) {
+            for (const [index, host] of workers.entries()) {
+                console.error(JSON.stringify({ index, inventory: await host.rpc("agent/cluster/inventory", { limit: 100 })
+                    .then(page => ({ count: page.agents.length }), error => ({ error: String(error) })) }));
+            }
+        }
         for (const page of pages) {
             assert.equal(page.coverage.length, count);
-            assert(page.coverage.every(row => row.state === "ok"));
+            assert(page.coverage.every(row => row.state === "ok"), JSON.stringify(page.coverage));
         }
         if (count === 3) {
             const child = outward.children[0];
