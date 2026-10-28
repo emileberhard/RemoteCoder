@@ -321,11 +321,21 @@ impl Gateway {
                     origin == request.origin,
                     "remote origin differs from the caller proven by its member"
                 );
-                ensure!(match (&request.caller_authority,&request.recipient) {
-                    (CallerAuthority::Operator,Recipient::None)=>true,
-                    (CallerAuthority::Agent {conversation,..},Recipient::Remote {host:receiver,conversation:target,..})=>receiver==host && target==conversation,
-                    _=>false,
-                },"remote recipient differs from its proven caller");
+                ensure!(
+                    match (&request.caller_authority, &request.recipient) {
+                        (CallerAuthority::Operator, Recipient::None) => true,
+                        (
+                            CallerAuthority::Agent { conversation, .. },
+                            Recipient::Remote {
+                                host: receiver,
+                                conversation: target,
+                                ..
+                            },
+                        ) => receiver == host && target == conversation,
+                        _ => false,
+                    },
+                    "remote recipient differs from its proven caller"
+                );
                 ensure!(
                     request.fingerprint == admit_fingerprint(&request)?,
                     "remote admission fingerprint differs from its payload"
@@ -521,7 +531,11 @@ impl Gateway {
     ) -> Result<Value> {
         validate_authority(&authority)?;
         let link = self.cluster_link().await?;
-        let member = link.store.resolve(host).await.map_err(|error|cluster_error(ErrorClass::Usage,error.to_string()))?;
+        let member = link
+            .store
+            .resolve(host)
+            .await
+            .map_err(|error| cluster_error(ErrorClass::Usage, error.to_string()))?;
         let identity = self.host_identity().await?;
         if matches!(method, "agent/jobs/start" | "agent/jobs/continue") {
             let (job_id, operation) = if method == "agent/jobs/start" {

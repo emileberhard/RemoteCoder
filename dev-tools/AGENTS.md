@@ -28,6 +28,18 @@ evidence. It never connects to an installed gateway or starts an agent turn.
 
 ## Delegated-job isolation probe
 
+`bun dev-tools/probes/cluster-lifecycle.mjs <candidate> <matched-runtime-package>`
+creates three private gateways with a full pinned membership mesh. Native Codex
+and Claude parents spawn remote children, receive an interim message, go offline
+while the children finish, and receive each completion once after returning.
+The journey runs in both directions, checks cluster coverage, then moves and
+promotes a child. `--members 2` selects the two-member run. `--remote <ssh-host>
+<remote-candidate> <remote-package> <remote-script>` places the second gateway
+on another Mac; copy the candidate and probe sources there first. SSH carries
+only probe control; gateway calls use the member's pinned TLS route. Every worker
+owns its gateway, daemon, provider homes and cleanup. The final receipt contains
+identities and timings, never membership credentials. Production is untouched.
+
 `bun dev-tools/probes/delegated-jobs.mjs <candidate> <matched-runtime-package>`
 uses `IsolatedGateway`, a loopback Responses model, and isolated provider homes.
 Its Claude child uses the host router without copying provider credentials.
