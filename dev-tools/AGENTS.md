@@ -31,8 +31,14 @@ evidence. It never connects to an installed gateway or starts an agent turn.
 `bun dev-tools/probes/delegated-jobs.mjs <candidate> <matched-runtime-package>`
 uses `IsolatedGateway`, a loopback Responses model, and isolated provider homes.
 Its Claude child uses the host router without copying provider credentials.
-It checks message-to-finished continuation deduplication and failure receipts
-through the installed candidate CLI, including isolated gateway restart.
+It checks running-job messages through the candidate CLI while the native model
+response is held, then requires the stable message ID and body in that original
+turn's canonical items and model input after release. Same-ID requests retain
+their receipt. It also checks message-to-finished continuation deduplication and
+failure receipts through the candidate CLI, including isolated gateway restart.
+A native continuation of a completed Codex job also sets its title and sends a
+parent message through the inherited scoped endpoint; the original parent's
+canonical items must contain the exact delivery ID.
 It also copies its completed Claude probe child's transcript into a deleted-cwd
 fixture, resumes that exact session through RPC, and requires both the unique
 input UUID and the new response in that same copied transcript. This fixture

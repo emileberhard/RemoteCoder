@@ -13,6 +13,7 @@ impl Gateway {
         conversation: &ConversationIdentity,
         delivery_id: &str,
         text: &str,
+        expected_turn: Option<&str>,
     ) -> RpcResult {
         if self.agent_conversation(&conversation.thread_id)? != *conversation {
             return Err(RpcError::new(
@@ -22,7 +23,7 @@ impl Gateway {
         }
         if conversation.provider == Provider::Codex {
             return self
-                .job_deliver_codex(conversation, delivery_id, text)
+                .job_deliver_codex(conversation, delivery_id, text, expected_turn)
                 .await;
         }
         let provider = self.job_claude()?;

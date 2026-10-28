@@ -185,9 +185,37 @@ impl Gateway {
                 },
                 None => None,
             };
+            let expected_turn =
+                if resolved.conversation.provider == crate::agents::jobs::model::Provider::Codex {
+                    match &resolved.target_job_id {
+                        Some(id) => store
+                            .read(id.clone())
+                            .await?
+                            .execution
+                            .binding()
+                            .map(|binding| binding.turn_id.clone()),
+                        None => None,
+                    }
+                } else {
+                    None
+                };
+            if resolved.conversation.provider == crate::agents::jobs::model::Provider::Codex
+                && resolved.target_job_id.is_some()
+                && expected_turn.is_none()
+            {
+                record = store.update_message(record.delivery_id.clone(), DeliveryState::Uncertain {
+                    reason: "the target job's exact native turn is unknown; input was not submitted".into(),
+                }, now_ms()).await?;
+                return Ok(json!(record));
+            }
             let gateway = self.jobs.gateway()?;
             let response = gateway
-                .deliver_job_input(&resolved.conversation, &record.delivery_id, text)
+                .deliver_job_input(
+                    &resolved.conversation,
+                    &record.delivery_id,
+                    text,
+                    expected_turn.as_deref(),
+                )
                 .await;
             drop(execution);
             match response {

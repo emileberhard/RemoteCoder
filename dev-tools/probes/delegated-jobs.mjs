@@ -207,8 +207,9 @@ async function runtimeFlows(lab, model) {
     }, 120);
     receipt.parentCallbacks = children.map(row => items.includes(`${row.run_id}:completion`));
 
+    receipt.runningMessage = await runningMessageFlow(lab, model);
     receipt.messages = await messageFlows(lab, receipt.codexChild.jobId);
-    receipt.scopedTitle = await scopedTitleFlow(lab, receipt.codexChild.jobId);
+    receipt.scopedTitle = await scopedTitleFlow(lab, receipt.codexChild.jobId, parent);
 
     const stopId = newJobId("codex");
     await agent(lab, ["spawn", "codex", probeModel, "RCJOB_HOLD:stop-child", "--job-id", stopId, "--operator", "--json"]);
@@ -327,6 +328,48 @@ async function cwdResumeFlow(lab, jobId) {
             sameConversation: true, sameScope: true, exactCopiedPath: true } };
 }
 
+async function runningMessageFlow(lab, model) {
+    const jobId = newJobId("codex");
+    const holdName = `running-message-${randomUUID()}`;
+    const messageName = `steer-${randomUUID()}`;
+    const text = `RCJOB_ECHO:${messageName}`;
+    const deliveryId = randomUUID();
+    await agent(lab, ["spawn", "codex", probeModel, `RCJOB_HOLD:${holdName}`, "--job-id", jobId,
+        "--operator", "--json"]);
+    const before = await settle(lab, jobId, running);
+    const { conversation, turnId } = before.execution.binding;
+    await lab.waitFor(() => model.requests.some(request => request.name === holdName), 120);
+    const client = await lab.connect();
+    try {
+        const args = ["message", jobId, text, "--delivery-id", deliveryId, "--operator", "--json"];
+        const first = await agent(lab, args);
+        assert(["accepted", "recorded"].includes(first.deliveryState.kind), "Running message was not admitted");
+        assert.equal(first.resolved.targetJobId, jobId);
+        assert.equal(first.resolved.continuation, null, "Running message admitted a successor job");
+        assert.deepEqual(await agent(lab, args), first, "Same-ID running message changed its receipt");
+        model.release(holdName);
+        const canonical = await lab.waitFor(async () => {
+            const reply = await client.rpc("thread/items/list", { threadId: conversation.threadId, limit: 100,
+                sortDirection: "desc" });
+            assert(!reply.error, `Running message items failed: ${JSON.stringify(reply.error)}`);
+            return reply.result.data.find(entry => entry.item.type === "userMessage"
+                && entry.item.clientId === deliveryId && entry.item.content.some(part => part.type === "text" && part.text === text));
+        }, 120);
+        assert.equal(canonical.turnId, turnId, "Running message landed in a different native turn");
+        const ended = await settle(lab, jobId, job => terminal(job) !== null);
+        assert.equal(terminal(ended).execution.turnId, turnId, "Running message replaced its job's turn");
+        assert(model.requests.some(request => request.name === messageName && request.kind === "ECHO"),
+            "The running model never received the message body");
+        assert.deepEqual(await agent(lab, args), first, "Accepted message replayed after its turn ended");
+        return { jobId, threadId: conversation.threadId, turnId, deliveryId,
+            deliveryState: first.deliveryState.kind, canonicalTurnId: canonical.turnId,
+            modelReceived: true, sameIdReceiptUnchanged: true };
+    } finally {
+        model.release(holdName);
+        client.ws.close();
+    }
+}
+
 async function messageFlows(lab, finishedJob) {
     await settle(lab, finishedJob, job => terminal(job)?.cleanup === "complete");
     const deliveryId = randomUUID();
@@ -381,14 +424,19 @@ async function messageFlows(lab, finishedJob) {
         persistedAcrossRestart: true };
 }
 
-async function scopedTitleFlow(lab, finishedJob) {
+async function scopedTitleFlow(lab, finishedJob, parent) {
     await settle(lab, finishedJob, job => terminal(job)?.cleanup === "complete");
     const view = await agent(lab, ["read", finishedJob, "--json"]);
     assert.equal(view.agent.conversation.kind, "known");
     const threadId = view.agent.conversation.conversation.threadId;
     const name = "Scoped continuation probe";
-    const command = [binary, "--env-file", lab.path("gateway.env"), "agent", "set-title", name,
-        "--mutation-id", randomUUID()].map(part => `'${part.replaceAll("'", "'\\''")}'`).join(" ");
+    const deliveryId = randomUUID();
+    const commands = [
+        [binary, "--env-file", lab.path("gateway.env"), "agent", "set-title", name, "--mutation-id", randomUUID()],
+        [binary, "--env-file", lab.path("gateway.env"), "agent", "message", "parent", "RCJOB_ECHO:scoped-parent-message",
+            "--delivery-id", deliveryId, "--json"],
+    ];
+    const command = commands.map(args => args.map(part => `'${part.replaceAll("'", "'\\''")}'`).join(" ")).join(" && ");
     const client = await lab.connect();
     try {
         const resumed = await client.rpc("turn/start", { threadId,
@@ -407,7 +455,9 @@ async function scopedTitleFlow(lab, finishedJob) {
             return reply.result.data.find(turn => turn.id === turnId && turn.status !== "inProgress");
         }, 120);
         assert.equal(ended.status, "completed");
-        return { threadId, turnId, name, completed: true, path: "native-continued-tool" };
+        await lab.waitFor(async () => (await parentItems(client, parent)).includes(deliveryId), 120);
+        return { threadId, turnId, name, completed: true, path: "native-continued-tool", parent,
+            parentDeliveryId: deliveryId, parentRecorded: true };
     } finally { client.ws.close(); }
 }
 

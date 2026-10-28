@@ -132,7 +132,11 @@ fenced; queued turn execution remains owned by the native receiver.
 
 The same delivery ID, sender, target and raw text reuse the retained receipt;
 changed input conflicts. Sending is persisted before the native receiver acts.
-Submitted, accepted and recorded receipts are never replayed. Explicit retries
+Submitted, accepted and recorded receipts are never replayed. New Codex input
+steers a positively identified running turn using its expected turn ID and stable
+message ID; runtime targets must match their exact job binding. A refused or
+uncertain steer never falls through to a queued successor. Native idle
+conversations retain the existing native queue path. Explicit retries
 reconcile unresolved native delivery using its original ID and envelope; a
 superseded frozen target stays uncertain instead of receiving fresh input in a
 newer invocation. There is no message scheduler or second provider registry.

@@ -19,6 +19,9 @@ schema under ignored `build/codex-schema/<version>/`.
   cancellation; the owned message task retains the per-ID claim and shutdown
   read guard. Stop persists and signals independently. Never hold this grant
   through a model turn or release it by canceling an in-flight provider RPC.
+  New Codex messages steer a known running turn with the stable message ID and
+  expected turn ID; the runtime job binding must match. A steer refusal never
+  falls through to a queued turn, and accepted historical input is never resent.
 
 ## Verify
 
