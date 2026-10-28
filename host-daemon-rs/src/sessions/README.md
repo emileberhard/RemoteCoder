@@ -93,9 +93,8 @@ prefix permits append, while a rewrite restarts the file. SQL always runs on one
 database and reports its covered origins. Search fans out, deduplicates mirrored
 items and reports unreachable members without hiding successful results.
 
-The gateway's internal local_cluster adapter is deliberately local-only until
-lane L's identity and link merge. Its replacement is the single integration seam;
-no cluster transport, member credentials, or identity owner is duplicated here.
+The gateway uses the retained host identity and cluster link for member reads.
+Native suffix resolution requests worker catch-up before its bounded indexed seek.
 The CLI is `remote-coder-codex-gateway sessions`; `--local` and `--database`
 permit gateway-independent reads. All output is JSON; errors go to stderr.
 
@@ -106,7 +105,8 @@ newly discovered skills are excluded from claims about an earlier unused period.
 
 The idle-cost decision keeps native events rather than directory-mtime polling:
 resuming an old conversation appends without changing its parent directory mtime.
-No debouncer or hot-file cache is needed. The manual corpus probe also accepts
+A bounded hot set covers writers that retain open files; no debouncer is needed.
+The manual corpus probe also accepts
 `RC_SESSIONS_MEASURE_IDLE=after` to measure a quiet minute and cold-append/new-file
 latency on a prepared private full-history catalog. Full reconcile CPU is
 reported separately and amortized over its ten-minute interval.
