@@ -1718,3 +1718,34 @@ fn sessions_mirror_refuses_unavailable_roots_even_on_an_empty_cursor_page() {
         );
     }
 }
+
+#[test]
+fn sessions_rotation_retires_only_proven_missing_identity_owners() {
+    let f = fixture();
+    scan(&f);
+    let replacement = f.codex.with_file_name("a-replacement.jsonl");
+    std::fs::rename(&f.codex, &replacement).unwrap();
+    let worker = super::worker::Worker::start(f.store.clone(), f.origins.clone()).unwrap();
+    ingest::refresh_inventory(&f.store).unwrap();
+    let headers = query::inventory(&f.store.reader().unwrap(), None, 1000).unwrap();
+    assert_eq!(
+        headers
+            .sessions
+            .iter()
+            .filter(|row| row.thread_id == "codex-root")
+            .count(),
+        1
+    );
+    worker.stop().unwrap();
+    let outcome = ingest::scan(&f.store, &f.origins, &AtomicBool::new(false)).unwrap();
+    assert_eq!(outcome["parseFailures"], 0);
+    assert_eq!(
+        search(&f.store, "codexmiddle")["hits"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    let owner: String = f.store.reader().unwrap().query_row("SELECT src.local_path FROM session s JOIN source src USING(source_id) WHERE s.thread_id='codex-root'",[],|r|r.get(0)).unwrap();
+    assert_eq!(Path::new(&owner), replacement);
+}

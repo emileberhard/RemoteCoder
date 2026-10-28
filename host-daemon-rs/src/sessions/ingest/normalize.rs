@@ -384,8 +384,20 @@ impl Record<'_> {
                 |r| r.get(0),
             )
             .optional()?;
-        if existing.is_some_and(|id| id != self.source) {
-            return Err(IdentityConflict { key }.into());
+        if let Some(existing) = existing.filter(|id| *id != self.source) {
+            let owner: String = self.db.query_row(
+                "SELECT local_path FROM source WHERE source_id=?1",
+                [existing],
+                |row| row.get(0),
+            )?;
+            let gone = matches!(std::fs::symlink_metadata(owner), Err(error) if error.kind() == std::io::ErrorKind::NotFound);
+            if !gone || !self.origin.path().is_dir() {
+                return Err(IdentityConflict { key }.into());
+            }
+            self.db
+                .execute("DELETE FROM session WHERE source_id=?1", [existing])?;
+            self.db
+                .execute("DELETE FROM source WHERE source_id=?1", [existing])?;
         }
         self.db.execute("INSERT OR IGNORE INTO session(session_key,origin_host,provider,provider_home,thread_id,source_id,thread_id_reversed) VALUES(?1,?2,?3,?4,?5,?6,?7)",params![key,self.origin.host,self.origin.provider,self.origin.provider_home.to_string_lossy(),thread,self.source,thread.bytes().rev().collect::<Vec<_>>()])?;
         Ok(())
