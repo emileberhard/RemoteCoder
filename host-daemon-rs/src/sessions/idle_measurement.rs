@@ -1,4 +1,4 @@
-use super::{Origin, ingest, store::Store, worker::Worker};
+use super::{Origin, discovery::Discovery, ingest, store::Store, worker::Worker};
 use anyhow::{Result, ensure};
 use serde_json::json;
 use std::io::Write;
@@ -54,6 +54,24 @@ pub(super) fn run(store: &Store, origins: &[Origin], mode: &str) -> Result<()> {
     let stop = AtomicBool::new(false);
     let cpu = cpu_seconds();
     let started = Instant::now();
+    let mut discovery = Discovery::default();
+    discovery.refresh(origins, None)?;
+    let header_result = discovery.headers(&mut *store.writer()?, origins, &stop, None);
+    let header_seconds = started.elapsed().as_secs_f64();
+    let header_complete = header_result.is_ok();
+    let directory_counts: serde_json::Map<String, serde_json::Value> = origins
+        .iter()
+        .map(|origin| {
+            (
+                origin.provider.clone(),
+                json!(discovery.directory_count(origin)),
+            )
+        })
+        .collect();
+    println!(
+        "{}",
+        json!({"phase":"headers","elapsedSeconds":header_seconds,"complete":header_complete,"directories":directory_counts})
+    );
     let initial = ingest::scan(store, origins, &stop)?;
     let initial_seconds = started.elapsed().as_secs_f64();
     let initial_cpu = cpu_seconds() - cpu;
@@ -66,6 +84,13 @@ pub(super) fn run(store: &Store, origins: &[Origin], mode: &str) -> Result<()> {
     let reconcile = ingest::scan(store, origins, &stop)?;
     let reconcile_seconds = started.elapsed().as_secs_f64();
     let reconcile_cpu = cpu_seconds() - cpu;
+    let mut discovery_times = Vec::new();
+    for _ in 0..10 {
+        let started = Instant::now();
+        discovery.refresh(origins, Some(started + Duration::from_secs(5)))?;
+        discovery_times.push(started.elapsed().as_secs_f64());
+    }
+    discovery_times.sort_by(f64::total_cmp);
     let origin = origins.iter().find(|o| o.provider == "codex").unwrap();
     let cold = origin.path().join("fleet-idle-cold.jsonl");
     let mut file = std::fs::OpenOptions::new()
@@ -104,6 +129,13 @@ pub(super) fn run(store: &Store, origins: &[Origin], mode: &str) -> Result<()> {
         std::thread::sleep(Duration::from_millis(20));
     }
     std::thread::sleep(Duration::from_secs(2));
+    let mut inventory_times = Vec::new();
+    for _ in 0..10 {
+        let started = Instant::now();
+        ingest::refresh_inventory(store)?;
+        inventory_times.push(started.elapsed().as_secs_f64());
+    }
+    inventory_times.sort_by(f64::total_cmp);
     let catalog_files = [
         store.path.clone(),
         store.path.with_extension("sqlite3-wal"),
@@ -148,7 +180,7 @@ pub(super) fn run(store: &Store, origins: &[Origin], mode: &str) -> Result<()> {
     append(&new, "fleetidlenewprobe")?;
     let new_seconds = wait_text(store, "fleet-idle-new", "fleetidlenewprobe", started)?;
     worker.stop()?;
-    let report = json!({"phase":mode,"initialSeconds":initial_seconds,"initialCpuSeconds":initial_cpu,"initial":initial,"reconcileSeconds":reconcile_seconds,"reconcileCpuSeconds":reconcile_cpu,"outcome":reconcile,"cpuSeconds":idle_cpu,"elapsedSeconds":elapsed,"cpuSecondsPerMinute":idle_cpu*60.0/elapsed,"amortizedReconcileCpuSecondsPerMinute":reconcile_cpu/10.0,"databaseWrittenDuringQuiet":false,"coldAppendSeconds":append_seconds,"newFileSeconds":new_seconds});
+    let report = json!({"phase":mode,"headerSeconds":header_seconds,"headerComplete":header_complete,"directories":directory_counts,"directoryDiscoveryP95Seconds":discovery_times[9],"inventoryCatchupP95Seconds":inventory_times[9],"initialSeconds":initial_seconds,"initialCpuSeconds":initial_cpu,"initial":initial,"reconcileSeconds":reconcile_seconds,"reconcileCpuSeconds":reconcile_cpu,"outcome":reconcile,"cpuSeconds":idle_cpu,"elapsedSeconds":elapsed,"cpuSecondsPerMinute":idle_cpu*60.0/elapsed,"amortizedReconcileCpuSecondsPerMinute":reconcile_cpu/10.0,"databaseWrittenDuringQuiet":false,"coldAppendSeconds":append_seconds,"newFileSeconds":new_seconds});
     std::fs::write(
         std::env::var("RC_SESSIONS_MEASURE_REPORT")?,
         serde_json::to_vec_pretty(&report)?,

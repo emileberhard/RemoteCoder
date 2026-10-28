@@ -73,6 +73,10 @@ impl Mailbox {
             self.wake.1.notify_all();
             requests
         };
+        let requests: Vec<_> = requests
+            .into_iter()
+            .filter(|request| request.deadline > Instant::now())
+            .collect();
         let Some(deadline) = requests.iter().map(|request| request.deadline).max() else {
             return;
         };

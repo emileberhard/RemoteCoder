@@ -31,8 +31,12 @@ impl Discovery {
             );
             self.directories.entry(root).or_default();
         }
-        let mut todo: Vec<_> = self.directories.keys().cloned().collect();
-        while let Some(path) = todo.pop() {
+        let mut todo: Vec<_> = self
+            .directories
+            .iter()
+            .map(|(path, revision)| (path.clone(), revision.clone()))
+            .collect();
+        while let Some((path, previous)) = todo.pop() {
             ensure!(
                 deadline.is_none_or(|deadline| Instant::now() < deadline),
                 "unavailable: inventory discovery exceeded five seconds"
@@ -50,7 +54,7 @@ impl Discovery {
                 Err(error) => return Err(error.into()),
             };
             let revision = FileRevision::from(metadata);
-            if self.directories.get(&path) == Some(&Some(revision.clone())) {
+            if previous.as_ref() == Some(&revision) {
                 continue;
             }
             for entry in std::fs::read_dir(&path)? {
@@ -67,7 +71,7 @@ impl Discovery {
                         "capacity: too many session directories"
                     );
                     self.directories.insert(child.clone(), None);
-                    todo.push(child);
+                    todo.push((child, None));
                 } else if kind.is_file() && child.extension().is_some_and(|e| e == "jsonl") {
                     ensure!(
                         self.pending.len() < CAPACITY,
@@ -79,6 +83,14 @@ impl Discovery {
             self.directories.insert(path, Some(revision));
         }
         Ok(())
+    }
+
+    #[cfg(test)]
+    pub fn directory_count(&self, origin: &Origin) -> usize {
+        self.directories
+            .range(origin.path()..)
+            .take_while(|(path, _)| path.starts_with(origin.path()))
+            .count()
     }
 
     fn forget(&mut self, path: &PathBuf) {
