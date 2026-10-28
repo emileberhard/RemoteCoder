@@ -1193,3 +1193,92 @@ fn sessions_inventory_accepts_known_exact_duplicates_without_transferring_owners
         .unwrap();
     assert_eq!(headers, 4);
 }
+
+#[test]
+fn sessions_claude_filename_owns_inherited_queue_identity() {
+    let f = fixture();
+    let path = f.claude.with_file_name("fork.jsonl");
+    write(
+        &path,
+        &[
+            json!({"type":"queue-operation","sessionId":"root"}),
+            json!({"type":"user","sessionId":"root","message":{"content":"inheritedqueuefixture"}}),
+        ],
+    );
+    assert_eq!(scan(&f)["parseFailures"], 0);
+    let db = f.store.reader().unwrap();
+    let owner: String = db.query_row("SELECT src.local_path FROM session s JOIN source src USING(source_id) WHERE s.thread_id='claude_fork'", [], |row|row.get(0)).unwrap();
+    assert_eq!(Path::new(&owner), path);
+}
+
+#[test]
+fn sessions_claude_workflow_children_keep_the_session_ancestor() {
+    let f = fixture();
+    let path = f
+        .claude
+        .with_extension("")
+        .join("subagents/workflows/workflow/agent-nested.jsonl");
+    write(
+        &path,
+        &[json!({"type":"user","sessionId":"root","message":{"content":"workflowchildfixture"}})],
+    );
+    assert_eq!(scan(&f)["parseFailures"], 0);
+    let db = f.store.reader().unwrap();
+    let parent: String = db.query_row("SELECT p.thread_id FROM session c JOIN session p ON p.session_key=c.parent_session_key WHERE c.thread_id='claude:root:nested'", [], |row|row.get(0)).unwrap();
+    assert_eq!(parent, "claude_root");
+}
+
+#[test]
+fn sessions_claude_workflow_journals_are_not_transcripts() {
+    let f = fixture();
+    let path = f
+        .claude
+        .with_extension("")
+        .join("subagents/workflows/workflow/journal.jsonl");
+    write(&path, &[json!({"type":"started","agentId":"fixture"})]);
+    assert_eq!(scan(&f)["parseFailures"], 0);
+    assert!(!f.origins[1].is_transcript(&path));
+    let count: i64 = f
+        .store
+        .reader()
+        .unwrap()
+        .query_row(
+            "SELECT count(*) FROM source WHERE local_path=?1",
+            [path.to_string_lossy().as_ref()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(count, 0);
+}
+
+#[test]
+fn sessions_claude_tool_result_jsonl_stays_evidence() {
+    let f = fixture();
+    let path = f
+        .claude
+        .with_extension("")
+        .join("tool-results/records.jsonl");
+    write(
+        &path,
+        &[json!({"type":"user","sessionId":"root","message":{"content":"toolresultjsonlfixture"}})],
+    );
+    assert_eq!(scan(&f)["parseFailures"], 0);
+    assert!(!f.origins[1].is_transcript(&path));
+    let db = f.store.reader().unwrap();
+    let count: i64 = db
+        .query_row(
+            "SELECT count(*) FROM source WHERE local_path=?1",
+            [path.to_string_lossy().as_ref()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(count, 0);
+    let evidence: i64 = db
+        .query_row(
+            "SELECT count(*) FROM dependency WHERE local_path=?1",
+            [path.to_string_lossy().as_ref()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(evidence, 1);
+}

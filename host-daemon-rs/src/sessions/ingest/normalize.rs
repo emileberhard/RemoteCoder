@@ -223,25 +223,29 @@ impl Record<'_> {
                 .file_stem()
                 .and_then(|p| p.to_str())
                 .context("Session path needs a UTF-8 name")?;
-            if self
-                .path
-                .parent()
-                .and_then(|p| p.file_name())
-                .is_some_and(|p| p == "subagents")
+            let root = self.origin.path();
+            let relative = self.path.strip_prefix(&root)?;
+            let mut parts = relative.iter();
+            parts
+                .next()
+                .context("Claude transcript has no project directory")?;
+            let session = parts
+                .next()
+                .context("Claude transcript has no session filename")?;
+            if parts
+                .next()
+                .is_some_and(|directory| directory == "subagents")
             {
-                let parent = self
-                    .path
-                    .parent()
-                    .and_then(|p| p.parent())
-                    .and_then(|p| p.file_name())
-                    .and_then(|p| p.to_str())
+                let parent = session
+                    .to_str()
                     .context("Native child has no owning session")?;
-                let child = stem.strip_prefix("agent-").unwrap_or(stem);
+                let child = stem
+                    .strip_prefix("agent-")
+                    .context("Native child has no agent filename")?;
                 state.thread = Some(format!("claude:{parent}:{child}"));
                 state.parent = Some(format!("claude_{parent}"));
             } else {
-                let id = v["sessionId"].as_str().unwrap_or(stem);
-                state.thread = Some(format!("claude_{id}"));
+                state.thread = Some(format!("claude_{stem}"));
             }
         }
         state.cwd = string(&v["cwd"]).or(state.cwd.take());

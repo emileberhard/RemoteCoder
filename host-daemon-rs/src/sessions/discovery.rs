@@ -72,7 +72,9 @@ impl Discovery {
                     );
                     self.directories.insert(child.clone(), None);
                     todo.push((child, None));
-                } else if kind.is_file() && child.extension().is_some_and(|e| e == "jsonl") {
+                } else if kind.is_file()
+                    && origins.iter().any(|origin| origin.is_transcript(&child))
+                {
                     ensure!(
                         self.pending.len() < CAPACITY,
                         "capacity: too many undiscovered session headers"

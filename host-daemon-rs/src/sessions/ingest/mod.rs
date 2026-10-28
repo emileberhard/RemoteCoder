@@ -33,7 +33,7 @@ pub(crate) fn files(origin: &Origin) -> Result<Vec<PathBuf>> {
     let mut files = Vec::new();
     for entry in WalkDir::new(origin.path()).follow_links(false) {
         let entry = entry?;
-        if entry.file_type().is_file() && entry.path().extension().is_some_and(|e| e == "jsonl") {
+        if entry.file_type().is_file() && origin.is_transcript(entry.path()) {
             ensure!(
                 files.len() < 100_000,
                 "capacity: more than 100000 session sources"
@@ -82,17 +82,13 @@ fn selected(store: &Store, origin: &Origin, paths: &[PathBuf]) -> Result<BTreeSe
     let db = store.reader()?;
     for path in paths {
         match std::fs::symlink_metadata(path) {
-            Ok(metadata)
-                if metadata.is_file() && path.extension().is_some_and(|e| e == "jsonl") =>
-            {
+            Ok(metadata) if metadata.is_file() && origin.is_transcript(path) => {
                 selected.insert(path.clone());
             }
             Ok(metadata) if metadata.is_dir() => {
                 for entry in WalkDir::new(path).follow_links(false) {
                     let entry = entry?;
-                    if entry.file_type().is_file()
-                        && entry.path().extension().is_some_and(|e| e == "jsonl")
-                    {
+                    if entry.file_type().is_file() && origin.is_transcript(entry.path()) {
                         selected.insert(entry.into_path());
                         ensure!(
                             selected.len() <= 100_000,
