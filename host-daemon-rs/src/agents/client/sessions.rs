@@ -180,12 +180,13 @@ pub(crate) async fn run(command: Command, env_file: Option<&Path>) -> Result<i32
         }
         Err(error) => {
             let (code, payload) = if let Some(failure) = error.downcast_ref::<super::RpcFailure>() {
-                (4, failure.0.clone())
-            } else {
                 (
-                    2,
-                    json!({"kind":"sessions_error","message":format!("{error:#}")}),
+                    crate::sessions::exit_code(&failure.0["data"]),
+                    failure.0.clone(),
                 )
+            } else {
+                let data = crate::sessions::error_data(&error);
+                (crate::sessions::exit_code(&data), data)
             };
             eprintln!(
                 "{}",

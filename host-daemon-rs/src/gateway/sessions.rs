@@ -253,14 +253,10 @@ fn local_cluster() -> (String, Vec<String>, cluster::MemberCall) {
 }
 
 fn session_error(error: anyhow::Error) -> RpcError {
-    let message = format!("{error:#}");
-    let kind = if message.starts_with("cursor_expired:") {
-        "cursor_expired"
-    } else if message.starts_with("source_changed:") {
-        "source_changed"
-    } else {
-        "sessions_error"
-    };
-    RpcError::new(RpcCode::InvalidParams, message)
-        .with_data(RpcData::Raw(json!({"kind":kind,"retryable":false})))
+    let data = crate::sessions::error_data(&error);
+    RpcError::new(
+        RpcCode::InvalidParams,
+        data["message"].as_str().unwrap_or("Session request failed"),
+    )
+    .with_data(RpcData::Raw(data))
 }

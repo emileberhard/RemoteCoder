@@ -86,5 +86,59 @@ pub(crate) fn timestamp(value: &str) -> Result<String> {
     Ok(canonical_timestamp(date))
 }
 
+pub(crate) fn error_data(error: &anyhow::Error) -> serde_json::Value {
+    let message = format!("{error:#}");
+    let (class, kind) = if message.starts_with("cursor_expired:") {
+        ("conflict", "cursor_expired")
+    } else if message.starts_with("source_changed:") || message.starts_with("conflict:") {
+        ("conflict", "source_changed")
+    } else if message.starts_with("source deleted") || message.starts_with("not_found:") {
+        ("not_found", "not_found")
+    } else if message.starts_with("unsupported:") {
+        ("unsupported", "unsupported")
+    } else if message.starts_with("unavailable:") {
+        ("unavailable", "unavailable")
+    } else if message.starts_with("capacity:") || message.starts_with("stale: budget") {
+        ("refused", "capacity")
+    } else if let Some(io) = error.downcast_ref::<std::io::Error>() {
+        if io.kind() == std::io::ErrorKind::NotFound {
+            ("not_found", "not_found")
+        } else {
+            ("unavailable", "unavailable")
+        }
+    } else if let Some(rusqlite::Error::SqliteFailure(code, _)) =
+        error.downcast_ref::<rusqlite::Error>()
+    {
+        match code.extended_code & 255 {
+            rusqlite::ffi::SQLITE_BUSY | rusqlite::ffi::SQLITE_LOCKED => {
+                ("unavailable", "unavailable")
+            }
+            rusqlite::ffi::SQLITE_READONLY
+            | rusqlite::ffi::SQLITE_AUTH
+            | rusqlite::ffi::SQLITE_PERM => ("refused", "refused"),
+            rusqlite::ffi::SQLITE_INTERRUPT
+            | rusqlite::ffi::SQLITE_TOOBIG
+            | rusqlite::ffi::SQLITE_FULL
+            | rusqlite::ffi::SQLITE_NOMEM => ("refused", "capacity"),
+            _ => ("usage", "usage"),
+        }
+    } else {
+        ("usage", "usage")
+    };
+    serde_json::json!({"class":class,"kind":kind,"message":message,"retryable":class=="unavailable"})
+}
+
+pub(crate) fn exit_code(data: &serde_json::Value) -> i32 {
+    match data["class"].as_str() {
+        Some("not_found") => 3,
+        Some("refused") => 4,
+        Some("unavailable") => 5,
+        Some("uncertain") => 6,
+        Some("unsupported") => 7,
+        Some("conflict") => 8,
+        _ => 2,
+    }
+}
+
 #[cfg(test)]
 mod tests;

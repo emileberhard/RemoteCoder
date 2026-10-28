@@ -302,6 +302,23 @@ fn sessions_feed_restart_expiry_and_atomic_rejection() {
 }
 
 #[test]
+fn sessions_errors_keep_their_cli_exit_class() {
+    for (message, code) in [
+        ("not_found: source", 3),
+        ("capacity: index", 4),
+        ("unavailable: ingest", 5),
+        ("unsupported: peer", 7),
+        ("cursor_expired: snapshot", 8),
+        ("invalid query", 2),
+    ] {
+        assert_eq!(
+            super::exit_code(&super::error_data(&anyhow::anyhow!(message))),
+            code
+        );
+    }
+}
+
+#[test]
 fn sessions_skill_catalog_deduplicates_provider_symlinks() {
     let root = tempfile::tempdir().unwrap();
     let actual = root.path().join("shared");
