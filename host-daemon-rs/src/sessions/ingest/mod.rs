@@ -45,14 +45,13 @@ pub(crate) fn files(origin: &Origin) -> Result<Vec<PathBuf>> {
     Ok(files)
 }
 
-fn companions(path: &Path) -> Result<Vec<PathBuf>> {
+fn companions(origin: &Origin, path: &Path) -> Result<Vec<PathBuf>> {
     let mut result = Vec::new();
     let directory = path.with_extension("");
     if directory.is_dir() {
         for entry in WalkDir::new(directory).follow_links(false) {
             let entry = entry?;
-            if entry.file_type().is_file() && entry.path().extension().is_none_or(|e| e != "jsonl")
-            {
+            if entry.file_type().is_file() && !origin.is_transcript(entry.path()) {
                 ensure!(
                     result.len() < 100_000,
                     "capacity: too many session companions"
@@ -317,7 +316,7 @@ fn ingest_source(
         )
         .transpose()?;
     let companions = if mode == ReadMode::Full {
-        companions(path)?
+        companions(origin, path)?
     } else {
         Vec::new()
     };
