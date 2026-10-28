@@ -208,6 +208,7 @@ async function runtimeFlows(lab, model) {
     receipt.parentCallbacks = children.map(row => items.includes(`${row.run_id}:completion`));
 
     receipt.messages = await messageFlows(lab, receipt.codexChild.jobId);
+    receipt.scopedTitle = await scopedTitleFlow(lab, receipt.codexChild.jobId);
 
     const stopId = jobId("codex");
     await agent(lab, ["spawn", "codex", probeModel, "RCJOB_HOLD:stop-child", "--job-id", stopId, "--operator", "--json"]);
@@ -289,6 +290,36 @@ async function messageFlows(lab, finishedJob) {
         unreachableId, refusedExit: refused.status, retryExit: retried.status,
         refusedState: refusedReceipt.deliveryState.kind, retryState: retryReceipt.deliveryState.kind,
         persistedAcrossRestart: true };
+}
+
+async function scopedTitleFlow(lab, finishedJob) {
+    await settle(lab, finishedJob, job => terminal(job)?.cleanup === "complete");
+    const view = await agent(lab, ["read", finishedJob, "--json"]);
+    assert.equal(view.agent.conversation.kind, "known");
+    const threadId = view.agent.conversation.conversation.threadId;
+    const name = "Scoped continuation probe";
+    const command = [binary, "--env-file", lab.path("gateway.env"), "agent", "set-title", name,
+        "--mutation-id", randomUUID()].map(part => `'${part.replaceAll("'", "'\\''")}'`).join(" ");
+    const client = await lab.connect();
+    try {
+        const resumed = await client.rpc("turn/start", { threadId,
+            clientUserMessageId: randomUUID(),
+            input: [{ type: "text", text: `RCJOB_SPAWN:${Buffer.from(command).toString("base64url")}`, text_elements: [] }] });
+        assert(!resumed.error, `Native continued turn failed: ${JSON.stringify(resumed.error)}`);
+        const turnId = resumed.result.turn.id;
+        await lab.waitFor(async () => {
+            const reply = await client.rpc("thread/read", { threadId, includeTurns: false });
+            assert(!reply.error, `Title read failed: ${JSON.stringify(reply.error)}`);
+            return reply.result.thread.name === name;
+        }, 120);
+        const ended = await lab.waitFor(async () => {
+            const reply = await client.rpc("thread/turns/list", { threadId, limit: 100 });
+            assert(!reply.error, `Turn read failed: ${JSON.stringify(reply.error)}`);
+            return reply.result.data.find(turn => turn.id === turnId && turn.status !== "inProgress");
+        }, 120);
+        assert.equal(ended.status, "completed");
+        return { threadId, turnId, name, completed: true, path: "native-continued-tool" };
+    } finally { client.ws.close(); }
 }
 
 const model = startModel();
