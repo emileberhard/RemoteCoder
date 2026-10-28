@@ -413,9 +413,12 @@ fn ingest_source(
     let stamp = identity(&before);
     let original = origin.original(path)?.to_string_lossy().into_owned();
     let prior = db.query_row("SELECT source_id,file_identity,ingested_offset,prefix_hash,parser_state,revision,present,append_state,size FROM source WHERE origin_host=?1 AND path=?2", params![origin.host,original], |row| {
+        let unsigned = |index: usize| -> rusqlite::Result<u64> {
+            u64::try_from(row.get::<_,i64>(index)?).map_err(|error|rusqlite::Error::FromSqlConversionFailure(index,rusqlite::types::Type::Integer,Box::new(error)))
+        };
         let saved: String = row.get(7)?;
         let append = serde_json::from_str(&saved).map_err(|error| rusqlite::Error::FromSqlConversionFailure(7,rusqlite::types::Type::Text,Box::new(error)))?;
-        Ok(Previous {id:row.get(0)?,stamp:row.get(1)?,offset:row.get(2)?,chain:row.get(3)?,parser:row.get(4)?,revision:row.get(5)?,present:row.get(6)?,append,size:row.get(8)?})
+        Ok(Previous {id:row.get(0)?,stamp:row.get(1)?,offset:unsigned(2)?,chain:row.get(3)?,parser:row.get(4)?,revision:row.get(5)?,present:row.get(6)?,append,size:unsigned(8)?})
     }).optional()?;
     let companions = if mode != ReadMode::Inventory {
         companions(origin, path)?

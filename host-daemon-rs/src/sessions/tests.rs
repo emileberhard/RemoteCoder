@@ -1593,14 +1593,17 @@ fn sessions_active_malformed_record_keeps_a_gap_and_indexes_following_appends() 
         1
     );
     let db = f.store.reader().unwrap();
-    let (offset, failure, state): (u64, String, String) = db
+    let (offset, failure, state): (i64, String, String) = db
         .query_row(
             "SELECT ingested_offset,failure,append_state FROM source WHERE local_path=?1",
             [f.codex.to_string_lossy().as_ref()],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .unwrap();
-    assert_eq!(offset, f.codex.metadata().unwrap().len());
+    assert_eq!(
+        u64::try_from(offset).unwrap(),
+        f.codex.metadata().unwrap().len()
+    );
     assert_eq!(failure, "record_gap");
     let state: Value = serde_json::from_str(&state).unwrap();
     assert_eq!(state["gap_records"], 1);
