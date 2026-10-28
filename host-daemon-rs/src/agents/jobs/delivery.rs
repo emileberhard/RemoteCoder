@@ -36,15 +36,38 @@ impl JobOwner {
             ) {
                 continue;
             }
-            if notice
+            let removed = match &original.recipient {
+                Recipient::Remote { host, .. } => !gateway.remote_receiver_active(host).await?,
+                _ => false,
+            };
+            let expired = notice
                 .at_ms
                 .is_some_and(|at| now_ms().saturating_sub(at) >= 24 * 60 * 60 * 1000)
                 && matches!(
                     notice.delivery,
                     DeliveryState::Unreachable { .. } | DeliveryState::Uncertain { .. }
-                )
-            {
-                gateway.surface_job_result(id,"receiver could not be reconciled within 24 hours; notice requires user attention").await?;
+                );
+            if removed || expired {
+                let reason = if removed {
+                    "receiver host was removed; notice acceptance cannot be reconciled"
+                } else {
+                    "receiver could not be reconciled within 24 hours; notice requires user attention"
+                };
+                let current = store.read(id.clone()).await?;
+                if !matches!(notice.delivery, DeliveryState::Uncertain { .. }) {
+                    store
+                        .notice_delivery(
+                            id.clone(),
+                            current.revision,
+                            delivery_id,
+                            DeliveryState::Uncertain {
+                                reason: reason.into(),
+                            },
+                            now_ms(),
+                        )
+                        .await?;
+                }
+                gateway.surface_job_result(id, reason).await?;
                 continue;
             }
             let current = store.read(id.clone()).await?;

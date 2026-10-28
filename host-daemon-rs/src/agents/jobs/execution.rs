@@ -20,8 +20,9 @@ impl JobOwner {
     pub(super) async fn reconcile_job(&self, id: JobId) -> Result<bool> {
         let gateway = self.gateway()?;
         let store = self.store().await?;
-        let current = store.read(id.clone()).await?;
-        let notices_pending = if matches!(current.recipient, Recipient::Remote { .. }) {
+        let current = store.retarget_delivery(id.clone()).await?;
+        let notices_pending = if matches!(&current.recipient, Recipient::Remote {host,..} if gateway.remote_receiver_active(host).await?)
+        {
             false
         } else {
             self.deliver_notices(&id).await?

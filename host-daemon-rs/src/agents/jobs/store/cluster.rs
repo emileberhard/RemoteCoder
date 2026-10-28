@@ -326,7 +326,9 @@ impl JobStore {
             let agent=inner.agent_view(&job.agent_id)?;
             if agent.parent_revision <= job.parent_revision {return Ok(job);}
             let frozen=matches!(&job.execution,ExecutionState::Terminal {terminal} if matches!(&terminal.completion,Completion::Required {delivery:DeliveryState::Uncertain{..}|DeliveryState::Sending{..}|DeliveryState::Submitted{..}|DeliveryState::Accepted{..}|DeliveryState::Recorded{..},..}));
-            if frozen {return Ok(job);}
+            let uncertain_notice = job.notices.iter().any(|notice| matches!(notice.delivery,
+                DeliveryState::Uncertain { .. } | DeliveryState::Sending { .. } | DeliveryState::Submitted { .. }));
+            if frozen || uncertain_notice {return Ok(job);}
             job.recipient=agent.parent_recipient.context("moved agent has no receiver identity")?;
             job.parent_revision=agent.parent_revision;
             let at_ms=job.updated_at_ms;

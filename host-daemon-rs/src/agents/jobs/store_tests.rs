@@ -180,6 +180,58 @@ async fn cluster_fault_commits_survive_restart_and_fence_parent_handover() {
 }
 
 #[tokio::test]
+async fn uncertain_notice_keeps_its_receiver_until_non_acceptance_is_proven() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = JobStore::open(directory.path().into()).await.unwrap();
+    let mut original = job(91);
+    let receiver = Recipient::Conversation {
+        conversation: conversation(),
+    };
+    original.recipient = receiver.clone();
+    original.notices.push(JobNotice {
+        at_ms: Some(100),
+        payload: CompletionPayload::Prepared {
+            delivery_id: "retained-notice".into(),
+            fingerprint: "fixture".into(),
+            text: "Notice".into(),
+        },
+        delivery: DeliveryState::Uncertain {
+            reason: "reply lost".into(),
+        },
+    });
+    store.admit(original.clone()).await.unwrap();
+    store
+        .set_parent(original.agent_id.clone(), None, Recipient::None)
+        .await
+        .unwrap();
+    let frozen = store
+        .retarget_delivery(original.job_id.clone())
+        .await
+        .unwrap();
+    assert_eq!(frozen.recipient, receiver);
+    let rejected = store
+        .notice_delivery(
+            original.job_id.clone(),
+            frozen.revision,
+            "retained-notice".into(),
+            DeliveryState::Unreachable {
+                reason: "not accepted".into(),
+            },
+            101,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .retarget_delivery(rejected.job_id)
+            .await
+            .unwrap()
+            .recipient,
+        Recipient::None
+    );
+}
+
+#[tokio::test]
 async fn admission_receipt_survives_reopen_and_rejects_conflicting_reuse() {
     let directory = tempfile::tempdir().unwrap();
     let store = JobStore::open(directory.path().into()).await.unwrap();
