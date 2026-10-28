@@ -47,48 +47,57 @@ struct ChatHistoryReadTests {
     }
 
     @Test(.timeLimit(.minutes(1))) func coveringTheTranscriptDefersPagingUntilItIsUncovered() async throws {
-        let gateway = try await serving(entries: 60)
-        await gateway.holdCursorPages()
-        let fixture = await WorkspaceFixture(miniGatewayPort: try await gateway.start())
-        defer { await fixture.cleanUp(); await gateway.stop() }
+        let fixture = await WorkspaceFixture()
+        defer { await fixture.cleanUp() }
+        let (chat, gateway) = try await openInProcess(fixture, entries: 120)
+        defer { await gateway.releaseHeldRead() }
+        await gateway.holdNextRead(.page)
+        let read = try #require(chat.historyEdges.load(.older))
+        await gateway.waitForHeldRead()
         let workspace = fixture.workspace
-        let chat = try await openPrefetching(fixture)
         workspace.setHistoryDrawerOpen(true, overlaysTranscript: true, in: workspace.keyWindow)
         #expect(chat.historyEdges.load(.older) == nil)
-        await gateway.waitForHeldPage()
-        let pages = await gateway.requests("thread/items/list").count
-        await gateway.releaseHeldPage()
-        try #require(await waitUntil { chat.historyEdges.isIdle })
-        #expect(await gateway.requests("thread/items/list").count == pages)
+        let pages = await gateway.pageReads
+        await gateway.releaseHeldRead()
+        await read.value
+        #expect(chat.historyEdges.isIdle)
+        #expect(await gateway.pageReads == pages)
         workspace.setHistoryDrawerOpen(false, overlaysTranscript: true, in: workspace.keyWindow)
         #expect(!chat.historyEdges.isIdle)
+        await chat.historyEdges.drain()
+        #expect(await gateway.pageReads > pages)
     }
 
     @Test(.timeLimit(.minutes(2))) func jumpingToTheLatestReadsTheGatewayTailEvenWhileItsPagesAreCached() async throws {
-        let gateway = try await serving(entries: 2_100)
-        let fixture = await WorkspaceFixture(miniGatewayPort: try await gateway.start())
-        defer { await fixture.cleanUp(); await gateway.stop() }
-        let chat = try await openFarBack(fixture)
+        let fixture = await WorkspaceFixture()
+        defer { await fixture.cleanUp() }
+        let (chat, gateway) = try await openInProcess(fixture, entries: 2_100)
+        try await pageFarBack(chat)
         let before = await gateway.tailReads
         chat.historyEdges.showLatest()
-        #expect(await waitUntil { await gateway.tailReads > before && chat.historyEdgeStatus[.newer] == nil })
+        await chat.historyEdges.drain()
+        #expect(await gateway.tailReads > before)
+        #expect(chat.historyEdgeStatus[.newer] == nil)
         #expect(!chat.streamItems.endsAtNewerHistoryEdge)
     }
 
     @Test(.timeLimit(.minutes(2))) func aFailedJumpToTheLatestReadsTheGatewayTailAgainAfterBackgrounding() async throws {
-        let gateway = try await serving(entries: 2_100)
-        let fixture = await WorkspaceFixture(miniGatewayPort: try await gateway.start())
-        defer { await fixture.cleanUp(); await gateway.stop() }
-        let chat = try await openFarBack(fixture)
-        await gateway.failTailReads(true)
+        let fixture = await WorkspaceFixture()
+        defer { await fixture.cleanUp() }
+        let (chat, gateway) = try await openInProcess(fixture, entries: 2_100)
+        try await pageFarBack(chat)
+        await gateway.failPages(true)
         chat.historyEdges.showLatest()
-        try #require(await waitUntil { chat.alert?.message != nil })
+        await chat.historyEdges.drain()
+        try #require(chat.alert?.message != nil)
         #expect(!chat.streamItems.endsAtNewerHistoryEdge)
         await chat.target.handleScenePhaseBackground()
-        await gateway.failTailReads(false)
+        await gateway.failPages(false)
         let before = await gateway.tailReads
         chat.historyEdges.showLatest()
-        #expect(await waitUntil { await gateway.tailReads > before })
+        await chat.historyEdges.drain()
+        #expect(await gateway.tailReads > before)
+        #expect(!chat.streamItems.endsAtNewerHistoryEdge)
     }
 
     @Test(.timeLimit(.minutes(1))) func evictionDuringOpeningPreservesFailureAndRetriesTheTail() async throws {
@@ -174,13 +183,28 @@ struct ChatHistoryReadTests {
         return chat
     }
 
-    private func serving(entries count: Int) async throws -> FakeGatewayServer {
-        let gateway = try FakeGatewayServer(threadID: threadID, model: "opus")
-        await gateway.serveHistory((0..<count).map { index in
+    private func openInProcess(_ fixture: WorkspaceFixture, entries count: Int) async throws
+        -> (ChatScreenModel, HistoryGatewayFixture) {
+        let chat = try #require(fixture.workspace.selectedScreen)
+        chat.selectDraft(.thread(threadID))
+        try #require(await chat.prepareDraft())
+        chat.setActiveSessionID(threadID)
+        let session = await chat.target.conversations.session(conversationID: chat.currentConversationID, threadID: threadID)
+        await chat.adopt(session)
+        let gateway = HistoryGatewayFixture(threadID: threadID)
+        await gateway.setHistory(.init(entries: (0..<count).map { index in
             .init(turnId: "t\(index / 3)", item: .agentMessage(id: "m\(index)", text: "Message \(index)"),
                   startedAtOrdinal: Int64(index), isComplete: true)
-        })
-        return gateway
+        }, turns: []))
+        let history = GatewayHistoryService(gateway: gateway, cache: HistoryPageCache(
+            directory: fixture.temporaryStorage.storage.root.appending(path: "history-pages")))
+        chat.historyEdges = HistoryEdgeReader(host: chat, historyService: history,
+            conversations: chat.target.conversations, networkPolicy: HistoryNetworkPolicy())
+        let read = await session.beginHistoryRead()
+        let tail = try await history.openTail(header: await gateway.header, base: read.base)
+        await chat.applyConversationSnapshot(tail, read: read, from: session, source: "network")
+        try #require(!chat.messages.isEmpty)
+        return (chat, gateway)
     }
 
     private func open(_ fixture: WorkspaceFixture) async throws -> ChatScreenModel {
@@ -190,21 +214,17 @@ struct ChatHistoryReadTests {
         return chat
     }
 
-    private func openPrefetching(_ fixture: WorkspaceFixture) async throws -> ChatScreenModel {
+    private func openFarBack(_ fixture: WorkspaceFixture) async throws -> ChatScreenModel {
         let chat = try await open(fixture)
-        try #require(await waitUntil { chat.historyEdges.allowsPrefetch })
-        chat.historyEdges.prefetchEarlier()
-        try #require(!chat.historyEdges.isIdle)
+        try await pageFarBack(chat)
         return chat
     }
 
-    private func openFarBack(_ fixture: WorkspaceFixture) async throws -> ChatScreenModel {
-        let chat = try await open(fixture)
+    private func pageFarBack(_ chat: ChatScreenModel) async throws {
         for _ in 0..<60 where !chat.streamItems.endsAtNewerHistoryEdge {
             let read = try #require(chat.historyEdges.load(.older))
             await read.value
         }
         try #require(chat.streamItems.endsAtNewerHistoryEdge)
-        return chat
     }
 }
