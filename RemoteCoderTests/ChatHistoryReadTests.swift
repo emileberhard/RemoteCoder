@@ -33,7 +33,9 @@ struct ChatHistoryReadTests {
         _ = target.agents(threadID: first.id)
         await target.conversationList.record(first)
         let warm = try #require(target.warmConversationsIfIdle())
+        print("warm test waiting for held read")
         await gateway.waitForHeldRead()
+        print("warm test held read arrived")
 
         let second = try fixture.thread("second", updatedAt: now - 1)
         _ = target.agents(threadID: second.id)
@@ -43,7 +45,9 @@ struct ChatHistoryReadTests {
         preparation.setActive(false, conservesEnergy: false)
         preparation.setActive(true, conservesEnergy: false)
         await gateway.releaseHeldRead()
+        print("warm test waiting for warm task")
         await warm.value
+        print("warm test warm task completed")
         #expect(!target.conversationWarmer.needsWarm(first) && !target.conversationWarmer.needsWarm(second))
         let readThreadIDs = await gateway.requestedThreadIDs
         #expect(Set(readThreadIDs) == [first.id, second.id])

@@ -60,6 +60,7 @@ final class ConversationWarmer {
             await host?.refreshAgents(threadID: threadID)
         }
         for thread in threads {
+            logger.notice("warm stage=admission thread=\(thread.id) mayContinue=\(mayContinue) cancelled=\(Task.isCancelled) priority=\(Task.currentPriority.rawValue)")
             guard mayContinue else { return }
             let observation = ledger.observation(threadID: thread.id, revision: thread.updatedAt)
             let covered = ledger.readCovers(threadID: thread.id, revision: thread.updatedAt)
@@ -67,11 +68,16 @@ final class ConversationWarmer {
                 let tail: HistoryWindow
                 let source: String
                 if hot.contains(thread.id) {
+                    logger.notice("warm stage=session start thread=\(thread.id)")
                     let session = await conversations.session(threadID: thread.id)
+                    logger.notice("warm stage=session end thread=\(thread.id)")
                     guard mayContinue else { return }
+                    logger.notice("warm stage=restore start thread=\(thread.id)")
                     try await session.restore()
+                    logger.notice("warm stage=restore end thread=\(thread.id)")
                     guard mayContinue else { return }
                     let read = await session.beginHistoryRead()
+                    logger.notice("warm stage=tail start thread=\(thread.id)")
                     let stored = covered == true ? await history.cachedConversation(header: thread) : nil
                     guard mayContinue else { return }
                     let page = if let stored { stored } else {
@@ -79,7 +85,9 @@ final class ConversationWarmer {
                             bypassCache: covered != true)
                     }
                     guard mayContinue else { return }
+                    logger.notice("warm stage=tail end thread=\(thread.id)")
                     let snapshot = await session.merge(page, read: read)
+                    logger.notice("warm stage=merge end thread=\(thread.id)")
                     guard mayContinue else { return }
                     host?.didWarm(snapshot, session: session)
                     ledger.readSucceeded(threadID: thread.id, observation: observation)
@@ -101,8 +109,11 @@ final class ConversationWarmer {
                     logger.notice("warmed thread=\(thread.id) revision=\(thread.updatedAt) source=\(source) outcome=historyOnly")
                     continue
                 }
+                logger.notice("warm stage=references start thread=\(thread.id)")
                 let references = await Self.visualReferences(in: tail)
+                logger.notice("warm stage=references end thread=\(thread.id)")
                 guard mayContinue else { return }
+                logger.notice("warm stage=preparation start thread=\(thread.id)")
                 let outcome = await host.prepareHTMLVisuals(references)
                 logger.notice("warmed thread=\(thread.id) revision=\(thread.updatedAt) source=\(source) visuals=\(references.count) outcome=\(String(describing: outcome))")
                 switch outcome {
