@@ -54,14 +54,28 @@ impl Gateway {
             membership,
             digest,
         } = grant
-            && !self
+        {
+            match self
                 .cluster_link()
                 .await?
                 .store
-                .valid(host, membership, digest)
-                .await?
-        {
-            return Err(cluster_error(ErrorClass::Refused, "membership was removed"));
+                .validate_credential(host, membership, digest)
+                .await
+            {
+                Ok(true) => {}
+                Ok(false) => {
+                    return Err(cluster_error(ErrorClass::Refused, "membership was removed"));
+                }
+                Err(error) => {
+                    if let Some(removed) =
+                        error.downcast_ref::<crate::cluster::members::MembershipRemoved>()
+                    {
+                        return Err(cluster_error(ErrorClass::Refused, "membership was removed")
+                            .with_data(RpcData::Raw(removed.data())));
+                    }
+                    return Err(error.into());
+                }
+            }
         }
         Ok(())
     }
@@ -170,6 +184,11 @@ impl Gateway {
             "cluster/remove" => {
                 let request: RemoveParams = decode(params)?;
                 let record = link.store.remove(request.clone(), true).await?;
+                if record.state == MemberState::Removed {
+                    return Ok(
+                        json!({"removed":true,"pending":false,"hostId":record.host,"membership":record.membership}),
+                    );
+                }
                 link.forget(&request.membership).await;
                 self.remove_member_work(&request.membership, &request.host)
                     .await?;
@@ -177,8 +196,12 @@ impl Gateway {
                 if remote.is_ok() {
                     link.store.remove(request, false).await?;
                 }
+                let pending = !link
+                    .store
+                    .is_removed(&record.host, &record.membership)
+                    .await?;
                 Ok(
-                    json!({"removed":true,"pending":remote.is_err(),"hostId":record.host,"membership":record.membership}),
+                    json!({"removed":true,"pending":pending,"hostId":record.host,"membership":record.membership}),
                 )
             }
             _ => {
@@ -221,6 +244,73 @@ impl Gateway {
                 link.update_identity(reset.clone()).await;
                 Ok(json!({"reset":true,"hostId":reset.host_id,"incarnation":reset.incarnation}))
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn operator_removal_preserves_pending_until_a_terminal_receipt_and_then_stays_idempotent()
+    {
+        let gateway = crate::test_support::TestGateway::new();
+        let link = gateway.cluster_link().await.unwrap();
+        let host = "00000000-0000-4000-8000-000000000021";
+        let membership = "00000000-0000-4000-8000-000000000022";
+        let token = link
+            .store
+            .issue(IssueParams {
+                protocol: PROTOCOL,
+                r#for: host.into(),
+                name: "pending-host".into(),
+                membership: membership.into(),
+            })
+            .await
+            .unwrap();
+        let grant = link.store.authenticate(&token).await.unwrap().unwrap();
+        let request = RemoveParams {
+            protocol: PROTOCOL,
+            host: host.into(),
+            membership: membership.into(),
+        };
+        let response = gateway
+            .cluster_rpc(&Grant::Operator, "cluster/remove", json!(request))
+            .await
+            .unwrap();
+        assert_eq!(response["pending"], true);
+        assert!(!link.store.is_removed(host, membership).await.unwrap());
+        link.store.remove(request.clone(), false).await.unwrap();
+        let changes = link.store.changes().await;
+        let response = gateway
+            .cluster_rpc(&Grant::Operator, "cluster/remove", json!(request))
+            .await
+            .unwrap();
+        assert_eq!(
+            response,
+            json!({"removed":true,"pending":false,"hostId":host,"membership":membership})
+        );
+        assert!(!changes.has_changed().unwrap());
+        for method in [
+            "cluster/hello",
+            "cluster/removed",
+            "agent/cluster/inventory",
+        ] {
+            let error = gateway
+                .cluster_rpc(
+                    &grant,
+                    method,
+                    json!({"protocol":PROTOCOL,"host":host,"membership":membership}),
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(
+                error.data,
+                RpcData::Raw(
+                    json!({"class":"refused","kind":"membership_removed","host":host,"membership":membership,"retryable":false})
+                )
+            );
         }
     }
 }

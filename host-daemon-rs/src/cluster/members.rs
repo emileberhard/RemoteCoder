@@ -63,6 +63,26 @@ impl Snapshot {
     }
 }
 
+#[derive(Debug)]
+pub(crate) struct MembershipRemoved {
+    pub(crate) host: String,
+    pub(crate) membership: String,
+}
+
+impl MembershipRemoved {
+    pub(crate) fn data(&self) -> serde_json::Value {
+        serde_json::json!({"class":"refused","kind":"membership_removed","host":self.host,"membership":self.membership,"retryable":false})
+    }
+}
+
+impl std::fmt::Display for MembershipRemoved {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("membership was removed")
+    }
+}
+
+impl std::error::Error for MembershipRemoved {}
+
 pub(crate) fn digest(token: &str) -> String {
     URL_SAFE_NO_PAD.encode(Sha256::digest(token.as_bytes()))
 }
@@ -358,15 +378,16 @@ impl Members {
                 record.host == request.host,
                 "membership belongs to another host"
             );
-            let state = if pending {
+            let state = if pending && (!existed || record.state != MemberState::Removed) {
                 MemberState::RemovePending
             } else {
                 MemberState::Removed
             };
-            let changed =
-                !existed || record.state != state || (!pending && record.credential.is_some());
+            let changed = !existed
+                || record.state != state
+                || (state == MemberState::Removed && record.credential.is_some());
             record.state = state;
-            if !pending {
+            if state == MemberState::Removed {
                 record.credential = None;
             }
             Ok((record.clone(), changed))
@@ -383,16 +404,7 @@ impl Members {
             return Ok(None);
         }
         let (host, membership, hash) = (parts[1], parts[2], digest(token));
-        let snapshot = self.snapshot().await?;
-        let valid = snapshot
-            .document
-            .records
-            .get(membership)
-            .is_some_and(|record| {
-                record.host == host
-                    && record.state == MemberState::Active
-                    && bool::from(record.issued_digest.as_bytes().ct_eq(hash.as_bytes()))
-            });
+        let valid = self.validate_credential(host, membership, &hash).await?;
         Ok(
             valid.then(|| crate::auth::installation_credentials::Grant::Peer {
                 host: host.to_owned(),
@@ -402,23 +414,126 @@ impl Members {
         )
     }
 
-    pub(crate) async fn valid(&self, host: &str, membership: &str, hash: &str) -> Result<bool> {
+    pub(crate) async fn is_removed(&self, host: &str, membership: &str) -> Result<bool> {
         let snapshot = self.snapshot().await?;
         Ok(snapshot
             .document
             .records
             .get(membership)
-            .is_some_and(|record| {
+            .is_some_and(|record| record.host == host && record.state == MemberState::Removed))
+    }
+
+    async fn credential_state(
+        &self,
+        host: &str,
+        membership: &str,
+        hash: &str,
+    ) -> Result<Option<MemberState>> {
+        let snapshot = self.snapshot().await?;
+        Ok(snapshot
+            .document
+            .records
+            .get(membership)
+            .filter(|record| {
                 record.host == host
-                    && record.state == MemberState::Active
                     && bool::from(record.issued_digest.as_bytes().ct_eq(hash.as_bytes()))
-            }))
+            })
+            .map(|record| record.state))
+    }
+
+    pub(crate) async fn validate_credential(
+        &self,
+        host: &str,
+        membership: &str,
+        hash: &str,
+    ) -> Result<bool> {
+        match self.credential_state(host, membership, hash).await? {
+            Some(MemberState::Active) => Ok(true),
+            Some(MemberState::Removed) => Err(MembershipRemoved {
+                host: host.to_owned(),
+                membership: membership.to_owned(),
+            }
+            .into()),
+            _ => Ok(false),
+        }
+    }
+
+    pub(crate) async fn valid(&self, host: &str, membership: &str, hash: &str) -> Result<bool> {
+        Ok(self.credential_state(host, membership, hash).await? == Some(MemberState::Active))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn removed_membership_is_terminal_and_revocation_evidence_requires_the_exact_credential()
+    {
+        let directory = tempfile::tempdir().unwrap();
+        let members = Members::new(directory.path());
+        let host = "00000000-0000-4000-8000-000000000011";
+        let membership = "00000000-0000-4000-8000-000000000012";
+        let issue = IssueParams {
+            protocol: PROTOCOL,
+            r#for: host.into(),
+            name: "removed-host".into(),
+            membership: membership.into(),
+        };
+        let token = members.issue(issue.clone()).await.unwrap();
+        let request = RemoveParams {
+            protocol: PROTOCOL,
+            host: host.into(),
+            membership: membership.into(),
+        };
+        assert_eq!(
+            members.remove(request.clone(), true).await.unwrap().state,
+            MemberState::RemovePending
+        );
+        assert_eq!(
+            members.remove(request.clone(), false).await.unwrap().state,
+            MemberState::Removed
+        );
+        let changes = members.changes().await;
+        let record = members.remove(request, true).await.unwrap();
+        assert_eq!(record.state, MemberState::Removed);
+        assert!(record.credential.is_none());
+        assert!(!changes.has_changed().unwrap());
+        assert!(members.issue(issue).await.is_err());
+        assert!(
+            !members
+                .valid(host, membership, &digest(&token))
+                .await
+                .unwrap()
+        );
+        let removed = members
+            .authenticate(&token)
+            .await
+            .unwrap_err()
+            .downcast::<MembershipRemoved>()
+            .unwrap();
+        assert_eq!(removed.host, host);
+        assert_eq!(removed.membership, membership);
+        assert!(
+            members
+                .authenticate(&format!("{token}x"))
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            !members
+                .is_removed("00000000-0000-4000-8000-000000000013", membership)
+                .await
+                .unwrap()
+        );
+        assert!(
+            !members
+                .is_removed(host, "00000000-0000-4000-8000-000000000013")
+                .await
+                .unwrap()
+        );
+    }
 
     #[tokio::test]
     async fn cached_reads_and_failed_writes_preserve_committed_membership() {
@@ -470,13 +585,25 @@ mod tests {
         members.remove(removal.clone(), false).await.unwrap();
         assert!(changes.has_changed().unwrap());
         changes.borrow_and_update();
-        assert!(members.authenticate(&token).await.unwrap().is_none());
+        assert!(
+            members
+                .authenticate(&token)
+                .await
+                .unwrap_err()
+                .is::<MembershipRemoved>()
+        );
         assert!(members.resolve(host).await.is_err());
         members.remove(removal, false).await.unwrap();
         assert!(!changes.has_changed().unwrap());
 
         let reopened = Members::new(directory.path());
-        assert!(reopened.authenticate(&token).await.unwrap().is_none());
+        assert!(
+            reopened
+                .authenticate(&token)
+                .await
+                .unwrap_err()
+                .is::<MembershipRemoved>()
+        );
         assert!(reopened.resolve("test-host").await.is_err());
         let records = reopened.all().await.unwrap();
         assert_eq!(records.len(), 1);
