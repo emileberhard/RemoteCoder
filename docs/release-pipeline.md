@@ -38,7 +38,9 @@ source/version/build stamps, signatures and required entitlements before deliver
 The app has no minimum gateway release-version gate. The existing protocol and
 capability compatibility remains authoritative, so app upload and gateway deploy
 run independently. The public workflow publishes the GitHub release after both platforms finish
-store preparation, using its own contents-write job token. The private run ends
+store preparation, using its own contents-write job token. The public release
+has no uploaded assets and is created once; reruns never edit a published release.
+The private run ends
 after direct delivery, triggering MacBook catch-up independently of Apple processing. An install, upload, processed build, store preparation,
 fleet catch-up and user acceptance remain separate outcomes.
 

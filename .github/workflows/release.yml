@@ -330,8 +330,4 @@ jobs:
           object=$(gh api "repos/$GH_REPO/git/ref/tags/$VERSION" --jq .object.sha)
           gh api "repos/$GH_REPO/git/tags/$object" | jq -j .message > "$RUNNER_TEMP/notes.md"
           [[ -s "$RUNNER_TEMP/notes.md" ]] || { echo "::error::The tag has no release notes."; exit 1; }
-          if gh release view "$VERSION" >/dev/null 2>&1; then
-            gh release edit "$VERSION" --title "$VERSION" --notes-file "$RUNNER_TEMP/notes.md" --latest
-          else
-            gh release create "$VERSION" --verify-tag --title "$VERSION" --notes-file "$RUNNER_TEMP/notes.md" --latest
-          fi
+          gh release create "$VERSION" --verify-tag --title "$VERSION" --notes-file "$RUNNER_TEMP/notes.md" --latest
