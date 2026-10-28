@@ -1300,8 +1300,8 @@ mod tests {
             ("uncertain", 6),
             ("blocked", 4),
             ("failed", 4),
-            ("sending", 4),
-            ("pending", 4),
+            ("sending", 6),
+            ("pending", 6),
         ] {
             assert_eq!(
                 message_exit(
