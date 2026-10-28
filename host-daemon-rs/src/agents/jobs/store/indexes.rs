@@ -4,7 +4,7 @@ use std::collections::{BTreeSet, HashMap};
 #[derive(Default)]
 pub(super) struct Indexes {
     conversations: HashMap<ConversationIdentity, BTreeSet<String>>,
-    parents: HashMap<crate::wire::cluster::AgentAddress, BTreeSet<String>>,
+    pub parents: HashMap<crate::wire::cluster::AgentAddress, BTreeSet<String>>,
     intents_by_parent: HashMap<crate::wire::cluster::AgentAddress, BTreeSet<JobId>>,
     open_intents: HashMap<String, HashMap<String, BTreeSet<JobId>>>,
     pub order: BTreeSet<(Option<i64>, JobId)>,

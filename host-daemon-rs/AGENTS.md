@@ -1955,3 +1955,14 @@ Use the sessions projection for native conversation inventory and resolution;
 never add another transcript reader. An unavailable projection is not an empty
 inventory. Native parent moves need no JobSpec; continuing unknown native
 permissions fails closed.
+
+## Lifecycle indexes
+
+JobStore is the only owner of conversation, parent, current-head, list-order and
+per-member work indexes. Insert or replace records through its indexed insertion
+methods; direct map mutation would leave reads or delivery wakeups stale. Agent
+parent changes, promotion and startup reload update those same indexes. The
+network driver consumes coalesced member-specific watches, never global history
+scans. A delivery retry receipt alone must not wake its own worker and bypass
+backoff. Members owns one cached immutable document per gateway; successful atomic
+writes publish a new snapshot, and authentication never reloads it from disk.

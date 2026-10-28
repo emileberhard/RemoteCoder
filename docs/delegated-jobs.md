@@ -416,3 +416,32 @@ uses one typed operation, `start(JobSpec)` or `continue(ContinueParams)`, throug
 `agent/jobs/admit`; its fingerprint includes the operation kind and full payload.
 Reusing a job ID with different admission inputs is conflict (exit 8), including
 changing Start into Continue.
+
+## Indexed lifecycle work
+
+JobStore owns the derived conversation, parent, current-head, active-agent,
+ordered-page and per-member pending-work indexes. Every persisted agent, job or
+intent transition publishes its index change in the same store critical section;
+startup rebuilds the indexes from retained records. Parent moves and promotions
+update the parent index and wake only members with affected pending deliveries.
+Ambiguous continuation branches retain an unresolved head. Ordinary head reads do
+not walk the continuation history.
+
+Network workers subscribe to their member's coalesced watch and read only that
+member's pending jobs and intents. Delivery attempts that change only the retry
+receipt do not wake themselves and bypass backoff. Each watch retains one revision;
+record sets are derived from the retained store and share its 512 MiB admission
+cap. Runtime reservations and unconfirmed remote intents each cap at 256. Settled
+payloads expire after 30 days; receipt and identity metadata do not expire silently.
+
+Members owns one parsed immutable snapshot. Authentication and selector reads use
+its indexes without disk reads. Its atomic file transaction serializes mutations;
+a successful write swaps the snapshot and wakes membership observers. External
+membership-file edits are unsupported while the gateway is running.
+
+The existing JobStore persistence mutex still spans accounting and disk I/O.
+The per-member Link socket mutex still spans one request/response exchange, with
+a ten-second deadline, so one slow request can delay other requests to that peer.
+These ordering boundaries remain explicit follow-up work; other peers proceed
+independently. Native session inventory freshness and ingestion remain owned by
+sessions, including its pending event-driven single-writer repair.

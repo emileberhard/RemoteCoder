@@ -261,31 +261,22 @@ impl JobStore {
                 .transpose()?;
             let included = match &selection {
                 Selection::Children(parent) | Selection::Descendants(parent) => {
-                    let mut parents = std::collections::HashSet::from([parent.clone()]);
+                    let mut parents = std::collections::VecDeque::from([parent.clone()]);
                     let mut included = std::collections::HashSet::new();
-                    loop {
-                        let mut changed = false;
-                        for agent in inner.agents.values() {
-                            if agent
-                                .parent
-                                .as_ref()
-                                .is_some_and(|parent| parents.contains(parent))
-                                && included.insert(agent.agent_id.clone())
+                    while let Some(next) = parents.pop_front() {
+                        for id in inner.indexes.parents.get(&next).into_iter().flatten() {
+                            if included.insert(id.clone())
+                                && matches!(selection, Selection::Descendants(_))
+                                && let Some(AgentRecord {
+                                    conversation: ConversationBinding::Known { conversation },
+                                    ..
+                                }) = inner.agents.get(id)
                             {
-                                changed = true;
-                                if matches!(selection, Selection::Descendants(_))
-                                    && let ConversationBinding::Known { conversation } =
-                                        &agent.conversation
-                                {
-                                    parents.insert(crate::wire::cluster::AgentAddress {
-                                        host_id: parent.host_id.clone(),
-                                        thread_id: conversation.thread_id.clone(),
-                                    });
-                                }
+                                parents.push_back(crate::wire::cluster::AgentAddress {
+                                    host_id: parent.host_id.clone(),
+                                    thread_id: conversation.thread_id.clone(),
+                                });
                             }
-                        }
-                        if !changed || matches!(selection, Selection::Children(_)) {
-                            break;
                         }
                     }
                     Some(included)
