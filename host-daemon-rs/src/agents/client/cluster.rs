@@ -29,7 +29,7 @@ pub(crate) enum ClusterCommand {
 
 fn target_host(target: &mut String) -> Option<String> {
     let (host, id) = target.split_once(':')?;
-    if matches!(host, "automation" | "codex") {
+    if matches!(host, "automation" | "codex" | "claude") {
         return None;
     }
     let (host, id) = (host.to_owned(), id.to_owned());
@@ -486,4 +486,20 @@ pub(super) async fn native_operation(
         json!({"threadId":thread,"action":action,"caller":caller,"input":extra}),
     )
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn claude_sidecars_keep_their_provider_namespace() {
+        let id = "claude:11111111-2222-4333-8444-555555555555:a123456";
+        let mut target = id.to_owned();
+        assert_eq!(target_host(&mut target), None);
+        assert_eq!(target, id);
+        let mut addressed = format!("host-a:{id}");
+        assert_eq!(target_host(&mut addressed), Some("host-a".into()));
+        assert_eq!(addressed, id);
+    }
 }
