@@ -1022,6 +1022,13 @@ scoped receipt reads require the exact sender conversation.
   prematurely started private ChatGPT and reopens ChatGPT once with that URL.
   An operator can disable automatic Desktop management through private host
   profiles; startup still publishes the environment for manual launches.
+  That environment includes `CODEX_SPARKLE_ENABLED=false`, which removes
+  Desktop's Sparkle updater: the managed `in_app_updates = false` requirement
+  fails open once Desktop has waited five minutes without reading it from an
+  app-server, and an update replaces the bundled Codex paired with the shared
+  runtime. A running Desktop without it is an environment mismatch. Rollback
+  and uninstall leave it set, so neither they nor an isolated probe re-arm the
+  updater.
   Verify the managed daemon and environment programmatically. The daemon's
   `processStartTime` record keeps upstream's `ps -o lstart=` encoding, so a
   bundled lifecycle check does not delete a live record as stale.

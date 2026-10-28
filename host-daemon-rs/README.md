@@ -512,6 +512,18 @@ absence is not a configuration-mismatch restart reason. Bundled stdio helpers
 may belong to Computer Use or other callers; their presence never authorizes a
 Desktop restart.
 
+Every gateway startup, install and recovery also publishes
+`CODEX_SPARKLE_ENABLED=false`, which removes ChatGPT's Sparkle updater from any
+app launched afterwards, including manual launches on hosts with Desktop
+management disabled. The managed `in_app_updates = false` requirement alone
+fails open: ChatGPT waits five minutes for its app-server to deliver the policy
+and then allows updates for that launch, and an update replaces the bundled
+Codex the shared runtime is paired with. A running ChatGPT without the variable
+is therefore an environment mismatch that reconciliation relaunches and
+`runtime desktop check` rejects. The variable stays set through rollback and
+uninstall until the user logs out, so no rollback or isolated probe re-arms the
+updater.
+
 ### Hosts without ChatGPT Desktop
 
 The private `~/.remote-coder/host-profiles.json` can list hosts that run without

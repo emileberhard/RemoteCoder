@@ -198,7 +198,8 @@ async fn reconcile_scenario(state: FakeDesktopState) -> (FakeDesktop, Vec<Value>
 fn managed_command() -> String {
     format!(
         "{CHATGPT_EXECUTABLE} SSL_CERT_FILE=/etc/ssl/cert.pem \
-         CODEX_APP_SERVER_WS_URL=ws+unix://localhost/tmp/codex.sock:/rpc"
+         CODEX_APP_SERVER_WS_URL=ws+unix://localhost/tmp/codex.sock:/rpc \
+         CODEX_SPARKLE_ENABLED=false"
     )
 }
 
@@ -1003,45 +1004,63 @@ fn desktop_uses_the_managed_unix_websocket_directly() {
 }
 
 #[test]
-fn desktop_process_must_carry_the_exact_managed_connection() {
+fn desktop_process_must_carry_the_exact_managed_connection_with_updates_off() {
     let environment = ChatGptEnvironment {
         app_server_ws_url: "ws+unix:///tmp/codex.sock:/rpc".to_string(),
     };
     for (command, attached) in [
         (
-            "ChatGPT CODEX_APP_SERVER_WS_URL=ws+unix:///tmp/codex.sock:/rpc",
-            true,
-        ),
-        (
-            "ChatGPT SSL_CERT_FILE=/etc/ssl/cert.pem \
-             CODEX_APP_SERVER_WS_URL=ws+unix:///tmp/codex.sock:/rpc",
+            "ChatGPT CODEX_APP_SERVER_WS_URL=ws+unix:///tmp/codex.sock:/rpc \
+             CODEX_SPARKLE_ENABLED=false",
             true,
         ),
         (
             "ChatGPT SSL_CERT_FILE=/etc/ssl/cert.pem \
              CODEX_APP_SERVER_WS_URL=ws+unix:///tmp/codex.sock:/rpc \
+             CODEX_SPARKLE_ENABLED=false",
+            true,
+        ),
+        (
+            "ChatGPT SSL_CERT_FILE=/etc/ssl/cert.pem \
+             CODEX_APP_SERVER_WS_URL=ws+unix:///tmp/codex.sock:/rpc \
+             CODEX_SPARKLE_ENABLED=false \
              CODEX_APP_SERVER_USE_LOCAL_DAEMON=1",
             true,
         ),
         (
             "ChatGPT SSL_CERT_FILE=/etc/ssl/cert.pem \
-             CODEX_APP_SERVER_WS_URL=ws+unix:///tmp/other.sock:/rpc",
+             CODEX_APP_SERVER_WS_URL=ws+unix:///tmp/other.sock:/rpc \
+             CODEX_SPARKLE_ENABLED=false",
             false,
         ),
         (
             "ChatGPT SSL_CERT_FILE=/etc/ssl/cert.pem \
              CODEX_APP_SERVER_WS_URL=ws+unix:///tmp/codex.sock:/rpc \
+             CODEX_SPARKLE_ENABLED=false \
              CODEX_APP_SERVER_FORCE_CLI=anything",
             false,
         ),
         (
             "ChatGPT SSL_CERT_FILE=/different/host-policy.pem \
-             CODEX_APP_SERVER_WS_URL=ws+unix:///tmp/codex.sock:/rpc",
+             CODEX_APP_SERVER_WS_URL=ws+unix:///tmp/codex.sock:/rpc \
+             CODEX_SPARKLE_ENABLED=false",
             true,
         ),
         (
             "ChatGPT SSL_CERT_FILE=/etc/ssl/cert.pem \
-             CODEX_APP_SERVER_WS_URL=ws+unix:///tmp/codex.sock:/rpc-v2",
+             CODEX_APP_SERVER_WS_URL=ws+unix:///tmp/codex.sock:/rpc-v2 \
+             CODEX_SPARKLE_ENABLED=false",
+            false,
+        ),
+        (
+            "ChatGPT SSL_CERT_FILE=/etc/ssl/cert.pem \
+             CODEX_APP_SERVER_WS_URL=ws+unix:///tmp/codex.sock:/rpc",
+            false,
+        ),
+        (
+            "ChatGPT SSL_CERT_FILE=/etc/ssl/cert.pem \
+             CODEX_APP_SERVER_WS_URL=ws+unix:///tmp/codex.sock:/rpc \
+             CODEX_SPARKLE_ENABLED=true",
             false,
         ),
     ] {
