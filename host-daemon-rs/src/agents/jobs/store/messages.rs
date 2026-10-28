@@ -48,12 +48,13 @@ fn bound_state(mut state: DeliveryState) -> DeliveryState {
         | DeliveryState::Failed { reason } => Some(reason),
         DeliveryState::Pending | DeliveryState::Sending { .. } => None,
     };
-    if let Some(text) = text {
-        if let Some((boundary, _)) = text.char_indices().nth(4096) {
-            text.truncate(boundary);
-            text.push_str(" [truncated]");
-        }
+    if let Some(text) = text
+        && let Some((boundary, _)) = text.char_indices().nth(4096)
+    {
+        text.truncate(boundary);
+        text.push_str(" [truncated]");
     }
+
     state
 }
 

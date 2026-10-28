@@ -16,7 +16,12 @@ fn now_ms() -> i64 {
 }
 
 fn bounded_reason(reason: &str) -> String {
-    reason.chars().take(4096).collect()
+    let mut characters = reason.chars();
+    let mut result: String = characters.by_ref().take(4096).collect();
+    if characters.next().is_some() {
+        result.push_str(" [truncated]");
+    }
+    result
 }
 
 impl Gateway {
