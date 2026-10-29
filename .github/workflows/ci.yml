@@ -90,9 +90,6 @@ jobs:
           HOMEBREW_NO_INSTALL_CLEANUP: '1'
         run: brew list tmux >/dev/null 2>&1 || brew install tmux
       - run: rustup show
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          workspaces: host-daemon-rs
       - run: cargo fmt --manifest-path host-daemon-rs/Cargo.toml --check
       - run: cargo clippy --manifest-path host-daemon-rs/Cargo.toml --locked --all-targets --all-features -- -D warnings
       - run: cargo test --manifest-path host-daemon-rs/Cargo.toml --locked
