@@ -125,7 +125,7 @@ conversations.
 ### LAN TLS listener
 
 Set `RC_CODEX_GATEWAY_LAN_PORT` (for example `8789`) to serve every gateway route
-over TLS on `0.0.0.0:<port>`, so the app can connect directly on the home
+over TLS on `[::]:<port>`, which also accepts IPv4, so the app can connect directly on the home
 network instead of over the tailnet. It is off when unset or empty; a
 non-numeric value, `0`, or the plaintext port fails startup. The plaintext
 listener is unchanged.
