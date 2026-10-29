@@ -669,12 +669,6 @@
           ]
         },
         {
-          "path": "RemoteCoderTests/Fixtures/providers.pcm",
-          "target-membership": [
-            "RemoteCoderTests/resources"
-          ]
-        },
-        {
           "kind": "folder",
           "path": "RemoteCoderTests",
           "target-membership": [
@@ -1186,6 +1180,7 @@
         }
       ],
       "build-settings": {
+        "LM_SKIP_METADATA_EXTRACTION": "YES",
         "APPLICATION_EXTENSION_API_ONLY": "YES",
         "CODE_SIGN_ENTITLEMENTS": "RemoteCoderLocationPushService/RemoteCoderLocationPushService.entitlements",
         "CURRENT_PROJECT_VERSION": "1",
@@ -1283,6 +1278,7 @@
         }
       ],
       "build-settings": {
+        "LM_SKIP_METADATA_EXTRACTION": "YES",
         "ASSETCATALOG_COMPILER_APPICON_NAME": "AppIcon",
         "ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME": "AccentColor",
         "CODE_SIGN_ENTITLEMENTS": "RemoteCoder/Entitlements/RemoteCoderMac.$(CONFIGURATION).entitlements",
@@ -1365,6 +1361,7 @@
         }
       ],
       "build-settings": {
+        "LM_SKIP_METADATA_EXTRACTION": "YES",
         "APPLICATION_EXTENSION_API_ONLY": "YES",
         "CODE_SIGN_ENTITLEMENTS": "RemoteCoderNotificationService/RemoteCoderNotificationService.entitlements",
         "CURRENT_PROJECT_VERSION": "1",
@@ -1448,6 +1445,7 @@
         }
       ],
       "build-settings": {
+        "LM_SKIP_METADATA_EXTRACTION": "YES",
         "APPLICATION_EXTENSION_API_ONLY": "YES",
         "CODE_SIGN_ENTITLEMENTS": "RemoteCoderShareExtension/RemoteCoderShareExtension.entitlements",
         "CURRENT_PROJECT_VERSION": "1",
@@ -1621,6 +1619,7 @@
         }
       ],
       "build-settings": {
+        "LM_SKIP_METADATA_EXTRACTION": "YES",
         "CURRENT_PROJECT_VERSION": "1",
         "EXCLUDED_SOURCE_FILE_NAMES": [
           "$(inherited)",
