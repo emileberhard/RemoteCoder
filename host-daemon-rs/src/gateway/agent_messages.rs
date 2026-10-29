@@ -221,7 +221,12 @@ impl Gateway {
             let gateway = self.jobs.gateway()?;
             let response = if let Some(recipient) = &resolved.remote_recipient {
                 gateway
-                    .deliver_job_recipient(recipient, &record.delivery_id, text)
+                    .deliver_job_recipient(
+                        recipient,
+                        &record.delivery_id,
+                        text,
+                        &record.delivery_state,
+                    )
                     .await
                     .map(|state| json!({"deliveryState":state}))
                     .map_err(RpcError::from)

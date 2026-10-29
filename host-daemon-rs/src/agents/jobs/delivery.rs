@@ -81,7 +81,7 @@ impl JobOwner {
                 )
                 .await?;
             let next = match gateway
-                .deliver_job_recipient(&original.recipient, &delivery_id, &text)
+                .deliver_job_recipient(&original.recipient, &delivery_id, &text, &notice.delivery)
                 .await
             {
                 Ok(state) => state,
@@ -211,7 +211,7 @@ impl JobOwner {
             )
             .await?;
         let next = match gateway
-            .deliver_job_recipient(&job.recipient, delivery_id, text)
+            .deliver_job_recipient(&job.recipient, delivery_id, text, delivery)
             .await
         {
             Ok(state) => state,

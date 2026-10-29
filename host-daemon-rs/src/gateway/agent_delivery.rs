@@ -126,6 +126,7 @@ impl Gateway {
         recipient: &crate::agents::jobs::model::Recipient,
         id: &str,
         text: &str,
+        previous: &DeliveryState,
     ) -> anyhow::Result<DeliveryState> {
         use crate::agents::jobs::model::Recipient;
         match recipient {
@@ -155,6 +156,18 @@ impl Gateway {
                     .await
                 {
                     Ok(response) => Ok(serde_json::from_value(response["deliveryState"].clone())?),
+                    Err(error)
+                        if matches!(
+                            previous,
+                            DeliveryState::Uncertain { .. }
+                                | DeliveryState::Sending { .. }
+                                | DeliveryState::Submitted { .. }
+                        ) =>
+                    {
+                        Ok(DeliveryState::Uncertain {
+                            reason: error.message,
+                        })
+                    }
                     Err(error) => Ok(match error.class {
                         crate::wire::cluster::ErrorClass::Unavailable if !error.transmitted => {
                             DeliveryState::Unreachable {
@@ -179,5 +192,81 @@ impl Gateway {
                 reason: reason.clone(),
             }),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agents::jobs::model::Recipient;
+    use crate::wire::cluster::*;
+
+    #[tokio::test]
+    async fn cluster_delivery_retry_transport_failure_keeps_uncertain_custody() {
+        use base64::Engine;
+        let directory = tempfile::tempdir().unwrap();
+        let gateway = crate::test_support::TestGateway::with_native_runtime(directory.path());
+        let link = gateway.cluster_link().await.unwrap();
+        let host = crate::ids::new_session_uuid();
+        let membership = crate::ids::new_session_uuid();
+        let credential = link
+            .store
+            .issue(IssueParams {
+                protocol: PROTOCOL,
+                r#for: host.clone(),
+                name: "receiver".into(),
+                membership: membership.clone(),
+            })
+            .await
+            .unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            for _ in 0..2 {
+                let (stream, _) = listener.accept().await.unwrap();
+                drop(stream);
+            }
+        });
+        link.store
+            .accept(AcceptParams {
+                protocol: PROTOCOL,
+                host: host.clone(),
+                name: "receiver".into(),
+                membership,
+                pin: base64::engine::general_purpose::STANDARD.encode([0u8; 32]),
+                routes: vec![format!("wss://{address}/ws")],
+                credential,
+            })
+            .await
+            .unwrap();
+        let recipient = Recipient::Remote {
+            host,
+            incarnation: crate::ids::new_session_uuid(),
+            conversation: ConversationIdentity {
+                provider: Provider::Codex,
+                provider_home: crate::agents::jobs::model::ProviderHome::Known {
+                    path: directory.path().join("codex"),
+                },
+                thread_id: crate::ids::new_session_uuid(),
+            },
+        };
+        let initial = gateway
+            .deliver_job_recipient(&recipient, "delivery", "result", &DeliveryState::Pending)
+            .await
+            .unwrap();
+        assert!(matches!(initial, DeliveryState::Unreachable { .. }));
+        let retried = gateway
+            .deliver_job_recipient(
+                &recipient,
+                "delivery",
+                "result",
+                &DeliveryState::Uncertain {
+                    reason: "old receiver may have accepted".into(),
+                },
+            )
+            .await
+            .unwrap();
+        assert!(matches!(retried, DeliveryState::Uncertain { .. }));
+        server.await.unwrap();
     }
 }
