@@ -166,7 +166,7 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
     }
 
     var connectivity: GatewayConnectivity {
-        if isConnected, let route { .connected(route.kind) } else if isRestarting { .restarting } else { .disconnected }
+        if isConnected, let route { .connected(route.kind) } else if isRestarting { .restarting } else if lastConnectionFailure != nil { .unreachable } else { .disconnected }
     }
 
     private var isRestarting: Bool {
@@ -176,7 +176,11 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
     private func announceUnavailability() {
         guard !isConnected, connectivity != announced else { return }
         announced = connectivity
-        hub.emit(announced == .restarting ? .restarting : .disconnected)
+        hub.emit(switch announced {
+        case .restarting: .restarting
+        case .unreachable: .unreachable
+        case .connected, .disconnected: .disconnected
+        })
     }
 
     private func observeRestart(closing task: URLSessionWebSocketTask) -> Bool {
@@ -307,6 +311,7 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
             }
             guard !Task.isCancelled, !isRetired, !(error is CancellationError) else { throw failure }
             lastConnectionFailure = failure
+            announceUnavailability()
             let delay = reconnect.failed(at: .now, restartingSince: restartObservedAt)
             logger.notice("Gateway connection attempt trigger=\(trigger.rawValue) step=\(step) routes=\(candidates.count) elapsedMs=\(started.duration(to: .now) / .milliseconds(1)) outcome=failed nextDelayMs=\(delay / .milliseconds(1)) error=\(failure.localizedDescription)")
             throw failure
@@ -499,6 +504,7 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
         }
         logger.notice("Gateway connected and initialized")
         restartObservedAt = nil
+        lastConnectionFailure = nil
         reconnect.connected(at: .now)
         if !livenessSuspended { resumeLivenessChecks() }
         announced = .connected(route.kind)

@@ -127,7 +127,7 @@ struct GatewayEventPumpTests {
         }
     }
 
-    @Test func aRestartThatOutlastsItsWindowReadsAsDisconnectedWhileTheGatewayStillRefuses() async throws {
+    @Test func aRestartThatOutlastsItsWindowReadsAsUnreachableWhileTheGatewayStillRefuses() async throws {
         var timeouts = GatewayClient.Timeouts()
         timeouts.restartWindow = .seconds(1)
         try await withRecordingPump(timeouts: timeouts) { client, socket, sink in
@@ -136,13 +136,13 @@ struct GatewayEventPumpTests {
             await socket.closeBeforeReady(code: .privateCode(4012))
             await socket.closeConnections(code: .privateCode(4012))
             #expect(await events.next() == .restarting)
-            #expect(await events.next() == .disconnected)
-            try #require(await waitUntil(timeout: .seconds(30)) { sink.connectivity.last == .disconnected })
+            #expect(await events.next() == .unreachable)
+            try #require(await waitUntil(timeout: .seconds(30)) { sink.connectivity.last == .unreachable })
             #expect(sink.connectivity.contains(.restarting))
             #expect(await socket.acceptedConnections >= 2)
             let error = await #expect(throws: GatewayClient.ClientError.self) { try await client.connectIfNeeded() }
             #expect({ if case .gatewayNotReady = error { true } else { false } }())
-            #expect(await client.connectivity == .disconnected)
+            #expect(await client.connectivity == .unreachable)
         }
     }
 
@@ -153,7 +153,7 @@ struct GatewayEventPumpTests {
             try #require(sink.connectivity.last == .connected(.configured))
             await socket.closeBeforeReady()
             await socket.closeConnections(code: .protocolCode(.internalServerError))
-            try #require(await waitUntil { sink.connectivity.last == .disconnected })
+            try #require(await waitUntil { sink.connectivity.last?.route == nil })
 
             let before = await socket.acceptedConnections
             let started = ContinuousClock.now

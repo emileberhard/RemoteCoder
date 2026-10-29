@@ -416,7 +416,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
                 return .init(hostId: host.id, name: host.displayName, state: .unknown)
             }
             let since = model.conversationList.lastSuccessfulRefreshAt
-            if model.gatewayConnectivity.route == nil {
+            if model.gatewayConnectivity == .unreachable {
                 return .init(hostId: host.id, name: host.displayName, state: .unreachable, since: model.gatewayUnreachableSince)
             }
             if model.conversationList.errorMessage != nil {

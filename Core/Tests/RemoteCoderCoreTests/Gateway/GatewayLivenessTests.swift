@@ -277,7 +277,7 @@ struct GatewayLivenessTests {
             try await Task.sleep(for: .milliseconds(300))
             await peer.rejectInitialize()
             await peer.stallExistingConnections()
-            let dropped = await waitUntil(timeout: .seconds(8)) { events.list.withLock { $0.last } == .disconnected }
+            let dropped = await waitUntil(timeout: .seconds(8)) { events.list.withLock { $0.contains(.disconnected) } }
             #expect(dropped)
             #expect(await peer.acceptedConnections == 2)
             #expect(await client.disconnections == disconnections + 1)

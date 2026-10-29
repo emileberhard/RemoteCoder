@@ -260,8 +260,8 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
     private(set) var gatewayUnreachableSince: Date?
     private(set) var gatewayConnectivity = GatewayConnectivity.disconnected {
         didSet {
-            if gatewayConnectivity.route != nil { gatewayUnreachableSince = nil }
-            else if oldValue.route != nil { gatewayUnreachableSince = .now }
+            if gatewayConnectivity != .unreachable { gatewayUnreachableSince = nil }
+            else if oldValue != .unreachable { gatewayUnreachableSince = .now }
         }
     }
     var gatewayRoute: GatewayRoute.Kind? { gatewayConnectivity.route }

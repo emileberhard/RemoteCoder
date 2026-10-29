@@ -3,6 +3,7 @@ import Foundation
 enum GatewayConnectivity: Sendable, Equatable {
     case connected(GatewayRoute.Kind)
     case restarting
+    case unreachable
     case disconnected
 
     var route: GatewayRoute.Kind? {

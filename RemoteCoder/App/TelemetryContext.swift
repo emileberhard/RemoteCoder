@@ -127,7 +127,7 @@ final class TelemetryContext {
         case .connected(.configured): .configured
         case .connected(.relay): .relay
         case .restarting: .restarting
-        case .disconnected: .disconnected
+        case .unreachable, .disconnected: .disconnected
         }
     }
 }

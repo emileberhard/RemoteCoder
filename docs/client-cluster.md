@@ -66,7 +66,8 @@ admits it through the history owner. Visible parents refresh immediately; change
 during an in-flight read coalesce into one trailing read, with pre-acknowledgement
 results fenced. Coverage
 strips preserve unknown, unreachable, unsupported, refused, unavailable and stale
-states. They appear
+states. A host is unreachable only after a connection attempt fails; an idle or
+reconnecting host is not. They appear
 when coverage is incomplete, format typed dates for display, and tolerate newer
 state values as unknown. The client
 never redirects an unavailable remote agent to its parent's gateway.
