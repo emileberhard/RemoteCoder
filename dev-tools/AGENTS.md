@@ -39,6 +39,10 @@ on another Mac; copy the candidate and probe sources there first. SSH carries
 only probe control; gateway calls use the member's pinned TLS route. Every worker
 owns its gateway, daemon, provider homes and cleanup. The final receipt contains
 identities and timings, never membership credentials. Production is untouched.
+Run a Developer-ID candidate from inside its intact signed `.app` bundle; copying
+only its executable elsewhere invalidates its bundle signature and can stall
+launch before logging. On failure each worker emits at most four 64 KiB log
+tails, with its known credentials redacted, before removing private state.
 
 `bun dev-tools/probes/delegated-jobs.mjs <candidate> <matched-runtime-package>`
 uses `IsolatedGateway`, a loopback Responses model, and isolated provider homes.

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, readFile } from "node:fs/promises";
+import { mkdir, open, readdir, readFile } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import { randomBytes, randomInt, randomUUID } from "node:crypto";
 import { createInterface } from "node:readline";
@@ -10,9 +10,32 @@ const quote = text => `'${text.replaceAll("'", "'\\''")}'`;
 const jobId = () => `agent-codex-${BigInt(Date.now()) * 1_000_000n + BigInt(randomInt(1_000_000))}-${randomBytes(4).toString("hex")}`;
 const terminal = job => job.execution.kind === "terminal" ? job.execution.terminal : null;
 
+async function failureLogs(lab, secrets) {
+    const directory = "Library/Logs/remote-coder";
+    const names = ["gateway.log", "gateway-errors.log", ...(await readdir(lab.path(directory)).catch(() => []))
+        .filter(name => name.startsWith("codex-gateway")).sort().slice(-2).map(name => `${directory}/${name}`)];
+    const logs = {};
+    for (const name of names) {
+        let file;
+        try {
+            file = await open(lab.path(name), "r");
+            const size = (await file.stat()).size;
+            const bytes = Buffer.alloc(Math.min(size, 65536));
+            const { bytesRead } = await file.read(bytes, 0, bytes.length, Math.max(0, size - bytes.length));
+            let text = bytes.subarray(0, bytesRead).toString("utf8");
+            for (const secret of secrets) if (secret) text = text.replaceAll(secret, "[redacted]");
+            logs[name] = text.replace(/\brcp1\.[A-Za-z0-9_.-]+/g, "[redacted membership]");
+        } catch (error) {
+            logs[name] = `unavailable: ${error.code ?? "read_failed"}`;
+        } finally { await file?.close(); }
+    }
+    return logs;
+}
+
 async function worker(binary, runtimePackage) {
     const lab = await IsolatedGateway.create(binary);
     const model = startModel();
+    const secrets = [lab.token];
     let client;
     const rpc = async (method, params) => {
         const response = await client.rpc(method, params);
@@ -38,7 +61,9 @@ async function worker(binary, runtimePackage) {
         const url = value("RC_CODEX_GATEWAY_ROUTER_URL");
         const keyFile = value("RC_CODEX_GATEWAY_ROUTER_KEY_FILE");
         assert(url && keyFile, "Claude probe requires the configured host router");
-        lab.router = startStubRouter({ url, key: (await readFile(keyFile, "utf8")).trim() });
+        const key = (await readFile(keyFile, "utf8")).trim();
+        secrets.push(key);
+        lab.router = startStubRouter({ url, key });
         await lab.writeGatewayEnv([
             `RC_CODEX_GATEWAY_LAN_PORT=${await availablePort()}`,
             `RC_CODEX_GATEWAY_EXTERNAL_PROVIDERS_FILE=${lab.path("external-providers.json")}`,
@@ -91,6 +116,9 @@ async function worker(binary, runtimePackage) {
             }
             if (method === "close") break;
         }
+    } catch (error) {
+        console.error(JSON.stringify({ failure: String(error), logs: await failureLogs(lab, secrets) }));
+        throw error;
     } finally { await close(); }
 }
 
