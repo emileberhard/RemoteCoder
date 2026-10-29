@@ -137,6 +137,7 @@ impl Gateway {
                 created_at: crate::cluster::link::timestamp(),
                 state: IntentState::Pending,
                 stop_confirmed: false,
+                transmission_uncertain: false,
             };
             let intent = self.jobs.store().await?.put_intent(intent).await?;
             ensure!(
@@ -146,7 +147,7 @@ impl Gateway {
                 ),
                 "remote intent is closed; inspect its retained receipt"
             );
-            self.send_remote_intent(intent, true).await
+            self.send_remote_intent(intent.request.job_id).await
         } else {
             if matches!(
                 method,
@@ -221,14 +222,12 @@ impl Gateway {
         }
     }
 
-    pub(super) async fn send_remote_intent(
-        &self,
-        intent: RemoteIntent,
-        initial: bool,
-    ) -> Result<Value> {
-        let result = self
-            .cluster_link()
-            .await?
+    pub(super) async fn send_remote_intent(&self, id: JobId) -> Result<Value> {
+        let store = self.jobs.store().await?;
+        let _claim = store.claim_intent(&id).await?;
+        let link = self.cluster_link().await?;
+        let (intent, uncertain) = store.begin_intent_attempt(id).await?;
+        let result = link
             .call(&intent.host, "agent/jobs/admit", json!(intent.request))
             .await;
         match result {
@@ -252,15 +251,16 @@ impl Gateway {
                 Ok(receipt)
             }
             Err(error) => {
-                if initial && !error.transmitted
-                    || matches!(
-                        error.class,
-                        ErrorClass::Refused
-                            | ErrorClass::Usage
-                            | ErrorClass::Unsupported
-                            | ErrorClass::Conflict
-                            | ErrorClass::NotFound
-                    )
+                if !uncertain
+                    && (!error.transmitted
+                        || matches!(
+                            error.class,
+                            ErrorClass::Refused
+                                | ErrorClass::Usage
+                                | ErrorClass::Unsupported
+                                | ErrorClass::Conflict
+                                | ErrorClass::NotFound
+                        ))
                 {
                     self.jobs
                         .store()
@@ -287,8 +287,8 @@ impl Gateway {
         let member = link.store.resolve(host).await?;
         if member.state == MemberState::RemovePending {
             if link.call(&member.host,"cluster/removed",json!({"protocol":PROTOCOL,"host":identity.host_id,"membership":member.membership})).await.is_ok() {
-                link.store.remove(RemoveParams {protocol:PROTOCOL,host:member.host,membership:member.membership},false).await?;
-            } else {retry=true;}
+                link.store.remove(RemoveParams {protocol:PROTOCOL,host:member.host.clone(),membership:member.membership.clone()},false).await?;
+            } else if !link.store.is_removed(&member.host, &member.membership).await? {retry=true;}
         }
         for intent in intents {
             if !matches!(
@@ -337,7 +337,11 @@ impl Gateway {
                         .confirm_remote_stop(intent.request.job_id)
                         .await?;
                 }
-            } else if self.send_remote_intent(intent, false).await.is_err() {
+            } else if self
+                .send_remote_intent(intent.request.job_id)
+                .await
+                .is_err()
+            {
                 retry = true;
             }
         }

@@ -143,6 +143,7 @@ async fn cluster_fault_commits_survive_restart_and_fence_parent_handover() {
         created_at: crate::cluster::link::timestamp(),
         state: IntentState::Pending,
         stop_confirmed: false,
+        transmission_uncertain: false,
     };
     store.put_intent(intent.clone()).await.unwrap();
     drop(store);

@@ -474,6 +474,7 @@ mod tests {
             },
             state: IntentState::Pending,
             stop_confirmed: false,
+            transmission_uncertain: false,
         };
         let rows = [
             native_row(

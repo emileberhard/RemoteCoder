@@ -162,6 +162,39 @@ impl JobStore {
         .await
     }
 
+    pub(crate) async fn claim_intent(
+        &self,
+        id: &JobId,
+    ) -> Result<tokio::sync::OwnedRwLockWriteGuard<()>> {
+        self.executions.mutation(id).await
+    }
+
+    pub(crate) async fn begin_intent_attempt(&self, id: JobId) -> Result<(RemoteIntent, bool)> {
+        self.access(move |inner| {
+            let mut intent = inner
+                .intents
+                .get(&id)
+                .context("remote intent does not exist")?
+                .clone();
+            ensure!(
+                matches!(intent.state, IntentState::Pending | IntentState::Admitted),
+                "remote intent is closed to admission"
+            );
+            let uncertain = intent.transmission_uncertain || intent.state == IntentState::Admitted;
+            intent.transmission_uncertain = true;
+            private_state::write_json(
+                &inner
+                    .root
+                    .join("remote-intents")
+                    .join(format!("{}.json", id.as_str())),
+                &intent,
+            )?;
+            inner.insert_intent(intent.clone());
+            Ok((intent, uncertain))
+        })
+        .await
+    }
+
     pub(crate) async fn put_intent(&self, intent: RemoteIntent) -> Result<RemoteIntent> {
         self.access(move |inner| {
             if let Some(existing) = inner.intents.get(&intent.request.job_id) {

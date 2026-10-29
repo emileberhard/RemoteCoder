@@ -206,6 +206,8 @@ pub(crate) struct RemoteIntent {
     pub state: IntentState,
     #[serde(default)]
     pub stop_confirmed: bool,
+    #[serde(default)]
+    pub transmission_uncertain: bool,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
