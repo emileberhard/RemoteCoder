@@ -33,6 +33,17 @@ struct ConversationListDeferralTests {
         }
     }
 
+    @Test func promotingAnUncachedChildReadsAndPersistsItsExactHeader() async throws {
+        try await withList { list, gateway in
+            let child = try ThreadFixture.wire("old-child", updatedAt: 0, fields: ["source": ["subAgent": ["thread_spawn": [:]]]])
+            await gateway.setHeader(child)
+            try await list.applyParent(nil, to: child.id)
+            #expect(await gateway.headerReads == [child.id])
+            #expect(list.header(id: child.id)?.agentClassification == .root)
+            #expect(list.header(id: child.id)?.isDelegatedAgent == false)
+        }
+    }
+
     private func withList(_ body: (ConversationList, DeferralGateway) async throws -> Void) async throws {
         let temporary = TemporaryHostStorage()
         let suiteName = "RemoteCoderCoreTests.Deferral.\(UUID())"
@@ -48,6 +59,10 @@ struct ConversationListDeferralTests {
             hostID: target.hostID, threadStore: store,
             marksStore: ConversationMarksStore(directory: directory), defaults: defaults)
         try await body(list, gateway)
+        if let placed = list.header(id: "old-child") {
+            let reopened = ConversationHeaderStore.scoped(to: target, storage: temporary.storage)
+            #expect(await reopened.load().threads.first { $0.id == placed.id }?.agentClassification == placed.agentClassification)
+        }
     }
 
     private static func unavailable(_ provider: AgentProvider, _ reason: String) throws -> GatewayRPCFailure {
@@ -60,6 +75,9 @@ struct ConversationListDeferralTests {
 private actor DeferralGateway: CodexHistoryGateway, ConversationMarksRemote {
     enum Failure: Error { case unexpectedRead }
     let historyHostID = "deferral-fixture"
+    private var exactHeader: CodexAppServerV2.Thread?
+    private(set) var headerReads: [String] = []
+    func setHeader(_ header: CodexAppServerV2.Thread) { exactHeader = header }
     private var codex: Result<[CodexAppServerV2.Thread], GatewayRPCFailure> = .success([])
     private var claude: Result<[CodexAppServerV2.Thread], GatewayRPCFailure> = .success([])
 
@@ -73,7 +91,11 @@ private actor DeferralGateway: CodexHistoryGateway, ConversationMarksRemote {
     func listClaudeThreads(limit: Int, cursor: String?) throws -> CodexAppServerV2.ThreadListResponse {
         .init(data: try claude.get(), nextCursor: nil)
     }
-    func readThread(threadID: String, includeTurns: Bool) throws -> CodexAppServerV2.ThreadReadResponse { throw Failure.unexpectedRead }
+    func readThread(threadID: String, includeTurns: Bool) throws -> CodexAppServerV2.ThreadReadResponse {
+        headerReads.append(threadID)
+        guard let exactHeader, exactHeader.id == threadID else { throw Failure.unexpectedRead }
+        return .init(thread: exactHeader)
+    }
     func historyPageData(method: String, params: JSONValue) throws -> Data {
         guard method == "conversation/agents/classify" else { throw Failure.unexpectedRead }
         let ids = params.objectValue?["threadIds"]?.arrayValue?.compactMap(\.stringValue) ?? []

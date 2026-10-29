@@ -1457,9 +1457,8 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
             parent: parent.map { .init(hostId: $0.hostID, threadId: $0.threadID) })
         try Task.checkCancellation()
         guard !owner.isRetired else { throw CancellationError() }
-        await owner.conversationList.applyParent(parent, to: address.threadID)
-        await owner.conversationList.refresh(reason: "agent placement changed")
-        for model in models { model.invalidateAgentLists() }
+        for model in models { model.agentPlacementChanged() }
+        try await owner.conversationList.applyParent(parent, to: address.threadID)
     }
 
     func agentParentCandidates(excluding address: ConversationAddress, query: String) async -> [(address: ConversationAddress, title: String, hostName: String)] {
