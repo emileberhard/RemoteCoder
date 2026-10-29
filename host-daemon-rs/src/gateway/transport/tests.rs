@@ -1,3 +1,5 @@
+mod cluster;
+
 use super::*;
 use crate::agents::tools::{Caller, ToolOutcome};
 use crate::gateway::RESTARTING_CLOSE_CODE;

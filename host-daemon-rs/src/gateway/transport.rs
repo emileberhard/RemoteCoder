@@ -570,6 +570,36 @@ impl Gateway {
             self.send_error_to(out_tx, id.as_ref(), &error).await?;
             return Ok(());
         }
+        let mut request = request;
+        let mut raw = raw;
+        while request.method == "agent/cluster/dispatch" {
+            match self
+                .local_cluster_dispatch(&out_tx.grant, &request.object["params"])
+                .await
+            {
+                Ok(Some((method, params))) => {
+                    let mut object = request.object;
+                    object.insert("method".into(), Value::String(method));
+                    object.insert("params".into(), params);
+                    raw = serde_json::to_string(&object)?;
+                    match DispatchPlan::parse(&raw) {
+                        DispatchPlan::Request(local) => {
+                            request = local;
+                        }
+                        DispatchPlan::Refuse { id, error } => {
+                            self.send_error_to(out_tx, Some(&id), &error).await?;
+                            return Ok(());
+                        }
+                        DispatchPlan::ForwardResponse => unreachable!(),
+                    }
+                }
+                Ok(None) => break,
+                Err(error) => {
+                    self.send_error_to(out_tx, id.as_ref(), &error).await?;
+                    return Ok(());
+                }
+            }
+        }
         if request.method == "$/cancelRequest" {
             if id.is_some() {
                 return self
