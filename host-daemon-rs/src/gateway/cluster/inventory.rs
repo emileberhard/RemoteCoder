@@ -314,7 +314,8 @@ impl Gateway {
     pub(super) async fn resolve_cluster_agent(&self, params: Value, peer: bool) -> Result<Value> {
         use futures_util::{StreamExt, stream};
         let target = params["target"].as_str().context("target is required")?;
-        if let Some(found) = self.resolve_local_agent(target).await? {
+        if let Some(mut found) = self.resolve_local_agent(target).await? {
+            found["local"] = json!(true);
             return Ok(found);
         }
         if peer || params["local"] == true {
@@ -351,7 +352,8 @@ impl Gateway {
         let mut incomplete = false;
         for (host, result) in replies {
             match result {
-                Ok(row) => {
+                Ok(mut row) => {
+                    row["local"] = json!(false);
                     coverage.push(json!({"hostId":host,"state":"ok"}));
                     matches.push(row);
                 }

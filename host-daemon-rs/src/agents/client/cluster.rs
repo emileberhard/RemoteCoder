@@ -87,8 +87,7 @@ pub(super) async fn resolve_command(
     } else {
         rpc(&local, "agent/cluster/resolve", json!({"target":target})).await?
     };
-    let cluster: Value = rpc(&local, "cluster/list", json!({})).await?;
-    if resolved["ownerHostId"] != cluster["self"]["hostId"] {
+    if endpoint.host.is_none() && resolved["local"] != true {
         endpoint.host = resolved["ownerHostId"].as_str().map(str::to_owned);
     }
     if resolved["kind"] == "native" {
@@ -109,27 +108,7 @@ pub(super) async fn resolve_command(
 }
 
 pub(super) fn error_exit(error: &Value) -> i32 {
-    if error["data"]["kind"] == "unprovenCaller" || error["kind"] == "unprovenCaller" {
-        return 4;
-    }
-    match error["data"]["class"]
-        .as_str()
-        .or_else(|| error["class"].as_str())
-    {
-        Some("usage") => 2,
-        Some("not_found") => 3,
-        Some("refused") => 4,
-        Some("unavailable") => 5,
-        Some("uncertain") => 6,
-        Some("unsupported") => 7,
-        Some("conflict") => 8,
-        _ => match error["code"].as_i64() {
-            Some(-32600 | -32602) => 2,
-            Some(-32601) => 7,
-            Some(-32003) => 5,
-            _ => 4,
-        },
-    }
+    crate::wire::cluster::ErrorClass::from_rpc(error).exit_code()
 }
 
 pub(super) async fn execute(endpoint: &Endpoint, command: ClusterCommand) -> Result<Value> {

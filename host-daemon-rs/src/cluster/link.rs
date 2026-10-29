@@ -309,6 +309,20 @@ impl Link {
         let result = match result {
             Ok(Ok(value)) => Ok(value),
             Ok(Err(error)) => {
+                if let Some(evidence) = error.downcast_ref::<super::members::MembershipRemoved>() {
+                    self.confirm_removed(&record, evidence)
+                        .await
+                        .map_err(|error| LinkError {
+                            class: ErrorClass::Unavailable,
+                            transmitted,
+                            message: error.to_string(),
+                        })?;
+                    return Err(LinkError {
+                        class: ErrorClass::Refused,
+                        transmitted,
+                        message: error.to_string(),
+                    });
+                }
                 Err(error
                     .downcast::<LinkError>()
                     .unwrap_or_else(|error| LinkError {
@@ -341,6 +355,29 @@ impl Link {
         *self.identity.write().await = identity;
         self.connections.lock().await.clear();
         self.observations.write().await.clear();
+    }
+
+    async fn confirm_removed(
+        &self,
+        record: &MemberRecord,
+        evidence: &super::members::MembershipRemoved,
+    ) -> Result<()> {
+        let identity = self.identity.read().await;
+        let matches = evidence.host == identity.host_id && evidence.membership == record.membership;
+        drop(identity);
+        if matches && record.state == MemberState::RemovePending {
+            self.store
+                .remove(
+                    RemoveParams {
+                        protocol: PROTOCOL,
+                        host: record.host.clone(),
+                        membership: record.membership.clone(),
+                    },
+                    false,
+                )
+                .await?;
+        }
+        Ok(())
     }
 
     async fn connect(&self, record: &MemberRecord) -> Result<Connection> {
@@ -406,6 +443,32 @@ impl Link {
                     }
                     self.observe(record, &hello).await;
                     return Ok(Connection { socket, hello });
+                }
+                Ok(Err(tokio_tungstenite::tungstenite::Error::Http(response))) => {
+                    let headers = response.headers();
+                    if response.status()
+                        == tokio_tungstenite::tungstenite::http::StatusCode::FORBIDDEN
+                        && headers
+                            .get("x-remotecoder-refusal")
+                            .and_then(|value| value.to_str().ok())
+                            == Some("membership_removed")
+                        && let (Some(host), Some(membership)) = (
+                            headers
+                                .get("x-remotecoder-peer-host")
+                                .and_then(|value| value.to_str().ok()),
+                            headers
+                                .get("x-remotecoder-membership")
+                                .and_then(|value| value.to_str().ok()),
+                        )
+                    {
+                        let evidence = super::members::MembershipRemoved {
+                            host: host.into(),
+                            membership: membership.into(),
+                        };
+                        self.confirm_removed(record, &evidence).await?;
+                        return Err(evidence.into());
+                    }
+                    failure = Some(format!("member refused upgrade with {}", response.status()));
                 }
                 Ok(Err(error)) => failure = Some(error.to_string()),
                 Err(_) => failure = Some("member connect deadline exceeded".into()),
@@ -498,16 +561,19 @@ async fn response(socket: &mut Socket, id: u64) -> Result<Value> {
                 let response: Value = serde_json::from_str(&text)?;
                 if response["id"].as_u64() == Some(id) {
                     if let Some(error) = response.get("error") {
-                        let class = error["data"]["class"]
-                            .as_str()
-                            .and_then(|class| serde_json::from_value(json!(class)).ok())
-                            .unwrap_or_else(|| {
-                                if error["code"].as_i64() == Some(-32601) {
-                                    ErrorClass::Unsupported
-                                } else {
-                                    ErrorClass::Refused
-                                }
-                            });
+                        if error["data"]["kind"] == "membership_removed"
+                            && let (Some(host), Some(membership)) = (
+                                error["data"]["host"].as_str(),
+                                error["data"]["membership"].as_str(),
+                            )
+                        {
+                            return Err(super::members::MembershipRemoved {
+                                host: host.into(),
+                                membership: membership.into(),
+                            }
+                            .into());
+                        }
+                        let class = ErrorClass::from_rpc(error);
                         return Err(LinkError {
                             class,
                             transmitted: true,
@@ -616,5 +682,102 @@ mod tests {
             ReachabilityState::Unsupported
         );
         server.await.unwrap();
+    }
+    #[tokio::test]
+    async fn cluster_lost_removal_ack_reconciles_only_exact_tombstone_evidence() {
+        use base64::Engine;
+        for exact in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let local = crate::ids::new_session_uuid();
+            let host = crate::ids::new_session_uuid();
+            let membership = crate::ids::new_session_uuid();
+            let link = Link::new(
+                directory.path(),
+                HostIdentity {
+                    host_id: local.clone(),
+                    incarnation: crate::ids::new_session_uuid(),
+                },
+            );
+            let credential = link
+                .store
+                .issue(IssueParams {
+                    protocol: PROTOCOL,
+                    r#for: host.clone(),
+                    name: "peer".into(),
+                    membership: membership.clone(),
+                })
+                .await
+                .unwrap();
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            link.store
+                .accept(AcceptParams {
+                    protocol: PROTOCOL,
+                    host: host.clone(),
+                    name: "peer".into(),
+                    membership: membership.clone(),
+                    pin: base64::engine::general_purpose::STANDARD.encode([0u8; 32]),
+                    routes: vec![format!("wss://{address}/ws")],
+                    credential,
+                })
+                .await
+                .unwrap();
+            link.store
+                .remove(
+                    RemoveParams {
+                        protocol: PROTOCOL,
+                        host: host.clone(),
+                        membership: membership.clone(),
+                    },
+                    true,
+                )
+                .await
+                .unwrap();
+            let data = json!({"class":"refused","kind":"membership_removed","host":if exact {local} else {crate::ids::new_session_uuid()},"membership":membership});
+            let server = tokio::spawn(async move {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+                let Message::Text(request) = socket.next().await.unwrap().unwrap() else {
+                    panic!("expected removal RPC")
+                };
+                let request: Value = serde_json::from_str(&request).unwrap();
+                assert_eq!(request["method"], "cluster/removed");
+                socket.send(Message::Text(json!({"jsonrpc":"2.0","id":request["id"],"error":{"code":-32000,"message":"membership removed","data":data}}).to_string())).await.unwrap();
+            });
+            let stream = tokio::net::TcpStream::connect(address).await.unwrap();
+            let (socket, _) = tokio_tungstenite::client_async(
+                format!("ws://{address}/ws"),
+                MaybeTlsStream::Plain(stream),
+            )
+            .await
+            .unwrap();
+            let hello = HelloReceipt {
+                protocol: PROTOCOL,
+                version: "test".into(),
+                host: host.clone(),
+                incarnation: crate::ids::new_session_uuid(),
+                capabilities: vec!["cluster.v1".into()],
+                routes: vec![],
+                load: HostLoad {
+                    cpu_percent: None,
+                    memory_pressure: None,
+                    active_agents: 0,
+                },
+            };
+            link.connections.lock().await.insert(
+                membership.clone(),
+                Arc::new(Mutex::new(Some(Connection { socket, hello }))),
+            );
+            let error = link
+                .call(&host, "cluster/removed", json!({}))
+                .await
+                .unwrap_err();
+            assert_eq!(error.class, ErrorClass::Refused);
+            assert_eq!(
+                link.store.is_removed(&host, &membership).await.unwrap(),
+                exact
+            );
+            server.await.unwrap();
+        }
     }
 }
