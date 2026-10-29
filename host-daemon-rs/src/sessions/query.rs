@@ -20,37 +20,84 @@ pub(crate) fn coverage(db: &super::store::Reader) -> Result<Value> {
 pub(crate) fn rows(db: &Connection, sql: &str, params: impl Params) -> Result<Value> {
     let mut stmt = db.prepare(sql)?;
     ensure!(stmt.readonly(), "sql accepts one read-only statement");
-    let columns: Vec<String> = stmt.column_names().map(str::to_owned).collect();
+    let mut bytes = 64 * 1024;
+    let mut columns = Vec::new();
+    for name in stmt.column_names() {
+        let length = string_bytes(name.as_bytes(), PAGE_BYTES.saturating_sub(bytes))
+            .context("capacity: SQL column names exceed the response budget")?;
+        bytes += length + 1;
+        ensure!(
+            bytes <= PAGE_BYTES,
+            "capacity: SQL column names exceed the response budget"
+        );
+        columns.push(name.to_owned());
+    }
     let mut cursor = stmt.query(params)?;
     let mut result = Vec::new();
-    let mut bytes = serde_json::to_vec(&columns)?.len() + 64 * 1024;
     let mut truncated = false;
-    while let Some(row) = cursor.next()? {
-        let values: Vec<Value> = (0..columns.len())
-            .map(|i| -> Result<Value> {
-                Ok(match row.get_ref(i)? {
-                    ValueRef::Null => Value::Null,
-                    ValueRef::Integer(v) => json!(v),
-                    ValueRef::Real(v) => json!(v),
-                    ValueRef::Text(v) => json!(std::str::from_utf8(v)?),
-                    ValueRef::Blob(v) => {
-                        json!({"base64":base64::engine::general_purpose::STANDARD.encode(v)})
-                    }
-                })
-            })
-            .collect::<Result<_>>()?;
-        let length = serde_json::to_vec(&values)?.len() + 1;
-        if result.len() == PAGE_ROWS || bytes + length > PAGE_BYTES {
+    'rows: while let Some(row) = cursor.next()? {
+        if result.len() == PAGE_ROWS {
             truncated = true;
             break;
         }
-        bytes += length;
+        let mut values = Vec::with_capacity(columns.len());
+        let mut row_bytes = 3;
+        for index in 0..columns.len() {
+            let value = row.get_ref(index)?;
+            let available = PAGE_BYTES.saturating_sub(bytes + row_bytes);
+            let length = match value {
+                ValueRef::Null => Some(4),
+                ValueRef::Integer(v) => Some(v.to_string().len()),
+                ValueRef::Real(v) => Some(serde_json::to_vec(&json!(v))?.len()),
+                ValueRef::Text(v) => string_bytes(v, available),
+                ValueRef::Blob(v) => v
+                    .len()
+                    .checked_add(2)
+                    .map(|n| n / 3)
+                    .and_then(|n| n.checked_mul(4))
+                    .and_then(|n| n.checked_add(13)),
+            };
+            let Some(length) = length.filter(|length| *length < available) else {
+                truncated = true;
+                break 'rows;
+            };
+            row_bytes += length + 1;
+            values.push(match value {
+                ValueRef::Null => Value::Null,
+                ValueRef::Integer(v) => json!(v),
+                ValueRef::Real(v) => json!(v),
+                ValueRef::Text(v) => json!(std::str::from_utf8(v)?),
+                ValueRef::Blob(v) => {
+                    json!({"base64":base64::engine::general_purpose::STANDARD.encode(v)})
+                }
+            });
+        }
+        bytes += row_bytes;
         result.push(values);
     }
     Ok(json!({"columns":columns,"rows":result,"truncated":truncated}))
 }
 
+fn string_bytes(value: &[u8], budget: usize) -> Option<usize> {
+    let mut bytes: usize = 2;
+    for byte in value {
+        bytes = bytes.checked_add(match byte {
+            b'"' | b'\\' | b'\n' | b'\r' | b'\t' | 8 | 12 => 2,
+            0..=31 => 6,
+            _ => 1,
+        })?;
+        if bytes > budget {
+            return None;
+        }
+    }
+    (bytes <= budget).then_some(bytes)
+}
+
 pub(crate) fn sql(db: &super::store::Reader, sql: &str) -> Result<Value> {
+    db.set_limit(
+        rusqlite::limits::Limit::SQLITE_LIMIT_LENGTH,
+        PAGE_BYTES as i32,
+    )?;
     let tx = db.unchecked_transaction()?;
     let mut result = rows(&tx, sql, [])?;
     result["changeCursor"] = json!(changes::cursor(&tx)?);

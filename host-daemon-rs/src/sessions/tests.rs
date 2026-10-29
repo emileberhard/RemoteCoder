@@ -1749,3 +1749,21 @@ fn sessions_rotation_retires_only_proven_missing_identity_owners() {
     let owner: String = f.store.reader().unwrap().query_row("SELECT src.local_path FROM session s JOIN source src USING(source_id) WHERE s.thread_id='codex-root'",[],|r|r.get(0)).unwrap();
     assert_eq!(Path::new(&owner), replacement);
 }
+
+#[test]
+fn sessions_sql_bounds_cumulative_blob_and_escaped_text_before_conversion() {
+    let f = fixture();
+    scan(&f);
+    let db = f.store.reader().unwrap();
+    for sql in [
+        "SELECT zeroblob(3145728),zeroblob(3145728)",
+        "SELECT replace(hex(zeroblob(1048576)),'0',char(1))",
+    ] {
+        let response = query::sql(&db, sql).unwrap();
+        assert_eq!(response["truncated"], true);
+        assert_eq!(response["rows"], json!([]));
+        assert!(serde_json::to_vec(&response).unwrap().len() < super::PAGE_BYTES);
+    }
+    assert!(query::sql(&db, "SELECT zeroblob(9437184)").is_err());
+    assert_eq!(query::sql(&db, "SELECT 42").unwrap()["rows"], json!([[42]]));
+}
