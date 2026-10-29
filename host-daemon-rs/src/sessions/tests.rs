@@ -1767,3 +1767,65 @@ fn sessions_sql_bounds_cumulative_blob_and_escaped_text_before_conversion() {
     assert!(query::sql(&db, "SELECT zeroblob(9437184)").is_err());
     assert_eq!(query::sql(&db, "SELECT 42").unwrap()["rows"], json!([[42]]));
 }
+
+#[tokio::test]
+async fn sessions_cluster_retries_failed_members_instead_of_exhausting_them() {
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let observed = calls.clone();
+    let call: cluster::MemberCall = Arc::new(move |host, _, params| {
+        let observed = observed.clone();
+        async move {
+            assert_eq!(host, "peer");
+            assert!(params["cursor"].is_null());
+            if observed.fetch_add(1, std::sync::atomic::Ordering::SeqCst) < 2 {
+                anyhow::bail!("unreachable fixture");
+            }
+            Ok(json!({"hits":[{"itemKey":"peer:item"}],"cursor":null}))
+        }
+        .boxed()
+    });
+    let first = cluster::search(
+        "local",
+        json!({"hits":[],"cursor":null}),
+        vec!["peer".into()],
+        query::Search {
+            query: "needle".into(),
+            ..Default::default()
+        },
+        call.clone(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(first["coverage"][1]["state"], "unreachable");
+    let second = cluster::search(
+        "local",
+        json!({"hits":[],"cursor":null}),
+        vec![],
+        query::Search {
+            query: "needle".into(),
+            cursor: Some(first["cursor"].as_str().unwrap().into()),
+            ..Default::default()
+        },
+        call.clone(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(second["coverage"][1]["state"], "unreachable");
+    let third = cluster::search(
+        "local",
+        json!({"hits":[],"cursor":null}),
+        vec!["peer".into()],
+        query::Search {
+            query: "needle".into(),
+            cursor: Some(second["cursor"].as_str().unwrap().into()),
+            ..Default::default()
+        },
+        call,
+    )
+    .await
+    .unwrap();
+    assert_eq!(third["hits"].as_array().unwrap().len(), 1);
+    assert_eq!(third["coverage"][1]["state"], "ok");
+    assert!(third["cursor"].is_null());
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 3);
+}
