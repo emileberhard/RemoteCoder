@@ -246,7 +246,7 @@ pub(crate) fn read(db: &super::store::Reader, request: ReadRequest) -> Result<Va
         "read length must be 1..=4194304 bytes"
     );
     let item: Option<(String,String,i64)> = db.query_row("SELECT i.source_ref,src.local_path,src.source_id FROM item i JOIN session s USING(session_key) JOIN source src USING(source_id) WHERE item_key=?1",[&request.target],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
-    let (path, base, total, reference) = if let Some((reference, path, source)) = item {
+    let (bytes, total, reference) = if let Some((reference, path, source)) = item {
         let reference: SourceRef = serde_json::from_str(&reference)?;
         if let Some(dependency) = request.dependency.as_deref() {
             ensure!(
@@ -258,24 +258,20 @@ pub(crate) fn read(db: &super::store::Reader, request: ReadRequest) -> Result<Va
                 "Dependency is not referenced by this item"
             );
             let (path,identity):(String,Option<String>)=db.query_row("SELECT local_path,identity FROM dependency WHERE source_id=?1 AND path=?2 AND present=1",params![source,dependency],|r|Ok((r.get(0)?,r.get(1)?))).context("source deleted: dependency is unavailable")?;
-            let file = File::open(&path)?;
-            ensure!(
-                identity.as_deref() == Some(&super::ingest::identity(&file.metadata()?)),
-                "source_changed: re-ingest before reading dependency"
-            );
-            let total = file.metadata()?.len();
-            (path, 0, total, Some(reference))
+            let expected = identity
+                .as_deref()
+                .context("source_changed: dependency revision is unknown")?;
+            let (bytes, total) =
+                dependency_bytes(File::open(&path)?, expected, request.offset, length)?;
+            (bytes, total, Some(reference))
         } else {
-            let mut file =
-                File::open(&path).context("source deleted: raw transcript is unavailable")?;
-            file.seek(SeekFrom::Start(reference.offset))?;
-            let mut hasher = blake3::Hasher::new();
-            let copied = std::io::copy(&mut file.take(reference.length), &mut hasher)?;
-            ensure!(
-                copied == reference.length && hasher.finalize().to_hex().as_str() == reference.hash,
-                "source_changed: exact record no longer matches the projection"
-            );
-            (path, reference.offset, reference.length, Some(reference))
+            let bytes = item_bytes(
+                File::open(&path).context("source deleted: raw transcript is unavailable")?,
+                &reference,
+                request.offset,
+                length,
+            )?;
+            (bytes, reference.length, Some(reference))
         }
     } else {
         ensure!(
@@ -304,15 +300,11 @@ pub(crate) fn read(db: &super::store::Reader, request: ReadRequest) -> Result<Va
         );
         ensure!(matches[0].1 == 1, "source deleted");
         let path = matches[0].0.clone();
-        let total = std::fs::metadata(&path).context("source deleted")?.len();
-        (path, 0, total, None)
+        let mut file = File::open(&path).context("source deleted")?;
+        let total = file.metadata()?.len();
+        let bytes = range_bytes(&mut file, total, request.offset, length)?;
+        (bytes, total, None)
     };
-    ensure!(request.offset <= total, "Read offset exceeds source length");
-    let mut file = File::open(&path)?;
-    file.seek(SeekFrom::Start(base + request.offset))?;
-    let mut bytes = Vec::new();
-    file.take((length as u64).min(total - request.offset))
-        .read_to_end(&mut bytes)?;
     let next = request.offset + bytes.len() as u64;
     let mut response = json!({"schemaVersion":1,"target":request.target,"offset":request.offset,"totalBytes":total,"nextOffset":if next<total {Some(next)} else {None},"base64":base64::engine::general_purpose::STANDARD.encode(&bytes),"utf8":std::str::from_utf8(&bytes).ok(),"sourceRef":reference});
     if serde_json::to_vec(&response)?.len() > PAGE_BYTES {
@@ -326,6 +318,93 @@ pub(crate) fn read(db: &super::store::Reader, request: ReadRequest) -> Result<Va
         "capacity: read response exceeds 8 MiB"
     );
     Ok(response)
+}
+
+fn range_bytes(file: &mut File, total: u64, offset: u64, length: usize) -> Result<Vec<u8>> {
+    ensure!(offset <= total, "Read offset exceeds source length");
+    file.seek(SeekFrom::Start(offset))?;
+    let mut bytes = Vec::new();
+    file.take((length as u64).min(total - offset))
+        .read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
+
+fn item_bytes(
+    mut file: File,
+    reference: &SourceRef,
+    offset: u64,
+    length: usize,
+) -> Result<Vec<u8>> {
+    ensure!(
+        reference.length <= crate::providers::claude::records::MAX_SESSION_RECORD_BYTES as u64,
+        "capacity: record exceeds bounded read"
+    );
+    ensure!(
+        offset <= reference.length,
+        "Read offset exceeds source length"
+    );
+    file.seek(SeekFrom::Start(reference.offset))?;
+    let mut record = Vec::new();
+    file.take(reference.length).read_to_end(&mut record)?;
+    ensure!(
+        record.len() as u64 == reference.length
+            && blake3::hash(&record).to_hex().as_str() == reference.hash,
+        "source_changed: exact record no longer matches the projection"
+    );
+    let start = usize::try_from(offset)?;
+    Ok(record[start..record.len().min(start + length)].to_vec())
+}
+
+fn dependency_bytes(
+    mut file: File,
+    expected: &str,
+    offset: u64,
+    length: usize,
+) -> Result<(Vec<u8>, u64)> {
+    let before = file.metadata()?;
+    ensure!(
+        super::ingest::identity(&before) == expected,
+        "source_changed: re-ingest before reading dependency"
+    );
+    let bytes = range_bytes(&mut file, before.len(), offset, length)?;
+    ensure!(
+        super::ingest::identity(&file.metadata()?) == expected,
+        "source_changed: dependency changed during read"
+    );
+    Ok((bytes, before.len()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sessions_reads_capture_validated_handles_across_path_rotation() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("evidence");
+        std::fs::write(&path, b"old record\n").unwrap();
+        let item_file = File::open(&path).unwrap();
+        let dependency_file = File::open(&path).unwrap();
+        std::fs::rename(&path, directory.path().join("retired")).unwrap();
+        std::fs::write(&path, b"replacement\n").unwrap();
+        let identity = super::super::ingest::identity(&dependency_file.metadata().unwrap());
+        let reference = SourceRef {
+            path: path.to_string_lossy().into_owned(),
+            offset: 0,
+            length: 11,
+            hash: blake3::hash(b"old record\n").to_hex().to_string(),
+            pointer: "".into(),
+            images: vec![],
+            sidecars: vec![],
+        };
+        assert_eq!(item_bytes(item_file, &reference, 4, 6).unwrap(), b"record");
+        assert_eq!(
+            dependency_bytes(dependency_file, &identity, 4, 6)
+                .unwrap()
+                .0,
+            b"record"
+        );
+    }
 }
 
 use rusqlite::OptionalExtension;
