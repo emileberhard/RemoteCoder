@@ -80,7 +80,7 @@ the private [operations entrypoint](https://github.com/emileberhard/RemoteCoder-
   signed device artifact only when its source, configuration, toolchain and
   signing inputs still match.
   Automatic delivery probes the exact enrolled iPhone for at most five seconds:
-  a reachable paired phone gets a direct install and launch; otherwise the app's
+  a reachable, unlocked paired phone gets a direct install and launch; otherwise the app's
   existing managed installation receives the update when the optional delivery
   integration is configured. Explicit
   `just delivery=direct install-dev` or `just delivery=mdm install-dev` selects a

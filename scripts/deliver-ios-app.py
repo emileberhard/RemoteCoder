@@ -239,6 +239,36 @@ def direct_device(requested):
     return fields
 
 
+def passcode_locked(identifier):
+    with tempfile.TemporaryDirectory() as temporary:
+        output = Path(temporary) / "lock-state.json"
+        try:
+            result = subprocess.run(
+                [
+                    "xcrun",
+                    "devicectl",
+                    "device",
+                    "info",
+                    "lockState",
+                    "--device",
+                    identifier,
+                    "--quiet",
+                    "--timeout",
+                    "5",
+                    "--json-output",
+                    str(output),
+                ],
+                capture_output=True,
+                timeout=10,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            return None
+        if result.returncode or not output.exists():
+            return None
+        return json.loads(output.read_text()).get("result", {}).get("passcodeRequired")
+
+
 def save_direct_proof(artifact, device, enrolled, info, verified):
     if not verified.get("installed") or not verified.get("readBack"):
         raise RuntimeError("Direct delivery did not verify installation")
@@ -485,6 +515,9 @@ def automatic_route(requested):
         raise RuntimeError(
             "CoreDevice discovery selected a different iPhone than the enrolled target"
         )
+    if paired and enrolled and passcode_locked(paired[0]):
+        print("The iPhone is locked; delivering through SimpleMDM", file=sys.stderr)
+        paired = None
     return enrolled, exact_udid, paired
 
 
