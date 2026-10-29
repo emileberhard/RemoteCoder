@@ -31,6 +31,33 @@ pub(crate) fn positions(cursor: Option<&str>) -> Result<BTreeMap<String, Positio
     Ok(positions)
 }
 
+pub(crate) fn forward_read(
+    local_host: &str,
+    mut request: super::query::ReadRequest,
+) -> Result<Option<(String, Value)>> {
+    if request.local {
+        return Ok(None);
+    }
+    let mut parts = request.target.splitn(4, ':');
+    let (Some(host), Some(provider), Some(home), Some(thread)) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return Ok(None);
+    };
+    if host == local_host
+        || host.is_empty()
+        || !matches!(provider, "codex" | "claude")
+        || home.len() != 16
+        || !home.bytes().all(|b| b.is_ascii_hexdigit())
+        || thread.is_empty()
+    {
+        return Ok(None);
+    }
+    let host = host.to_owned();
+    request.local = true;
+    Ok(Some((host, serde_json::to_value(request)?)))
+}
+
 pub(crate) async fn search(
     local_host: &str,
     local: Value,

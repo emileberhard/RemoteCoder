@@ -270,6 +270,8 @@ pub(crate) struct ReadRequest {
     pub offset: u64,
     pub length: Option<usize>,
     pub dependency: Option<String>,
+    #[serde(default)]
+    pub local: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

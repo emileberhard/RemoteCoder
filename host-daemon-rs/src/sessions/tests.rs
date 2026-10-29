@@ -163,6 +163,7 @@ fn sessions_evidence_survives_append_rewrite_and_exact_paging() {
                     offset,
                     length: Some(8191),
                     dependency: None,
+                    local: true,
                 },
             )
             .unwrap();
@@ -228,6 +229,7 @@ fn sessions_evidence_survives_append_rewrite_and_exact_paging() {
                 offset: 0,
                 length: None,
                 dependency: None
+                local: true,
             }
         )
         .is_err()
@@ -326,6 +328,7 @@ fn sessions_raw_session_read_and_missing_address() {
             offset: 0,
             length: Some(4 << 20),
             dependency: None,
+            local: true,
         },
     )
     .unwrap();
@@ -342,6 +345,7 @@ fn sessions_raw_session_read_and_missing_address() {
             offset: 0,
             length: None,
             dependency: None,
+            local: true,
         },
     )
     .unwrap_err();
@@ -893,6 +897,7 @@ fn sessions_keep_owning_identity_and_binary_evidence() {
             offset: 0,
             length: Some(64),
             dependency: Some(f.sidecar.to_string_lossy().into_owned()),
+            local: true,
         },
     )
     .unwrap();
@@ -1305,6 +1310,7 @@ fn sessions_read_seeks_all_address_forms_and_rejects_ambiguous_ids() {
                 offset: 0,
                 length: Some(4 << 20),
                 dependency: None,
+                local: true,
             },
         )
     };
@@ -1522,6 +1528,7 @@ fn sessions_reconcile_repairs_a_growing_rewrite_that_preserves_both_windows() {
                 offset: 0,
                 length: None,
                 dependency: None
+                local: true,
             }
         )
         .is_err()
@@ -1829,3 +1836,48 @@ async fn sessions_cluster_retries_failed_members_instead_of_exhausting_them() {
     assert!(third["cursor"].is_null());
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 3);
 }
+
+#[test]
+fn sessions_cluster_search_hits_route_exact_reads_to_their_origin() -> Result<()> {
+    let fixture = fixture();
+    ingest::scan(&fixture.store, &fixture.origins, &AtomicBool::new(false))?;
+    let page = query::search(
+        &fixture.store.reader()?,
+        &query::Search {
+            query: "codexmiddle".into(),
+            ..Default::default()
+        },
+    )?;
+    let request = query::ReadRequest {
+        target: page["hits"][0]["itemKey"].as_str().unwrap().into(),
+        offset: 0,
+        length: Some(64),
+        dependency: None,
+        local: false,
+    };
+    let (host, forwarded) = cluster::forward_read("another-host", request.clone())?.unwrap();
+    assert_eq!(host, "fixture");
+    let forwarded: query::ReadRequest = serde_json::from_value(forwarded)?;
+    assert!(forwarded.local);
+    let bytes = query::read(&fixture.store.reader()?, forwarded.clone())?;
+    assert_eq!(bytes["offset"], 0);
+    assert_eq!(
+        base64::engine::general_purpose::STANDARD
+            .decode(bytes["base64"].as_str().unwrap())?
+            .len(),
+        64
+    );
+    assert!(cluster::forward_read("fixture", request.clone())?.is_none());
+    assert!(cluster::forward_read("another-host", forwarded)?.is_none());
+    let mut local = request;
+    local.local = true;
+    assert!(cluster::forward_read("another-host", local)?.is_none());
+    let error = anyhow::Error::new(crate::cluster::link::LinkError {
+        class: crate::wire::cluster::ErrorClass::Unavailable,
+        transmitted: false,
+        message: "origin offline".into(),
+    });
+    assert_eq!(super::error_data(&error)["class"], "unavailable");
+    Ok(())
+}
+

@@ -109,6 +109,7 @@ fn request(command: &Command) -> Result<(&'static str, Value)> {
                     offset,
                     length: Some(usize::try_from(end - offset)?),
                     dependency: dependency.clone(),
+                    local: command.local || command.database.is_some(),
                 })?,
             )
         }
