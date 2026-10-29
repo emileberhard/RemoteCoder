@@ -139,6 +139,13 @@ checkpoint and recovery publication; only then may migration reclaim legacy
 folders. Already durable imported data can exceed admission limits and remains
 charged to the destination; later new writes still use normal admission.
 
+Adopting a store by reference would add persistent path indirection and still need
+a merge when a canonical store already exists. Keeping ownership in the existing
+store handles both cases without another mapping. Invalidated imports carry only
+local records; healthy imports retain offline history without requiring a gateway
+read. Recovery has no automatic age deletion policy: its exact bytes stay protected
+and charged to the same owner.
+
 An adopted invalidation uses the existing SQLite invalidation row with a `history`
 state alongside local-only checkpoint records. That state retains submissions and
 unique local records without claiming complete history, survives local-only saves,

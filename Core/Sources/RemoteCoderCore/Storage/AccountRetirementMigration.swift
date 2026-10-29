@@ -253,12 +253,14 @@ enum AccountRetirementMigration {
             if let thread {
                 if current[thread] == nil { current[thread] = targetID }
             }
-            try await destination.adopt(restored, conversationID: targetID, threadID: thread,
-                importID: identifier("checkpoint|\(accountID)|\(id)"))
-            try JSONEncoder().encode(current).write(to: indexURL, options: .atomic)
-            progress.conversations[id] = targetID
-            try Ledger.save(progress, to: journal)
-            try await source.remove(id)
+            if incoming != nil || restored.requiresAuthoritativeHistory {
+                try await destination.adopt(restored, conversationID: targetID, threadID: thread,
+                    importID: identifier("checkpoint|\(accountID)|\(id)"))
+                try JSONEncoder().encode(current).write(to: indexURL, options: .atomic)
+                progress.conversations[id] = targetID
+                try Ledger.save(progress, to: journal)
+                try await source.remove(id)
+            }
         }
         try JSONEncoder().encode(current).write(to: indexURL, options: .atomic)
         try await destination.adoptRecovery(from: sourceDirectory, sourceID: accountID, conversationIDs: replacements)

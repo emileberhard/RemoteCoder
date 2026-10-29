@@ -47,7 +47,7 @@ actor GatewayIdentityMigration {
         let receipts = storage.directory(for: .host(gatewayID)).appending(path: "identity-imports")
         for source in sources {
             guard files.fileExists(atPath: receipts.appending(path: "\(journal.id)-\(source).complete").path) else {
-                throw MigrationFailure.incompleteImport
+                throw MigrationFailure.recovery
             }
         }
         let recordings = storage.root.appending(path: "dictation-recordings")
@@ -128,10 +128,10 @@ actor GatewayIdentityMigration {
     }
 
     enum MigrationFailure: LocalizedError {
-        case incompleteImport, retiredAccounts, verificationInProgress
+        case recovery, retiredAccounts, verificationInProgress
         var errorDescription: String? {
             switch self {
-            case .incompleteImport: "Saved conversation import has not completed for this gateway."
+            case .recovery: "Saved conversation import has not completed for this gateway."
             case .retiredAccounts: "Saved accounts must finish importing before this gateway's identity can be migrated."
             case .verificationInProgress: "Another gateway identity is being verified. Retry when it finishes."
             }

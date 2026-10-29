@@ -4,7 +4,7 @@ import Synchronization
 @testable import RemoteCoderCore
 
 @MainActor
-struct GatewayIdentityTests {
+struct GatewayIdentityTests: ConversationHistoryFixtures {
     @Test func verifiedAliasesMergeWithoutGuessingAnUnreachableHost() async throws {
         let suite = "GatewayIdentityTests.\(UUID())"
         let defaults = try #require(UserDefaults(suiteName: suite))
@@ -259,6 +259,10 @@ struct GatewayIdentityTests {
         try FileManager.default.createDirectory(at: orphan.deletingLastPathComponent(), withIntermediateDirectories: true)
         let orphanBytes = Data("Unindexed protected bytes".utf8)
         try orphanBytes.write(to: orphan)
+        try Data("Finder metadata".utf8).write(to: checkpoints.appending(path: "recovery/.DS_Store"))
+        let destinationRecovery = temporary.storage.root.appending(path: "conversations-v1/\(gateway)/recovery")
+        try FileManager.default.createDirectory(at: destinationRecovery, withIntermediateDirectories: true)
+        try Data("Finder metadata".utf8).write(to: destinationRecovery.appending(path: ".DS_Store"))
         var pending = ConversationState(conversationID: originalID, threadID: "thread")
         let message = ChatMessage(role: .user, text: "Keep the pending submission")
         pending.submit(message)
@@ -270,6 +274,7 @@ struct GatewayIdentityTests {
         let destination = ConversationCheckpointStore(hostID: gateway, storage: temporary.storage, primaryBudgetBytes: 512 * 1_024 * 1_024)
         var existing = ConversationState(conversationID: targetID, threadID: "thread")
         existing.appendLocal(ChatMessage(role: .codex, text: "Unique canonical local record"), turnID: "local")
+        existing.merge(history(items: [.agentMessage(id: "stale", text: "Previously cached history")], threadID: "thread"))
         try await destination.save(existing.checkpoint, conversationID: targetID)
         var canonical = legacy
         canonical.id = gateway
@@ -300,6 +305,7 @@ struct GatewayIdentityTests {
         let result = try await reopened.restore(targetID, threadID: "thread", generation: nil)
         #expect(result.requiresAuthoritativeHistory)
         let restored = try #require(result.checkpoint)
+        #expect(restored.historyWindow == nil)
         #expect(restored.submissions[message.id]?.message.text == message.text)
         var state = ConversationState(conversationID: targetID, threadID: "thread")
         state.restore(restored)

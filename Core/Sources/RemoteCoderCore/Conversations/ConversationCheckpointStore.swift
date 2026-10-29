@@ -430,16 +430,15 @@ actor ConversationCheckpointStore {
         let existing = try await restore(conversationID, threadID: threadID, generation: nil)
         guard existing.checkpoint?.accountImports?.contains(importID) != true else { return }
         guard incoming.checkpoint != nil || incoming.requiresAuthoritativeHistory else { return }
+        guard incoming.checkpoint != nil || existing.checkpoint != nil else { return }
         let invalidation: Invalidation? = incoming.requiresAuthoritativeHistory || existing.requiresAuthoritativeHistory ? .history : nil
         var state = ConversationState(conversationID: conversationID, threadID: threadID)
         if let checkpoint = existing.checkpoint { state.restore(checkpoint) }
         if let checkpoint = incoming.checkpoint {
-            var normalized = ConversationState(conversationID: conversationID, threadID: threadID)
-            normalized.restore(checkpoint)
-            let merged = try Self.mergingLocalRecords(normalized.checkpoint, into: state.checkpoint).checkpoint
-            state = ConversationState(conversationID: conversationID, threadID: threadID)
-            state.restore(merged)
-            state.restore(normalized.checkpoint)
+            state.restore(checkpoint)
+            if let dismissals = checkpoint.questionDismissals {
+                state.questionDismissals = dismissals.merging(state.questionDismissals ?? [:]) { _, existing in existing }
+            }
         }
         var checkpoint = invalidation == nil ? state.checkpoint : state.checkpoint.localRecords
         checkpoint.accountImports = (checkpoint.accountImports ?? []).union([importID])
@@ -453,7 +452,8 @@ actor ConversationCheckpointStore {
         let files = FileManager.default
         let incoming = source.appending(path: "recovery")
         if files.fileExists(atPath: incoming.path) {
-            for folder in try files.contentsOfDirectory(at: incoming, includingPropertiesForKeys: nil) {
+            for folder in try files.contentsOfDirectory(at: incoming, includingPropertiesForKeys: nil)
+            where folder.lastPathComponent != ".DS_Store" {
                 try Task.checkCancellation()
                 guard let originalID = UUID(uuidString: folder.lastPathComponent) else { throw CocoaError(.fileReadCorruptFile) }
                 let targetID = conversationIDs[originalID] ?? originalID
@@ -470,10 +470,12 @@ actor ConversationCheckpointStore {
         let recovery = directory.appending(path: "recovery")
         if files.fileExists(atPath: recovery.path) {
             for folder in try files.contentsOfDirectory(at: recovery, includingPropertiesForKeys: nil) {
-                guard let id = UUID(uuidString: folder.lastPathComponent) else { throw CocoaError(.fileReadCorruptFile) }
+                guard let id = UUID(uuidString: folder.lastPathComponent) else { continue }
+                let pending = try files.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)
+                    .filter { $0.lastPathComponent.hasPrefix(".pending-\(sourceID)-") }
+                guard !pending.isEmpty else { continue }
                 defer { refreshRecoveryAccounting(id) }
-                for pending in try files.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)
-                where pending.lastPathComponent.hasPrefix(".pending-\(sourceID)-") {
+                for pending in pending {
                     try Self.moveRecovery(pending, to: folder.appending(path: String(pending.lastPathComponent.dropFirst(".pending-".count))))
                 }
             }
@@ -502,8 +504,7 @@ actor ConversationCheckpointStore {
         try validate(id, generation: generation)
         do {
             if try prepareInvalidation(id) {
-                let local = records[id]?.invalidation == .history ? try storedCheckpoint(id)?.checkpoint : nil
-                return .invalidated(try mergingSubmissions(into: local, conversationID: id))
+                return .invalidated(try mergingSubmissions(into: nil, conversationID: id))
             }
             while true {
                 try validate(id, generation: generation)
@@ -586,7 +587,7 @@ actor ConversationCheckpointStore {
                 }
                 let saved = try mergingSubmissions(into: checkpoint, conversationID: id)
                 try refreshLoadedRecord(id, checkpoint: checkpoint, source: source.url)
-                return saved.map(LoadResult.checkpoint) ?? .missing
+                return records[id]?.invalidation == .history ? .invalidated(saved) : saved.map(LoadResult.checkpoint) ?? .missing
             }
         } catch {
             if generation == fences[id]?.generation {
@@ -1103,12 +1104,10 @@ actor ConversationCheckpointStore {
         catch let error as CheckpointDatabase.Failure where [SQLITE_NOTADB, SQLITE_CORRUPT, SQLITE_ERROR, SQLITE_SCHEMA].contains(error.code) { return false }
         catch let error as CocoaError where error.code == .fileReadCorruptFile { return false }
         guard let bytes = marker else { return false }
-        if try JSONDecoder().decode(Invalidation.self, from: bytes) == .history {
-            _ = try Self.decodeDatabase(inspectionDatabase(for: id).read())
-            try refreshLoadedRecord(id, checkpoint: storedCheckpoint(id)?.checkpoint, source: directory.appending(path: "\(id).sqlite"))
+        if (try? JSONDecoder().decode(Invalidation.self, from: bytes)) == .history {
             records[id]?.invalidation = .history
             records[id]?.protected = true
-            return true
+            return false
         }
         guard try inspectionDatabase(for: id).read().count == 1,
               let state = try? JSONDecoder().decode(Invalidation.self, from: bytes) else { return false }
@@ -1398,8 +1397,7 @@ actor ConversationCheckpointStore {
         let database = try CheckpointDatabase(url: file, access: .inspection)
         guard let bytes = try database.readInvalidation() else { return nil }
         let state = try JSONDecoder().decode(Invalidation.self, from: bytes)
-        if state == .history { _ = try decodeDatabase(database.read()) }
-        else if try database.read().count != 1 { throw CocoaError(.fileReadCorruptFile) }
+        if state != .history, try database.read().count != 1 { throw CocoaError(.fileReadCorruptFile) }
         return state
     }
 
