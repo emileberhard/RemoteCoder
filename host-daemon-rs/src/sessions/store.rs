@@ -26,7 +26,7 @@ impl Store {
         };
         let mut db = store.writer()?;
         let version: u32 = db.pragma_query_value(None, "user_version", |r| r.get(0))?;
-        if version != 0 && version != SCHEMA_VERSION {
+        if version != 0 && version != 4 && version != SCHEMA_VERSION {
             db.pragma_update(None, "foreign_keys", false)?;
             let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
             let objects:Vec<(String,String)>=tx.prepare("SELECT name,type FROM sqlite_schema WHERE type IN ('trigger','view','table') AND name NOT LIKE 'sqlite_%' ORDER BY CASE type WHEN 'trigger' THEN 0 WHEN 'view' THEN 1 ELSE CASE WHEN sql LIKE 'CREATE VIRTUAL TABLE%' THEN 2 ELSE 3 END END")?.query_map([],|r|Ok((r.get(0)?,r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
@@ -40,6 +40,7 @@ impl Store {
             db.pragma_update(None, "foreign_keys", true)?;
         }
         db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON; PRAGMA auto_vacuum=INCREMENTAL;")?;
+        migrate_change(&mut db)?;
         db.execute_batch(include_str!("schema.sql"))?;
         db.execute_batch(include_str!("views.sql"))?;
         db.pragma_update(None, "user_version", SCHEMA_VERSION)?;
@@ -87,7 +88,12 @@ impl Store {
                 ("UPDATE", "new", "upsert"),
                 ("DELETE", "old", "tombstone"),
             ] {
-                db.execute_batch(&format!("CREATE TRIGGER IF NOT EXISTS feed_{table}_{event} AFTER {event} ON {table} BEGIN INSERT INTO change(entity,key,op,revision) VALUES('{table}',{},'{op}',{}); END;", key.replace("{r}",row), revision.replace("{r}",row)))?;
+                let (host, path) = if matches!(table, "source" | "dependency") {
+                    (format!("{row}.origin_host"), format!("{row}.path"))
+                } else {
+                    ("NULL".into(), "NULL".into())
+                };
+                db.execute_batch(&format!("CREATE TRIGGER IF NOT EXISTS feed_{table}_{event} AFTER {event} ON {table} BEGIN INSERT INTO change(entity,key,op,revision,origin_host,evidence_path) VALUES('{table}',{},'{op}',{},{host},{path}); END;", key.replace("{r}",row), revision.replace("{r}",row)))?;
             }
         }
         use std::os::unix::fs::PermissionsExt;
@@ -141,6 +147,29 @@ impl Store {
             storage: self.storage.clone(),
         })
     }
+}
+
+fn migrate_change(db: &mut Connection) -> Result<()> {
+    let columns: std::collections::BTreeSet<String> = db
+        .prepare("PRAGMA table_info(change)")?
+        .query_map([], |row| row.get(1))?
+        .collect::<rusqlite::Result<_>>()?;
+    if columns.is_empty() || columns.contains("origin_host") && columns.contains("evidence_path") {
+        return Ok(());
+    }
+    let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    for column in ["origin_host", "evidence_path"] {
+        if !columns.contains(column) {
+            tx.execute_batch(&format!("ALTER TABLE change ADD COLUMN {column} TEXT"))?;
+        }
+    }
+    for table in ["source", "dependency"] {
+        for event in ["INSERT", "UPDATE", "DELETE"] {
+            tx.execute_batch(&format!("DROP TRIGGER IF EXISTS feed_{table}_{event}"))?;
+        }
+    }
+    tx.commit()?;
+    Ok(())
 }
 
 pub(crate) fn reader(path: &Path) -> Result<Reader> {

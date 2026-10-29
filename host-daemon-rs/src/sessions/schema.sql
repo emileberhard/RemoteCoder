@@ -64,8 +64,10 @@ CREATE TABLE IF NOT EXISTS dependency (
 CREATE TABLE IF NOT EXISTS change (
  seq INTEGER PRIMARY KEY AUTOINCREMENT, entity TEXT NOT NULL, key TEXT NOT NULL,
  op TEXT NOT NULL CHECK(op IN ('upsert','tombstone')), revision INTEGER NOT NULL,
- committed_at TEXT NOT NULL DEFAULT(strftime('%Y-%m-%dT%H:%M:%fZ','now')));
+ committed_at TEXT NOT NULL DEFAULT(strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+ origin_host TEXT, evidence_path TEXT);
 CREATE INDEX IF NOT EXISTS change_age ON change(committed_at);
+CREATE INDEX IF NOT EXISTS change_evidence ON change(origin_host,seq) WHERE evidence_path IS NOT NULL;
 CREATE TABLE IF NOT EXISTS coverage (
  origin_host TEXT PRIMARY KEY, mode TEXT NOT NULL CHECK(mode IN ('local','mirror')),
  indexed_through TEXT, complete_through TEXT, stale_reason TEXT,
@@ -81,3 +83,6 @@ CREATE INDEX IF NOT EXISTS source_failures ON source(origin_host) WHERE failure 
 CREATE INDEX IF NOT EXISTS dependency_missing ON dependency(source_id) WHERE present=0;
 
 CREATE INDEX IF NOT EXISTS source_recent ON source(origin_host,provider,provider_home,mtime_ns DESC) WHERE present=1;
+
+CREATE TABLE IF NOT EXISTS mirror_state (
+ origin_host TEXT PRIMARY KEY, cursor TEXT NOT NULL, reconciled_at INTEGER NOT NULL, projected_complete INTEGER NOT NULL CHECK(projected_complete IN (0,1)));

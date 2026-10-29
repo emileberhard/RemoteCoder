@@ -10,6 +10,7 @@ use tokio::sync::{Mutex, Semaphore};
 
 pub(super) struct Runtime {
     store: Store,
+    origins: Vec<Origin>,
     worker: Arc<Worker>,
     readers: Arc<Semaphore>,
     mirror_lock: Mutex<()>,
@@ -46,9 +47,10 @@ impl Gateway {
                 ];
                 tokio::task::spawn_blocking(move || -> Result<Arc<Runtime>> {
                     let store = Store::open(root.join("catalog.sqlite3"))?;
-                    let worker = Arc::new(Worker::start(store.clone(), origins)?);
+                    let worker = Arc::new(Worker::start(store.clone(), origins.clone())?);
                     Ok(Arc::new(Runtime {
                         store,
+                        origins,
                         worker,
                         readers: Arc::new(Semaphore::new(16)),
                         mirror_lock: Mutex::new(()),
@@ -232,6 +234,7 @@ impl Gateway {
         }
         let permit = runtime.readers.clone().acquire_owned().await?;
         let store = runtime.store.clone();
+        let origins = runtime.origins.clone();
         let method = method.to_owned();
         let request = if method == "sessions/search" {
             let mut request = serde_json::from_value::<query::Search>(params.clone())?;
@@ -274,6 +277,7 @@ impl Gateway {
                     let request:List=serde_json::from_value(params)?;
                     mirror::list(&store,&host,request.cursor)
                 }
+                "sessions/mirror/changes"=>mirror::delta(&store,&host,&origins,serde_json::from_value(params)?),
                 "sessions/mirror/fetch"=>mirror::fetch(&store,&host,serde_json::from_value(params)?),
                 _=>anyhow::bail!("unsupported: unknown sessions method"),
             }

@@ -16,16 +16,15 @@ pub(crate) fn cursor(db: &Connection) -> Result<String> {
     Ok(format!("1:{epoch}:{seq}"))
 }
 
-pub(crate) fn read(db: &super::store::Reader, request: Request) -> Result<Value> {
-    let tx = db.unchecked_transaction()?;
-    let head = cursor(&tx)?;
+pub(super) fn window(db: &Connection, requested: Option<&str>) -> Result<(String, i64, i64)> {
+    let head = cursor(db)?;
     let prefix = head.rsplit_once(':').expect("generated change cursor").0;
-    let floor: i64 = tx
+    let floor: i64 = db
         .query_row("SELECT value FROM meta WHERE key='floor'", [], |r| {
             r.get::<_, String>(0)
         })?
         .parse()?;
-    let after = match request.cursor.as_deref() {
+    let after = match requested {
         None => 0,
         Some(value) => {
             let (epoch, seq) = value.rsplit_once(':').ok_or_else(|| {
@@ -43,6 +42,13 @@ pub(crate) fn read(db: &super::store::Reader, request: Request) -> Result<Value>
         after >= floor && after <= high,
         "cursor_expired: take a SQL snapshot and use its changeCursor"
     );
+    Ok((head, after, high))
+}
+
+pub(crate) fn read(db: &super::store::Reader, request: Request) -> Result<Value> {
+    let tx = db.unchecked_transaction()?;
+    let (head, after, high) = window(&tx, request.cursor.as_deref())?;
+    let prefix = head.rsplit_once(':').expect("generated change cursor").0;
     let limit = request.limit.unwrap_or(1000);
     ensure!(
         (1..=PAGE_ROWS).contains(&limit),
