@@ -177,6 +177,7 @@ class InstallIPhoneTests(unittest.TestCase):
             patch.object(module, "load_script", return_value=DELIVERY),
             patch.object(DELIVERY, "enrolled_device", side_effect=lambda requested: self.enrolled),
             patch.object(DELIVERY, "direct_device", side_effect=lambda udid: self.paired),
+            patch.object(DELIVERY, "passcode_locked", return_value=False),
             patch.object(
                 DELIVERY,
                 "mdm_target",

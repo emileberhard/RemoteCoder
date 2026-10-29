@@ -210,6 +210,7 @@ class ArtifactDeliveryTests(unittest.TestCase):
                     "direct_device",
                     return_value=["core-id", "exact-udid", "phone"],
                 ) as probe,
+                patch.object(module, "passcode_locked", return_value=False),
                 patch.object(
                     module,
                     "direct_install",
@@ -234,6 +235,20 @@ class ArtifactDeliveryTests(unittest.TestCase):
                     )
                 probe.assert_called_once_with("exact-udid")
                 mdm.assert_not_called()
+
+    def test_auto_routes_a_locked_reachable_enrolled_phone_through_mdm(self):
+        with (
+            patch.object(module, "enrolled_device", return_value=self.device),
+            patch.object(
+                module,
+                "direct_device",
+                return_value=["core-id", "exact-udid", "phone"],
+            ),
+            patch.object(module, "passcode_locked", return_value=True) as locked,
+        ):
+            enrolled, udid, paired = module.automatic_route("named phone")
+        locked.assert_called_once_with("core-id")
+        self.assertEqual((enrolled, udid, paired), (self.device, "exact-udid", None))
 
     def test_auto_rejects_coredevice_discovery_of_another_phone(self):
         with (
