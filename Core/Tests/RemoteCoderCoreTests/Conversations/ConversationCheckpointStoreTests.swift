@@ -1692,14 +1692,16 @@ struct ConversationCheckpointStoreTests: ConversationHistoryFixtures {
         defer { try? FileManager.default.removeItem(at: directory) }
         let host = UUID()
         let id = UUID()
-        let session = await ConversationSession.make(conversationID: id, threadID: "thread",
-            checkpoints: ConversationCheckpointStore(hostID: host, directory: directory, primaryBudgetBytes: 512 * 1_024 * 1_024))
+        let source = ConversationCheckpointStore(hostID: host, directory: directory, primaryBudgetBytes: 512 * 1_024 * 1_024)
+        let generation = await source.generation(for: id)
+        var state = ConversationState(conversationID: id, threadID: "thread")
         let unknown = ChatMessage(role: .user, text: "Original unknown submission")
         let readable = ChatMessage(role: .user, text: "Readable pending submission")
-        _ = try await session.submitToQueue(unknown, input: unknown.text)
-        try await session.persistSubmission(unknown.id)
-        _ = try await session.submitToQueue(readable, input: readable.text)
-        try await session.persistSubmission(readable.id)
+        for message in [unknown, readable] {
+            state.submitToQueue(message, input: message.text)
+            try await source.saveSubmission(.init(revision: state.persistenceRevision, threadID: "thread",
+                submission: try #require(state.submissions[message.id])), conversationID: id, generation: generation)
+        }
         let record = directory.appending(path: "\(id).submissions/\(unknown.id).json")
         let corrupt = Data("unreadable submission".utf8)
         try corrupt.write(to: record)
