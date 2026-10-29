@@ -111,7 +111,7 @@ struct ConversationAgentsPlaceholder: View {
             } else {
                 ProgressView()
             }
-        } else if model.agents.isEmpty && model.warnings.isEmpty && model.error == nil && model.coverage.allSatisfy { $0.state == .ok } {
+        } else if model.agents.isEmpty && model.warnings.isEmpty && model.error == nil && model.coverage.allSatisfy({ $0.state == .ok }) {
             ContentUnavailableView("No Agents", systemImage: "person.2")
         }
     }

@@ -218,7 +218,7 @@ struct GatewayBusyStateTests {
         chat.input = "Keep going"
         #expect(await workspace.send(from: chat))
 
-        #expect(try await waitUntil { await gateway.steers == [.init(threadID: Self.claudeThread, text: "Keep going")] })
+        #expect(await waitUntil { await gateway.steers == [.init(threadID: Self.claudeThread, text: "Keep going")] })
         let steer = try #require(await gateway.requests("turn/steer").first?.objectValue)
         #expect(steer["expectedTurnId"]?.stringValue == "turn-running")
         #expect(await gateway.turnStarts.isEmpty)
