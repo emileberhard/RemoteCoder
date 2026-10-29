@@ -414,7 +414,7 @@ fn sessions_previous_schema_rebuilds_projection_and_expires_cursor() {
     f.store
         .writer()
         .unwrap()
-        .pragma_update(None, "user_version", super::SCHEMA_VERSION - 1)
+        .pragma_update(None, "user_version", 3)
         .unwrap();
     Store::open(f.store.path.clone()).unwrap();
     assert!(
@@ -2221,7 +2221,7 @@ fn sessions_mirror_feed_upgrade_preserves_v4_rows_and_epoch() -> Result<()> {
                 db.execute_batch(&format!("DROP TRIGGER feed_{table}_{event}"))?;
             }
         }
-        db.execute_batch("DROP INDEX change_evidence; ALTER TABLE change DROP COLUMN origin_host; ALTER TABLE change DROP COLUMN evidence_path;")?;
+        db.execute_batch("DROP INDEX change_evidence; ALTER TABLE change DROP COLUMN origin_host; ALTER TABLE change DROP COLUMN evidence_path; PRAGMA user_version=4;")?;
     }
     let upgraded = Store::open(f.store.path.clone())?;
     assert_eq!(changes::cursor(&upgraded.reader()?)?, cursor);

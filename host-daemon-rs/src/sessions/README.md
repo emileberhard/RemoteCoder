@@ -65,8 +65,8 @@ SQL opens a separate read-only connection with query_only, no extensions or
 attachments, a five-second progress deadline, 10,000 rows, and an 8 MiB response
 budget. Read commands use byte ranges and return base64 plus UTF-8 when valid.
 Earlier normalization-schema mismatches rebuild the projection with a new epoch.
-The mirror feed metadata upgrade adds columns and replaces its source/dependency
-triggers in place on v4, preserving accepted rows and the epoch; fresh v4 needs no
+The v4-to-v5 mirror feed metadata upgrade adds columns and replaces its source/dependency
+triggers in place, preserving accepted rows and the epoch; fresh v5 needs no
 ALTER. Provider evidence and mirrored raw files remain intact. Change cursors
 carry schema version, database epoch and monotonic sequence;
 30-day expiry requires a SQL snapshot and its changeCursor. Item and source

@@ -1972,7 +1972,7 @@ backoff. Members owns one cached immutable document per gateway; successful atom
 writes publish a new snapshot, and authentication never reloads it from disk.
 
 The sessions mirror is role-gated and feed-driven. Preserve its source/dependency
-path tombstones, per-member cursor commit fence and additive v4 metadata upgrade;
+path tombstones, per-member cursor commit fence and additive v4-to-v5 metadata upgrade;
 never replace that upgrade with a catalog rebuild. Idle ticks are O(members),
 changed batches use indexed evidence ranges, and full listing/tree reconciliation
 is limited to first sync, cursor expiry or the 600-second background cadence.
