@@ -47,7 +47,7 @@ impl ErrorClass {
         match error["code"].as_i64() {
             Some(-32600 | -32602) => Self::Usage,
             Some(-32601) => Self::Unsupported,
-            Some(-32001 | -32002 | -32003) => Self::Unavailable,
+            Some(-32003..=-32001) => Self::Unavailable,
             Some(-32009) => Self::Conflict,
             _ => Self::Refused,
         }

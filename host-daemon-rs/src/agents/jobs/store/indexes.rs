@@ -647,6 +647,12 @@ impl JobStore {
     }
 }
 
+fn unsettled_intent(intent: &crate::wire::cluster::RemoteIntent) -> bool {
+    intent.state == crate::wire::cluster::IntentState::Pending
+        || intent.state == crate::wire::cluster::IntentState::StopRequested
+            && !intent.stop_confirmed
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -699,10 +705,4 @@ mod tests {
         index.remove_agent(&agent);
         assert!(index.agent(&next).unwrap().is_none());
     }
-}
-
-fn unsettled_intent(intent: &crate::wire::cluster::RemoteIntent) -> bool {
-    intent.state == crate::wire::cluster::IntentState::Pending
-        || intent.state == crate::wire::cluster::IntentState::StopRequested
-            && !intent.stop_confirmed
 }
