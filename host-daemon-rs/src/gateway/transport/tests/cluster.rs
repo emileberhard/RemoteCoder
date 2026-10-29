@@ -54,13 +54,8 @@ async fn completed_agent(host: &TestGateway, name: &str, scope: ToolScope) -> Jo
         .bind(
             admitted.job.job_id,
             admitted.job.revision,
-            ConversationIdentity {
-                provider: Provider::Codex,
-                provider_home: ProviderHome::Known {
-                    path: host.job_codex_home().unwrap(),
-                },
-                thread_id: crate::ids::new_session_uuid(),
-            },
+            host.agent_conversation(&crate::ids::new_session_uuid())
+                .unwrap(),
             at_ms,
         )
         .await
@@ -100,7 +95,7 @@ fn dispatch(host: &str, method: &str, request: Value, caller: Value) -> Value {
 #[tokio::test]
 async fn cluster_self_dispatch_uses_local_list_read_message_and_errors() {
     let directory = tempfile::tempdir().unwrap();
-    let host = TestGateway::with_native_runtime(directory.path());
+    let host = TestGateway::with_native_runtime(&directory.path().canonicalize().unwrap());
     *host.control_init_result.lock().await = Some(json!({}));
     let job = completed_agent(&host, "self-address", ToolScope::Full).await;
     let identity = host.host_identity().await.unwrap();
@@ -183,7 +178,7 @@ async fn cluster_self_dispatch_uses_local_list_read_message_and_errors() {
 #[tokio::test]
 async fn cluster_self_dispatch_preserves_captured_read_only_caller() {
     let directory = tempfile::tempdir().unwrap();
-    let host = TestGateway::with_native_runtime(directory.path());
+    let host = TestGateway::with_native_runtime(&directory.path().canonicalize().unwrap());
     *host.control_init_result.lock().await = Some(json!({}));
     let scope = ToolScope::ReadOnly {
         root: root(&host).into(),
