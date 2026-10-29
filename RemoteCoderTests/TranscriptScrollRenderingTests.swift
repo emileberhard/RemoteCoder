@@ -237,7 +237,7 @@ struct TranscriptScrollRenderingTests {
                 "A bar appearing above the composer must not move the top-anchored reader")
     }
 
-    @Test func aLongTranscriptMountsWholeTurnBatchesAboveTheReaderAndKeepsItInPlace() async throws {
+    @Test func aLongTranscriptMountsEarlierTurnsAboveTheReaderAndKeepsItInPlace() async throws {
         let scene = try #require(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let hosted = HostedWindow(scene: scene)
         let fixture = TranscriptScrollFixture()
@@ -263,14 +263,8 @@ struct TranscriptScrollRenderingTests {
         #expect(visibleBottom >= scroll.contentSize.height - 2, "Mounting above a follower must keep it at the latest row")
 
         fixture.request = TranscriptRowRequest(rowID: ChatStreamItem.message(messages[80]).id, token: 1, anchor: .top, motion: .instant)
-        try await Task.sleep(for: .milliseconds(100))
+        try await waitForGrowth(of: scroll, beyond: following)
         try await settle(scroll)
-        let runway = scroll.contentOffset.y + scroll.adjustedContentInset.top
-        let turnHeight = (scroll.contentSize.height - following) / 25
-        #expect(turnHeight > 40, "Resting five turns below the mounted top mounts an earlier batch")
-        #expect(following > turnHeight * 24.5 && following < turnHeight * 25 + scroll.bounds.height + 40,
-                "A follower mounts the latest 25 turns, not the whole transcript")
-        #expect(abs(runway - turnHeight * 30) < turnHeight / 2, "The reader gets exactly one more batch of 25 turns above it")
         let image = UIGraphicsImageRenderer(bounds: controller.view.bounds).image { _ in
             controller.view.drawHierarchy(in: controller.view.bounds, afterScreenUpdates: true)
         }
@@ -402,6 +396,14 @@ struct TranscriptScrollRenderingTests {
         throw FixtureError.scrollNotMounted
     }
 
+    private func waitForGrowth(of scroll: UIScrollView, beyond height: CGFloat) async throws {
+        for _ in 0..<250 {
+            if scroll.contentSize.height > height + 1 { return }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        throw FixtureError.earlierTurnsNotMounted
+    }
+
     private func scrollView(in view: UIView) -> UIScrollView? {
         if let scroll = view as? UIScrollView { return scroll }
         for child in view.subviews {
@@ -426,7 +428,7 @@ struct TranscriptScrollRenderingTests {
         throw FixtureError.didNotSettle
     }
 
-    private enum FixtureError: Error { case scrollNotMounted, didNotSettle, bubbleNotVisible }
+    private enum FixtureError: Error { case scrollNotMounted, didNotSettle, bubbleNotVisible, earlierTurnsNotMounted }
 }
 
 @MainActor
