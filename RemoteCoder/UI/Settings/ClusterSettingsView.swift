@@ -17,6 +17,12 @@ struct ClusterSettingsView: View {
         return host.id
     }
     private var members: [ClusterMember] { anchor.flatMap { model.listings[$0]?.members } ?? [] }
+    private var joinableHosts: [ValidatedGatewayHost] {
+        settings.hosts.filter { host in
+            guard let anchor else { return true }
+            return host.id != anchor && !model.isMember(host.id, of: anchor)
+        }
+    }
 
     var body: some View {
         SettingsFormPage {
@@ -33,25 +39,24 @@ struct ClusterSettingsView: View {
                     AgentNote(text: failure)
                 }
             } header: { Text("Cluster") }
-            Section {
-                ForEach(settings.hosts.filter { host in
-                    guard let anchor else { return true }
-                    return host.id != anchor && !model.isMember(host.id, of: anchor)
-                }) { host in
-                    HStack {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(host.displayName)
-                            if host.configuration.gatewayID != host.id {
-                                Label("Identity unresolved", systemImage: "questionmark.circle")
-                                    .scaledFont(.caption).foregroundStyle(.secondary)
+            if !joinableHosts.isEmpty {
+                Section {
+                    ForEach(joinableHosts) { host in
+                        HStack {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(host.displayName)
+                                if host.configuration.gatewayID != host.id {
+                                    Label("Identity unresolved", systemImage: "questionmark.circle")
+                                        .scaledFont(.caption).foregroundStyle(.secondary)
+                                }
                             }
+                            Spacer()
+                            Button("Join") { operation = .join(host.id) }
+                                .disabled(host.configuration.gatewayID != host.id || anchor == nil || operation != nil)
                         }
-                        Spacer()
-                        Button("Join") { operation = .join(host.id) }
-                            .disabled(host.configuration.gatewayID != host.id || anchor == nil || operation != nil)
                     }
-                }
-            } header: { Text("Known hosts") }
+                } header: { Text("Known hosts") }
+            }
             ForEach(model.pairs.filter { !$0.complete }) { pair in
                 Section {
                     LabeledContent(name(pair.first), value: pair.firstComplete ? "Done" : "Pending")
