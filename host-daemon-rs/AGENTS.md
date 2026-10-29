@@ -1941,7 +1941,11 @@ incarnation fences job and receipt store epochs, and same-epoch backup restores
 require `cluster reset-identity`. Membership and pinned links belong to
 `cluster/`. Membership mutations require the local operator; every peer request
 rechecks the retained membership, including on existing sockets. Cluster
-credentials are journal-redacted.
+credentials are journal-redacted. Each Link connection owns its socket task and
+capacity-one request channel. The task reads continuously, evicts closed sockets,
+and resolves its pending receipt on termination. Reconnection is bounded to one
+attempt within the call deadline; possibly transmitted mutations never replay.
+RPC dispatch metadata is the authority for read-only reconnection.
 
 `agents/jobs` remains the only job, intent, fence and result owner. The execution
 driver owns native custody and local delivery; `cluster/driver.rs` owns network

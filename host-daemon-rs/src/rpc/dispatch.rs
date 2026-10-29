@@ -197,6 +197,38 @@ macro_rules! prefix_spec {
 }
 
 const METHOD_SPECS: &[MethodSpec] = &[
+    spec!("cluster/hello", Cluster, Some(RequestLifetime::Query), 0),
+    spec!("cluster/list", Cluster, Some(RequestLifetime::Query), 0),
+    spec!(
+        "agent/cluster/inventory",
+        Cluster,
+        Some(RequestLifetime::Query),
+        0
+    ),
+    spec!(
+        "agent/cluster/resolve",
+        Cluster,
+        Some(RequestLifetime::Query),
+        0
+    ),
+    spec!(
+        "agent/cluster/list",
+        Cluster,
+        Some(RequestLifetime::Query),
+        0
+    ),
+    spec!(
+        "agent/parent/read",
+        Cluster,
+        Some(RequestLifetime::Query),
+        0
+    ),
+    spec!(
+        "agent/parent/resolve",
+        Cluster,
+        Some(RequestLifetime::Query),
+        0
+    ),
     prefix_spec!("cluster/", Cluster, Some(RequestLifetime::Command)),
     prefix_spec!("agent/cluster/", Cluster, Some(RequestLifetime::Command)),
     prefix_spec!("agent/parent/", Cluster, Some(RequestLifetime::Command)),

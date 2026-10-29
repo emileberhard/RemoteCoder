@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use anyhow::{Context, Result, ensure};
@@ -69,10 +69,8 @@ pub(crate) struct MemberView {
     pub routes: Vec<String>,
 }
 
-struct Connection {
-    socket: Socket,
-    hello: HelloReceipt,
-}
+mod connection;
+use connection::Connection;
 
 pub(crate) struct Link {
     pub(crate) store: Arc<Members>,
@@ -244,111 +242,128 @@ impl Link {
                 .or_default()
                 .clone()
         };
-        let mut slot = tokio::time::timeout(Duration::from_secs(10), slot.lock())
+        let mut cached = tokio::time::timeout(Duration::from_secs(10), slot.lock())
             .await
             .map_err(|_| LinkError {
                 class: ErrorClass::Unavailable,
                 transmitted: false,
                 message: "member connection is busy".into(),
             })?;
-        let previous = slot.take();
-        let mut transmitted = false;
-        let result = tokio::time::timeout(Duration::from_secs(10), async {
-            let mut connection = match previous {
-                Some(connection) => connection,
-                None => self.connect(&record).await?,
-            };
-            ensure!(
-                connection.hello.host == record.host,
-                "member returned another host identity"
-            );
-            let capability = if method.starts_with("sessions/") {
-                "sessions.v1"
-            } else if method.starts_with("agent/parent/") {
-                "agent.parent.v1"
-            } else if method.starts_with("agent/") {
-                "agent.jobs.v1"
-            } else {
-                "cluster.v1"
-            };
-            if !connection
-                .hello
-                .capabilities
-                .iter()
-                .any(|value| value == capability)
-            {
-                return Err(anyhow::anyhow!(LinkError {
-                    class: ErrorClass::Unsupported,
-                    transmitted: false,
-                    message: format!("member lacks {capability}")
-                }));
-            }
-            let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-            let request = crate::wire::json::encode(
-                &json!({"jsonrpc":"2.0","id":id,"method":method,"params":params}),
-            )?;
-            let crate::wire::json::EncodedJson::Text(request) = request else {
-                anyhow::bail!("member request exceeds frame capacity");
-            };
-            transmitted = true;
-            connection.socket.send(Message::Text(request)).await?;
-            let result = response(&mut connection.socket, id).await?;
-            if method == "cluster/hello" {
-                let hello: HelloReceipt = serde_json::from_value(result.clone())?;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        let spec = crate::rpc::dispatch::method_spec(method);
+        let read_only = matches!(
+            spec.lifetime.or(spec.claude.map(|claude| claude.lifetime)),
+            Some(
+                crate::rpc::dispatch::RequestLifetime::Query
+                    | crate::rpc::dispatch::RequestLifetime::Status
+            )
+        );
+        let mut any_transmitted = false;
+        for attempt in 0..2 {
+            let previous = cached.take().filter(Connection::is_alive);
+            let transmitted = Arc::new(AtomicBool::new(false));
+            let result = tokio::time::timeout_at(deadline, async {
+                let mut connection = match previous {
+                    Some(connection) => connection,
+                    None => self.connect(&record, &slot).await?,
+                };
                 ensure!(
-                    hello.host == record.host && hello.protocol == PROTOCOL,
-                    "member hello identity changed"
+                    connection.hello.host == record.host,
+                    "member returned another host identity"
                 );
-                self.observe(&record, &hello).await;
-                connection.hello = hello;
-            }
-            *slot = Some(connection);
-            Ok(result)
-        })
-        .await;
-        let result = match result {
-            Ok(Ok(value)) => Ok(value),
-            Ok(Err(error)) => {
-                if let Some(evidence) = error.downcast_ref::<super::members::MembershipRemoved>() {
-                    self.confirm_removed(&record, evidence)
-                        .await
-                        .map_err(|error| LinkError {
-                            class: ErrorClass::Unavailable,
-                            transmitted,
-                            message: error.to_string(),
-                        })?;
-                    return Err(LinkError {
-                        class: ErrorClass::Refused,
-                        transmitted,
-                        message: error.to_string(),
-                    });
-                }
-                Err(error
-                    .downcast::<LinkError>()
-                    .unwrap_or_else(|error| LinkError {
-                        class: if transmitted {
-                            ErrorClass::Uncertain
-                        } else {
-                            ErrorClass::Unavailable
-                        },
-                        transmitted,
-                        message: error.to_string(),
-                    }))
-            }
-            Err(_) => Err(LinkError {
-                class: if transmitted {
-                    ErrorClass::Uncertain
+                let capability = if method.starts_with("sessions/") {
+                    "sessions.v1"
+                } else if method.starts_with("agent/parent/") {
+                    "agent.parent.v1"
+                } else if method.starts_with("agent/") {
+                    "agent.jobs.v1"
                 } else {
-                    ErrorClass::Unavailable
-                },
-                transmitted,
-                message: "member request deadline exceeded".into(),
-            }),
-        };
-        if let Err(error) = &result {
-            self.observe_failure(&record, error).await;
+                    "cluster.v1"
+                };
+                if !connection
+                    .hello
+                    .capabilities
+                    .iter()
+                    .any(|value| value == capability)
+                {
+                    return Err(anyhow::anyhow!(LinkError {
+                        class: ErrorClass::Unsupported,
+                        transmitted: false,
+                        message: format!("member lacks {capability}")
+                    }));
+                }
+                let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+                let request = crate::wire::json::encode(
+                    &json!({"jsonrpc":"2.0","id":id,"method":method,"params":params}),
+                )?;
+                let crate::wire::json::EncodedJson::Text(request) = request else {
+                    return Err(LinkError {
+                        class: ErrorClass::Usage,
+                        transmitted: false,
+                        message: "member request exceeds frame capacity".into(),
+                    }
+                    .into());
+                };
+                let result = connection.request(id, request, transmitted.clone()).await?;
+                if method == "cluster/hello" {
+                    let hello: HelloReceipt = serde_json::from_value(result.clone())?;
+                    ensure!(
+                        hello.host == record.host && hello.protocol == PROTOCOL,
+                        "member hello identity changed"
+                    );
+                    self.observe(&record, &hello).await;
+                    connection.hello = hello;
+                }
+                if connection.is_alive() {
+                    *cached = Some(connection);
+                }
+                Ok(result)
+            })
+            .await;
+            any_transmitted |= transmitted.load(Ordering::Acquire);
+            let error = match result {
+                Ok(Ok(value)) => return Ok(value),
+                Ok(Err(error)) => error,
+                Err(_) => anyhow::anyhow!("member request deadline exceeded"),
+            };
+            if let Some(evidence) = error.downcast_ref::<super::members::MembershipRemoved>() {
+                self.confirm_removed(&record, evidence)
+                    .await
+                    .map_err(|error| LinkError {
+                        class: ErrorClass::Unavailable,
+                        transmitted: any_transmitted,
+                        message: error.to_string(),
+                    })?;
+                return Err(LinkError {
+                    class: ErrorClass::Refused,
+                    transmitted: any_transmitted,
+                    message: error.to_string(),
+                });
+            }
+            let transport_failure = error.downcast_ref::<LinkError>().is_none();
+            let mut error = error
+                .downcast::<LinkError>()
+                .unwrap_or_else(|error| LinkError {
+                    class: if any_transmitted {
+                        ErrorClass::Uncertain
+                    } else {
+                        ErrorClass::Unavailable
+                    },
+                    transmitted: any_transmitted,
+                    message: error.to_string(),
+                });
+            error.transmitted |= any_transmitted;
+            if attempt == 0
+                && transport_failure
+                && (!error.transmitted || read_only)
+                && tokio::time::Instant::now() < deadline
+            {
+                continue;
+            }
+            self.observe_failure(&record, &error).await;
+            return Err(error);
         }
-        result
+        unreachable!("member call has at most two attempts")
     }
 
     pub(crate) async fn update_identity(&self, identity: HostIdentity) {
@@ -380,7 +395,11 @@ impl Link {
         Ok(())
     }
 
-    async fn connect(&self, record: &MemberRecord) -> Result<Connection> {
+    async fn connect(
+        &self,
+        record: &MemberRecord,
+        slot: &Arc<Mutex<Option<Connection>>>,
+    ) -> Result<Connection> {
         let identity = self.identity.read().await.clone();
         let token = record
             .credential
@@ -442,7 +461,7 @@ impl Link {
                         .into());
                     }
                     self.observe(record, &hello).await;
-                    return Ok(Connection { socket, hello });
+                    return Ok(Connection::new(socket, hello, Arc::downgrade(slot)));
                 }
                 Ok(Err(tokio_tungstenite::tungstenite::Error::Http(response))) => {
                     let headers = response.headers();
@@ -560,34 +579,7 @@ async fn response(socket: &mut Socket, id: u64) -> Result<Value> {
             Message::Text(text) => {
                 let response: Value = serde_json::from_str(&text)?;
                 if response["id"].as_u64() == Some(id) {
-                    if let Some(error) = response.get("error") {
-                        if error["data"]["kind"] == "membership_removed"
-                            && let (Some(host), Some(membership)) = (
-                                error["data"]["host"].as_str(),
-                                error["data"]["membership"].as_str(),
-                            )
-                        {
-                            return Err(super::members::MembershipRemoved {
-                                host: host.into(),
-                                membership: membership.into(),
-                            }
-                            .into());
-                        }
-                        let class = ErrorClass::from_rpc(error);
-                        return Err(LinkError {
-                            class,
-                            transmitted: true,
-                            message: error["message"]
-                                .as_str()
-                                .unwrap_or("member refused request")
-                                .to_owned(),
-                        }
-                        .into());
-                    }
-                    return response
-                        .get("result")
-                        .cloned()
-                        .context("member returned no result");
+                    return receipt(response);
                 }
             }
             Message::Ping(value) => socket.send(Message::Pong(value)).await?,
@@ -597,6 +589,39 @@ async fn response(socket: &mut Socket, id: u64) -> Result<Value> {
     }
     anyhow::bail!("member closed before its receipt")
 }
+
+fn receipt(response: Value) -> Result<Value> {
+    if let Some(error) = response.get("error") {
+        if error["data"]["kind"] == "membership_removed"
+            && let (Some(host), Some(membership)) = (
+                error["data"]["host"].as_str(),
+                error["data"]["membership"].as_str(),
+            )
+        {
+            return Err(super::members::MembershipRemoved {
+                host: host.into(),
+                membership: membership.into(),
+            }
+            .into());
+        }
+        return Err(LinkError {
+            class: ErrorClass::from_rpc(error),
+            transmitted: true,
+            message: error["message"]
+                .as_str()
+                .unwrap_or("member refused request")
+                .to_owned(),
+        }
+        .into());
+    }
+    response
+        .get("result")
+        .cloned()
+        .context("member returned no result")
+}
+
+#[cfg(test)]
+mod reconnect_tests;
 
 #[cfg(test)]
 mod tests {
@@ -667,10 +692,9 @@ mod tests {
                 active_agents: 0,
             },
         };
-        link.connections.lock().await.insert(
-            membership,
-            Arc::new(Mutex::new(Some(Connection { socket, hello }))),
-        );
+        let slot = Arc::new(Mutex::new(None));
+        *slot.lock().await = Some(Connection::new(socket, hello, Arc::downgrade(&slot)));
+        link.connections.lock().await.insert(membership, slot);
         let error = link
             .call(&host, "agent/jobs/admit", json!({}))
             .await
@@ -764,10 +788,12 @@ mod tests {
                     active_agents: 0,
                 },
             };
-            link.connections.lock().await.insert(
-                membership.clone(),
-                Arc::new(Mutex::new(Some(Connection { socket, hello }))),
-            );
+            let slot = Arc::new(Mutex::new(None));
+            *slot.lock().await = Some(Connection::new(socket, hello, Arc::downgrade(&slot)));
+            link.connections
+                .lock()
+                .await
+                .insert(membership.clone(), slot);
             let error = link
                 .call(&host, "cluster/removed", json!({}))
                 .await

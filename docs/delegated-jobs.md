@@ -315,7 +315,13 @@ Other modules use `Gateway::cluster_link().await` to obtain an `Arc<Link>`.
 (serialized as `hostId`), and `name` is its alias. `Link::call(host, method,
 params).await` uses one pooled, pinned TLS connection per membership. A
 `LinkError` retains `class` and `transmitted`; only `transmitted == false`
-proves that the requested method was never sent. `Gateway::host_identity().await`
+proves that the requested method was never handed to the socket owner. Each
+connection owns a continuous reader and a capacity-one request channel; close,
+EOF or an error evicts its cached socket and resolves pending receipts. A transport
+failure reconnects once within the same ten-second deadline if nothing could
+have been transmitted, or if the RPC metadata classifies the method as a query
+or status read. A possibly transmitted mutation is never replayed by Link.
+`Gateway::host_identity().await`
 returns `HostIdentity {host_id, incarnation}`.
 
 `cluster/list` returns `self {hostId,name,incarnation,version,protocol}` and
