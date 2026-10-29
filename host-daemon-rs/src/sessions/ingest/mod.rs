@@ -632,12 +632,13 @@ fn ingest_source(
     for companion in companions {
         let metadata = std::fs::metadata(&companion)?;
         tx.execute(
-            "INSERT OR IGNORE INTO dependency VALUES(?1,?2,?3,'companion',?4,1)",
+            "INSERT OR IGNORE INTO dependency(source_id,path,local_path,kind,identity,present,origin_host) VALUES(?1,?2,?3,'companion',?4,1,?5)",
             params![
                 source,
                 origin.original(&companion)?.to_string_lossy(),
                 companion.to_string_lossy(),
-                identity(&metadata)
+                identity(&metadata),
+                origin.host
             ],
         )?;
     }
