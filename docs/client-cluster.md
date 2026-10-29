@@ -56,9 +56,8 @@ both sides. Remove journals every exact edge found in cluster listings, includin
 peers without app configurations. A pending acknowledgement retains Retry until
 that half completes. A later Join gets a new membership ID. Credentials remain transient;
 only pair IDs, progress, and errors enter preferences. Missing host configurations
-and installation-only connections remain visible as pending pairs with the
-connection required to retry. Installation credentials
-can read cluster status but cannot mutate membership.
+remain visible as pending pairs with the connection required to retry. Operator
+and installation credentials both manage membership; peer gateways cannot.
 
 The Settings Cluster page, child menus, sidebar menus and placement picker share
 these owners. Menus send `agent/parent/set` to the exact owner's gateway. On

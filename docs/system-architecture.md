@@ -387,7 +387,7 @@ owner rather than the sidebar selection. Log export follows the visible host.
 
 A host's configured address is usually its tailnet address. When the gateway
 sets `RC_CODEX_GATEWAY_LAN_PORT`, it also serves the same routes over TLS 1.3 on
-`0.0.0.0`, with a persisted P-256 key and a certificate for its
+every IPv6 and IPv4 address, with a persisted P-256 key and a certificate for its
 `<LocalHostName>.local` name (see `host-daemon-rs/README.md`, *LAN TLS
 listener*). Its authorized `/health` publishes that listener as
 `lanEndpoint: {host, port, spkiSha256}`, or `null` when it is not serving.

@@ -100,8 +100,8 @@ scoped receipt reads require the exact sender conversation.
   `POST /credentials/enroll` is operator-only (`docs/owned-operations.md`).
   Token values never appear in logs or source.
 - With `RC_CODEX_GATEWAY_LAN_PORT` set, every route is also served over pinned
-  TLS 1.3 on `0.0.0.0` and published as `lanEndpoint` in the authorized
-  `/health`. The app's `GatewayRoutes` tries it first on Wi-Fi or Ethernet
+  TLS 1.3 on every IPv6 and IPv4 address and published as `lanEndpoint` in the
+  authorized `/health`. The app's `GatewayRoutes` tries it first on Wi-Fi or Ethernet
   (`docs/system-architecture.md`, *LAN route*). With
   `~/.remote-coder/relay/relay.json` present, the authorized, uncached
   `GET /relay` publishes the route through the relay to that listener
@@ -1939,8 +1939,8 @@ no-replay boundary. Keep this policy in the gateway rather than client retries.
 Cluster identity belongs to `identity.rs`: the host UUID is stable, the ledger
 incarnation fences job and receipt store epochs, and same-epoch backup restores
 require `cluster reset-identity`. Membership and pinned links belong to
-`cluster/`. Membership mutations require the local operator; every peer request
-rechecks the retained membership, including on existing sockets. Cluster
+`cluster/`. Membership mutations require a local client, never a peer; every
+peer request rechecks the retained membership, including on existing sockets. Cluster
 credentials are journal-redacted. Each Link connection owns its socket task and
 capacity-one request channel. The task reads continuously, evicts closed sockets,
 and resolves its pending receipt on termination. Reconnection is bounded to one

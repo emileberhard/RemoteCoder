@@ -1,4 +1,4 @@
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::{Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -7,7 +7,7 @@ use axum::Router;
 use hyper_util::rt::{TokioIo, TokioTimer};
 use hyper_util::service::TowerToHyperService;
 use serde::Serialize;
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::{TcpListener, TcpSocket, TcpStream};
 use tokio::sync::Semaphore;
 use tokio_rustls::TlsAcceptor;
 use tokio_util::sync::CancellationToken;
@@ -41,9 +41,8 @@ impl LanListener {
         })
         .await
         .context("LAN TLS identity task failed")??;
-        let listener = TcpListener::bind((Ipv4Addr::UNSPECIFIED, port))
-            .await
-            .with_context(|| format!("failed to bind 0.0.0.0:{port}"))?;
+        let listener =
+            bind_dual_stack(port).with_context(|| format!("failed to bind [::]:{port}"))?;
         Ok(Self {
             listener,
             acceptor: identity.acceptor,
@@ -58,6 +57,14 @@ impl LanListener {
     pub(crate) fn endpoint(&self) -> &LanEndpoint {
         &self.endpoint
     }
+}
+
+fn bind_dual_stack(port: u16) -> std::io::Result<TcpListener> {
+    let socket = TcpSocket::new_v6()?;
+    nix::sys::socket::setsockopt(&socket, nix::sys::socket::sockopt::Ipv6V6Only, &false)?;
+    socket.set_reuseaddr(true)?;
+    socket.bind(SocketAddr::from((Ipv6Addr::UNSPECIFIED, port)))?;
+    socket.listen(128)
 }
 
 pub(super) async fn serve_lan(
@@ -156,5 +163,22 @@ async fn serve_lan_connection(
     };
     if let Err(error) = served {
         debug!(%peer, %error, "LAN connection ended with an error");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn the_lan_listener_accepts_ipv6_and_ipv4_peers() {
+        let listener = bind_dual_stack(0).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        for address in [
+            SocketAddr::from((Ipv6Addr::LOCALHOST, port)),
+            SocketAddr::from(([127, 0, 0, 1], port)),
+        ] {
+            tokio::try_join!(TcpStream::connect(address), listener.accept()).unwrap();
+        }
     }
 }

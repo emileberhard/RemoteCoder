@@ -172,7 +172,7 @@ async fn ssh(host: &str, args: &[&str], input: Option<Value>) -> Result<Value> {
         format!("'{}'", value.replace('\'', "'\\''"))
     }
     let remote = format!(
-        "remote-coder-codex-gateway agent cluster {}",
+        "\"$HOME/localbin/remote-coder-gateway/remote-coder-codex-gateway\" agent cluster {}",
         args.iter()
             .map(|value| quote(value))
             .collect::<Vec<_>>()

@@ -1,5 +1,6 @@
 use super::harness::{HOST, LanHarness, OPERATOR};
 use crate::agents::jobs::model::*;
+use crate::auth::installation_credentials::Enrollment;
 use crate::wire::cluster::*;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
@@ -49,7 +50,19 @@ async fn request(socket: &mut Socket, method: &str, params: Value) -> Value {
 }
 
 async fn rpc(host: &LanHarness, method: &str, params: Value) -> Value {
-    let mut socket = connect(host, OPERATOR).await;
+    let installation = host
+        .state
+        .installation_credentials
+        .enroll(
+            Enrollment {
+                installation_id: "app".into(),
+                label: "App".into(),
+            },
+            OPERATOR,
+        )
+        .await
+        .unwrap();
+    let mut socket = connect(host, &installation).await;
     let response = request(&mut socket, method, params).await;
     socket.close(None).await.unwrap();
     assert!(response.get("error").is_none(), "{}", response["error"]);

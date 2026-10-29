@@ -409,7 +409,7 @@ root. Parent changes invalidate ancestry and agent-view caches. Remote-intent
 stub rows use `lastActiveAt` in epoch seconds, matching real rows, and every
 conversation-agent page carries a revision derived from its final rows.
 
-`cluster add SSH_HOST` enrolls every pair through each host's operator SSH route,
+`cluster add SSH_HOST` enrolls every pair over SSH through each host's installed gateway,
 skips active pairs and reports per-pair JSON. Partial enrollment exits 5;
 rerunning finishes existing membership IDs. Peer credentials cannot issue or
 accept another membership. `cluster list --json` reports reachability, version,
