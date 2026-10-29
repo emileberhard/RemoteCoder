@@ -365,7 +365,7 @@ async fn cluster_intent_claim_rechecks_closed_state_after_a_queued_attempt() {
     let _second = second.await.unwrap();
     assert!(
         store
-            .begin_intent_attempt(id)
+            .begin_intent_attempt(id.clone())
             .await
             .unwrap_err()
             .to_string()
