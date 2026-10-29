@@ -28,7 +28,7 @@ struct GatewayConnectionEventTests {
         await server.stop()
     }
 
-    @Test(.timeLimit(.minutes(1))) func aFailedConnectAttemptReportsNothing() async throws {
+    @Test(.timeLimit(.minutes(1))) func aFailedConnectAttemptReportsUnreachableOnce() async throws {
         let gateway = GatewayClient(config: .init(url: try #require(URL(string: "ws://127.0.0.1:1")), authToken: "test", hostLabel: "test"),
                                          routes: nil)
         var events = await gateway.connectionEvents().makeAsyncIterator()
@@ -36,6 +36,7 @@ struct GatewayConnectionEventTests {
         await #expect(throws: (any Error).self) { try await gateway.connectIfNeeded() }
         await gateway.retire()
 
+        #expect(await events.next() == .unreachable)
         #expect(await events.next() == nil)
     }
 }

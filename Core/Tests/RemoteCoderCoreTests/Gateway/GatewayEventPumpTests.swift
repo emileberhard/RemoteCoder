@@ -153,7 +153,7 @@ struct GatewayEventPumpTests {
             try #require(sink.connectivity.last == .connected(.configured))
             await socket.closeBeforeReady()
             await socket.closeConnections(code: .protocolCode(.internalServerError))
-            try #require(await waitUntil { sink.connectivity.last?.route == nil })
+            try #require(await waitUntil { sink.connectivity.last == .unreachable })
 
             let before = await socket.acceptedConnections
             let started = ContinuousClock.now
@@ -162,7 +162,10 @@ struct GatewayEventPumpTests {
             #expect(await socket.acceptedConnections - before <= 3)
 
             await socket.admitConnections()
-            #expect(await waitUntil(timeout: .seconds(20)) { sink.connectivity.last == .connected(.configured) })
+            try #require(await waitUntil(timeout: .seconds(20)) { sink.connectivity.last == .connected(.configured) })
+            var events = await client.connectionEvents().makeAsyncIterator()
+            await client.disconnect()
+            #expect(await events.next() == .disconnected)
         }
     }
 
