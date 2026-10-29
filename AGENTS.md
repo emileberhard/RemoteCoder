@@ -196,6 +196,11 @@ A release is one annotated stable `X.Y.Z` tag (each part 0–999, no leading zer
 on pushed `main` and higher than every stable tag. The tag is every artifact's
 marketing version. Tags are immutable; fixes use the next patch.
 
+Project and Core package compiler warnings are errors in local builds and CI; fix
+the cause, and use a narrowly scoped `@diagnose(..., as: ignored, reason: "...")`
+only when a justified exception cannot be removed. CI compiles Debug and Release
+before a tag can reach the archive lane.
+
 Public hosted CI compiles both apps, their extensions, hosted tests and the Mac
 performance harness, runs the existing logic/tooling/gateway checks and targeted
 hosted rendering/history suites. Release admission waits for that exact main CI

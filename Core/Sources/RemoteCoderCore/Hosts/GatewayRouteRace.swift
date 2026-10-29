@@ -1,3 +1,4 @@
+#warning("Temporary compiler warning enforcement probe")
 import Foundation
 
 struct GatewayRouteRace<Route: Sendable, Connection: Sendable> {
@@ -30,7 +31,7 @@ struct GatewayRouteRace<Route: Sendable, Connection: Sendable> {
                     do { return .finished(index, .success(try await attempt(candidate.route))) }
                     catch { return .finished(index, .failure(error)) }
                 }), launched < candidates.count else { return }
-                group.addTaskUnlessCancelled {
+                _ = group.addTaskUnlessCancelled {
                     try? await Task.sleep(for: candidate.headStart)
                     return .headStartElapsed(index)
                 }
