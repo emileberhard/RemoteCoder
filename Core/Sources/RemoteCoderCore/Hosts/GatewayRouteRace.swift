@@ -1,4 +1,3 @@
-#warning("Temporary compiler warning enforcement probe")
 import Foundation
 
 struct GatewayRouteRace<Route: Sendable, Connection: Sendable> {
