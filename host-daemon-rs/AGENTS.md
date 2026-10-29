@@ -1970,3 +1970,9 @@ network driver consumes coalesced member-specific watches, never global history
 scans. A delivery retry receipt alone must not wake its own worker and bypass
 backoff. Members owns one cached immutable document per gateway; successful atomic
 writes publish a new snapshot, and authentication never reloads it from disk.
+
+The sessions mirror is role-gated and feed-driven. Preserve its source/dependency
+path tombstones, per-member cursor commit fence and additive v4-to-v5 metadata upgrade;
+never replace that upgrade with a catalog rebuild. Idle ticks are O(members),
+changed batches use indexed evidence ranges, and full listing/tree reconciliation
+is limited to first sync, cursor expiry or the 600-second background cadence.

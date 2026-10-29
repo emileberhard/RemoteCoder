@@ -64,8 +64,10 @@ addresses remain not_found; multiple canonical keys remain ambiguous usage.
 SQL opens a separate read-only connection with query_only, no extensions or
 attachments, a five-second progress deadline, 10,000 rows, and an 8 MiB response
 budget. Read commands use byte ranges and return base64 plus UTF-8 when valid.
-A catalog-version mismatch drops the rebuildable projection and creates a new
-epoch; provider evidence and mirrored raw files remain intact. Change cursors
+Earlier normalization-schema mismatches rebuild the projection with a new epoch.
+The v4-to-v5 mirror feed metadata upgrade adds columns and replaces its source/dependency
+triggers in place, preserving accepted rows and the epoch; fresh v5 needs no
+ALTER. Provider evidence and mirrored raw files remain intact. Change cursors
 carry schema version, database epoch and monotonic sequence;
 30-day expiry requires a SQL snapshot and its changeCursor. Item and source
 updates and their feed records share a transaction. Retention never deletes raw
@@ -137,3 +139,23 @@ still visit every matching posting; common since queries terminate once the page
 fills. Cluster cursors retain failed or unqueried members for retry rather than
 marking them exhausted. Feed pruning seeks expired entries through change_age;
 a catalog with no expired entries does not scan the feed during restart.
+
+
+The private mirror role uses a per-member change cursor. Source and dependency
+feed triggers retain origin/path metadata for upserts and tombstones while the
+generic change-feed keys remain unchanged. `sessions/mirror/changes` seeks the
+partial origin/sequence index, reads at most 500 evidence events plus one
+lookahead, deduplicates their paths and stats only affected evidence. An empty
+page performs no raw-file work. A missing provider root refuses changed batches
+instead of proving deletion.
+
+The mirror persists its cursor only after transfers, deletions and projection
+ingest finish. The same transfer path handles full and incremental pages. First
+sync and cursor expiry use the paged full listing, capturing a feed cursor before
+the first page so concurrent changes are replayed. Full listings and whole-tree
+reconciliation otherwise run no more often than once per 600 seconds. Unchanged
+ticks make one bounded feed request per member and write no catalog state.
+Changed paths and full manifests are capped at 100,000, provider homes at 1,024;
+overflow refuses the batch without advancing the cursor. The projection's last
+completion state is retained separately from origin coverage so idle ticks do not
+rescan history to recover it. The role remains off by default.

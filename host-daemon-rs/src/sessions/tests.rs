@@ -414,7 +414,7 @@ fn sessions_previous_schema_rebuilds_projection_and_expires_cursor() {
     f.store
         .writer()
         .unwrap()
-        .pragma_update(None, "user_version", super::SCHEMA_VERSION - 1)
+        .pragma_update(None, "user_version", 3)
         .unwrap();
     Store::open(f.store.path.clone()).unwrap();
     assert!(
@@ -539,8 +539,10 @@ async fn sessions_mirror_preserves_sidecars_and_refuses_over_budget() {
     let destination = tempfile::tempdir().unwrap();
     let target = Store::open(destination.path().join("state/catalog.sqlite3")).unwrap();
     let peer = f.store.clone();
+    let origins = f.origins.clone();
     let call: mirror::Call = Arc::new(move |method: &'static str, params: Value| {
         let peer = peer.clone();
+        let origins = origins.clone();
         async move {
             match method {
                 "sessions/mirror/list" => mirror::list(
@@ -550,6 +552,9 @@ async fn sessions_mirror_preserves_sidecars_and_refuses_over_budget() {
                 ),
                 "sessions/mirror/fetch" => {
                     mirror::fetch(&peer, "fixture", serde_json::from_value(params)?)
+                }
+                "sessions/mirror/changes" => {
+                    mirror::delta(&peer, "fixture", &origins, serde_json::from_value(params)?)
                 }
                 _ => anyhow::bail!("Unexpected member method"),
             }
@@ -1971,6 +1976,277 @@ fn sessions_search_uses_descending_fts_order_and_exact_dates() -> Result<()> {
             .as_array()
             .unwrap()
             .is_empty()
+    );
+    Ok(())
+}
+
+fn mirror_peer(
+    f: &Fixture,
+    calls: Arc<std::sync::Mutex<Vec<String>>>,
+    fail: Arc<AtomicBool>,
+) -> mirror::Call {
+    let peer = f.store.clone();
+    let origins = f.origins.clone();
+    Arc::new(move |method, params| {
+        let peer = peer.clone();
+        let origins = origins.clone();
+        let calls = calls.clone();
+        let fail = fail.clone();
+        async move {
+            calls.lock().unwrap().push(method.to_owned());
+            match method {
+                "sessions/mirror/list" => mirror::list(
+                    &peer,
+                    "fixture",
+                    params["cursor"].as_str().map(str::to_owned),
+                ),
+                "sessions/mirror/changes" => {
+                    mirror::delta(&peer, "fixture", &origins, serde_json::from_value(params)?)
+                }
+                "sessions/mirror/fetch" => {
+                    anyhow::ensure!(
+                        !fail.load(std::sync::atomic::Ordering::Acquire),
+                        "unavailable: injected transfer failure"
+                    );
+                    mirror::fetch(&peer, "fixture", serde_json::from_value(params)?)
+                }
+                _ => anyhow::bail!("Unexpected member method"),
+            }
+        }
+        .boxed()
+    })
+}
+
+async fn sync_mirror(target: &Store, call: mirror::Call) -> Result<Value> {
+    mirror::sync(
+        target,
+        "fixture",
+        call,
+        tokio_util::sync::CancellationToken::new(),
+    )
+    .await
+}
+
+fn mirror_cursor(target: &Store) -> String {
+    target
+        .reader()
+        .unwrap()
+        .query_row(
+            "SELECT cursor FROM mirror_state WHERE origin_host='fixture'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap()
+}
+
+#[tokio::test]
+async fn sessions_mirror_idle_uses_only_feed_and_defers_full_tree_reconciliation() -> Result<()> {
+    let f = fixture();
+    scan(&f);
+    let directory = tempfile::tempdir()?;
+    let target = Store::open(directory.path().join("state/catalog.sqlite3"))?;
+    let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let call = mirror_peer(&f, calls.clone(), Arc::new(AtomicBool::new(false)));
+    assert_eq!(sync_mirror(&target, call.clone()).await?["full"], true);
+    calls.lock().unwrap().clear();
+    let origin_reader = f.store.reader()?;
+    let target_reader = target.reader()?;
+    let before = target.path.metadata()?.modified()?;
+    let orphan = directory
+        .path()
+        .join("state/mirror")
+        .join(blake3::hash(b"fixture").to_hex().as_str())
+        .join("orphan");
+    std::fs::write(&orphan, b"orphan")?;
+    let cursor = mirror_cursor(&target);
+    let idle = sync_mirror(&target, call.clone()).await?;
+    assert_eq!(idle["files"], 0);
+    assert_eq!(idle["full"], false);
+    assert_eq!(*calls.lock().unwrap(), vec!["sessions/mirror/changes"]);
+    assert_eq!(mirror_cursor(&target), cursor);
+    assert_eq!(target.path.metadata()?.modified()?, before);
+    assert!(orphan.is_file());
+    drop(target_reader);
+    drop(origin_reader);
+    target
+        .writer()?
+        .execute("UPDATE mirror_state SET reconciled_at=0", [])?;
+    assert_eq!(sync_mirror(&target, call).await?["full"], true);
+    assert!(!orphan.exists());
+    let plan: Vec<String> = f
+        .store
+        .reader()?
+        .prepare(&format!("EXPLAIN QUERY PLAN {}", mirror::DELTA_SQL))?
+        .query_map(rusqlite::params!["fixture", 0], |r| r.get(3))?
+        .collect::<rusqlite::Result<_>>()?;
+    assert!(
+        plan.iter()
+            .any(|p| p.contains("USING INDEX change_evidence (origin_host=? AND seq>?)")),
+        "{plan:?}"
+    );
+    assert!(!plan.iter().any(|p| p.contains("TEMP B-TREE")), "{plan:?}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn sessions_mirror_delta_replays_failed_transfers_and_preserves_unknown_roots() -> Result<()>
+{
+    let f = fixture();
+    scan(&f);
+    let directory = tempfile::tempdir()?;
+    let target = Store::open(directory.path().join("state/catalog.sqlite3"))?;
+    let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let fail = Arc::new(AtomicBool::new(false));
+    let call = mirror_peer(&f, calls.clone(), fail.clone());
+    sync_mirror(&target, call.clone()).await?;
+    let cursor = mirror_cursor(&target);
+    let new = f.codex.with_file_name("delta-new.jsonl");
+    write(
+        &new,
+        &[
+            codex_meta("delta-new", None),
+            json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"deltauniquetext"}]}}),
+        ],
+    );
+    scan(&f);
+    fail.store(true, std::sync::atomic::Ordering::Release);
+    assert!(sync_mirror(&target, call.clone()).await.is_err());
+    assert_eq!(mirror_cursor(&target), cursor);
+    fail.store(false, std::sync::atomic::Ordering::Release);
+    let unavailable = f.origins[0].path().with_file_name("unavailable");
+    std::fs::rename(f.origins[0].path(), &unavailable)?;
+    assert!(
+        sync_mirror(&target, call.clone())
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("presence is unknown")
+    );
+    assert_eq!(mirror_cursor(&target), cursor);
+    assert_eq!(
+        query::inventory(&target.reader()?, None, 1000)?
+            .sessions
+            .len(),
+        4
+    );
+    std::fs::rename(&unavailable, f.origins[0].path())?;
+    calls.lock().unwrap().clear();
+    assert_eq!(sync_mirror(&target, call.clone()).await?["full"], false);
+    assert!(
+        !calls
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|m| m == "sessions/mirror/list")
+    );
+    assert_eq!(
+        search(&target, "deltauniquetext")["hits"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    std::fs::remove_file(&new)?;
+    scan(&f);
+    sync_mirror(&target, call.clone()).await?;
+    assert!(
+        !query::inventory(&target.reader()?, None, 1000)?
+            .sessions
+            .iter()
+            .any(|s| s.thread_id == "delta-new")
+    );
+    target
+        .writer()?
+        .execute("UPDATE mirror_state SET cursor='1:expired:0'", [])?;
+    assert_eq!(sync_mirror(&target, call).await?["full"], true);
+    Ok(())
+}
+
+#[tokio::test]
+async fn sessions_mirror_replays_changes_that_race_the_initial_listing() -> Result<()> {
+    let f = fixture();
+    scan(&f);
+    let directory = tempfile::tempdir()?;
+    let target = Store::open(directory.path().join("state/catalog.sqlite3"))?;
+    let peer = f.store.clone();
+    let origins = f.origins.clone();
+    let new = f.codex.with_file_name("racing.jsonl");
+    let introduced = Arc::new(AtomicBool::new(false));
+    let call: mirror::Call = Arc::new(move |method, params| {
+        let peer = peer.clone();
+        let origins = origins.clone();
+        let new = new.clone();
+        let introduced = introduced.clone();
+        async move {
+            match method {
+                "sessions/mirror/list"=>{
+                    let page=mirror::list(&peer,"fixture",params["cursor"].as_str().map(str::to_owned))?;
+                    if !introduced.swap(true,std::sync::atomic::Ordering::AcqRel) {
+                        write(&new,&[codex_meta("racing",None),json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"racinguniquetext"}]}})]);
+                        ingest::scan(&peer,&origins,&AtomicBool::new(false))?;
+                    }
+                    Ok(page)
+                }
+                "sessions/mirror/changes"=>mirror::delta(&peer,"fixture",&origins,serde_json::from_value(params)?),
+                "sessions/mirror/fetch"=>mirror::fetch(&peer,"fixture",serde_json::from_value(params)?),
+                _=>anyhow::bail!("Unexpected method"),
+            }
+        }.boxed()
+    });
+    sync_mirror(&target, call.clone()).await?;
+    sync_mirror(&target, call).await?;
+    assert_eq!(
+        search(&target, "racinguniquetext")["hits"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    Ok(())
+}
+
+#[test]
+fn sessions_mirror_feed_upgrade_preserves_v4_rows_and_epoch() -> Result<()> {
+    let f = fixture();
+    scan(&f);
+    let cursor = changes::cursor(&*f.store.reader()?)?;
+    let rows: i64 = f
+        .store
+        .reader()?
+        .query_row("SELECT count(*) FROM item", [], |r| r.get(0))?;
+    {
+        let db = f.store.writer()?;
+        for table in ["source", "dependency"] {
+            for event in ["INSERT", "UPDATE", "DELETE"] {
+                db.execute_batch(&format!("DROP TRIGGER feed_{table}_{event}"))?;
+            }
+        }
+        db.execute_batch("DROP INDEX change_evidence; ALTER TABLE change DROP COLUMN origin_host; ALTER TABLE change DROP COLUMN evidence_path; PRAGMA user_version=4;")?;
+    }
+    let upgraded = Store::open(f.store.path.clone())?;
+    assert_eq!(changes::cursor(&*upgraded.reader()?)?, cursor);
+    assert_eq!(
+        upgraded
+            .reader()?
+            .query_row("SELECT count(*) FROM item", [], |r| r.get::<_, i64>(0))?,
+        rows
+    );
+    upgraded.writer()?.execute(
+        "UPDATE source SET revision=revision+1 WHERE provider='codex'",
+        [],
+    )?;
+    let events: i64 = upgraded.reader()?.query_row(
+        "SELECT count(*) FROM change WHERE origin_host='fixture' AND evidence_path IS NOT NULL",
+        [],
+        |r| r.get(0),
+    )?;
+    assert_eq!(events, 2);
+    let reopened = Store::open(f.store.path.clone())?;
+    assert_eq!(
+        reopened
+            .reader()?
+            .query_row("SELECT count(*) FROM item", [], |r| r.get::<_, i64>(0))?,
+        rows
     );
     Ok(())
 }

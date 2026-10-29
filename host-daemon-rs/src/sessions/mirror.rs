@@ -1,4 +1,4 @@
-use super::{Origin, ingest, store::Store};
+use super::{Origin, changes, ingest, store::Store};
 use anyhow::{Context, Result, ensure};
 use base64::Engine;
 use futures_util::future::BoxFuture;
@@ -76,6 +76,7 @@ WHERE p.path>?2 ORDER BY p.path LIMIT 501"#;
 
 pub(crate) fn list(store: &Store, host: &str, after: Option<String>) -> Result<Value> {
     let db = store.reader()?;
+    let change_cursor = changes::cursor(&db)?;
     let (through, complete, roots): (Option<String>, bool, String) = db.query_row("SELECT indexed_through,stale_reason IS NULL AND complete_through IS NOT NULL,provider_roots FROM coverage WHERE origin_host=?1",[host],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;
     let roots: Vec<PathBuf> = serde_json::from_str(&roots)?;
     ensure!(
@@ -98,37 +99,9 @@ pub(crate) fn list(store: &Store, host: &str, after: Option<String>) -> Result<V
     let more = rows.len() > 500;
     let mut page = Vec::new();
     for (provider, home, path, local, present, dependency) in rows.into_iter().take(500) {
-        let root = Path::new(&home).join(if provider == "codex" {
-            "sessions"
-        } else {
-            "projects"
-        });
-        ensure!(
-            root.is_dir(),
-            "unavailable: provider root is unavailable; mirror presence is unknown"
-        );
-        let metadata = match std::fs::metadata(&local) {
-            Ok(m) => Some(m),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                ensure!(
-                    root.is_dir(),
-                    "unavailable: provider root is unavailable; mirror presence is unknown"
-                );
-                None
-            }
-            Err(e) => return Err(e.into()),
-        };
-        page.push(Entry {
-            origin_host: host.into(),
-            provider,
-            provider_home: home.into(),
-            path: path.into(),
-            identity: metadata.as_ref().map(physical).unwrap_or_default(),
-            revision: metadata.as_ref().map(ingest::identity).unwrap_or_default(),
-            size: metadata.as_ref().map_or(0, |m| m.len()),
-            present: present && metadata.is_some(),
-            dependency,
-        });
+        page.push(describe(
+            host, provider, home, path, local, present, dependency,
+        )?);
     }
     let next = if more {
         page.last()
@@ -141,8 +114,130 @@ pub(crate) fn list(store: &Store, host: &str, after: Option<String>) -> Result<V
         "unavailable: provider roots are unavailable; mirror presence is unknown"
     );
     Ok(
-        json!({"schemaVersion":1,"files":page,"cursor":next,"through":through,"complete":complete,"coverage":super::query::coverage(&db)?}),
+        json!({"schemaVersion":1,"files":page,"cursor":next,"through":through,"complete":complete,"changeCursor":change_cursor,"coverage":super::query::coverage(&db)?}),
     )
+}
+
+fn describe(
+    host: &str,
+    provider: String,
+    home: String,
+    path: String,
+    local: String,
+    present: bool,
+    dependency: bool,
+) -> Result<Entry> {
+    let root = Path::new(&home).join(if provider == "codex" {
+        "sessions"
+    } else {
+        "projects"
+    });
+    ensure!(
+        root.is_dir(),
+        "unavailable: provider root is unavailable; mirror presence is unknown"
+    );
+    let metadata = match std::fs::metadata(&local) {
+        Ok(m) => Some(m),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            ensure!(
+                root.is_dir(),
+                "unavailable: provider root is unavailable; mirror presence is unknown"
+            );
+            None
+        }
+        Err(e) => return Err(e.into()),
+    };
+    Ok(Entry {
+        origin_host: host.into(),
+        provider,
+        provider_home: home.into(),
+        path: path.into(),
+        identity: metadata.as_ref().map(physical).unwrap_or_default(),
+        revision: metadata.as_ref().map(ingest::identity).unwrap_or_default(),
+        size: metadata.as_ref().map_or(0, |m| m.len()),
+        present: present && metadata.is_some(),
+        dependency,
+    })
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct DeltaRequest {
+    pub cursor: String,
+}
+
+pub(super) const DELTA_SQL: &str = "SELECT seq,evidence_path FROM change INDEXED BY change_evidence WHERE origin_host=?1 AND evidence_path IS NOT NULL AND seq>?2 ORDER BY seq LIMIT 501";
+
+pub(crate) fn delta(
+    store: &Store,
+    host: &str,
+    origins: &[Origin],
+    request: DeltaRequest,
+) -> Result<Value> {
+    let db = store.reader()?;
+    let tx = db.unchecked_transaction()?;
+    let (head, after, _) = changes::window(&tx, Some(&request.cursor))?;
+    let events: Vec<(i64, String)> = tx
+        .prepare(DELTA_SQL)?
+        .query_map(params![host, after], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    let more = events.len() > 500;
+    let mut last = after;
+    let mut paths = std::collections::BTreeSet::new();
+    for (seq, path) in events.into_iter().take(500) {
+        last = seq;
+        paths.insert(path);
+    }
+    if !paths.is_empty() {
+        ensure!(
+            origins.iter().all(|origin| origin.path().is_dir()),
+            "unavailable: provider roots are unavailable; mirror presence is unknown"
+        );
+    }
+    let mut files = Vec::new();
+    for path in paths {
+        let origin = origins
+            .iter()
+            .find(|origin| {
+                origin.host == host && Path::new(&path).starts_with(&origin.provider_home)
+            })
+            .context("unsupported: changed evidence is outside the configured provider origins")?;
+        let known: Option<(String,String,String,bool,bool)> = tx.query_row("SELECT provider,provider_home,local_path,present,0 FROM source WHERE origin_host=?1 AND path=?2 UNION ALL SELECT s.provider,s.provider_home,d.local_path,d.present,1 FROM dependency d JOIN source s USING(source_id) WHERE d.origin_host=?1 AND d.path=?2 LIMIT 1",params![host,path],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).optional()?;
+        let (provider, home, local, present, dependency) = match known {
+            Some(known) => known,
+            None => {
+                let local = origin.local(Path::new(&path))?;
+                (
+                    origin.provider.clone(),
+                    origin.provider_home.to_string_lossy().into_owned(),
+                    local.to_string_lossy().into_owned(),
+                    true,
+                    !origin.is_transcript(&local),
+                )
+            }
+        };
+        files.push(describe(
+            host, provider, home, path, local, present, dependency,
+        )?);
+    }
+    if !files.is_empty() {
+        ensure!(
+            origins.iter().all(|origin| origin.path().is_dir()),
+            "unavailable: provider roots are unavailable; mirror presence is unknown"
+        );
+    }
+    let cursor = if more {
+        format!(
+            "{}:{last}",
+            head.rsplit_once(':')
+                .context("Generated change cursor missing sequence")?
+                .0
+        )
+    } else {
+        head
+    };
+    let (through,complete):(Option<String>,bool)=tx.query_row("SELECT indexed_through,stale_reason IS NULL AND complete_through IS NOT NULL FROM coverage WHERE origin_host=?1",[host],|r|Ok((r.get(0)?,r.get(1)?)))?;
+    Ok(json!({"files":files,"cursor":cursor,"hasMore":more,"through":through,"complete":complete}))
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -235,7 +330,9 @@ async fn sync_owned(
     stop: tokio_util::sync::CancellationToken,
 ) -> Result<Value> {
     let root = store.path.parent().context("Mirror root")?.join("mirror");
-    crate::storage::private_state::ensure_private_directory(&root)?;
+    if !root.is_dir() {
+        crate::storage::private_state::ensure_private_directory(&root)?;
+    }
     use std::os::unix::fs::OpenOptionsExt;
     let lock = OpenOptions::new()
         .read(true)
@@ -247,27 +344,71 @@ async fn sync_owned(
         .open(root.join(".lock"))?;
     let _mirror_lease = super::storage::Lease::acquire(lock)
         .context("Mirror is already owned by another worker")?;
-    let mut cursor = None;
+    let saved: Option<(String, i64, bool)> = store
+        .reader()?
+        .query_row(
+            "SELECT cursor,reconciled_at,projected_complete FROM mirror_state WHERE origin_host=?1",
+            [host],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()?;
+    let now = ::time::OffsetDateTime::now_utc().unix_timestamp();
+    let mut full = saved
+        .as_ref()
+        .is_none_or(|(_, at, _)| now.saturating_sub(*at) >= 600);
+    let mut cursor = if full {
+        None
+    } else {
+        saved.as_ref().map(|(cursor, _, _)| cursor.clone())
+    };
+    let mut snapshot_cursor = None;
+    let mut changed = std::collections::BTreeSet::new();
     let storage = &store.storage;
     let mut origins = BTreeMap::new();
-    let known: Vec<(String, String)> = store
-        .reader()?
-        .prepare("SELECT DISTINCT provider,provider_home FROM source WHERE origin_host=?1")?
-        .query_map([host], |r| Ok((r.get(0)?, r.get(1)?)))?
-        .collect::<rusqlite::Result<_>>()?;
-    for (provider, home) in known {
-        let origin = mirror_origin(&root, host, provider, PathBuf::from(home));
-        origins.insert(
-            (origin.provider.clone(), origin.provider_home.clone()),
-            origin,
-        );
-    }
     let mut retained = std::collections::BTreeSet::new();
     let mut complete = true;
     let mut total_files = 0;
     let mut through: Option<String> = None;
     loop {
-        let page = call("sessions/mirror/list", json!({"cursor":cursor})).await?;
+        if full && snapshot_cursor.is_none() {
+            let known: Vec<(String, String)> = store
+        .reader()?
+        .prepare("SELECT DISTINCT provider,provider_home FROM source WHERE origin_host=?1 LIMIT 1025")?
+        .query_map([host], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+            ensure!(
+                known.len() <= 1024,
+                "capacity: mirror origin inventory exceeds 1024 provider homes"
+            );
+            for (provider, home) in known {
+                let origin = mirror_origin(&root, host, provider, PathBuf::from(home));
+                origins.insert(
+                    (origin.provider.clone(), origin.provider_home.clone()),
+                    origin,
+                );
+            }
+        }
+        let page = if full {
+            call("sessions/mirror/list", json!({"cursor":cursor})).await?
+        } else {
+            match call("sessions/mirror/changes", json!({"cursor":cursor})).await {
+                Ok(page) => page,
+                Err(error) if format!("{error:#}").contains("cursor_expired:") => {
+                    full = true;
+                    cursor = None;
+                    continue;
+                }
+                Err(error) => return Err(error),
+            }
+        };
+        if full && snapshot_cursor.is_none() {
+            snapshot_cursor = Some(
+                page["changeCursor"]
+                    .as_str()
+                    .context("unsupported: mirror listing has no change cursor")?
+                    .to_owned(),
+            );
+        }
         complete &= page["complete"] == true;
         if let Some(boundary) = page["through"].as_str() {
             if through
@@ -303,15 +444,30 @@ async fn sync_owned(
                 entry.provider_home.clone(),
             );
             let home = origin.local_home.clone();
+            ensure!(
+                origins.len() < 1024
+                    || origins
+                        .contains_key(&(origin.provider.clone(), origin.provider_home.clone())),
+                "capacity: mirror exceeds 1024 provider homes"
+            );
             origins.insert(
                 (origin.provider.clone(), origin.provider_home.clone()),
                 origin,
             );
             let target = home.join(relative);
-            if entry.present {
+            if full && entry.present {
+                ensure!(
+                    retained.len() < 100_000,
+                    "capacity: mirror manifest exceeds 100000 files"
+                );
                 retained.insert(target.clone());
             }
             if !entry.present {
+                ensure!(
+                    changed.len() < 100_000 || changed.contains(&target),
+                    "capacity: mirror batch exceeds 100000 changed paths"
+                );
+                changed.insert(target.clone());
                 if target.is_file() {
                     storage.mutate(&[&target], 0, || Ok(std::fs::remove_file(&target)?))?;
                 }
@@ -435,14 +591,19 @@ async fn sync_owned(
                 Ok(std::fs::rename(&temporary, &target)?)
             })?;
             store.writer()?.execute("INSERT INTO mirror_file VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(origin_host,path) DO UPDATE SET identity=excluded.identity,size=excluded.size,received=excluded.received,local_path=excluded.local_path",params![host,entry.path.to_string_lossy(),entry.revision,i64::try_from(entry.size)?,i64::try_from(offset)?,target.to_string_lossy()])?;
+            ensure!(
+                changed.len() < 100_000 || changed.contains(&target),
+                "capacity: mirror batch exceeds 100000 changed paths"
+            );
+            changed.insert(target);
             total_files += 1;
         }
         cursor = page["cursor"].as_str().map(str::to_owned);
-        if cursor.is_none() {
+        if full && cursor.is_none() || !full && page["hasMore"] != true {
             break;
         }
     }
-    if complete {
+    if full && complete {
         let host_root = root.join(blake3::hash(host.as_bytes()).to_hex().as_str());
         if host_root.exists() {
             for entry in walkdir::WalkDir::new(&host_root).follow_links(false) {
@@ -456,18 +617,63 @@ async fn sync_owned(
         }
     }
     let origins: Vec<_> = origins.into_values().collect();
-    {
-        let outcome = ingest::scan(store, &origins, &std::sync::atomic::AtomicBool::new(false))?;
-        let partial: bool = store.reader()?.query_row(
-            "SELECT stale_reason IS NOT NULL FROM coverage WHERE origin_host=?1",
+    let projected = if full || !changed.is_empty() {
+        let paths: Vec<_> = changed.into_iter().collect();
+        let stop = std::sync::atomic::AtomicBool::new(false);
+        let outcome = if full {
+            ingest::scan(store, &origins, &stop)?
+        } else {
+            ingest::scan_scope(store, &origins, ingest::Scope::Changed(&paths), &stop)?
+        };
+        let partial: bool = store.reader()?.query_row("SELECT EXISTS(SELECT 1 FROM coverage WHERE origin_host=?1 AND stale_reason IS NOT NULL)",[host],|row|row.get(0))?;
+        outcome["parseFailures"] == 0 && !partial
+    } else {
+        saved.as_ref().is_some_and(|(_, _, projected)| *projected)
+    };
+    let cursor =
+        if full { snapshot_cursor } else { cursor }.context("Mirror returned no change cursor")?;
+    let complete = complete && projected;
+    let reason = if !projected {
+        Some("missing_dependency")
+    } else if !complete {
+        Some("origin_incomplete")
+    } else {
+        None
+    };
+    let previous: Option<(Option<String>, Option<String>)> = store
+        .reader()?
+        .query_row(
+            "SELECT complete_through,stale_reason FROM coverage WHERE origin_host=?1",
             [host],
-            |r| r.get(0),
-        )?;
-        let complete = complete && outcome["parseFailures"] == 0 && !partial;
-        let at = super::now();
-        store.writer()?.execute("INSERT INTO coverage(origin_host,mode,indexed_through,complete_through,stale_reason) VALUES(?1,'mirror',?2,?3,?4) ON CONFLICT(origin_host) DO UPDATE SET mode='mirror',indexed_through=excluded.indexed_through,complete_through=CASE WHEN excluded.stale_reason IS NULL THEN excluded.complete_through ELSE coverage.complete_through END,stale_reason=excluded.stale_reason",params![host,at,if complete {through.as_deref()} else {None},if complete {None} else {Some("missing_dependency")}])?;
-        Ok(json!({"files":total_files,"complete":complete}))
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    let complete_through = if complete {
+        through
+    } else {
+        previous.as_ref().and_then(|(through, _)| through.clone())
+    };
+    let reconciled = if full {
+        ::time::OffsetDateTime::now_utc().unix_timestamp()
+    } else {
+        saved.as_ref().context("Delta mirror has no prior state")?.1
+    };
+    let state_changed = saved
+        .as_ref()
+        .is_none_or(|(old, at, prior)| old != &cursor || *at != reconciled || *prior != projected);
+    let coverage_changed = previous
+        .as_ref()
+        .is_none_or(|(prior, stale)| prior != &complete_through || stale.as_deref() != reason);
+    if state_changed || coverage_changed {
+        let mut db = store.writer()?;
+        let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        tx.execute("INSERT INTO mirror_state(origin_host,cursor,reconciled_at,projected_complete) VALUES(?1,?2,?3,?4) ON CONFLICT(origin_host) DO UPDATE SET cursor=excluded.cursor,reconciled_at=excluded.reconciled_at,projected_complete=excluded.projected_complete",params![host,cursor,reconciled,projected])?;
+        if coverage_changed {
+            tx.execute("INSERT INTO coverage(origin_host,mode,indexed_through,complete_through,stale_reason) VALUES(?1,'mirror',?2,?3,?4) ON CONFLICT(origin_host) DO UPDATE SET mode='mirror',indexed_through=excluded.indexed_through,complete_through=excluded.complete_through,stale_reason=excluded.stale_reason",params![host,super::now(),complete_through,reason])?;
+        }
+        tx.commit()?;
     }
+    Ok(json!({"files":total_files,"complete":complete,"full":full}))
 }
 
 use rusqlite::OptionalExtension;
