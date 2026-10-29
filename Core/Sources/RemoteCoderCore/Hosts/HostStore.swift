@@ -298,7 +298,7 @@ final class HostStore {
             try persist(configurations.filter { !journal.replacedIDs.contains($0.id) && $0.id != journal.host.id } + [journal.host],
                         activeHostID: active, directory: directory)
             for source in journal.host.legacyIDs {
-                try await GatewayIdentityPreferences.migrate(from: source, to: journal.host.id, domainName: defaultsDomain)
+                GatewayIdentityPreferences.migrate(from: source, to: journal.host.id, in: defaults, domainName: defaultsDomain)
             }
             try Task.checkCancellation()
             try await migration.finish(journal)
