@@ -1924,6 +1924,36 @@ fn sessions_search_uses_descending_fts_order_and_exact_dates() -> Result<()> {
         !plan.iter().any(|line| line.contains("TEMP B-TREE")),
         "{plan:?}"
     );
+    let mut samples = Vec::new();
+    for (term, since) in [
+        ("SKILL.md", None),
+        ("Process exited", None),
+        ("codex-threads", None),
+        ("permission", None),
+        ("Continue target", None),
+        ("pair-programming", None),
+        ("PID start time", None),
+        ("remote-coder", None),
+        ("agents", None),
+        ("FileRevision", None),
+        ("SKILL.md", Some("2026-10-15T00:00:00Z")),
+    ] {
+        let mut milliseconds = Vec::new();
+        for _ in 0..5 {
+            let started = Instant::now();
+            query::search(
+                &db,
+                &query::Search {
+                    query: term.into(),
+                    since: since.map(str::to_owned),
+                    ..Default::default()
+                },
+            )?;
+            milliseconds.push(started.elapsed().as_secs_f64() * 1000.0);
+        }
+        samples.push(json!({"term":term,"since":since,"sampleMs":milliseconds}));
+    }
+    println!("{}", json!({"searchFixtureSamples":samples,"plan":plan}));
     let mut request = query::Search {
         query: "SKILL.md".into(),
         limit: Some(1),
