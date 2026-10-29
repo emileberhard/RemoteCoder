@@ -1,7 +1,7 @@
 use super::{PAGE_BYTES, PAGE_ROWS, changes};
 use anyhow::{Context, Result, ensure};
 use base64::Engine;
-use rusqlite::{Connection, Params, params, types::ValueRef};
+use rusqlite::{Connection, OptionalExtension, Params, params, types::ValueRef};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::fs::File;
@@ -387,7 +387,7 @@ fn item_bytes(
     length: usize,
 ) -> Result<Vec<u8>> {
     ensure!(
-        reference.length <= crate::providers::claude::records::MAX_SESSION_RECORD_BYTES as u64,
+        reference.length <= crate::providers::claude::records::MAX_SESSION_RECORD_BYTES,
         "capacity: record exceeds bounded read"
     );
     ensure!(
@@ -457,5 +457,3 @@ mod tests {
         );
     }
 }
-
-use rusqlite::OptionalExtension;
