@@ -976,6 +976,16 @@ fn sessions_budget_counts_catalog_wal_and_temporary_mirrors() {
 }
 
 #[test]
+fn sessions_catalog_grows_past_half_of_its_space_while_keeping_the_floor() {
+    let gib = 1u64 << 30;
+    let limit = super::store::page_limit(25 * gib, gib, 48 * gib, 4096) * 4096;
+    assert!(limit > 36 * gib, "{limit}");
+    assert!(
+        limit + super::storage::WAL_BYTES <= 48 * gib - super::storage::RESERVE_BYTES + 25 * gib
+    );
+}
+
+#[test]
 fn sessions_mirror_role_defaults_off() {
     let f = fixture();
     assert!(!mirror::role(&f.store.path).unwrap());

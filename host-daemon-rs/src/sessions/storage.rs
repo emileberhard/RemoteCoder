@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 
 pub(crate) const CAP_BYTES: u64 = 64 << 30;
 pub(crate) const RESERVE_BYTES: u64 = 20 << 30;
+pub(crate) const WAL_BYTES: u64 = 8 << 30;
 
 pub(crate) struct Storage {
     root: PathBuf,

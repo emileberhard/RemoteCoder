@@ -120,19 +120,14 @@ impl Store {
         );
         let usage = storage.usage()?;
         let size = self.path.metadata()?.len();
-        let other = usage.used_bytes.saturating_sub(size);
-        let space = super::storage::CAP_BYTES
-            .saturating_sub(other)
-            .min(
-                usage
-                    .free_bytes
-                    .saturating_sub(super::storage::RESERVE_BYTES)
-                    .saturating_add(size),
-            )
-            .saturating_sub(65536);
         let page_size: u32 = db.pragma_query_value(None, "page_size", |r| r.get(0))?;
         let page_count: u32 = db.pragma_query_value(None, "page_count", |r| r.get(0))?;
-        let limit = space / (2 * u64::from(page_size) + 24);
+        let limit = page_limit(
+            size,
+            usage.used_bytes.saturating_sub(size),
+            usage.free_bytes,
+            u64::from(page_size),
+        );
         ensure!(
             u64::from(page_count) <= limit,
             "stale: budget; catalog cannot reserve its database and WAL within the shared cap"
@@ -147,6 +142,18 @@ impl Store {
             storage: self.storage.clone(),
         })
     }
+}
+
+pub(super) fn page_limit(size: u64, other: u64, free: u64, page_size: u64) -> u64 {
+    super::storage::CAP_BYTES
+        .saturating_sub(other)
+        .min(
+            free.saturating_sub(super::storage::RESERVE_BYTES)
+                .saturating_add(size),
+        )
+        .saturating_sub(65536)
+        .saturating_sub(super::storage::WAL_BYTES)
+        / page_size
 }
 
 fn migrate_change(db: &mut Connection) -> Result<()> {
