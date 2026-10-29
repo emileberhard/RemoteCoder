@@ -153,8 +153,7 @@ actor GatewayIdentityMigration {
 }
 
 enum GatewayIdentityPreferences {
-    @concurrent static func migrate(from source: UUID, to target: UUID, domainName: String) async throws {
-        guard let defaults = UserDefaults(suiteName: domainName) else { throw CocoaError(.fileReadInvalidFileName) }
+    static func migrate(from source: UUID, to target: UUID, in defaults: UserDefaults, domainName: String) {
         guard source != target else { return }
         let sourceText = source.uuidString
         let targetText = target.uuidString

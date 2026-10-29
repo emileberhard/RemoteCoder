@@ -161,7 +161,7 @@ struct GatewayIdentityTests {
         defaults.register(defaults: [registeredKey: ["host": source.uuidString]])
         defaults.set(["old": "retained", "same": "older"], forKey: oldKey)
         defaults.set(["same": "newer", "host": source.uuidString], forKey: newKey)
-        try await GatewayIdentityPreferences.migrate(from: source, to: target, domainName: suite)
+        GatewayIdentityPreferences.migrate(from: source, to: target, in: defaults, domainName: suite)
         let saved = try #require(defaults.persistentDomain(forName: suite))
         #expect(saved[oldKey] == nil)
         #expect(saved[newKey] as? [String: String] == ["old": "retained", "same": "newer", "host": target.uuidString])
@@ -169,7 +169,7 @@ struct GatewayIdentityTests {
         #expect(saved["registered.\(target)"] == nil)
         #expect(defaults.dictionary(forKey: registeredKey)?["host"] as? String == source.uuidString)
         defaults.removeObject(forKey: newKey)
-        try await GatewayIdentityPreferences.migrate(from: source, to: target, domainName: suite)
+        GatewayIdentityPreferences.migrate(from: source, to: target, in: defaults, domainName: suite)
         #expect(defaults.persistentDomain(forName: suite)?[newKey] == nil)
     }
 
