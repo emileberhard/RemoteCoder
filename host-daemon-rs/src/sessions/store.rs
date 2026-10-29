@@ -10,6 +10,7 @@ pub(crate) struct Store {
     pub path: PathBuf,
     pub storage: std::sync::Arc<super::storage::Storage>,
     pub(super) worker: std::sync::Arc<std::sync::OnceLock<std::sync::Arc<super::worker::Mailbox>>>,
+    anchor: std::sync::Arc<std::sync::Mutex<Connection>>,
 }
 
 impl Store {
@@ -20,6 +21,7 @@ impl Store {
         private_state::ensure_private_directory(parent)?;
         let storage = std::sync::Arc::new(super::storage::Storage::new(&path)?);
         let store = Self {
+            anchor: std::sync::Arc::new(std::sync::Mutex::new(Connection::open(&path)?)),
             path,
             storage,
             worker: Default::default(),
@@ -98,6 +100,11 @@ impl Store {
         }
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&store.path, std::fs::Permissions::from_mode(0o600))?;
+        store
+            .anchor
+            .lock()
+            .expect("Session catalog anchor poisoned")
+            .query_row("SELECT count(*) FROM sqlite_schema", [], |_| Ok(()))?;
         Ok(store)
     }
 

@@ -986,6 +986,15 @@ fn sessions_catalog_grows_past_half_of_its_space_while_keeping_the_floor() {
 }
 
 #[test]
+fn sessions_writers_never_close_the_catalog_as_its_last_connection() {
+    let f = fixture();
+    scan(&f);
+    let mut wal = f.store.path.clone().into_os_string();
+    wal.push("-wal");
+    assert!(std::path::Path::new(&wal).exists());
+}
+
+#[test]
 fn sessions_mirror_role_defaults_off() {
     let f = fixture();
     assert!(!mirror::role(&f.store.path).unwrap());
