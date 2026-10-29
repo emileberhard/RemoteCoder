@@ -609,4 +609,4 @@ verify-apps-local:
 
 [private]
 verify-simulator-local:
-    just ios-simulator-test-local RemoteCoderTests/StreamingRenderingTests RemoteCoderTests/TranscriptScrollRenderingTests RemoteCoderTests/ChatHistoryReadTests RemoteCoderTests/GatewayBusyStateTests 'RemoteCoderTests/ActiveTasksLiveActivityScopeTests/mainActivityCreationControl()'
+    just ios-simulator-test-local RemoteCoderTests/StreamingRenderingTests RemoteCoderTests/TranscriptScrollTests RemoteCoderTests/TranscriptScrollRenderingTests RemoteCoderTests/ChatHistoryReadTests RemoteCoderTests/GatewayBusyStateTests 'RemoteCoderTests/ActiveTasksLiveActivityScopeTests/mainActivityCreationControl()'
