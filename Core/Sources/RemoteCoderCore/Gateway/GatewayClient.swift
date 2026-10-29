@@ -176,11 +176,12 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
     private func announceUnavailability() {
         guard !isConnected, connectivity != announced else { return }
         announced = connectivity
-        hub.emit(switch announced {
+        let event: GatewayConnectionEvent = switch announced {
         case .restarting: .restarting
         case .unreachable: .unreachable
         case .connected, .disconnected: .disconnected
-        })
+        }
+        hub.emit(event)
     }
 
     private func observeRestart(closing task: URLSessionWebSocketTask) -> Bool {
