@@ -422,7 +422,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
             if model.conversationList.errorMessage != nil {
                 return .init(hostId: host.id, name: host.displayName, state: .stale, staleThrough: since)
             }
-            return .init(hostId: host.id, name: host.displayName, state: .ok)
+            return .init(hostId: host.id, name: host.displayName, state: since == nil ? .unknown : .ok)
         }
         var seen = Set(coverage.map(\.id))
         for member in cluster.membersByID.values where seen.insert(member.id).inserted {
