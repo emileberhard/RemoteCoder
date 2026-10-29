@@ -297,7 +297,6 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
             let route = try await connectOverAvailableRoute(candidates, startedAt: started)
             logger.notice("Gateway connection attempt trigger=\(trigger.rawValue) step=\(step) routes=\(candidates.count) elapsedMs=\(started.duration(to: .now) / .milliseconds(1)) outcome=connected route=\(String(describing: route))")
         } catch {
-            if !Task.isCancelled { await disconnectTransport(reason: error) }
             let failure: any Error = if let error = error as? URLError {
                 // Only transport failures are reattributed: a dead host and a wrong
                 // active host both surface as a bare "Could not connect to the
@@ -310,9 +309,9 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
             } else {
                 error
             }
+            if !Task.isCancelled, !isRetired, !(error is CancellationError) { lastConnectionFailure = failure }
+            if !Task.isCancelled { await disconnectTransport(reason: error) }
             guard !Task.isCancelled, !isRetired, !(error is CancellationError) else { throw failure }
-            lastConnectionFailure = failure
-            announceUnavailability()
             let delay = reconnect.failed(at: .now, restartingSince: restartObservedAt)
             logger.notice("Gateway connection attempt trigger=\(trigger.rawValue) step=\(step) routes=\(candidates.count) elapsedMs=\(started.duration(to: .now) / .milliseconds(1)) outcome=failed nextDelayMs=\(delay / .milliseconds(1)) error=\(failure.localizedDescription)")
             throw failure
