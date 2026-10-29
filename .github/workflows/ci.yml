@@ -13,7 +13,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  changes:
+  reuse:
     if: ${{ !github.event.repository.private }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -21,56 +21,30 @@ jobs:
       contents: read
       actions: read
     outputs:
-      gateway: ${{ steps.scope.outputs.gateway }}
-      swift: ${{ steps.scope.outputs.swift }}
-      agent_calls: ${{ steps.scope.outputs.agent_calls }}
-      web: ${{ steps.scope.outputs.web }}
+      run: ${{ steps.scope.outputs.run }}
       tree: ${{ steps.scope.outputs.tree }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: ${{ github.event_name == 'push' && 1 || 0 }}
           persist-credentials: false
       - id: scope
         shell: bash
         env:
           EVENT_NAME: ${{ github.event_name }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           GH_TOKEN: ${{ github.token }}
         run: |
-          gateway=false
-          swift=false
-          agent_calls=false
-          web=true
+          run=true
           tree=$(git rev-parse 'HEAD^{tree}')
           if [[ "$EVENT_NAME" == push ]] && gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=ci-passed-$tree&per_page=100" \
               --jq '[.artifacts[] | select((.expired | not) and .workflow_run.head_repository_id == .workflow_run.repository_id)] | length > 0' | grep -qx true; then
-            web=false
-            echo "A pull request already passed CI on tree $tree; reusing that result."
-          elif [[ "$EVENT_NAME" == push ]]; then
-            gateway=true
-            swift=true
-            agent_calls=true
-          else
-            git diff --no-renames --name-only -z "$BASE_SHA...$HEAD_SHA" > "$RUNNER_TEMP/changed-paths"
-            while IFS= read -r -d '' path; do
-              case "$path" in
-                host-daemon-rs/*|docs/codex/compatibility.json|protocol-fixtures/*|dev-tools/fixtures/*|rust-toolchain.toml|.github/workflows/ci.yml) gateway=true ;;
-              esac
-              case "$path" in
-                *.swift|protocol-fixtures/*|Core/*|RemoteCoder/*|RemoteCoderMac/*|RemoteCoderTests/*|RemoteCoderUITests/*|RemoteCoderLiveActivities/*|RemoteCoderNotificationService/*|RemoteCoderLocationPushService/*|RemoteCoderShareExtension/*|RemoteCoderCaptureExtension/*|Shared/*|Config/*|RemoteCoder.xcodeproj/*|scripts/*|.xcode-version|.swift-version|.github/workflows/ci.yml) swift=true ;;
-              esac
-              case "$path" in
-                agent-calls/*|dev-tools/*|.github/workflows/ci.yml) agent_calls=true ;;
-              esac
-            done < "$RUNNER_TEMP/changed-paths"
+            run=false
+            echo "A pull request already passed every lane on tree $tree; reusing that result."
           fi
-          printf 'gateway=%s\nswift=%s\nagent_calls=%s\nweb=%s\ntree=%s\n' "$gateway" "$swift" "$agent_calls" "$web" "$tree" >> "$GITHUB_OUTPUT"
+          printf 'run=%s\ntree=%s\n' "$run" "$tree" >> "$GITHUB_OUTPUT"
 
   agent-calls:
-    needs: changes
-    if: ${{ needs.changes.outputs.agent_calls == 'true' }}
+    needs: reuse
+    if: ${{ needs.reuse.outputs.run == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     defaults:
@@ -93,8 +67,8 @@ jobs:
       - run: uv run --locked pytest -q
 
   gateway:
-    needs: changes
-    if: ${{ needs.changes.outputs.gateway == 'true' }}
+    needs: reuse
+    if: ${{ needs.reuse.outputs.run == 'true' }}
     runs-on: xcode-27
     timeout-minutes: 35
     env:
@@ -124,8 +98,8 @@ jobs:
       - run: cargo test --manifest-path host-daemon-rs/Cargo.toml --locked
 
   swift:
-    needs: changes
-    if: ${{ needs.changes.outputs.swift == 'true' }}
+    needs: reuse
+    if: ${{ needs.reuse.outputs.run == 'true' }}
     runs-on: xcode-27
     timeout-minutes: 45
     steps:
@@ -148,8 +122,8 @@ jobs:
       - run: uv run --project dev-tools --locked python -m unittest discover -s scripts/tests
 
   apps-ios:
-    needs: changes
-    if: ${{ needs.changes.outputs.swift == 'true' }}
+    needs: reuse
+    if: ${{ needs.reuse.outputs.run == 'true' }}
     runs-on: xcode-27
     timeout-minutes: 60
     env:
@@ -195,8 +169,8 @@ jobs:
           if-no-files-found: ignore
 
   apps-mac:
-    needs: changes
-    if: ${{ needs.changes.outputs.swift == 'true' }}
+    needs: reuse
+    if: ${{ needs.reuse.outputs.run == 'true' }}
     runs-on: xcode-27
     timeout-minutes: 60
     env:
@@ -228,8 +202,8 @@ jobs:
           if-no-files-found: ignore
 
   web:
-    needs: changes
-    if: ${{ needs.changes.outputs.web == 'true' }}
+    needs: reuse
+    if: ${{ needs.reuse.outputs.run == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -249,25 +223,30 @@ jobs:
         working-directory: web-client
 
   passed:
-    needs: [changes, agent-calls, gateway, swift, apps-ios, apps-mac, web]
+    needs: [reuse, agent-calls, gateway, swift, apps-ios, apps-mac, web]
     if: ${{ always() && !github.event.repository.private }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     env:
-      TREE: ${{ needs.changes.outputs.tree }}
+      TREE: ${{ needs.reuse.outputs.tree }}
       RECORD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
     steps:
-      - name: Require every lane in scope to pass
+      - name: Require every lane that ran to pass
         env:
           RESULTS: ${{ toJSON(needs) }}
         run: jq -e 'all(.[]; .result == "success" or .result == "skipped")' <<< "$RESULTS"
-      - name: Record the tested tree
+      - name: Record the fully tested tree
+        id: record
         if: env.RECORD == 'true' && env.TREE != ''
+        env:
+          RESULTS: ${{ toJSON(needs) }}
         run: |
+          jq -e 'all(.[]; .result == "success")' <<< "$RESULTS" || exit 0
           mkdir -p "$RUNNER_TEMP/passed"
           printf '%s\n' "$TREE" > "$RUNNER_TEMP/passed/tree"
+          echo "full=true" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        if: env.RECORD == 'true' && env.TREE != ''
+        if: steps.record.outputs.full == 'true'
         with:
           name: ci-passed-${{ env.TREE }}
           path: ${{ runner.temp }}/passed/tree
