@@ -228,7 +228,7 @@ fn sessions_evidence_survives_append_rewrite_and_exact_paging() {
                 target: old_key,
                 offset: 0,
                 length: None,
-                dependency: None
+                dependency: None,
                 local: true,
             }
         )
@@ -1527,7 +1527,7 @@ fn sessions_reconcile_repairs_a_growing_rewrite_that_preserves_both_windows() {
                 target: old_key,
                 offset: 0,
                 length: None,
-                dependency: None
+                dependency: None,
                 local: true,
             }
         )
