@@ -3,6 +3,9 @@ mod execution;
 mod indexes;
 pub(crate) mod messages;
 
+#[cfg(test)]
+mod cluster_tests;
+
 use std::collections::{BTreeMap, HashMap};
 use std::fs::{File, OpenOptions};
 use std::os::unix::fs::OpenOptionsExt;
@@ -262,9 +265,10 @@ impl JobStore {
                 .transpose()?;
             let included = match &selection {
                 Selection::Children(parent) | Selection::Descendants(parent) => {
-                    let mut parents = std::collections::VecDeque::from([parent.clone()]);
+                    let mut parents = std::collections::VecDeque::from([(parent.clone(), 0)]);
+                    let mut visited = std::collections::HashSet::from([parent.clone()]);
                     let mut included = std::collections::HashSet::new();
-                    while let Some(next) = parents.pop_front() {
+                    while let Some((next, depth)) = parents.pop_front() {
                         for id in inner.indexes.parents.get(&next).into_iter().flatten() {
                             if included.insert(id.clone())
                                 && matches!(selection, Selection::Descendants(_))
@@ -273,10 +277,13 @@ impl JobStore {
                                     ..
                                 }) = inner.agents.get(id)
                             {
-                                parents.push_back(crate::wire::cluster::AgentAddress {
+                                let next = crate::wire::cluster::AgentAddress {
                                     host_id: parent.host_id.clone(),
                                     thread_id: conversation.thread_id.clone(),
-                                });
+                                };
+                                if depth < 15 && visited.insert(next.clone()) {
+                                    parents.push_back((next, depth + 1));
+                                }
                             }
                         }
                     }
@@ -284,29 +291,41 @@ impl JobStore {
                 }
                 _ => None,
             };
-            let order = match &selection {
-                Selection::Active => Some(&inner.indexes.active_order),
-                Selection::Agent(id) => inner.indexes.by_agent.get(id),
-                _ => Some(&inner.indexes.order),
+            let orders = if let Some(ids) = included {
+                ids.iter()
+                    .filter_map(|id| inner.indexes.by_agent.get(id))
+                    .collect::<Vec<_>>()
+            } else {
+                match &selection {
+                    Selection::Active => Some(&inner.indexes.active_order),
+                    Selection::Agent(id) => inner.indexes.by_agent.get(id),
+                    _ => Some(&inner.indexes.order),
+                }
+                .into_iter()
+                .collect()
             };
+            use std::ops::Bound::{Excluded, Unbounded};
+            let mut ranges = orders
+                .iter()
+                .map(|order| {
+                    order
+                        .range((Unbounded, before.clone().map_or(Unbounded, Excluded)))
+                        .rev()
+                })
+                .collect::<Vec<_>>();
+            let mut next = ranges
+                .iter_mut()
+                .enumerate()
+                .filter_map(|(index, range)| range.next().cloned().map(|key| (key, index)))
+                .collect::<std::collections::BinaryHeap<_>>();
             let mut records = Vec::new();
-            if let Some(order) = order {
-                use std::ops::Bound::{Excluded, Unbounded};
-                for (_, id) in order
-                    .range((Unbounded, before.map_or(Unbounded, Excluded)))
-                    .rev()
-                {
-                    let job = inner.job(id)?;
-                    if included
-                        .as_ref()
-                        .is_some_and(|ids| !ids.contains(&job.agent_id))
-                    {
-                        continue;
-                    }
-                    records.push(job);
-                    if records.len() > limit as usize {
-                        break;
-                    }
+            while let Some(((_, id), index)) = next.pop() {
+                records.push(inner.job(&id)?);
+                if records.len() > limit as usize {
+                    break;
+                }
+                if let Some(key) = ranges[index].next() {
+                    next.push((key.clone(), index));
                 }
             }
             let more = records.len() > limit as usize;
@@ -361,7 +380,7 @@ impl JobStore {
         };
         self.access(move |inner| {
             let _previous = _previous;
-            if job.admitted_membership.is_some() && let Some(fence)=inner.fences.values().find(|fence|fence.job_id==job.job_id && job.admitted_membership.as_deref()==Some(fence.membership.as_str())) {
+            if let Some(membership) = &job.admitted_membership && let Some(fence) = inner.fences.get(&cluster::fence_key(membership, &job.job_id)) {
                 job.stop=StopState::Requested {mutation_id:format!("cluster:{}",fence.membership),at_ms:fence.at};
             }
             validate_job(&job)?;

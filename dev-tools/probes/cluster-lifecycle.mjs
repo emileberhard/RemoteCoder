@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, readFile } from "node:fs/promises";
+import { mkdir, open, readdir, readFile } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import { randomBytes, randomInt, randomUUID } from "node:crypto";
 import { createInterface } from "node:readline";
@@ -10,9 +10,50 @@ const quote = text => `'${text.replaceAll("'", "'\\''")}'`;
 const jobId = () => `agent-codex-${BigInt(Date.now()) * 1_000_000n + BigInt(randomInt(1_000_000))}-${randomBytes(4).toString("hex")}`;
 const terminal = job => job.execution.kind === "terminal" ? job.execution.terminal : null;
 
+async function timed(phase, timings, operation) {
+    const started = performance.now();
+    let outcome = "failed";
+    try {
+        const result = await operation();
+        outcome = "passed";
+        return result;
+    } finally {
+        const timing = { phase, outcome, durationMs: performance.now() - started };
+        timings.push(timing);
+        console.error(JSON.stringify({ phaseTiming: timing }));
+    }
+}
+
+async function failureLogs(lab, secrets) {
+    const directory = "Library/Logs/remote-coder";
+    const names = ["gateway.log", "gateway-errors.log", ...(await readdir(lab.path(directory)).catch(() => []))
+        .filter(name => name.startsWith("codex-gateway")).sort().slice(-2).map(name => `${directory}/${name}`)];
+    const logs = {};
+    for (const name of names) {
+        let file;
+        try {
+            file = await open(lab.path(name), "r");
+            const size = (await file.stat()).size;
+            const bytes = Buffer.alloc(Math.min(size, 65536));
+            const { bytesRead } = await file.read(bytes, 0, bytes.length, Math.max(0, size - bytes.length));
+            let text = bytes.subarray(0, bytesRead).toString("utf8");
+            if (size > bytes.length) {
+                const line = text.indexOf("\n");
+                text = line < 0 ? "" : text.slice(line + 1);
+            }
+            for (const secret of secrets) if (secret) text = text.replaceAll(secret, "[redacted]");
+            logs[name] = text.replace(/\brcp1\.[A-Za-z0-9_.-]+/g, "[redacted membership]");
+        } catch (error) {
+            logs[name] = `unavailable: ${error.code ?? "read_failed"}`;
+        } finally { await file?.close(); }
+    }
+    return logs;
+}
+
 async function worker(binary, runtimePackage) {
     const lab = await IsolatedGateway.create(binary);
     const model = startModel();
+    const secrets = [lab.token];
     let client;
     const rpc = async (method, params) => {
         const response = await client.rpc(method, params);
@@ -38,13 +79,16 @@ async function worker(binary, runtimePackage) {
         const url = value("RC_CODEX_GATEWAY_ROUTER_URL");
         const keyFile = value("RC_CODEX_GATEWAY_ROUTER_KEY_FILE");
         assert(url && keyFile, "Claude probe requires the configured host router");
-        lab.router = startStubRouter({ url, key: (await readFile(keyFile, "utf8")).trim() });
+        const key = (await readFile(keyFile, "utf8")).trim();
+        secrets.push(key);
+        lab.router = startStubRouter({ url, key });
         await lab.writeGatewayEnv([
             `RC_CODEX_GATEWAY_LAN_PORT=${await availablePort()}`,
             `RC_CODEX_GATEWAY_EXTERNAL_PROVIDERS_FILE=${lab.path("external-providers.json")}`,
             "RC_CLAUDE_ENABLED=true", `RC_CLAUDE_HOME=${lab.path(".claude")}`,
             `RC_CLAUDE_PATH=${join(lab.realHome, ".local/bin/claude")}`,
         ]);
+        secrets.push((await readFile(lab.path("router-key"), "utf8")).trim());
         await lab.start();
         client = await lab.connect();
         for await (const line of createInterface({ input: process.stdin })) {
@@ -59,6 +103,7 @@ async function worker(binary, runtimePackage) {
                     case "stop": await lab.stop(); result = true; break;
                     case "start": await lab.start(); client = await lab.connect(); result = true; break;
                     case "requests": result = model.requests; break;
+                    case "failureLogs": result = await failureLogs(lab, secrets); break;
                     case "inputs": {
                         assert(/^claude_[0-9a-f-]{36}$/.test(params.thread));
                         const rows = [];
@@ -91,6 +136,9 @@ async function worker(binary, runtimePackage) {
             }
             if (method === "close") break;
         }
+    } catch (error) {
+        console.error(JSON.stringify({ failure: String(error), logs: await failureLogs(lab, secrets) }));
+        throw error;
     } finally { await close(); }
 }
 
@@ -247,6 +295,10 @@ async function journey(a, b, suffix) {
             const found = await observedCompletion(a, child.parent, child.id);
             return found.length ? found : null;
         });
+        console.error(JSON.stringify({ callbackReceipt: { journey: suffix,
+            parentHostId: a.info.hostId, ownerHostId: b.info.hostId, childId: child.id,
+            parentThreadId: child.parent, provider: child.provider,
+            completionCount: entries.length, callbackAfterReturnMs: Date.now() - resumed } }));
         assert.equal(entries.length, 1, "Completion entered the parent's native history twice");
     }
     console.error(`${suffix}: canonical parent inputs confirm one completion each`);
@@ -264,80 +316,111 @@ async function main() {
     assert([2, 3].includes(count));
     const workers = [];
     const errors = [];
+    const timings = [];
     try {
-        for (let i = 0; i < count; i++) {
-            const command = i === 1 && remote >= 0
-                ? ["ssh", "-o", "BatchMode=yes", options[remote + 1],
-                    ["/opt/homebrew/bin/bun", options[remote + 4], "--worker", options[remote + 2], options[remote + 3]].map(quote).join(" ")]
-                : [process.execPath, import.meta.path, "--worker", binary, runtimePackage];
-            const host = await openWorker(command);
-            workers.push(host);
-            host.info = await host.call("describe");
-        }
-        for (let i = 0; i < workers.length; i++) {
-            for (let j = i + 1; j < workers.length; j++) await pair(workers[i], workers[j], `probe-${i}`, `probe-${j}`);
-        }
-        await waitFor(async () => {
+        await timed("startup", timings, async () => {
+            for (let i = 0; i < count; i++) {
+                const command = i === 1 && remote >= 0
+                    ? ["ssh", "-o", "BatchMode=yes", options[remote + 1],
+                        ["/opt/homebrew/bin/bun", options[remote + 4], "--worker", options[remote + 2], options[remote + 3]].map(quote).join(" ")]
+                    : [process.execPath, import.meta.path, "--worker", binary, runtimePackage];
+                const host = await openWorker(command);
+                workers.push(host);
+                host.info = await host.call("describe");
+            }
+        });
+        await timed("pairing", timings, async () => {
+            for (let i = 0; i < workers.length; i++) {
+                for (let j = i + 1; j < workers.length; j++) await pair(workers[i], workers[j], `probe-${i}`, `probe-${j}`);
+            }
+        });
+        await timed("reachable-members", timings, () => waitFor(async () => {
             const pages = await Promise.all(workers.map(host => host.rpc("cluster/list")));
             return pages.every(page => page.members.length === count - 1
                 && page.members.every(member => member.reachability.state === "reachable"
                     && member.reachability.lastSeenAt));
-        });
-        const outward = await journey(workers[0], workers[1], "outward");
-        const reverse = await journey(workers[1], workers[0], "reverse");
-        const pages = await Promise.all(workers.map(host => host.rpc("agent/cluster/list", { limit: 100 })));
-        if (pages.some(page => page.coverage.some(row => row.state !== "ok"))) {
-            for (const [index, host] of workers.entries()) {
-                console.error(JSON.stringify({ index, inventory: await host.rpc("agent/cluster/inventory", { limit: 100 })
-                    .then(page => ({ count: page.agents.length }), error => ({ error: String(error) })) }));
+        }));
+        const outward = await timed("outward", timings, () => journey(workers[0], workers[1], "outward"));
+        console.error(JSON.stringify({ journeyReceipt: { direction: "outward", ...outward } }));
+        const reverse = await timed("reverse", timings, () => journey(workers[1], workers[0], "reverse"));
+        console.error(JSON.stringify({ journeyReceipt: { direction: "reverse", ...reverse } }));
+        await timed("concurrent-inventory", timings, async () => {
+            const started = performance.now();
+            const results = await Promise.allSettled(workers.map(host => host.rpc("agent/cluster/list", { limit: 100 })));
+            const inventories = results.map((result, index) => ({ index, hostId: workers[index].info.hostId,
+                ...(result.status === "fulfilled"
+                    ? { coverage: result.value.coverage, warnings: result.value.warnings, count: result.value.agents?.length }
+                    : { error: String(result.reason) }) }));
+            console.error(JSON.stringify({ concurrentInventory: { durationMs: performance.now() - started, inventories } }));
+            assert(results.every(result => result.status === "fulfilled"), JSON.stringify(inventories));
+            const pages = results.map(result => result.value);
+            if (pages.some(page => page.coverage.some(row => row.state !== "ok"))) {
+                await Promise.all(workers.map(async (host, index) => {
+                    console.error(JSON.stringify({ index, inventory: await host.rpc("agent/cluster/inventory", { limit: 100 })
+                        .then(page => ({ count: page.agents.length }), error => ({ error: String(error) })) }));
+                }));
             }
-        }
-        for (const page of pages) {
-            assert.equal(page.coverage.length, count);
-            assert(page.coverage.every(row => row.state === "ok"), JSON.stringify(page.coverage));
-        }
+            for (const page of pages) {
+                assert.equal(page.coverage.length, count, JSON.stringify(inventories));
+                assert(page.coverage.every(row => row.state === "ok"), JSON.stringify(inventories));
+            }
+        });
         let parenting = null;
         if (count === 3) {
-            console.error("three-member: move the child's parent tag");
-            const child = outward.children[0];
-            const job = (await workers[1].rpc("agent/jobs/read", { jobId: child.id })).job;
-            const address = { hostId: workers[1].info.hostId, threadId: terminal(job).execution.conversation.threadId };
-            const root = await nativeParent(workers[2], "codex");
-            const moved = await workers[1].rpc("agent/parent/set", { protocol: 1, agent: address,
-                parent: { hostId: workers[2].info.hostId, threadId: root }, caller: { kind: "operator" } });
-            assert.equal(moved.parent.hostId, workers[2].info.hostId);
-            const continued = jobId();
-            const command = [workers[2].info.binary, "--env-file", workers[2].info.env,
-                "agent", "spawn", `RCJOB_ECHO:Moved child result ${continued}`,
-                "--resume", child.id, "--host", workers[1].info.hostId,
-                "--job-id", continued, "--json"].map(quote).join(" ");
-            await nativeCommand(workers[2], root, "codex", command);
-            await waitFor(async () => {
-                const rows = await workers[1].rpc("agent/jobs/list", {selector:{kind:"recent"},limit:100,cursor:null});
-                if (!rows.jobs.some(row => row.jobId === continued)) return false;
-                const view = await workers[1].rpc("agent/jobs/read", {jobId:continued});
-                return ["accepted", "recorded"].includes(terminal(view.job)?.completion?.delivery?.kind);
+            await timed("move-and-promotion", timings, async () => {
+                console.error("three-member: move the child's parent tag");
+                const child = outward.children[0];
+                const job = (await workers[1].rpc("agent/jobs/read", { jobId: child.id })).job;
+                const address = { hostId: workers[1].info.hostId, threadId: terminal(job).execution.conversation.threadId };
+                const root = await nativeParent(workers[2], "codex");
+                const moved = await workers[1].rpc("agent/parent/set", { protocol: 1, agent: address,
+                    parent: { hostId: workers[2].info.hostId, threadId: root }, caller: { kind: "operator" } });
+                assert.equal(moved.parent.hostId, workers[2].info.hostId);
+                const continued = jobId();
+                const command = [workers[2].info.binary, "--env-file", workers[2].info.env,
+                    "agent", "spawn", `RCJOB_ECHO:Moved child result ${continued}`,
+                    "--resume", child.id, "--host", workers[1].info.hostId,
+                    "--job-id", continued, "--json"].map(quote).join(" ");
+                await nativeCommand(workers[2], root, "codex", command);
+                await waitFor(async () => {
+                    const rows = await workers[1].rpc("agent/jobs/list", {selector:{kind:"recent"},limit:100,cursor:null});
+                    if (!rows.jobs.some(row => row.jobId === continued)) return false;
+                    const view = await workers[1].rpc("agent/jobs/read", {jobId:continued});
+                    return ["accepted", "recorded"].includes(terminal(view.job)?.completion?.delivery?.kind);
+                });
+                const movedEntries = await waitFor(async () => {
+                    const entries = await observedCompletion(workers[2], root, continued);
+                    return entries.length ? entries : null;
+                });
+                assert.equal(movedEntries.length, 1);
+                assert.equal((await observedCompletion(workers[0], child.parent, continued)).length, 0);
+                console.error("three-member: only the new parent received the continued result");
+                const promoted = await workers[1].rpc("agent/parent/set", { protocol: 1, agent: address,
+                    parent: null, caller: { kind: "operator" } });
+                assert.equal(promoted.parent, null);
+                parenting = { agent: address, movedParent: { hostId: workers[2].info.hostId, threadId: root },
+                    continuedJobId: continued, promoted: true };
+                console.error("three-member: promote the child to a root");
             });
-            const movedEntries = await waitFor(async () => {
-                const entries = await observedCompletion(workers[2], root, continued);
-                return entries.length ? entries : null;
-            });
-            assert.equal(movedEntries.length, 1);
-            assert.equal((await observedCompletion(workers[0], child.parent, continued)).length, 0);
-            console.error("three-member: only the new parent received the continued result");
-            const promoted = await workers[1].rpc("agent/parent/set", { protocol: 1, agent: address,
-                parent: null, caller: { kind: "operator" } });
-            assert.equal(promoted.parent, null);
-            parenting = { agent: address, movedParent: { hostId: workers[2].info.hostId, threadId: root },
-                continuedJobId: continued, promoted: true };
-            console.error("three-member: promote the child to a root");
         }
         console.log(JSON.stringify({ members: count, crossMac: remote >= 0, outward, reverse,
-            completeCoverage: true, moveAndPromotion: count === 3, parenting }));
+            completeCoverage: true, moveAndPromotion: count === 3, parenting, phaseTimings: timings }));
+    } catch (error) {
+        console.error(JSON.stringify({ coordinatorFailure: String(error), phaseTimings: timings }));
+        const diagnostics = await Promise.all(workers.map(async (host, index) => ({
+            index, hostId: host.info?.hostId,
+            ...await host.call("failureLogs").then(logs => ({ logs }), failure => ({ failureLogsError: String(failure) })),
+        })));
+        for (const diagnostic of diagnostics) console.error(JSON.stringify({ workerFailureLogs: diagnostic }));
+        throw error;
     } finally {
+        const started = performance.now();
         for (const host of workers.reverse()) {
             try { await host.close(); } catch (error) { errors.push(String(error)); }
         }
+        const cleanup = { phase: "cleanup", outcome: errors.length ? "failed" : "passed", durationMs: performance.now() - started };
+        timings.push(cleanup);
+        console.error(JSON.stringify({ phaseTiming: cleanup, cleanupErrors: errors }));
         assert.equal(errors.length, 0, errors.join("\n"));
     }
 }

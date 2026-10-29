@@ -707,6 +707,18 @@ async fn agent_client_format_only_reads_scoped_proof_without_bearer_credentials(
         .unwrap();
 }
 
+fn fixture_job(id: &str, agent: &str) -> Value {
+    json!({
+        "jobId":id,"agentId":agent,"requestFingerprint":null,"createdAtMs":100,
+        "updatedAtMs":100,"revision":0,"previousJobId":null,"source":"imported",
+        "admissionOrigin":null,"unconfirmedResult":null,"notices":[],
+        "spec":{"kind":"known","spec":{"prompt":"fixture","cwd":"/tmp",
+            "settings":{"provider":"claude","model":"opus","effort":"high","fast":false},
+            "toolScope":{"kind":"full"},"title":null}},
+        "recipient":{"kind":"none"},"execution":{"kind":"admitted"},"stop":{"kind":"notRequested"}
+    })
+}
+
 #[tokio::test]
 async fn agent_client_resume_agent_id_continues_latest_but_explicit_stale_jobs_stay_fenced() {
     let root = tempfile::tempdir().unwrap();
@@ -717,23 +729,12 @@ async fn agent_client_resume_agent_id_continues_latest_but_explicit_stale_jobs_s
     let latest = "agent-claude-1793127141860775000-00000003";
     let next = "agent-claude-1793127141860775000-00000004";
     let server = tokio::spawn(async move {
-        let job = |id: &str| {
-            json!({
-                "jobId":id,"agentId":first,"requestFingerprint":null,"createdAtMs":100,
-                "updatedAtMs":100,"revision":0,"previousJobId":null,"source":"imported",
-                "admissionOrigin":null,"unconfirmedResult":null,"notices":[],
-                "spec":{"kind":"known","spec":{"prompt":"fixture","cwd":"/tmp",
-                    "settings":{"provider":"claude","model":"opus","effort":"high","fast":false},
-                    "toolScope":{"kind":"full"},"title":null}},
-                "recipient":{"kind":"none"},"execution":{"kind":"admitted"},"stop":{"kind":"notRequested"}
-            })
-        };
+        let job = |id: &str| fixture_job(id, first);
         for target in [first, stale] {
             let mut source_id = target;
             for method in if target == first {
                 vec![
                     "agent/cluster/resolve",
-                    "cluster/list",
                     "agent/jobs/read",
                     "agent/jobs/read",
                     "agent/jobs/continue",
@@ -741,7 +742,6 @@ async fn agent_client_resume_agent_id_continues_latest_but_explicit_stale_jobs_s
             } else {
                 vec![
                     "agent/cluster/resolve",
-                    "cluster/list",
                     "agent/jobs/read",
                     "agent/jobs/continue",
                 ]
@@ -755,9 +755,7 @@ async fn agent_client_resume_agent_id_continues_latest_but_explicit_stale_jobs_s
                 let request: Value = serde_json::from_str(&text).unwrap();
                 assert_eq!(request["method"], method);
                 let response = if method == "agent/cluster/resolve" {
-                    json!({"result":{"ownerHostId":"fixture-host","jobId":target,"agentId":first}})
-                } else if method == "cluster/list" {
-                    json!({"result":{"self":{"hostId":"fixture-host"},"members":[]}})
+                    json!({"result":{"ownerHostId":"fixture-host","jobId":target,"agentId":first,"local":true}})
                 } else if method == "agent/jobs/read" {
                     assert_eq!(request["params"]["jobId"], source_id);
                     let result = json!({"job":job(source_id),"agent":{
@@ -820,4 +818,190 @@ async fn agent_client_resume_agent_id_continues_latest_but_explicit_stale_jobs_s
         }
     }
     server.await.unwrap();
+}
+
+#[tokio::test]
+async fn agent_client_exact_local_operations_never_probe_or_dispatch_to_peers() {
+    let root = tempfile::tempdir().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    configuration(root.path(), listener.local_addr().unwrap().port());
+    let id = "agent-claude-1793127141860775000-00000011";
+    let next = "agent-claude-1793127141860775000-00000012";
+    let server = tokio::spawn(async move {
+        for methods in [
+            vec!["agent/cluster/resolve", "agent/jobs/read"],
+            vec!["agent/cluster/resolve", "agent/jobs/message"],
+            vec!["agent/cluster/resolve", "agent/jobs/stop"],
+            vec![
+                "agent/cluster/resolve",
+                "agent/jobs/read",
+                "agent/jobs/continue",
+            ],
+        ] {
+            for method in methods {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+                initialize(&mut socket).await;
+                let Message::Text(text) = socket.next().await.unwrap().unwrap() else {
+                    panic!("No operation request");
+                };
+                let request: Value = serde_json::from_str(&text).unwrap();
+                assert_ne!(request["method"], "cluster/list");
+                assert_ne!(request["method"], "agent/cluster/dispatch");
+                assert_eq!(request["method"], method);
+                let result = match method {
+                    "agent/cluster/resolve" => {
+                        assert_eq!(request["params"]["target"], id);
+                        json!({"ownerHostId":"fixture-host","jobId":id,"agentId":id,"local":true})
+                    }
+                    "agent/jobs/read" => {
+                        assert_eq!(request["params"]["jobId"], id);
+                        json!({"job":fixture_job(id,id),"agent":{"agentId":id,"conversation":{"kind":"unknown","reason":"fixture"},"origin":{"kind":"topLevel"},"toolScope":{"kind":"full"},"originJobId":id,"latestJobId":id}})
+                    }
+                    "agent/jobs/message" => {
+                        assert_eq!(
+                            request["params"]["target"],
+                            json!({"kind":"selector","selector":id})
+                        );
+                        assert_eq!(request["params"]["caller"], json!({"kind":"operator"}));
+                        assert_eq!(request["params"]["deliveryId"], "local-message");
+                        json!({"deliveryId":"local-message","deliveryState":{"kind":"accepted","receipt":"local fixture"}})
+                    }
+                    "agent/jobs/stop" => {
+                        assert_eq!(request["params"]["jobId"], id);
+                        assert_eq!(request["params"]["mutationId"], "local-stop");
+                        json!({"stopped":true})
+                    }
+                    "agent/jobs/continue" => {
+                        assert_eq!(request["params"]["expectedPreviousJobId"], id);
+                        let mut continued = fixture_job(next, id);
+                        continued["previousJobId"] = json!(id);
+                        json!({"protocol":1,"ownerHostId":"fixture-host","jobId":next,"address":null,"state":"waiting","incarnation":"fixture-incarnation","job":continued,"duplicate":false})
+                    }
+                    _ => panic!("Unexpected operation"),
+                };
+                socket
+                    .send(Message::Text(
+                        json!({"id":request["id"],"result":result}).to_string(),
+                    ))
+                    .await
+                    .unwrap();
+            }
+        }
+    });
+    for arguments in [
+        vec!["read", id, "--json"],
+        vec![
+            "message",
+            id,
+            "Local message",
+            "--operator",
+            "--json",
+            "--delivery-id",
+            "local-message",
+        ],
+        vec!["stop", id, "--mutation-id", "local-stop"],
+        vec![
+            "spawn",
+            "--resume",
+            id,
+            "Continue fixture",
+            "--operator",
+            "--json",
+            "--job-id",
+            next,
+        ],
+    ] {
+        let output = tokio::time::timeout(
+            Duration::from_secs(10),
+            tokio::process::Command::new(env!("CARGO_BIN_EXE_remote-coder-codex-gateway"))
+                .env_clear()
+                .env("HOME", root.path())
+                .arg("--env-file")
+                .arg(root.path().join("gateway.env"))
+                .arg("agent")
+                .args(&arguments)
+                .kill_on_drop(true)
+                .output(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(output.status.success(), "{arguments:?}: {output:?}");
+        assert!(output.stderr.is_empty(), "{output:?}");
+        let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+        match arguments[0] {
+            "read" => assert_eq!(result["job"]["jobId"], id),
+            "message" => assert_eq!(result["deliveryId"], "local-message"),
+            "stop" => assert_eq!(result["stopped"], true),
+            "spawn" => assert_eq!(result["previous_run_id"], id),
+            _ => panic!("Unexpected command"),
+        }
+    }
+    tokio::time::timeout(Duration::from_secs(10), server)
+        .await
+        .unwrap()
+        .unwrap();
+}
+
+#[tokio::test]
+async fn agent_client_rpc_exit_codes_preserve_explicit_classes_and_typed_availability_conflicts() {
+    let root = tempfile::tempdir().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    configuration(root.path(), listener.local_addr().unwrap().port());
+    let cases = [
+        (json!({"code":-32003,"message":"Fixture failure"}), 5),
+        (json!({"code":-32009,"message":"Fixture failure"}), 8),
+        (
+            json!({"code":-32003,"message":"Fixture failure","data":{"class":"conflict"}}),
+            8,
+        ),
+        (
+            json!({"code":-32009,"message":"Fixture failure","data":{"class":"unavailable"}}),
+            5,
+        ),
+    ];
+    let replies = cases.clone();
+    let server = tokio::spawn(async move {
+        for (error, _) in replies {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            initialize(&mut socket).await;
+            let Message::Text(text) = socket.next().await.unwrap().unwrap() else {
+                panic!("No receipt request");
+            };
+            let request: Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(request["method"], "agent/messages/read");
+            socket
+                .send(Message::Text(
+                    json!({"id":request["id"],"error":error}).to_string(),
+                ))
+                .await
+                .unwrap();
+        }
+    });
+    for (error, expected) in cases {
+        let output = tokio::time::timeout(
+            Duration::from_secs(10),
+            tokio::process::Command::new(env!("CARGO_BIN_EXE_remote-coder-codex-gateway"))
+                .env_clear()
+                .env("HOME", root.path())
+                .arg("--env-file")
+                .arg(root.path().join("gateway.env"))
+                .args(["agent", "receipt", "fixture-message", "--json"])
+                .kill_on_drop(true)
+                .output(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(output.status.code(), Some(expected), "{output:?}");
+        assert!(output.stdout.is_empty());
+        let diagnostic: Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert_eq!(diagnostic["error"], error);
+    }
+    tokio::time::timeout(Duration::from_secs(10), server)
+        .await
+        .unwrap()
+        .unwrap();
 }

@@ -1045,7 +1045,7 @@ async fn current_parent_tag_overrides_native_provenance_in_headers_and_classific
         .await
         .unwrap();
     store
-        .set_parent(agent.agent_id.clone(), None, Recipient::None)
+        .set_parent_for_test(agent.agent_id.clone(), None, Recipient::None)
         .await
         .unwrap();
     let mut header = json!({"thread":{"id":"0e1a0399-0e3d-5aa4-ace7-0ed28835d55f","parentThreadId":"83fd029c-0ad3-5ed2-8513-781e45c9b22a"}});
@@ -1082,7 +1082,7 @@ async fn current_parent_tag_overrides_native_provenance_in_headers_and_classific
         thread_id: address.thread_id.clone(),
     };
     store
-        .set_parent(
+        .set_parent_for_test(
             agent.agent_id.clone(),
             Some(address.clone()),
             Recipient::Remote {
@@ -1156,7 +1156,7 @@ async fn remote_parent_pages_have_stable_revisions_and_non_null_titles() {
         thread_id: "other-host-parent".into(),
     };
     store
-        .set_parent(
+        .set_parent_for_test(
             agent.agent_id.clone(),
             Some(address.clone()),
             Recipient::Unknown {
@@ -1177,7 +1177,7 @@ async fn remote_parent_pages_have_stable_revisions_and_non_null_titles() {
         .unwrap();
     assert_eq!(page["revision"], unchanged["revision"]);
     store
-        .set_parent(agent.agent_id, None, Recipient::None)
+        .set_parent_for_test(agent.agent_id, None, Recipient::None)
         .await
         .unwrap();
     let empty = gateway
@@ -1186,4 +1186,30 @@ async fn remote_parent_pages_have_stable_revisions_and_non_null_titles() {
         .unwrap();
     assert!(empty["agents"].as_array().unwrap().is_empty());
     assert_ne!(page["revision"], empty["revision"]);
+}
+
+#[tokio::test]
+async fn cluster_parent_cycles_are_bounded_and_each_affected_thread_is_a_root() {
+    let gateway = gateway();
+    for (thread, parent) in [("cycle-a", "cycle-b"), ("cycle-b", "cycle-a")] {
+        gateway.agents.parents.lock().await.insert(
+            thread.into(),
+            ParentSnapshot {
+                at: Instant::now(),
+                parent: Some(parent.into()),
+                available: true,
+            },
+        );
+    }
+    let roots = gateway
+        .agent_service()
+        .thread_roots(&["cycle-a".into(), "cycle-b".into()])
+        .await;
+    assert_eq!(
+        roots,
+        HashMap::from([
+            ("cycle-a".into(), "cycle-a".into()),
+            ("cycle-b".into(), "cycle-b".into())
+        ])
+    );
 }

@@ -265,7 +265,7 @@ async fn cluster_fault_admission_replay_fences_and_incarnation() {
         caller_authority:CallerAuthority::Agent {conversation:ConversationIdentity {provider:Provider::Codex,provider_home:ProviderHome::Known {path:a.directory.path().into()},thread_id:"restricted-parent".into()},scope:ToolScope::ReadOnly {root:a.directory.path().into()}},
         request:json!({"target":{"kind":"job","jobId":id},"caller":{"kind":"operator"},"deliveryId":"restricted-steer","text":"must not steer full-access work"}),
     })).await.unwrap_err();
-    assert_eq!(steer.class, ErrorClass::Refused);
+    assert_eq!(steer.class, ErrorClass::Unavailable);
     let mut changed = intent.request.clone();
     changed.operation = AdmissionOperation::Continue(crate::wire::agent_jobs::ContinueParams {
         job_id: id.clone(),

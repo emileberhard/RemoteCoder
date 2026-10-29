@@ -315,7 +315,13 @@ Other modules use `Gateway::cluster_link().await` to obtain an `Arc<Link>`.
 (serialized as `hostId`), and `name` is its alias. `Link::call(host, method,
 params).await` uses one pooled, pinned TLS connection per membership. A
 `LinkError` retains `class` and `transmitted`; only `transmitted == false`
-proves that the requested method was never sent. `Gateway::host_identity().await`
+proves that the requested method was never handed to the socket owner. Each
+connection owns a continuous reader and a capacity-one request channel; close,
+EOF or an error evicts its cached socket and resolves pending receipts. A transport
+failure reconnects once within the same ten-second deadline if nothing could
+have been transmitted, or if the RPC metadata classifies the method as a query
+or status read. A possibly transmitted mutation is never replayed by Link.
+`Gateway::host_identity().await`
 returns `HostIdentity {host_id, incarnation}`.
 
 `cluster/list` returns `self {hostId,name,incarnation,version,protocol}` and
@@ -453,3 +459,39 @@ a ten-second deadline, so one slow request can delay other requests to that peer
 These ordering boundaries remain explicit follow-up work; other peers proceed
 independently. Native session inventory freshness and ingestion remain owned by
 sessions, including its pending event-driven single-writer repair.
+
+### Admission custody and parent graphs
+
+Remote admission has one JobStore-owned claim per intent. The retained intent is
+checked after acquiring that claim, and transmission uncertainty is persisted
+before sending. A later connection failure cannot erase an earlier uncertain
+transmission. Abandoned intents are never sent. Delivery transport failures also
+preserve uncertain custody; only positive receiver evidence of non-acceptance
+allows the current parent tag to retarget a result.
+
+The owning job store validates the current local parent graph and commits a move
+under the same lock. Remote observations are gathered before that critical
+section. Simultaneous moves across different hosts can still create a cycle;
+there is no distributed graph lock. Parent mutation and descendant walks stop at
+16 levels. Root classification uses at most 32 cached links and treats a detected
+cycle as a root. CLI lifecycle operations do not walk parent chains locally.
+
+A read-only child can send free-form MessageParent input to its immutable proven
+origin parent without arbitrary steering permission. Moving it under a new parent
+still routes completion there, but free-form MessageParent to that new parent
+requires ordinary steering authorization. A placement tag grants no authority.
+
+Child and descendant pages merge only the selected agents' ordered job ranges.
+For K selected agents and R returned rows, selection costs O(K log J +
+(K + R) log K), with at most 16 descendant levels. An empty parent costs O(1).
+Recent and active pages retain ordered seeks. Unsettled-intent admission uses an
+O(1) counter; cancellation fences use an exact O(log F) key lookup. These costs
+exclude inherited storage accounting, reclaim sorting and persistence under the
+store lock, which remain separate follow-up work. Retained records and their
+indexes still grow with J; this change adds no retention policy.
+
+Membership tombstones are terminal. Repeating removal succeeds without changing
+a removed record back to pending. Revoked credentials gain no Grant: an exact
+retained tombstone can return only a typed membership_removed refusal. A pinned
+peer matches its host and membership before treating that refusal as positive
+removal acknowledgement. Other credential failures never complete removal.

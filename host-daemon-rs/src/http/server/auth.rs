@@ -70,18 +70,33 @@ impl FromRequestParts<HttpState> for Operator {
 pub(in crate::http) enum AuthorizationFailure {
     Unauthorized,
     Unavailable,
+    MembershipRemoved(crate::cluster::members::MembershipRemoved),
 }
 
 impl IntoResponse for AuthorizationFailure {
     fn into_response(self) -> Response {
-        let (status, message) = match self {
-            Self::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized"),
+        match self {
+            Self::MembershipRemoved(removed) => (
+                StatusCode::FORBIDDEN,
+                [
+                    ("x-remotecoder-refusal", "membership_removed"),
+                    ("x-remotecoder-peer-host", removed.host.as_str()),
+                    ("x-remotecoder-membership", removed.membership.as_str()),
+                ],
+                Json(removed.data()),
+            )
+                .into_response(),
+            Self::Unauthorized => (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({"error":"unauthorized"})),
+            )
+                .into_response(),
             Self::Unavailable => (
                 StatusCode::SERVICE_UNAVAILABLE,
-                "credential storage unavailable",
-            ),
-        };
-        (status, Json(json!({"error": message}))).into_response()
+                Json(json!({"error":"credential storage unavailable"})),
+            )
+                .into_response(),
+        }
     }
 }
 
@@ -97,10 +112,13 @@ pub(super) async fn authorize(
     {
         Ok(Some(grant)) => Ok(grant),
         Ok(None) => Err(AuthorizationFailure::Unauthorized),
-        Err(error) => {
-            warn!(%error, "installation credential storage unavailable");
-            Err(AuthorizationFailure::Unavailable)
-        }
+        Err(error) => match error.downcast::<crate::cluster::members::MembershipRemoved>() {
+            Ok(removed) => Err(AuthorizationFailure::MembershipRemoved(removed)),
+            Err(error) => {
+                warn!(%error, "installation credential storage unavailable");
+                Err(AuthorizationFailure::Unavailable)
+            }
+        },
     }
 }
 
@@ -127,5 +145,89 @@ pub(super) async fn enroll_credential(
             )
                 .into_response()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::http::server::harness::{HOST, LanHarness, exchange};
+    use crate::wire::cluster::{IssueParams, PROTOCOL, RemoveParams};
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+
+    #[tokio::test]
+    async fn revoked_peer_credentials_receive_only_exact_typed_http_refusal() {
+        let lan = LanHarness::start().await;
+        let link = lan.gateway.cluster_link().await.unwrap();
+        let host = "00000000-0000-4000-8000-000000000031";
+        let membership = "00000000-0000-4000-8000-000000000032";
+        let token = link
+            .store
+            .issue(IssueParams {
+                protocol: PROTOCOL,
+                r#for: host.into(),
+                name: "revoked-peer".into(),
+                membership: membership.into(),
+            })
+            .await
+            .unwrap();
+        link.store
+            .remove(
+                RemoveParams {
+                    protocol: PROTOCOL,
+                    host: host.into(),
+                    membership: membership.into(),
+                },
+                false,
+            )
+            .await
+            .unwrap();
+        let mut stream = lan.connect(&lan.pin).await.unwrap();
+        let (status, body) = exchange(
+            &mut stream,
+            &format!(
+                "GET /health HTTP/1.1\r\nHost: {HOST}\r\nAuthorization: Bearer {token}\r\n\r\n"
+            ),
+            b"",
+        )
+        .await;
+        assert_eq!(status, 403);
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+            json!({"class":"refused","kind":"membership_removed","host":host,"membership":membership,"retryable":false})
+        );
+        let (status, body) = exchange(
+            &mut stream,
+            &format!(
+                "GET /health HTTP/1.1\r\nHost: {HOST}\r\nAuthorization: Bearer {token}x\r\n\r\n"
+            ),
+            b"",
+        )
+        .await;
+        assert_eq!(status, 401);
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+            json!({"error":"unauthorized"})
+        );
+        let stream = lan.connect(&lan.pin).await.unwrap();
+        let mut request = format!("wss://{HOST}/ws").into_client_request().unwrap();
+        request.headers_mut().insert(
+            header::AUTHORIZATION,
+            format!("Bearer {token}").parse().unwrap(),
+        );
+        let error = tokio_tungstenite::client_async(request, stream)
+            .await
+            .unwrap_err();
+        let tokio_tungstenite::tungstenite::Error::Http(response) = error else {
+            panic!("expected an HTTP refusal");
+        };
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(
+            response.headers()["x-remotecoder-refusal"],
+            "membership_removed"
+        );
+        assert_eq!(response.headers()["x-remotecoder-peer-host"], host);
+        assert_eq!(response.headers()["x-remotecoder-membership"], membership);
+        lan.stop().await;
     }
 }

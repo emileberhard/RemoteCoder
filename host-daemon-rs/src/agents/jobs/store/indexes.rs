@@ -7,6 +7,7 @@ pub(super) struct Indexes {
     pub parents: HashMap<crate::wire::cluster::AgentAddress, BTreeSet<String>>,
     intents_by_parent: HashMap<crate::wire::cluster::AgentAddress, BTreeSet<JobId>>,
     open_intents: HashMap<String, HashMap<String, BTreeSet<JobId>>>,
+    pub unsettled_intents: usize,
     pub order: BTreeSet<(Option<i64>, JobId)>,
     pub by_agent: HashMap<String, BTreeSet<(Option<i64>, JobId)>>,
     pub active: HashMap<String, BTreeSet<JobId>>,
@@ -198,6 +199,9 @@ impl Indexes {
     }
 
     fn remove_intent(&mut self, intent: &crate::wire::cluster::RemoteIntent) {
+        if unsettled_intent(intent) {
+            self.unsettled_intents -= 1;
+        }
         if let Some(parent) = &intent.parent
             && let Some(ids) = self.intents_by_parent.get_mut(parent)
         {
@@ -220,6 +224,9 @@ impl Indexes {
     }
 
     pub fn intent_changed(&mut self, intent: &crate::wire::cluster::RemoteIntent) {
+        if unsettled_intent(intent) {
+            self.unsettled_intents += 1;
+        }
         if let Some(parent) = &intent.parent {
             self.intents_by_parent
                 .entry(parent.clone())
@@ -638,6 +645,12 @@ impl JobStore {
         })
         .await
     }
+}
+
+fn unsettled_intent(intent: &crate::wire::cluster::RemoteIntent) -> bool {
+    intent.state == crate::wire::cluster::IntentState::Pending
+        || intent.state == crate::wire::cluster::IntentState::StopRequested
+            && !intent.stop_confirmed
 }
 
 #[cfg(test)]

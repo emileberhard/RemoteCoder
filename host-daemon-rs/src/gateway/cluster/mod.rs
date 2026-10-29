@@ -87,17 +87,7 @@ impl Gateway {
             return self.native_conversation_operation(request, caller).await;
         }
         if matches!(method, "agent/cluster/inventory" | "agent/cluster/resolve") {
-            if let Grant::Peer {
-                host,
-                membership,
-                digest,
-            } = grant
-            {
-                ensure!(
-                    link.store.valid(host, membership, digest).await?,
-                    "membership was removed"
-                );
-            }
+            self.validate_member_grant(grant).await?;
             let result = if method == "agent/cluster/inventory" {
                 self.local_agent_inventory(params).await
             } else {
@@ -150,17 +140,12 @@ impl Gateway {
             return self.set_cluster_parent(request).await;
         }
         let Grant::Peer {
-            host,
-            membership,
-            digest,
+            host, membership, ..
         } = grant
         else {
             bail!("this cluster method requires an authenticated member");
         };
-        ensure!(
-            link.store.valid(host, membership, digest).await?,
-            "membership was removed"
-        );
+        self.validate_member_grant(grant).await?;
         ensure!(
             params["protocol"].as_u64() == Some(PROTOCOL as u64),
             "unsupported cluster protocol"

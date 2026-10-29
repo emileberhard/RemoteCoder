@@ -32,6 +32,40 @@ pub(crate) enum ErrorClass {
     Conflict,
 }
 
+impl ErrorClass {
+    pub(crate) fn from_rpc(error: &Value) -> Self {
+        if let Some(class) = error["data"]["class"]
+            .as_str()
+            .or_else(|| error["class"].as_str())
+            .and_then(|class| serde_json::from_value(Value::String(class.to_owned())).ok())
+        {
+            return class;
+        }
+        if error["data"]["kind"] == "unprovenCaller" || error["kind"] == "unprovenCaller" {
+            return Self::Refused;
+        }
+        match error["code"].as_i64() {
+            Some(-32600 | -32602) => Self::Usage,
+            Some(-32601) => Self::Unsupported,
+            Some(-32003..=-32001) => Self::Unavailable,
+            Some(-32009) => Self::Conflict,
+            _ => Self::Refused,
+        }
+    }
+
+    pub(crate) fn exit_code(&self) -> i32 {
+        match self {
+            Self::Usage => 2,
+            Self::NotFound => 3,
+            Self::Refused => 4,
+            Self::Unavailable => 5,
+            Self::Uncertain => 6,
+            Self::Unsupported => 7,
+            Self::Conflict => 8,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct MemberRecord {
@@ -206,6 +240,8 @@ pub(crate) struct RemoteIntent {
     pub state: IntentState,
     #[serde(default)]
     pub stop_confirmed: bool,
+    #[serde(default)]
+    pub transmission_uncertain: bool,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
