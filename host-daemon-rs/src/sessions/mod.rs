@@ -13,7 +13,7 @@ use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-pub(crate) const SCHEMA_VERSION: u32 = 3;
+pub(crate) const SCHEMA_VERSION: u32 = 4;
 pub(crate) const PAGE_BYTES: usize = 8 << 20;
 pub(crate) const PAGE_ROWS: usize = 10_000;
 pub(crate) const CHANGE_DAYS: i64 = 30;
@@ -118,6 +118,9 @@ pub(crate) fn timestamp(value: &str) -> Result<String> {
 
 pub(crate) fn error_data(error: &anyhow::Error) -> serde_json::Value {
     let message = format!("{error:#}");
+    if let Some(link) = error.downcast_ref::<crate::cluster::link::LinkError>() {
+        return serde_json::json!({"class":link.class,"kind":link.class,"message":message,"retryable":link.class==crate::wire::cluster::ErrorClass::Unavailable,"transmitted":link.transmitted});
+    }
     let (class, kind) = if message.starts_with("cursor_expired:") {
         ("conflict", "cursor_expired")
     } else if message.starts_with("source_changed:") || message.starts_with("conflict:") {

@@ -111,3 +111,29 @@ The manual corpus probe also accepts
 `RC_SESSIONS_MEASURE_IDLE=after` to measure a quiet minute and cold-append/new-file
 latency on a prepared private full-history catalog. Full reconcile CPU is
 reported separately and amortized over its ten-minute interval.
+
+Schema 4 rebuilds earlier development catalogs with origin-indexed dependencies
+and persisted provider roots. Mirror listings perform cursor seeks and limit in
+SQL before materialization: a page performs O(R log H) index work and O(R)
+filesystem checks for R <= 500, including shared evidence only once. A missing
+provider root refuses even an empty continuation page; unknown presence never
+authorizes mirror reclamation. Rotation retires a proven-missing source owner
+inside the replacement transaction; an existing owner remains a conflict.
+
+Canonical session and item reads route directly to the origin member. Explicit
+local and database reads stay on that catalog, and peer reads cannot fan out.
+Exact item and dependency responses return bytes captured from the same opened
+handle used for validation. SQL bounds cumulative encoded response bytes before
+allocating text or base64 values, with SQLITE_LIMIT_LENGTH on the query connection
+only; ingestion and other SQLite users have no process-wide heap limit.
+
+Search returns newest-ingested items first with a descending rowid cursor.
+Background rebuilds ingest sources oldest-first by mtime; appended records enter
+at the head of search naturally. Ordering uses FTS rowid directly and stops at
+the page limit without sorting all matches. Timestamps remain exact predicates:
+item timestamps and ingestion order are not interchangeable. A date window with
+few qualifying hits, especially a historical before window if added later, can
+still visit every matching posting; common since queries terminate once the page
+fills. Cluster cursors retain failed or unqueried members for retry rather than
+marking them exhausted. Feed pruning seeks expired entries through change_age;
+a catalog with no expired entries does not scan the feed during restart.

@@ -193,8 +193,26 @@ impl Gateway {
         method: &str,
         params: Value,
     ) -> Result<Value> {
-        let runtime = self.sessions_runtime().await?.clone();
         let host = self.host_identity().await?.host_id;
+        let params = if method == "sessions/read" {
+            let mut request: query::ReadRequest = serde_json::from_value(params)?;
+            request.local |= matches!(
+                grant,
+                crate::auth::installation_credentials::Grant::Peer { .. }
+            );
+            if let Some((origin, forwarded)) = cluster::forward_read(&host, request.clone())? {
+                return self
+                    .cluster_link()
+                    .await?
+                    .call(&origin, method, forwarded)
+                    .await
+                    .map_err(Into::into);
+            }
+            serde_json::to_value(request)?
+        } else {
+            params
+        };
+        let runtime = self.sessions_runtime().await?.clone();
         let local_host = host.clone();
         if method == "sessions/list" {
             #[derive(serde::Deserialize)]
@@ -232,9 +250,11 @@ impl Gateway {
                 "sessions/search"=>{
                     let mut request=request_copy.context("Search request missing")?;
                     if !request.local {
-                        let cursors:std::collections::BTreeMap<String,Option<String>>=request.cursor.as_deref().map(serde_json::from_str).transpose()?.unwrap_or_default();
-                        if cursors.contains_key(&host) && cursors[&host].is_none() {return Ok(json!({"hits":[],"cursor":null,"coverage":query::coverage(&store.reader()?)?}));}
-                        request.cursor=cursors.get(&host).cloned().flatten();
+                        let positions=cluster::positions(request.cursor.as_deref())?;
+                        match positions.get(&host).cloned().unwrap_or(cluster::Position::Next(None)) {
+                            cluster::Position::Exhausted=>return Ok(json!({"hits":[],"cursor":null,"coverage":query::coverage(&store.reader()?)?})),
+                            cluster::Position::Next(cursor)=>request.cursor=cursor,
+                        }
                     }
                     query::search(&store.reader()?,&request)
                 }

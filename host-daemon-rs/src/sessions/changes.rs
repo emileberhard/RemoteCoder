@@ -62,9 +62,13 @@ pub(crate) fn read(db: &super::store::Reader, request: Request) -> Result<Value>
     Ok(response)
 }
 
+pub(super) const PRUNE_SQL: &str = "SELECT coalesce(max(seq),0) FROM change INDEXED BY change_age WHERE committed_at < strftime('%Y-%m-%dT%H:%M:%fZ','now',?1)";
+
 pub(crate) fn prune(db: &Connection) -> Result<()> {
     let tx = db.unchecked_transaction()?;
-    let removed: i64 = tx.query_row("SELECT coalesce(max(seq),0) FROM change WHERE committed_at < strftime('%Y-%m-%dT%H:%M:%fZ','now',?1)", [format!("-{} days",super::CHANGE_DAYS)], |r| r.get(0))?;
+    let removed: i64 = tx.query_row(PRUNE_SQL, [format!("-{} days", super::CHANGE_DAYS)], |r| {
+        r.get(0)
+    })?;
     tx.execute("DELETE FROM change WHERE seq<=?1", [removed])?;
     tx.execute(
         "UPDATE meta SET value=CAST(max(CAST(value AS INTEGER),?1) AS TEXT) WHERE key='floor'",

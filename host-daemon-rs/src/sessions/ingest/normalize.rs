@@ -384,8 +384,20 @@ impl Record<'_> {
                 |r| r.get(0),
             )
             .optional()?;
-        if existing.is_some_and(|id| id != self.source) {
-            return Err(IdentityConflict { key }.into());
+        if let Some(existing) = existing.filter(|id| *id != self.source) {
+            let owner: String = self.db.query_row(
+                "SELECT local_path FROM source WHERE source_id=?1",
+                [existing],
+                |row| row.get(0),
+            )?;
+            let gone = matches!(std::fs::symlink_metadata(owner), Err(error) if error.kind() == std::io::ErrorKind::NotFound);
+            if !gone || !self.origin.path().is_dir() {
+                return Err(IdentityConflict { key }.into());
+            }
+            self.db
+                .execute("DELETE FROM session WHERE source_id=?1", [existing])?;
+            self.db
+                .execute("DELETE FROM source WHERE source_id=?1", [existing])?;
         }
         self.db.execute("INSERT OR IGNORE INTO session(session_key,origin_host,provider,provider_home,thread_id,source_id,thread_id_reversed) VALUES(?1,?2,?3,?4,?5,?6,?7)",params![key,self.origin.host,self.origin.provider,self.origin.provider_home.to_string_lossy(),thread,self.source,thread.bytes().rev().collect::<Vec<_>>()])?;
         Ok(())
@@ -436,8 +448,8 @@ impl Record<'_> {
                 Ok(local) => local,
                 Err(_) => {
                     self.db.execute(
-                        "INSERT OR IGNORE INTO dependency VALUES(?1,?2,'','external_image',NULL,0)",
-                        params![self.source, path],
+                        "INSERT OR IGNORE INTO dependency(source_id,path,local_path,kind,identity,present,origin_host) VALUES(?1,?2,'','external_image',NULL,0,?3)",
+                        params![self.source, path, self.origin.host],
                     )?;
                     continue;
                 }
@@ -447,7 +459,7 @@ impl Record<'_> {
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
                 Err(e) => return Err(e.into()),
             };
-            self.db.execute("INSERT INTO dependency(source_id,path,local_path,kind,identity,present) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(source_id,path) DO UPDATE SET identity=excluded.identity,present=excluded.present",params![self.source,path,local.to_string_lossy(),if sidecars.contains(path) {"sidecar"} else {"image"},identity,identity.is_some()])?;
+            self.db.execute("INSERT INTO dependency(source_id,path,local_path,kind,identity,present,origin_host) VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(source_id,path) DO UPDATE SET identity=excluded.identity,present=excluded.present",params![self.source,path,local.to_string_lossy(),if sidecars.contains(path) {"sidecar"} else {"image"},identity,identity.is_some(),self.origin.host])?;
         }
         let reference = SourceRef {
             path: self

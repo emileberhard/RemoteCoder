@@ -163,6 +163,7 @@ fn sessions_evidence_survives_append_rewrite_and_exact_paging() {
                     offset,
                     length: Some(8191),
                     dependency: None,
+                    local: true,
                 },
             )
             .unwrap();
@@ -227,7 +228,8 @@ fn sessions_evidence_survives_append_rewrite_and_exact_paging() {
                 target: old_key,
                 offset: 0,
                 length: None,
-                dependency: None
+                dependency: None,
+                local: true,
             }
         )
         .is_err()
@@ -326,6 +328,7 @@ fn sessions_raw_session_read_and_missing_address() {
             offset: 0,
             length: Some(4 << 20),
             dependency: None,
+            local: true,
         },
     )
     .unwrap();
@@ -342,6 +345,7 @@ fn sessions_raw_session_read_and_missing_address() {
             offset: 0,
             length: None,
             dependency: None,
+            local: true,
         },
     )
     .unwrap_err();
@@ -893,6 +897,7 @@ fn sessions_keep_owning_identity_and_binary_evidence() {
             offset: 0,
             length: Some(64),
             dependency: Some(f.sidecar.to_string_lossy().into_owned()),
+            local: true,
         },
     )
     .unwrap();
@@ -1305,6 +1310,7 @@ fn sessions_read_seeks_all_address_forms_and_rejects_ambiguous_ids() {
                 offset: 0,
                 length: Some(4 << 20),
                 dependency: None,
+                local: true,
             },
         )
     };
@@ -1521,7 +1527,8 @@ fn sessions_reconcile_repairs_a_growing_rewrite_that_preserves_both_windows() {
                 target: old_key,
                 offset: 0,
                 length: None,
-                dependency: None
+                dependency: None,
+                local: true,
             }
         )
         .is_err()
@@ -1619,4 +1626,351 @@ fn sessions_active_malformed_record_keeps_a_gap_and_indexes_following_appends() 
     drop(db);
     assert_eq!(scan(&f)["ingested"], 0);
     assert_eq!(revision(), before);
+}
+
+#[test]
+fn sessions_mirror_pages_seek_before_stats_and_deduplicate_shared_evidence() {
+    let directory = tempfile::tempdir().unwrap();
+    let home = directory.path().join("codex");
+    let root = home.join("sessions");
+    std::fs::create_dir_all(&root).unwrap();
+    let actual = root.join("actual.jsonl");
+    std::fs::write(&actual, b"fixture\n").unwrap();
+    let store = Store::open(directory.path().join("state/catalog.sqlite3")).unwrap();
+    {
+        let mut db = store.writer().unwrap();
+        let tx = db.transaction().unwrap();
+        for index in 0..1001 {
+            let path = root.join(if index < 500 {
+                format!("a{index:04}.jsonl")
+            } else {
+                format!("z{:04}.jsonl", index - 500)
+            });
+            tx.execute("INSERT INTO source(origin_host,provider,provider_home,path,local_path,file_identity,size,mtime_ns,ingested_offset,revision,present,prefix_hash,parser_state) VALUES('fixture','codex',?1,?2,?3,'',0,0,0,0,1,'','{}')", rusqlite::params![home.to_string_lossy(),path.to_string_lossy(),if index<500 {"/dev/null/not-a-directory"}else{actual.to_str().unwrap()}]).unwrap();
+        }
+        for id in [1, 2] {
+            tx.execute(
+                "INSERT INTO dependency VALUES(?1,'fixture',?2,?3,'image',NULL,1)",
+                rusqlite::params![
+                    id,
+                    root.join("zz-shared").to_string_lossy(),
+                    actual.to_string_lossy()
+                ],
+            )
+            .unwrap();
+        }
+        tx.execute(
+            "INSERT INTO coverage(origin_host,mode,provider_roots) VALUES('fixture','local',?1)",
+            [serde_json::to_string(&vec![&root]).unwrap()],
+        )
+        .unwrap();
+        tx.commit().unwrap();
+    }
+    let first = mirror::list(
+        &store,
+        "fixture",
+        Some(root.join("a0499.jsonl").to_string_lossy().into_owned()),
+    )
+    .unwrap();
+    assert_eq!(first["files"].as_array().unwrap().len(), 500);
+    let second = mirror::list(
+        &store,
+        "fixture",
+        Some(first["cursor"].as_str().unwrap().into()),
+    )
+    .unwrap();
+    assert_eq!(second["files"].as_array().unwrap().len(), 2);
+    assert!(second["cursor"].is_null());
+    assert_eq!(second["files"][1]["dependency"], true);
+    let steps: Vec<String> = store
+        .reader()
+        .unwrap()
+        .prepare(&format!("EXPLAIN QUERY PLAN {}", mirror::LIST_SQL))
+        .unwrap()
+        .query_map(["fixture", ""], |r| r.get(3))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert!(
+        steps
+            .iter()
+            .any(|step| step.contains("source") && step.contains("origin_host=? AND path>?")),
+        "{steps:?}"
+    );
+    assert!(
+        steps
+            .iter()
+            .any(|step| step.contains("dependency_origin_path")
+                && step.contains("origin_host=? AND path>?")),
+        "{steps:?}"
+    );
+    assert!(
+        !steps.iter().any(|step| step.contains("AUTOMATIC")),
+        "{steps:?}"
+    );
+}
+
+#[test]
+fn sessions_mirror_refuses_unavailable_roots_even_on_an_empty_cursor_page() {
+    let f = fixture();
+    scan(&f);
+    let root = f.origins[0].path();
+    std::fs::rename(&root, root.with_file_name("unavailable")).unwrap();
+    for cursor in [None, Some("zzzz".into())] {
+        assert!(
+            mirror::list(&f.store, "fixture", cursor)
+                .unwrap_err()
+                .to_string()
+                .contains("mirror presence is unknown")
+        );
+    }
+}
+
+#[test]
+fn sessions_rotation_retires_only_proven_missing_identity_owners() {
+    let f = fixture();
+    scan(&f);
+    let replacement = f.codex.with_file_name("a-replacement.jsonl");
+    std::fs::rename(&f.codex, &replacement).unwrap();
+    let worker = super::worker::Worker::start(f.store.clone(), f.origins.clone()).unwrap();
+    ingest::refresh_inventory(&f.store).unwrap();
+    let headers = query::inventory(&f.store.reader().unwrap(), None, 1000).unwrap();
+    assert_eq!(
+        headers
+            .sessions
+            .iter()
+            .filter(|row| row.thread_id == "codex-root")
+            .count(),
+        1
+    );
+    worker.stop().unwrap();
+    let outcome = ingest::scan(&f.store, &f.origins, &AtomicBool::new(false)).unwrap();
+    assert_eq!(outcome["parseFailures"], 0);
+    assert_eq!(
+        search(&f.store, "codexmiddle")["hits"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    let owner: String = f.store.reader().unwrap().query_row("SELECT src.local_path FROM session s JOIN source src USING(source_id) WHERE s.thread_id='codex-root'",[],|r|r.get(0)).unwrap();
+    assert_eq!(Path::new(&owner), replacement);
+}
+
+#[test]
+fn sessions_sql_bounds_cumulative_blob_and_escaped_text_before_conversion() {
+    let f = fixture();
+    scan(&f);
+    let db = f.store.reader().unwrap();
+    for sql in [
+        "SELECT zeroblob(3145728),zeroblob(3145728)",
+        "SELECT replace(hex(zeroblob(1048576)),'0',char(1))",
+    ] {
+        let response = query::sql(&db, sql).unwrap();
+        assert_eq!(response["truncated"], true);
+        assert_eq!(response["rows"], json!([]));
+        assert!(serde_json::to_vec(&response).unwrap().len() < super::PAGE_BYTES);
+    }
+    assert!(query::sql(&db, "SELECT zeroblob(9437184)").is_err());
+    assert_eq!(query::sql(&db, "SELECT 42").unwrap()["rows"], json!([[42]]));
+}
+
+#[tokio::test]
+async fn sessions_cluster_retries_failed_members_instead_of_exhausting_them() {
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let observed = calls.clone();
+    let call: cluster::MemberCall = Arc::new(move |host, _, params| {
+        let observed = observed.clone();
+        async move {
+            assert_eq!(host, "peer");
+            assert!(params["cursor"].is_null());
+            if observed.fetch_add(1, std::sync::atomic::Ordering::SeqCst) < 2 {
+                anyhow::bail!("unreachable fixture");
+            }
+            Ok(json!({"hits":[{"itemKey":"peer:item"}],"cursor":null}))
+        }
+        .boxed()
+    });
+    let first = cluster::search(
+        "local",
+        json!({"hits":[],"cursor":null}),
+        vec!["peer".into()],
+        query::Search {
+            query: "needle".into(),
+            ..Default::default()
+        },
+        call.clone(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(first["coverage"][1]["state"], "unreachable");
+    let second = cluster::search(
+        "local",
+        json!({"hits":[],"cursor":null}),
+        vec![],
+        query::Search {
+            query: "needle".into(),
+            cursor: Some(first["cursor"].as_str().unwrap().into()),
+            ..Default::default()
+        },
+        call.clone(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(second["coverage"][1]["state"], "unreachable");
+    let third = cluster::search(
+        "local",
+        json!({"hits":[],"cursor":null}),
+        vec!["peer".into()],
+        query::Search {
+            query: "needle".into(),
+            cursor: Some(second["cursor"].as_str().unwrap().into()),
+            ..Default::default()
+        },
+        call,
+    )
+    .await
+    .unwrap();
+    assert_eq!(third["hits"].as_array().unwrap().len(), 1);
+    assert_eq!(third["coverage"][1]["state"], "ok");
+    assert!(third["cursor"].is_null());
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 3);
+}
+
+#[test]
+fn sessions_cluster_search_hits_route_exact_reads_to_their_origin() -> Result<()> {
+    let fixture = fixture();
+    ingest::scan(&fixture.store, &fixture.origins, &AtomicBool::new(false))?;
+    let page = query::search(
+        &fixture.store.reader()?,
+        &query::Search {
+            query: "codexmiddle".into(),
+            ..Default::default()
+        },
+    )?;
+    let request = query::ReadRequest {
+        target: page["hits"][0]["itemKey"].as_str().unwrap().into(),
+        offset: 0,
+        length: Some(64),
+        dependency: None,
+        local: false,
+    };
+    let (host, forwarded) = cluster::forward_read("another-host", request.clone())?.unwrap();
+    assert_eq!(host, "fixture");
+    let forwarded: query::ReadRequest = serde_json::from_value(forwarded)?;
+    assert!(forwarded.local);
+    let bytes = query::read(&fixture.store.reader()?, forwarded.clone())?;
+    assert_eq!(bytes["offset"], 0);
+    assert_eq!(
+        base64::engine::general_purpose::STANDARD
+            .decode(bytes["base64"].as_str().unwrap())?
+            .len(),
+        64
+    );
+    assert!(cluster::forward_read("fixture", request.clone())?.is_none());
+    assert!(cluster::forward_read("another-host", forwarded)?.is_none());
+    let mut local = request;
+    local.local = true;
+    assert!(cluster::forward_read("another-host", local)?.is_none());
+    let error = anyhow::Error::new(crate::cluster::link::LinkError {
+        class: crate::wire::cluster::ErrorClass::Unavailable,
+        transmitted: false,
+        message: "origin offline".into(),
+    });
+    assert_eq!(super::error_data(&error)["class"], "unavailable");
+    Ok(())
+}
+
+#[test]
+fn sessions_pruning_seeks_expired_feed_entries() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let store = Store::open(directory.path().join("catalog.sqlite3"))?;
+    let db = store.writer()?;
+    db.execute_batch("INSERT INTO change(entity,key,op,revision,committed_at) VALUES('source','expired','upsert',1,'2000-01-01T00:00:00Z'),('source','recent','upsert',2,'2999-01-01T00:00:00Z')")?;
+    let plan: Vec<String> = db
+        .prepare(&format!("EXPLAIN QUERY PLAN {}", changes::PRUNE_SQL))?
+        .query_map(["-30 days"], |row| row.get(3))?
+        .collect::<rusqlite::Result<_>>()?;
+    assert!(
+        plan.iter()
+            .any(|line| line.contains("USING COVERING INDEX change_age (committed_at<?)")),
+        "{plan:?}"
+    );
+    changes::prune(&db)?;
+    assert_eq!(
+        db.query_row("SELECT key FROM change", [], |row| row.get::<_, String>(0))?,
+        "recent"
+    );
+    Ok(())
+}
+
+#[test]
+fn sessions_search_uses_descending_fts_order_and_exact_dates() -> Result<()> {
+    let fixture = fixture();
+    ingest::scan(&fixture.store, &fixture.origins, &AtomicBool::new(false))?;
+    let db = fixture.store.reader()?;
+    let plan: Vec<String> = db
+        .prepare(&format!("EXPLAIN QUERY PLAN {}", query::SEARCH_SQL))?
+        .query_map(
+            rusqlite::params!["\"agents\"", None::<String>, i64::MAX, "agents", 2],
+            |row| row.get(3),
+        )?
+        .collect::<rusqlite::Result<_>>()?;
+    assert!(
+        plan.iter().any(|line| line.contains("VIRTUAL TABLE INDEX")),
+        "{plan:?}"
+    );
+    assert!(
+        !plan.iter().any(|line| line.contains("TEMP B-TREE")),
+        "{plan:?}"
+    );
+    let mut samples = Vec::new();
+    for (term, since) in [
+        ("SKILL.md", None),
+        ("Process exited", None),
+        ("codex-threads", None),
+        ("permission", None),
+        ("Continue target", None),
+        ("pair-programming", None),
+        ("PID start time", None),
+        ("remote-coder", None),
+        ("agents", None),
+        ("FileRevision", None),
+        ("SKILL.md", Some("2026-10-15T00:00:00Z")),
+    ] {
+        let mut milliseconds = Vec::new();
+        for _ in 0..5 {
+            let started = Instant::now();
+            query::search(
+                &db,
+                &query::Search {
+                    query: term.into(),
+                    since: since.map(str::to_owned),
+                    ..Default::default()
+                },
+            )?;
+            milliseconds.push(started.elapsed().as_secs_f64() * 1000.0);
+        }
+        samples.push(json!({"term":term,"since":since,"sampleMs":milliseconds}));
+    }
+    println!("{}", json!({"searchFixtureSamples":samples,"plan":plan}));
+    let mut request = query::Search {
+        query: "SKILL.md".into(),
+        limit: Some(1),
+        ..Default::default()
+    };
+    let first = query::search(&db, &request)?;
+    request.cursor = first["cursor"].as_str().map(str::to_owned);
+    assert!(request.cursor.is_some());
+    let next = query::search(&db, &request)?;
+    assert_ne!(first["hits"][0]["itemKey"], next["hits"][0]["itemKey"]);
+    request.cursor = None;
+    request.since = Some("2999-01-01T00:00:00Z".into());
+    assert!(
+        query::search(&db, &request)?["hits"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    Ok(())
 }

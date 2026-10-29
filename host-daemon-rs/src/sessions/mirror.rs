@@ -55,54 +55,93 @@ fn physical(metadata: &std::fs::Metadata) -> String {
     format!("{}:{}", metadata.dev(), metadata.ino())
 }
 
+pub(super) const LIST_SQL: &str = r#"WITH RECURSIVE paths(path) AS (
+ SELECT ?2
+ UNION ALL
+ SELECT (SELECT min(candidate) FROM (
+  SELECT (SELECT min(path) FROM source WHERE origin_host=?1 AND path>paths.path) AS candidate
+  UNION ALL
+  SELECT (SELECT min(path) FROM dependency WHERE origin_host=?1 AND path>paths.path)
+ )) FROM paths WHERE path IS NOT NULL LIMIT 502
+)
+SELECT s.provider,s.provider_home,p.path,
+ CASE WHEN s.path=p.path THEN s.local_path ELSE d.local_path END,
+ CASE WHEN s.path=p.path THEN s.present ELSE d.present END,
+ s.path<>p.path
+FROM paths p JOIN source s ON s.source_id=coalesce(
+ (SELECT source_id FROM source WHERE origin_host=?1 AND path=p.path),
+ (SELECT source_id FROM dependency WHERE origin_host=?1 AND path=p.path ORDER BY source_id LIMIT 1))
+LEFT JOIN dependency d ON d.origin_host=?1 AND d.path=p.path AND d.source_id=s.source_id
+WHERE p.path>?2 ORDER BY p.path LIMIT 501"#;
+
 pub(crate) fn list(store: &Store, host: &str, after: Option<String>) -> Result<Value> {
     let db = store.reader()?;
-    let mut statement=db.prepare("SELECT provider,provider_home,path,local_path,present,0 FROM source WHERE origin_host=?1 UNION ALL SELECT s.provider,s.provider_home,d.path,d.local_path,d.present,1 FROM dependency d JOIN source s USING(source_id) WHERE s.origin_host=?1 ORDER BY 3")?;
-    let mut entries = BTreeMap::new();
-    for row in statement.query_map([host], |r| {
-        Ok((
-            r.get::<_, String>(0)?,
-            r.get::<_, String>(1)?,
-            r.get::<_, String>(2)?,
-            r.get::<_, String>(3)?,
-            r.get::<_, bool>(4)?,
-            r.get::<_, bool>(5)?,
-        ))
-    })? {
-        let (provider, home, path, local, present, dependency) = row?;
+    let (through, complete, roots): (Option<String>, bool, String) = db.query_row("SELECT indexed_through,stale_reason IS NULL AND complete_through IS NOT NULL,provider_roots FROM coverage WHERE origin_host=?1",[host],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;
+    let roots: Vec<PathBuf> = serde_json::from_str(&roots)?;
+    ensure!(
+        !roots.is_empty() && roots.iter().all(|root| root.is_dir()),
+        "unavailable: provider roots are unavailable; mirror presence is unknown"
+    );
+    let mut statement = db.prepare(LIST_SQL)?;
+    let rows = statement
+        .query_map(params![host, after.as_deref().unwrap_or("")], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+                r.get::<_, bool>(4)?,
+                r.get::<_, bool>(5)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let more = rows.len() > 500;
+    let mut page = Vec::new();
+    for (provider, home, path, local, present, dependency) in rows.into_iter().take(500) {
+        let root = Path::new(&home).join(if provider == "codex" {
+            "sessions"
+        } else {
+            "projects"
+        });
+        ensure!(
+            root.is_dir(),
+            "unavailable: provider root is unavailable; mirror presence is unknown"
+        );
         let metadata = match std::fs::metadata(&local) {
             Ok(m) => Some(m),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                ensure!(
+                    root.is_dir(),
+                    "unavailable: provider root is unavailable; mirror presence is unknown"
+                );
+                None
+            }
             Err(e) => return Err(e.into()),
         };
-        let entry = Entry {
+        page.push(Entry {
             origin_host: host.into(),
             provider,
             provider_home: home.into(),
-            path: PathBuf::from(&path),
+            path: path.into(),
             identity: metadata.as_ref().map(physical).unwrap_or_default(),
             revision: metadata.as_ref().map(ingest::identity).unwrap_or_default(),
             size: metadata.as_ref().map_or(0, |m| m.len()),
             present: present && metadata.is_some(),
             dependency,
-        };
-        entries.insert(path, entry);
+        });
     }
-    let mut page = Vec::new();
-    let mut next = None;
-    for (path, entry) in entries
-        .into_iter()
-        .filter(|(p, _)| after.as_ref().is_none_or(|after| p > after))
-    {
-        if page.len() == 500 {
-            break;
-        }
-        next = Some(path);
-        page.push(entry);
-    }
-    let (through, complete): (Option<String>, bool) = db.query_row("SELECT indexed_through,stale_reason IS NULL AND complete_through IS NOT NULL FROM coverage WHERE origin_host=?1",[host],|r|Ok((r.get(0)?,r.get(1)?)))?;
+    let next = if more {
+        page.last()
+            .map(|entry| entry.path.to_string_lossy().into_owned())
+    } else {
+        None
+    };
+    ensure!(
+        roots.iter().all(|root| root.is_dir()),
+        "unavailable: provider roots are unavailable; mirror presence is unknown"
+    );
     Ok(
-        json!({"schemaVersion":1,"files":page,"cursor":if page.len()==500 {next} else {None},"through":through,"complete":complete,"coverage":super::query::coverage(&db)?}),
+        json!({"schemaVersion":1,"files":page,"cursor":next,"through":through,"complete":complete,"coverage":super::query::coverage(&db)?}),
     )
 }
 
