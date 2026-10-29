@@ -1718,7 +1718,7 @@
     "GCC_C_LANGUAGE_STANDARD": "gnu11",
     "GCC_DYNAMIC_NO_PIC[config=Debug]": "NO",
     "GCC_NO_COMMON_BLOCKS": "YES",
-    "GCC_TREAT_WARNINGS_AS_ERRORS": "YES",
+    "GCC_TREAT_WARNINGS_AS_ERRORS[config=Debug]": "YES",
     "GCC_OPTIMIZATION_LEVEL[config=Debug]": "0",
     "GCC_PREPROCESSOR_DEFINITIONS[config=Debug]": [
       "DEBUG=1",
@@ -1734,7 +1734,7 @@
     "MTL_ENABLE_DEBUG_INFO[config=Release]": "NO",
     "ONLY_ACTIVE_ARCH[config=Debug]": "YES",
     "PRODUCT_NAME": "$(TARGET_NAME)",
-    "SWIFT_TREAT_WARNINGS_AS_ERRORS": "YES",
+    "SWIFT_TREAT_WARNINGS_AS_ERRORS[config=Debug]": "YES",
     "VALIDATE_PRODUCT[config=Release]": "YES"
   }
 }

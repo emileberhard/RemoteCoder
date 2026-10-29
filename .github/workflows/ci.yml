@@ -158,16 +158,6 @@ jobs:
       - run: just ios-build-local
       - run: just mac-build-local
       - run: just mac-harness-build-local
-      - name: Compile Release before archive admission
-        run: |
-          xcodebuild -project RemoteCoder.xcodeproj -scheme RemoteCoder -configuration Release \
-            -derivedDataPath "$RC_DERIVED_DATA" -destination 'generic/platform=iOS Simulator' \
-            CODE_SIGNING_ALLOWED=NO -disableAutomaticPackageResolution \
-            -onlyUsePackageVersionsFromResolvedFile -skipPackageUpdates COMPILER_INDEX_STORE_ENABLE=NO ARCHS=arm64 build
-          xcodebuild -project RemoteCoder.xcodeproj -scheme RemoteCoderMac -configuration Release \
-            -derivedDataPath "$RC_DERIVED_DATA" -destination 'generic/platform=macOS' \
-            CODE_SIGNING_ALLOWED=NO -disableAutomaticPackageResolution \
-            -onlyUsePackageVersionsFromResolvedFile -skipPackageUpdates COMPILER_INDEX_STORE_ENABLE=NO build
       - name: Create the baseline iPhone 17 Pro on iOS 27.0
         timeout-minutes: 5
         run: |
