@@ -17,15 +17,19 @@ jobs:
     if: ${{ !github.event.repository.private }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
     outputs:
       gateway: ${{ steps.scope.outputs.gateway }}
       swift: ${{ steps.scope.outputs.swift }}
       agent_calls: ${{ steps.scope.outputs.agent_calls }}
+      web: ${{ steps.scope.outputs.web }}
+      tree: ${{ steps.scope.outputs.tree }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: ${{ github.event_name == 'pull_request' }}
         with:
-          fetch-depth: 0
+          fetch-depth: ${{ github.event_name == 'pull_request' && 0 || 1 }}
           persist-credentials: false
       - id: scope
         shell: bash
@@ -33,11 +37,18 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           gateway=false
           swift=false
           agent_calls=false
-          if [[ "$EVENT_NAME" == push ]]; then
+          web=true
+          tree=$(git rev-parse 'HEAD^{tree}')
+          if [[ "$EVENT_NAME" == push ]] && gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=ci-passed-$tree&per_page=100" \
+              --jq '[.artifacts[] | select((.expired | not) and .workflow_run.head_repository_id == .workflow_run.repository_id)] | length > 0' | grep -qx true; then
+            web=false
+            echo "A pull request already passed CI on tree $tree; reusing that result."
+          elif [[ "$EVENT_NAME" == push ]]; then
             gateway=true
             swift=true
             agent_calls=true
@@ -55,7 +66,7 @@ jobs:
               esac
             done < "$RUNNER_TEMP/changed-paths"
           fi
-          printf 'gateway=%s\nswift=%s\nagent_calls=%s\n' "$gateway" "$swift" "$agent_calls" >> "$GITHUB_OUTPUT"
+          printf 'gateway=%s\nswift=%s\nagent_calls=%s\nweb=%s\ntree=%s\n' "$gateway" "$swift" "$agent_calls" "$web" "$tree" >> "$GITHUB_OUTPUT"
 
   agent-calls:
     needs: changes
@@ -89,6 +100,7 @@ jobs:
     env:
       CARGO_BUILD_JOBS: '4'
       RUST_TEST_THREADS: '4'
+      CARGO_PROFILE_DEV_DEBUG: '0'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -104,6 +116,9 @@ jobs:
           HOMEBREW_NO_INSTALL_CLEANUP: '1'
         run: brew list tmux >/dev/null 2>&1 || brew install tmux
       - run: rustup show
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: host-daemon-rs
       - run: cargo fmt --manifest-path host-daemon-rs/Cargo.toml --check
       - run: cargo clippy --manifest-path host-daemon-rs/Cargo.toml --locked --all-targets --all-features -- -D warnings
       - run: cargo test --manifest-path host-daemon-rs/Cargo.toml --locked
@@ -132,7 +147,54 @@ jobs:
       - run: ./scripts/lint-platform-imports
       - run: uv run --project dev-tools --locked python -m unittest discover -s scripts/tests
 
-  apps:
+  apps-ios:
+    needs: changes
+    if: ${{ needs.changes.outputs.swift == 'true' }}
+    runs-on: xcode-27
+    timeout-minutes: 60
+    env:
+      RC_COMPILATION_OWNER: '1'
+      RC_DERIVED_DATA: ${{ github.workspace }}/.local/app-build
+      RC_BUILD_PROVENANCE: ${{ github.workspace }}/.local/ci/source.json
+      RC_BUILD_STAGES: ${{ github.workspace }}/.local/ci/stages.jsonl
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: scripts/select-xcode
+      - name: Create the baseline iPhone 17 Pro on iOS 27.0
+        id: simulator
+        background: true
+        timeout-minutes: 5
+        run: |
+          device=$(xcrun simctl create 'RemoteCoder CI' \
+            com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro \
+            com.apple.CoreSimulator.SimRuntime.iOS-27-0)
+          echo "RC_IOS_SIMULATOR=$device" >> "$GITHUB_ENV"
+          echo "Created the iPhone 17 Pro / iOS 27.0 baseline: $device"
+          xcrun simctl boot "$device"
+          xcrun simctl bootstatus "$device" -b
+      - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
+        with:
+          just-version: '1.59.0'
+      - name: Record this CI build's source
+        run: |
+          mkdir -p "$(dirname "$RC_BUILD_PROVENANCE")"
+          jq -n --arg commit "$GITHUB_SHA" --arg run "$GITHUB_RUN_ID" \
+            '{sourceCommit:$commit,buildId:$run}' > "$RC_BUILD_PROVENANCE"
+      - run: just ios-build-local
+      - name: Wait for the simulator
+        wait: simulator
+      - run: just verify-simulator-local
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: failure()
+        with:
+          name: failed-native-tests-ios-${{ github.run_attempt }}
+          path: .local/ci
+          retention-days: 1
+          if-no-files-found: ignore
+
+  apps-mac:
     needs: changes
     if: ${{ needs.changes.outputs.swift == 'true' }}
     runs-on: xcode-27
@@ -155,30 +217,19 @@ jobs:
           mkdir -p "$(dirname "$RC_BUILD_PROVENANCE")"
           jq -n --arg commit "$GITHUB_SHA" --arg run "$GITHUB_RUN_ID" \
             '{sourceCommit:$commit,buildId:$run}' > "$RC_BUILD_PROVENANCE"
-      - run: just ios-build-local
       - run: just mac-build-local
       - run: just mac-harness-build-local
-      - name: Create the baseline iPhone 17 Pro on iOS 27.0
-        timeout-minutes: 5
-        run: |
-          device=$(xcrun simctl create 'RemoteCoder CI' \
-            com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro \
-            com.apple.CoreSimulator.SimRuntime.iOS-27-0)
-          echo "RC_IOS_SIMULATOR=$device" >> "$GITHUB_ENV"
-          echo "Created the iPhone 17 Pro / iOS 27.0 baseline: $device"
-          xcrun simctl boot "$device"
-          xcrun simctl bootstatus "$device" -b
-      - run: just verify-simulator-local
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: failure()
         with:
-          name: failed-native-tests-${{ github.run_attempt }}
+          name: failed-native-tests-mac-${{ github.run_attempt }}
           path: .local/ci
           retention-days: 1
           if-no-files-found: ignore
 
   web:
-    if: ${{ !github.event.repository.private }}
+    needs: changes
+    if: ${{ needs.changes.outputs.web == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -196,3 +247,29 @@ jobs:
         working-directory: web-client
       - run: bun run build
         working-directory: web-client
+
+  passed:
+    needs: [changes, agent-calls, gateway, swift, apps-ios, apps-mac, web]
+    if: ${{ always() && !github.event.repository.private }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      TREE: ${{ needs.changes.outputs.tree }}
+      RECORD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
+    steps:
+      - name: Require every lane in scope to pass
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: jq -e 'all(.[]; .result == "success" or .result == "skipped")' <<< "$RESULTS"
+      - name: Record the tested tree
+        if: env.RECORD == 'true' && env.TREE != ''
+        run: |
+          mkdir -p "$RUNNER_TEMP/passed"
+          printf '%s\n' "$TREE" > "$RUNNER_TEMP/passed/tree"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: env.RECORD == 'true' && env.TREE != ''
+        with:
+          name: ci-passed-${{ env.TREE }}
+          path: ${{ runner.temp }}/passed/tree
+          retention-days: 14
+          overwrite: true

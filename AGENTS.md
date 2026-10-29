@@ -198,7 +198,9 @@ marketing version. Tags are immutable; fixes use the next patch.
 
 Public hosted CI compiles both apps, their extensions, hosted tests and the Mac
 performance harness, runs the existing logic/tooling/gateway checks and targeted
-hosted rendering/history suites. Release admission waits for that exact main CI
+hosted rendering/history suites. A main push whose tree a same-repository pull
+request already passed reuses that result instead of rerunning the lanes; the
+`passed` job is the single verdict. Release admission waits for that exact main CI
 commit; releases do not rerun it. `scripts/select-xcode` selects `.xcode-version`
 without changing the host's default Xcode.
 
