@@ -315,14 +315,40 @@ struct ConversationState: Sendable {
         let mergesChanges = persistenceRevision > 0 || live
         // A restore may finish after live events. Merge missing facts, never replace live state.
         let reconciled = Set(checkpoint.submissions.keys.filter { contains(clientID: $0) }.map(\.uuidString))
+        if !reconciled.isEmpty {
+            for turnID in order {
+                guard var turn = turns[turnID] else { continue }
+                for (itemID, var item) in turn.items {
+                    guard case .userMessage(_, _, let clientID) = item.value,
+                          let clientID, let id = UUID(uuidString: clientID), reconciled.contains(id.uuidString), !item.isLocal,
+                          item.localMessage == nil, let pending = checkpoint.submissions[id] else { continue }
+                    submissions[id] = submissions[id] ?? pending
+                    let position = turn.order.firstIndex(of: itemID)
+                    let observedLive = item.observedLive
+                    reconcile(&item, in: &turn)
+                    item.observedLive = observedLive
+                    turn.items[itemID] = item
+                    if !turn.order.contains(itemID), let position { turn.order.insert(itemID, at: min(position, turn.order.count)) }
+                }
+                turns.storeIfChanged(turn)
+            }
+        }
         order = Self.mergeOrder(existing: order, observed: checkpoint.order)
         for (id, saved) in checkpoint.turns {
             var turn = turns[id] ?? Turn(id: id)
             turn.order = Self.mergeOrder(existing: turn.order, observed: saved.order)
-            for (itemID, savedItem) in saved.items where turn.items[itemID] == nil && !reconciled.contains(itemID) {
-                var item = savedItem
-                if !live { item.hasStreamingPrefix = false }
-                turn.items[itemID] = item
+            for (itemID, savedItem) in saved.items where !reconciled.contains(itemID) {
+                if var item = turn.items[itemID] {
+                    if item.localMessage == nil, let message = savedItem.localMessage {
+                        item.localMessage = message
+                        if case .userMessage(_, let content, _) = item.value { item.localMessage?.useCanonicalImages(content) }
+                        turn.items[itemID] = item
+                    }
+                } else {
+                    var item = savedItem
+                    if !live { item.hasStreamingPrefix = false }
+                    turn.items[itemID] = item
+                }
             }
             turn.order.removeAll { turn.items[$0] == nil }
             turn.startedAt = turn.startedAt ?? saved.startedAt

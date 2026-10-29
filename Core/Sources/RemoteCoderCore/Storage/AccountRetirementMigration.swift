@@ -13,10 +13,6 @@ enum AccountRetirementMigration {
         var issues: [String] = []
     }
 
-    private struct ProtectedRecovery: LocalizedError {
-        var errorDescription: String? { "A saved checkpoint needs recovery. Its source files have been retained." }
-    }
-
     fileprivate struct Progress: Codable {
         var importVersion: Int?
         var attempts = 0
@@ -34,7 +30,7 @@ enum AccountRetirementMigration {
         private let preferences: ThreadSafeDefaults
         private var defaults: UserDefaults { preferences.value }
         private static let attemptLimit = 3
-        private static let importVersion = 2
+        private static let importVersion = 3
 
         @MainActor init(defaults: UserDefaults) { preferences = ThreadSafeDefaults(value: defaults) }
 
@@ -157,12 +153,11 @@ enum AccountRetirementMigration {
                                 }
                                 for key in keys { defaults.removeObject(forKey: key) }
                                 progress.completed = true
-                                progress.conversations = [:]
                                 progress.failure = nil
                                 try Self.save(progress, to: journal)
                             }
                             for key in keys { defaults.removeObject(forKey: key) }
-                            try await Self.reclaim(account: account, host: host, storage: storage)
+                            try await Self.reclaim(account: account, host: host, storage: storage, conversations: progress.conversations)
                             outcome.migrated[host, default: []].insert(account)
                         } catch is CancellationError {
                             if !progress.completed { progress.attempts -= 1 }
@@ -197,10 +192,15 @@ enum AccountRetirementMigration {
             return (host, account)
         }
 
-        private static func reclaim(account: UUID, host: UUID, storage: HostStorage) async throws {
+        private static func reclaim(account: UUID, host: UUID, storage: HostStorage, conversations: [UUID: UUID]) async throws {
             let checkpoints = storage.root.appending(path: "conversations-v1/\(host)/accounts/\(account)")
-            let source = ConversationCheckpointStore(hostID: host, directory: checkpoints, storage: storage, primaryBudgetBytes: 512 * 1_024 * 1_024)
-            guard try await !source.hasProtectedRecovery() else { throw ProtectedRecovery() }
+            let source = storage.directory(for: .account(host: host, account: account))
+            let entries = try ConversationIndex.loadIndex(from: source.appending(path: "session-index.json"))
+            let current = try ConversationIndex.loadIndex(from: storage.directory(for: .host(host)).appending(path: "session-index.json"))
+            var replacements = conversations
+            for (thread, id) in entries where replacements[id] == nil { replacements[id] = current[thread] }
+            let destination = ConversationCheckpointStore(hostID: host, storage: storage, primaryBudgetBytes: 512 * 1_024 * 1_024)
+            try await destination.adoptRecovery(from: checkpoints, sourceID: account, conversationIDs: replacements)
             for folder in [storage.directory(for: .account(host: host, account: account)),
                            storage.root.appending(path: "conversations-v1/\(host)/accounts/\(account)")] {
                 if FileManager.default.fileExists(atPath: folder.path) { try FileManager.default.removeItem(at: folder) }
@@ -235,12 +235,8 @@ enum AccountRetirementMigration {
         let source = ConversationCheckpointStore(hostID: hostID, directory: sourceDirectory, storage: storage, primaryBudgetBytes: 512 * 1_024 * 1_024)
         let destination = ConversationCheckpointStore(hostID: hostID, storage: storage, primaryBudgetBytes: 512 * 1_024 * 1_024)
         var conversationIDs = Set(entries.values)
-        if FileManager.default.fileExists(atPath: sourceDirectory.path) {
-            conversationIDs.formUnion(try FileManager.default.contentsOfDirectory(at: sourceDirectory, includingPropertiesForKeys: nil)
-                .compactMap { UUID(uuidString: $0.deletingPathExtension().lastPathComponent) })
-        }
+        conversationIDs.formUnion(try await source.conversationIDs())
         let threadsByID = Dictionary(grouping: entries, by: \.value).mapValues { $0.map(\.key) }
-        guard try await !source.hasProtectedRecovery() else { throw ProtectedRecovery() }
         for id in conversationIDs.sorted(by: { $0.uuidString < $1.uuidString }) {
             try Task.checkCancellation()
             let aliases = (threadsByID[id] ?? []).sorted()
@@ -249,7 +245,6 @@ enum AccountRetirementMigration {
                 continue
             }
             let restored = try await source.restore(id, threadID: nil, generation: nil)
-            guard !restored.requiresAuthoritativeHistory else { throw ProtectedRecovery() }
             let incoming = restored.checkpoint
             let thread = incoming?.threadID ?? aliases.first
             let targetID = thread.flatMap { current[$0] } ?? id
@@ -258,16 +253,9 @@ enum AccountRetirementMigration {
             if let thread {
                 if current[thread] == nil { current[thread] = targetID }
             }
-            if let incoming {
-                let existing = try await destination.load(targetID, threadID: thread)
-                if existing?.accountImports?.contains(accountID) != true {
-                    var merged = ConversationState(conversationID: targetID, threadID: thread)
-                    if let existing { merged.restore(existing) }
-                    merged.restore(incoming)
-                    var checkpoint = merged.checkpoint
-                    checkpoint.accountImports = (checkpoint.accountImports ?? []).union([accountID])
-                    try await destination.save(checkpoint, conversationID: targetID)
-                }
+            if incoming != nil || restored.requiresAuthoritativeHistory {
+                try await destination.adopt(restored, conversationID: targetID, threadID: thread,
+                    importID: identifier("checkpoint|\(accountID)|\(id)"))
                 try JSONEncoder().encode(current).write(to: indexURL, options: .atomic)
                 progress.conversations[id] = targetID
                 try Ledger.save(progress, to: journal)
@@ -275,6 +263,7 @@ enum AccountRetirementMigration {
             }
         }
         try JSONEncoder().encode(current).write(to: indexURL, options: .atomic)
+        try await destination.adoptRecovery(from: sourceDirectory, sourceID: accountID, conversationIDs: replacements)
         let marks: ConversationMarksReplica
         if progress.marksImported == true {
             marks = try storedMarks(in: host)

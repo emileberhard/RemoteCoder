@@ -129,6 +129,33 @@ and source-identity checks reject stale decode failures. An unreadable retained
 rollback source is copied without changing the rollback file. Recovery bytes are
 never automatically deleted. Readable sidecars remain usable, and opening still
 fetches authoritative history. Recovery journals one notice without content.
+Identity and account adoption keep ownership in `ConversationCheckpointStore`:
+recovery folders move within the storage root through a canonical `.pending-`
+name before publication, retaining source scope, original conversation and
+incident names beneath the destination conversation. Both names count as protected
+payload; a restart publishes unfinished moves even after the source disappeared.
+The move never decodes or rewrites recovery contents. Import receipts follow
+checkpoint and recovery publication; only then may migration reclaim legacy
+folders. Already durable imported data can exceed admission limits and remains
+charged to the destination; later new writes still use normal admission.
+
+Adopting a store by reference would add persistent path indirection and still need
+a merge when a canonical store already exists. Keeping ownership in the existing
+store handles both cases without another mapping. Invalidated imports carry only
+local records; healthy imports retain offline history without requiring a gateway
+read. Recovery has no automatic age deletion policy: its exact bytes stay protected
+and charged to the same owner.
+
+An adopted invalidation uses the existing SQLite invalidation row with a `history`
+state alongside local-only checkpoint records. That state retains submissions and
+unique local records without claiming complete history, survives local-only saves,
+and clears when authoritative history is saved. Extending this owner avoids a
+second recovery store or migration journal; pending/complete deletion markers
+keep their existing cleanup contract. Same-volume moves and fenced model
+construction are required; moving a store outside its storage root would require
+revisiting that boundary. Older readers preserve an unfamiliar marker as an
+unreadable checkpoint rather than accepting incomplete history.
+
 Revision metadata retires with its fence and cached connection; active operations
 keep the revision comparisons they need. Submission admission also checks the
 persisted revision for that message, preserving distinct pending submissions and

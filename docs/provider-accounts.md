@@ -142,7 +142,10 @@ Discovery scans UUID account directories off the main actor, so missing cached
 identities cannot strand local data. An on-disk ledger records checkpoint
 receipts and completed imports. Failed imports retain their source files and
 retry at most three times before surfacing a workspace issue; completed imports
-reclaim their former folders while protected recovery data stays retained.
+reclaim their former folders only after the checkpoint store adopts protected recovery
+bytes intact into the host's budget and source-keyed conversation recovery tree.
+Invalidated imports retain pending submissions and unique local records while
+continuing to require authoritative history.
 
 Draft imports preserve draft IDs, setup, attachments and dictation receipts.
 Drafts for the same conversation merge content once using import receipts.

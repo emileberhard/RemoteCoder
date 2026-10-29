@@ -19,6 +19,9 @@ files. Local I/O failure keeps the journal, fence and visible error. Foreground
 or reconnect resumes that same operation; neither network access nor a new
 verification is needed. Receipts are scoped to the journal and cannot authorize
 adoption independently. A canonical host without a journal does no identity I/O.
+Protected recovery bytes move intact through the checkpoint store into the canonical
+conversation's budget and source-keyed recovery tree before source folders retire;
+invalidated checkpoints retain local records and require authoritative history.
 
 Preference migration reads only the owning persistent domain, removes renamed
 keys, and records completion last. Duplicate verified configurations collapse
