@@ -258,7 +258,10 @@ entrypoint linked above.
     Discover folders independently of loaded hosts; release each host after its
     import attempt. Journal checkpoint imports before consuming sources.
     Honor earlier Claude completion; reclaim completed
-    folders only when no protected recovery bytes remain. Restart cancelled
+    folders only after the checkpoint store adopts protected recovery bytes intact
+    under the canonical conversation, counting them in its budget and retaining
+    source identity; invalidated imports keep local records and require authoritative
+    history. Restart cancelled
     imports before admitting their hosts' models.
     Independent New Chat slots and restored windows retain their setup.
     Preserve pending mark IDs and order. Scope old read-all operations with the

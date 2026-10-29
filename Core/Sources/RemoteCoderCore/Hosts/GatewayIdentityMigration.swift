@@ -47,7 +47,7 @@ actor GatewayIdentityMigration {
         let receipts = storage.directory(for: .host(gatewayID)).appending(path: "identity-imports")
         for source in sources {
             guard files.fileExists(atPath: receipts.appending(path: "\(journal.id)-\(source).complete").path) else {
-                throw MigrationFailure.recovery
+                throw MigrationFailure.incompleteImport
             }
         }
         let recordings = storage.root.appending(path: "dictation-recordings")
@@ -98,33 +98,20 @@ actor GatewayIdentityMigration {
         let destination = ConversationCheckpointStore(hostID: gatewayID, storage: storage, primaryBudgetBytes: 512 * 1_024 * 1_024)
         let aliases = Dictionary(grouping: entries, by: \.value).mapValues { $0.map(\.key) }
         var ids = Set(entries.values)
-        if FileManager.default.fileExists(atPath: source.path) {
-            ids.formUnion(try FileManager.default.contentsOfDirectory(at: source, includingPropertiesForKeys: nil)
-                .compactMap { UUID(uuidString: $0.deletingPathExtension().lastPathComponent) })
-        }
-        guard try await !original.hasProtectedRecovery() else { throw MigrationFailure.recovery }
+        ids.formUnion(try await original.conversationIDs())
         var replacements: [UUID: UUID] = [:]
         for id in ids.sorted(by: { $0.uuidString < $1.uuidString }) {
             let restored = try await original.restore(id, threadID: nil, generation: nil)
-            guard !restored.requiresAuthoritativeHistory else { throw MigrationFailure.recovery }
             let thread = restored.checkpoint?.threadID ?? aliases[id]?.min()
             let targetID = thread.flatMap { current[$0] } ?? id
             replacements[id] = targetID
             for alias in aliases[id] ?? [] { current[alias] = targetID }
-            if let incoming = restored.checkpoint {
-                let existing = try await destination.load(targetID, threadID: thread)
-                if existing?.accountImports?.contains(sourceID) != true {
-                    var state = ConversationState(conversationID: targetID, threadID: thread)
-                    if let existing { state.restore(existing) }
-                    state.restore(incoming)
-                    var checkpoint = state.checkpoint
-                    checkpoint.accountImports = (checkpoint.accountImports ?? []).union([sourceID])
-                    try await destination.save(checkpoint, conversationID: targetID)
-                }
-            }
+            try await destination.adopt(restored, conversationID: targetID, threadID: thread,
+                importID: AccountRetirementMigration.identifier("checkpoint|\(sourceID)|\(id)"))
         }
         try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
         try JSONEncoder().encode(current).write(to: target.appending(path: "session-index.json"), options: .atomic)
+        try await destination.adoptRecovery(from: source, sourceID: sourceID, conversationIDs: replacements)
         return replacements
     }
 
@@ -141,10 +128,10 @@ actor GatewayIdentityMigration {
     }
 
     enum MigrationFailure: LocalizedError {
-        case recovery, retiredAccounts, verificationInProgress
+        case incompleteImport, retiredAccounts, verificationInProgress
         var errorDescription: String? {
             switch self {
-            case .recovery: "Saved conversations need recovery before this gateway's identity can be migrated."
+            case .incompleteImport: "Saved conversation import has not completed for this gateway."
             case .retiredAccounts: "Saved accounts must finish importing before this gateway's identity can be migrated."
             case .verificationInProgress: "Another gateway identity is being verified. Retry when it finishes."
             }

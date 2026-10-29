@@ -34,7 +34,7 @@ actor ConversationCheckpointStore {
     }
 
     private enum Invalidation: String, Codable, Sendable {
-        case pending, complete
+        case pending, complete, history
     }
 
     struct SaveReceipt: Sendable {
@@ -315,7 +315,7 @@ actor ConversationCheckpointStore {
         let primary = try Self.primaryBytes(checkpoint) + sidecars + recovery + (source.pathExtension == "sqlite" ? jsonBytes : 0)
         records[id] = DiskRecord(bytes: try diskBytes(id) + jsonBytes + sidecars + recovery,
             payloadBytes: primary, modified: records[id]?.modified ?? .now,
-            protected: primary > 0, invalidation: nil, recoveryBytes: recovery,
+            protected: primary > 0 || records[id]?.invalidation == .history, invalidation: records[id]?.invalidation == .history ? .history : nil, recoveryBytes: recovery,
             inventoryContents: sidecars + recovery + (source.pathExtension == "sqlite" ? jsonBytes : 0) == 0
                 ? checkpoint.map(CheckpointInventory.Contents.init) : nil)
     }
@@ -421,8 +421,73 @@ actor ConversationCheckpointStore {
             protected: true, invalidation: previous?.invalidation, recoveryBytes: recovery)
     }
 
-    func hasProtectedRecovery() throws -> Bool {
-        try Self.recursiveBytes(directory.appending(path: "recovery")) > 0
+    func conversationIDs() async throws -> Set<UUID> {
+        try await index()
+        return Set(records.keys)
+    }
+
+    func adopt(_ incoming: LoadResult, conversationID: UUID, threadID: String?, importID: UUID) async throws {
+        let existing = try await restore(conversationID, threadID: threadID, generation: nil)
+        guard existing.checkpoint?.accountImports?.contains(importID) != true else { return }
+        guard incoming.checkpoint != nil || incoming.requiresAuthoritativeHistory else { return }
+        let invalidation: Invalidation? = incoming.requiresAuthoritativeHistory || existing.requiresAuthoritativeHistory ? .history : nil
+        var state = ConversationState(conversationID: conversationID, threadID: threadID)
+        if let checkpoint = existing.checkpoint { state.restore(checkpoint) }
+        if let checkpoint = incoming.checkpoint {
+            var normalized = ConversationState(conversationID: conversationID, threadID: threadID)
+            normalized.restore(checkpoint)
+            let merged = try Self.mergingLocalRecords(normalized.checkpoint, into: state.checkpoint).checkpoint
+            state = ConversationState(conversationID: conversationID, threadID: threadID)
+            state.restore(merged)
+            state.restore(normalized.checkpoint)
+        }
+        var checkpoint = invalidation == nil ? state.checkpoint : state.checkpoint.localRecords
+        checkpoint.accountImports = (checkpoint.accountImports ?? []).union([importID])
+        checkpoint.persistenceRevision = max(checkpoint.durableRevision, existing.checkpoint?.durableRevision ?? 0) + 1
+        try await persist(checkpoint, conversationID: conversationID, generation: nil, presented: true,
+                          purpose: .adoption, invalidation: invalidation)
+    }
+
+    func adoptRecovery(from source: URL, sourceID: UUID, conversationIDs: [UUID: UUID]) async throws {
+        try await index()
+        let files = FileManager.default
+        let incoming = source.appending(path: "recovery")
+        if files.fileExists(atPath: incoming.path) {
+            for folder in try files.contentsOfDirectory(at: incoming, includingPropertiesForKeys: nil) {
+                try Task.checkCancellation()
+                guard let originalID = UUID(uuidString: folder.lastPathComponent) else { throw CocoaError(.fileReadCorruptFile) }
+                let targetID = conversationIDs[originalID] ?? originalID
+                let root = recoveryDirectory(targetID)
+                try files.createDirectory(at: root, withIntermediateDirectories: true,
+                    attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication])
+                let key = "\(sourceID)-\(originalID)"
+                let staging = root.appending(path: ".pending-\(key)")
+                defer { refreshRecoveryAccounting(targetID) }
+                try Self.moveRecovery(folder, to: staging)
+                try Self.moveRecovery(staging, to: root.appending(path: key))
+            }
+        }
+        let recovery = directory.appending(path: "recovery")
+        if files.fileExists(atPath: recovery.path) {
+            for folder in try files.contentsOfDirectory(at: recovery, includingPropertiesForKeys: nil) {
+                guard let id = UUID(uuidString: folder.lastPathComponent) else { throw CocoaError(.fileReadCorruptFile) }
+                defer { refreshRecoveryAccounting(id) }
+                for pending in try files.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)
+                where pending.lastPathComponent.hasPrefix(".pending-\(sourceID)-") {
+                    try Self.moveRecovery(pending, to: folder.appending(path: String(pending.lastPathComponent.dropFirst(".pending-".count))))
+                }
+            }
+        }
+        let payload = records.values.reduce(0) { $0 + $1.payloadBytes }
+        if payload > primaryBudgetBytes {
+            logger.notice("Adopted checkpoint data exceeds its allowance primaryPayloadBytes=\(payload) limitBytes=\(self.primaryBudgetBytes)")
+        }
+    }
+
+    private static func moveRecovery(_ source: URL, to target: URL) throws {
+        guard renamex_np(source.path, target.path, UInt32(RENAME_EXCL)) == 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
     }
 
     func load(_ id: UUID, threadID: String? = nil, generation: UInt64? = nil) async throws -> ConversationState.Checkpoint? {
@@ -437,7 +502,8 @@ actor ConversationCheckpointStore {
         try validate(id, generation: generation)
         do {
             if try prepareInvalidation(id) {
-                return .invalidated(try mergingSubmissions(into: nil, conversationID: id))
+                let local = records[id]?.invalidation == .history ? try storedCheckpoint(id)?.checkpoint : nil
+                return .invalidated(try mergingSubmissions(into: local, conversationID: id))
             }
             while true {
                 try validate(id, generation: generation)
@@ -594,6 +660,15 @@ actor ConversationCheckpointStore {
     @discardableResult
     func save(_ supplied: ConversationState.Checkpoint, conversationID: UUID, generation: UInt64? = nil,
               presented: Bool = true) async throws -> SaveReceipt {
+        try await persist(supplied, conversationID: conversationID, generation: generation, presented: presented,
+                          purpose: .update, invalidation: nil)
+    }
+
+    private enum SavePurpose { case update, adoption }
+
+    @discardableResult
+    private func persist(_ supplied: ConversationState.Checkpoint, conversationID: UUID, generation: UInt64?,
+                         presented: Bool, purpose: SavePurpose, invalidation requestedInvalidation: Invalidation?) async throws -> SaveReceipt {
         var timing = metrics.beginCheckpointSave()
         defer { timing.finish() }
         var checkpoint = supplied
@@ -610,6 +685,8 @@ actor ConversationCheckpointStore {
         }
         try validate(conversationID, generation: generation)
         _ = try submissionRecords(conversationID)
+        let invalidation = requestedInvalidation ?? (records[conversationID]?.invalidation == .history && checkpoint.historyWindow == nil ? .history : nil)
+        if invalidation == .history { checkpoint = checkpoint.localRecords }
         if let saved = committedRevision(checkpoint, id: conversationID, presented: presented) {
             try finishCommit(conversationID, revision: saved)
             metrics.skipped(.checkpoints)
@@ -674,7 +751,7 @@ actor ConversationCheckpointStore {
             let retired = try preservedImageEvictions(checkpoint, id: conversationID)
             checkpoint = checkpoint.applyingUnavailableImages(retired)
             var admission = Admission.checkpoint(checkpoint, retainedBytes: try retainedFileBytes + recoverySize(conversationID))
-            if checkpoint.containsLocalRecords || !submissions.isEmpty {
+            if purpose == .update, checkpoint.containsLocalRecords || !submissions.isEmpty {
                 try admitPrimaryPayload(&admission, replacing: conversationID)
             }
             if case .checkpoint(let admitted, _) = admission { checkpoint = admitted }
@@ -683,7 +760,12 @@ actor ConversationCheckpointStore {
                 encoded = try Self.encodeDatabaseRecords(checkpoint, previous: previous)
             }
             timing.advance(to: .database)
-            let replacement = try replaceDatabase(encoded, retaining: keys, id: conversationID)
+            var retainedKeys = keys
+            if let invalidation {
+                encoded.append(.init(key: "invalidation", data: try JSONEncoder().encode(invalidation)))
+                retainedKeys.insert("invalidation")
+            }
+            let replacement = try replaceDatabase(encoded, retaining: retainedKeys, id: conversationID)
             writtenBytes = replacement.bytes
             metrics.recordCheckpointWrite(inputBytes: encoded.reduce(0) { $0 + $1.data.count },
                 newPayloadBytes: writtenBytes, chunking: replacement.chunking, sqlCommit: replacement.sqlCommit)
@@ -698,7 +780,7 @@ actor ConversationCheckpointStore {
         fences[conversationID]?.invalidated = false
         fences[conversationID]?.invalidationCommitted = false
         records[conversationID] = DiskRecord(bytes: payloadBytes, payloadBytes: payloadBytes, modified: .now,
-            protected: payloadBytes > 0, invalidation: nil)
+            protected: payloadBytes > 0 || invalidation != nil, invalidation: invalidation)
         records[conversationID]?.bytes = try diskBytes(conversationID) + retainedFileBytes + recoverySize(conversationID)
         records[conversationID]?.recoveryBytes = try recoverySize(conversationID)
         records[conversationID]?.historyExhausted = !historyAdmitted
@@ -1021,6 +1103,13 @@ actor ConversationCheckpointStore {
         catch let error as CheckpointDatabase.Failure where [SQLITE_NOTADB, SQLITE_CORRUPT, SQLITE_ERROR, SQLITE_SCHEMA].contains(error.code) { return false }
         catch let error as CocoaError where error.code == .fileReadCorruptFile { return false }
         guard let bytes = marker else { return false }
+        if try JSONDecoder().decode(Invalidation.self, from: bytes) == .history {
+            _ = try Self.decodeDatabase(inspectionDatabase(for: id).read())
+            try refreshLoadedRecord(id, checkpoint: storedCheckpoint(id)?.checkpoint, source: directory.appending(path: "\(id).sqlite"))
+            records[id]?.invalidation = .history
+            records[id]?.protected = true
+            return true
+        }
         guard try inspectionDatabase(for: id).read().count == 1,
               let state = try? JSONDecoder().decode(Invalidation.self, from: bytes) else { return false }
         fences[id]?.invalidated = true
@@ -1250,7 +1339,7 @@ actor ConversationCheckpointStore {
             let payloadBytes: Int
             var protected: Bool?
             var contents: CheckpointInventory.Contents?
-            if file.pathExtension == "sqlite", invalidated[id] != nil {
+            if file.pathExtension == "sqlite", invalidated[id] != nil && invalidated[id] != .history {
                 payloadBytes = 0
                 protected = true
             } else if file.pathExtension == "sqlite" {
@@ -1258,7 +1347,7 @@ actor ConversationCheckpointStore {
                     let checkpoint = try decodeDatabase(CheckpointDatabase(url: file, access: .inspection).read())
                     payloadBytes = try primaryBytes(checkpoint)
                     contents = checkpoint.map(CheckpointInventory.Contents.init)
-                    protected = payloadBytes > 0
+                    protected = payloadBytes > 0 || invalidated[id] == .history
                     if ((try? Self.fileBytes(wal)) ?? 0) > 0,
                        !FileManager.default.fileExists(atPath: directory.appending(path: "\(id).json").path) {
                         walCheckpoints.insert(id)
@@ -1308,8 +1397,10 @@ actor ConversationCheckpointStore {
     private static func readInvalidation(_ file: URL) throws -> Invalidation? {
         let database = try CheckpointDatabase(url: file, access: .inspection)
         guard let bytes = try database.readInvalidation() else { return nil }
-        guard try database.read().count == 1 else { throw CocoaError(.fileReadCorruptFile) }
-        return try JSONDecoder().decode(Invalidation.self, from: bytes)
+        let state = try JSONDecoder().decode(Invalidation.self, from: bytes)
+        if state == .history { _ = try decodeDatabase(database.read()) }
+        else if try database.read().count != 1 { throw CocoaError(.fileReadCorruptFile) }
+        return state
     }
 
     isolated deinit {
@@ -1517,8 +1608,13 @@ actor ConversationCheckpointStore {
     private static func decodeDatabase(_ records: [CheckpointDatabase.Record]) throws -> ConversationState.Checkpoint? {
         guard !records.isEmpty else { return nil }
         if let marker = records.first(where: { $0.key == "invalidation" }) {
+            let state = try JSONDecoder().decode(Invalidation.self, from: marker.data)
+            if state == .history {
+                let checkpoint = try decodeDatabase(records.filter { $0.key != "invalidation" })
+                guard checkpoint?.historyWindow == nil else { throw CocoaError(.fileReadCorruptFile) }
+                return checkpoint
+            }
             guard records.count == 1 else { throw CocoaError(.fileReadCorruptFile) }
-            _ = try JSONDecoder().decode(Invalidation.self, from: marker.data)
             return nil
         }
         var indexed: [String: Data] = [:]

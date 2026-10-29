@@ -238,6 +238,89 @@ struct GatewayIdentityTests {
         #expect(ConversationPinStore.scoped(hostID: target, defaults: defaults).load().isEmpty)
     }
 
+    @Test(arguments: [false, true])
+    func protectedRecoveryAndInvalidatedSubmissionsAdoptAnExistingCanonicalStore(interrupted: Bool) async throws {
+        let temporary = TemporaryHostStorage()
+        defer { temporary.cleanUp() }
+        let legacy = host("Legacy"), gateway = UUID(), originalID = UUID(), targetID = UUID(), recoveryOnly = UUID()
+        let source = temporary.storage.directory(for: .host(legacy.id))
+        let target = temporary.storage.directory(for: .host(gateway))
+        try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        try JSONEncoder().encode(["thread": originalID]).write(to: source.appending(path: "session-index.json"))
+        try JSONEncoder().encode(["thread": targetID]).write(to: target.appending(path: "session-index.json"))
+        let checkpoints = temporary.storage.root.appending(path: "conversations-v1/\(legacy.id)")
+        let incident = UUID()
+        let recovery = checkpoints.appending(path: "recovery/\(originalID)/\(incident)/\(originalID).json")
+        try FileManager.default.createDirectory(at: recovery.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let bytes = Data("Original unreadable recovery bytes".utf8)
+        try bytes.write(to: recovery)
+        let orphan = checkpoints.appending(path: "recovery/\(recoveryOnly)/\(incident)/\(recoveryOnly).json")
+        try FileManager.default.createDirectory(at: orphan.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let orphanBytes = Data("Unindexed protected bytes".utf8)
+        try orphanBytes.write(to: orphan)
+        var pending = ConversationState(conversationID: originalID, threadID: "thread")
+        let message = ChatMessage(role: .user, text: "Keep the pending submission")
+        pending.submit(message)
+        let sourceStore = ConversationCheckpointStore(hostID: legacy.id, directory: checkpoints, storage: temporary.storage,
+            primaryBudgetBytes: 512 * 1_024 * 1_024)
+        try await sourceStore.saveSubmission(.init(revision: pending.persistenceRevision, threadID: "thread",
+            submission: try #require(pending.submissions[message.id])), conversationID: originalID,
+            generation: await sourceStore.generation(for: originalID))
+        let destination = ConversationCheckpointStore(hostID: gateway, storage: temporary.storage, primaryBudgetBytes: 512 * 1_024 * 1_024)
+        var existing = ConversationState(conversationID: targetID, threadID: "thread")
+        existing.appendLocal(ChatMessage(role: .codex, text: "Unique canonical local record"), turnID: "local")
+        try await destination.save(existing.checkpoint, conversationID: targetID)
+        var canonical = legacy
+        canonical.id = gateway
+        canonical.gatewayID = gateway
+        canonical.legacyIDs = [legacy.id]
+        let journal = GatewayIdentityImport(id: UUID(), host: canonical, replacedIDs: [legacy.id])
+        let migration = GatewayIdentityMigration(storage: temporary.storage)
+        let badMarks = target.appending(path: ConversationMarksStore.fileName)
+        if interrupted { try Data("Cannot decode marks yet".utf8).write(to: badMarks) }
+        var marks = ConversationMarksReplica()
+        marks.record(.pin(threadID: "thread", name: "Saved"))
+        try JSONEncoder().encode(marks).write(to: source.appending(path: ConversationMarksStore.fileName))
+        if interrupted {
+            await #expect(throws: (any Error).self) { try await migration.migrate(journal) }
+            #expect(FileManager.default.fileExists(atPath: source.path))
+            try FileManager.default.removeItem(at: badMarks)
+            let root = temporary.storage.root.appending(path: "conversations-v1/\(gateway)/recovery/\(targetID)")
+            let key = "\(legacy.id)-\(originalID)"
+            try FileManager.default.moveItem(at: root.appending(path: key), to: root.appending(path: ".pending-\(key)"))
+        }
+        try await GatewayIdentityMigration(storage: temporary.storage).migrate(journal)
+        try await migration.migrate(journal)
+        try await migration.finish(journal)
+        #expect(!FileManager.default.fileExists(atPath: source.path))
+        #expect(!FileManager.default.fileExists(atPath: checkpoints.path))
+        #expect(try ConversationIndex.loadIndex(from: target.appending(path: "session-index.json"))["thread"] == targetID)
+        let reopened = ConversationCheckpointStore(hostID: gateway, storage: temporary.storage, primaryBudgetBytes: 512 * 1_024 * 1_024)
+        let result = try await reopened.restore(targetID, threadID: "thread", generation: nil)
+        #expect(result.requiresAuthoritativeHistory)
+        let restored = try #require(result.checkpoint)
+        #expect(restored.submissions[message.id]?.message.text == message.text)
+        var state = ConversationState(conversationID: targetID, threadID: "thread")
+        state.restore(restored)
+        #expect(state.checkpoint.turns.values.contains { $0.items.values.contains { $0.localMessage?.text == "Unique canonical local record" } })
+        let canonicalRecovery = temporary.storage.root.appending(path: "conversations-v1/\(gateway)/recovery")
+        let files = try #require(FileManager.default.enumerator(at: canonicalRecovery, includingPropertiesForKeys: nil)?.allObjects as? [URL])
+        #expect(files.filter { (try? Data(contentsOf: $0)) == bytes }.count == 1)
+        #expect(files.filter { (try? Data(contentsOf: $0)) == orphanBytes }.count == 1)
+        #expect(files.contains { $0.path.contains(targetID.uuidString) && $0.lastPathComponent == "\(originalID).json" })
+        let inventory = try #require(await reopened.inventory(threadIDs: [:]))
+        #expect(inventory.totals.primaryPayloadBytes >= bytes.count + orphanBytes.count)
+        #expect(await reopened.accountedDiskBytes >= bytes.count + orphanBytes.count)
+        try await reopened.save(restored, conversationID: targetID)
+        let stillInvalidated = ConversationCheckpointStore(hostID: gateway, storage: temporary.storage, primaryBudgetBytes: 512 * 1_024 * 1_024)
+        #expect(try await stillInvalidated.restore(targetID, threadID: "thread", generation: nil).requiresAuthoritativeHistory)
+        state.merge(history(items: [.agentMessage(id: "answer", text: "Authoritative answer")], threadID: "thread"))
+        try await stillInvalidated.save(state.checkpoint, conversationID: targetID)
+        let refreshed = ConversationCheckpointStore(hostID: gateway, storage: temporary.storage, primaryBudgetBytes: 512 * 1_024 * 1_024)
+        #expect(try await !refreshed.restore(targetID, threadID: "thread", generation: nil).requiresAuthoritativeHistory)
+    }
+
     private func host(_ name: String) -> GatewayHostConfiguration {
         .init(id: UUID(), name: name, hostname: "\(name.lowercased()).example", port: 443, authToken: "fixture")
     }

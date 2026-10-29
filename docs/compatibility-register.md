@@ -102,6 +102,14 @@ an old backup keeps its item until the check passes.
 | Legacy compilation eviction activation | `scripts/build_cache.py.load_policy`, configs `build/compilation-cache-policy.json` and `build/compilation-cache-eviction.json` | The legacy policy flag stays false while the new activation file enables only the corrected owner; stale worktrees must not delete outside RemoteCoder-Build | No supported release or live worktree uses the old activation flag or its broader eviction implementation |
 | Legacy six-key `build/macos-cache-policy.json` reader | Pinned older `scripts/build_cache.py` in immutable release tags and live worktrees; source in the private maintainer build policy | Re-running supported releases and older worktrees must keep reading their exact policy schema. New runners use `compilation-cache-policy.json` for retention and `compilation-cache-eviction.json` for activation | No supported release tag or live worktree predating the aggregate compilation policy still loads this file |
 
+## Adopted history invalidation
+
+Host/account adoption is roll-forward only. Its `history` invalidation row retains
+local checkpoint records in schema 1 until authoritative history is saved; older
+apps treat this unfamiliar marker as unreadable and preserve the exact database
+in recovery, but cannot display those local records normally after a downgrade.
+Use a reader supporting `history` for stores that have completed this adoption.
+
 ## Planned checkpoint database rollout
 
 This path is not active; checkpoints still use schema 1. The deferred schema-2
