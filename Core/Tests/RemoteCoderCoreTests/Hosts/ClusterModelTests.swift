@@ -84,41 +84,40 @@ struct ClusterModelTests {
         #expect(rejoined.complete)
     }
 
-    @Test func installationCredentialsCannotJoin() async throws {
+    @Test func installationCredentialsJoin() async throws {
         let suite = "ClusterModelTests.\(UUID())"
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let first = UUID(), second = UUID()
         let left = MemberRemote(host: first), right = MemberRemote(host: second)
-        let model = ClusterModel(defaults: defaults)
-        await model.refresh(hosts: [host(first, remote: left), host(second, remote: right)])
-        var installation = host(first, remote: left).configuration
-        installation.authToken = "rc1.installation"
-        await model.join(second, anchor: first, hosts: [.init(configuration: installation, remote: left), host(second, remote: right)])
-        #expect(model.pairs.count == 1)
-        #expect(model.pairs.first?.complete == false)
-        #expect(model.pairs.first?.error?.contains("operator credential") == true)
-        #expect(await left.issued.isEmpty)
-        #expect(await right.issued.isEmpty)
-    }
-
-    @Test func missingAndInstallationOnlyMembersRemainVisibleAsPendingPairs() async throws {
-        let suite = "ClusterModelTests.\(UUID())"
-        let defaults = try #require(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
-        let first = UUID(), second = UUID(), missing = UUID(), installationID = UUID()
-        let left = MemberRemote(host: first), right = MemberRemote(host: second), installationRemote = MemberRemote(host: installationID)
-        await left.setMembers([member(missing, name: "Missing"), member(installationID, name: "Installation")])
-        var installation = host(installationID, remote: installationRemote).configuration
-        installation.authToken = "rc1.fixture"
-        let hosts = [host(first, remote: left), host(second, remote: right), ClusterModel.Host(configuration: installation, remote: installationRemote)]
+        let hosts = [(first, left), (second, right)].map { id, remote in
+            var configuration = host(id, remote: remote).configuration
+            configuration.authToken = "rc1.\(id)"
+            return ClusterModel.Host(configuration: configuration, remote: remote)
+        }
         let model = ClusterModel(defaults: defaults)
         await model.refresh(hosts: hosts)
         await model.join(second, anchor: first, hosts: hosts)
-        #expect(model.pairs.count == 3)
+        let pair = try #require(model.pairs.first)
+        #expect(pair.complete)
+        #expect(await left.accepted == [pair.membership])
+        #expect(await right.accepted == [pair.membership])
+    }
+
+    @Test func missingMembersRemainVisibleAsPendingPairs() async throws {
+        let suite = "ClusterModelTests.\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let first = UUID(), second = UUID(), missing = UUID()
+        let left = MemberRemote(host: first), right = MemberRemote(host: second)
+        await left.setMembers([member(missing, name: "Missing")])
+        let hosts = [host(first, remote: left), host(second, remote: right)]
+        let model = ClusterModel(defaults: defaults)
+        await model.refresh(hosts: hosts)
+        await model.join(second, anchor: first, hosts: hosts)
+        #expect(model.pairs.count == 2)
         #expect(model.pairs.first { $0.includes(first) }?.complete == true)
         #expect(model.pairs.first { $0.includes(missing) }?.error?.contains("Add Missing in Hosts") == true)
-        #expect(model.pairs.first { $0.includes(installationID) }?.error?.contains("operator credential") == true)
         let missingPair = try #require(model.pairs.first { $0.includes(missing) })
         let missingRemote = MemberRemote(host: missing)
         await model.retry(missingPair.id, hosts: hosts + [host(missing, remote: missingRemote)])

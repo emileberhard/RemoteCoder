@@ -17,14 +17,12 @@ struct ClusterSettingsView: View {
         return host.id
     }
     private var members: [ClusterMember] { anchor.flatMap { model.listings[$0]?.members } ?? [] }
-    private var writable: Bool { settings.activeHost?.configuration.usesInstallationCredential == false }
 
     var body: some View {
         SettingsFormPage {
             Section {
                 if let failure = model.persistenceFailure { AgentNote(text: failure) }
                 if let failure = model.operationFailure { AgentNote(text: failure) }
-                if !writable { Label("Read only", systemImage: "lock") }
                 if let anchor, let local = model.listings[anchor]?.local {
                     LabeledContent(local.name, value: local.version)
                 }
@@ -50,7 +48,7 @@ struct ClusterSettingsView: View {
                         }
                         Spacer()
                         Button("Join") { operation = .join(host.id) }
-                            .disabled(!writable || host.configuration.usesInstallationCredential || host.configuration.gatewayID != host.id || anchor == nil || operation != nil)
+                            .disabled(host.configuration.gatewayID != host.id || anchor == nil || operation != nil)
                     }
                 }
             } header: { Text("Known hosts") }
@@ -60,7 +58,7 @@ struct ClusterSettingsView: View {
                     LabeledContent(name(pair.second), value: pair.secondComplete ? "Done" : "Pending")
                     if let error = pair.error { AgentNote(text: error) }
                     Button("Retry", systemImage: "arrow.clockwise") { operation = .retry(pair.id) }
-                        .disabled(!writable || model.running.contains(pair.id) || operation != nil)
+                        .disabled(model.running.contains(pair.id) || operation != nil)
                 } header: { Text(pair.operation == .join ? "Join" : "Remove") }
             }
         }
@@ -131,10 +129,8 @@ struct ClusterSettingsView: View {
                 }
             }
             Spacer()
-            if writable {
-                Button("Remove", role: .destructive) { removingMember = member }
-                    .disabled(operation != nil)
-            }
+            Button("Remove", role: .destructive) { removingMember = member }
+                .disabled(operation != nil)
         }
     }
 }

@@ -1939,8 +1939,8 @@ no-replay boundary. Keep this policy in the gateway rather than client retries.
 Cluster identity belongs to `identity.rs`: the host UUID is stable, the ledger
 incarnation fences job and receipt store epochs, and same-epoch backup restores
 require `cluster reset-identity`. Membership and pinned links belong to
-`cluster/`. Membership mutations require the local operator; every peer request
-rechecks the retained membership, including on existing sockets. Cluster
+`cluster/`. Membership mutations require a local client, never a peer; every
+peer request rechecks the retained membership, including on existing sockets. Cluster
 credentials are journal-redacted. Each Link connection owns its socket task and
 capacity-one request channel. The task reads continuously, evicts closed sockets,
 and resolves its pending receipt on termination. Reconnection is bounded to one

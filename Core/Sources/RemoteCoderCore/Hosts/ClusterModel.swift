@@ -167,8 +167,8 @@ final class ClusterModel {
         do {
             switch pair.operation {
             case .join:
-                let first = try operatorHost(pair.first, hosts: hosts)
-                let second = try operatorHost(pair.second, hosts: hosts)
+                let first = try connectedHost(pair.first, hosts: hosts)
+                let second = try connectedHost(pair.second, hosts: hosts)
                 let issuedFirst = try await first.remote.clusterIssue(for: second.id, name: second.configuration.displayName, membership: pair.membership)
                 let issuedSecond = try await second.remote.clusterIssue(for: first.id, name: first.configuration.displayName, membership: pair.membership)
                 guard issuedFirst.host == first.id, issuedSecond.host == second.id,
@@ -187,7 +187,7 @@ final class ClusterModel {
                 var errors: [String] = []
                 if !pair.firstComplete {
                     do {
-                        let first = try operatorHost(pair.first, hosts: hosts)
+                        let first = try connectedHost(pair.first, hosts: hosts)
                         pair.firstComplete = try await remove(from: first, peer: pair.second, membership: pair.membership)
                         if !pair.firstComplete { errors.append("Removal is pending on \(first.configuration.displayName). Retry.") }
                         replace(pair)
@@ -195,7 +195,7 @@ final class ClusterModel {
                 }
                 if !pair.secondComplete {
                     do {
-                        let second = try operatorHost(pair.second, hosts: hosts)
+                        let second = try connectedHost(pair.second, hosts: hosts)
                         pair.secondComplete = try await remove(from: second, peer: pair.first, membership: pair.membership)
                         if !pair.secondComplete { errors.append("Removal is pending on \(second.configuration.displayName). Retry.") }
                     } catch { errors.append(error.localizedDescription) }
@@ -213,10 +213,9 @@ final class ClusterModel {
         return !receipt.pending
     }
 
-    private func operatorHost(_ id: UUID, hosts: [Host]) throws -> Host {
+    private func connectedHost(_ id: UUID, hosts: [Host]) throws -> Host {
         let name = membersByID[id]?.name ?? id.uuidString
         guard let host = hosts.first(where: { $0.id == id }) else { throw ClusterFailure.connectionRequired(name) }
-        guard !host.configuration.usesInstallationCredential else { throw ClusterFailure.operatorRequired(host.configuration.displayName) }
         return host
     }
 
@@ -244,12 +243,11 @@ final class ClusterModel {
 
     enum ClusterFailure: LocalizedError {
         case identityChanged
-        case operatorRequired(String), connectionRequired(String)
+        case connectionRequired(String)
         var errorDescription: String? {
             switch self {
             case .identityChanged: "The gateway's verified identity changed. Reconnect before joining."
-            case .operatorRequired(let name): "Connect to \(name) with an operator credential, then retry."
-            case .connectionRequired(let name): "Add \(name) in Hosts with an operator credential, verify its identity, then retry."
+            case .connectionRequired(let name): "Add \(name) in Hosts, verify its identity, then retry."
             }
         }
     }

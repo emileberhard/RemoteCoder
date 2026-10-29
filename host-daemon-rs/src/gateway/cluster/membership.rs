@@ -152,8 +152,8 @@ impl Gateway {
         let identity = self.host_identity().await?;
         let link = self.cluster_link().await?;
         ensure!(
-            matches!(grant, Grant::Operator),
-            "membership changes require the local operator"
+            !matches!(grant, Grant::Peer { .. }),
+            "membership changes require a local client"
         );
         match method {
             "cluster/issue" => {
