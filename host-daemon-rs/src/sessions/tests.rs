@@ -2209,7 +2209,7 @@ async fn sessions_mirror_replays_changes_that_race_the_initial_listing() -> Resu
 fn sessions_mirror_feed_upgrade_preserves_v4_rows_and_epoch() -> Result<()> {
     let f = fixture();
     scan(&f);
-    let cursor = changes::cursor(&f.store.reader()?)?;
+    let cursor = changes::cursor(&*f.store.reader()?)?;
     let rows: i64 = f
         .store
         .reader()?
@@ -2224,7 +2224,7 @@ fn sessions_mirror_feed_upgrade_preserves_v4_rows_and_epoch() -> Result<()> {
         db.execute_batch("DROP INDEX change_evidence; ALTER TABLE change DROP COLUMN origin_host; ALTER TABLE change DROP COLUMN evidence_path; PRAGMA user_version=4;")?;
     }
     let upgraded = Store::open(f.store.path.clone())?;
-    assert_eq!(changes::cursor(&upgraded.reader()?)?, cursor);
+    assert_eq!(changes::cursor(&*upgraded.reader()?)?, cursor);
     assert_eq!(
         upgraded
             .reader()?

@@ -619,17 +619,12 @@ async fn sync_owned(
     let origins: Vec<_> = origins.into_values().collect();
     let projected = if full || !changed.is_empty() {
         let paths: Vec<_> = changed.into_iter().collect();
-        let scope = if full {
-            ingest::Scope::Full
+        let stop = std::sync::atomic::AtomicBool::new(false);
+        let outcome = if full {
+            ingest::scan(store, &origins, &stop)?
         } else {
-            ingest::Scope::Changed(&paths)
+            ingest::scan_scope(store, &origins, ingest::Scope::Changed(&paths), &stop)?
         };
-        let outcome = ingest::scan_scope(
-            store,
-            &origins,
-            scope,
-            &std::sync::atomic::AtomicBool::new(false),
-        )?;
         let partial: bool = store.reader()?.query_row("SELECT EXISTS(SELECT 1 FROM coverage WHERE origin_host=?1 AND stale_reason IS NOT NULL)",[host],|row|row.get(0))?;
         outcome["parseFailures"] == 0 && !partial
     } else {
