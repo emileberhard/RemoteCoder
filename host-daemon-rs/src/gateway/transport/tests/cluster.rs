@@ -48,6 +48,7 @@ async fn completed_agent(host: &TestGateway, name: &str, scope: ToolScope) -> Jo
         )
         .await
         .unwrap();
+    let at_ms = admitted.job.updated_at_ms;
     let store = host.jobs.store().await.unwrap();
     let bound = store
         .bind(
@@ -60,7 +61,7 @@ async fn completed_agent(host: &TestGateway, name: &str, scope: ToolScope) -> Jo
                 },
                 thread_id: crate::ids::new_session_uuid(),
             },
-            2,
+            at_ms,
         )
         .await
         .unwrap();
@@ -70,7 +71,7 @@ async fn completed_agent(host: &TestGateway, name: &str, scope: ToolScope) -> Jo
             bound.revision,
             ExecutionState::Terminal {
                 terminal: Terminal {
-                    at_ms: Some(3),
+                    at_ms: Some(at_ms + 1),
                     execution: None,
                     git: GitSnapshot::Unknown {
                         reason: "fixture".into(),
@@ -86,7 +87,7 @@ async fn completed_agent(host: &TestGateway, name: &str, scope: ToolScope) -> Jo
                     cleanup: CleanupState::Complete,
                 },
             },
-            3,
+            at_ms + 1,
         )
         .await
         .unwrap()
@@ -131,7 +132,10 @@ async fn cluster_self_dispatch_uses_local_list_read_message_and_errors() {
         assert_eq!(addressed, local, "{method}");
         assert!(addressed.get("error").is_none(), "{method}: {addressed}");
         if method == "agent/jobs/message" {
-            assert_eq!(addressed["result"]["deliveryState"]["kind"], "accepted");
+            assert_eq!(
+                addressed["result"]["deliveryState"]["kind"], "accepted",
+                "{addressed}"
+            );
             assert_eq!(addressed["result"]["sender"]["kind"], "topLevel");
         }
     }
@@ -239,8 +243,8 @@ async fn cluster_self_dispatch_preserves_captured_read_only_caller() {
     assert!(
         addressed["error"]["message"]
             .as_str()
-            .unwrap()
-            .contains("read-only caller cannot steer")
+            .is_some_and(|message| message.contains("read-only caller cannot steer")),
+        "{addressed}"
     );
     let child = JobId::for_mutation(Provider::Codex, "scoped-self-child").unwrap();
     let started = request(
