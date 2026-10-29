@@ -178,10 +178,7 @@ mod tests {
             SocketAddr::from((Ipv6Addr::LOCALHOST, port)),
             SocketAddr::from(([127, 0, 0, 1], port)),
         ] {
-            let (connected, accepted) =
-                tokio::join!(TcpStream::connect(address), listener.accept());
-            connected.unwrap();
-            accepted.unwrap();
+            tokio::try_join!(TcpStream::connect(address), listener.accept()).unwrap();
         }
     }
 }
