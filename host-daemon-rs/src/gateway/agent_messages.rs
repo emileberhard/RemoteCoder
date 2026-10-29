@@ -150,7 +150,7 @@ impl Gateway {
             .resolved
             .as_ref()
             .context("message resolution was not frozen")?;
-        self.authorize_conversation(&request.caller, &resolved.conversation)
+        self.authorize_message_target(&request.caller, &record, resolved)
             .await?;
         let text = record
             .text
@@ -253,6 +253,40 @@ impl Gateway {
             .update_message(record.delivery_id, state, now_ms())
             .await?;
         Ok(json!(record))
+    }
+
+    async fn authorize_message_target(
+        &self,
+        caller: &Caller,
+        record: &MessageRecord,
+        resolved: &ResolvedMessage,
+    ) -> Result<()> {
+        if matches!(record.requested_target, MessageTarget::Parent)
+            && let Origin::Parent { conversation } = &record.sender
+            && let Some(agent) = self.jobs.agent_for_conversation(conversation).await?
+        {
+            let immutable_parent = match (&agent.origin, &resolved.remote_recipient) {
+                (Origin::Parent { conversation }, None) => conversation == &resolved.conversation,
+                (
+                    Origin::RemoteParent { host, conversation },
+                    Some(Recipient::Remote {
+                        host: receiver,
+                        conversation: target,
+                        ..
+                    }),
+                ) => {
+                    host == receiver
+                        && conversation == target
+                        && conversation == &resolved.conversation
+                }
+                _ => false,
+            };
+            if immutable_parent {
+                return Ok(());
+            }
+        }
+        self.authorize_conversation(caller, &resolved.conversation)
+            .await
     }
 
     async fn resolve_message_target(&self, record: &MessageRecord) -> Result<ResolvedMessage> {
@@ -493,3 +527,6 @@ impl Gateway {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod parent_authority_tests;
