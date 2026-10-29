@@ -109,6 +109,50 @@ fn spec(root: &std::path::Path) -> JobSpec {
     }
 }
 
+fn dispatch(host: &str, method: &str, request: Value, caller: Value) -> Value {
+    json!({"host":host,"method":method,"request":request,"caller":caller})
+}
+
+#[tokio::test]
+async fn cluster_self_dispatch_does_not_admit_unknown_hosts_or_peer_forwarding() {
+    let host = LanHarness::start().await;
+    let peer = LanHarness::start().await;
+    let (_, credential) = pair(&host, &peer, "host", "peer").await;
+    let identity = peer.gateway.host_identity().await.unwrap();
+    for (token, target, class, message) in [
+        (
+            OPERATOR,
+            crate::ids::new_session_uuid(),
+            "usage",
+            "unknown or removed member",
+        ),
+        (
+            credential.as_str(),
+            identity.host_id.clone(),
+            "refused",
+            "a member cannot forward through a third host",
+        ),
+    ] {
+        let mut socket = connect(&peer, token).await;
+        let response = request(
+            &mut socket,
+            "agent/cluster/dispatch",
+            dispatch(
+                &target,
+                "agent/jobs/list",
+                json!({"selector":{"kind":"recent"}}),
+                json!({"kind":"operator"}),
+            ),
+        )
+        .await;
+        assert_eq!(response["error"]["data"]["class"], class);
+        assert_eq!(response["error"]["message"], message);
+        socket.close(None).await.unwrap();
+    }
+    host.stop().await;
+    peer.stop().await;
+}
+
 #[tokio::test]
 async fn cluster_peer_search_stays_local_without_recursive_coverage() {
     let a = LanHarness::start().await;

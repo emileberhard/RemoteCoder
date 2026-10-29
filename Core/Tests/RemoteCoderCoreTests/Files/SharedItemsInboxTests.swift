@@ -65,7 +65,7 @@ struct SharedItemsInboxTests {
         #expect(throws: CocoaError.self) { try share.copy(source, maximumBytes: 4) }
         #expect(throws: CocoaError.self) { try share.move(source, maximumBytes: 4) }
         #expect(FileManager.default.fileExists(atPath: source.path))
-        let contents = try FileManager.default.enumerator(at: share.folder, includingPropertiesForKeys: [.isRegularFileKey])
+        let contents = FileManager.default.enumerator(at: share.folder, includingPropertiesForKeys: [.isRegularFileKey])
         let files = (contents?.allObjects as? [URL] ?? []).filter {
             (try? $0.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true
         }

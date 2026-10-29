@@ -41,6 +41,21 @@ struct Dispatch {
 }
 
 impl Gateway {
+    pub(super) async fn local_cluster_dispatch(
+        &self,
+        grant: &Grant,
+        params: &Value,
+    ) -> Result<Option<(String, Value)>, RpcError> {
+        if matches!(grant, Grant::Peer { .. })
+            || params["host"].as_str() != Some(self.host_identity().await?.host_id.as_str())
+        {
+            return Ok(None);
+        }
+        let request: Dispatch = decode(params.clone())
+            .map_err(|error| cluster_error(ErrorClass::Refused, format!("{error:#}")))?;
+        Ok(Some((request.method, request.request)))
+    }
+
     pub(super) async fn cluster_rpc(
         &self,
         grant: &Grant,

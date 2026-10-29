@@ -70,7 +70,7 @@ struct ChatHistoryReadTests {
         }, turns: []))
         let history = GatewayHistoryService(gateway: gateway, cache: HistoryPageCache(
             directory: fixture.temporaryStorage.storage.root.appending(path: "history-pages")))
-        let header = await gateway.header
+        let header = gateway.header
         let opening = await original.beginHistoryRead()
         let tail = try await history.openTail(header: header, base: opening.base)
         await chat.applyConversationSnapshot(tail, read: opening, from: original, source: "network")
@@ -249,7 +249,7 @@ struct ChatHistoryReadTests {
         chat.historyEdges = HistoryEdgeReader(host: chat, historyService: history,
             conversations: chat.target.conversations, networkPolicy: HistoryNetworkPolicy())
         let read = await session.beginHistoryRead()
-        let tail = try await history.openTail(header: await gateway.header, base: read.base)
+        let tail = try await history.openTail(header: gateway.header, base: read.base)
         await chat.applyConversationSnapshot(tail, read: read, from: session, source: "network")
         try #require(!chat.messages.isEmpty)
         return (chat, gateway)
