@@ -128,11 +128,18 @@ private extension KeyedDecodingContainer {
     }
 }
 
+struct ClusterRemoval: Decodable, Sendable {
+    let removed: Bool
+    let pending: Bool
+    let hostId: UUID
+    let membership: UUID
+}
+
 protocol ClusterRemote: Actor {
     func clusterList() async throws -> ClusterList
     func clusterIssue(for host: UUID, name: String, membership: UUID) async throws -> ClusterIssuedCredential
     func clusterAccept(_ issued: ClusterIssuedCredential, name: String, membership: UUID) async throws
-    func clusterRemove(host: UUID, membership: UUID) async throws
+    func clusterRemove(host: UUID, membership: UUID) async throws -> ClusterRemoval
     func setAgentParent(agent: ClusterParent, parent: ClusterParent?) async throws
 }
 
@@ -154,8 +161,8 @@ extension GatewayClient: ClusterRemote {
             "routes": .array(issued.routes.map(JSONValue.string)), "credential": .string(issued.credential)]), timeout: .seconds(10))
     }
 
-    func clusterRemove(host: UUID, membership: UUID) async throws {
-        let _: JSONValue = try await callDecodable(method: "cluster/remove", params: .object([
+    func clusterRemove(host: UUID, membership: UUID) async throws -> ClusterRemoval {
+        try await callDecodable(method: "cluster/remove", params: .object([
             "protocol": .number(1), "host": .string(host.uuidString.lowercased()),
             "membership": .string(membership.uuidString.lowercased())]), timeout: .seconds(10))
     }

@@ -137,12 +137,17 @@ final class ClusterModel {
 
     func remove(_ hostID: UUID, hosts: [Host]) async {
         guard persistenceFailure == nil else { return }
-        for host in hosts where host.id != hostID {
-            let member = memberIndex[host.id]?[hostID] ?? memberIndex[hostID]?[host.id]
-            guard let member else { continue }
-            let existing = pairs.first { $0.membership == member.membership }
+        var edges: [UUID: Pair] = [:]
+        for (owner, listing) in listings {
+            for member in listing.members where owner == hostID || member.id == hostID {
+                guard owner != member.id else { continue }
+                edges[member.membership] = Pair(first: owner, second: member.id, membership: member.membership, operation: .remove)
+            }
+        }
+        for edge in edges.values.sorted(by: { $0.id.uuidString < $1.id.uuidString }) {
+            let existing = pairs.first { $0.membership == edge.membership }
             if existing == nil, !reservePair() { return }
-            var pair = existing ?? Pair(first: host.id, second: hostID, membership: member.membership, operation: .remove)
+            var pair = existing ?? edge
             if pair.operation != .remove {
                 pair.operation = .remove
                 pair.firstComplete = false
@@ -150,8 +155,8 @@ final class ClusterModel {
                 pair.error = nil
             }
             replace(pair)
-            await retry(pair.id, hosts: hosts)
         }
+        for id in edges.keys { await retry(id, hosts: hosts) }
         await refresh(hosts: hosts)
     }
 
@@ -183,16 +188,16 @@ final class ClusterModel {
                 if !pair.firstComplete {
                     do {
                         let first = try operatorHost(pair.first, hosts: hosts)
-                        try await first.remote.clusterRemove(host: pair.second, membership: pair.membership)
-                        pair.firstComplete = true
+                        pair.firstComplete = try await remove(from: first, peer: pair.second, membership: pair.membership)
+                        if !pair.firstComplete { errors.append("Removal is pending on \(first.configuration.displayName). Retry.") }
                         replace(pair)
                     } catch { errors.append(error.localizedDescription) }
                 }
                 if !pair.secondComplete {
                     do {
                         let second = try operatorHost(pair.second, hosts: hosts)
-                        try await second.remote.clusterRemove(host: pair.first, membership: pair.membership)
-                        pair.secondComplete = true
+                        pair.secondComplete = try await remove(from: second, peer: pair.first, membership: pair.membership)
+                        if !pair.secondComplete { errors.append("Removal is pending on \(second.configuration.displayName). Retry.") }
                     } catch { errors.append(error.localizedDescription) }
                 }
                 pair.error = errors.isEmpty ? nil : errors.joined(separator: "\n")
@@ -200,6 +205,12 @@ final class ClusterModel {
             if pair.complete { pair.error = nil }
         } catch { pair.error = error.localizedDescription }
         replace(pair)
+    }
+
+    private func remove(from host: Host, peer: UUID, membership: UUID) async throws -> Bool {
+        let receipt = try await host.remote.clusterRemove(host: peer, membership: membership)
+        guard receipt.hostId == peer, receipt.membership == membership, receipt.removed else { throw ClusterFailure.identityChanged }
+        return !receipt.pending
     }
 
     private func operatorHost(_ id: UUID, hosts: [Host]) throws -> Host {
