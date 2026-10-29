@@ -103,7 +103,24 @@ def mdm_target(requested, bundle, *, device=None):
         raise ManagedAppNotConfigured(
             "Accept this app's initial SimpleMDM managed installation before using automatic updates"
         )
+    attributes = installed[0]["attributes"]
+    if store_build(attributes):
+        raise ManagedAppNotConfigured(
+            f"the iPhone runs the TestFlight build {attributes['short_version']} ({attributes['version']}), "
+            "which iOS refuses to replace through SimpleMDM; one direct install with the iPhone unlocked "
+            "near this Mac returns it to managed updates"
+        )
     return device, catalog, installed[0]
+
+
+def store_build(attributes):
+    release_cache = load_script("release_cache", SCRIPTS / "release-cache.py")
+    try:
+        direct = release_cache.build_number(attributes.get("short_version"))
+    except ValueError:
+        return False
+    build = attributes.get("version")
+    return isinstance(build, str) and build.isdigit() and build != direct
 
 
 def catalog_app(bundle):
