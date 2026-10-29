@@ -49,6 +49,34 @@ struct ConversationAgentsRefreshTests {
         } catch { await gateway.retire(); await fixture.stop(); throw error }
     }
 
+    @Test func placementDuringAReadCoalescesIntoOneFreshTrailingRead() async throws {
+        let fixture = try DeviceToolSocketFixture(declarationReply: .accepted)
+        await fixture.holdRequests("conversation/agents/list")
+        let port = try await fixture.start()
+        let gateway = GatewayClient(config: .init(url: try #require(URL(string: "ws://127.0.0.1:\(port)")),
+            authToken: "fixture", hostLabel: "Fixture"), routes: nil)
+        let model = ConversationAgentsModel(address: .init(hostID: UUID(), threadID: "parent"), gateway: gateway)
+        do {
+            let refresh = Task { await model.refresh() }
+            for await request in fixture.requests where request.method == "conversation/agents/list" { break }
+            model.refreshAfterPlacement()
+            model.refreshAfterPlacement()
+            await fixture.setResult(.object(["agents": .array([]), "revision": .string("2"), "warnings": .array([])]), method: "conversation/agents/list")
+            try await fixture.releaseRequests(result: page)
+            await refresh.value
+            #expect(model.hasLoaded && model.agents.isEmpty && !model.isRefreshing)
+            #expect(await fixture.recordedRequests.filter { $0.method == "conversation/agents/list" }.count == 2)
+            #expect(await fixture.recordedNotifications.allSatisfy { $0.method != "$/cancelRequest" })
+            await fixture.setResult(page, method: "conversation/agents/list")
+            model.refreshAfterPlacement()
+            await model.refreshIfNeeded()
+            #expect(model.agents.count == 1)
+            #expect(await fixture.recordedRequests.filter { $0.method == "conversation/agents/list" }.count == 3)
+            await gateway.retire()
+            await fixture.stop()
+        } catch { await gateway.retire(); await fixture.stop(); throw error }
+    }
+
     @Test func lastCancelledSurfaceAbandonsTheSharedRead() async throws {
         let fixture = try DeviceToolSocketFixture(declarationReply: .accepted)
         await fixture.advertiseCancellation(true)

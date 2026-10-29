@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import Synchronization
 @testable import RemoteCoderCore
 
 @MainActor
@@ -8,6 +9,9 @@ struct GatewayIdentityTests {
         let suite = "GatewayIdentityTests.\(UUID())"
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
+        let temporary = TemporaryHostStorage()
+        defer { temporary.cleanUp() }
+        let migration = GatewayIdentityMigration(storage: temporary.storage)
         let first = host("First")
         let second = host("Second")
         let unreachable = host("Away")
@@ -18,8 +22,10 @@ struct GatewayIdentityTests {
         defaults.set(["thread": "Pinned"], forKey: ConversationPinStore.storageKey(hostID: first.id))
         defaults.set(["host": first.id.uuidString, "thread": "thread"], forKey: "workspace.open-conversation.v1")
         let identity = GatewayIdentity(hostId: gateway, incarnation: UUID())
-        try await store.adoptIdentity(identity, for: first)
-        try await store.adoptIdentity(identity, for: second)
+        try store.beginIdentityMigration(identity, for: first)
+        try await store.completeIdentityMigration(using: migration)
+        try store.beginIdentityMigration(identity, for: second)
+        try await store.completeIdentityMigration(using: migration)
         let merged = try #require(store.hosts.first { $0.id == gateway })
         #expect(Set(merged.configuration.legacyIDs) == [first.id, second.id])
         #expect(store.hosts.count == 2)
@@ -32,7 +38,7 @@ struct GatewayIdentityTests {
         #expect(saved.hosts.first { $0.id == gateway }?.configuration.gatewayID == gateway)
         #expect(store.canonicalHostID(first.id) == gateway)
         ConversationPinStore.scoped(hostID: gateway, defaults: defaults).clear()
-        try await store.adoptIdentity(identity, for: merged.configuration)
+        try await store.completeIdentityMigration(using: migration)
         #expect(ConversationPinStore.scoped(hostID: gateway, defaults: defaults).load().isEmpty)
         #expect(throws: (any Error).self) {
             try store.verifyIdentity(.init(hostId: UUID(), incarnation: UUID()), for: merged.configuration)
@@ -62,9 +68,16 @@ struct GatewayIdentityTests {
         try JSONEncoder().encode(firstMarks).write(to: firstDirectory.appending(path: ConversationMarksStore.fileName))
         try JSONEncoder().encode(secondMarks).write(to: secondDirectory.appending(path: ConversationMarksStore.fileName))
         let migration = GatewayIdentityMigration(storage: temporary.storage)
-        try await migration.migrate(from: first, to: gateway)
-        try await migration.migrate(from: second, to: gateway)
-        try await migration.migrate(from: second, to: gateway)
+        var canonical = host("Canonical")
+        canonical.id = gateway
+        canonical.gatewayID = gateway
+        canonical.legacyIDs = [first]
+        let firstImport = GatewayIdentityImport(id: UUID(), host: canonical, replacedIDs: [first])
+        try await migration.migrate(firstImport)
+        canonical.legacyIDs = [second]
+        let secondImport = GatewayIdentityImport(id: UUID(), host: canonical, replacedIDs: [second])
+        try await migration.migrate(secondImport)
+        try await migration.migrate(secondImport)
         let target = temporary.storage.directory(for: .host(gateway))
         let reopened = ComposerDraftStore(directory: target.appending(path: "drafts"))
         let merged = try #require(await reopened.draft(for: .thread("same-thread")))
@@ -78,7 +91,7 @@ struct GatewayIdentityTests {
         try FileManager.default.createDirectory(at: recording.deletingLastPathComponent(), withIntermediateDirectories: true)
         try JSONSerialization.data(withJSONObject: ["formatVersion": 1, "owner": ["hostID": second.uuidString], "sampleRate": 16_000])
             .write(to: recording)
-        try await migration.finish(from: second, to: gateway)
+        try await migration.finish(secondImport)
         let manifest = try JSONSerialization.jsonObject(with: Data(contentsOf: recording)) as? [String: Any]
         #expect((manifest?["owner"] as? [String: String])?["hostID"] == gateway.uuidString)
         #expect(!FileManager.default.fileExists(atPath: secondDirectory.path))
@@ -108,7 +121,8 @@ struct GatewayIdentityTests {
         let credentials = MemoryGatewayCredentials()
         let store = HostStore(hosts: [original], activeHostID: original.id, defaults: defaults, credentials: credentials, defaultsDomain: suite)
         credentials.fail(with: -50)
-        await #expect(throws: (any Error).self) { try await store.adoptIdentity(.init(hostId: UUID(), incarnation: UUID()), for: original) }
+        #expect(throws: (any Error).self) { try store.beginIdentityMigration(.init(hostId: UUID(), incarnation: UUID()), for: original) }
+        #expect(store.identityMigrationHostIDs.contains(original.id))
         #expect(store.hosts.first?.configuration == original)
     }
 
@@ -159,7 +173,8 @@ struct GatewayIdentityTests {
         #expect(defaults.persistentDomain(forName: suite)?[newKey] == nil)
     }
 
-    @Test func restartAfterCanonicalPersistenceCompletesEveryVerifiedAliasWithoutReimporting() async throws {
+    @Test(arguments: [IdentitySaveFailure.adoption, .completion])
+    func journalResumesOfflineAcrossCredentialSaveFailures(failure: IdentitySaveFailure) async throws {
         let temporary = TemporaryHostStorage()
         defer { temporary.cleanUp() }
         let suite = "GatewayIdentityTests.\(UUID())"
@@ -169,11 +184,9 @@ struct GatewayIdentityTests {
         var duplicate = host("Duplicate")
         duplicate.gatewayID = target
         duplicate.legacyIDs = [older]
-        let credentials = MemoryGatewayCredentials()
+        let credentials = IdentityJournalCredentials(target: target, failure: failure)
         let before = HostStore(hosts: [source, duplicate], activeHostID: source.id,
                                defaults: defaults, credentials: credentials, defaultsDomain: suite)
-        let sources = try before.identityMigrationSources(.init(hostId: target, incarnation: UUID()), for: source)
-        #expect(sources == [source.id, duplicate.id, older])
         let originalDirectory = temporary.storage.directory(for: .host(source.id))
         let drafts = ComposerDraftStore(directory: originalDirectory.appending(path: "drafts"))
         let draft = try #require(await drafts.draft(for: .thread("thread")))
@@ -190,21 +203,24 @@ struct GatewayIdentityTests {
         let recording = temporary.storage.root.appending(path: "dictation-recordings/recording/recording.json")
         try FileManager.default.createDirectory(at: recording.deletingLastPathComponent(), withIntermediateDirectories: true)
         try JSONSerialization.data(withJSONObject: ["owner": ["hostID": source.id.uuidString]]).write(to: recording)
+        try before.beginIdentityMigration(.init(hostId: target, incarnation: UUID()), for: source)
+        let journal = try #require(before.identityMigration)
+        #expect(Set(journal.host.legacyIDs) == [source.id, duplicate.id, older])
+        #expect(before.identityMigrationHostIDs == [source.id, duplicate.id, older, target])
         let migration = GatewayIdentityMigration(storage: temporary.storage)
-        for id in sources { try await migration.migrate(from: id, to: target) }
-        var canonical = source
-        canonical.id = target
-        canonical.gatewayID = target
-        canonical.legacyIDs = Array(sources)
-        let reopened = HostStore(hosts: [canonical], activeHostID: target,
-                                 defaults: defaults, credentials: credentials, defaultsDomain: suite)
+        await #expect(throws: (any Error).self) { try await before.completeIdentityMigration(using: migration) }
+        #expect(before.identityMigration == journal)
+        credentials.allowCompletion()
+        let reopened = HostStore(defaults: defaults, credentials: credentials, sharedDirectory: MemoryGatewayCredentials(),
+            configuration: .success(LocalConfiguration()), defaultsDomain: suite)
+        #expect(reopened.identityMigration == journal)
+        #expect(reopened.identityMigrationHostIDs == [source.id, duplicate.id, older, target])
+        #expect(!reopened.upsert(source))
         let restarted = GatewayIdentityMigration(storage: temporary.storage)
-        #expect(await restarted.unfinishedImports(hosts: [canonical]) == [target])
-        var unverified = canonical
-        unverified.gatewayID = nil
-        #expect(await restarted.unfinishedImports(hosts: [unverified]).isEmpty)
-        try await reopened.resumeIdentityMigration(for: target, using: restarted)
-        #expect(await restarted.unfinishedImports(hosts: [canonical]).isEmpty)
+        try await reopened.completeIdentityMigration(using: restarted)
+        #expect(reopened.identityMigration == nil)
+        #expect(reopened.identityMigrationHostIDs.isEmpty)
+        #expect(reopened.hosts.map(\.id) == [target])
         #expect(ConversationPinStore.scoped(hostID: target, defaults: defaults).load() == ["thread": "Pinned"])
         #expect(defaults.persistentDomain(forName: suite)?[ConversationPinStore.storageKey(hostID: source.id)] == nil)
         #expect(defaults.dictionary(forKey: "workspace.open-conversation.v1")?["host"] as? String == target.uuidString)
@@ -218,11 +234,32 @@ struct GatewayIdentityTests {
         #expect((manifest["owner"] as? [String: String])?["hostID"] == target.uuidString)
         #expect(!FileManager.default.fileExists(atPath: originalDirectory.path))
         defaults.removeObject(forKey: ConversationPinStore.storageKey(hostID: target))
-        try await reopened.resumeIdentityMigration(for: target, using: restarted)
+        try await reopened.completeIdentityMigration(using: restarted)
         #expect(ConversationPinStore.scoped(hostID: target, defaults: defaults).load().isEmpty)
     }
 
     private func host(_ name: String) -> GatewayHostConfiguration {
         .init(id: UUID(), name: name, hostname: "\(name.lowercased()).example", port: 443, authToken: "fixture")
+    }
+}
+
+enum IdentitySaveFailure: Equatable, Sendable { case adoption, completion }
+
+private final class IdentityJournalCredentials: GatewayCredentialStorage {
+    private struct State { var data: Data?; var reject = true }
+    private let state = Mutex(State())
+    private let target: UUID
+    private let failure: IdentitySaveFailure
+    init(target: UUID, failure: IdentitySaveFailure) { self.target = target; self.failure = failure }
+    func read() -> Data? { state.withLock { $0.data } }
+    func allowCompletion() { state.withLock { $0.reject = false } }
+    func write(_ data: Data) throws {
+        struct Snapshot: Decodable { let hosts: [GatewayHostConfiguration]; let identityMigration: GatewayIdentityImport? }
+        let snapshot = try JSONDecoder().decode(Snapshot.self, from: data)
+        try state.withLock { value in
+            if value.reject, snapshot.hosts.contains(where: { $0.id == target }),
+               failure == .adoption || snapshot.identityMigration == nil { throw CocoaError(.fileWriteNoPermission) }
+            value.data = data
+        }
     }
 }

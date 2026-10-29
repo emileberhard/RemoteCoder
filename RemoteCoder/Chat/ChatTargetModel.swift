@@ -328,8 +328,14 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
     @ObservationIgnored var agentHosts: @MainActor () -> [ConversationAgentsHost] = { [] }
     @ObservationIgnored var agentCoverage: @MainActor () -> [ClusterCoverage] = { [] }
 
-    func invalidateAgentLists() {
-        for screen in screens { screen.conversationAgents?.invalidate() }
+    func agentPlacementChanged() {
+        let visible = isOnScreen ? Set(presentingScreens.compactMap { $0.conversationAgents?.id }) : []
+        var updated: Set<UUID> = []
+        for screen in screens {
+            guard let agents = screen.conversationAgents, updated.insert(agents.id).inserted else { continue }
+            if visible.contains(agents.id) { agents.refreshAfterPlacement() }
+            else { agents.invalidate() }
+        }
     }
 
     private func agentsModel(threadID: String) -> ConversationAgentsModel {

@@ -33,6 +33,7 @@ final class ConversationAgentsModel: Identifiable {
     @ObservationIgnored private var refreshedAt: Date?
     @ObservationIgnored private let now: @Sendable () -> Date
     @ObservationIgnored private var observedChildren: Set<String>?
+    @ObservationIgnored private var placementRefreshPending = false
     @ObservationIgnored private var refreshID: UUID?
     @ObservationIgnored private var refreshTask: Task<Void, Never>?
     @ObservationIgnored private var waiters: [UUID: CheckedContinuation<Void, Never>] = [:]
@@ -58,12 +59,23 @@ final class ConversationAgentsModel: Identifiable {
 
     func invalidate() {
         refreshedAt = nil
+        placementRefreshPending = false
         guard let refreshTask else { return }
         refreshTask.cancel()
         self.refreshTask = nil
         projectionTask?.cancel()
         projectionTask = nil
         startRefresh()
+    }
+
+    func refreshAfterPlacement() {
+        refreshedAt = nil
+        if refreshTask != nil {
+            placementRefreshPending = true
+            projectionTask?.cancel()
+            projectionTask = nil
+            projectionID = nil
+        } else { startRefresh() }
     }
 
     func observeChildren(_ threadIDs: Set<String>) {
@@ -142,7 +154,7 @@ final class ConversationAgentsModel: Identifiable {
     }
 
     private func receive(_ result: Result<ConversationAgentsPage, Error>, from host: ConversationAgentsHost, id: UUID) {
-        guard refreshID == id else { return }
+        guard refreshID == id, !placementRefreshPending else { return }
         switch result {
         case .success(let page):
             rowsByHost[host.id] = page.agents
@@ -196,6 +208,11 @@ final class ConversationAgentsModel: Identifiable {
     private func finish(id: UUID) {
         guard refreshID == id else { return }
         refreshTask = nil
+        if placementRefreshPending {
+            placementRefreshPending = false
+            startRefresh()
+            return
+        }
         refreshID = nil
         isRefreshing = false
         let completed = waiters.values
@@ -207,6 +224,7 @@ final class ConversationAgentsModel: Identifiable {
         guard let waiter = waiters.removeValue(forKey: id) else { return }
         waiter.resume()
         guard waiters.isEmpty else { return }
+        placementRefreshPending = false
         refreshTask?.cancel()
         refreshTask = nil
         projectionTask?.cancel()

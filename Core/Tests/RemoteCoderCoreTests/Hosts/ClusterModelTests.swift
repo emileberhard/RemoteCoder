@@ -126,6 +126,36 @@ struct ClusterModelTests {
         #expect(await missingRemote.accepted == [missingPair.membership])
     }
 
+    @Test func removalJournalsUnconfiguredEdgesAndPendingAcknowledgements() async throws {
+        let suite = "ClusterModelTests.\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let anchor = UUID(), target = UUID(), missing = UUID()
+        let left = MemberRemote(host: anchor), right = MemberRemote(host: target), third = MemberRemote(host: missing)
+        let anchorEdge = member(anchor, name: "Anchor"), missingEdge = member(missing, name: "Missing")
+        await right.setMembers([anchorEdge, missingEdge])
+        await left.setRemovalPending(true)
+        let hosts = [host(anchor, remote: left), host(target, remote: right)]
+        let model = ClusterModel(defaults: defaults)
+        await model.refresh(hosts: hosts)
+        await model.remove(target, hosts: hosts)
+        #expect(model.pairs.count == 2)
+        let pending = try #require(model.pairs.first { $0.membership == anchorEdge.membership })
+        #expect(!pending.complete)
+        #expect(pending.error?.contains("pending") == true)
+        let unconfigured = try #require(model.pairs.first { $0.membership == missingEdge.membership })
+        #expect(!unconfigured.complete)
+        #expect(unconfigured.error?.contains("Add Missing in Hosts") == true)
+        let restored = ClusterModel(defaults: defaults)
+        await left.setRemovalPending(false)
+        await restored.retry(pending.id, hosts: hosts)
+        await restored.retry(unconfigured.id, hosts: hosts + [host(missing, remote: third)])
+        #expect(restored.pairs.allSatisfy { $0.complete })
+        #expect(await left.removed == [anchorEdge.membership, anchorEdge.membership])
+        #expect(await third.removed == [missingEdge.membership])
+        #expect(await right.removed.count == 2)
+    }
+
     @Test func futureStatesAndFractionalCoverageDatesDecodeWithoutLosingMeaning() throws {
         let hostID = UUID()
         let fields: [String: Any] = ["hostId": hostID.uuidString, "membership": UUID().uuidString, "name": "Newer",
@@ -166,6 +196,7 @@ private actor MemberRemote: ClusterRemote {
     private var members: [ClusterMember] = []
     private var acceptFailure = false
     private var removeFailure = false
+    private var removalPending = false
     private(set) var listCalls = 0
     private var held = false
     private var lists: [CheckedContinuation<ClusterList, Never>] = []
@@ -174,6 +205,7 @@ private actor MemberRemote: ClusterRemote {
     func setMembers(_ members: [ClusterMember]) { self.members = members }
     func setAcceptFailure(_ value: Bool) { acceptFailure = value }
     func setRemoveFailure(_ value: Bool) { removeFailure = value }
+    func setRemovalPending(_ value: Bool) { removalPending = value }
 
     func holdLists() { held = true }
     func releaseLists() {
@@ -201,10 +233,11 @@ private actor MemberRemote: ClusterRemote {
         members.append(.init(hostId: issued.host, membership: membership, name: name, state: .active, version: "1.0.0", load: nil,
                          reachability: .init(state: .reachable, since: nil, lastSeenAt: nil), protocol: 1))
     }
-    func clusterRemove(host: UUID, membership: UUID) throws {
+    func clusterRemove(host: UUID, membership: UUID) throws -> ClusterRemoval {
         if removeFailure { throw URLError(.cannotConnectToHost) }
         removed.append(membership)
         members.removeAll { $0.hostId == host && $0.membership == membership }
+        return .init(removed: true, pending: removalPending, hostId: host, membership: membership)
     }
     func setAgentParent(agent: ClusterParent, parent: ClusterParent?) {}
 }

@@ -120,12 +120,22 @@ final class ConversationList {
         await refresh(limit: RefreshPolicy.incrementalLimit, reason: reason, intent: .mergeRecent)
     }
 
-    func applyParent(_ parent: ConversationAddress?, to threadID: String) async {
-        guard let index = threads.firstIndex(where: { $0.id == threadID }) else { return }
-        threads[index].agentClassification = parent.map {
+    func applyParent(_ parent: ConversationAddress?, to threadID: String) async throws {
+        await loadPersistedThreadsIfNeeded()
+        guard !headerReadsRetired else { throw CancellationError() }
+        noteHeaderMutation(threadID)
+        var header: ConversationHeader
+        if let cached = self.header(id: threadID) { header = cached }
+        else { header = try await service.readHeader(threadID: threadID) }
+        try Task.checkCancellation()
+        guard !headerReadsRetired else { throw CancellationError() }
+        guard header.id == threadID else { throw ConversationAgentNavigationError.noConversation }
+        header.agentClassification = parent.map {
             .child(.init(parentHostID: $0.hostID, parentThreadId: $0.threadID, parentAccountId: nil, agentId: threadID))
         } ?? .root
         await service.invalidateAgentClassification(threadID: threadID)
+        try Task.checkCancellation()
+        await record(header)
     }
 
     func refreshAfterReconnect(isDrawerOpen: Bool) async {
