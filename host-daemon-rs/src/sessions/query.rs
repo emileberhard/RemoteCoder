@@ -215,6 +215,8 @@ pub(crate) struct Search {
     pub local: bool,
 }
 
+pub(super) const SEARCH_SQL: &str = "SELECT i.rowid,i.item_key,i.session_key,s.origin_host,s.thread_id,i.at,i.kind,substr(i.text,max(1,instr(lower(i.text),lower(?4))-100),400),i.text_bytes,src.present FROM item_fts CROSS JOIN item i ON i.rowid=item_fts.rowid JOIN session s USING(session_key) JOIN source src USING(source_id) WHERE item_fts MATCH ?1 AND (?2 IS NULL OR julianday(i.at)>=julianday(?2)) AND item_fts.rowid<?3 ORDER BY item_fts.rowid DESC LIMIT ?5";
+
 pub(crate) fn search(db: &super::store::Reader, request: &Search) -> Result<Value> {
     ensure!(
         request.query.chars().count() >= 3 && request.query.len() <= 4096,
@@ -227,7 +229,7 @@ pub(crate) fn search(db: &super::store::Reader, request: &Search) -> Result<Valu
             .to_hex()
             .to_string();
     let after = match &request.cursor {
-        None => 0,
+        None => i64::MAX,
         Some(cursor) => {
             let (query, id) = cursor.rsplit_once(':').context("Invalid search cursor")?;
             ensure!(
@@ -238,7 +240,7 @@ pub(crate) fn search(db: &super::store::Reader, request: &Search) -> Result<Valu
         }
     };
     let literal = format!("\"{}\"", request.query.replace('"', "\"\""));
-    let mut stmt = db.prepare("SELECT i.rowid,i.item_key,i.session_key,s.origin_host,s.thread_id,i.at,i.kind,substr(i.text,max(1,instr(lower(i.text),lower(?4))-100),400),i.text_bytes,src.present FROM item_fts JOIN item i ON i.rowid=item_fts.rowid JOIN session s USING(session_key) JOIN source src USING(source_id) WHERE item_fts MATCH ?1 AND (?2 IS NULL OR julianday(i.at)>=julianday(?2)) AND i.rowid>?3 ORDER BY i.rowid LIMIT ?5")?;
+    let mut stmt = db.prepare(SEARCH_SQL)?;
     let mut rows = stmt.query(params![
         literal,
         request.since,

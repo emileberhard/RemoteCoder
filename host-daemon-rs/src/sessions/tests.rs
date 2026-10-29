@@ -1881,3 +1881,66 @@ fn sessions_cluster_search_hits_route_exact_reads_to_their_origin() -> Result<()
     Ok(())
 }
 
+#[test]
+fn sessions_pruning_seeks_expired_feed_entries() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let store = Store::open(directory.path().join("catalog.sqlite3"))?;
+    let db = store.writer()?;
+    db.execute_batch("INSERT INTO change(entity,key,op,revision,committed_at) VALUES('source','expired','upsert',1,'2000-01-01T00:00:00Z'),('source','recent','upsert',2,'2999-01-01T00:00:00Z')")?;
+    let plan: Vec<String> = db
+        .prepare(&format!("EXPLAIN QUERY PLAN {}", changes::PRUNE_SQL))?
+        .query_map(["-30 days"], |row| row.get(3))?
+        .collect::<rusqlite::Result<_>>()?;
+    assert!(
+        plan.iter()
+            .any(|line| line.contains("USING COVERING INDEX change_age (committed_at<?)")),
+        "{plan:?}"
+    );
+    changes::prune(&db)?;
+    assert_eq!(
+        db.query_row("SELECT key FROM change", [], |row| row.get::<_, String>(0))?,
+        "recent"
+    );
+    Ok(())
+}
+
+#[test]
+fn sessions_search_uses_descending_fts_order_and_exact_dates() -> Result<()> {
+    let fixture = fixture();
+    ingest::scan(&fixture.store, &fixture.origins, &AtomicBool::new(false))?;
+    let db = fixture.store.reader()?;
+    let plan: Vec<String> = db
+        .prepare(&format!("EXPLAIN QUERY PLAN {}", query::SEARCH_SQL))?
+        .query_map(
+            rusqlite::params!["\"agents\"", None::<String>, i64::MAX, "agents", 2],
+            |row| row.get(3),
+        )?
+        .collect::<rusqlite::Result<_>>()?;
+    assert!(
+        plan.iter().any(|line| line.contains("VIRTUAL TABLE INDEX")),
+        "{plan:?}"
+    );
+    assert!(
+        !plan.iter().any(|line| line.contains("TEMP B-TREE")),
+        "{plan:?}"
+    );
+    let mut request = query::Search {
+        query: "SKILL.md".into(),
+        limit: Some(1),
+        ..Default::default()
+    };
+    let first = query::search(&db, &request)?;
+    request.cursor = first["cursor"].as_str().map(str::to_owned);
+    assert!(request.cursor.is_some());
+    let next = query::search(&db, &request)?;
+    assert_ne!(first["hits"][0]["itemKey"], next["hits"][0]["itemKey"]);
+    request.cursor = None;
+    request.since = Some("2999-01-01T00:00:00Z".into());
+    assert!(
+        query::search(&db, &request)?["hits"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    Ok(())
+}

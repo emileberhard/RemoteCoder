@@ -219,6 +219,7 @@ pub(super) fn scan_serving(
     let mut slow_sources = 0;
     let mut changed_hosts = BTreeSet::new();
     let at = super::now();
+    let mut sources = Vec::new();
     for origin in origins {
         let root = origin.path();
         let scopes = match &scope {
@@ -243,52 +244,65 @@ pub(super) fn scan_serving(
         if !root.is_dir() {
             continue;
         }
-        let paths: Vec<_> = selected(store, origin, &scopes)?.into_iter().collect();
-        for batch in paths.chunks(32) {
-            let mut db = store.writer()?;
-            for path in batch {
-                if stop.load(Ordering::Acquire) {
-                    return Ok(serde_json::json!({"cancelled":true}));
-                }
-                let original = origin.original(path)?.to_string_lossy().into_owned();
-                let gone = match std::fs::symlink_metadata(path) {
-                    Ok(metadata) => !metadata.is_file(),
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
-                    Err(error) => return Err(error.into()),
-                };
-                if gone {
-                    if !root.is_dir() {
-                        break;
-                    }
-                    let tx =
-                        db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-                    tx.execute("DELETE FROM session WHERE source_id IN (SELECT source_id FROM source WHERE origin_host=?1 AND path=?2)",params![origin.host,original])?;
-                    tx.execute(
-                        "DELETE FROM source WHERE origin_host=?1 AND path=?2",
-                        params![origin.host, original],
-                    )?;
-                    tx.commit()?;
-                    between(&mut db)?;
-                    continue;
-                }
-                let started = std::time::Instant::now();
-                let outcome = match &scope {
-                    Scope::Full => ingest(&mut db, origin, path, stop),
-                    Scope::Changed(_) => {
-                        ingest_source(&mut db, origin, path, stop, ReadMode::Incremental)
-                    }
-                };
-                match outcome {
-                    Ok(changed) => ingested += usize::from(changed),
-                    Err(error) => {
-                        db.execute("INSERT INTO source(origin_host,provider,provider_home,path,local_path,file_identity,size,mtime_ns,ingested_offset,revision,present,prefix_hash,parser_state,failure) VALUES(?1,?2,?3,?4,?5,'',0,0,0,0,1,'','{}',?6) ON CONFLICT(origin_host,path) DO UPDATE SET failure=excluded.failure",params![origin.host,origin.provider,origin.provider_home.to_string_lossy(),original,path.to_string_lossy(),format!("{error:#}")])?;
-                    }
-                }
-                let elapsed = started.elapsed().as_secs_f64();
-                longest_source = longest_source.max(elapsed);
-                slow_sources += usize::from(elapsed > 5.0);
-                between(&mut db)?;
+        for path in selected(store, origin, &scopes)? {
+            ensure!(
+                sources.len() < 100_000,
+                "capacity: more than 100000 session sources"
+            );
+            sources.push((origin, path));
+        }
+    }
+    if matches!(scope, Scope::Full) {
+        sources.sort_by_cached_key(|(_, path)| {
+            std::fs::metadata(path)
+                .and_then(|metadata| metadata.modified())
+                .ok()
+        });
+    }
+    for batch in sources.chunks(32) {
+        let mut db = store.writer()?;
+        for (origin, path) in batch {
+            let root = origin.path();
+            if stop.load(Ordering::Acquire) {
+                return Ok(serde_json::json!({"cancelled":true}));
             }
+            let original = origin.original(path)?.to_string_lossy().into_owned();
+            let gone = match std::fs::symlink_metadata(path) {
+                Ok(metadata) => !metadata.is_file(),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+                Err(error) => return Err(error.into()),
+            };
+            if gone {
+                if !root.is_dir() {
+                    break;
+                }
+                let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+                tx.execute("DELETE FROM session WHERE source_id IN (SELECT source_id FROM source WHERE origin_host=?1 AND path=?2)",params![origin.host,original])?;
+                tx.execute(
+                    "DELETE FROM source WHERE origin_host=?1 AND path=?2",
+                    params![origin.host, original],
+                )?;
+                tx.commit()?;
+                between(&mut db)?;
+                continue;
+            }
+            let started = std::time::Instant::now();
+            let outcome = match &scope {
+                Scope::Full => ingest(&mut db, origin, path, stop),
+                Scope::Changed(_) => {
+                    ingest_source(&mut db, origin, path, stop, ReadMode::Incremental)
+                }
+            };
+            match outcome {
+                Ok(changed) => ingested += usize::from(changed),
+                Err(error) => {
+                    db.execute("INSERT INTO source(origin_host,provider,provider_home,path,local_path,file_identity,size,mtime_ns,ingested_offset,revision,present,prefix_hash,parser_state,failure) VALUES(?1,?2,?3,?4,?5,'',0,0,0,0,1,'','{}',?6) ON CONFLICT(origin_host,path) DO UPDATE SET failure=excluded.failure",params![origin.host,origin.provider,origin.provider_home.to_string_lossy(),original,path.to_string_lossy(),format!("{error:#}")])?;
+                }
+            }
+            let elapsed = started.elapsed().as_secs_f64();
+            longest_source = longest_source.max(elapsed);
+            slow_sources += usize::from(elapsed > 5.0);
+            between(&mut db)?;
         }
     }
     if changed_hosts.is_empty() {
