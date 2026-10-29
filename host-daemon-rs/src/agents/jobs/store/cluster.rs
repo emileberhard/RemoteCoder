@@ -33,8 +33,7 @@ impl Inner {
                 continue;
             }
             let fence: CancelFence = read(&entry.path(), MAX_AGENT_BYTES)?;
-            let key =
-                fingerprint(format!("{}:{}", fence.membership, fence.job_id.as_str()).as_bytes());
+            let key = fence_key(&fence.membership, &fence.job_id);
             ensure!(
                 entry.path().file_stem().and_then(|name| name.to_str()) == Some(key.as_str()),
                 "cancel-fence filename differs from its identity"
@@ -220,13 +219,7 @@ impl JobStore {
                 "remote intent exceeds record capacity"
             );
             ensure!(
-                inner
-                    .intents
-                    .values()
-                    .filter(|intent| intent.state == IntentState::Pending
-                        || intent.state == IntentState::StopRequested && !intent.stop_confirmed)
-                    .count()
-                    < MAX_UNSETTLED_JOBS,
+                inner.indexes.unsettled_intents < MAX_UNSETTLED_JOBS,
                 "remote intent capacity reached"
             );
             ensure!(
@@ -291,8 +284,7 @@ impl JobStore {
 
     pub(crate) async fn cancel_remote(&self, fence: CancelFence) -> Result<Option<JobRecord>> {
         self.access(move |inner| {
-            let key =
-                fingerprint(format!("{}:{}", fence.membership, fence.job_id.as_str()).as_bytes());
+            let key = fence_key(&fence.membership, &fence.job_id);
             if !inner.fences.contains_key(&key) {
                 ensure!(
                     inner.accounted_bytes()? + MAX_AGENT_BYTES + MUTATION_RESERVE
@@ -327,23 +319,43 @@ impl JobStore {
         id: String,
         parent: Option<AgentAddress>,
         recipient: Recipient,
+        target: AgentAddress,
+        observed: HashMap<AgentAddress, (Option<ConversationIdentity>, Option<AgentAddress>)>,
     ) -> Result<AgentRecord> {
         self.access(move |inner| {
-            let mut agent = inner.agent_view(&id)?;
-            if agent.parent == parent && agent.parent_recipient.as_ref() == Some(&recipient) {
-                return Ok(agent);
+            let mut next = parent.clone();
+            let mut seen = std::collections::HashSet::new();
+            for hop in 0..=16 {
+                let Some(address) = next else {
+                    return inner.update_parent(id, parent, recipient);
+                };
+                ensure!(
+                    hop < 16 && address != target && seen.insert(address.clone()),
+                    "parent tag would form a cycle or exceed 16 hops"
+                );
+                let (conversation, snapshot) = observed
+                    .get(&address)
+                    .context("parent chain changed during validation; retry the move")?;
+                next = conversation
+                    .as_ref()
+                    .and_then(|conversation| inner.parents.get(conversation))
+                    .unwrap_or(snapshot)
+                    .clone();
             }
-            agent.parent = parent;
-            agent.parent_revision = agent
-                .parent_revision
-                .checked_add(1)
-                .context("parent revision exhausted")?;
-            agent.parent_recipient = Some(recipient);
-            inner.write_agent(&agent)?;
-            inner.insert_agent(agent.clone());
-            Ok(agent)
+            unreachable!()
         })
         .await
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn set_parent_for_test(
+        &self,
+        id: String,
+        parent: Option<AgentAddress>,
+        recipient: Recipient,
+    ) -> Result<AgentRecord> {
+        self.access(move |inner| inner.update_parent(id, parent, recipient))
+            .await
     }
 
     pub(crate) async fn retarget_delivery(&self, id: JobId) -> Result<JobRecord> {
@@ -391,5 +403,32 @@ impl JobStore {
             inner.commit(job, at_ms)
         })
         .await
+    }
+}
+
+pub(super) fn fence_key(membership: &str, id: &JobId) -> String {
+    fingerprint(format!("{}:{}", membership, id.as_str()).as_bytes())
+}
+
+impl Inner {
+    fn update_parent(
+        &mut self,
+        id: String,
+        parent: Option<AgentAddress>,
+        recipient: Recipient,
+    ) -> Result<AgentRecord> {
+        let mut agent = self.agent_view(&id)?;
+        if agent.parent == parent && agent.parent_recipient.as_ref() == Some(&recipient) {
+            return Ok(agent);
+        }
+        agent.parent = parent;
+        agent.parent_revision = agent
+            .parent_revision
+            .checked_add(1)
+            .context("parent revision exhausted")?;
+        agent.parent_recipient = Some(recipient);
+        self.write_agent(&agent)?;
+        self.insert_agent(agent.clone());
+        Ok(agent)
     }
 }

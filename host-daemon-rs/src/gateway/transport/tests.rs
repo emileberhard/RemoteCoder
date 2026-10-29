@@ -1684,7 +1684,7 @@ async fn thread_reads_preserve_untagged_bytes_and_project_a_promoted_parent() {
         .await
         .unwrap();
     store
-        .set_parent(agent.agent_id, None, Recipient::None)
+        .set_parent_for_test(agent.agent_id, None, Recipient::None)
         .await
         .unwrap();
     let (tx, mut replies) = mpsc::channel(4);

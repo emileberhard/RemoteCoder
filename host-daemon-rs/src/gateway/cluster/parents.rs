@@ -70,6 +70,7 @@ impl Gateway {
         let mut next = request.parent.clone();
         let link = self.cluster_link().await?;
         let mut seen = std::collections::HashSet::new();
+        let mut observed = std::collections::HashMap::new();
         for hop in 0..=16 {
             let Some(parent) = next else { break };
             ensure!(hop < 16, "parent chain exceeds 16 hops");
@@ -80,6 +81,9 @@ impl Gateway {
                     cluster_error(ErrorClass::Usage, "parent tag would form a cycle").into(),
                 );
             }
+            let conversation = (parent.host_id == identity.host_id)
+                .then(|| self.agent_conversation(&parent.thread_id))
+                .transpose()?;
             next = if parent.host_id == identity.host_id {
                 self.agent_service()
                     .parent_for_thread(&parent.thread_id)
@@ -89,12 +93,13 @@ impl Gateway {
                     .call(
                         &parent.host_id,
                         "agent/parent/read",
-                        json!({"protocol":PROTOCOL,"agent":parent}),
+                        json!({"protocol":PROTOCOL,"agent":parent.clone()}),
                     )
                     .await
                     .map_err(|error| cluster_error(ErrorClass::Unavailable, error.message))?;
                 decode(response["parent"].clone())?
             };
+            observed.insert(parent, (conversation, next.clone()));
         }
         let recipient = match &request.parent {
             None => Recipient::None,
@@ -112,7 +117,7 @@ impl Gateway {
                     .call(
                         &parent.host_id,
                         "agent/parent/resolve",
-                        json!({"protocol":PROTOCOL,"agent":parent}),
+                        json!({"protocol":PROTOCOL,"agent":parent.clone()}),
                     )
                     .await?;
                 let conversation: ConversationIdentity = decode(resolved["conversation"].clone())?;
@@ -135,7 +140,13 @@ impl Gateway {
             .jobs
             .store()
             .await?
-            .set_parent(agent.agent_id, request.parent, recipient)
+            .set_parent(
+                agent.agent_id,
+                request.parent,
+                recipient,
+                request.agent.clone(),
+                observed,
+            )
             .await?;
         self.agent_service().invalidate_parent_views().await;
         self.jobs.dirty();

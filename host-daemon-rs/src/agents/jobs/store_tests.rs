@@ -92,7 +92,7 @@ async fn cluster_untagged_records_keep_legacy_keys_until_explicit_parent_change(
         }
     }
     let promoted = store
-        .set_parent(original.agent_id.clone(), None, Recipient::None)
+        .set_parent_for_test(original.agent_id.clone(), None, Recipient::None)
         .await
         .unwrap();
     assert_eq!(promoted.parent_recipient, Some(Recipient::None));
@@ -193,7 +193,7 @@ async fn cluster_fault_commits_survive_restart_and_fence_parent_handover() {
         .await
         .unwrap();
     store
-        .set_parent(original.agent_id.clone(), None, Recipient::None)
+        .set_parent_for_test(original.agent_id.clone(), None, Recipient::None)
         .await
         .unwrap();
     let frozen = store.retarget_delivery(done.job_id.clone()).await.unwrap();
@@ -254,7 +254,7 @@ async fn uncertain_notice_keeps_its_receiver_until_non_acceptance_is_proven() {
     });
     store.admit(original.clone()).await.unwrap();
     store
-        .set_parent(original.agent_id.clone(), None, Recipient::None)
+        .set_parent_for_test(original.agent_id.clone(), None, Recipient::None)
         .await
         .unwrap();
     let frozen = store
@@ -1064,7 +1064,7 @@ async fn cluster_store_indexes_follow_binding_move_promotion_and_reload() {
     );
     assert!(!a.has_changed().unwrap());
     store
-        .set_parent(
+        .set_parent_for_test(
             original.agent_id.clone(),
             Some(AgentAddress {
                 host_id: "host-b".into(),
@@ -1104,7 +1104,7 @@ async fn cluster_store_indexes_follow_binding_move_promotion_and_reload() {
     );
     assert!(b.has_changed().unwrap());
     store
-        .set_parent(original.agent_id.clone(), None, Recipient::None)
+        .set_parent_for_test(original.agent_id.clone(), None, Recipient::None)
         .await
         .unwrap();
     assert!(

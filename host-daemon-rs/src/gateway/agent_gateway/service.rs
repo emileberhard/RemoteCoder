@@ -842,7 +842,7 @@ impl AgentService<'_> {
                         return snapshot.available.then(|| (thread.clone(), owner));
                     };
                     if !visited.insert(parent.clone()) {
-                        return None;
+                        return Some((thread.clone(), thread.clone()));
                     }
                     owner = parent;
                 }
