@@ -27,24 +27,30 @@ impl Gateway {
         };
         let identity = self.host_identity().await?;
         let link = self.cluster_link().await?;
-        let mut hosts = vec![identity.host_id.clone()];
-        if params["local"] != true {
-            hosts.extend(
-                link.members()
-                    .await?
-                    .into_iter()
-                    .filter(|member| member.state == MemberState::Active)
-                    .map(|member| member.host),
-            );
-        }
-        if let Some(selector) = params["host"].as_str() {
-            let target = if selector == identity.host_id {
-                identity.host_id.clone()
-            } else {
-                link.store.resolve(selector).await?.host
-            };
-            hosts.retain(|host| *host == target);
-        }
+        let local = params["local"] == true;
+        let hosts = match params["host"].as_str() {
+            Some(selector) if selector == identity.host_id => vec![identity.host_id.clone()],
+            Some(selector) => {
+                ensure!(!local, "--local cannot list another host");
+                let member = link.store.resolve(selector).await?;
+                ensure!(
+                    member.state == MemberState::Active,
+                    "{} is not an active cluster member",
+                    member.name
+                );
+                vec![member.host]
+            }
+            None if local => vec![identity.host_id.clone()],
+            None => std::iter::once(identity.host_id.clone())
+                .chain(
+                    link.members()
+                        .await?
+                        .into_iter()
+                        .filter(|member| member.state == MemberState::Active)
+                        .map(|member| member.host),
+                )
+                .collect(),
+        };
         let pages=stream::iter(hosts.iter().cloned()).map(|host| {
             let position=cursor.positions.get(&host).cloned().flatten();
             let complete=cursor.complete.contains(&host);
