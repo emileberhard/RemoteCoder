@@ -237,7 +237,7 @@ struct TranscriptScrollRenderingTests {
                 "A bar appearing above the composer must not move the top-anchored reader")
     }
 
-    @Test func aLongTranscriptMountsEarlierTurnsAboveTheReaderAndKeepsItInPlace() async throws {
+    @Test func aLongTranscriptMountsOneBatchAboveTheReaderAndKeepsItInPlace() async throws {
         let scene = try #require(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let hosted = HostedWindow(scene: scene)
         let fixture = TranscriptScrollFixture()
@@ -258,13 +258,18 @@ struct TranscriptScrollRenderingTests {
         let scroll = try await waitForScroll(in: controller.view)
         try await Task.sleep(for: .milliseconds(600))
         try await settle(scroll)
-        let following = scroll.contentSize.height
         let visibleBottom = scroll.contentOffset.y + scroll.bounds.height - scroll.adjustedContentInset.bottom
         #expect(visibleBottom >= scroll.contentSize.height - 2, "Mounting above a follower must keep it at the latest row")
 
-        fixture.request = TranscriptRowRequest(rowID: ChatStreamItem.message(messages[80]).id, token: 1, anchor: .top, motion: .instant)
-        try await waitForGrowth(of: scroll, beyond: following)
+        let reader = ChatStreamItem.message(messages[80]).id
+        let batchStart = ChatStreamItem.message(messages[20]).id
+        fixture.request = TranscriptRowRequest(rowID: reader, token: 1, anchor: .top, motion: .instant)
+        try await waitForReading(fixture, mountedStart: batchStart, reader: reader)
         try await settle(scroll)
+        fixture.readingPosition.capture(scope: fixture.readingScope)
+        #expect(fixture.readingPosition.mountedStartRowID == batchStart,
+                "Resting five turns below the latest 25 mounts exactly one more batch of 25 turns")
+        #expect(fixture.readingPosition.anchor?.rowID == reader)
         let image = UIGraphicsImageRenderer(bounds: controller.view.bounds).image { _ in
             controller.view.drawHierarchy(in: controller.view.bounds, afterScreenUpdates: true)
         }
@@ -396,12 +401,14 @@ struct TranscriptScrollRenderingTests {
         throw FixtureError.scrollNotMounted
     }
 
-    private func waitForGrowth(of scroll: UIScrollView, beyond height: CGFloat) async throws {
+    private func waitForReading(_ fixture: TranscriptScrollFixture, mountedStart: String, reader: String) async throws {
         for _ in 0..<250 {
-            if scroll.contentSize.height > height + 1 { return }
+            fixture.readingPosition.capture(scope: fixture.readingScope)
+            if fixture.readingPosition.mountedStartRowID == mountedStart,
+               fixture.readingPosition.anchor?.rowID == reader { return }
             try await Task.sleep(for: .milliseconds(20))
         }
-        throw FixtureError.earlierTurnsNotMounted
+        throw FixtureError.batchNotMounted
     }
 
     private func scrollView(in view: UIView) -> UIScrollView? {
@@ -428,7 +435,7 @@ struct TranscriptScrollRenderingTests {
         throw FixtureError.didNotSettle
     }
 
-    private enum FixtureError: Error { case scrollNotMounted, didNotSettle, bubbleNotVisible, earlierTurnsNotMounted }
+    private enum FixtureError: Error { case scrollNotMounted, didNotSettle, bubbleNotVisible, batchNotMounted }
 }
 
 @MainActor
