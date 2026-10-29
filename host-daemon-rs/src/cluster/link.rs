@@ -47,6 +47,7 @@ pub(crate) struct Reachability {
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum ReachabilityState {
+    Unknown,
     Reachable,
     Unreachable,
     Unsupported,
@@ -156,7 +157,7 @@ impl Link {
                         incarnation: None,
                         capabilities: Vec::new(),
                         reachability: Reachability {
-                            state: ReachabilityState::Unreachable,
+                            state: ReachabilityState::Unknown,
                             since: timestamp(),
                             last_seen_at: None,
                         },
@@ -420,15 +421,18 @@ impl Link {
             request
                 .headers_mut()
                 .insert("Authorization", format!("Bearer {token}").parse()?);
-            let connected = tokio::time::timeout(
-                Duration::from_secs(3),
-                tokio_tungstenite::connect_async_tls_with_config(
+            let connected = tokio::time::timeout(Duration::from_secs(3), async {
+                let stream = dial(request.uri())
+                    .await
+                    .map_err(tokio_tungstenite::tungstenite::Error::Io)?;
+                tokio_tungstenite::client_async_tls_with_config(
                     request,
+                    stream,
                     Some(crate::providers::codex::daemon::websocket_config()),
-                    false,
                     Some(Connector::Rustls(Arc::new(config.clone()))),
-                ),
-            )
+                )
+                .await
+            })
             .await;
             match connected {
                 Ok(Ok((mut socket, _))) => {
@@ -550,6 +554,7 @@ impl Link {
             };
             if view.reachability.state != state {
                 view.reachability.since = timestamp();
+                tracing::warn!(host = %record.host, name = %record.name, state = ?state, error = %error.message, "cluster member is not reachable");
             }
             view.reachability.state = state;
         }
@@ -558,6 +563,45 @@ impl Link {
     pub(crate) async fn forget(&self, membership: &str) {
         self.connections.lock().await.remove(membership);
     }
+}
+
+const ATTEMPT_DELAY: Duration = Duration::from_millis(250);
+
+async fn dial(
+    uri: &tokio_tungstenite::tungstenite::http::Uri,
+) -> std::io::Result<tokio::net::TcpStream> {
+    let host = uri.host().unwrap_or_default();
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    let addresses = tokio::net::lookup_host((host, uri.port_u16().unwrap_or(443)))
+        .await?
+        .collect();
+    race(addresses, tokio::net::TcpStream::connect).await
+}
+
+async fn race<T, F, Attempt>(addresses: Vec<std::net::SocketAddr>, connect: F) -> std::io::Result<T>
+where
+    F: Fn(std::net::SocketAddr) -> Attempt,
+    Attempt: std::future::Future<Output = std::io::Result<T>>,
+{
+    let mut attempts = futures_util::stream::FuturesUnordered::new();
+    for (index, address) in addresses.into_iter().enumerate() {
+        let attempt = connect(address);
+        let delay = ATTEMPT_DELAY * u32::try_from(index).unwrap_or(u32::MAX);
+        attempts.push(async move {
+            tokio::time::sleep(delay).await;
+            attempt.await
+        });
+    }
+    let mut failure = None;
+    while let Some(result) = attempts.next().await {
+        match result {
+            Ok(stream) => return Ok(stream),
+            Err(error) => failure = Some(error),
+        }
+    }
+    Err(failure.unwrap_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::NotFound, "member route has no address")
+    }))
 }
 
 fn ensure_capacity(
@@ -626,6 +670,26 @@ mod reconnect_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test(start_paused = true)]
+    async fn a_stalled_first_address_does_not_starve_a_later_one() {
+        let started = tokio::time::Instant::now();
+        let addresses = vec![
+            "[::1]:8789".parse().unwrap(),
+            "127.0.0.1:8789".parse().unwrap(),
+        ];
+        let connected = race(addresses, |address: std::net::SocketAddr| async move {
+            if address.is_ipv6() {
+                std::future::pending::<std::io::Result<std::net::SocketAddr>>().await
+            } else {
+                Ok(address)
+            }
+        })
+        .await
+        .unwrap();
+        assert!(connected.is_ipv4());
+        assert_eq!(started.elapsed(), ATTEMPT_DELAY);
+    }
 
     #[tokio::test]
     async fn cluster_fault_old_member_is_unsupported_before_admission_is_sent() {

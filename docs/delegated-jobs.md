@@ -327,6 +327,9 @@ returns `HostIdentity {host_id, incarnation}`.
 `cluster/list` returns `self {hostId,name,incarnation,version,protocol}` and
 `members [{hostId,name,membership,state,reachability,version,protocol,load,routes}]`.
 Reachability has `state`, `since` and nullable `lastSeenAt`, with RFC 3339 times.
+A member is `unknown` until its first hello succeeds or fails. Member connects
+race a route's resolved addresses with staggered starts, and every change to a
+failure state is logged with its reason.
 Listing probes active members concurrently with a two-second hello deadline,
 updates reachability and preserves the last successful `lastSeenAt`. A successful
 hello resets that member's delivery backoff. There is no background polling.
