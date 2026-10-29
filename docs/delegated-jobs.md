@@ -340,7 +340,8 @@ host adds `kind:"remote_intent"` stub rows with `jobId`, `ownerHostId`,
 replaces its stub by `(ownerHostId,jobId)`.
 
 Cluster-wide CLI reads include `coverage [{hostId,state,since?,staleThrough?}]`,
-where state is `ok`, `unreachable`, `unsupported` or `refused`.
+where state is `ok`, `unreachable`, `unsupported` or `refused`. `agent list
+--host MEMBER` narrows the cluster list to that member.
 `agent/parent/set {agent:{hostId,threadId},parent:{hostId,threadId}|null}` goes to
 the agent's owner and returns the updated row. A cycle is `usage`; an unreachable
 parent-chain hop is `unavailable`. Provenance and authority never change with the

@@ -37,6 +37,14 @@ impl Gateway {
                     .map(|member| member.host),
             );
         }
+        if let Some(selector) = params["host"].as_str() {
+            let target = if selector == identity.host_id {
+                identity.host_id.clone()
+            } else {
+                link.store.resolve(selector).await?.host
+            };
+            hosts.retain(|host| *host == target);
+        }
         let pages=stream::iter(hosts.iter().cloned()).map(|host| {
             let position=cursor.positions.get(&host).cloned().flatten();
             let complete=cursor.complete.contains(&host);

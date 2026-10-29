@@ -193,6 +193,22 @@ async fn cluster_peer_search_stays_local_without_recursive_coverage() {
 }
 
 #[tokio::test]
+async fn cluster_list_for_one_host_covers_only_that_member() {
+    let a = LanHarness::start().await;
+    let b = LanHarness::start().await;
+    pair(&a, &b, "a", "b").await;
+    let identity = b.gateway.host_identity().await.unwrap();
+    let result = rpc(&a, "agent/cluster/list", json!({"host":"b"})).await;
+    assert_eq!(
+        result["coverage"],
+        json!([{"hostId":identity.host_id,"state":"ok"}]),
+        "{result}"
+    );
+    a.stop().await;
+    b.stop().await;
+}
+
+#[tokio::test]
 async fn cluster_fault_capacity_refuses_before_provider_custody() {
     let a = LanHarness::start().await;
     let b = LanHarness::start().await;

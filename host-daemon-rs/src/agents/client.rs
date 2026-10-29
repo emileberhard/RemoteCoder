@@ -1052,7 +1052,11 @@ async fn execute(mut command: AgentCommand, env_file: Option<&Path>) -> Result<V
                 );
                 return Ok(serde_json::to_value(read(&endpoint, target).await?)?);
             }
-            rpc(&endpoint,"agent/cluster/list",json!({"local":arguments.local,"active":arguments.active,"provider":arguments.provider,"limit":arguments.last,"cursor":arguments.cursor})).await
+            let local = Endpoint {
+                local: endpoint.local.clone(),
+                host: None,
+            };
+            rpc(&local,"agent/cluster/list",json!({"host":endpoint.host,"local":arguments.local,"active":arguments.active,"provider":arguments.provider,"limit":arguments.last,"cursor":arguments.cursor})).await
         }
         AgentCommand::Message(arguments) => {
             message(
