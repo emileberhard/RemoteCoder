@@ -196,9 +196,16 @@ A release is one annotated stable `X.Y.Z` tag (each part 0–999, no leading zer
 on pushed `main` and higher than every stable tag. The tag is every artifact's
 marketing version. Tags are immutable; fixes use the next patch.
 
+Every Debug project build and Core package build fails on compiler warnings,
+locally and in CI; Release archives retain their existing warning behavior. Fix
+the cause, using a narrowly scoped `@diagnose(..., as: ignored, reason: "...")`
+only when a justified exception cannot be removed.
+
 Public hosted CI compiles both apps, their extensions, hosted tests and the Mac
 performance harness, runs the existing logic/tooling/gateway checks and targeted
-hosted rendering/history suites. Release admission waits for that exact main CI
+hosted rendering/history suites. Pull requests run every lane. A main push whose
+tree a same-repository pull request already passed in full reuses that result
+instead of rerunning the lanes; the `passed` job is the single verdict. Release admission waits for that exact main CI
 commit; releases do not rerun it. `scripts/select-xcode` selects `.xcode-version`
 without changing the host's default Xcode.
 

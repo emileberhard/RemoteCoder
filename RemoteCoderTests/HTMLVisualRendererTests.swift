@@ -154,7 +154,7 @@ struct HTMLVisualRendererTests {
                 motion.visibility.setVisibleRowIDs(["first", "second"])
                 motion.showSecond = true
                 try await wait { motion.secondAppeared }
-                _ = try await original.callAsyncJavaScript("await new Promise(resolve=>setTimeout(resolve,100)); return true;", in: nil, in: .page)
+                _ = try await original.callAsyncJavaScript("await new Promise(resolve=>setTimeout(resolve,100)); return true;", in: nil, contentWorld: .page)
                 #expect(webViews(in: controller.view).count == 1)
 
                 motion.visibility.setScrollPhase(.decelerating)
@@ -166,7 +166,7 @@ struct HTMLVisualRendererTests {
                 #expect(original.bounds == originalBounds)
                 #expect(try await original.evaluateJavaScript("window.motionToken") as? String == "retained")
 
-                _ = try await original.callAsyncJavaScript("await new Promise(resolve=>setTimeout(resolve,100)); return true;", in: nil, in: .page)
+                _ = try await original.callAsyncJavaScript("await new Promise(resolve=>setTimeout(resolve,100)); return true;", in: nil, contentWorld: .page)
                 #expect(webViews(in: controller.view).count == 1)
                 #expect(webViews(in: controller.view).first === original)
                 #expect(original.bounds == originalBounds)
@@ -182,7 +182,7 @@ struct HTMLVisualRendererTests {
                 #expect(try await original.evaluateJavaScript("window.motionToken") as? String == "retained")
                 #expect(try await original.evaluateJavaScript("window.loads") as? Int == 1)
 
-                _ = try await original.callAsyncJavaScript("document.getElementById('input').focus();await new Promise(resolve=>setTimeout(resolve,0)); return true;", in: nil, in: .page)
+                _ = try await original.callAsyncJavaScript("document.getElementById('input').focus();await new Promise(resolve=>setTimeout(resolve,0)); return true;", in: nil, contentWorld: .page)
                 motion.visibility.setScrollPhase(.decelerating)
                 try await wait { motion.observedMoving == true && effectiveOpacity(of: original) > 0.99 }
                 #expect(webViews(in: controller.view).contains { $0 === original })
@@ -190,7 +190,7 @@ struct HTMLVisualRendererTests {
                 #expect(original.bounds == originalBounds)
                 #expect(try await original.evaluateJavaScript("document.activeElement.id") as? String == "input")
 
-                _ = try await original.callAsyncJavaScript("document.getElementById('input').blur();await new Promise(resolve=>setTimeout(resolve,0)); return true;", in: nil, in: .page)
+                _ = try await original.callAsyncJavaScript("document.getElementById('input').blur();await new Promise(resolve=>setTimeout(resolve,0)); return true;", in: nil, contentWorld: .page)
                 if captureInitiallyAllowed { try await wait { effectiveOpacity(of: original) == 0 } }
                 else { #expect(effectiveOpacity(of: original) > 0.99) }
                 motion.visibility.setScrollPhase(.idle)
@@ -222,7 +222,7 @@ struct HTMLVisualRendererTests {
                     await host.preparation.awaitPresentable([reference], documents: host.source.documents, atMost: .seconds(8))
                 }
                 try await wait { host.preparation.surface.instance?.page != nil }
-                weak var page = host.preparation.surface.instance?.page
+                weak let page = host.preparation.surface.instance?.page
                 #expect(await preparation.value)
                 let prepared = try #require(fixture.renderer.presentableRaster(for: key, displayScale: 3))
                 #expect(prepared.raster.displayHeight == 80)
@@ -1166,7 +1166,7 @@ struct HTMLVisualRendererTests {
                 #expect(original.window != nil)
                 #expect(webViews(in: controller.view).first === original)
                 #expect(fixture.renderer.snapshot(for: wideKey).image == nil)
-                _ = try await original.callAsyncJavaScript("await new Promise(resolve=>setTimeout(resolve,200)); return true;", in: nil, in: .page)
+                _ = try await original.callAsyncJavaScript("await new Promise(resolve=>setTimeout(resolve,200)); return true;", in: nil, contentWorld: .page)
                 #expect(effectiveOpacity(of: original) > 0.99)
                 #expect(fixture.renderer.snapshot(for: wideKey).image == nil)
                 #expect(try await original.evaluateJavaScript("window.resizeToken") as? String == "retained")
@@ -1237,7 +1237,7 @@ struct HTMLVisualRendererTests {
                 withAnimation(.smooth(duration: 0.2)) {
                     transcript.request = TranscriptRowRequest(rowID: items[0].id, token: 2, anchor: .top, motion: .instant)
                 }
-                _ = try await original.callAsyncJavaScript("await new Promise(resolve=>setTimeout(resolve,350)); return true;", in: nil, in: .page)
+                _ = try await original.callAsyncJavaScript("await new Promise(resolve=>setTimeout(resolve,350)); return true;", in: nil, contentWorld: .page)
                 #expect(webViews(in: controller.view).first === original)
                 #expect(original.window != nil)
                 #expect(original.bounds.height == 80)
@@ -1592,7 +1592,7 @@ private final class RendererLifecycleFixture {
                        document: @escaping @MainActor () async throws -> String) {
         if !instances.contains(where: { $0 === instance }) { instances.append(instance) }
         let identity = ObjectIdentifier(instance)
-        tasks[identity] = Task {
+        tasks[identity] = Task { [renderer, reference, key, weak self] in
             await renderer.run(instance, reference: reference, key: key, document: document,
                 open: { _ in Issue.record("Renderer fixture must not open links") },
                 onPinChange: { [weak self] active in self?.pins[identity, default: []].append(active) })

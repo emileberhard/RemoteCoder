@@ -20,8 +20,8 @@ final class DeviceConditions {
         }
         observers.append(center.addObserver(forName: UIScreen.brightnessDidChangeNotification, object: nil,
                                             queue: .main) { [weak self] notification in
-            let brightness = (notification.object as? UIScreen)?.brightness
-            MainActor.assumeIsolated { self?.setBrightness(brightness) }
+            let screen = notification.object as? UIScreen
+            MainActor.assumeIsolated { self?.setBrightness(screen?.brightness) }
         })
         readBattery()
         let screen = UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.screen }.first

@@ -55,7 +55,7 @@ struct GatewayRelayEndpoint: Codable, Equatable, Sendable {
         sec_protocol_options_set_verify_block(tls.securityProtocolOptions, { _, trust, complete in
             complete(GatewaySPKIPin.matches(sec_trust_copy_ref(trust).takeRetainedValue(), pin: pin))
         }, Self.verification)
-        var proxy = ProxyConfiguration(
+        let proxy = ProxyConfiguration(
             httpCONNECTProxy: .hostPort(host: NWEndpoint.Host(proxyHost), port: NWEndpoint.Port(integerLiteral: proxyPort)),
             tlsOptions: tls)
         proxy.applyCredential(username: username, password: password)

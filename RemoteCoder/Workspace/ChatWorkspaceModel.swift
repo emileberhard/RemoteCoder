@@ -773,7 +773,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
 
     func bootstrap() async {
         guard !isQuiescing else { return }
-        await targets.awaitRetirements()
+        _ = await targets.awaitRetirements()
         guard !isQuiescing, !Task.isCancelled else { return }
         await accountDirectory.restore()
         guard !isQuiescing, !Task.isCancelled else { return }

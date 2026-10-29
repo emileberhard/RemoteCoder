@@ -588,7 +588,7 @@ struct HistoryServiceTests {
         let gateway = HistoryGatewayFixture()
         let hostID = UUID()
         let store = ConversationHeaderStore(hostID: hostID, directory: directory)
-        var header = await gateway.header
+        var header = gateway.header
         header.lastTurnCompletedAt = 100
         await store.save(snapshot: .init(threads: [header], lastSuccessfulRefreshAt: nil, revision: 5))
         await gateway.setCompletionTime(100)
@@ -819,7 +819,7 @@ struct HistoryServiceTests {
         let gateway = HistoryGatewayFixture()
         let hostID = UUID()
         let store = ConversationHeaderStore(hostID: hostID, directory: directory)
-        let header = await gateway.header
+        let header = gateway.header
         await store.save(snapshot: .init(threads: [header], lastSuccessfulRefreshAt: nil, revision: 7))
         ConversationPinStore.scoped(hostID: hostID, defaults: temporary.defaults).save(["other": "Legacy"])
         func launch() -> ConversationList {

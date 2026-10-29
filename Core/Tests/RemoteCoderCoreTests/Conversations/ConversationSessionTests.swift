@@ -295,7 +295,7 @@ struct ConversationSessionTests: ConversationHistoryFixtures {
         let registry = ConversationSessions(hostID: hostID, sessionIndex: ConversationIndex(hostID: hostID, storage: temporary.storage),
             contentSubscriptions: RecordingContentSubscriptions(), storage: temporary.storage)
         var original: ConversationSession? = await registry.session(threadID: "original")
-        weak var released = original
+        weak let released = original
         for index in 0..<20 { _ = await registry.session(threadID: "other-\(index)") }
         await registry.evictIdle(keeping: [])
         #expect(await registry.retainedEpochCount <= 17)

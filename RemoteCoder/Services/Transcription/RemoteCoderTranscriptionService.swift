@@ -61,7 +61,7 @@ struct RemoteCoderTranscriptionService: TranscriptionService {
     private func batchEngine(for model: TranscriptionModel) async throws -> TranscriptionEngine {
         switch model {
         case .elevenLabsScribeV2Realtime, .elevenLabsScribeV2:
-            let configuration = try ElevenLabsProviderConfiguration(access: try await access.access(to: .elevenLabs))
+            let configuration = ElevenLabsProviderConfiguration(access: try await access.access(to: .elevenLabs))
             return TranscriptionEngine(provider: ElevenLabsTranscriptionProvider(configuration: configuration))
         case .openAIGPT4oMini, .openAIGPT4oMiniTranscribeRealtime:
             return try await openAIEngine(model: "gpt-4o-mini-transcribe-2025-12-15")

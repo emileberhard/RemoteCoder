@@ -20,7 +20,8 @@ struct ForegroundNotificationPresentationTests {
              "promptPreview":"Prompt","messagePreview":"Done","createdAtUnixSeconds":1790000000,
              "accountID":"AAAAAAAA-0000-0000-0000-000000000001","accountGeneration":2}
             """.utf8))
-        #expect(ForegroundNotificationPresentation.isOpen(event, address: .init(hostID: host, threadID: "thread")))
+        let matchingConversation = ForegroundNotificationPresentation.isOpen(event, address: ConversationAddress(hostID: host, threadID: "thread"))
+        #expect(matchingConversation)
         let otherHost = ForegroundNotificationPresentation.isOpen(event, address: ConversationAddress(hostID: UUID(), threadID: "thread"))
         let otherThread = ForegroundNotificationPresentation.isOpen(event, address: ConversationAddress(hostID: host, threadID: "other"))
         #expect(!otherHost)

@@ -9,11 +9,14 @@ let package = Package(
         // The app's Xcode target compiles these same source files. Keeping them
         // internal avoids exposing app implementation details as a public API.
         .target(name: "RemoteCoderCore", swiftSettings: [
+            .treatAllWarnings(as: .error),
             .enableUpcomingFeature("NonisolatedNonsendingByDefault"),
             .enableUpcomingFeature("InferIsolatedConformances"),
             .enableUpcomingFeature("MemberImportVisibility"),
         ]),
-        .testTarget(name: "RemoteCoderCoreTests", dependencies: ["RemoteCoderCore"]),
+        .testTarget(name: "RemoteCoderCoreTests", dependencies: ["RemoteCoderCore"], swiftSettings: [
+            .treatAllWarnings(as: .error),
+        ]),
     ],
     swiftLanguageModes: [.v6]
 )

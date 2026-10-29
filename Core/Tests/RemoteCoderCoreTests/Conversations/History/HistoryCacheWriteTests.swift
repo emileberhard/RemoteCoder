@@ -160,7 +160,7 @@ private actor CacheWriteGateway: CodexHistoryGateway {
     private let turns: Data
 
     init() throws {
-        let entries = (0..<50).map { index in
+        let entries = (0..<50).map { (index: Int64) in
             CodexAppServerV2.ThreadItemsListResponse.Entry(turnId: "turn", item: .agentMessage(id: "reply-\(index)", text: String(repeating: "abcdefghij", count: 960)), startedAtOrdinal: index, isComplete: true)
         }
         items = try JSONEncoder().encode(CacheWriteEnvelope(result: CodexAppServerV2.ThreadItemsListResponse(data: entries, nextCursor: "older-opaque", backwardsCursor: nil)))

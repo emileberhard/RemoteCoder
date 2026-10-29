@@ -27,7 +27,6 @@ struct StoreInitializationTests {
         let hostID = UUID()
         let fixture = TemporaryHostStorage()
         defer { fixture.cleanUp() }
-        let directory = fixture.storage.directory(for: .host(hostID))
         let index = ConversationIndex(hostID: hostID, storage: fixture.storage)
         let id = UUID()
         await index.record(sessionID: "thread", conversationID: id)

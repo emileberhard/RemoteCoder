@@ -1719,7 +1719,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         guard let current = selectedModel else {
             if case .unavailable(let modelID, _) = newChatModelSource {
                 guard AgentProvider.provider(forModelID: modelID) == provider else { return }
-                adoptSettings(modelID: modelID, reasoning: reasoningSelection, fastModeState: fastModeState, source: .draftSetup)
+                _ = adoptSettings(modelID: modelID, reasoning: reasoningSelection, fastModeState: fastModeState, source: .draftSetup)
             } else {
                 refreshNewChatDefaults(for: requestedNewChatProvider)
             }

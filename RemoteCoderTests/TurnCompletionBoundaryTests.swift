@@ -22,9 +22,9 @@ struct TurnCompletionBoundaryTests {
         try await gateway.notify("item/completed", agentMessage("Hello there", itemID: "answer"))
         try await gateway.notify("turn/completed", completion(status: "completed"))
 
-        #expect(try await waitUntil { chat.currentReplyDelivery == .idle })
+        #expect(await waitUntil { chat.currentReplyDelivery == .idle })
         #expect(chat.target.historyBusySessionIDs.isEmpty)
-        #expect(try await waitUntil { Self.isEngaged(speech) })
+        #expect(await waitUntil { Self.isEngaged(speech) })
     }
 
     @Test(.timeLimit(.minutes(1))) func aFailedTurnEndsItsJobWithoutSpeaking() async throws {
@@ -38,7 +38,7 @@ struct TurnCompletionBoundaryTests {
 
         try await gateway.notify("turn/completed", completion(status: "failed", error: "Rate limit reached"))
 
-        #expect(try await waitUntil { chat.currentReplyDelivery == .idle })
+        #expect(await waitUntil { chat.currentReplyDelivery == .idle })
         #expect(chat.target.historyBusySessionIDs.isEmpty)
         #expect(Self.isQuiet(speech))
     }
@@ -54,7 +54,7 @@ struct TurnCompletionBoundaryTests {
 
         try await gateway.notify("turn/completed", completion(status: "completed"))
 
-        #expect(try await waitUntil { chat.currentReplyDelivery == .idle })
+        #expect(await waitUntil { chat.currentReplyDelivery == .idle })
         #expect(chat.target.historyBusySessionIDs.isEmpty)
         #expect(Self.isQuiet(speech))
         #expect(!chat.messages.contains { $0.text.contains("empty response") })
@@ -75,7 +75,7 @@ struct TurnCompletionBoundaryTests {
         try? await Task.sleep(for: .milliseconds(300))
         await gateway.releaseTurnStart()
 
-        #expect(try await waitUntil { chat.currentReplyDelivery == .idle })
+        #expect(await waitUntil { chat.currentReplyDelivery == .idle })
         #expect(chat.target.historyBusySessionIDs.isEmpty)
     }
 
@@ -92,7 +92,7 @@ struct TurnCompletionBoundaryTests {
         try await gateway.notify("turn/completed", completion(status: "completed", turnID: "turn-other"))
         try await gateway.notify("turn/completed", completion(status: "completed"))
 
-        #expect(try await waitUntil { chat.currentReplyDelivery == .idle })
+        #expect(await waitUntil { chat.currentReplyDelivery == .idle })
         #expect(Self.isQuiet(speech))
     }
 
@@ -132,8 +132,8 @@ struct TurnCompletionBoundaryTests {
 
         await gateway.stop()
 
-        #expect(try await waitUntil { chat.messages.contains { $0.text.hasPrefix("⛔️") } })
-        #expect(try await waitUntil { chat.currentReplyDelivery == .idle })
+        #expect(await waitUntil { chat.messages.contains { $0.text.hasPrefix("⛔️") } })
+        #expect(await waitUntil { chat.currentReplyDelivery == .idle })
         #expect(chat.target.historyBusySessionIDs.isEmpty)
     }
 
