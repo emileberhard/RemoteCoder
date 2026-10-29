@@ -210,7 +210,7 @@ async fn agent_client_detached_tmux_rejects_inherited_identity_before_delivery()
             &["message", "parent", "Detached callback", "--json"],
         )
         .await;
-    assert_eq!(exit, 5);
+    assert_eq!(exit, 4);
     assert_eq!(payload["error"]["data"]["kind"], "unprovenCaller");
     server.await.unwrap();
 }
@@ -635,7 +635,7 @@ async fn agent_client_format_only_rejects_unproven_or_peer_host_environment_iden
         })
         .await
         .unwrap();
-        assert_eq!(output.status.code(), Some(if peer_host { 2 } else { 5 }));
+        assert_eq!(output.status.code(), Some(if peer_host { 2 } else { 4 }));
         assert!(output.stdout.is_empty());
         let diagnostic: Value = serde_json::from_slice(&output.stderr).unwrap();
         if peer_host {
