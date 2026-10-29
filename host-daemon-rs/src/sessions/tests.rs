@@ -477,6 +477,26 @@ fn sessions_spawn_then_resolve_catches_up_before_worker_scan() {
 }
 
 #[test]
+fn sessions_inventory_reports_an_ingest_failure_instead_of_waiting_out_the_backoff() {
+    use std::os::unix::fs::PermissionsExt;
+    let f = fixture();
+    scan(&f);
+    let locked = f.origins[0].path().join("2026");
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let worker = super::worker::Worker::start(f.store.clone(), f.origins.clone()).unwrap();
+    let started = std::time::Instant::now();
+    let error = ingest::refresh_inventory(&f.store).unwrap_err();
+    let elapsed = started.elapsed();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+    worker.stop().unwrap();
+    assert!(
+        !format!("{error:#}").contains("exceeded five seconds"),
+        "{error:#}"
+    );
+    assert!(elapsed < std::time::Duration::from_secs(3), "{elapsed:?}");
+}
+
+#[test]
 fn sessions_inventory_pages_exact_provider_headers() {
     let f = fixture();
     scan(&f);

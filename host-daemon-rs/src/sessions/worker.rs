@@ -326,10 +326,14 @@ impl Worker {
                             if full {
                                 next_reconcile = Instant::now() + retry_delay;
                             }
+                            let failure = format!("{error:#}");
+                            for request in std::mem::take(&mut pending.1) {
+                                let _ = request.reply.try_send(Err(failure.clone()));
+                            }
                             let _pending = signal
                                 .1
-                                .wait_timeout_while(pending, retry_delay, |_| {
-                                    !flag.load(Ordering::Acquire)
+                                .wait_timeout_while(pending, retry_delay, |pending| {
+                                    pending.1.is_empty() && !flag.load(Ordering::Acquire)
                                 })
                                 .expect("Session worker wake poisoned");
                             retry_delay = (retry_delay * 2).min(RECONCILE);
