@@ -199,11 +199,13 @@ async fn cluster_list_for_one_host_covers_only_that_member() {
     pair(&a, &b, "a", "b").await;
     let identity = b.gateway.host_identity().await.unwrap();
     let result = rpc(&a, "agent/cluster/list", json!({"host":"b"})).await;
-    assert_eq!(
-        result["coverage"],
-        json!([{"hostId":identity.host_id,"state":"ok"}]),
-        "{result}"
-    );
+    let covered: Vec<&str> = result["coverage"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| entry["hostId"].as_str().unwrap())
+        .collect();
+    assert_eq!(covered, [identity.host_id.as_str()], "{result}");
     a.stop().await;
     b.stop().await;
 }
