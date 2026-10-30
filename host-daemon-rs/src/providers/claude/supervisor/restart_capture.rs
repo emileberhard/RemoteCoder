@@ -615,5 +615,14 @@ mod tests {
         assert!(captured.is_empty());
         assert_eq!(refused.code, RpcCode::ServerBusy);
         assert_eq!(fixture.stub.log("launches.jsonl").len(), 1);
+        assert_eq!(
+            fixture
+                .stub
+                .log("controls.jsonl")
+                .iter()
+                .map(|control| control["request"]["subtype"].clone())
+                .collect::<Vec<_>>(),
+            [json!("interrupt")]
+        );
     }
 }

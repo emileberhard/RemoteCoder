@@ -88,6 +88,7 @@ impl ClaudeSupervisor {
         origin: TurnOrigin,
         policy: super::jobs::LaunchPolicy,
     ) -> Result<String, TurnStartError> {
+        self.refuse_while_closing()?;
         self.recover_stored_cwd(&mut request, &policy).await?;
         request.input.client_id.get_or_insert_with(new_session_uuid);
         self.prepare_job_resume(&request, &policy).await?;
@@ -678,11 +679,7 @@ impl ClaudeSupervisor {
         }
     }
 
-    pub(super) async fn reserve_start(
-        &self,
-        request: &ClaudeTurnRequest,
-    ) -> Result<lifecycle::StartReservation, TurnStartError> {
-        let runtimes = self.runtimes.lock().await;
+    fn refuse_while_closing(&self) -> Result<(), TurnStartError> {
         if self
             .process_registry
             .lock()
@@ -695,6 +692,15 @@ impl ClaudeSupervisor {
                 message: "Claude runtime owner is stopping".into(),
             });
         }
+        Ok(())
+    }
+
+    pub(super) async fn reserve_start(
+        &self,
+        request: &ClaudeTurnRequest,
+    ) -> Result<lifecycle::StartReservation, TurnStartError> {
+        let runtimes = self.runtimes.lock().await;
+        self.refuse_while_closing()?;
         if let Some(active) = runtimes
             .get(&request.thread_id)
             .and_then(|runtime| runtime.active_turn.as_ref())
