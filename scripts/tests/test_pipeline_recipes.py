@@ -416,11 +416,15 @@ else:
                     arguments = commands[-1]
                     if recipe == "ios-simulator-test-local":
                         self.assertEqual(len(commands), 3)
-                        self.assertIn("build-for-testing", commands[0])
-                        self.assertIn("-showBuildSettings", commands[1])
-                        self.assertIn("-alltargets", commands[1])
-                        self.assertEqual(commands[1][commands[1].index("-project") + 1], "RemoteCoder.xcodeproj")
+                        build, settings = sorted(
+                            commands[:2], key=lambda command: "-showBuildSettings" in command
+                        )
+                        self.assertIn("build-for-testing", build)
+                        self.assertIn("-showBuildSettings", settings)
+                        self.assertIn("-alltargets", settings)
+                        self.assertEqual(settings[settings.index("-project") + 1], "RemoteCoder.xcodeproj")
                         self.assertIn("test-without-building", commands[2])
+                        self.assertNotIn("-showBuildSettings", commands[2])
                         for command in commands:
                             self.assertEqual(
                                 command[command.index("-configuration") + 1], "Debug"
