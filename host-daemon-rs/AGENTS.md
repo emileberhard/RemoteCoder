@@ -1149,13 +1149,14 @@ scoped receipt reads require the exact sender conversation.
       input after closing is refused as `owner_stopping`. Capture waits for
       every admitted input before it snapshots, so it records either the
       untouched turn or the turn with that input, never a fold in between or
-      a write it misses. Besides the runtimes lock and index transactions that
-      capture takes itself, an admitted start waits only on the notification
-      channel and, for a failed start, the bounded process termination; an
-      admitted steer also waits for a writer slot within the 10 s input stall
-      limit. After 5 s capture stops waiting for notifications: a supervisor
-      notification that cannot enter the full channel is dropped with a
-      warning, and clients see it again only if history recorded it.
+      an admitted write it misses. Besides the runtimes lock and index
+      transactions that capture takes itself, an admitted start waits only on
+      the notification channel and, for a failed start, the bounded process
+      termination; an admitted steer also waits for a writer slot within the
+      10 s input stall limit. After 5 s capture stops waiting for
+      notifications: a supervisor notification that cannot enter the full
+      channel is dropped with a warning, and clients see it again only if
+      history recorded it.
     - Once the replacement's listener is up, it resumes each thread with
       `--resume` in the host-default profile, using the recorded cwd, model,
       effort and Fast.
@@ -1177,6 +1178,11 @@ scoped receipt reads require the exact sender conversation.
       for the notice and each carried input by id, and only the missing ones
       are written, so a crash mid-recovery neither duplicates nor drops one. A
       failed write or a vanished process fails the attempt.
+    - A planned restart aborts a resume in progress before capture, so a
+      thread whose resume stopped between writes is captured again with only
+      the inputs already queued. The new item keeps the pending item's carried
+      inputs ahead of its own unless a Stop came between the two captures, and
+      the next dispatch's history check skips whatever Claude already recorded.
     - A notice still unread when the thread is captured again is not carried
       as a separate input: its item's events, paused agents and wakes fold into
       the new item, whose notice lists every event in time order.

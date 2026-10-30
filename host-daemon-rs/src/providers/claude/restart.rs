@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
@@ -157,6 +157,25 @@ impl Item {
         self.scheduled_wakes = wakes;
     }
 
+    fn carry_queued_inputs(&mut self, earlier: Item) {
+        if earlier
+            .stop_generation
+            .is_some_and(|generation| self.stop_generation != Some(generation))
+        {
+            return;
+        }
+        let mut inputs = earlier.queued_inputs;
+        self.queued_inputs.retain(|input| {
+            input.client_id.as_ref().is_none_or(|id| {
+                !inputs
+                    .iter()
+                    .any(|earlier| earlier.client_id.as_ref() == Some(id))
+            })
+        });
+        inputs.append(&mut self.queued_inputs);
+        self.queued_inputs = inputs;
+    }
+
     pub(crate) fn notice(&self) -> String {
         let mut notice = vec![
             "Automated notice from RemoteCoder, the app the user runs this Claude Code session through; the user did not type it.".to_owned(),
@@ -267,17 +286,27 @@ impl Journal {
             .iter()
             .map(|item| item.thread_id.clone())
             .collect::<HashSet<_>>();
-        let carried = previous
+        let (recaptured, carried): (Vec<_>, Vec<_>) = previous
             .into_iter()
             .filter(|previous| previous.account == account)
             .flat_map(|previous| previous.items)
-            .filter(|item| item.status.is_pending() && !captured_threads.contains(&item.thread_id))
-            .collect::<Vec<_>>();
+            .filter(|item| item.status.is_pending())
+            .partition(|item| captured_threads.contains(&item.thread_id));
+        let mut recaptured = recaptured
+            .into_iter()
+            .map(|item| (item.thread_id.clone(), item))
+            .collect::<HashMap<_, _>>();
+        let captured = captured.into_iter().map(|mut item| {
+            if let Some(earlier) = recaptured.remove(&item.thread_id) {
+                item.carry_queued_inputs(earlier);
+            }
+            item
+        });
         let journal = Self {
             schema_version: SCHEMA_VERSION,
             generation_id: crate::ids::new_session_uuid(),
             account,
-            items: captured.into_iter().chain(carried).collect(),
+            items: captured.chain(carried).collect(),
         };
         journal.validate()?;
         Ok(journal)
@@ -726,6 +755,55 @@ mod tests {
         assert_ne!(journal.generation_id, previous.generation_id);
         let other_account = Journal::capture(None, Vec::new(), Some(previous)).unwrap();
         assert!(other_account.items.is_empty());
+    }
+
+    #[test]
+    fn a_recapture_keeps_the_inputs_a_pending_resume_had_not_queued() {
+        let input = |id: &str| crate::providers::claude::ClaudeUserInput {
+            client_id: Some(id.to_owned()),
+            ..crate::providers::claude::ClaudeUserInput::text(id)
+        };
+        let texts = |journal: &Journal| {
+            journal
+                .items
+                .iter()
+                .map(|item| {
+                    (
+                        item.recovery_id.clone(),
+                        item.queued_inputs
+                            .iter()
+                            .map(|input| input.text.clone())
+                            .collect::<Vec<_>>(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let mut pending = item("a", ItemStatus::Dispatching);
+        pending.stop_generation = Some(4);
+        pending.queued_inputs = vec![input("a"), input("b")];
+        let previous = Journal::capture(account(), vec![pending], None).unwrap();
+        let mut recaptured = item("a", ItemStatus::Captured);
+        recaptured.recovery_id = "recovery-a-again".to_owned();
+        recaptured.stop_generation = Some(4);
+        recaptured.queued_inputs = vec![input("a")];
+
+        let journal =
+            Journal::capture(account(), vec![recaptured.clone()], Some(previous.clone())).unwrap();
+        recaptured.queued_inputs.push(input("c"));
+        let with_later =
+            Journal::capture(account(), vec![recaptured.clone()], Some(previous.clone())).unwrap();
+        recaptured.stop_generation = Some(5);
+        let after_stop = Journal::capture(account(), vec![recaptured], Some(previous)).unwrap();
+
+        let expected = |inputs: &[&str]| {
+            vec![(
+                "recovery-a-again".to_owned(),
+                inputs.iter().map(|input| (*input).to_owned()).collect(),
+            )]
+        };
+        assert_eq!(texts(&journal), expected(&["a", "b"]));
+        assert_eq!(texts(&with_later), expected(&["a", "b", "c"]));
+        assert_eq!(texts(&after_stop), expected(&["a", "c"]));
     }
 
     #[test]
