@@ -55,6 +55,14 @@ HOST_TABLES = {
 HOST_DATABASES = {"logs_2.sqlite"}
 
 
+def unclassified_databases(home, schema):
+    return sorted(
+        path.name
+        for path in home.glob("*.sqlite")
+        if path.name not in schema and path.name not in HOST_DATABASES
+    )
+
+
 def digest(value):
     return hashlib.sha256(json.dumps(value, separators=(",", ":")).encode()).hexdigest()
 
@@ -318,6 +326,11 @@ def main(request):
                     validate(connection, path, expected)
     if request["mode"] == "scope":
         return read_scope(target)
+    unclassified = unclassified_databases(source, request["schema"])
+    if unclassified:
+        raise ValueError(
+            f"Unclassified Codex databases in {source}: {', '.join(unclassified)}"
+        )
     if request["mode"] == "plan":
         threads, replace, host_threads = thread_plan(source, target)
         return {"threads": threads, "replaced": replace, "host_threads": host_threads}

@@ -792,6 +792,35 @@ fn native_schema_drift_is_rejected_before_any_source_history_is_copied() {
 }
 
 #[test]
+fn unclassified_source_databases_are_rejected_before_any_source_history_is_copied() {
+    let fixture = Fixture::new();
+    fixture.native();
+    let source = fixture.source.join("c");
+    python(
+        "import sqlite3,sys\nfor path in sys.argv[1:]:\n    with sqlite3.connect(path) as db: db.execute('CREATE TABLE value(id TEXT)')\nprint('{}')",
+        &[
+            source.join("logs_2.sqlite"),
+            source.join("agent_message_board_1.sqlite"),
+        ],
+    );
+    let original = source_bytes(&fixture.source);
+    let error = run(fixture.home.path(), &fixture.target, &fixture.claude_home)
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(
+        error.contains(&format!(
+            "Unclassified Codex databases in {}: agent_message_board_1.sqlite\n",
+            source.display()
+        )),
+        "{error}"
+    );
+    assert!(!fixture.target.join("state_5.sqlite").exists());
+    assert!(!fixture.target.join("sessions").exists());
+    assert_eq!(source_bytes(&fixture.source), original);
+}
+
+#[test]
 fn fresh_native_history_adopts_into_upgraded_layout_without_swapping_named_columns() {
     let fixture = Fixture::new();
     let manifest = fixture.native();

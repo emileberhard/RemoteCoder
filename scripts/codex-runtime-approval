@@ -340,9 +340,8 @@ def adoption_pins(root: Path, package: Path) -> dict[str, int]:
     with tempfile.TemporaryDirectory() as temporary:
         home = Path(temporary).resolve()
         create_fresh_home(package.resolve() / "bin/codex", home)
-        databases = {path.name for path in home.glob("*.sqlite")}
-        unknown = sorted(databases - set(pins) - native.HOST_DATABASES)
-        missing = sorted(set(pins) - databases)
+        unknown = native.unclassified_databases(home, pins)
+        missing = sorted(name for name in pins if not (home / name).exists())
         if unknown or missing:
             raise ApprovalError(
                 f"approved runtime databases differ from the adoption pins (unknown {unknown}, "

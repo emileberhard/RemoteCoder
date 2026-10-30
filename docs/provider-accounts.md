@@ -418,7 +418,8 @@ The adapter is pinned to the exact approved Codex source in
 metadata or paginated projections, so `accounts/codex_migration/native.py` is the
 single private-schema boundary. It checks schema and SQLx migration checksums of
 both sides before writing, and refuses any table it neither copies nor assigns to
-the host. It copies thread metadata, selected rollout paths, archive state, titles,
+the host and any source database outside the pinned and host-owned sets, naming
+it. It copies thread metadata, selected rollout paths, archive state, titles,
 dynamic tools, spawn edges, projects, attachments, guardian review feedback and
 read receipts from `state_5.sqlite`; the full history projection and observation versions from
 `thread_history_1.sqlite`; and thread queues, goals and memory from `queue_1.sqlite`,
@@ -429,7 +430,8 @@ file copies and recorded import plans make an interrupted import safe to repeat.
 Divergent histories or incompatible schemas fail startup with originals intact.
 `just codex-runtime-approve` creates a fresh home with the package being approved
 and refuses it until the adapter classifies every database and table and its pins
-match that runtime, so a new migration cannot ship unreviewed.
+match that runtime, so a new migration cannot ship unreviewed. A database a fresh
+home does not create, such as a feature-gated store, is refused at adoption instead.
 Snapshot rollback takes the same native write lock as the importer, so a helper
 surviving a killed gateway finishes before restoration can replace its databases.
 

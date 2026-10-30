@@ -262,9 +262,9 @@ scoped receipt reads require the exact sender conversation.
   per-thread assets and preserves native rows in `state_5.sqlite`,
   `thread_history_1.sqlite`, `queue_1.sqlite`, `goals_1.sqlite` and
   `memories_1.sqlite`. Its isolated adapter verifies the exact pinned schemas
-  and migration versions before writing and refuses tables it neither copies
-  nor assigns to the host; incompatible schemas or unresolved conflicts fail
-  closed. Snapshot stopped database/WAL families with the existing
+  and migration versions before writing and refuses databases and tables it
+  neither copies nor assigns to the host; incompatible schemas or unresolved
+  conflicts fail closed. Snapshot stopped database/WAL families with the existing
   APFS clone owner under the native adoption lock. Keep source homes as cold copies: never move or delete
   their history, attachments or companion gateway state.
 - `runtime::accounts` captures surviving legacy daemons' exact task trees through
