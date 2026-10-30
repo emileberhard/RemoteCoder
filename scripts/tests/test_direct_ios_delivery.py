@@ -7,6 +7,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -29,8 +30,6 @@ class DirectDeliveryTests(unittest.TestCase):
                 )
 
     def test_testflight_refusal_requires_inventory_refreshed_under_the_lease(self):
-        real = module.load_coordinator()
-
         def row(build, seen, managed=True):
             return {
                 "id": 98,
@@ -63,9 +62,9 @@ class DirectDeliveryTests(unittest.TestCase):
                     CatalogLease=Mock(return_value=lease),
                     SimpleMDM=Mock(return_value=api),
                     InventoryRefresh=Mock(return_value=Mock()),
-                    resource=real.resource,
-                    inventory_time=real.inventory_time,
-                    InstallError=real.InstallError,
+                    resource=lambda payload: payload["data"],
+                    inventory_time=datetime.fromisoformat,
+                    InstallError=type("InstallError", (Exception,), {}),
                 )
                 clock = iter(range(0, 1000, 50))
                 with (
