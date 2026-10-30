@@ -104,7 +104,7 @@ struct HTMLVisualPresentationCacheTests {
         for height in 101...120 {
             _ = try await cache.store(key(0), height: Double(height), image: nil)
         }
-        #expect(!FileManager.default.fileExists(atPath: directory.appending(path: "presentations.plist").path))
+        #expect(!FileManager.default.fileExists(atPath: directory.appending(path: "index-v3.plist").path))
         #expect(clock.waitingCount == 1)
         try await cache.retire()
         #expect(clock.waitingCount == 0)
@@ -127,12 +127,12 @@ struct HTMLVisualPresentationCacheTests {
         let images = directory.appending(path: "images")
         let written = try imageFiles(images)
         #expect(written.count == 3)
-        let index = try Data(contentsOf: directory.appending(path: "presentations.plist"))
+        let index = try Data(contentsOf: directory.appending(path: "index-v3.plist"))
         #expect(index.count < 4_096)
         _ = try await cache.store(key(0), height: 300, image: nil)
         try await cache.flush()
         #expect(try imageFiles(images) == written)
-        #expect(try Data(contentsOf: directory.appending(path: "presentations.plist")) == index)
+        #expect(try Data(contentsOf: directory.appending(path: "index-v3.plist")) == index)
         try await cache.retire()
     }
 
@@ -193,7 +193,7 @@ struct HTMLVisualPresentationCacheTests {
         #expect(try await cache.load()[key(0)] == .init(height: 500, hasImage: true))
         try await cache.retire()
         #expect(try imageFiles(directory.appending(path: "images")).count == 1)
-        #expect(try Data(contentsOf: directory.appending(path: "presentations.plist")).count < 4_096)
+        #expect(try Data(contentsOf: directory.appending(path: "index-v3.plist")).count < 4_096)
         let restored = HTMLVisualPresentationCache(directory: directory, clock: ContinuousClock())
         #expect(try await restored.load() == [key(0): .init(height: 500, hasImage: true), key(1): .init(height: 600, hasImage: false)])
         #expect(try await restored.image(for: key(0)) == Data(repeating: 7, count: 40_000))
@@ -261,7 +261,7 @@ struct HTMLVisualPresentationCacheTests {
         #expect(try imageFiles(images).isEmpty)
     }
 
-    @Test func oldReaderRejectsNewImagesAndUpgradeReclaimsFilesAfterAnOldCacheReplacement() async throws {
+    @Test func oldReaderCanLoadAndStoreAfterMigrationAndTheNextUpgradeReclaimsItsCache() async throws {
         struct Record3768: Codable {
             let key: HTMLVisualLayoutKey
             let height: Double
@@ -275,23 +275,41 @@ struct HTMLVisualPresentationCacheTests {
         }
         let directory = URL.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let cache = HTMLVisualPresentationCache(directory: directory, clock: FrozenVisualClock())
-        _ = try await cache.store(key(0), height: 100, image: Data([7]))
-        try await cache.retire()
-        let url = directory.appending(path: "presentations.plist")
-        let index = try Data(contentsOf: url)
-        #expect(throws: DecodingError.self) { try PropertyListDecoder().decode(Envelope3768.self, from: index) }
-        let old = Envelope3768(version: 2, records: [
-            Record3768(key: key(1), height: 200, heightOrder: 1, image: Data([8]), imageOrder: 1),
-        ])
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let legacy = directory.appending(path: "presentations.plist")
         let encoder = PropertyListEncoder()
         encoder.outputFormat = .binary
-        try encoder.encode(old).write(to: url, options: .atomic)
+        let old = Envelope3768(version: 2, records: [
+            Record3768(key: key(0), height: 100, heightOrder: 1, image: Data([7]), imageOrder: 1),
+        ])
+        try encoder.encode(old).write(to: legacy, options: .atomic)
+        let cache = HTMLVisualPresentationCache(directory: directory, clock: FrozenVisualClock())
+        #expect(try await cache.load()[key(0)] == .init(height: 100, hasImage: true))
+        #expect(!FileManager.default.fileExists(atPath: legacy.path))
+        _ = try await cache.store(key(1), height: 200, image: Data([8]))
+        try await cache.retire()
+        let current = try Data(contentsOf: directory.appending(path: "index-v3.plist"))
+
+        let loadedByOld = FileManager.default.fileExists(atPath: legacy.path)
+            ? try PropertyListDecoder().decode(Envelope3768.self, from: Data(contentsOf: legacy))
+            : Envelope3768(version: 2, records: [])
+        #expect(loadedByOld.version == 2 && loadedByOld.records.isEmpty)
+        let writtenByOld = Envelope3768(version: 2, records: [
+            Record3768(key: key(2), height: 300, heightOrder: 1, image: Data([9]), imageOrder: 1),
+        ])
+        try encoder.encode(writtenByOld).write(to: legacy, options: .atomic)
+        let coldOld = try PropertyListDecoder().decode(Envelope3768.self, from: Data(contentsOf: legacy))
+        #expect((1...2).contains(coldOld.version) && coldOld.records.count <= 256)
+        #expect(coldOld.records.first?.image == Data([9]))
+
         let restored = HTMLVisualPresentationCache(directory: directory, clock: FrozenVisualClock())
-        #expect(try await restored.load() == [key(1): .init(height: 200, hasImage: true)])
+        #expect(try await restored.load() == [key(0): .init(height: 100, hasImage: true), key(1): .init(height: 200, hasImage: true)])
+        #expect(try await restored.image(for: key(0)) == Data([7]))
         #expect(try await restored.image(for: key(1)) == Data([8]))
+        #expect(!FileManager.default.fileExists(atPath: legacy.path))
+        #expect(try Data(contentsOf: directory.appending(path: "index-v3.plist")) == current)
         try await restored.retire()
-        #expect(try imageFiles(directory.appending(path: "images")).count == 1)
+        #expect(try imageFiles(directory.appending(path: "images")).count == 2)
     }
 
     @Test func failedIndexCommitsKeepPreviousImagesAndReclaimSupersededFiles() async throws {
@@ -300,7 +318,7 @@ struct HTMLVisualPresentationCacheTests {
         let cache = HTMLVisualPresentationCache(directory: directory, clock: FrozenVisualClock())
         _ = try await cache.store(key(0), height: 100, image: Data([0]))
         try await cache.flush()
-        let url = directory.appending(path: "presentations.plist")
+        let url = directory.appending(path: "index-v3.plist")
         let committed = try Data(contentsOf: url)
         try FileManager.default.removeItem(at: url)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: false)

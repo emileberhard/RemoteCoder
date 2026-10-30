@@ -170,7 +170,8 @@ actor HTMLVisualPresentationCache {
         guard !retired else { throw HTMLVisualPresentationError.retired }
     }
 
-    private var indexURL: URL { directory.appending(path: "presentations.plist") }
+    private var indexURL: URL { directory.appending(path: "index-v3.plist") }
+    private var legacyURL: URL { directory.appending(path: "presentations.plist") }
     private var imageDirectory: URL { directory.appending(path: "images", directoryHint: .isDirectory) }
 
     private static func imageFileName(_ data: Data) -> String {
@@ -180,11 +181,16 @@ actor HTMLVisualPresentationCache {
     private func prepare() throws {
         guard !loaded else { return }
         let file: FileHandle
+        var migrating = false
         do { file = try FileHandle(forReadingFrom: indexURL) }
         catch let error as CocoaError where error.code == .fileNoSuchFile || error.code == .fileReadNoSuchFile {
-            removeOrphanedImages(keeping: [])
-            loaded = true
-            return
+            do { file = try FileHandle(forReadingFrom: legacyURL) }
+            catch let error as CocoaError where error.code == .fileNoSuchFile || error.code == .fileReadNoSuchFile {
+                removeOrphanedImages(keeping: [])
+                loaded = true
+                return
+            }
+            migrating = true
         }
         defer { try? file.close() }
         guard let data = try file.read(upToCount: Self.maximumLegacyFileBytes + 1),
@@ -201,7 +207,18 @@ actor HTMLVisualPresentationCache {
         }
         committedImageFiles = referencedImageFiles().subtracting(Set(unwrittenImages.values.map(Self.imageFileName)))
         removeOrphanedImages(keeping: referencedImageFiles())
+        if migrating {
+            dirty = true
+            try writePending()
+        } else {
+            try removeLegacyFile()
+        }
         loaded = true
+    }
+
+    private func removeLegacyFile() throws {
+        do { try FileManager.default.removeItem(at: legacyURL) }
+        catch let error as CocoaError where error.code == .fileNoSuchFile || error.code == .fileReadNoSuchFile {}
     }
 
     private func restore(_ stored: [Record]) throws {
@@ -370,6 +387,7 @@ actor HTMLVisualPresentationCache {
             }
             try index.write(to: indexURL, options: .atomic)
             bytes += index.count
+            try removeLegacyFile()
             committedImageFiles = referencedImageFiles()
             removeOrphanedImages(keeping: committedImageFiles)
             dirty = false
