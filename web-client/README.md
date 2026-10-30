@@ -1,6 +1,6 @@
 # RemoteCoder browser client
 
-A React 19 browser client built and checked with stable TypeScript 7.0.2 and Bun 1.4.3. The UI follows RemoteCoder's native Paper, Neutral and named accent themes, with a host drawer, readable transcript and glass composer. The browser talks to the existing gateway through a same-origin Bun bridge; bearer credentials stay on that bridge's host.
+A React 19 browser client built and checked with stable TypeScript 7.0.2 and Bun 1.4.4. The UI follows RemoteCoder's native Paper, Neutral and named accent themes, with a host drawer, readable transcript and glass composer. The browser talks to the existing gateway through a same-origin Bun bridge; bearer credentials stay on that bridge's host.
 
 ```sh
 bun install --frozen-lockfile
