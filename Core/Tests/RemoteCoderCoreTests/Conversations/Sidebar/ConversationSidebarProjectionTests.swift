@@ -124,7 +124,7 @@ struct ConversationSidebarProjectionTests {
     @Test func aRestartingHostReportsUpdatingInsteadOfItsConnectionError() throws {
         let hosts = [
             host(mini, name: "Mac Mini", threads: [try thread("mini-a", updatedAt: 10)],
-                 errorMessage: "Codex gateway is restarting.", isGatewayRestarting: true),
+                 errorMessage: "Gateway is restarting.", isGatewayRestarting: true),
             host(book, name: "MacBook", threads: [try thread("book-a", updatedAt: 5)], isGatewayRestarting: true),
         ]
 

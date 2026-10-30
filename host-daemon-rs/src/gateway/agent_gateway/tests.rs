@@ -1010,6 +1010,74 @@ async fn runtime_inventory_keeps_healthy_agents_when_one_continuation_is_ambiguo
 }
 
 #[tokio::test]
+async fn a_running_runtime_agent_reads_its_live_conversation() {
+    use crate::agents::jobs::model::*;
+    let directory = tempfile::tempdir().unwrap();
+    let gateway = crate::test_support::TestGateway::with_codex(
+        Arc::new(CodexAppServer::new_for_test_socket(
+            directory.path().join("codex"),
+        )),
+        Some(directory.path().join("active-codex-turns.json")),
+    );
+    let root = directory.path().join("agent-jobs/v1");
+    let child = "00000000-0000-4000-8000-000000000001";
+    let conversation = gateway.agent_conversation(child).unwrap();
+    seed_origin(
+        &root,
+        conversation.clone(),
+        Origin::Parent {
+            conversation: gateway
+                .agent_conversation("8c43d12f-8038-5d28-be95-ef14cc47faf3")
+                .unwrap(),
+        },
+        1,
+    );
+    let job_id = JobId::for_mutation(Provider::Codex, "fixture-1").unwrap();
+    let file = root.join("jobs").join(format!("{}.json", job_id.as_str()));
+    let mut job: JobRecord = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+    job.execution = ExecutionState::Bound { conversation };
+    std::fs::write(&file, serde_json::to_vec(&job).unwrap()).unwrap();
+    let mut control = crate::test_support::FakeControl::attach(&gateway, 2)
+        .await
+        .requests;
+    let owner = Arc::clone(&gateway);
+    let responder = tokio::spawn(async move {
+        while let Some(raw) = control.recv().await {
+            let request: Value = serde_json::from_str(&raw).unwrap();
+            assert_eq!(request["params"]["threadId"], child);
+            let result = match request["method"].as_str().unwrap() {
+                "thread/turns/list" => json!({"data":[{"id":"live-turn"}],"nextCursor":null}),
+                "thread/items/list" => {
+                    assert_eq!(request["params"]["turnId"], "live-turn");
+                    json!({"data":[{"item":{"type":"agentMessage","text":"Reading the gateway"}}],"nextCursor":null})
+                }
+                method => panic!("unexpected read RPC {method}"),
+            };
+            owner
+                .control_requests
+                .lock()
+                .unwrap()
+                .remove(request["id"].as_str().unwrap())
+                .unwrap()
+                .send(Ok(result))
+                .unwrap();
+        }
+    });
+    let output = gateway
+        .cluster_agents_rpc(
+            "conversation/agents/read",
+            json!({"threadId":"8c43d12f-8038-5d28-be95-ef14cc47faf3","agentId":format!("job:{}", job_id.as_str())}),
+        )
+        .await;
+    responder.abort();
+    let output = output.unwrap();
+    assert_eq!(
+        output["messages"],
+        json!([{"role":"assistant","text":"Reading the gateway"}])
+    );
+}
+
+#[tokio::test]
 async fn current_parent_tag_overrides_native_provenance_in_headers_and_classification() {
     use crate::agents::jobs::model::*;
     use crate::wire::cluster::AgentAddress;

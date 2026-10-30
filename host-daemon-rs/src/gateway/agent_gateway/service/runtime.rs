@@ -325,22 +325,31 @@ impl AgentService<'_> {
         )
         .map_err(anyhow::Error::msg)?;
         let view = self.gateway.jobs.read(&id).await?;
+        let terminal = match &view.job.execution {
+            ExecutionState::Terminal { terminal } => Some(terminal),
+            _ => None,
+        };
+        if terminal.is_none()
+            && let Some(thread) = &node.thread_id
+        {
+            return self.read_thread_output(thread).await;
+        }
         let mut output = Output::default();
         if let SpecEvidence::Known { spec } = &view.job.spec {
             output.push("user", &spec.prompt);
         }
-        let ExecutionState::Terminal { terminal } = &view.job.execution else {
-            bail!("Agent has not completed; open its provider conversation for live output");
-        };
-        match &terminal.result {
-            ResultEvidence::Available { result } => {
+        match terminal.map(|terminal| &terminal.result) {
+            None => {}
+            Some(ResultEvidence::Available { result }) => {
                 output.push("assistant", &result.text);
                 output.truncated |= result.truncated;
             }
-            ResultEvidence::Unavailable { reason } => {
+            Some(ResultEvidence::Unavailable { reason }) => {
                 bail!("Agent result is unavailable: {reason}")
             }
-            ResultEvidence::Expired => bail!("Agent result has expired under the retention policy"),
+            Some(ResultEvidence::Expired) => {
+                bail!("Agent result has expired under the retention policy")
+            }
         }
         Ok(serde_json::to_value(output)?)
     }

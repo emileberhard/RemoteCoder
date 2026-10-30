@@ -66,18 +66,18 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
             case .retired:
                 return "This gateway connection has been retired."
             case .notConnected:
-                return "Codex gateway is not connected."
+                return "Gateway is not connected."
             case .invalidURL:
-                return "Invalid Codex gateway URL."
+                return "Invalid gateway URL."
             case .invalidMessage:
-                return "Received an invalid response from the Codex gateway."
+                return "Received an invalid response from the gateway."
             case .serverError(let message, let code):
                 if let code {
-                    return "Codex gateway error (\(code)): \(message)"
+                    return "Gateway error (\(code)): \(message)"
                 }
-                return "Codex gateway error: \(message)"
+                return "Gateway error: \(message)"
             case .connectionClosed:
-                return "Codex gateway connection closed."
+                return "Gateway connection closed."
             case .historyCapacity(let actual, let limit):
                 return "History contains an item too large to transfer (\(actual) bytes; limit \(limit)). Load a different history page."
             case .subscriptionCapacity(let actual, let limit):
@@ -85,13 +85,13 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
             case .invalidSubscriptionThreadID:
                 return "A retained Claude conversation has an invalid thread ID."
             case .requestTimedOut(let method):
-                return "Codex gateway request timed out (\(method))."
+                return "Gateway request timed out (\(method))."
             case .connectionFailed(let host, let reason):
                 return "Could not connect to \(host). \(reason)"
             case .gatewayNotReady(let host, let reason):
                 return "\(host) closed the connection: \(reason)"
             case .gatewayRestarting:
-                return "Codex gateway is restarting."
+                return "Gateway is restarting."
             }
         }
     }
@@ -275,7 +275,7 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
 
         let trigger = expeditedBy ?? (reconnect.failures > 0 ? .backoff : .demand)
         expeditedBy = nil
-        let task = Task(name: "Codex gateway connection") { [self] in
+        let task = Task(name: "Gateway connection") { [self] in
             try await establishConnection(trigger: trigger)
         }
         connectionInFlight = task
@@ -514,7 +514,7 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
     private func handOver(to socket: GatewaySocket, over route: GatewayRoute) async -> Bool {
         logger.notice("Handing the gateway connection over to the \(String(describing: route.kind)) route")
         let lostGeneration = closeSocket(failing: ClientError.connectionClosed)
-        let installation = Task(name: "Codex gateway handover") { [self] in try await install(socket, over: route) }
+        let installation = Task(name: "Gateway handover") { [self] in try await install(socket, over: route) }
         connectionInFlight = installation
         await endConnection(lostGeneration)
         do {
