@@ -21,8 +21,11 @@ jobs:
       contents: read
       actions: read
     outputs:
-      run: ${{ steps.scope.outputs.run }}
-      tree: ${{ steps.scope.outputs.tree }}
+      gateway: ${{ steps.scope.outputs.gateway }}
+      gateway-lint: ${{ steps.scope.outputs.gateway-lint }}
+      swift: ${{ steps.scope.outputs.swift }}
+      apps-ios: ${{ steps.scope.outputs.apps-ios }}
+      apps-mac: ${{ steps.scope.outputs.apps-mac }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -30,21 +33,28 @@ jobs:
       - id: scope
         shell: bash
         env:
-          EVENT_NAME: ${{ github.event_name }}
           GH_TOKEN: ${{ github.token }}
+          APP_SOURCES: RemoteCoder RemoteCoder.xcodeproj RemoteCoderCaptureExtension RemoteCoderLiveActivities RemoteCoderLocationPushService RemoteCoderNotificationService RemoteCoderShareExtension RemoteCoderTests RemoteCoderUITests Core Shared Config web-client
+          GATEWAY_SOURCES: host-daemon-rs .cargo rust-toolchain.toml web-client agent-calls relay dev-tools docs AGENTS.md CLAUDE.md README.md CONTRIBUTING.md SECURITY.md PRIVACY.md
         run: |
-          run=true
-          tree=$(git rev-parse 'HEAD^{tree}')
-          if [[ "$EVENT_NAME" == push ]] && gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=ci-passed-$tree&per_page=100" \
-              --jq '[.artifacts[] | select((.expired | not) and .workflow_run.head_repository_id == .workflow_run.repository_id)] | length > 0' | grep -qx true; then
-            run=false
-            echo "A pull request already passed every lane on tree $tree; reusing that result."
-          fi
-          printf 'run=%s\ntree=%s\n' "$run" "$tree" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          inputs() {
+            git ls-tree HEAD | awk -F '\t' -v excluded="$1" 'BEGIN { split(excluded, names, " "); for (i in names) skip[names[i]] = 1 } !($2 in skip)' | sha256sum | cut -c1-40
+          }
+          gateway=$(inputs "$APP_SOURCES")
+          apps=$(inputs "$GATEWAY_SOURCES")
+          for lane in gateway:$gateway gateway-lint:$gateway swift:$(inputs '') apps-ios:$apps apps-mac:$apps; do
+            name=ci-lane-${lane%%:*}-${lane#*:}
+            if gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=$name&per_page=100" \
+                --jq '[.artifacts[] | select((.expired | not) and .workflow_run.head_repository_id == .workflow_run.repository_id)] | length > 0' | grep -qx true; then
+              echo "${lane%%:*} already passed on these inputs; reusing $name."
+              name=
+            fi
+            printf '%s=%s\n' "${lane%%:*}" "$name" >> "$GITHUB_OUTPUT"
+          done
 
   agent-calls:
     needs: reuse
-    if: ${{ needs.reuse.outputs.run == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     defaults:
@@ -68,7 +78,7 @@ jobs:
 
   gateway:
     needs: reuse
-    if: ${{ needs.reuse.outputs.run == 'true' }}
+    if: ${{ needs.reuse.outputs.gateway != '' }}
     runs-on: xcode-27
     timeout-minutes: 35
     env:
@@ -94,7 +104,7 @@ jobs:
 
   gateway-lint:
     needs: reuse
-    if: ${{ needs.reuse.outputs.run == 'true' }}
+    if: ${{ needs.reuse.outputs.gateway-lint != '' }}
     runs-on: xcode-27
     timeout-minutes: 35
     env:
@@ -111,7 +121,7 @@ jobs:
 
   swift:
     needs: reuse
-    if: ${{ needs.reuse.outputs.run == 'true' }}
+    if: ${{ needs.reuse.outputs.swift != '' }}
     runs-on: xcode-27
     timeout-minutes: 45
     steps:
@@ -135,7 +145,7 @@ jobs:
 
   apps-ios:
     needs: reuse
-    if: ${{ needs.reuse.outputs.run == 'true' }}
+    if: ${{ needs.reuse.outputs.apps-ios != '' }}
     runs-on: xcode-27
     timeout-minutes: 60
     env:
@@ -180,7 +190,7 @@ jobs:
 
   apps-mac:
     needs: reuse
-    if: ${{ needs.reuse.outputs.run == 'true' }}
+    if: ${{ needs.reuse.outputs.apps-mac != '' }}
     runs-on: xcode-27
     timeout-minutes: 60
     env:
@@ -213,7 +223,6 @@ jobs:
 
   web:
     needs: reuse
-    if: ${{ needs.reuse.outputs.run == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -238,27 +247,53 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     env:
-      TREE: ${{ needs.reuse.outputs.tree }}
-      RECORD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
+      TRUSTED: ${{ github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository }}
     steps:
+      - name: Write the passed-lane marker
+        if: always() && env.TRUSTED == 'true'
+        run: printf '%s\n' "$GITHUB_SHA" > "$RUNNER_TEMP/passed"
+      - if: always() && env.TRUSTED == 'true' && needs.gateway.result == 'success'
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ needs.reuse.outputs.gateway }}
+          path: ${{ runner.temp }}/passed
+          retention-days: 14
+          overwrite: true
+      - if: always() && env.TRUSTED == 'true' && needs.gateway-lint.result == 'success'
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ needs.reuse.outputs.gateway-lint }}
+          path: ${{ runner.temp }}/passed
+          retention-days: 14
+          overwrite: true
+      - if: always() && env.TRUSTED == 'true' && needs.swift.result == 'success'
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ needs.reuse.outputs.swift }}
+          path: ${{ runner.temp }}/passed
+          retention-days: 14
+          overwrite: true
+      - if: always() && env.TRUSTED == 'true' && needs.apps-ios.result == 'success'
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ needs.reuse.outputs.apps-ios }}
+          path: ${{ runner.temp }}/passed
+          retention-days: 14
+          overwrite: true
+      - if: always() && env.TRUSTED == 'true' && needs.apps-mac.result == 'success'
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ needs.reuse.outputs.apps-mac }}
+          path: ${{ runner.temp }}/passed
+          retention-days: 14
+          overwrite: true
       - name: Require every lane that ran to pass
+        if: always()
         env:
           RESULTS: ${{ toJSON(needs) }}
         run: jq -e 'all(.[]; .result == "success" or .result == "skipped")' <<< "$RESULTS"
-      - name: Record the fully tested tree
-        id: record
-        if: env.RECORD == 'true' && env.TREE != ''
-        env:
-          RESULTS: ${{ toJSON(needs) }}
-        run: |
-          jq -e 'all(.[]; .result == "success")' <<< "$RESULTS" || exit 0
-          mkdir -p "$RUNNER_TEMP/passed"
-          printf '%s\n' "$TREE" > "$RUNNER_TEMP/passed/tree"
-          echo "full=true" >> "$GITHUB_OUTPUT"
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        if: steps.record.outputs.full == 'true'
-        with:
-          name: ci-passed-${{ env.TREE }}
-          path: ${{ runner.temp }}/passed/tree
-          retention-days: 14
-          overwrite: true

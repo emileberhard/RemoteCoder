@@ -203,9 +203,11 @@ only when a justified exception cannot be removed.
 
 Public hosted CI compiles both apps, their extensions, hosted tests and the Mac
 performance harness, runs the existing logic/tooling/gateway checks and targeted
-hosted rendering/history suites. Pull requests run every lane. A main push whose
-tree a same-repository pull request already passed in full reuses that result
-instead of rerunning the lanes; the `passed` job is the single verdict. Release admission waits for that exact main CI
+hosted rendering/history suites. Each macOS lane skips when a main push or
+same-repository pull request already passed its exact inputs: the top-level
+entries it can read. The `reuse` job owns each lane's excluded entries; when a
+lane starts reading another top-level path, stop excluding it there. The `passed`
+job records passing lanes and is the single verdict. Release admission waits for that exact main CI
 commit; releases do not rerun it. `scripts/select-xcode` selects `.xcode-version`
 without changing the host's default Xcode.
 
