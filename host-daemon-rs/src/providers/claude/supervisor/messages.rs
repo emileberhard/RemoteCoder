@@ -1507,6 +1507,71 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_closing_supervisor_rejects_parent_messages_so_a_later_delivery_retries_them() {
+        let mut fixture = Fixture::new();
+        fixture.initial_turn().await;
+        fixture.agent.process_registry.lock().unwrap().closing = true;
+        let idle = fixture
+            .agent
+            .deliver_parent_message(message("idle", "the child finished"))
+            .await
+            .expect_err("a closing supervisor starts no turn");
+        {
+            let mut runtimes = fixture.agent.runtimes.lock().await;
+            let runtime = runtimes.get_mut(THREAD).unwrap();
+            runtime.idle = None;
+            runtime.active_turn = Some(super::super::RuntimeTurn::new(
+                crate::providers::claude::translate::TurnTranslator::new(
+                    THREAD.to_owned(),
+                    "claude-turn-running".to_owned(),
+                    fixture.root.root_path().to_string_lossy().into_owned(),
+                    None,
+                    0,
+                    Arc::default(),
+                ),
+                false,
+                None,
+            ));
+        }
+        let steered = fixture
+            .agent
+            .deliver_parent_message(message("steered", "the second child finished"))
+            .await
+            .expect_err("a closing supervisor writes no input");
+        let parent = fixture
+            .agent
+            .conversation_index
+            .parent(THREAD)
+            .await
+            .unwrap();
+        fixture.agent.process_registry.lock().unwrap().closing = false;
+        let retried = fixture
+            .agent
+            .deliver_parent_message(message("steered", "the second child finished"))
+            .await
+            .expect("a rejected delivery is delivered again");
+        let received = fixture.received(2).await;
+        fixture.agent.stop_all().await;
+
+        for refused in [&idle, &steered] {
+            assert_eq!(refused.code, RpcCode::ServerBusy);
+            assert_eq!(refused.message, "Claude runtime owner is stopping");
+        }
+        for id in ["idle", "steered"] {
+            assert_eq!(
+                parent.delivery(id).map(|delivery| delivery.state),
+                Some(DeliveryState::Rejected)
+            );
+        }
+        assert_eq!(retried["delivery"], "gateway-steered");
+        assert_eq!(received.len(), 2);
+        assert_eq!(
+            received[1]["message"]["content"],
+            "the second child finished"
+        );
+    }
+
+    #[tokio::test]
     async fn a_lost_message_receipt_is_reconciled_without_resending_or_guessing_absence() {
         let mut fixture = Fixture::new();
         fixture.initial_turn().await;
