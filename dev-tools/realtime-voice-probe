@@ -16,16 +16,30 @@ fixture_path=''
 previous_input=''
 previous_output=''
 
+restore_route() {
+  local route=$1 previous=$2 built_in_uid=$3 target target_uid
+  target="$(SwitchAudioSource -a -t "${route}" -f json | jq -cs --argjson previous "${previous}" --arg builtIn "${built_in_uid}" '
+    (map(select(.uid == $previous.uid)) + map(select(.uid == $builtIn))) | first // empty
+  ')"
+  [[ -n "${target}" ]] || return 1
+  target_uid="$(jq -r .uid <<< "${target}")"
+  SwitchAudioSource -t "${route}" -i "$(jq -r .id <<< "${target}")" >/dev/null 2>&1 || return 1
+  [[ "$(SwitchAudioSource -c -t "${route}" -f json | jq -r .uid)" == "${target_uid}" ]] || return 1
+  if [[ "${target_uid}" != "$(jq -r .uid <<< "${previous}")" ]]; then
+    print -u2 -- "Audio ${route} $(jq -r .name <<< "${previous}") is gone; restored built-in $(jq -r .name <<< "${target}") instead."
+  fi
+}
+
 cleanup() {
   local probe_exit_code=$? restore_failed=false
   if [[ -n "${previous_input}" ]]; then
-    { SwitchAudioSource -s "${previous_input}" -t input >/dev/null 2>&1 && [[ "$(SwitchAudioSource -c -t input)" == "${previous_input}" ]]; } || {
+    restore_route input "${previous_input}" BuiltInMicrophoneDevice || {
       print -u2 -- "FAIL restoring audio input ${previous_input}"
       restore_failed=true
     }
   fi
   if [[ -n "${previous_output}" ]]; then
-    { SwitchAudioSource -s "${previous_output}" -t output >/dev/null 2>&1 && [[ "$(SwitchAudioSource -c -t output)" == "${previous_output}" ]]; } || {
+    restore_route output "${previous_output}" BuiltInSpeakerDevice || {
       print -u2 -- "FAIL restoring audio output ${previous_output}"
       restore_failed=true
     }
@@ -195,9 +209,9 @@ if [[ "${build_only}" != true && ( "${media_mode}" == true || "${silent_mode}" =
     probe_arguments+=(--fixture "${fixture_path}")
   fi
 
-  previous_input="$(SwitchAudioSource -c -t input)"
-  previous_output="$(SwitchAudioSource -c -t output)"
-  [[ -n "${previous_input}" && -n "${previous_output}" ]] || {
+  previous_input="$(SwitchAudioSource -c -t input -f json)"
+  previous_output="$(SwitchAudioSource -c -t output -f json)"
+  jq -se 'length == 2 and all(.uid | type == "string" and length > 0)' <<< "${previous_input}${previous_output}" >/dev/null 2>&1 || {
     print -u2 -- 'Existing audio routes are unknown; no route changed or session started.'
     exit 2
   }

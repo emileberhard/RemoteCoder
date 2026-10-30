@@ -523,7 +523,10 @@ one it fails before touching audio routes, fixtures or the gateway and prints th
 - Media probes need macOS Microphone permission for the invoking process and
   reject unauthorized capture before starting a gateway voice session, because
   connected ICE and outbound packets alone can carry silence. They hold one lease
-  on the audio route, and a failed input or output restore fails the run.
+  on the audio route and restore each saved device by UID. A saved device that
+  disappeared during the run, such as AirPods, falls back to the built-in
+  microphone or speakers with a notice on stderr; a failed restore or fallback
+  fails the run.
 - A delegated command counts only when it completed with exit code 0, and the
   delegated turn only when it ended `completed`; a failed, interrupted or
   status-less turn fails the probe. `realtime_probe_assertions.swift` holds these

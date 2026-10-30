@@ -124,7 +124,8 @@ Run on the GUI test host. `--silent` leases both audio routes and requires verif
 BlackHole 2ch input/output before session setup or playback. Media modes require
 an existing cached fixture; silent mode never generates one. Missing support or
 route readback fails before a session starts. Both routes are restored and
-verified, and cleanup failures make the probe fail. It starts no agent call or
+verified; a saved device that disappeared falls back to the built-in device with
+a notice, and cleanup failures make the probe fail. It starts no agent call or
 phone call. `--build-only` compiles the full probe without changing routes,
 preparing media, reading gateway credentials or starting a live session.
 
