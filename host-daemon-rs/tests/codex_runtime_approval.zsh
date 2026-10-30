@@ -27,7 +27,8 @@ for name, statements in json.loads(layout.read_text()).items():
 for line in sys.stdin:
     message = json.loads(line)
     if "id" in message:
-        result = {"thread": {"id": "thread"}} if message["method"] == "thread/start" else {}
+        print(json.dumps({"id": message["id"], "method": "item/tool/requestUserInput", "params": {}}), flush=True)
+        result ={"thread": {"id": "thread"}} if message["method"] == "thread/start" else {}
         print(json.dumps({"id": message["id"], "result": result}), flush=True)
 EOF
 cat >"${temp_root}/package/databases.json" <<'EOF'

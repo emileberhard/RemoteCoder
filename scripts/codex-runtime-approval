@@ -277,7 +277,7 @@ def request(server: subprocess.Popen[str], identifier: int, method: str, params:
             message = json.loads(line)
         except json.JSONDecodeError as error:
             raise ApprovalError(f"approved runtime wrote invalid JSON-RPC: {error}") from error
-        if message.get("id") == identifier:
+        if message.get("id") == identifier and "method" not in message:
             if "error" in message:
                 raise ApprovalError(f"approved runtime rejected {method}: {message['error']}")
             return message["result"]
