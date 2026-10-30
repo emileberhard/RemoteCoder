@@ -2159,7 +2159,7 @@ async fn restart_capture_waits_for_a_fold_admitted_before_closing_to_queue_its_i
         let agent = Arc::clone(&agent);
         async move {
             agent
-                .capture_after_admitted_starts(Duration::from_secs(3600))
+                .capture_after_admitted_inputs(Duration::from_secs(3600))
                 .await
         }
     });
@@ -2195,6 +2195,103 @@ async fn restart_capture_waits_for_a_fold_admitted_before_closing_to_queue_its_i
 }
 
 #[tokio::test]
+async fn restart_capture_waits_for_a_steer_admitted_before_closing_to_queue_its_input() {
+    let (tx, _rx) = mpsc::channel(32);
+    let (_home, agent) = isolated_agent(tx);
+    let (mut runtime, mut child) = placeholder_runtime(&request("claude_a", false)).await;
+    runtime.active_turn = Some(RuntimeTurn::new(
+        TurnTranslator::new(
+            "claude_a".to_string(),
+            "claude-turn-1".to_string(),
+            "/tmp".to_string(),
+            None,
+            0,
+            Arc::default(),
+        ),
+        false,
+        None,
+    ));
+    let input = runtime.input.clone();
+    agent
+        .runtimes
+        .lock()
+        .await
+        .insert("claude_a".to_string(), runtime);
+    let mut held = Vec::new();
+    while let Ok(Ok(slot)) = tokio::time::timeout(Duration::from_millis(100), input.reserve()).await
+    {
+        held.push(slot);
+    }
+    let steer = tokio::spawn({
+        let agent = Arc::clone(&agent);
+        async move {
+            agent
+                .steer("claude_a", "claude-turn-1", &ClaudeUserInput::text("steer"))
+                .await
+        }
+    });
+    while agent.admitted_inputs.is_empty() {
+        tokio::task::yield_now().await;
+    }
+    let mut capture = tokio::spawn({
+        let agent = Arc::clone(&agent);
+        async move {
+            agent
+                .capture_after_admitted_inputs(Duration::from_secs(3600))
+                .await
+        }
+    });
+    while !agent.process_registry.lock().unwrap().closing {
+        tokio::task::yield_now().await;
+    }
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), &mut capture)
+            .await
+            .is_err(),
+        "capture waits while an admitted steer waits for its writer slot"
+    );
+
+    drop(held);
+    steer
+        .await
+        .unwrap()
+        .expect("a steer admitted before closing is delivered");
+    let captured = capture.await.unwrap();
+    let Err(TurnControlError::Failed(refused)) = agent
+        .steer("claude_a", "claude-turn-1", &ClaudeUserInput::text("late"))
+        .await
+    else {
+        panic!("a steer after closing is refused");
+    };
+
+    assert_eq!(captured.len(), 1);
+    assert_eq!(
+        captured[0].interrupted_turn_id.as_deref(),
+        Some("claude-turn-1")
+    );
+    assert_eq!(
+        captured[0]
+            .queued_inputs
+            .iter()
+            .map(|input| input.text.as_str())
+            .collect::<Vec<_>>(),
+        ["steer"]
+    );
+    assert_eq!(refused.code, RpcCode::ServerBusy);
+    assert_eq!(refused.message, "Claude runtime owner is stopping");
+    assert_eq!(
+        input
+            .unconsumed()
+            .pending()
+            .iter()
+            .map(|input| input.text.as_str())
+            .collect::<Vec<_>>(),
+        ["steer"]
+    );
+    let _ = child.kill().await;
+}
+
+#[tokio::test]
 async fn an_overdue_restart_capture_carries_a_fold_whose_notifications_cannot_be_delivered() {
     let (tx, mut rx) = mpsc::channel(1);
     let (_home, agent) = isolated_agent(tx);
@@ -2213,7 +2310,7 @@ async fn an_overdue_restart_capture_carries_a_fold_whose_notifications_cannot_be
         tokio::task::yield_now().await;
     }
 
-    let captured = agent.capture_after_admitted_starts(Duration::ZERO).await;
+    let captured = agent.capture_after_admitted_inputs(Duration::ZERO).await;
     let turn_id = start
         .await
         .unwrap()

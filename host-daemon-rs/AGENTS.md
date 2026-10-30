@@ -1141,16 +1141,21 @@ scoped receipt reads require the exact sender conversation.
       (`ClaudeSupervisor::suspend`). Never send the CLI's `interrupt` here: it marks
       background agents stopped by the user, and no message can resume them
       afterwards.
-    - Capture first closes the supervisor to starts. A start or fold checks
+    - Capture first closes the supervisor to new input. A start or fold checks
       that fence under the runtimes lock in each section that changes its
-      runtime and is admitted (`admit_start`) where it commits its turn.
-      Capture waits for every admitted start to queue its input before it
-      snapshots, so it records either the untouched turn or the new turn with
-      its input, never a fold in between. Besides the runtimes lock and index
-      transactions that capture takes itself, an admitted start waits only on
-      the notification channel. After 5 s capture stops waiting for it: a
-      supervisor notification that cannot enter the full channel is dropped
-      with a warning, and clients reread it from history.
+      runtime and is admitted (`admit_input`) where it commits its turn; a
+      steer, parent message or resumed message is admitted where it checks
+      the running turn. Admitted input holds its token until it is queued, and
+      input after closing is refused as `owner_stopping`. Capture waits for
+      every admitted input before it snapshots, so it records either the
+      untouched turn or the turn with that input, never a fold in between or
+      a write it misses. Besides the runtimes lock and index transactions that
+      capture takes itself, an admitted start waits only on the notification
+      channel and, for a failed start, the bounded process termination; an
+      admitted steer also waits for a writer slot within the 10 s input stall
+      limit. After 5 s capture stops waiting for notifications: a supervisor
+      notification that cannot enter the full channel is dropped with a
+      warning, and clients see it again only if history recorded it.
     - Once the replacement's listener is up, it resumes each thread with
       `--resume` in the host-default profile, using the recorded cwd, model,
       effort and Fast.

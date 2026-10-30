@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::warn;
 
-const ADMITTED_START_GRACE: Duration = Duration::from_secs(5);
+const ADMITTED_INPUT_GRACE: Duration = Duration::from_secs(5);
 
 pub(crate) enum ResumeDelivery {
     Started(String),
@@ -24,26 +24,26 @@ pub(crate) enum ResumeDelivery {
 
 impl ClaudeSupervisor {
     pub(crate) async fn capture_for_restart(&self) -> Vec<Item> {
-        self.capture_after_admitted_starts(ADMITTED_START_GRACE)
+        self.capture_after_admitted_inputs(ADMITTED_INPUT_GRACE)
             .await
     }
 
-    pub(super) async fn capture_after_admitted_starts(&self, grace: Duration) -> Vec<Item> {
+    pub(super) async fn capture_after_admitted_inputs(&self, grace: Duration) -> Vec<Item> {
         self.process_registry
             .lock()
             .expect("Claude process registry poisoned")
             .closing = true;
-        self.admitted_starts.close();
-        if tokio::time::timeout(grace, self.admitted_starts.wait())
+        self.admitted_inputs.close();
+        if tokio::time::timeout(grace, self.admitted_inputs.wait())
             .await
             .is_err()
         {
             warn!(
-                admitted = self.admitted_starts.len(),
-                "Claude restart capture stopped waiting for admitted starts' notification delivery"
+                admitted = self.admitted_inputs.len(),
+                "Claude restart capture stopped waiting for admitted inputs' notification delivery"
             );
             self.restart_capture_overdue.cancel();
-            self.admitted_starts.wait().await;
+            self.admitted_inputs.wait().await;
         }
         self.capture().await
     }
@@ -380,16 +380,20 @@ impl ClaudeSupervisor {
         let prepared =
             super::input_writer::InputWriter::prepare_input(frame).map_err(TurnStartError::from)?;
         let slot = input.reserve().await.map_err(TurnStartError::from)?;
-        let policy = self
-            .runtimes
-            .lock()
-            .await
-            .get(thread_id)
-            .filter(|runtime| runtime.process_group_id == group && runtime.running_turn().is_some())
-            .map(|runtime| runtime.launch.clone())
-            .ok_or_else(|| {
-                resume_error("Claude's recovery runtime stopped before input submission".into())
-            })?;
+        let (admitted, policy) = {
+            let runtimes = self.runtimes.lock().await;
+            let admitted = self.admit_input(&runtimes)?;
+            let policy = runtimes
+                .get(thread_id)
+                .filter(|runtime| {
+                    runtime.process_group_id == group && runtime.running_turn().is_some()
+                })
+                .map(|runtime| runtime.launch.clone())
+                .ok_or_else(|| {
+                    resume_error("Claude's recovery runtime stopped before input submission".into())
+                })?;
+            (admitted, policy)
+        };
         let pending = self
             .submit_callback_input(
                 thread_id,
@@ -399,6 +403,7 @@ impl ClaudeSupervisor {
                 prepared,
             )
             .await?;
+        drop(admitted);
         let Err(error) = pending.written().await else {
             return self.ensure_runtime_current(thread_id, group).await;
         };

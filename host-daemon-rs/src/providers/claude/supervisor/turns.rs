@@ -13,6 +13,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use tokio::sync::MutexGuard;
 use tokio_util::task::task_tracker::TaskTrackerToken;
 use tracing::{debug, info, warn};
 
@@ -223,7 +224,7 @@ impl ClaudeSupervisor {
             .await?;
         let (admitted, slot, process_group_id, mut process_admission) = {
             let mut runtimes = self.runtimes.lock().await;
-            let admitted = self.admit_start(&runtimes)?;
+            let admitted = self.admit_input(&runtimes)?;
             if let Some(runtime) = runtimes.get_mut(&request.thread_id) {
                 let Some((group, slot)) =
                     warm.filter(|(group, _)| *group == runtime.process_group_id)
@@ -435,7 +436,7 @@ impl ClaudeSupervisor {
 
         let (admitted, closing_wake) = {
             let mut runtimes = self.runtimes.lock().await;
-            let admitted = self.admit_start(&runtimes)?;
+            let admitted = self.admit_input(&runtimes)?;
             let closing_wake = runtimes
                 .get_mut(&request.thread_id)
                 .filter(|runtime| runtime.process_group_id == reserved_group)
@@ -577,8 +578,9 @@ impl ClaudeSupervisor {
         input: &ClaudeUserInput,
     ) -> Result<(), TurnControlError> {
         let lifecycle = self.lifecycles.lock(thread_id).await;
-        let (writer, process_group_id, policy) = {
+        let (admitted, writer, process_group_id, policy) = {
             let mut runtimes = self.runtimes.lock().await;
+            let admitted = self.admit_input(&runtimes)?;
             let Some(runtime) = runtimes.get_mut(thread_id) else {
                 return Err(TurnControlError::NotRunning {
                     message: format!("thread {thread_id} has no running Claude process"),
@@ -593,6 +595,7 @@ impl ClaudeSupervisor {
                 });
             };
             (
+                admitted,
                 runtime.input.clone(),
                 runtime.process_group_id,
                 runtime.launch.clone(),
@@ -605,10 +608,14 @@ impl ClaudeSupervisor {
                 let pending = self
                     .submit_job_input(thread_id, &policy, slot, prepared)
                     .await?;
+                drop(admitted);
                 drop(lifecycle);
                 pending.written().await
             }
-            Err(error) => Err(error),
+            Err(error) => {
+                drop(admitted);
+                Err(error)
+            }
         };
         if let Err(err) = delivered {
             if InputWriter::is_stalled(&err) {
@@ -699,9 +706,9 @@ impl ClaudeSupervisor {
         Ok(())
     }
 
-    fn admit_start(
+    pub(super) fn admit_input(
         &self,
-        _runtimes: &HashMap<String, ClaudeRuntime>,
+        _runtimes: &MutexGuard<'_, HashMap<String, ClaudeRuntime>>,
     ) -> Result<TaskTrackerToken, TurnStartError> {
         let registry = self
             .process_registry
@@ -710,7 +717,7 @@ impl ClaudeSupervisor {
         if registry.closing {
             return Err(TurnStartError::owner_stopping());
         }
-        Ok(self.admitted_starts.token())
+        Ok(self.admitted_inputs.token())
     }
 
     pub(super) async fn reserve_start(

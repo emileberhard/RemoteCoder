@@ -611,8 +611,11 @@ impl ClaudeSupervisor {
                 "Claude parent was interrupted by the user, so this message will not wake it",
             )));
         }
-        let policy = {
+        let (admitted, policy) = {
             let runtimes = self.runtimes.lock().await;
+            let admitted = self
+                .admit_input(&runtimes)
+                .map_err(DispatchFailure::Rejected)?;
             let Some(runtime) = runtimes.get(thread).filter(|runtime| {
                 runtime.process_group_id == group && runtime.running_turn().is_some()
             }) else {
@@ -620,7 +623,7 @@ impl ClaudeSupervisor {
                     "Claude parent execution changed before this message was submitted",
                 )));
             };
-            runtime.launch.clone()
+            (admitted, runtime.launch.clone())
         };
         let pending = self
             .submit_callback_input(
@@ -634,6 +637,7 @@ impl ClaudeSupervisor {
             )
             .await
             .map_err(DispatchFailure::Rejected)?;
+        drop(admitted);
         if let Err(error) = pending.written().await {
             if super::InputWriter::is_stalled(&error) {
                 return Err(DispatchFailure::Uncertain(self.input_stalled(
