@@ -393,7 +393,7 @@ final class HTMLVisualPreparation {
         instance.preparing = true
         instance.inlineHeightLimit = layoutContext.inlineHeightLimit
         let (stored, continuation) = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
-        instance.onSnapshotStored = { continuation.yield() }
+        instance.onCaptureFinished = { continuation.yield() }
         surface.instance = instance
         let started = ContinuousClock.now
         let run = Task {

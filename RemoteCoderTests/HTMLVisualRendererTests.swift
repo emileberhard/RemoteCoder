@@ -614,7 +614,7 @@ struct HTMLVisualRendererTests {
                 let captured = try #require(fixture.renderer.presentableRaster(for: key, displayScale: 3))
                 #expect(!Self.matches(Self.centerColor(of: captured), Self.centerColor(of: orange)))
 
-                let newer = try #require(fixture.renderer.store(Self.filledPDF(orange), for: key, height: 80))
+                let newer = try #require(await fixture.renderer.store(Self.filledPDF(orange), for: key, height: 80))
                 #expect(fixture.renderer.presentableRaster(for: key, displayScale: 3) === captured)
                 #expect(!host.preparation.isPresentable(reference))
                 host.preparation.updateNear([reference], documents: documents)
@@ -623,7 +623,7 @@ struct HTMLVisualRendererTests {
                 #expect(near.revision == newer.revision)
                 #expect(Self.matches(Self.centerColor(of: near), Self.centerColor(of: orange)))
 
-                let latest = try #require(fixture.renderer.store(Self.filledPDF(azure), for: key, height: 80))
+                let latest = try #require(await fixture.renderer.store(Self.filledPDF(azure), for: key, height: 80))
                 await host.preparation.awaitPresentable([reference], documents: documents, atMost: .seconds(8))
                 let opened = try #require(fixture.renderer.currentRaster(for: key, displayScale: 3))
                 #expect(opened.revision == latest.revision)
@@ -776,6 +776,46 @@ struct HTMLVisualRendererTests {
                     #expect(fixture.renderer.height(for: HTMLVisualLayoutKey(digest: reference.digest, width: 360, theme: theme)) != nil)
                 }
             }
+        }
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func capacityPressureLeavesPreparationIncompleteAndRetriesAfterPinsAreReleased() async throws {
+        try await withFixture { fixture in
+            let pinned = (0..<3).map { index in
+                HTMLVisualLayoutKey(digest: String(format: "%064x", index + 400), width: 320, theme: theme)
+            }
+            for (index, key) in pinned.enumerated() {
+                let captured = try await fixture.renderer.store(Data(repeating: UInt8(index), count: 8 << 20), for: key, height: 80)
+                #expect(captured != nil)
+            }
+            fixture.renderer.pinRasters(Array(pinned.dropFirst()))
+            defer { fixture.renderer.unpinRasters(Array(pinned.dropFirst())) }
+            try await withPreparationHost(fixture) { host in
+                let preparation = host.preparation
+                preparation.updateLayoutContext { $0.width = 320 }
+                fixture.renderer.pinRasters([pinned[0]])
+                do {
+                    defer { fixture.renderer.unpinRasters([pinned[0]]) }
+                    #expect(await preparation.prepareInBackground(host.references, documents: host.source.documents)
+                        == .incomplete(missing: 1))
+                }
+                #expect(await preparation.prepareInBackground(host.references, documents: host.source.documents)
+                    == .settled(stored: 1, unpreparable: 0))
+            }
+        }
+    }
+
+    @Test func oversizedSnapshotIsRejectedBeforeEitherCacheAcceptsIt() async throws {
+        try await withFixture { fixture in
+            let key = HTMLVisualLayoutKey(digest: fixture.reference.digest, width: 320, theme: theme)
+            let captured = try await fixture.renderer.store(Data(count: HTMLVisualCapturedImage.maximumBytes + 1), for: key, height: 80)
+            #expect(captured == nil)
+            #expect(!fixture.renderer.hasStoredSnapshot(for: key))
+            try await fixture.renderer.flush()
+            let cold = HTMLVisualPresentationCache(directory: fixture.directory.appending(path: "presentations"), clock: ContinuousClock())
+            #expect(try await cold.load()[key] == nil)
+            try await cold.retire()
         }
     }
 

@@ -484,7 +484,7 @@ least-recently-used unpinned images. When pinned images leave insufficient room,
 the store reports capacity instead of evicting a pinned or newly stored image.
 
 The actor-owned presentation cache under
-`RemoteCoder/html-visuals/presentations/` stores a small version 3 binary index and
+`RemoteCoder/html-visuals/presentations/` stores a small version 3 binary index in `index-v3.plist` and
 one content-addressed PDF per image in `images/`. It writes images atomically
 before committing the index, then reclaims unreferenced files. Immutable image
 names preserve the previously committed image if an index update fails. A failed
@@ -492,13 +492,16 @@ commit retains only the last committed and current image sets (at most 48 MiB
 combined); a successful commit returns storage to the 24 MiB live budget. Loading
 reclaims orphan files; a missing, truncated or hash-mismatched image loses only its
 snapshot, retaining geometry. Repeated unchanged height measurements do not write.
-The actor reads version 2 embedded PDFs and migrates them on its next write;
-version 1 keeps heights and drops its partial PNGs. The 3.76.8 decoder rejects the
-version 3 image metadata, which the renderer catches as a cache miss; that build
-continues rendering live content but cannot persist presentations until the cache
-is replaced or a newer build returns. A later new-build load reclaims files left
-behind by any old-format replacement. Snapshots remain encoded until a visible
-occurrence or background preparation rasterizes one off-main at display scale.
+The actor migrates embedded version 2 PDFs from `presentations.plist`, committing
+the new index before deleting that rebuildable legacy file; version 1 keeps heights
+and drops partial PNGs. Older builds never encounter the v3 index, so they can load
+and write their own v2 cache normally. When v3 already exists, it remains authoritative
+and the next new-build load removes any legacy file produced during a downgrade.
+Capacity pressure leaves preparation incomplete and retryable after pins are released;
+it never classifies the document as unpreparable. Live and background captures share
+one acceptance path that enforces the 8 MiB capture limit before updating the cache.
+Snapshots remain encoded until a visible occurrence or background preparation
+rasterizes one off-main at display scale.
 The renderer's `HTMLVisualRasterBudget` owns every prepared and in-flight
 raster: 32 MiP (128 MiB) in total, and at most 8 MiP and 16,384 pixels per
 side for one raster. A raster that does not fit is drawn at a lower scale, down

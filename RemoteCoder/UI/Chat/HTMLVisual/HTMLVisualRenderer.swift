@@ -65,7 +65,7 @@ final class HTMLVisualInstance: Identifiable {
     @ObservationIgnored var revision = 0
     @ObservationIgnored var needsSnapshot = false
     @ObservationIgnored var preparing = false
-    @ObservationIgnored var onSnapshotStored: () -> Void = {}
+    @ObservationIgnored var onCaptureFinished: () -> Void = {}
     @ObservationIgnored var captureAllowed = false
     @ObservationIgnored var onPinChange: (Bool) -> Void = { _ in }
     @ObservationIgnored var admissionDemand: AdmissionDemand?
@@ -165,9 +165,7 @@ final class HTMLVisualRenderer {
     private let cache: HTMLVisualPresentationCache
     private var loadTask: Task<Void, Never>?
     private var persistence: Task<Void, Never>?
-    private var pending: [HTMLVisualLayoutKey: Persistence] = [:]
-    private var pendingImageOrder: [HTMLVisualLayoutKey] = []
-    private var pendingImageBytes = 0
+    private var pendingHeights: [HTMLVisualLayoutKey: Double] = [:]
 
     init(cache: HTMLVisualPresentationCache, webContent: HTMLVisualWebContent) {
         self.cache = cache
@@ -232,7 +230,7 @@ final class HTMLVisualRenderer {
     }
 
     func hasStoredSnapshot(for key: HTMLVisualLayoutKey) -> Bool {
-        snapshots[key]?.image != nil || pending[key]?.image != nil || persistedImages.contains(key)
+        snapshots[key]?.image != nil || persistedImages.contains(key)
     }
 
     func presentableRaster(for key: HTMLVisualLayoutKey, displayScale: Double) -> HTMLVisualPreparedRaster? {
@@ -702,7 +700,7 @@ final class HTMLVisualRenderer {
             heightOrder.append(key)
             if heightOrder.count > HTMLVisualPresentationCache.maximumHeights { heights.removeValue(forKey: heightOrder.removeFirst()) }
             instance.snapshot?.height = height
-            persist(key, height: height, image: nil)
+            persistHeight(height, for: key)
         }
         capture(instance)
     }
@@ -764,15 +762,8 @@ final class HTMLVisualRenderer {
                     #endif
                     try Task.checkCancellation()
                     guard instance.page === page, instance.key == key else { continue }
-                    let captured: HTMLVisualCapturedImage?
-                    if instance.preparing {
-                        let entries = try await cache.store(key, height: instance.height, image: data, protecting: Set(rasterPins.keys))
-                        persistedImages = Set(entries.filter(\.value.hasImage).keys)
-                        guard instance.page === page, instance.key == key else { continue }
-                        captured = retainSnapshot(data, for: key, height: instance.height)
-                    } else {
-                        captured = store(data, for: key, height: instance.height)
-                    }
+                    let captured = try await store(data, for: key, height: instance.height)
+                    guard instance.page === page, instance.key == key else { continue }
                     guard let captured else {
                         instance.capturedImage = nil
                         Self.logger.notice("html visual snapshot discarded bytes=\(data.count) limit=\(HTMLVisualCapturedImage.maximumBytes)")
@@ -780,14 +771,13 @@ final class HTMLVisualRenderer {
                     }
                     instance.snapshot = snapshot(for: key)
                     instance.capturedImage = captured
-                    instance.onSnapshotStored()
+                    instance.onCaptureFinished()
                 }
             } catch is CancellationError {
             } catch HTMLVisualPresentationError.capacity {
                 guard instance.page === page else { return }
                 instance.needsSnapshot = false
-                instance.status = .unavailable(HTMLVisualPresentationError.capacity.localizedDescription)
-                instance.onSnapshotStored()
+                instance.onCaptureFinished()
             } catch {
                 instance.needsSnapshot = false
                 Self.logger.error("html visual snapshot failed reason=\(error.localizedDescription)")
@@ -795,14 +785,12 @@ final class HTMLVisualRenderer {
         }
     }
 
-    func store(_ data: Data, for key: HTMLVisualLayoutKey, height: Double) -> HTMLVisualCapturedImage? {
-        guard let captured = retainSnapshot(data, for: key, height: height) else { return nil }
-        persist(key, height: height, image: data)
-        return captured
-    }
-
-    private func retainSnapshot(_ data: Data, for key: HTMLVisualLayoutKey, height: Double) -> HTMLVisualCapturedImage? {
+    func store(_ data: Data, for key: HTMLVisualLayoutKey, height: Double) async throws -> HTMLVisualCapturedImage? {
         guard let captured = HTMLVisualCapturedImage(data: data, key: key, revision: nextSnapshotRevision()) else { return nil }
+        pendingHeights.removeValue(forKey: key)
+        let entries = try await cache.store(key, height: height, image: data, protecting: Set(rasterPins.keys))
+        persistedImages = Set(entries.filter(\.value.hasImage).keys)
+        if let current = snapshots[key], current.revision > captured.revision { return captured }
         heights[key] = height
         heightOrder.removeAll { $0 == key }
         heightOrder.append(key)
@@ -829,40 +817,19 @@ final class HTMLVisualRenderer {
         else if allowed, instance.needsSnapshot { capture(instance) }
     }
 
-    private struct Persistence {
-        var height: Double
-        var image: Data?
-    }
-
-    private func persist(_ key: HTMLVisualLayoutKey, height: Double, image: Data?) {
-        var value = pending[key] ?? Persistence(height: height, image: nil)
-        value.height = height
-        if let image {
-            pendingImageBytes -= value.image?.count ?? 0
-            value.image = image
-            pendingImageBytes += image.count
-            pendingImageOrder.removeAll { $0 == key }
-            pendingImageOrder.append(key)
+    private func persistHeight(_ height: Double, for key: HTMLVisualLayoutKey) {
+        if pendingHeights.count >= HTMLVisualPresentationCache.maximumHeights,
+           pendingHeights[key] == nil, let first = pendingHeights.keys.first {
+            pendingHeights.removeValue(forKey: first)
         }
-        if pending.count >= HTMLVisualPresentationCache.maximumHeights, pending[key] == nil, let first = pending.keys.first {
-            pendingImageBytes -= pending.removeValue(forKey: first)?.image?.count ?? 0
-            pendingImageOrder.removeAll { $0 == first }
-        }
-        pending[key] = value
-        while pendingImageBytes > HTMLVisualPresentationCache.maximumImageBytes {
-            let first = pendingImageOrder.removeFirst()
-            pendingImageBytes -= pending[first]?.image?.count ?? 0
-            pending[first]?.image = nil
-        }
+        pendingHeights[key] = height
         guard persistence == nil else { return }
         persistence = Task {
             defer { persistence = nil }
-            while let (key, value) = pending.first {
-                pending.removeValue(forKey: key)
-                pendingImageBytes -= value.image?.count ?? 0
-                pendingImageOrder.removeAll { $0 == key }
+            while let (key, height) = pendingHeights.first {
+                pendingHeights.removeValue(forKey: key)
                 do {
-                    let entries = try await cache.store(key, height: value.height, image: value.image, protecting: Set(rasterPins.keys))
+                    let entries = try await cache.store(key, height: height, image: nil, protecting: Set(rasterPins.keys))
                     persistedImages = Set(entries.filter(\.value.hasImage).keys)
                 } catch { Self.logger.error("html visual cache save failed reason=\(error.localizedDescription)") }
                 if Task.isCancelled { return }
