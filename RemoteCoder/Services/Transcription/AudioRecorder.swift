@@ -26,7 +26,7 @@ enum AudioCaptureError: LocalizedError, Sendable {
 final class AudioRecorder {
     private let logger = AppLogger(category: "VoiceInput.AudioRecorder")
     private let session: any CaptureAudioSession
-    private var audioEngine = AVAudioEngine()
+    private let engine = CaptureEngine()
     private let levelMeter = AudioLevelMeter()
     private let pcm16Sink = PCM16CaptureSink()
 
@@ -35,8 +35,8 @@ final class AudioRecorder {
     private var shouldMaintainRecording = false
     private var pausedForRouteLoss = false
     private var reactivationTask: Task<Void, Never>?
+    private var engineWork: Task<Void, Never>?
     private var isCaptureRunning = false
-    private var isTapInstalled = false
 
     init(session: any CaptureAudioSession) {
         self.session = session
@@ -68,10 +68,11 @@ final class AudioRecorder {
         }
 
         do {
-            if isCaptureRunning, audioEngine.isRunning == false {
+            if isCaptureRunning, await engine.isRunning == false {
                 VoiceModeDiagnostics.log("capture graph invalidated; rebuilding")
                 stopCaptureImmediately()
             }
+            await engineWork?.value
             if isCaptureRunning == false {
                 try await prepareCapture()
             }
@@ -81,17 +82,14 @@ final class AudioRecorder {
             }
 
             try await pcm16Sink.begin(inputFormat: inputFormat, output: output)
+            levelMeter.reset()
             isRecording = true
             shouldMaintainRecording = true
             pausedForRouteLoss = false
-            levelMeter.reset()
 
-            if audioEngine.isRunning == false {
-                audioEngine.prepare()
-                try audioEngine.start()
-            }
+            try await engine.start()
             isCaptureRunning = true
-            VoiceModeDiagnostics.log("audio segment sink opened engineRunning=\(audioEngine.isRunning)")
+            VoiceModeDiagnostics.log("audio segment sink opened engineRunning=\(await engine.isRunning)")
         } catch {
             pcm16Sink.finish()
             isRecording = false
@@ -120,57 +118,37 @@ final class AudioRecorder {
 
     private func prepareCapture() async throws {
         VoiceModeDiagnostics.log("dictation capture preparation started")
-        let inputNode = audioEngine.inputNode
-        if inputNode.isVoiceProcessingEnabled {
-            try inputNode.setVoiceProcessingEnabled(false)
-        }
-
-        let hardwareFormat = inputNode.inputFormat(forBus: 0)
-        let format = inputNode.outputFormat(forBus: 0)
-        guard hardwareFormat.sampleRate > 0,
-              hardwareFormat.channelCount > 0,
-              format.sampleRate > 0,
-              format.channelCount > 0
-        else {
-            throw AudioCaptureError.invalidInputFormat
-        }
-
-        let levelMeter = levelMeter
-        let pcm16Sink = pcm16Sink
-        try inputNode.installAudioTap(
-            onBus: 0,
-            bufferSize: 1_024,
-            format: format
-        ) { readOnlyBuffer, _ in
-            let buffer = AVAudioPCMBuffer(copying: readOnlyBuffer)
-            levelMeter.process(buffer)
-            pcm16Sink.consume(buffer)
-        }
+        let format = try await engine.installTap(levelMeter: levelMeter, sink: pcm16Sink)
         inputFormat = format
-        isTapInstalled = true
         VoiceModeDiagnostics.log("capture tap installed sampleRate=\(Int(format.sampleRate)) channels=\(format.channelCount)")
     }
 
     private func stopCaptureImmediately() {
         pcm16Sink.finish()
-        if isTapInstalled {
-            audioEngine.inputNode.removeTap(onBus: 0)
-            isTapInstalled = false
-        }
-        audioEngine.stop()
-        audioEngine = AVAudioEngine()
         isCaptureRunning = false
         inputFormat = nil
-        VoiceModeDiagnostics.log("capture engine stopped")
+        afterEngineWork { engine in
+            await engine.reset()
+            VoiceModeDiagnostics.log("capture engine stopped")
+        }
     }
 
     private func stopCapture() async {
         stopCaptureImmediately()
+        await engineWork?.value
 
         isRecording = false
         shouldMaintainRecording = false
         pausedForRouteLoss = false
         VoiceModeDiagnostics.log("capture pipeline torn down")
+    }
+
+    private func afterEngineWork(_ operation: @escaping (CaptureEngine) async -> Void) {
+        let previous = engineWork
+        engineWork = Task { [engine] in
+            await previous?.value
+            await operation(engine)
+        }
     }
 
     private func registerAudioSessionObserversIfNeeded() {
@@ -191,9 +169,11 @@ final class AudioRecorder {
     }
 
     private func handleAudioSessionInterruption() {
-        if shouldMaintainRecording, audioEngine.isRunning {
-            audioEngine.pause()
-            logger.notice("paused recording due to audio-session interruption")
+        guard shouldMaintainRecording else { return }
+        afterEngineWork { [logger] engine in
+            if await engine.pause() {
+                logger.notice("paused recording due to audio-session interruption")
+            }
         }
     }
 
@@ -214,10 +194,13 @@ final class AudioRecorder {
 
         try? session.preferBuiltInInput(context: "route change")
 
-        if inputLost, audioEngine.isRunning {
-            audioEngine.pause()
+        if inputLost, isCaptureRunning {
             pausedForRouteLoss = true
-            logger.notice("paused recording due to route change: \(reasonCode)")
+            afterEngineWork { [logger] engine in
+                if await engine.pause() {
+                    logger.notice("paused recording due to route change: \(reasonCode)")
+                }
+            }
         }
 
         if pausedForRouteLoss, session.isInputAvailable {
@@ -234,7 +217,8 @@ final class AudioRecorder {
 
     private func resumeRecording(context: String) async {
         guard shouldMaintainRecording, isCaptureRunning else { return }
-        if audioEngine.isRunning {
+        await engineWork?.value
+        if await engine.isRunning {
             pausedForRouteLoss = false
             return
         }
@@ -244,7 +228,7 @@ final class AudioRecorder {
             try Task.checkCancellation()
             guard shouldMaintainRecording, isCaptureRunning else { return }
             try session.preferBuiltInInput(context: context)
-            try audioEngine.start()
+            try await engine.resume()
             pausedForRouteLoss = false
             logger.notice("resumed recording after \(context)")
         } catch is CancellationError {
@@ -252,5 +236,68 @@ final class AudioRecorder {
         } catch {
             logger.error("failed to reactivate audio session after \(context): \(error.localizedDescription)")
         }
+    }
+}
+
+// MARK: - Engine
+
+private actor CaptureEngine {
+    private var engine = AVAudioEngine()
+    private var isTapInstalled = false
+
+    var isRunning: Bool { engine.isRunning }
+
+    func installTap(levelMeter: AudioLevelMeter, sink: PCM16CaptureSink) throws -> AVAudioFormat {
+        let inputNode = engine.inputNode
+        if inputNode.isVoiceProcessingEnabled {
+            try inputNode.setVoiceProcessingEnabled(false)
+        }
+
+        let hardwareFormat = inputNode.inputFormat(forBus: 0)
+        let format = inputNode.outputFormat(forBus: 0)
+        guard hardwareFormat.sampleRate > 0,
+              hardwareFormat.channelCount > 0,
+              format.sampleRate > 0,
+              format.channelCount > 0
+        else {
+            throw AudioCaptureError.invalidInputFormat
+        }
+
+        try inputNode.installAudioTap(
+            onBus: 0,
+            bufferSize: 1_024,
+            format: format
+        ) { readOnlyBuffer, _ in
+            let buffer = AVAudioPCMBuffer(copying: readOnlyBuffer)
+            levelMeter.process(buffer)
+            sink.consume(buffer)
+        }
+        isTapInstalled = true
+        return format
+    }
+
+    func start() throws {
+        guard !engine.isRunning else { return }
+        engine.prepare()
+        try engine.start()
+    }
+
+    func resume() throws {
+        try engine.start()
+    }
+
+    func pause() -> Bool {
+        guard engine.isRunning else { return false }
+        engine.pause()
+        return true
+    }
+
+    func reset() {
+        if isTapInstalled {
+            engine.inputNode.removeTap(onBus: 0)
+            isTapInstalled = false
+        }
+        engine.stop()
+        engine = AVAudioEngine()
     }
 }
