@@ -1,4 +1,4 @@
-# Google Maps and Navigation SDKs 11.1.0
+# Google Maps and Navigation SDKs 11.2.0
 
 The Swift package wrappers are Apache-2.0. The binary SDKs are provided under the Google Maps Platform terms, not the wrappers' license. See https://cloud.google.com/maps-platform/terms and https://developers.google.com/maps/documentation/navigation/ios-sdk/policies. Applications must display the SDK-provided attribution and legal notices.
 
@@ -12990,13 +12990,11 @@ This software is partially based on mathfu:
 
 This software is partially based on minizip:
 
-zlib
-
-(extracted from README, except for match.S)
+BEGIN _LICENSE
 
 Copyright notice:
 
- (C) 1995-2004 Jean-loup Gailly and Mark Adler
+ (C) 1995-2026 Jean-loup Gailly and Mark Adler
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -13018,25 +13016,73 @@ Copyright notice:
   jloup@gzip.org          madler@alumni.caltech.edu
 
 
-(extracted from match.S, for match.S only)
+END _LICENSE
 
- Copyright (C) 1998, 2007 Brian Raiter <breadbox@muppetlabs.com>
+------------------
 
- This software is provided 'as-is', without any express or implied
- warranty.  In no event will the author be held liable for any damages
- arising from the use of this software.
+BEGIN LICENSE.Info-Zip
 
- Permission is granted to anyone to use this software for any purpose,
- including commercial applications, and to alter it and redistribute it
- freely, subject to the following restrictions:
+This is version 2009-Jan-02 of the Info-ZIP license. The definitive version of
+this document should be available at ftp://ftp.info-
+zip.org/pub/infozip/license.html indefinitely and a copy at http://www.info-
+zip.org/pub/infozip/license.html.
 
- 1. The origin of this software must not be misrepresented; you must not
-    claim that you wrote the original software. If you use this software
-    in a product, an acknowledgment in the product documentation would be
-    appreciated but is not required.
- 2. Altered source versions must be plainly marked as such, and must not be
-    misrepresented as being the original software.
- 3. This notice may not be removed or altered from any source distribution.
+Copyright (c) 1990-2009 Info-ZIP. All rights reserved.
+
+For the purposes of this copyright and license, "Info-ZIP" is defined as the
+following set of individuals:
+
+    Mark Adler, John Bush, Karl Davis, Harald Denker, Jean-Michel Dubois, Jean-
+    loup Gailly, Hunter Goatley, Ed Gordon, Ian Gorman, Chris Herborth, Dirk
+    Haase, Greg Hartwig, Robert Heath, Jonathan Hudson, Paul Kienitz, David
+    Kirschbaum, Johnny Lee, Onno van der Linden, Igor Mandrichenko, Steve P.
+    Miller, Sergio Monesi, Keith Owens, George Petrov, Greg Roelofs, Kai Uwe
+    Rommel, Steve Salisbury, Dave Smith, Steven M. Schweda, Christian Spieler,
+    Cosmin Truta, Antoine Verheijen, Paul von Behren, Rich Wales, Mike White.
+
+This software is provided "as is," without warranty of any kind, express or
+implied. In no event shall Info-ZIP or its contributors be held liable for any
+direct, indirect, incidental, special or consequential damages arising out of
+the use of or inability to use this software.
+
+Permission is granted to anyone to use this software for any purpose, including
+commercial applications, and to alter it and redistribute it freely, subject to
+the above disclaimer and the following restrictions:
+
+    Redistributions of source code (in whole or in part) must retain the above
+    copyright notice, definition, disclaimer, and this list of conditions.
+
+    Redistributions in binary form (compiled executables and libraries) must
+    reproduce the above copyright notice, definition, disclaimer, and this list
+    of conditions in documentation and/or other materials provided with the
+    distribution. Additional documentation is not needed for executables where a
+    command line license option provides these and a note regarding this option
+    is in the executable's startup banner. The sole exception to this condition
+    is redistribution of a standard UnZipSFX binary (including SFXWiz) as part
+    of a self-extracting archive; that is permitted without inclusion of this
+    license, as long as the normal SFX banner has not been removed from the
+    binary or disabled.
+
+    Altered versions--including, but not limited to, ports to new operating
+    systems, existing ports with new graphical interfaces, versions with
+    modified or added functionality, and dynamic, shared, or static library
+    versions not from Info-ZIP--must be plainly marked as such and must not be
+    misrepresented as being the original source or, if binaries, compiled from
+    the original source. Such altered versions also must not be misrepresented
+    as being Info-ZIP releases--including, but not limited to, labeling of the
+    altered versions with the names "Info-ZIP" (or any variation thereof,
+    including, but not limited to, different capitalizations), "Pocket UnZip,"
+    "WiZ" or "MacZip" without the explicit permission of Info-ZIP. Such altered
+    versions are further prohibited from misrepresentative use of the Zip-Bugs
+    or Info-ZIP e-mail addresses or the Info-ZIP URL(s), such as to imply Info-
+    ZIP will provide support for the altered versions.
+
+    Info-ZIP retains the right to use the names "Info-ZIP," "Zip," "UnZip,"
+    "UnZipSFX," "WiZ," "Pocket UnZip," "Pocket Zip," and "MacZip" for its own
+    source and binary releases.
+
+
+END LICENSE.Info-Zip
 
 This software is partially based on mobiledatadownload:
 
@@ -27358,13 +27404,11 @@ This software is partially based on mathfu:
 
 This software is partially based on minizip:
 
-zlib
-
-(extracted from README, except for match.S)
+BEGIN _LICENSE
 
 Copyright notice:
 
- (C) 1995-2004 Jean-loup Gailly and Mark Adler
+ (C) 1995-2026 Jean-loup Gailly and Mark Adler
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -27386,25 +27430,73 @@ Copyright notice:
   jloup@gzip.org          madler@alumni.caltech.edu
 
 
-(extracted from match.S, for match.S only)
+END _LICENSE
 
- Copyright (C) 1998, 2007 Brian Raiter <breadbox@muppetlabs.com>
+------------------
 
- This software is provided 'as-is', without any express or implied
- warranty.  In no event will the author be held liable for any damages
- arising from the use of this software.
+BEGIN LICENSE.Info-Zip
 
- Permission is granted to anyone to use this software for any purpose,
- including commercial applications, and to alter it and redistribute it
- freely, subject to the following restrictions:
+This is version 2009-Jan-02 of the Info-ZIP license. The definitive version of
+this document should be available at ftp://ftp.info-
+zip.org/pub/infozip/license.html indefinitely and a copy at http://www.info-
+zip.org/pub/infozip/license.html.
 
- 1. The origin of this software must not be misrepresented; you must not
-    claim that you wrote the original software. If you use this software
-    in a product, an acknowledgment in the product documentation would be
-    appreciated but is not required.
- 2. Altered source versions must be plainly marked as such, and must not be
-    misrepresented as being the original software.
- 3. This notice may not be removed or altered from any source distribution.
+Copyright (c) 1990-2009 Info-ZIP. All rights reserved.
+
+For the purposes of this copyright and license, "Info-ZIP" is defined as the
+following set of individuals:
+
+    Mark Adler, John Bush, Karl Davis, Harald Denker, Jean-Michel Dubois, Jean-
+    loup Gailly, Hunter Goatley, Ed Gordon, Ian Gorman, Chris Herborth, Dirk
+    Haase, Greg Hartwig, Robert Heath, Jonathan Hudson, Paul Kienitz, David
+    Kirschbaum, Johnny Lee, Onno van der Linden, Igor Mandrichenko, Steve P.
+    Miller, Sergio Monesi, Keith Owens, George Petrov, Greg Roelofs, Kai Uwe
+    Rommel, Steve Salisbury, Dave Smith, Steven M. Schweda, Christian Spieler,
+    Cosmin Truta, Antoine Verheijen, Paul von Behren, Rich Wales, Mike White.
+
+This software is provided "as is," without warranty of any kind, express or
+implied. In no event shall Info-ZIP or its contributors be held liable for any
+direct, indirect, incidental, special or consequential damages arising out of
+the use of or inability to use this software.
+
+Permission is granted to anyone to use this software for any purpose, including
+commercial applications, and to alter it and redistribute it freely, subject to
+the above disclaimer and the following restrictions:
+
+    Redistributions of source code (in whole or in part) must retain the above
+    copyright notice, definition, disclaimer, and this list of conditions.
+
+    Redistributions in binary form (compiled executables and libraries) must
+    reproduce the above copyright notice, definition, disclaimer, and this list
+    of conditions in documentation and/or other materials provided with the
+    distribution. Additional documentation is not needed for executables where a
+    command line license option provides these and a note regarding this option
+    is in the executable's startup banner. The sole exception to this condition
+    is redistribution of a standard UnZipSFX binary (including SFXWiz) as part
+    of a self-extracting archive; that is permitted without inclusion of this
+    license, as long as the normal SFX banner has not been removed from the
+    binary or disabled.
+
+    Altered versions--including, but not limited to, ports to new operating
+    systems, existing ports with new graphical interfaces, versions with
+    modified or added functionality, and dynamic, shared, or static library
+    versions not from Info-ZIP--must be plainly marked as such and must not be
+    misrepresented as being the original source or, if binaries, compiled from
+    the original source. Such altered versions also must not be misrepresented
+    as being Info-ZIP releases--including, but not limited to, labeling of the
+    altered versions with the names "Info-ZIP" (or any variation thereof,
+    including, but not limited to, different capitalizations), "Pocket UnZip,"
+    "WiZ" or "MacZip" without the explicit permission of Info-ZIP. Such altered
+    versions are further prohibited from misrepresentative use of the Zip-Bugs
+    or Info-ZIP e-mail addresses or the Info-ZIP URL(s), such as to imply Info-
+    ZIP will provide support for the altered versions.
+
+    Info-ZIP retains the right to use the names "Info-ZIP," "Zip," "UnZip,"
+    "UnZipSFX," "WiZ," "Pocket UnZip," "Pocket Zip," and "MacZip" for its own
+    source and binary releases.
+
+
+END LICENSE.Info-Zip
 
 This software is partially based on mobiledatadownload:
 
