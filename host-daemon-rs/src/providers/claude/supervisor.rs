@@ -723,7 +723,7 @@ impl ClaudeSupervisor {
             () = self.restart_capture_overdue.cancelled() => {
                 warn!(
                     method = ?notification.get("method"),
-                    "Claude restart capture stopped waiting for notification delivery; clients reread this notification from history"
+                    "Claude restart capture stopped waiting for notification delivery and dropped this notification; clients see it again only if history recorded it"
                 );
                 return Ok(());
             }
