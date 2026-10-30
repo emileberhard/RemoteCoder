@@ -53,7 +53,7 @@ struct ComposerSurfaceLayout: Layout {
         precondition(subviews.count == 1)
         let surface = subviews[0]
         let width = proposal.width.flatMap { $0.isFinite ? $0 : nil } ?? minimumInlineWidth
-        let size = surface.sizeThatFits(ProposedViewSize(width: width - inset(width) * 2, height: proposal.height))
+        let size = surface.sizeThatFits(ProposedViewSize(width: width - inset(width) * 2, height: nil))
         return CGSize(width: width, height: size.height)
     }
 
@@ -62,7 +62,7 @@ struct ComposerSurfaceLayout: Layout {
         let surface = subviews[0]
         let inset = inset(bounds.width)
         surface.place(at: CGPoint(x: bounds.minX + inset, y: bounds.minY), anchor: .topLeading,
-                      proposal: ProposedViewSize(width: bounds.width - inset * 2, height: bounds.height))
+                      proposal: ProposedViewSize(width: bounds.width - inset * 2, height: nil))
     }
 
     private func inset(_ width: CGFloat) -> CGFloat {
