@@ -43,23 +43,42 @@ pub(super) fn codex(
     models: &[Model],
 ) -> Result<ExecutionSettings> {
     let normalized = input.to_ascii_lowercase();
-    let requested_family = normalized
+    let newest = |requested: &str| {
+        models
+            .iter()
+            .filter_map(|model| {
+                if model.model_provider.is_some() {
+                    return None;
+                }
+                let (version, candidate) = family(&model.model)?;
+                (candidate == requested).then_some((version, model))
+            })
+            .max_by(|(left, _), (right, _)| left.cmp(right))
+            .map(|(_, model)| model)
+    };
+    let external = models
+        .iter()
+        .find(|model| model.model_provider.is_some() && model.id == input);
+    let selected = if normalized == "codex-daybreak-blue" {
+        models
+            .iter()
+            .find(|model| model.model_provider.is_none() && model.model == "gpt-6-sol")
+    } else if let Some(requested) = normalized
         .strip_prefix("codex-")
         .filter(|family| is_family_name(family))
-        .or_else(|| family(&normalized).map(|(_, family)| family));
-    let selected = if normalized == "codex-daybreak-blue" {
-        models.iter().find(|model| model.model_provider.is_none() && model.model == "gpt-6-sol")
-    } else if let Some(requested_family) = requested_family {
-        models.iter().filter_map(|model| {
-            if model.model_provider.is_some() {
-                return None;
-            }
-            let (version, candidate_family) = family(&model.model)?;
-            (candidate_family == requested_family).then_some((version, model))
-        }).max_by(|(left, _), (right, _)| left.cmp(right)).map(|(_, model)| model)
+    {
+        newest(requested)
+    } else if let Some((_, requested)) = family(&normalized) {
+        let native = newest(requested);
+        ensure!(
+            native.is_none() || external.is_none(),
+            "Model {input:?} names both an external model and the native {requested} family; use codex-{requested} for the native model"
+        );
+        native.or(external)
     } else {
-        models.iter().find(|model| model.model_provider.is_some() && model.id == input)
-    }.with_context(|| {
+        external
+    }
+    .with_context(|| {
         let mut families: Vec<_> = models.iter().filter(|model| model.model_provider.is_none()).filter_map(|model| family(&model.model).map(|(_, family)| format!("codex-{family}"))).collect();
         families.sort();
         families.dedup();
@@ -160,6 +179,27 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(error.contains("codex-sol, codex-terra"));
+    }
+
+    #[test]
+    fn an_exact_external_id_keeps_its_provider_unless_a_native_family_shares_it() {
+        let mut models = catalog();
+        models.extend(serde_json::from_value::<Vec<Model>>(serde_json::json!([
+            {"id":"gpt-6.1-nova","model":"gpt-6.1-nova","modelProvider":"relay","supportedReasoningEfforts":[{"reasoningEffort":"none"}],"defaultReasoningEffort":"none"},
+            {"id":"gpt-6.2-sol","model":"gpt-6.2-sol","modelProvider":"relay","supportedReasoningEfforts":[{"reasoningEffort":"none"}],"defaultReasoningEffort":"none"}
+        ])).unwrap());
+        assert_eq!(
+            codex("gpt-6.1-nova", None, None, &models).unwrap(),
+            ExecutionSettings::Codex {
+                model: "gpt-6.1-nova".into(),
+                model_provider: "relay".into(),
+                effort: "none".into(),
+                service_tier: None,
+                cyber_access_program: None,
+            }
+        );
+        assert!(codex("gpt-6.2-sol", None, None, &models).is_err());
+        assert!(codex("codex-sol", None, None, &models).is_ok());
     }
 
     #[test]
