@@ -8,6 +8,7 @@ final class PerformanceReplayHTTP: URLProtocol, @unchecked Sendable {
         var responses: [String: (Int, Data)] = [:]
         var requests: [String: Int] = [:]
         var blockedExternal = 0
+        var unrecordedHealthRequests = 0
         var missing: Set<String> = []
         var omittedSiteIcons = 0
         var omittedVisuals = 0
@@ -45,8 +46,8 @@ final class PerformanceReplayHTTP: URLProtocol, @unchecked Sendable {
         state.withLock { $0 = State(responses: encoded, telemetryDirectory: telemetryDirectory) }
     }
 
-    static func diagnostics() -> (requests: [String: Int], missing: [String], blockedExternal: Int) {
-        state.withLock { ($0.requests, $0.missing.sorted(), $0.blockedExternal) }
+    static func diagnostics() -> (requests: [String: Int], missing: [String], blockedExternal: Int, unrecordedHealthRequests: Int) {
+        state.withLock { ($0.requests, $0.missing.sorted(), $0.blockedExternal, $0.unrecordedHealthRequests) }
     }
 
     override class func canInit(with request: URLRequest) -> Bool {
@@ -66,8 +67,13 @@ final class PerformanceReplayHTTP: URLProtocol, @unchecked Sendable {
         let captured = Self.state.withLock { state -> (Int, Data)? in
             guard loopback else { state.blockedExternal += 1; return nil }
             state.requests[key, default: 0] += 1
-            if state.responses[key] == nil { state.missing.insert(key) }
-            return state.responses[key]
+            if let response = state.responses[key] { return response }
+            if key == "GET /health" {
+                state.unrecordedHealthRequests += 1
+                return (404, Data("{}".utf8))
+            }
+            state.missing.insert(key)
+            return nil
         }
         guard let (status, data) = captured,
               let response = HTTPURLResponse(url: url, statusCode: status, httpVersion: "HTTP/1.1",

@@ -16,6 +16,11 @@ reads requested history pages from indexed files instead of retaining the whole
 library. All replay code is guarded by `RC_PERF_HARNESS`; shipping behavior and
 production storage budgets remain unchanged. No inference or installed gateway
 is used by `scenario`, and uncaptured HTTP/RPC or external visual loads fail it.
+The one fixture-server default is an unrecorded loopback `GET /health`: it
+returns HTTP 404, keeping verified gateway identity unavailable in older frozen
+fixtures. An explicit recorded response always wins. Reports count defaults
+served as `unrecordedHealthRequests`; the fixture bytes and digest stay unchanged.
+This permits 3.76+ identity reads without modifying a frozen comparison workload.
 
 The existing `perf-sim` runner owns source/artifact and device leases. A scenario
 reserves both compiler slots separately for each complete repeat, including

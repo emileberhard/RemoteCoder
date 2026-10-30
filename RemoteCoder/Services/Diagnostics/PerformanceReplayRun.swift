@@ -122,6 +122,7 @@ final class PerformanceReplayRun {
             let http = PerformanceReplayHTTP.diagnostics()
             report["httpRequests"] = http.requests
             report["uncapturedHTTP"] = http.missing
+            report["unrecordedHealthRequests"] = http.unrecordedHealthRequests
             report["blockedExternalHTTP"] = http.blockedExternal
             report["omittedSiteIconFetches"] = PerformanceReplayHTTP.omittedSiteIconFetches
             report["omittedVisualFetches"] = PerformanceReplayHTTP.omittedVisualFetches

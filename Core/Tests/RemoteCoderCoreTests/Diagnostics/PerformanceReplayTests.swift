@@ -337,6 +337,20 @@ import Testing
         #expect(diagnostics.requests == ["GET /accounts": 1])
         #expect(diagnostics.blockedExternal == 1)
         #expect(diagnostics.missing.isEmpty)
+        let health = try #require(URL(string: "http://127.0.0.1:1/health"))
+        let (_, missingHealth) = try await session.data(from: health)
+        #expect((missingHealth as? HTTPURLResponse)?.statusCode == 404)
+        #expect(PerformanceReplayHTTP.diagnostics().unrecordedHealthRequests == 1)
+        #expect(PerformanceReplayHTTP.diagnostics().missing.isEmpty)
+        let unknown = try #require(URL(string: "http://127.0.0.1:1/uncaptured"))
+        await #expect(throws: URLError.self) { try await session.data(from: unknown) }
+        #expect(PerformanceReplayHTTP.diagnostics().missing == ["GET /uncaptured"])
+        try PerformanceReplayHTTP.install(["GET /health": .object(["status": .number(200),
+            "body": .object(["captured": .bool(true)])])])
+        let (healthBody, capturedHealth) = try await session.data(from: health)
+        #expect((capturedHealth as? HTTPURLResponse)?.statusCode == 200)
+        #expect(try JSONDecoder().decode(JSONValue.self, from: healthBody) == .object(["captured": .bool(true)]))
+        #expect(PerformanceReplayHTTP.diagnostics().unrecordedHealthRequests == 0)
         let directory = URL.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         try PerformanceReplayHTTP.install(["POST /app-logs": .object(["status": .number(200), "body": .object([:])])], telemetryDirectory: directory)
