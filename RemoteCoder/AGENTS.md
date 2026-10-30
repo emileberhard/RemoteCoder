@@ -346,8 +346,9 @@ entrypoint linked above.
   - Each host's `GatewayRoutes` orders the gateway's published `lanEndpoint`
     first on Wi-Fi or Ethernet, then the configured address, then the relay.
     `GatewayNetworkMonitor` shares one path monitor across route owners and stops
-    it after the last retires. Only status, used interface types and LAN
-    availability change routing identity; other path churn preserves penalties.
+    it after the last retires. Status, used interface types, LAN availability
+    and gateways while using Wi-Fi/Ethernet change routing identity; cellular
+    gateway churn preserves penalties.
     `GatewayClient` races them, replaces a stalled route with a standby
     connection, and hands idle connections to a preferred route on connect,
     foreground, the idle edge, every network path change and every 30 s off

@@ -20,11 +20,25 @@ struct GatewayRoutePolicyTests {
     }
 
     @Test func routingPathIdentityUsesAvailabilityAndInterfaceTypes() {
-        let cellular = GatewayRoutingPath(status: .satisfied, interfaceTypes: [.cellular], localNetworkAvailable: false)
-        #expect(cellular == GatewayRoutingPath(status: .satisfied, interfaceTypes: [.cellular, .cellular], localNetworkAvailable: false))
-        #expect(cellular != GatewayRoutingPath(status: .unsatisfied, interfaceTypes: [.cellular], localNetworkAvailable: false))
-        #expect(cellular != GatewayRoutingPath(status: .satisfied, interfaceTypes: [.wifi], localNetworkAvailable: false))
-        #expect(cellular != GatewayRoutingPath(status: .satisfied, interfaceTypes: [.cellular], localNetworkAvailable: true))
+        let cellular = GatewayRoutingPath(status: .satisfied, interfaceTypes: [.cellular], localNetworkAvailable: false, gateways: [])
+        #expect(cellular == GatewayRoutingPath(status: .satisfied, interfaceTypes: [.cellular, .cellular], localNetworkAvailable: false, gateways: []))
+        #expect(cellular != GatewayRoutingPath(status: .unsatisfied, interfaceTypes: [.cellular], localNetworkAvailable: false, gateways: []))
+        #expect(cellular != GatewayRoutingPath(status: .satisfied, interfaceTypes: [.wifi], localNetworkAvailable: false, gateways: []))
+        #expect(cellular != GatewayRoutingPath(status: .satisfied, interfaceTypes: [.cellular], localNetworkAvailable: true, gateways: []))
+    }
+
+    @Test func localNetworkGatewaysDistinguishWiFiHandoffsButNotCellularChurn() {
+        let home: [NWEndpoint] = [.hostPort(host: "192.0.2.1", port: 0)]
+        let office: [NWEndpoint] = [.hostPort(host: "198.51.100.1", port: 0)]
+        let wifiHome = GatewayRoutingPath(status: .satisfied, interfaceTypes: [.wifi], localNetworkAvailable: true, gateways: home)
+        let wifiOffice = GatewayRoutingPath(status: .satisfied, interfaceTypes: [.wifi], localNetworkAvailable: true, gateways: office)
+        #expect(wifiHome != wifiOffice)
+        let wiredHome = GatewayRoutingPath(status: .satisfied, interfaceTypes: [.wiredEthernet], localNetworkAvailable: true, gateways: home)
+        let wiredOffice = GatewayRoutingPath(status: .satisfied, interfaceTypes: [.wiredEthernet], localNetworkAvailable: true, gateways: office)
+        #expect(wiredHome != wiredOffice)
+        let cellularHome = GatewayRoutingPath(status: .satisfied, interfaceTypes: [.cellular], localNetworkAvailable: false, gateways: home)
+        let cellularOffice = GatewayRoutingPath(status: .satisfied, interfaceTypes: [.cellular], localNetworkAvailable: false, gateways: office)
+        #expect(cellularHome == cellularOffice)
     }
 
     @Test func offersLANOnlyWithALearnedEndpointOnALocalNetwork() {

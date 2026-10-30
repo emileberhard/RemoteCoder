@@ -96,17 +96,20 @@ struct GatewayRoutingPath: Equatable, Sendable {
     let status: NWPath.Status
     let interfaceTypes: [NWInterface.InterfaceType]
     let localNetworkAvailable: Bool
+    let localGateways: [NWEndpoint]
 
-    init(status: NWPath.Status, interfaceTypes: [NWInterface.InterfaceType], localNetworkAvailable: Bool) {
+    init(status: NWPath.Status, interfaceTypes: [NWInterface.InterfaceType], localNetworkAvailable: Bool, gateways: [NWEndpoint]) {
         self.status = status
         self.interfaceTypes = [.wifi, .cellular, .wiredEthernet, .loopback, .other].filter { interfaceTypes.contains($0) }
         self.localNetworkAvailable = localNetworkAvailable
+        localGateways = self.interfaceTypes.contains(.wifi) || self.interfaceTypes.contains(.wiredEthernet) ? gateways : []
     }
 
     init(_ path: NWPath) {
         self.init(status: path.status,
                   interfaceTypes: [.wifi, .cellular, .wiredEthernet, .loopback, .other].filter { path.usesInterfaceType($0) },
-                  localNetworkAvailable: path.availableInterfaces.contains { $0.type == .wifi || $0.type == .wiredEthernet })
+                  localNetworkAvailable: path.availableInterfaces.contains { $0.type == .wifi || $0.type == .wiredEthernet },
+                  gateways: path.gateways)
     }
 }
 
