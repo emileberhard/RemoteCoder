@@ -34,16 +34,8 @@ pub(crate) struct Lease(std::fs::File);
 
 impl Lease {
     pub(crate) fn try_acquire(paths: &HostPaths) -> Result<Option<Self>> {
-        use std::os::unix::fs::OpenOptionsExt;
         crate::storage::private_state::ensure_private_directory(&paths.state_directory())?;
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .read(true)
-            .write(true)
-            .custom_flags(libc::O_NOFOLLOW)
-            .mode(0o600)
-            .open(paths.state("gateway-installation.lock"))?;
+        let file = crate::storage::lock_file::open(&paths.state("gateway-installation.lock"))?;
         match file.try_lock() {
             Ok(()) => Ok(Some(Self(file))),
             Err(std::fs::TryLockError::WouldBlock) => Ok(None),

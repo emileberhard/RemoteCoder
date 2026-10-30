@@ -41,16 +41,9 @@ fn read_saved(path: &Path) -> Result<Saved> {
 }
 
 pub(crate) fn save(home: &Path, root: &str, generation: u128, snapshot: Projection) -> Result<()> {
-    use std::os::unix::fs::OpenOptionsExt;
     let path = state_path(home, root)?;
     std::fs::create_dir_all(path.parent().context("Missing index directory")?)?;
-    let lock = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .mode(0o600)
-        .open(path.with_extension("lock"))?;
+    let lock = crate::storage::lock_file::open(&path.with_extension("lock"))?;
     lock.lock()?;
     let mut current = read_saved(&path)?;
     if current.generation > generation {

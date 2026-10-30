@@ -334,14 +334,7 @@ async fn sync_owned(
         crate::storage::private_state::ensure_private_directory(&root)?;
     }
     use std::os::unix::fs::OpenOptionsExt;
-    let lock = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(root.join(".lock"))?;
+    let lock = crate::storage::lock_file::open(&root.join(".lock"))?;
     let _mirror_lease = super::storage::Lease::acquire(lock)
         .context("Mirror is already owned by another worker")?;
     let saved: Option<(String, i64, bool)> = store

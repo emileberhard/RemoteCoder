@@ -7,8 +7,7 @@ pub(crate) mod messages;
 mod cluster_tests;
 
 use std::collections::{BTreeMap, HashMap};
-use std::fs::{File, OpenOptions};
-use std::os::unix::fs::OpenOptionsExt;
+use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -58,14 +57,7 @@ impl JobStore {
     pub(crate) async fn open(root: PathBuf) -> Result<Self> {
         tokio::task::spawn_blocking(move || {
             private_state::ensure_private_directory(&root)?;
-            let lease = OpenOptions::new()
-                .read(true)
-                .write(true)
-                .create(true)
-                .truncate(false)
-                .mode(0o600)
-                .custom_flags(libc::O_NOFOLLOW)
-                .open(root.join("owner.lock"))?;
+            let lease = crate::storage::lock_file::open(&root.join("owner.lock"))?;
             lease.try_lock().context("another process owns the delegated-job store")?;
             let mut inner = Inner { root, _lease: lease, indexes: indexes::Indexes::default(), jobs: HashMap::new(), agents: HashMap::new(), parents:Default::default(), uncertainties: Vec::new(), messages: BTreeMap::new(), intents: BTreeMap::new(), fences: BTreeMap::new() };
             for name in ["jobs", "agents", "evidence", "uncertainties", "messages", "remote-intents", "cancel-fences"] {

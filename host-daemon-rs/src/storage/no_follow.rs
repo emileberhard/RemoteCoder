@@ -304,6 +304,7 @@ impl Root {
                         | libc::O_CREAT
                         | libc::O_NOFOLLOW
                         | libc::O_CLOEXEC
+                        | super::lock_file::O_CLOFORK
                         | libc::O_NONBLOCK,
                     0o600,
                 )

@@ -83,7 +83,6 @@ impl Registry {
 }
 
 fn commit_lock(path: &Path) -> Result<std::fs::File> {
-    use std::os::unix::fs::OpenOptionsExt;
     let parent = path.parent().context("Account registry has no parent")?;
     match std::fs::symlink_metadata(parent) {
         Ok(metadata) => {
@@ -95,14 +94,7 @@ fn commit_lock(path: &Path) -> Result<std::fs::File> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => private_directory(parent)?,
         Err(error) => return Err(error).context("Reading account registry parent"),
     }
-    let lock = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .custom_flags(libc::O_NOFOLLOW)
-        .mode(0o600)
-        .open(path.with_extension("commit.lock"))?;
+    let lock = crate::storage::lock_file::open(&path.with_extension("commit.lock"))?;
     lock.lock()?;
     Ok(lock)
 }

@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -416,13 +416,7 @@ impl RecoveryStore {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
         std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))?;
-        let lock = std::fs::OpenOptions::new()
-            .create(true)
-            .read(true)
-            .write(true)
-            .custom_flags(libc::O_NOFOLLOW)
-            .mode(0o600)
-            .open(&self.lock_path)
+        let lock = crate::storage::lock_file::open(&self.lock_path)
             .with_context(|| format!("failed to open {}", self.lock_path.display()))?;
         lock.lock()
             .with_context(|| format!("failed to lock {}", self.lock_path.display()))?;

@@ -1,5 +1,6 @@
 mod content_store;
 pub(crate) mod file_revision;
+pub(crate) mod lock_file;
 pub(crate) mod no_follow;
 pub(crate) mod private_document;
 pub(crate) mod private_state;

@@ -1,7 +1,6 @@
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
-use std::fs::{File, OpenOptions};
-use std::os::unix::fs::OpenOptionsExt;
+use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
@@ -186,14 +185,7 @@ impl Storage {
 
     pub fn lease(&self, incoming: u64) -> Result<Lease> {
         let permit = self.gate.enter()?;
-        let lock = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(self.path(".storage.lock"))?;
+        let lock = crate::storage::lock_file::open(&self.path(".storage.lock"))?;
         let mut lock = Lease::acquire(lock)
             .context("unavailable: another session writer owns the storage budget")?;
         lock._permit = Some(permit);

@@ -70,14 +70,7 @@ pub(crate) fn transaction<D, T>(
 ) -> Result<T> {
     let parent = path.parent().context(parent_error)?;
     ensure_private_directory(parent)?;
-    let lock = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .custom_flags(libc::O_NOFOLLOW)
-        .mode(0o600)
-        .open(path.with_extension("lock"))?;
+    let lock = super::lock_file::open(&path.with_extension("lock"))?;
     lock.lock()?;
     let mut document = load(path)?;
     let (result, changed) = operation(&mut document)?;

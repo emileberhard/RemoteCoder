@@ -494,11 +494,8 @@ mod tests {
             128
         );
         gateway.stop_sessions().await;
-        let file = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(root.join("sessions/v1/.storage.lock"))
-            .unwrap();
+        let file =
+            crate::storage::lock_file::open(&root.join("sessions/v1/.storage.lock")).unwrap();
         let _lease = crate::sessions::storage::Lease::acquire(file).unwrap();
         assert!(gateway.session_inventory(None, 1).await.is_err());
 
@@ -581,11 +578,7 @@ mod tests {
             .join("sessions/v1");
         drop(gateway);
         let gateway = crate::test_support::TestGateway::with_native_runtime(directory.path());
-        let file = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(root.join(".storage.lock"))
-            .unwrap();
+        let file = crate::storage::lock_file::open(&root.join(".storage.lock")).unwrap();
         let lease = crate::sessions::storage::Lease::acquire(file).unwrap();
         for (method, params) in [
             ("agent/cluster/inventory", json!({"limit":100})),

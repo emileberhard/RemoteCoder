@@ -6,7 +6,7 @@ use crate::runtime::rpc::RpcClient;
 use crate::runtime::transaction::{RecoveryTransaction, suspend_captured_tasks};
 use anyhow::{Context, Result, bail, ensure};
 use std::fs::File;
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::PermissionsExt;
 use std::time::Duration;
 use tracing::warn;
 
@@ -131,13 +131,7 @@ impl RuntimeLease {
         let parent = path.parent().context("transaction lock has no parent")?;
         std::fs::create_dir_all(parent)?;
         std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))?;
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .read(true)
-            .write(true)
-            .custom_flags(libc::O_NOFOLLOW)
-            .mode(0o600)
-            .open(&path)
+        let file = crate::storage::lock_file::open(&path)
             .with_context(|| format!("failed to open {}", path.display()))?;
         match file.try_lock() {
             Ok(()) => {}

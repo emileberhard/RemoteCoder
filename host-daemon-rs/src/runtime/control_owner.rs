@@ -1,7 +1,6 @@
 use super::recovery::RecoveryStore;
 use anyhow::{Context, Result};
 use std::fs::File;
-use std::os::unix::fs::OpenOptionsExt;
 use std::time::Duration;
 
 pub(crate) struct ControlOwnerLease {
@@ -23,13 +22,7 @@ impl ControlOwnerLease {
         let path = store.path().with_extension("control.lock");
         let parent = path.parent().context("control owner lock has no parent")?;
         crate::storage::private_state::ensure_private_directory(parent)?;
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .read(true)
-            .write(true)
-            .custom_flags(libc::O_NOFOLLOW)
-            .mode(0o600)
-            .open(&path)
+        let file = crate::storage::lock_file::open(&path)
             .with_context(|| format!("opening control owner lock {}", path.display()))?;
         match file.try_lock() {
             Ok(()) => Ok(Some(Self { file })),
