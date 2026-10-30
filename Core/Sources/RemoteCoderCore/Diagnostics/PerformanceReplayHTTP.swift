@@ -114,6 +114,7 @@ final class PerformanceReplayHTTP: URLProtocol, @unchecked Sendable {
                 guard let size = try file.resourceValues(forKeys: [.fileSizeKey]).fileSize, size <= 4 * 1_048_576 else { continue }
                 retainTelemetry(GzipEncoding.gzipped(try Data(contentsOf: file)))
             }
+        } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
         } catch {
             state.withLock { if $0.telemetryFailures.count < 16 { $0.telemetryFailures.append("Could not read pending telemetry uploads") } }
         }
