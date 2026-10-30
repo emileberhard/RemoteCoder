@@ -130,7 +130,7 @@ actor FakeGatewayServer {
             ready = continuation
             listener.stateUpdateHandler = { [weak self] state in Task { await self?.listenerChanged(state) } }
             listener.newConnectionHandler = { [weak self] connection in Task { await self?.accept(connection) } }
-            listener.start(queue: .global(qos: .utility))
+            listener.start(queue: .global(qos: .userInitiated))
         }
     }
 
@@ -334,7 +334,7 @@ actor FakeGatewayServer {
         guard peers.count < 16 else { connection.cancel(); return }
         connectionCount += 1
         peers[ObjectIdentifier(connection)] = Peer(connection)
-        connection.start(queue: .global(qos: .utility))
+        connection.start(queue: .global(qos: .userInitiated))
         receive(connection)
     }
 
