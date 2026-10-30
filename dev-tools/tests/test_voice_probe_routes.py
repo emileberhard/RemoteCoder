@@ -26,10 +26,13 @@ s=json.loads(p.read_text())
 a=sys.argv[1:]
 s["calls"].append(a)
 route=a[a.index("-t")+1]
-if "-a" in a: print("BlackHole 2ch")
-elif "-c" in a: print(s[route])
-elif "-s" in a:
- name=a[a.index("-s")+1]
+devices=[{"name":n,"id":str(i),"uid":"uid-"+n} for i,n in enumerate(["Fixture microphone","Fixture speakers","BlackHole 2ch"])]
+show=lambda d: json.dumps(d) if "-f" in a else d["name"]
+if "-a" in a:
+ for d in devices: print(show(d))
+elif "-c" in a: print(show(next(d for d in devices if d["name"]==s[route])))
+else:
+ name=a[a.index("-s")+1] if "-s" in a else next(d["name"] for d in devices if d["id"]==a[a.index("-i")+1])
  if os.environ.get("PROBE_FAIL_RESTORE")=="1" and name=="Fixture speakers":
   p.write_text(json.dumps(s)); sys.exit(1)
  s[route]=name
@@ -48,11 +51,41 @@ out.write_text("#!/usr/bin/env python3\\nimport json,os\\nfrom pathlib import Pa
 out.chmod(0o700)
 """)
     compiler.chmod(0o700)
-    framework = (
-        tmp_path
-        / "Library/Developer/Xcode/DerivedData/Fixture/SourcePackages/artifacts/webrtc/WebRTC/WebRTC.xcframework/macos-x86_64_arm64/WebRTC.framework"
+    resolved = json.loads(
+        (
+            TOOLS.parent
+            / "RemoteCoder.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved"
+        ).read_text()
     )
+    revision = next(
+        pin["state"]["revision"] for pin in resolved["pins"] if pin["identity"] == "webrtc"
+    )
+    packages = tmp_path / "Library/Developer/Xcode/DerivedData/Fixture/SourcePackages"
+    xcframework = packages / "artifacts/webrtc/WebRTC/WebRTC.xcframework"
+    framework = xcframework / "macos-x86_64_arm64/WebRTC.framework"
     framework.mkdir(parents=True)
+    (framework / "WebRTC").touch()
+    (packages / "workspace-state.json").write_text(
+        json.dumps(
+            {
+                "object": {
+                    "dependencies": [
+                        {
+                            "packageRef": {"identity": "webrtc"},
+                            "state": {"checkoutState": {"revision": revision}},
+                        }
+                    ],
+                    "artifacts": [
+                        {
+                            "packageRef": {"identity": "webrtc"},
+                            "targetName": "WebRTC",
+                            "path": str(xcframework),
+                        }
+                    ],
+                }
+            }
+        )
+    )
     environment = {
         "HOME": str(tmp_path),
         "PATH": f"{binaries}:/usr/bin:/bin:/usr/sbin:/sbin",
@@ -74,11 +107,11 @@ def test_silent_signaling_routes_before_executable_and_restores_both(isolated_ro
     restored = json.loads(state.read_text())
     assert restored["input"] == "Fixture microphone"
     assert restored["output"] == "Fixture speakers"
-    assert [call for call in restored["calls"] if "-s" in call] == [
+    assert [call for call in restored["calls"] if "-s" in call or "-i" in call] == [
         ["-s", "BlackHole 2ch", "-t", "input"],
         ["-s", "BlackHole 2ch", "-t", "output"],
-        ["-s", "Fixture microphone", "-t", "input"],
-        ["-s", "Fixture speakers", "-t", "output"],
+        ["-t", "input", "-i", "0"],
+        ["-t", "output", "-i", "1"],
     ]
 
 
@@ -112,6 +145,7 @@ def test_restore_failure_fails_an_otherwise_successful_silent_probe(isolated_rou
         timeout=10,
     )
     assert result.returncode != 0
+    assert "Existing audio routes are unknown" not in result.stderr
     assert "FAIL restoring audio output" in result.stderr
 
 
