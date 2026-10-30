@@ -477,6 +477,7 @@ pub(crate) struct ClaudeSupervisor {
     starting: Arc<StdMutex<HashSet<String>>>,
     process_registry: Arc<StdMutex<ProcessRegistry>>,
     admitted_starts: tokio_util::task::TaskTracker,
+    restart_capture_overdue: tokio_util::sync::CancellationToken,
     reapers: tokio_util::task::TaskTracker,
     io_tasks: crate::tasks::owned_tasks::OwnedTasks,
     timers: crate::tasks::owned_tasks::OwnedTasks,
@@ -512,6 +513,7 @@ impl ClaudeSupervisor {
             starting: Arc::new(StdMutex::new(HashSet::new())),
             process_registry: Arc::default(),
             admitted_starts: tokio_util::task::TaskTracker::new(),
+            restart_capture_overdue: tokio_util::sync::CancellationToken::new(),
             reapers: tokio_util::task::TaskTracker::new(),
             io_tasks: crate::tasks::owned_tasks::OwnedTasks::default(),
             timers: crate::tasks::owned_tasks::OwnedTasks::default(),
@@ -707,19 +709,27 @@ impl ClaudeSupervisor {
 
     async fn publish(&self, recorded: RecordedNotification) {
         if let Some(warning) = recorded.persistence_warning {
-            let _ = self
-                .notifications
-                .send(ClaudeNotification::Event(warning))
-                .await;
+            let _ = self.deliver(warning).await;
         }
-        if self
-            .notifications
-            .send(ClaudeNotification::Event(recorded.notification))
-            .await
-            .is_err()
-        {
+        if self.deliver(recorded.notification).await.is_err() {
             debug!("claude notification sink closed");
         }
+    }
+
+    async fn deliver(&self, notification: Value) -> Result<(), mpsc::error::SendError<()>> {
+        let permit = tokio::select! {
+            biased;
+            permit = self.notifications.reserve() => permit?,
+            () = self.restart_capture_overdue.cancelled() => {
+                warn!(
+                    method = ?notification.get("method"),
+                    "Claude restart capture stopped waiting for notification delivery; clients reread this notification from history"
+                );
+                return Ok(());
+            }
+        };
+        permit.send(ClaudeNotification::Event(notification));
+        Ok(())
     }
 }
 

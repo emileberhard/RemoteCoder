@@ -1143,7 +1143,11 @@ scoped receipt reads require the exact sender conversation.
       runtime and is admitted (`admit_start`) where it commits its turn.
       Capture waits for every admitted start to queue its input before it
       snapshots, so it records either the untouched turn or the new turn with
-      its input, never a fold in between.
+      its input, never a fold in between. Besides the runtimes lock and index
+      transactions that capture takes itself, an admitted start waits only on
+      the notification channel. After 5 s capture stops waiting for it: a
+      supervisor notification that cannot enter the full channel is dropped
+      with a warning, and clients reread it from history.
     - Once the replacement's listener is up, it resumes each thread with
       `--resume` in the host-default profile, using the recorded cwd, model,
       effort and Fast.

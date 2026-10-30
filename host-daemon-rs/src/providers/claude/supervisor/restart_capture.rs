@@ -10,8 +10,10 @@ use crate::rpc::error::RpcCode;
 use futures_util::StreamExt;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::warn;
+
+const ADMITTED_START_GRACE: Duration = Duration::from_secs(5);
 
 pub(crate) enum ResumeDelivery {
     Started(String),
@@ -22,12 +24,27 @@ pub(crate) enum ResumeDelivery {
 
 impl ClaudeSupervisor {
     pub(crate) async fn capture_for_restart(&self) -> Vec<Item> {
+        self.capture_after_admitted_starts(ADMITTED_START_GRACE)
+            .await
+    }
+
+    pub(super) async fn capture_after_admitted_starts(&self, grace: Duration) -> Vec<Item> {
         self.process_registry
             .lock()
             .expect("Claude process registry poisoned")
             .closing = true;
         self.admitted_starts.close();
-        self.admitted_starts.wait().await;
+        if tokio::time::timeout(grace, self.admitted_starts.wait())
+            .await
+            .is_err()
+        {
+            warn!(
+                admitted = self.admitted_starts.len(),
+                "Claude restart capture stopped waiting for admitted starts' notification delivery"
+            );
+            self.restart_capture_overdue.cancel();
+            self.admitted_starts.wait().await;
+        }
         self.capture().await
     }
 

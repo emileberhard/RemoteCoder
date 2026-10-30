@@ -2157,7 +2157,11 @@ async fn restart_capture_waits_for_a_fold_admitted_before_closing_to_queue_its_i
     }
     let capture = tokio::spawn({
         let agent = Arc::clone(&agent);
-        async move { agent.capture_for_restart().await }
+        async move {
+            agent
+                .capture_after_admitted_starts(Duration::from_secs(3600))
+                .await
+        }
     });
     while !agent.process_registry.lock().unwrap().closing {
         tokio::task::yield_now().await;
@@ -2186,6 +2190,58 @@ async fn restart_capture_waits_for_a_fold_admitted_before_closing_to_queue_its_i
             .map(|input| input.text.as_str())
             .collect::<Vec<_>>(),
         ["hi"]
+    );
+    let _ = child.kill().await;
+}
+
+#[tokio::test]
+async fn an_overdue_restart_capture_carries_a_fold_whose_notifications_cannot_be_delivered() {
+    let (tx, mut rx) = mpsc::channel(1);
+    let (_home, agent) = isolated_agent(tx);
+    let (mut runtime, mut child) = placeholder_runtime(&request("claude_a", false)).await;
+    runtime.active_turn = Some(wake_turn("claude-turn-wake"));
+    agent
+        .runtimes
+        .lock()
+        .await
+        .insert("claude_a".to_string(), runtime);
+    let start = tokio::spawn({
+        let agent = Arc::clone(&agent);
+        async move { agent.start_turn(request("claude_a", false)).await }
+    });
+    while rx.is_empty() {
+        tokio::task::yield_now().await;
+    }
+
+    let captured = agent.capture_after_admitted_starts(Duration::ZERO).await;
+    let turn_id = start
+        .await
+        .unwrap()
+        .expect("an overdue capture lets the admitted fold queue its input");
+
+    assert_eq!(captured.len(), 1);
+    assert_eq!(
+        captured[0].interrupted_turn_id.as_deref(),
+        Some(turn_id.as_str())
+    );
+    assert!(!captured[0].agent_initiated);
+    assert_eq!(
+        captured[0]
+            .queued_inputs
+            .iter()
+            .map(|input| input.text.as_str())
+            .collect::<Vec<_>>(),
+        ["hi"]
+    );
+    let completed = next_notification(&mut rx).await;
+    assert_eq!(completed["params"]["turn"]["id"], json!("claude-turn-wake"));
+    assert!(rx.try_recv().is_err());
+    assert!(
+        agent
+            .turn_record("claude_a", &turn_id)
+            .await
+            .unwrap()
+            .is_some()
     );
     let _ = child.kill().await;
 }
