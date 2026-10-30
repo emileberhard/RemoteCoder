@@ -3,6 +3,25 @@
   "codexCommit": "e79de0be2c87b29979fde43e908224be9a4294d2",
   "originalHome": "/private/tmp/adopt-fixture-L2Yke2/c",
   "createdBy": "dev-tools/probes/codex-adoption.mjs fixture() using actual pinned app-server and loopback Responses SSE, never live inference",
+  "upgradedBy": {
+    "codexVersion": "0.163.0-alpha.11",
+    "codexCommit": "f97ca1b2872a81b418a46aa5d1d1a064cf136bb7",
+    "migrations": [
+      60,
+      61
+    ],
+    "readStates": [
+      {
+        "thread": "01a14ab7-fffc-7211-adac-4a0e73963e19",
+        "operation": "unread"
+      },
+      {
+        "thread": "01a14ab7-ff34-7151-bad7-3262b406e60a",
+        "operation": "read"
+      }
+    ],
+    "method": "in-place app-server stdio thread/readState/update on the original home; every earlier row and rollout byte-identical"
+  },
   "threads": [
     {
       "id": "01a14ab7-ff34-7151-bad7-3262b406e60a",
@@ -39,6 +58,6 @@
       "open"
     ]
   ],
-  "archiveSha256": "398af6aa686cd4a6457977b9f95d861d1ab60db602976051992f0655b0fbb30e",
+  "archiveSha256": "d59280271523e328ec70599cbd715b7811eeb33aa77ae4b5ff9d3ceaab7cc58b",
   "queueRows": 1
 }

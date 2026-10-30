@@ -406,12 +406,14 @@ home=pathlib.Path(sys.argv[1])
 with sqlite3.connect(f'file:{home}/state_5.sqlite?mode=ro',uri=True) as db:
     threads=db.execute('SELECT id,archived,title FROM threads ORDER BY id').fetchall()
     edges=db.execute('SELECT parent_thread_id,child_thread_id,status FROM thread_spawn_edges ORDER BY parent_thread_id,child_thread_id').fetchall()
+    receipts=db.execute('SELECT thread_id,first_unread_turn,revision,last_published_turn FROM thread_read_receipts ORDER BY thread_id').fetchall()
+    guardian=db.execute('SELECT id,thread_id,hex(record) FROM guardian_review_feedback ORDER BY id').fetchall()
 with sqlite3.connect(f'file:{home}/thread_history_1.sqlite?mode=ro',uri=True) as db:
     turns=dict(db.execute('SELECT thread_id,COUNT(*) FROM thread_turns GROUP BY thread_id'))
     items=dict(db.execute('SELECT thread_id,COUNT(*) FROM thread_items GROUP BY thread_id'))
 with sqlite3.connect(f'file:{home}/queue_1.sqlite?mode=ro',uri=True) as db:
     queue=db.execute('SELECT COUNT(*) FROM queued_items').fetchone()[0]
-print(json.dumps({'threads':threads,'edges':edges,'turns':turns,'items':items,'queue':queue}))
+print(json.dumps({'threads':threads,'edges':edges,'receipts':receipts,'guardian':guardian,'turns':turns,'items':items,'queue':queue}))
 "#,
         &[home.to_owned()],
     )
@@ -444,7 +446,13 @@ fn real_native_history_and_gateway_state_resume_after_collision_without_repeatin
     let fixture = Fixture::new();
     let manifest = fixture.native();
     let source = fixture.source.join("c");
+    python(
+        "import sqlite3,sys\nwith sqlite3.connect(sys.argv[1]) as db: db.execute('INSERT INTO guardian_review_feedback VALUES(?,?,?)', ('01a14ab9-0000-7000-8000-000000000001',sys.argv[2],b'{\"decision\":\"approve\"}'))\nprint('{}')",
+        &[source.join("state_5.sqlite"), THREAD.into()],
+    );
     let baseline = native_summary(&source);
+    assert_eq!(baseline["receipts"].as_array().unwrap().len(), 2);
+    assert_eq!(baseline["guardian"].as_array().unwrap().len(), 1);
     for thread in manifest["threads"].as_array().unwrap() {
         let id = thread["id"].as_str().unwrap();
         assert_eq!(baseline["turns"][id], thread["projectionTurns"]);

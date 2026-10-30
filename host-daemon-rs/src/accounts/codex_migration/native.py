@@ -21,6 +21,8 @@ TABLES = {
         "thread_dynamic_tools",
         "thread_spawn_edges",
         "thread_attachments",
+        "guardian_review_feedback",
+        "thread_read_receipts",
     ],
     "thread_history_1.sqlite": [
         "thread_turns",
@@ -35,6 +37,22 @@ TABLES = {
     "memories_1.sqlite": ["stage1_outputs", "jobs"],
     "memories_v2_1.sqlite": ["stage1_outputs", "jobs"],
 }
+HOST_TABLES = {
+    "state_5.sqlite": {
+        "_sqlx_migrations",
+        "backfill_state",
+        "external_agent_config_imports",
+        "remote_control_enrollments",
+        "rollout_migration_skipped_rollouts",
+        "rollout_migration_state",
+    },
+    "thread_history_1.sqlite": {"_sqlx_migrations"},
+    "queue_1.sqlite": {"_sqlx_migrations", "queued_thread_revisions"},
+    "goals_1.sqlite": {"_sqlx_migrations"},
+    "memories_1.sqlite": {"_sqlx_migrations", "consolidation_progress"},
+    "memories_v2_1.sqlite": {"_sqlx_migrations", "consolidation_progress"},
+}
+HOST_DATABASES = {"logs_2.sqlite"}
 
 
 def digest(value):
@@ -59,7 +77,7 @@ def connect(path, readonly):
         connection.close()
 
 
-def validate(connection, expected, name):
+def fingerprint(connection):
     schema = connection.execute(
         "SELECT type,name,tbl_name,sql FROM sqlite_master "
         "WHERE name NOT LIKE 'sqlite_%' ORDER BY type,name"
@@ -67,14 +85,31 @@ def validate(connection, expected, name):
     migrations = connection.execute(
         "SELECT version,hex(checksum),success FROM _sqlx_migrations ORDER BY version"
     ).fetchall()
+    return {
+        "schema": digest(schema),
+        "migrations": digest(migrations),
+        "latestMigration": migrations[-1][0] if migrations else None,
+        "tables": sorted(row[1] for row in schema if row[0] == "table"),
+    }
+
+
+def validate(connection, path, expected):
+    actual = fingerprint(connection)
     accepted = (
         expected["schema"]
         if isinstance(expected["schema"], list)
         else [expected["schema"]]
     )
-    if digest(schema) not in accepted or digest(migrations) != expected["migrations"]:
+    if actual["schema"] not in accepted or actual["migrations"] != expected["migrations"]:
         raise ValueError(
-            f"Unsupported pinned Codex schema or migration checksums: {name}"
+            f"Unsupported pinned Codex schema or migration checksums: {path}"
+        )
+    unclassified = sorted(
+        set(actual["tables"]) - set(TABLES[path.name]) - HOST_TABLES[path.name]
+    )
+    if unclassified:
+        raise ValueError(
+            f"Unclassified Codex tables in {path}: {', '.join(unclassified)}"
         )
 
 
@@ -172,11 +207,11 @@ def adopt_database(name, source, target, expected, threads, replace):
     if not source_path.exists():
         return 0
     with connect(source_path, True) as incoming:
-        validate(incoming, expected, source_path)
+        validate(incoming, source_path, expected)
         if not target_path.exists():
             initialize(incoming, target_path)
         with connect(target_path, False) as host:
-            validate(host, expected, target_path)
+            validate(host, target_path, expected)
             host.execute("PRAGMA synchronous=FULL")
             host.execute("BEGIN IMMEDIATE")
             count = 0
@@ -280,7 +315,7 @@ def main(request):
         for path in [source / name, target / name]:
             if path.exists():
                 with connect(path, True) as connection:
-                    validate(connection, expected, path)
+                    validate(connection, path, expected)
     if request["mode"] == "scope":
         return read_scope(target)
     if request["mode"] == "plan":

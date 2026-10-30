@@ -1,7 +1,7 @@
 {
   "state_5.sqlite": {
-    "schema": "eb6f12fe6da4bded03f74dcb3f61960f870eeaed5f8dd7afdee7915a6fcf1050",
-    "migrations": "b080b4fc8f0124c760d214d39b6d5c4aec5138a57b5c30df45987f6c49bde127"
+    "schema": "cd134af74a7b6ee760eaae8f003f1858da9c6bed434d5232472a46141390ebb8",
+    "migrations": "899bc0ad2af9296b069f936e218bd217de2c2aeecfba238cafd5005bae277536"
   },
   "thread_history_1.sqlite": {
     "schema": [

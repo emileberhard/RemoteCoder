@@ -417,9 +417,10 @@ The adapter is pinned to the exact approved Codex source in
 `docs/codex/compatibility.json`. Filesystem repair cannot preserve SQLite-only
 metadata or paginated projections, so `accounts/codex_migration/native.py` is the
 single private-schema boundary. It checks schema and SQLx migration checksums of
-both sides before writing. It copies thread metadata, selected rollout paths,
-archive state, titles, dynamic tools, spawn edges, projects and attachments from
-`state_5.sqlite`; the full history projection and observation versions from
+both sides before writing, and refuses any table it neither copies nor assigns to
+the host. It copies thread metadata, selected rollout paths, archive state, titles,
+dynamic tools, spawn edges, projects, attachments, guardian review feedback and
+read receipts from `state_5.sqlite`; the full history projection and observation versions from
 `thread_history_1.sqlite`; and thread queues, goals and memory from `queue_1.sqlite`,
 `goals_1.sqlite`, `memories_1.sqlite` and `memories_v2_1.sqlite`, together with
 the `memories/` and `memories_v2/` files. Global migration cursors and provider
