@@ -64,9 +64,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
-          version: '0.13.4'
+          version: '0.13.6'
           python-version: '3.14'
       - name: Install the credential-source shell
         run: |
@@ -138,9 +138,9 @@ jobs:
       - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
         with:
           just-version: '1.59.0'
-      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
-          version: '0.13.4'
+          version: '0.13.6'
       - run: python3 scripts/core-test.py
       - run: ./scripts/lint-glass
       - run: ./scripts/lint-haptics
@@ -186,7 +186,7 @@ jobs:
         timeout-minutes: 5
         run: xcrun simctl bootstatus "$RC_IOS_SIMULATOR" -b
       - run: just verify-simulator-local
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure()
         with:
           name: failed-native-tests-ios-${{ github.run_attempt }}
@@ -219,7 +219,7 @@ jobs:
             '{sourceCommit:$commit,buildId:$run}' > "$RC_BUILD_PROVENANCE"
       - run: just mac-build-local
       - run: just mac-harness-build-local
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure()
         with:
           name: failed-native-tests-mac-${{ github.run_attempt }}
@@ -237,7 +237,7 @@ jobs:
           persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: 1.4.3
+          bun-version: 1.4.4
       - run: bun install --frozen-lockfile
         working-directory: web-client
       - run: bun run typecheck
