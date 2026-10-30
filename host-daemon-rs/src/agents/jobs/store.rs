@@ -192,7 +192,7 @@ impl JobStore {
     pub(crate) async fn classify(
         &self,
         conversation: ConversationIdentity,
-        created_at_ms: Option<i64>,
+        creation: Creation,
     ) -> Result<Option<Origin>> {
         self.access(move |inner| {
             let mut found = inner.agents.values().filter(|agent| matches!(&agent.conversation, ConversationBinding::Known { conversation: known } if known == &conversation));
@@ -206,8 +206,10 @@ impl JobStore {
                 evidence.provider.is_none_or(|provider| provider == conversation.provider)
                     && evidence.provider_home.as_ref().is_none_or(|home| matches!(&conversation.provider_home, ProviderHome::Known { path } if path == home))
                     && evidence.thread_id.as_ref().is_none_or(|thread| thread == &conversation.thread_id)
-                    && (evidence.thread_id.is_some() || (created_at_ms.zip(evidence.latest_possible_creation_ms).is_none_or(|(created, latest)| created <= latest)
-                        && !JobId::try_from(evidence.source_run_id.clone()).ok().and_then(|run| inner.jobs.get(&run)).is_some_and(|job| job.execution.conversation().is_some())))
+                    && (evidence.thread_id.is_some() || match creation {
+                        Creation::RecordedByGateway => false,
+                        Creation::ReportedByProvider { at_ms } => at_ms.zip(evidence.latest_possible_creation_ms).is_none_or(|(created, latest)| created <= latest),
+                    })
             }) {
                 return Ok(Some(Origin::Unknown { reason: format!("historical ancestry of run {} is unresolved: {}", evidence.source_run_id, evidence.reason) }));
             }

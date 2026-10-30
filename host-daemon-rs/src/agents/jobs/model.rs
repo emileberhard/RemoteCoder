@@ -123,6 +123,12 @@ pub(crate) enum Origin {
     },
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Creation {
+    RecordedByGateway,
+    ReportedByProvider { at_ms: Option<i64> },
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) enum Recipient {

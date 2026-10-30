@@ -6,8 +6,8 @@ use serde_json::{Value, json};
 
 use super::{ActionParams, AgentService};
 use crate::agents::jobs::model::{
-    ConversationBinding, ExecutionState, JobId, JobOutcome, Origin, Provider, ResultEvidence,
-    SpecEvidence,
+    ConversationBinding, Creation, ExecutionState, JobId, JobOutcome, Origin, Provider,
+    ResultEvidence, SpecEvidence,
 };
 use crate::agents::{Agent, Capabilities, Output, State};
 use crate::wire::agent_jobs::{
@@ -95,25 +95,26 @@ impl AgentService<'_> {
                 header["id"] == thread,
                 "Claude history returned another conversation"
             );
-            if let Some(origin) = self
-                .gateway
-                .jobs
-                .classify(&identity, created_at_ms(&header))
-                .await?
-            {
+            let recorded = match self.gateway.claude_agent() {
+                Some(runtime) => runtime.creation_origin(thread)?,
+                None => None,
+            };
+            let creation = match recorded {
+                Some(_) => Creation::RecordedByGateway,
+                None => Creation::ReportedByProvider {
+                    at_ms: created_at_ms(&header),
+                },
+            };
+            if let Some(origin) = self.gateway.jobs.classify(&identity, creation).await? {
                 return origin_relation(origin, &host);
             }
             use crate::providers::claude::conversation_index::SessionOrigin;
-            if let Some(runtime) = self.gateway.claude_agent() {
-                match runtime.creation_origin(thread)? {
-                    Some(SessionOrigin::TopLevel) => return Ok(ThreadRelation::Root),
-                    Some(SessionOrigin::Job { .. } | SessionOrigin::Unknown) => {
-                        bail!("Claude session has no resolved runtime origin");
-                    }
-                    None => {}
+            return match recorded {
+                Some(SessionOrigin::TopLevel) | None => Ok(ThreadRelation::Root),
+                Some(SessionOrigin::Job { .. } | SessionOrigin::Unknown) => {
+                    bail!("Claude session has no resolved runtime origin")
                 }
-            }
-            return Ok(ThreadRelation::Root);
+            };
         }
         let header = self
             .gateway
@@ -125,7 +126,12 @@ impl AgentService<'_> {
         if let Some(origin) = self
             .gateway
             .jobs
-            .classify(&identity, created_at_ms(&header["thread"]))
+            .classify(
+                &identity,
+                Creation::ReportedByProvider {
+                    at_ms: created_at_ms(&header["thread"]),
+                },
+            )
             .await?
         {
             return origin_relation(origin, &host);

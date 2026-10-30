@@ -753,40 +753,40 @@ async fn explicit_continuation_preserves_imported_unknown_outcome_and_origin() {
 }
 
 #[tokio::test]
-async fn threadless_historical_uncertainty_ends_once_its_run_binds_a_conversation() {
-    let root = ConversationIdentity {
-        thread_id: "thread-root".into(),
-        ..conversation()
+async fn historical_uncertainty_spares_only_conversations_the_gateway_created() {
+    let directory = tempfile::tempdir().unwrap();
+    drop(JobStore::open(directory.path().into()).await.unwrap());
+    let mut imported = job(91);
+    imported.source = JobSource::Imported;
+    imported.execution = ExecutionState::Unknown {
+        conversation: Some(conversation()),
+        binding: None,
+        reason: "historical outcome is unconfirmed".into(),
     };
-    for (sequence, bound) in [(91, true), (92, false)] {
-        let directory = tempfile::tempdir().unwrap();
-        drop(JobStore::open(directory.path().into()).await.unwrap());
-        let mut imported = job(sequence);
-        imported.source = JobSource::Imported;
-        imported.execution = ExecutionState::Unknown {
-            conversation: bound.then(conversation),
-            binding: None,
-            reason: "historical outcome is unconfirmed".into(),
-        };
+    std::fs::write(
+        directory
+            .path()
+            .join("jobs")
+            .join(format!("{}.json", imported.job_id.as_str())),
+        serde_json::to_vec(&imported).unwrap(),
+    )
+    .unwrap();
+    for thread in [None, Some("thread-named")] {
         let evidence = ImportedUncertainty {
-            evidence_id: format!("fixture-host:{}:", imported.job_id.as_str()),
+            evidence_id: format!(
+                "fixture-host:{}:{}",
+                imported.job_id.as_str(),
+                thread.unwrap_or_default()
+            ),
             source_run_id: imported.job_id.as_str().into(),
             provider: Some(Provider::Codex),
             provider_home: Some("/tmp/job-fixture/codex".into()),
-            thread_id: None,
+            thread_id: thread.map(Into::into),
             parent_home: None,
             parent_thread_id: None,
             latest_possible_creation_ms: None,
             reason: "identityPending".into(),
         };
-        std::fs::write(
-            directory
-                .path()
-                .join("jobs")
-                .join(format!("{}.json", imported.job_id.as_str())),
-            serde_json::to_vec(&imported).unwrap(),
-        )
-        .unwrap();
         std::fs::write(
             directory.path().join("uncertainties").join(format!(
                 "{}.json",
@@ -795,15 +795,28 @@ async fn threadless_historical_uncertainty_ends_once_its_run_binds_a_conversatio
             serde_json::to_vec(&evidence).unwrap(),
         )
         .unwrap();
-        let store = JobStore::open(directory.path().into()).await.unwrap();
-        let origin = store.classify(root.clone(), Some(200)).await.unwrap();
-        if bound {
-            assert_eq!(origin, None);
-        } else {
-            let Some(Origin::Unknown { reason }) = origin else {
-                panic!("an unresolved run must keep every possible child unknown");
-            };
-            assert!(reason.contains(imported.job_id.as_str()));
+    }
+    let store = JobStore::open(directory.path().into()).await.unwrap();
+    for (thread, creation, unknown) in [
+        (
+            "thread-root",
+            Creation::ReportedByProvider { at_ms: Some(200) },
+            true,
+        ),
+        ("thread-root", Creation::RecordedByGateway, false),
+        ("thread-named", Creation::RecordedByGateway, true),
+    ] {
+        let conversation = ConversationIdentity {
+            thread_id: thread.into(),
+            ..conversation()
+        };
+        let origin = store.classify(conversation, creation).await.unwrap();
+        match origin {
+            Some(Origin::Unknown { reason }) if unknown => {
+                assert!(reason.contains(imported.job_id.as_str()))
+            }
+            None if !unknown => {}
+            other => panic!("{thread} created as {creation:?} classified as {other:?}"),
         }
     }
 }

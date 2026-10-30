@@ -166,11 +166,11 @@ impl JobOwner {
     pub(crate) async fn classify(
         &self,
         conversation: &ConversationIdentity,
-        created_at_ms: Option<i64>,
+        creation: Creation,
     ) -> Result<Option<Origin>> {
         self.store()
             .await?
-            .classify(conversation.clone(), created_at_ms)
+            .classify(conversation.clone(), creation)
             .await
     }
 
