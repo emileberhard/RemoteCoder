@@ -13,7 +13,7 @@ RemoteCoder's license applies to its own code. The components below retain their
 | Codex runtime | Modified OpenAI Codex and codex-code-mode-host | Apache-2.0; [OpenAI license](LICENSES/Codex-Apache-2.0.txt), [OpenAI/Ratatui NOTICE](LICENSES/Codex-NOTICE.txt), [CLI Rust dependencies](LICENSES/codex-rust.md) and [code-mode-host Rust dependencies](LICENSES/codex-code-mode-host-rust.md) |
 | Codex runtime | ripgrep 15.2.0 | MIT; [license and attribution](LICENSES/ripgrep.txt) |
 | Codex code-mode host | rusty_v8, V8 and native dependencies | [License and attribution](LICENSES/V8.txt) |
-| Browser client | npm dependencies, including Mermaid 12.1.0 and ELK 0.9.3 | [Versioned inventory and license texts](LICENSES/web-npm.md) |
+| Browser client | npm dependencies, including Mermaid 12.2.0 and ELK 0.9.3 | [Versioned inventory and license texts](LICENSES/web-npm.md) |
 
 ELK is distributed unmodified as part of Mermaid. Its source is available at [elkjs 0.9.3](https://github.com/kieler/elkjs/tree/0.9.3) and as a [versioned source archive](https://registry.npmjs.org/elkjs/-/elkjs-0.9.3.tgz). ELK remains under EPL-2.0; RemoteCoder's license does not restrict those rights. Native Mermaid's exact embedded dependency versions and source links appear in its notice file.
 

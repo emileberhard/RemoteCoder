@@ -7,15 +7,17 @@ The original licenses below govern these components. Versioned npm source archiv
 | Component | License | Source |
 | --- | --- | --- |
 | @antfu/install-pkg 2.1.0 | MIT | [Source](https://registry.npmjs.org/@antfu/install-pkg/-/install-pkg-2.1.0.tgz) |
-| @biomejs/biome 2.5.15 | MIT OR Apache-2.0 | [Source](https://registry.npmjs.org/@biomejs/biome/-/biome-2.5.15.tgz) |
-| @biomejs/cli-darwin-arm64 2.5.15 | MIT OR Apache-2.0 | [Source](https://registry.npmjs.org/@biomejs/cli-darwin-arm64/-/cli-darwin-arm64-2.5.15.tgz) |
-| @biomejs/cli-darwin-x64 2.5.15 | MIT OR Apache-2.0 | [Source](https://registry.npmjs.org/@biomejs/cli-darwin-x64/-/cli-darwin-x64-2.5.15.tgz) |
-| @biomejs/cli-linux-arm64 2.5.15 | MIT OR Apache-2.0 | [Source](https://registry.npmjs.org/@biomejs/cli-linux-arm64/-/cli-linux-arm64-2.5.15.tgz) |
-| @biomejs/cli-linux-arm64-musl 2.5.15 | MIT OR Apache-2.0 | [Source](https://registry.npmjs.org/@biomejs/cli-linux-arm64-musl/-/cli-linux-arm64-musl-2.5.15.tgz) |
-| @biomejs/cli-linux-x64 2.5.15 | MIT OR Apache-2.0 | [Source](https://registry.npmjs.org/@biomejs/cli-linux-x64/-/cli-linux-x64-2.5.15.tgz) |
-| @biomejs/cli-linux-x64-musl 2.5.15 | MIT OR Apache-2.0 | [Source](https://registry.npmjs.org/@biomejs/cli-linux-x64-musl/-/cli-linux-x64-musl-2.5.15.tgz) |
-| @biomejs/cli-win32-arm64 2.5.15 | MIT OR Apache-2.0 | [Source](https://registry.npmjs.org/@biomejs/cli-win32-arm64/-/cli-win32-arm64-2.5.15.tgz) |
-| @biomejs/cli-win32-x64 2.5.15 | MIT OR Apache-2.0 | [Source](https://registry.npmjs.org/@biomejs/cli-win32-x64/-/cli-win32-x64-2.5.15.tgz) |
+| @biomejs/biome 2.6.4 | MIT OR Apache-2.0 | [Source](https://registry.npmjs.org/@biomejs/biome/-/biome-2.6.4.tgz) |
+| @biomejs/cli-android-arm64 2.6.4 | MIT OR Apache-2.0 | [Source](https://registry.npmjs.org/@biomejs/cli-android-arm64/-/cli-android-arm64-2.6.4.tgz) |
+| @biomejs/cli-android-x64 2.6.4 | MIT OR Apache-2.0 | [Source](https://registry.npmjs.org/@biomejs/cli-android-x64/-/cli-android-x64-2.6.4.tgz) |
+| @biomejs/cli-darwin-arm64 2.6.4 | MIT OR Apache-2.0 | [Source](https://registry.npmjs.org/@biomejs/cli-darwin-arm64/-/cli-darwin-arm64-2.6.4.tgz) |
+| @biomejs/cli-darwin-x64 2.6.4 | MIT OR Apache-2.0 | [Source](https://registry.npmjs.org/@biomejs/cli-darwin-x64/-/cli-darwin-x64-2.6.4.tgz) |
+| @biomejs/cli-linux-arm64 2.6.4 | MIT OR Apache-2.0 | [Source](https://registry.npmjs.org/@biomejs/cli-linux-arm64/-/cli-linux-arm64-2.6.4.tgz) |
+| @biomejs/cli-linux-arm64-musl 2.6.4 | MIT OR Apache-2.0 | [Source](https://registry.npmjs.org/@biomejs/cli-linux-arm64-musl/-/cli-linux-arm64-musl-2.6.4.tgz) |
+| @biomejs/cli-linux-x64 2.6.4 | MIT OR Apache-2.0 | [Source](https://registry.npmjs.org/@biomejs/cli-linux-x64/-/cli-linux-x64-2.6.4.tgz) |
+| @biomejs/cli-linux-x64-musl 2.6.4 | MIT OR Apache-2.0 | [Source](https://registry.npmjs.org/@biomejs/cli-linux-x64-musl/-/cli-linux-x64-musl-2.6.4.tgz) |
+| @biomejs/cli-win32-arm64 2.6.4 | MIT OR Apache-2.0 | [Source](https://registry.npmjs.org/@biomejs/cli-win32-arm64/-/cli-win32-arm64-2.6.4.tgz) |
+| @biomejs/cli-win32-x64 2.6.4 | MIT OR Apache-2.0 | [Source](https://registry.npmjs.org/@biomejs/cli-win32-x64/-/cli-win32-x64-2.6.4.tgz) |
 | @braintree/sanitize-url 7.1.2 | MIT | [Source](https://registry.npmjs.org/@braintree/sanitize-url/-/sanitize-url-7.1.2.tgz) |
 | @chevrotain/cst-dts-gen 13.2.0 | Apache-2.0 | [Source](https://registry.npmjs.org/@chevrotain/cst-dts-gen/-/cst-dts-gen-13.2.0.tgz) |
 | @chevrotain/gast 13.2.0 | Apache-2.0 | [Source](https://registry.npmjs.org/@chevrotain/gast/-/gast-13.2.0.tgz) |
@@ -25,7 +27,7 @@ The original licenses below govern these components. Versioned npm source archiv
 | @iconify/types 2.0.0 | MIT | [Source](https://registry.npmjs.org/@iconify/types/-/types-2.0.0.tgz) |
 | @iconify/utils 3.1.7 | MIT | [Source](https://registry.npmjs.org/@iconify/utils/-/utils-3.1.7.tgz) |
 | @mermaid-js/parser 2.0.1 | MIT | [Source](https://registry.npmjs.org/@mermaid-js/parser/-/parser-2.0.1.tgz) |
-| @types/bun 1.4.3 | MIT | [Source](https://registry.npmjs.org/@types/bun/-/bun-1.4.3.tgz) |
+| @types/bun 1.4.4 | MIT | [Source](https://registry.npmjs.org/@types/bun/-/bun-1.4.4.tgz) |
 | @types/d3 7.4.3 | MIT | [Source](https://registry.npmjs.org/@types/d3/-/d3-7.4.3.tgz) |
 | @types/d3-array 3.2.2 | MIT | [Source](https://registry.npmjs.org/@types/d3-array/-/d3-array-3.2.2.tgz) |
 | @types/d3-axis 3.0.6 | MIT | [Source](https://registry.npmjs.org/@types/d3-axis/-/d3-axis-3.0.6.tgz) |
@@ -58,7 +60,7 @@ The original licenses below govern these components. Versioned npm source archiv
 | @types/d3-transition 3.0.9 | MIT | [Source](https://registry.npmjs.org/@types/d3-transition/-/d3-transition-3.0.9.tgz) |
 | @types/d3-zoom 3.0.9 | MIT | [Source](https://registry.npmjs.org/@types/d3-zoom/-/d3-zoom-3.0.9.tgz) |
 | @types/geojson 7946.0.16 | MIT | [Source](https://registry.npmjs.org/@types/geojson/-/geojson-7946.0.16.tgz) |
-| @types/node 26.6.5 | MIT | [Source](https://registry.npmjs.org/@types/node/-/node-26.6.5.tgz) |
+| @types/node 26.6.6 | MIT | [Source](https://registry.npmjs.org/@types/node/-/node-26.6.6.tgz) |
 | @types/react 19.3.0 | MIT | [Source](https://registry.npmjs.org/@types/react/-/react-19.3.0.tgz) |
 | @types/react-dom 19.3.0 | MIT | [Source](https://registry.npmjs.org/@types/react-dom/-/react-dom-19.3.0.tgz) |
 | @types/trusted-types 2.0.7 | MIT | [Source](https://registry.npmjs.org/@types/trusted-types/-/trusted-types-2.0.7.tgz) |
@@ -86,14 +88,14 @@ The original licenses below govern these components. Versioned npm source archiv
 | @typescript/typescript-win32-x64 7.0.2 | Apache-2.0 | [Source](https://registry.npmjs.org/@typescript/typescript-win32-x64/-/typescript-win32-x64-7.0.2.tgz) |
 | @upsetjs/venn.js 2.0.0 | MIT | [Source](https://registry.npmjs.org/@upsetjs/venn.js/-/venn.js-2.0.0.tgz) |
 | buffer-image-size 0.6.4 | MIT | [Source](https://registry.npmjs.org/buffer-image-size/-/buffer-image-size-0.6.4.tgz) |
-| bun-types 1.4.3 | MIT | [Source](https://registry.npmjs.org/bun-types/-/bun-types-1.4.3.tgz) |
+| bun-types 1.4.4 | MIT | [Source](https://registry.npmjs.org/bun-types/-/bun-types-1.4.4.tgz) |
 | chevrotain 13.2.0 | Apache-2.0 | [Source](https://registry.npmjs.org/chevrotain/-/chevrotain-13.2.0.tgz) |
+| commander 15.0.0 | MIT | [Source](https://registry.npmjs.org/commander/-/commander-15.0.0.tgz) |
 | commander 7.2.0 | MIT | [Source](https://registry.npmjs.org/commander/-/commander-7.2.0.tgz) |
-| commander 8.3.0 | MIT | [Source](https://registry.npmjs.org/commander/-/commander-8.3.0.tgz) |
 | cose-base 1.0.3 | MIT | [Source](https://registry.npmjs.org/cose-base/-/cose-base-1.0.3.tgz) |
 | cose-base 2.2.0 | MIT | [Source](https://registry.npmjs.org/cose-base/-/cose-base-2.2.0.tgz) |
 | csstype 3.2.3 | MIT | [Source](https://registry.npmjs.org/csstype/-/csstype-3.2.3.tgz) |
-| cytoscape 3.34.3 | MIT | [Source](https://registry.npmjs.org/cytoscape/-/cytoscape-3.34.3.tgz) |
+| cytoscape 3.34.4 | MIT | [Source](https://registry.npmjs.org/cytoscape/-/cytoscape-3.34.4.tgz) |
 | cytoscape-cose-bilkent 4.1.0 | MIT | [Source](https://registry.npmjs.org/cytoscape-cose-bilkent/-/cytoscape-cose-bilkent-4.1.0.tgz) |
 | cytoscape-fcose 2.2.0 | MIT | [Source](https://registry.npmjs.org/cytoscape-fcose/-/cytoscape-fcose-2.2.0.tgz) |
 | d3 7.9.0 | ISC | [Source](https://registry.npmjs.org/d3/-/d3-7.9.0.tgz) |
@@ -137,29 +139,28 @@ The original licenses below govern these components. Versioned npm source archiv
 | dompurify 3.4.17 | (MPL-2.0 OR Apache-2.0) | [Source](https://registry.npmjs.org/dompurify/-/dompurify-3.4.17.tgz) |
 | elkjs 0.9.3 | EPL-2.0 | [Source](https://registry.npmjs.org/elkjs/-/elkjs-0.9.3.tgz) |
 | entities 7.0.1 | BSD-2-Clause | [Source](https://registry.npmjs.org/entities/-/entities-7.0.1.tgz) |
-| es-toolkit 1.52.0 | MIT | [Source](https://registry.npmjs.org/es-toolkit/-/es-toolkit-1.52.0.tgz) |
+| es-toolkit 1.53.0 | MIT | [Source](https://registry.npmjs.org/es-toolkit/-/es-toolkit-1.53.0.tgz) |
 | hachure-fill 0.5.2 | MIT | [Source](https://registry.npmjs.org/hachure-fill/-/hachure-fill-0.5.2.tgz) |
-| happy-dom 21.0.1 | MIT | [Source](https://registry.npmjs.org/happy-dom/-/happy-dom-21.0.1.tgz) |
+| happy-dom 21.0.4 | MIT | [Source](https://registry.npmjs.org/happy-dom/-/happy-dom-21.0.4.tgz) |
 | highlight.js 11.12.0 | BSD-3-Clause | [Source](https://registry.npmjs.org/highlight.js/-/highlight.js-11.12.0.tgz) |
 | iconv-lite 0.6.3 | MIT | [Source](https://registry.npmjs.org/iconv-lite/-/iconv-lite-0.6.3.tgz) |
 | import-meta-resolve 4.2.0 | MIT | [Source](https://registry.npmjs.org/import-meta-resolve/-/import-meta-resolve-4.2.0.tgz) |
 | internmap 1.0.1 | ISC | [Source](https://registry.npmjs.org/internmap/-/internmap-1.0.1.tgz) |
-| internmap 2.0.3 | ISC | [Source](https://registry.npmjs.org/internmap/-/internmap-2.0.3.tgz) |
-| katex 0.18.2 | MIT | [Source](https://registry.npmjs.org/katex/-/katex-0.18.2.tgz) |
+| katex 0.18.10 | MIT | [Source](https://registry.npmjs.org/katex/-/katex-0.18.10.tgz) |
 | khroma 2.1.0 | null | [Source](https://registry.npmjs.org/khroma/-/khroma-2.1.0.tgz) |
 | layout-base 1.0.2 | MIT | [Source](https://registry.npmjs.org/layout-base/-/layout-base-1.0.2.tgz) |
 | layout-base 2.0.1 | MIT | [Source](https://registry.npmjs.org/layout-base/-/layout-base-2.0.1.tgz) |
 | lodash-es 4.18.1 | MIT | [Source](https://registry.npmjs.org/lodash-es/-/lodash-es-4.18.1.tgz) |
-| lucide-react 1.55.0 | ISC | [Source](https://registry.npmjs.org/lucide-react/-/lucide-react-1.55.0.tgz) |
+| lucide-react 1.64.0 | ISC | [Source](https://registry.npmjs.org/lucide-react/-/lucide-react-1.64.0.tgz) |
 | marked 16.4.2 | MIT | [Source](https://registry.npmjs.org/marked/-/marked-16.4.2.tgz) |
-| marked 18.1.1 | MIT | [Source](https://registry.npmjs.org/marked/-/marked-18.1.1.tgz) |
-| mermaid 12.1.0 | MIT | [Source](https://registry.npmjs.org/mermaid/-/mermaid-12.1.0.tgz) |
+| marked 18.1.2 | MIT | [Source](https://registry.npmjs.org/marked/-/marked-18.1.2.tgz) |
+| mermaid 12.2.0 | MIT | [Source](https://registry.npmjs.org/mermaid/-/mermaid-12.2.0.tgz) |
 | package-manager-detector 1.9.0 | MIT | [Source](https://registry.npmjs.org/package-manager-detector/-/package-manager-detector-1.9.0.tgz) |
 | path-data-parser 0.1.0 | MIT | [Source](https://registry.npmjs.org/path-data-parser/-/path-data-parser-0.1.0.tgz) |
 | points-on-curve 0.2.0 | MIT | [Source](https://registry.npmjs.org/points-on-curve/-/points-on-curve-0.2.0.tgz) |
 | points-on-path 0.2.1 | MIT | [Source](https://registry.npmjs.org/points-on-path/-/points-on-path-0.2.1.tgz) |
-| react 19.3.0 | MIT | [Source](https://registry.npmjs.org/react/-/react-19.3.0.tgz) |
-| react-dom 19.3.0 | MIT | [Source](https://registry.npmjs.org/react-dom/-/react-dom-19.3.0.tgz) |
+| react 19.3.1 | MIT | [Source](https://registry.npmjs.org/react/-/react-19.3.1.tgz) |
+| react-dom 19.3.1 | MIT | [Source](https://registry.npmjs.org/react-dom/-/react-dom-19.3.1.tgz) |
 | robust-predicates 3.0.3 | Unlicense | [Source](https://registry.npmjs.org/robust-predicates/-/robust-predicates-3.0.3.tgz) |
 | roughjs 4.6.6 | MIT | [Source](https://registry.npmjs.org/roughjs/-/roughjs-4.6.6.tgz) |
 | rw 1.3.3 | BSD-3-Clause | [Source](https://registry.npmjs.org/rw/-/rw-1.3.3.tgz) |
@@ -169,7 +170,6 @@ The original licenses below govern these components. Versioned npm source archiv
 | tinyexec 1.3.1 | MIT | [Source](https://registry.npmjs.org/tinyexec/-/tinyexec-1.3.1.tgz) |
 | ts-dedent 2.3.0 | MIT | [Source](https://registry.npmjs.org/ts-dedent/-/ts-dedent-2.3.0.tgz) |
 | typescript 7.0.2 | Apache-2.0 | [Source](https://registry.npmjs.org/typescript/-/typescript-7.0.2.tgz) |
-| undici-types 8.11.2 | MIT | [Source](https://registry.npmjs.org/undici-types/-/undici-types-8.11.2.tgz) |
 | undici-types 8.9.0 | MIT | [Source](https://registry.npmjs.org/undici-types/-/undici-types-8.9.0.tgz) |
 | uuid 14.0.3 | MIT | [Source](https://registry.npmjs.org/uuid/-/uuid-14.0.3.tgz) |
 | whatwg-mimetype 3.0.0 | MIT | [Source](https://registry.npmjs.org/whatwg-mimetype/-/whatwg-mimetype-3.0.0.tgz) |
@@ -204,7 +204,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 
-## @biomejs/biome 2.5.15
+## @biomejs/biome 2.6.4
 
 Author: {"name": "Emanuele Stoppa"}
 
@@ -437,42 +437,52 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 
-## @biomejs/cli-darwin-arm64 2.5.15
+## @biomejs/cli-android-arm64 2.6.4
 
 The package does not contain a license text; see its versioned source and repository metadata.
 
 
-## @biomejs/cli-darwin-x64 2.5.15
+## @biomejs/cli-android-x64 2.6.4
 
 The package does not contain a license text; see its versioned source and repository metadata.
 
 
-## @biomejs/cli-linux-arm64 2.5.15
+## @biomejs/cli-darwin-arm64 2.6.4
 
 The package does not contain a license text; see its versioned source and repository metadata.
 
 
-## @biomejs/cli-linux-arm64-musl 2.5.15
+## @biomejs/cli-darwin-x64 2.6.4
 
 The package does not contain a license text; see its versioned source and repository metadata.
 
 
-## @biomejs/cli-linux-x64 2.5.15
+## @biomejs/cli-linux-arm64 2.6.4
 
 The package does not contain a license text; see its versioned source and repository metadata.
 
 
-## @biomejs/cli-linux-x64-musl 2.5.15
+## @biomejs/cli-linux-arm64-musl 2.6.4
 
 The package does not contain a license text; see its versioned source and repository metadata.
 
 
-## @biomejs/cli-win32-arm64 2.5.15
+## @biomejs/cli-linux-x64 2.6.4
 
 The package does not contain a license text; see its versioned source and repository metadata.
 
 
-## @biomejs/cli-win32-x64 2.5.15
+## @biomejs/cli-linux-x64-musl 2.6.4
+
+The package does not contain a license text; see its versioned source and repository metadata.
+
+
+## @biomejs/cli-win32-arm64 2.6.4
+
+The package does not contain a license text; see its versioned source and repository metadata.
+
+
+## @biomejs/cli-win32-x64 2.6.4
 
 The package does not contain a license text; see its versioned source and repository metadata.
 
@@ -1706,7 +1716,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 
-## @types/bun 1.4.3
+## @types/bun 1.4.4
 
 ### bun/LICENSE
 
@@ -2597,7 +2607,7 @@ MIT License
     SOFTWARE
 
 
-## @types/node 26.6.5
+## @types/node 26.6.6
 
 ### node/LICENSE
 
@@ -12826,7 +12836,7 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 
-## bun-types 1.4.3
+## bun-types 1.4.4
 
 ### package/docs/project/license.mdx
 
@@ -13131,7 +13141,7 @@ Apache License
    limitations under the License.
 
 
-## commander 7.2.0
+## commander 15.0.0
 
 Author: {"name": "TJ Holowaychuk", "email": "tj@vision-media.ca"}
 
@@ -13161,7 +13171,7 @@ TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 
-## commander 8.3.0
+## commander 7.2.0
 
 Author: {"name": "TJ Holowaychuk", "email": "tj@vision-media.ca"}
 
@@ -13272,7 +13282,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 
-## cytoscape 3.34.3
+## cytoscape 3.34.4
 
 ### package/LICENSE
 
@@ -15188,7 +15198,7 @@ THIS IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRE
 EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
-## es-toolkit 1.52.0
+## es-toolkit 1.53.0
 
 ### package/LICENSE
 
@@ -15286,7 +15296,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 
-## happy-dom 21.0.1
+## happy-dom 21.0.4
 
 Author: {"name": "David Ortner"}
 
@@ -15483,28 +15493,7 @@ TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
 THIS SOFTWARE.
 
 
-## internmap 2.0.3
-
-Author: {"url": "https://bost.ocks.org/mike", "name": "Mike Bostock"}
-
-### package/LICENSE
-
-Copyright 2021 Mike Bostock
-
-Permission to use, copy, modify, and/or distribute this software for any purpose
-with or without fee is hereby granted, provided that the above copyright notice
-and this permission notice appear in all copies.
-
-THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND
-FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS
-OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
-TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
-THIS SOFTWARE.
-
-
-## katex 0.18.2
+## katex 0.18.10
 
 ### package/LICENSE
 
@@ -15667,7 +15656,7 @@ licenses; we recommend you read them, as their terms may differ from the
 terms above.
 
 
-## lucide-react 1.55.0
+## lucide-react 1.64.0
 
 Author: Eric Fennis
 
@@ -15724,7 +15713,7 @@ SOFTWARE.
 ### package/dist/esm/icons/copyright.mjs
 
 /**
- * @license lucide-react v1.55.0 - ISC
+ * @license lucide-react v1.64.0 - ISC
  *
  * This source code is licensed under the ISC license.
  * See the LICENSE file in the root directory of this source tree.
@@ -15799,7 +15788,7 @@ Redistribution and use in source and binary forms, with or without modification,
 This software is provided by the copyright holders and contributors “as is” and any express or implied warranties, including, but not limited to, the implied warranties of merchantability and fitness for a particular purpose are disclaimed. In no event shall the copyright owner or contributors be liable for any direct, indirect, incidental, special, exemplary, or consequential damages (including, but not limited to, procurement of substitute goods or services; loss of use, data, or profits; or business interruption) however caused and on any theory of liability, whether in contract, strict liability, or tort (including negligence or otherwise) arising in any way out of the use of this software, even if advised of the possibility of such damage.
 
 
-## marked 18.1.1
+## marked 18.1.2
 
 Author: {"name": "Christopher Jeffrey"}
 
@@ -15851,7 +15840,7 @@ Redistribution and use in source and binary forms, with or without modification,
 This software is provided by the copyright holders and contributors “as is” and any express or implied warranties, including, but not limited to, the implied warranties of merchantability and fitness for a particular purpose are disclaimed. In no event shall the copyright owner or contributors be liable for any direct, indirect, incidental, special, exemplary, or consequential damages (including, but not limited to, procurement of substitute goods or services; loss of use, data, or profits; or business interruption) however caused and on any theory of liability, whether in contract, strict liability, or tort (including negligence or otherwise) arising in any way out of the use of this software, even if advised of the possibility of such damage.
 
 
-## mermaid 12.1.0
+## mermaid 12.2.0
 
 Author: {"name": "Knut Sveidqvist"}
 
@@ -15996,7 +15985,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 
-## react 19.3.0
+## react 19.3.1
 
 ### package/LICENSE
 
@@ -16023,7 +16012,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 
-## react-dom 19.3.0
+## react-dom 19.3.1
 
 ### package/LICENSE
 
@@ -16801,33 +16790,6 @@ SOFTWARE.
 
 
 ---------------------------------------------------------
-
-
-## undici-types 8.11.2
-
-### package/LICENSE
-
-MIT License
-
-Copyright (c) Matteo Collina and Undici contributors
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
 
 
 ## undici-types 8.9.0
