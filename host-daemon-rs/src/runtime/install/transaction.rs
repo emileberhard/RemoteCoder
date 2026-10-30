@@ -201,15 +201,8 @@ impl<'a> InstallationTransaction<'a> {
         )
         .await?;
         mark("controlOwnerReleased");
-        let codex_home = self
-            .recovery
-            .app_server
-            .child_environment()
-            .get("CODEX_HOME")
-            .map(PathBuf::from)
-            .or_else(|| std::env::var_os("CODEX_HOME").map(PathBuf::from))
-            .unwrap_or_else(|| self.paths.home().join(".codex"));
-        self.claude_state.capture(&self.claude_home, &codex_home)?;
+        self.claude_state
+            .capture(&self.claude_home, self.recovery.app_server.provider_home()?)?;
         self.activate_gateway_artifacts()?;
         self.gateway_plist
             .activate_launchagent(&self.gateway)

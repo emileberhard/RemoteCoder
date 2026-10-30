@@ -97,15 +97,7 @@ pub(crate) struct CodexAppServer {
 
 impl CodexAppServer {
     pub fn new(codex_path: PathBuf, child_env: HashMap<String, String>) -> Self {
-        let codex_home = child_env
-            .get("CODEX_HOME")
-            .map(PathBuf::from)
-            .or_else(|| std::env::var_os("CODEX_HOME").map(PathBuf::from))
-            .or_else(|| {
-                crate::config::HostPaths::from_env()
-                    .ok()
-                    .map(|paths| paths.home().join(".codex"))
-            })
+        let codex_home = crate::config::codex_home(&child_env)
             .expect("HOME or CODEX_HOME must be set for the shared Codex daemon");
         Self::with_codex_home(codex_path, child_env, codex_home)
     }

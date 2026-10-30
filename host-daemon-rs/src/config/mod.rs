@@ -274,6 +274,17 @@ impl Settings {
     }
 }
 
+pub(crate) fn codex_home(child_env: &HashMap<String, String>) -> Result<PathBuf> {
+    if let Some(home) = child_env
+        .get("CODEX_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("CODEX_HOME").map(PathBuf::from))
+    {
+        return Ok(home);
+    }
+    Ok(HostPaths::from_env()?.home().join(".codex"))
+}
+
 fn user_name(sources: &ConfigSources) -> Result<Option<String>> {
     sources
         .raw("RC_CODEX_GATEWAY_USER_NAME")
