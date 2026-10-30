@@ -10,6 +10,7 @@ readonly probe_file="${this_dir}/realtime_voice_probe.swift"
 readonly assertions_file="${this_dir}/realtime_probe_assertions.swift"
 readonly options_file="${this_dir}/realtime_probe_options.swift"
 readonly derived_data_root="${HOME}/Library/Developer/Xcode/DerivedData"
+readonly package_resolved="${repo_root}/RemoteCoder.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved"
 readonly build_dir="$(mktemp -d /tmp/remotecoder-realtime-probe.XXXXXX)"
 fixture_path=''
 previous_input=''
@@ -114,6 +115,31 @@ if [[ "${probe_host:l}" != *macbook* ]]; then
   exit 2
 fi
 
+webrtc_pin="$(jq -er '.pins[] | select(.identity == "webrtc") | "\(.state.version) \(.state.revision)"' "${package_resolved}")" || {
+  print -u2 -- "No WebRTC pin found in ${package_resolved}."
+  exit 2
+}
+readonly webrtc_version="${webrtc_pin%% *}"
+readonly webrtc_revision="${webrtc_pin##* }"
+framework_dir=''
+for state_file in "${derived_data_root}"/*/SourcePackages/workspace-state.json(N); do
+  xcframework="$(jq -er --arg revision "${webrtc_revision}" '
+    select(any(.object.dependencies[]; .packageRef.identity == "webrtc" and .state.checkoutState.revision == $revision))
+    | .object.artifacts[]
+    | select(.packageRef.identity == "webrtc" and .targetName == "WebRTC")
+    | .path
+  ' "${state_file}" 2>/dev/null)" || continue
+  if [[ -f "${xcframework}/macos-x86_64_arm64/WebRTC.framework/WebRTC" ]]; then
+    framework_dir="${xcframework}/macos-x86_64_arm64"
+    break
+  fi
+done
+if [[ -z "${framework_dir}" ]]; then
+  print -u2 -- "WebRTC ${webrtc_version} (${webrtc_revision[1,12]}), pinned by this checkout, is not resolved in ${derived_data_root}."
+  print -u2 -- "Resolve it, then rerun: cd ${(q)repo_root} && xcodebuild -resolvePackageDependencies -project RemoteCoder.xcodeproj -onlyUsePackageVersionsFromResolvedFile"
+  exit 2
+fi
+
 if [[ "${build_only}" != true && ( "${media_mode}" == true || "${silent_mode}" == true ) ]]; then
   command -v SwitchAudioSource >/dev/null || {
     print -u2 -- 'SwitchAudioSource is required for media or silent mode.'
@@ -181,22 +207,6 @@ if [[ "${build_only}" != true && ( "${media_mode}" == true || "${silent_mode}" =
     print -u2 -- 'Isolated audio route readback failed; no session started.'
     exit 2
   }
-fi
-
-framework_dir="$(
-  find "${derived_data_root}" \
-    -path '*/SourcePackages/artifacts/webrtc/WebRTC/WebRTC.xcframework/macos-x86_64_arm64' \
-    -type d \
-    -print0 2>/dev/null \
-    | xargs -0 stat -f '%m %N' \
-    | sort -rn \
-    | head -n 1 \
-    | cut -d ' ' -f 2-
-)"
-
-if [[ -z "${framework_dir}" || ! -d "${framework_dir}/WebRTC.framework" ]]; then
-  print -u2 -- "WebRTC macOS framework not found in Xcode DerivedData. Build RemoteCoder once first."
-  exit 2
 fi
 
 readonly executable="${build_dir}/realtime-voice-probe"

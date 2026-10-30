@@ -515,6 +515,11 @@ cleanup. `--help` and `README.md` list the modes (`--media`, `--handoff`,
 `--claude`, `--resume-context`); `just voice-probe-both` runs the Codex and Claude
 release gates in sequence.
 
+It links only the WebRTC framework from an Xcode DerivedData resolution of the
+checkout's pinned `Package.resolved` revision, never another version. Without
+one it fails before touching audio routes, fixtures or the gateway and prints the
+`xcodebuild -resolvePackageDependencies` command that provides it.
+
 - Media probes need macOS Microphone permission for the invoking process and
   reject unauthorized capture before starting a gateway voice session, because
   connected ICE and outbound packets alone can carry silence. They hold one lease
