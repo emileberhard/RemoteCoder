@@ -2,31 +2,60 @@ import Foundation
 import AVFoundation
 
 final class AudioLevelMeter: @unchecked Sendable {
+    static let window = Duration.milliseconds(25)
+
+    private struct State {
+        var sum: Float = 0
+        var count = 0
+        var peak: Float = 0.015
+        var levels: AsyncStream<[Float]>.Continuation?
+    }
+
     private let lock = NSLock()
-    private var averagePowerDecibels: Float = -160
+    private var state = State()
+
+    func levels() -> AsyncStream<[Float]> {
+        let (stream, continuation) = AsyncStream.makeStream(of: [Float].self, bufferingPolicy: .bufferingNewest(8))
+        let replaced = lock.withLock {
+            defer { state.levels = continuation }
+            return state.levels
+        }
+        replaced?.finish()
+        return stream
+    }
+
+    func reset() {
+        lock.withLock {
+            state.sum = 0
+            state.count = 0
+            state.peak = 0.015
+        }
+    }
 
     func process(_ buffer: AVAudioPCMBuffer) {
         guard let channel = buffer.floatChannelData?.pointee else { return }
         let frameCount = Int(buffer.frameLength)
-        guard frameCount > 0 else { return }
-
-        var sum: Float = 0
-        for index in 0..<frameCount {
-            let sample = channel[index]
-            sum += sample * sample
+        let windowFrames = max(1, Int(buffer.format.sampleRate * (Self.window / .seconds(1))))
+        lock.withLock {
+            var levels: [Float] = []
+            for index in 0..<frameCount {
+                let sample = channel[index]
+                state.sum += sample * sample
+                state.count += 1
+                guard state.count == windowFrames else { continue }
+                levels.append(normalized(rms: sqrt(state.sum / Float(windowFrames))))
+                state.sum = 0
+                state.count = 0
+            }
+            if !levels.isEmpty { state.levels?.yield(levels) }
         }
-        let rms = sqrt(sum / Float(frameCount))
-        let decibels = rms > 0 ? 20 * log10(rms) : -160
-
-        lock.lock()
-        averagePowerDecibels = max(-160, min(0, decibels))
-        lock.unlock()
     }
 
-    func readAveragePowerDecibels() -> Float {
-        lock.lock()
-        defer { lock.unlock() }
-        return averagePowerDecibels
+    private func normalized(rms: Float) -> Float {
+        // Adaptive normalization with fast attack and slow decay.
+        let rms = min(1, rms)
+        state.peak = max(0.015, min(0.5, rms > state.peak ? rms : state.peak * 0.995))
+        return min(1, sqrt(rms / state.peak) * 0.7)
     }
 }
 

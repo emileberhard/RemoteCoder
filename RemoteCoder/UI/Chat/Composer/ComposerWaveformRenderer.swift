@@ -43,24 +43,27 @@ final class ComposerWaveformRenderer {
         CATransaction.commit()
     }
 
-    func append(_ level: Float, interval: Duration, glides: Bool) {
-        samples.append(level)
+    func append(_ levels: [Float], every interval: Duration, glides: Bool) {
+        guard !levels.isEmpty else { return }
         var start = scroll.presentation()?.position.x ?? scroll.position.x
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        offset += 3
-        if offset >= CGFloat(bars.count) * 3 {
-            let distance = CGFloat(bars.count) * 3
-            offset -= distance
-            start += distance
-            bars.forEach { $0.position.x -= distance }
+        for level in levels {
+            samples.append(level)
+            offset += 3
+            if offset >= CGFloat(bars.count) * 3 {
+                let distance = CGFloat(bars.count) * 3
+                offset -= distance
+                start += distance
+                bars.forEach { $0.position.x -= distance }
+            }
+            newest = (newest + 1) % bars.count
+            let bar = bars[newest]
+            let height = max(3, samples.values[samples.values.count - 1] * layer.bounds.height * 0.95)
+            bar.bounds.size = CGSize(width: 2, height: height)
+            bar.position = CGPoint(x: offset, y: layer.bounds.height / 2)
+            bar.isHidden = false
         }
-        newest = (newest + 1) % bars.count
-        let bar = bars[newest]
-        let height = max(3, samples.values[samples.values.count - 1] * layer.bounds.height * 0.95)
-        bar.bounds.size = CGSize(width: 2, height: height)
-        bar.position = CGPoint(x: offset, y: layer.bounds.height / 2)
-        bar.isHidden = false
         let end = layer.bounds.width - offset - (glides ? 3 : 0)
         scroll.position.x = end
         scroll.removeAnimation(forKey: "scroll")
@@ -68,7 +71,7 @@ final class ComposerWaveformRenderer {
             let animation = CABasicAnimation(keyPath: "position.x")
             animation.fromValue = start
             animation.toValue = end
-            animation.duration = interval / .seconds(1)
+            animation.duration = interval * levels.count / .seconds(1)
             animation.timingFunction = CAMediaTimingFunction(name: .linear)
             scroll.add(animation, forKey: "scroll")
         }

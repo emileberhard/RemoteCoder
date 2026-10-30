@@ -98,7 +98,7 @@ private final class RefusingRecorder: VoiceInputRecording {
     func deactivateSession() async throws {}
     func start(output: PCM16CaptureOutput) async throws {}
     func stop() {}
-    func normalizedLevel() -> Float { 0 }
+    func levels() -> AsyncStream<[Float]> { AsyncStream { $0.finish() } }
 }
 
 @MainActor
@@ -111,5 +111,5 @@ private final class ReleaseFailingRecorder: VoiceInputRecording {
         output.receive(Data(repeating: 1, count: 3_200))
     }
     func stop() {}
-    func normalizedLevel() -> Float { 0 }
+    func levels() -> AsyncStream<[Float]> { AsyncStream { $0.finish() } }
 }

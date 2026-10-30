@@ -378,7 +378,7 @@ private final class HeldStopRecorder: VoiceInputRecording {
         output.receive(Data([1]))
     }
     func stop() { stops += 1 }
-    func normalizedLevel() -> Float { 0 }
+    func levels() -> AsyncStream<[Float]> { AsyncStream { $0.finish() } }
 }
 
 private final class HeldRecoveryTranscriber: TranscriptionService {
@@ -535,7 +535,7 @@ private final class GatedVoiceRecorder: VoiceInputRecording {
     }
 
     func stop() { didStop = true }
-    func normalizedLevel() -> Float { 0 }
+    func levels() -> AsyncStream<[Float]> { AsyncStream { $0.finish() } }
 
     private func hold() async {
         await withTaskCancellationHandler {
@@ -566,5 +566,5 @@ private final class FailingCaptureRecorder: VoiceInputRecording {
     }
 
     func stop() {}
-    func normalizedLevel() -> Float { 0 }
+    func levels() -> AsyncStream<[Float]> { AsyncStream { $0.finish() } }
 }

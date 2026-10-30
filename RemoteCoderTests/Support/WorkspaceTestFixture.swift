@@ -182,7 +182,7 @@ final class StubVoiceRecorder: VoiceInputRecording {
         output.receive(Data(repeating: 1, count: output.sampleRate / 10 * 2))
     }
     func stop() { didStop = true }
-    func normalizedLevel() -> Float { 0 }
+    func levels() -> AsyncStream<[Float]> { AsyncStream { $0.finish() } }
 }
 
 struct TemporaryDictationRecordings {

@@ -103,7 +103,7 @@ private final class NativeFixtureVoiceRecorder: VoiceInputRecording {
         sink.consume(buffer)
     }
     func stop() { sink.finish() }
-    func normalizedLevel() -> Float { 0 }
+    func levels() -> AsyncStream<[Float]> { AsyncStream { $0.finish() } }
 }
 
 private final class ArchiveFixtureTranscriber: TranscriptionService {

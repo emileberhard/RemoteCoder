@@ -286,13 +286,14 @@ and never gates movement.
 Switching conversations from the drawer is refused while the composer is
 recording: the drawer stays open, plays `refused` feedback and shows a transient
 notice in its bottom status area. The recording waveform is not a decoration and
-keeps sampling while the drawer covers the chat. It samples on the energy
-policy's cadence (40 Hz, or 20 Hz while conserving energy). `ComposerWaveformView`
-owns the cancellable sampling task; `ComposerWaveformRenderer` recycles at most
-140 rounded bar layers and lets Core Animation interpolate their shared position
-between samples. Only the arriving bar changes geometry. Coordinates rebase
+keeps sampling while the drawer covers the chat. `AudioLevelMeter` turns each
+microphone buffer (about 100 ms) into one bar level per 25 ms window and yields
+them as one batch. `ComposerWaveformView`'s cancellable task appends each batch
+in one Core Animation transaction; `ComposerWaveformRenderer` recycles at most
+140 rounded bar layers and lets Core Animation glide their shared position over
+the batch's duration. Only arriving bars change geometry. Coordinates rebase
 within the bounded layer ring, so long recordings cannot grow its state.
-Under energy pressure it steps once per sample. Reduce Motion, an inactive scene
+Under energy pressure it steps once per batch. Reduce Motion, an inactive scene
 or hidden visuals stop both sampling and animation, preserving the visible bars.
 Disclosure feedback fires on finger lift after a drawer drag, including a slow
 drag released at the endpoint. It uses the shared gesture

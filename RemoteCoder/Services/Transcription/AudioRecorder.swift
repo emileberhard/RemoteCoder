@@ -32,7 +32,6 @@ final class AudioRecorder {
 
     private var isRecording = false
     private var inputFormat: AVAudioFormat?
-    private var meterPeak: Float = 0.015
     private var shouldMaintainRecording = false
     private var pausedForRouteLoss = false
     private var reactivationTask: Task<Void, Never>?
@@ -85,7 +84,7 @@ final class AudioRecorder {
             isRecording = true
             shouldMaintainRecording = true
             pausedForRouteLoss = false
-            meterPeak = 0.015
+            levelMeter.reset()
 
             if audioEngine.isRunning == false {
                 audioEngine.prepare()
@@ -115,21 +114,8 @@ final class AudioRecorder {
         VoiceModeDiagnostics.log("audio segment sink closed")
     }
 
-    func normalizedLevel() -> Float {
-        guard isRecording else { return 0 }
-        let avgDb = levelMeter.readAveragePowerDecibels()
-        let rms = pow(10, avgDb / 20)
-
-        // Adaptive normalization with fast attack and slow decay.
-        if rms > meterPeak {
-            meterPeak = rms
-        } else {
-            meterPeak *= 0.995
-        }
-        meterPeak = max(0.015, min(0.5, meterPeak))
-
-        let normalized = rms / meterPeak
-        return min(1.0, sqrt(normalized) * 0.7)
+    func levels() -> AsyncStream<[Float]> {
+        levelMeter.levels()
     }
 
     private func prepareCapture() async throws {

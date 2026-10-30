@@ -693,7 +693,7 @@ struct ChatComposerView: View {
             ComposerWaveformView(
                 isActive: true,
                 tint: .white,
-                level: { screen.target.voice.readNormalizedLevel() }
+                levels: { screen.target.voice.levels() }
             )
             .frame(height: 26)
             .frame(maxWidth: .infinity)

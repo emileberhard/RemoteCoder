@@ -9,9 +9,7 @@ struct AppEnergyPolicyTests {
     ])
     func powerAndThermalPressureLimitOnlyOptionalWork(lowPower: Bool, thermal: ProcessInfo.ThermalState, constrained: Bool) {
         let policy = AppEnergyPolicy(isLowPowerModeEnabled: lowPower, thermalState: thermal)
-        let unconstrained = AppEnergyPolicy(isLowPowerModeEnabled: false, thermalState: .nominal)
         #expect(policy.conservesEnergy == constrained)
-        #expect((policy.waveformInterval > unconstrained.waveformInterval) == constrained)
         #expect(policy.animatesDecorations(sceneActive: true, visible: true, reduceMotion: false) == !constrained)
     }
 

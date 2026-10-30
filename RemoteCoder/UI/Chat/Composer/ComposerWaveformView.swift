@@ -3,7 +3,7 @@ import SwiftUI
 struct ComposerWaveformView: View {
     let isActive: Bool
     let tint: Color
-    let level: () -> Float
+    let levels: () -> AsyncStream<[Float]>
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.visualsVisible) private var visualsVisible
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -15,21 +15,13 @@ struct ComposerWaveformView: View {
     }
 
     var body: some View {
-        let interval = energyPolicy.waveformInterval
+        let glides = !energyPolicy.conservesEnergy
         NativeComposerWaveform(renderer: renderer, tint: tint.opacity(isActive ? 0.95 : 0.35))
-            .task(id: Playback(active: isAnimating, interval: interval)) {
+            .task(id: Playback(active: isAnimating, glides: glides)) {
                 guard isAnimating else { return }
                 defer { renderer.stop() }
-                let clock = ContinuousClock()
-                var next = clock.now
-                while !Task.isCancelled {
-                    renderer.append(level(), interval: interval, glides: !energyPolicy.conservesEnergy)
-                    next = max(next + interval, clock.now)
-                    do {
-                        try await clock.sleep(until: next)
-                    } catch {
-                        return
-                    }
+                for await batch in levels() {
+                    renderer.append(batch, every: AudioLevelMeter.window, glides: glides)
                 }
             }
             .accessibilityHidden(true)
@@ -37,6 +29,6 @@ struct ComposerWaveformView: View {
 
     private struct Playback: Equatable {
         let active: Bool
-        let interval: Duration
+        let glides: Bool
     }
 }

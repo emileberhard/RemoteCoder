@@ -16,8 +16,6 @@ struct AppEnergyPolicy: Equatable, Sendable {
         isLowPowerModeEnabled || thermalState == .serious || thermalState == .critical
     }
 
-    var waveformInterval: Duration { conservesEnergy ? .milliseconds(50) : .milliseconds(25) }
-
     func animatesDecorations(sceneActive: Bool, visible: Bool, reduceMotion: Bool) -> Bool {
         sceneActive && visible && !reduceMotion && !conservesEnergy
     }

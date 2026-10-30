@@ -16,7 +16,7 @@ protocol VoiceInputRecording: AnyObject {
     func deactivateSession() async throws
     func start(output: PCM16CaptureOutput) async throws
     func stop()
-    func normalizedLevel() -> Float
+    func levels() -> AsyncStream<[Float]>
 }
 
 extension AudioRecorder: VoiceInputRecording {}
@@ -303,8 +303,8 @@ final class VoiceInputController {
         }
     }
 
-    func readNormalizedLevel() -> Float {
-        recorder.normalizedLevel()
+    func levels() -> AsyncStream<[Float]> {
+        recorder.levels()
     }
 
     private func startRecording() async throws {

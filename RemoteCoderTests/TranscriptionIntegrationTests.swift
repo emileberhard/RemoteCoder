@@ -189,7 +189,7 @@ private final class ProgressiveFixtureRecorder: VoiceInputRecording {
         }
     }
     func stop() { sink.finish() }
-    func normalizedLevel() -> Float { 0 }
+    func levels() -> AsyncStream<[Float]> { AsyncStream { $0.finish() } }
 }
 
 private final class AzureTimingTranscriber: TranscriptionService {
