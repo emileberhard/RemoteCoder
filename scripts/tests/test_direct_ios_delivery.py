@@ -28,39 +28,60 @@ class DirectDeliveryTests(unittest.TestCase):
                     testflight,
                 )
 
-    def test_testflight_refusal_requires_a_refreshed_inventory(self):
-        phone = {"id": 27, "attributes": {"unique_identifier": "phone-udid"}}
+    def test_testflight_refusal_requires_inventory_refreshed_under_the_lease(self):
+        real = module.load_coordinator()
 
-        def row(build, seen):
+        def row(build, seen, managed=True):
             return {
                 "id": 98,
                 "attributes": {
                     "identifier": "bundle",
-                    "managed": True,
+                    "managed": managed,
                     "short_version": "3.76.6",
                     "version": build,
                     "last_seen_at": seen,
                 },
             }
 
-        stale = row("3073012", "2026-10-29T08:00:00Z")
-        for refreshed, refused in (
-            (row("3076006", "2026-10-30T01:00:00Z"), False),
-            (row("3073012", "2026-10-30T01:00:00Z"), True),
-            (None, True),
+        testflight = row("3073012", "2026-10-30T01:00:00Z")
+        later = "2026-10-30T01:01:00Z"
+        for name, observed, outcome in (
+            ("advanced while waiting for the lease", [row("3076006", later)], "accepted"),
+            ("refreshed to the direct build", [testflight, row("3076006", later)], "accepted"),
+            ("still TestFlight", [testflight, row("3073012", later)], "TestFlight build"),
+            ("lost management", [testflight, row("3076006", later, managed=False)], "initial SimpleMDM"),
+            ("never refreshed", [testflight] * 3, "did not refresh"),
         ):
-            with (
-                self.subTest(refreshed=refreshed),
-                patch.object(module, "mdm_api", return_value=[stale]),
-                patch.object(module, "catalog_app", return_value={"id": 19}),
-                patch.object(module, "refreshed_install", return_value=refreshed),
-            ):
-                if refused:
-                    with self.assertRaises(module.ManagedAppNotConfigured):
-                        module.mdm_target("", "bundle", device=phone)
-                else:
-                    _, _, installed = module.mdm_target("", "bundle", device=phone)
-                    self.assertIs(installed, refreshed)
+            with self.subTest(name):
+                observations = iter(observed)
+                lease = Mock()
+                lease.__enter__ = Mock(return_value=lease)
+                lease.__exit__ = Mock(return_value=False)
+                api = Mock()
+                api.request = Mock(side_effect=lambda *_: [next(observations)])
+                helper = SimpleNamespace(
+                    CatalogLease=Mock(return_value=lease),
+                    SimpleMDM=Mock(return_value=api),
+                    InventoryRefresh=Mock(return_value=Mock()),
+                    resource=real.resource,
+                    inventory_time=real.inventory_time,
+                    InstallError=real.InstallError,
+                )
+                clock = iter(range(0, 1000, 50))
+                with (
+                    patch.object(module, "load_coordinator", return_value=helper),
+                    patch.object(
+                        module,
+                        "time",
+                        SimpleNamespace(monotonic=lambda: next(clock), sleep=Mock()),
+                    ),
+                ):
+                    if outcome == "accepted":
+                        installed = module.replaceable_install({"id": 27}, {"id": 19}, "bundle")
+                        self.assertEqual(installed, observed[-1])
+                    else:
+                        with self.assertRaisesRegex(module.ManagedAppNotConfigured, outcome):
+                            module.replaceable_install({"id": 27}, {"id": 19}, "bundle")
 
     def test_automatic_managed_target_uses_model_name_not_hardware_product_code(self):
         phone = {
