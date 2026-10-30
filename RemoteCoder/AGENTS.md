@@ -1764,7 +1764,12 @@ The gateway side is in `host-daemon-rs/AGENTS.md`; both paths are in
 - `AudioRecorder` drives a `CaptureAudioSession` (`AVCaptureAudioSession` on iOS:
   recording-only `AVAudioSession`, prefers the built-in
   microphone), delivers PCM16 mono chunks to one `PCM16CaptureOutput`, and tears
-  down reliably so repeated taps work. For dictation that output appends each
+  down reliably so repeated taps work. Its private `CaptureEngine` actor owns
+  the engine and tap; prepare, start, pause and teardown never run on the main
+  actor. The recorder reserves each start before suspension and orders complete
+  starts, interruption/route recovery and teardown through one task chain. Stop
+  detaches the sink synchronously and cancels a pending start; session release
+  and the next start wait for teardown. For dictation that output appends each
   chunk to the recording writer and then to the `RealtimeDictation`. It pauses
   on interruptions and route changes, and resumes when an interruption ends with
   `shouldResume` or an input route returns.

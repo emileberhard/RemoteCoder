@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import SpeechKit
 import Synchronization
@@ -7,6 +8,31 @@ import Testing
 @MainActor
 struct DictationRecordingTests {
     private let owner = ExecutionTarget(hostID: UUID())
+
+    @Test func waveformWindowsReceiveBatchedLevelsAcrossTapBuffersAndResetPartialAudio() async throws {
+        let meter = AudioLevelMeter()
+        var levels = meter.levels().makeAsyncIterator()
+        var otherWindow = meter.levels().makeAsyncIterator()
+        let format = try #require(AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1))
+        func buffer(_ samples: [Float]) throws -> AVAudioPCMBuffer {
+            let buffer = try #require(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(samples.count)))
+            buffer.frameLength = buffer.frameCapacity
+            let channel = try #require(buffer.floatChannelData?.pointee)
+            for (index, sample) in samples.enumerated() { channel[index] = sample }
+            return buffer
+        }
+        meter.process(try buffer(Array(repeating: 0, count: 600)))
+        meter.process(try buffer(Array(repeating: 0, count: 600) + Array(repeating: 0.5, count: 1_200)))
+        let batch = try #require(await levels.next())
+        #expect(await otherWindow.next() == batch)
+        #expect(batch.count == 2)
+        #expect(batch[0] == 0)
+        #expect(abs(batch[1] - 0.7) < 0.001)
+        meter.process(try buffer(Array(repeating: 0.5, count: 600)))
+        meter.reset()
+        meter.process(try buffer(Array(repeating: 0, count: 1_200)))
+        #expect(await levels.next() == [0])
+    }
 
     @Test(.timeLimit(.minutes(1))) func cancellingAnUnansweredPermissionRequestFinishesWithoutWaitingForItsLateGrant() async throws {
         let reply = HeldPermissionReply()

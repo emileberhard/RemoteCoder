@@ -8,19 +8,20 @@ final class AudioLevelMeter: @unchecked Sendable {
         var sum: Float = 0
         var count = 0
         var peak: Float = 0.015
-        var levels: AsyncStream<[Float]>.Continuation?
+        var levels: [UUID: AsyncStream<[Float]>.Continuation] = [:]
     }
 
     private let lock = NSLock()
     private var state = State()
 
     func levels() -> AsyncStream<[Float]> {
+        let id = UUID()
         let (stream, continuation) = AsyncStream.makeStream(of: [Float].self, bufferingPolicy: .bufferingNewest(8))
-        let replaced = lock.withLock {
-            defer { state.levels = continuation }
-            return state.levels
+        continuation.onTermination = { [weak self] _ in
+            guard let self else { return }
+            lock.withLock { _ = state.levels.removeValue(forKey: id) }
         }
-        replaced?.finish()
+        lock.withLock { state.levels[id] = continuation }
         return stream
     }
 
@@ -36,7 +37,7 @@ final class AudioLevelMeter: @unchecked Sendable {
         guard let channel = buffer.floatChannelData?.pointee else { return }
         let frameCount = Int(buffer.frameLength)
         let windowFrames = max(1, Int(buffer.format.sampleRate * (Self.window / .seconds(1))))
-        lock.withLock {
+        let (levels, subscribers) = lock.withLock {
             var levels: [Float] = []
             for index in 0..<frameCount {
                 let sample = channel[index]
@@ -47,7 +48,10 @@ final class AudioLevelMeter: @unchecked Sendable {
                 state.sum = 0
                 state.count = 0
             }
-            if !levels.isEmpty { state.levels?.yield(levels) }
+            return (levels, Array(state.levels.values))
+        }
+        if !levels.isEmpty {
+            for subscriber in subscribers { subscriber.yield(levels) }
         }
     }
 

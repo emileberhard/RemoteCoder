@@ -288,13 +288,26 @@ recording: the drawer stays open, plays `refused` feedback and shows a transient
 notice in its bottom status area. The recording waveform is not a decoration and
 keeps sampling while the drawer covers the chat. `AudioLevelMeter` turns each
 microphone buffer (about 100 ms) into one bar level per 25 ms window and yields
-them as one batch. `ComposerWaveformView`'s cancellable task appends each batch
+them as one batch to each live waveform subscriber. Each subscription keeps at
+most eight newest batches and removes itself on cancellation; one Mac window
+cannot take over another window's levels. `ComposerWaveformView`'s cancellable task appends each batch
 in one Core Animation transaction; `ComposerWaveformRenderer` recycles at most
 140 rounded bar layers and lets Core Animation glide their shared position over
 the batch's duration. Only arriving bars change geometry. Coordinates rebase
 within the bounded layer ring, so long recordings cannot grow its state.
-Under energy pressure it steps once per batch. Reduce Motion, an inactive scene
-or hidden visuals stop both sampling and animation, preserving the visible bars.
+It stays still until the first audio arrives (about 250–350 ms). Under energy
+pressure it steps once per batch, normally 12 points per 100 ms. Reduce Motion,
+an inactive scene or hidden visuals stop consuming levels and animating,
+preserving the visible bars; the meter continues processing captured audio.
+
+`AudioRecorder` owns the main-actor capture intent and audio-session lifecycle.
+Its private `CaptureEngine` actor owns the audio graph and tap, including the
+blocking prepare/start and teardown. Complete starts, pauses, resumes, resets
+and session release are ordered through one task chain. Stop immediately closes
+the synchronized PCM16 sink and cancels any pending start; cancellation is checked
+after each start suspension, and failed/cancelled starts reset the graph before
+the chain admits another operation. Session release waits for engine teardown.
+The SDK tap callback only touches the lock-owned meter and PCM16 sink.
 Disclosure feedback fires on finger lift after a drawer drag, including a slow
 drag released at the endpoint. It uses the shared gesture
 feedback modifier in that same update, with no delayed completion pulse.

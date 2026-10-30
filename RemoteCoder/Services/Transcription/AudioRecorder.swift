@@ -6,14 +6,12 @@ import OSLog
 
 enum AudioCaptureError: LocalizedError, Sendable {
     case alreadyRecording
-    case missingInputFormat
     case invalidInputFormat
     case sessionDidNotDeactivate
 
     var errorDescription: String? {
         switch self {
         case .alreadyRecording: "A recording is already active."
-        case .missingInputFormat: "The microphone's input format was not available."
         case .invalidInputFormat: "The microphone reported an invalid input format."
         case .sessionDidNotDeactivate: "The recording audio session did not release."
         }
@@ -31,11 +29,12 @@ final class AudioRecorder {
     private let pcm16Sink = PCM16CaptureSink()
 
     private var isRecording = false
-    private var inputFormat: AVAudioFormat?
     private var shouldMaintainRecording = false
     private var pausedForRouteLoss = false
     private var reactivationTask: Task<Void, Never>?
-    private var engineWork: Task<Void, Never>?
+    private var captureWork: Task<Void, Never>?
+    private var starting: Task<Void, Error>?
+    private var generation = UUID()
     private var isCaptureRunning = false
 
     init(session: any CaptureAudioSession) {
@@ -48,17 +47,33 @@ final class AudioRecorder {
 
     func activateSession() async throws {
         registerAudioSessionObserversIfNeeded()
-        try await session.activateForRecording()
+        let previous = captureWork
+        let work = Task {
+            await previous?.value
+            try Task.checkCancellation()
+            try await session.activateForRecording()
+            try Task.checkCancellation()
+        }
+        captureWork = Task { _ = await work.result }
+        try await withTaskCancellationHandler {
+            try await work.value
+        } onCancel: {
+            work.cancel()
+        }
     }
 
     func deactivateSession() async throws {
-        reactivationTask?.cancel()
-        reactivationTask = nil
-        await stopCapture()
-        guard await session.deactivate() else {
-            throw AudioCaptureError.sessionDidNotDeactivate
+        stop()
+        let previous = captureWork
+        let work = Task {
+            await previous?.value
+            guard await session.deactivate() else {
+                throw AudioCaptureError.sessionDidNotDeactivate
+            }
+            VoiceModeDiagnostics.log("audio session inactive")
         }
-        VoiceModeDiagnostics.log("audio session inactive")
+        captureWork = Task { _ = await work.result }
+        try await work.value
     }
 
     func start(output: PCM16CaptureOutput) async throws {
@@ -66,49 +81,65 @@ final class AudioRecorder {
         guard !isRecording else {
             throw AudioCaptureError.alreadyRecording
         }
-
-        do {
-            if isCaptureRunning, await engine.isRunning == false {
-                VoiceModeDiagnostics.log("capture graph invalidated; rebuilding")
-                stopCaptureImmediately()
+        let generation = UUID()
+        self.generation = generation
+        isRecording = true
+        shouldMaintainRecording = true
+        pausedForRouteLoss = false
+        let previous = captureWork
+        let work = Task {
+            await previous?.value
+            do {
+                try Task.checkCancellation()
+                VoiceModeDiagnostics.log("dictation capture preparation started")
+                let format = try await engine.installTap(levelMeter: levelMeter, sink: pcm16Sink)
+                try Task.checkCancellation()
+                VoiceModeDiagnostics.log("capture tap installed sampleRate=\(Int(format.sampleRate)) channels=\(format.channelCount)")
+                try await pcm16Sink.begin(inputFormat: format, output: output)
+                try Task.checkCancellation()
+                levelMeter.reset()
+                try await engine.start()
+                try Task.checkCancellation()
+                isCaptureRunning = true
+                VoiceModeDiagnostics.log("audio segment sink opened")
+            } catch {
+                pcm16Sink.finish()
+                await engine.reset()
+                if self.generation == generation {
+                    isRecording = false
+                    shouldMaintainRecording = false
+                    isCaptureRunning = false
+                }
+                throw error
             }
-            await engineWork?.value
-            if isCaptureRunning == false {
-                try await prepareCapture()
-            }
-            try Task.checkCancellation()
-            guard let inputFormat else {
-                throw AudioCaptureError.missingInputFormat
-            }
-
-            try await pcm16Sink.begin(inputFormat: inputFormat, output: output)
-            levelMeter.reset()
-            isRecording = true
-            shouldMaintainRecording = true
-            pausedForRouteLoss = false
-
-            try await engine.start()
-            isCaptureRunning = true
-            VoiceModeDiagnostics.log("audio segment sink opened engineRunning=\(await engine.isRunning)")
-        } catch {
-            pcm16Sink.finish()
-            isRecording = false
-            if isCaptureRunning == false {
-                await stopCapture()
-            }
-            throw error
+        }
+        starting = work
+        captureWork = Task { _ = await work.result }
+        defer {
+            if self.generation == generation { starting = nil }
+        }
+        try await withTaskCancellationHandler {
+            try await work.value
+        } onCancel: {
+            work.cancel()
         }
     }
 
     func stop() {
+        generation = UUID()
+        starting?.cancel()
+        starting = nil
         reactivationTask?.cancel()
         reactivationTask = nil
         shouldMaintainRecording = false
         pausedForRouteLoss = false
         pcm16Sink.finish()
         isRecording = false
-
-        stopCaptureImmediately()
+        isCaptureRunning = false
+        afterCaptureWork { engine in
+            await engine.reset()
+            VoiceModeDiagnostics.log("capture engine stopped")
+        }
         VoiceModeDiagnostics.log("audio segment sink closed")
     }
 
@@ -116,36 +147,9 @@ final class AudioRecorder {
         levelMeter.levels()
     }
 
-    private func prepareCapture() async throws {
-        VoiceModeDiagnostics.log("dictation capture preparation started")
-        let format = try await engine.installTap(levelMeter: levelMeter, sink: pcm16Sink)
-        inputFormat = format
-        VoiceModeDiagnostics.log("capture tap installed sampleRate=\(Int(format.sampleRate)) channels=\(format.channelCount)")
-    }
-
-    private func stopCaptureImmediately() {
-        pcm16Sink.finish()
-        isCaptureRunning = false
-        inputFormat = nil
-        afterEngineWork { engine in
-            await engine.reset()
-            VoiceModeDiagnostics.log("capture engine stopped")
-        }
-    }
-
-    private func stopCapture() async {
-        stopCaptureImmediately()
-        await engineWork?.value
-
-        isRecording = false
-        shouldMaintainRecording = false
-        pausedForRouteLoss = false
-        VoiceModeDiagnostics.log("capture pipeline torn down")
-    }
-
-    private func afterEngineWork(_ operation: @escaping (CaptureEngine) async -> Void) {
-        let previous = engineWork
-        engineWork = Task { [engine] in
+    private func afterCaptureWork(_ operation: @escaping (CaptureEngine) async -> Void) {
+        let previous = captureWork
+        captureWork = Task { [engine] in
             await previous?.value
             await operation(engine)
         }
@@ -170,7 +174,8 @@ final class AudioRecorder {
 
     private func handleAudioSessionInterruption() {
         guard shouldMaintainRecording else { return }
-        afterEngineWork { [logger] engine in
+        reactivationTask?.cancel()
+        afterCaptureWork { [logger] engine in
             if await engine.pause() {
                 logger.notice("paused recording due to audio-session interruption")
             }
@@ -183,6 +188,7 @@ final class AudioRecorder {
         case .shouldResume:
             resumeRecordingIfNeeded(context: "interruption ended")
         case .shouldNotResume:
+            reactivationTask?.cancel()
             logger.notice("system recommended leaving the interrupted recording paused")
         case .unknown:
             logger.notice("system provided an unknown audio-session resumption recommendation")
@@ -194,9 +200,10 @@ final class AudioRecorder {
 
         try? session.preferBuiltInInput(context: "route change")
 
-        if inputLost, isCaptureRunning {
+        if inputLost {
+            reactivationTask?.cancel()
             pausedForRouteLoss = true
-            afterEngineWork { [logger] engine in
+            afterCaptureWork { [logger] engine in
                 if await engine.pause() {
                     logger.notice("paused recording due to route change: \(reasonCode)")
                 }
@@ -210,25 +217,32 @@ final class AudioRecorder {
 
     private func resumeRecordingIfNeeded(context: String) {
         reactivationTask?.cancel()
-        reactivationTask = Task { [weak self] in
-            await self?.resumeRecording(context: context)
+        let previous = captureWork
+        let work = Task { [weak self] in
+            await previous?.value
+            guard let self, !Task.isCancelled, shouldMaintainRecording, isCaptureRunning else { return }
+            await resumeRecording(context: context)
         }
+        reactivationTask = work
+        captureWork = work
     }
 
     private func resumeRecording(context: String) async {
-        guard shouldMaintainRecording, isCaptureRunning else { return }
-        await engineWork?.value
-        if await engine.isRunning {
-            pausedForRouteLoss = false
-            return
-        }
-
         do {
+            try Task.checkCancellation()
+            let running = await engine.isRunning
+            try Task.checkCancellation()
+            if running {
+                pausedForRouteLoss = false
+                return
+            }
+            try Task.checkCancellation()
             try await session.reactivate()
             try Task.checkCancellation()
             guard shouldMaintainRecording, isCaptureRunning else { return }
             try session.preferBuiltInInput(context: context)
             try await engine.resume()
+            try Task.checkCancellation()
             pausedForRouteLoss = false
             logger.notice("resumed recording after \(context)")
         } catch is CancellationError {
@@ -238,8 +252,6 @@ final class AudioRecorder {
         }
     }
 }
-
-// MARK: - Engine
 
 private actor CaptureEngine {
     private var engine = AVAudioEngine()
@@ -277,12 +289,15 @@ private actor CaptureEngine {
     }
 
     func start() throws {
+        try Task.checkCancellation()
         guard !engine.isRunning else { return }
         engine.prepare()
+        try Task.checkCancellation()
         try engine.start()
     }
 
     func resume() throws {
+        try Task.checkCancellation()
         try engine.start()
     }
 
