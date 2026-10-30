@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use serde::Deserialize;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 const HOST_PROFILES: &str = include_str!("../../config/host-profiles.json");
@@ -19,9 +20,19 @@ impl DesktopMode {
         }
     }
 
-    pub(crate) fn for_this_host() -> Result<Self> {
+    pub(crate) fn for_codex_home(codex_home: &Path) -> Result<Option<Self>> {
+        if !is_user_codex_home(codex_home)? {
+            return Ok(None);
+        }
         let host = nix::unistd::gethostname().context("failed to read this host's name")?;
-        Ok(Self::for_host(load_profiles()?, &host.to_string_lossy()))
+        Ok(Some(Self::for_host(
+            load_profiles()?,
+            &host.to_string_lossy(),
+        )))
+    }
+
+    pub(crate) fn name_for_codex_home(codex_home: &Path) -> Result<&'static str> {
+        Ok(Self::for_codex_home(codex_home)?.map_or("isolated", Self::as_str))
     }
 
     fn for_host(profiles: &HostProfiles, host: &str) -> Self {
@@ -30,6 +41,21 @@ impl DesktopMode {
         } else {
             DesktopMode::Shared
         }
+    }
+}
+
+fn is_user_codex_home(codex_home: &Path) -> Result<bool> {
+    let user = nix::unistd::User::from_uid(nix::unistd::getuid())
+        .context("failed to read this user's account")?
+        .context("this user has no account entry")?;
+    Ok(location(codex_home)? == location(&user.dir.join(".codex"))?)
+}
+
+fn location(path: &Path) -> Result<PathBuf> {
+    match std::fs::canonicalize(path) {
+        Ok(resolved) => Ok(resolved),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(path.to_path_buf()),
+        Err(error) => Err(error).with_context(|| format!("failed to resolve {}", path.display())),
     }
 }
 
@@ -200,6 +226,25 @@ mod tests {
         for host in ["gateway-secondary", "gateway-primary-2"] {
             assert!(!FullDiskAccessRequirement::for_host(&profiles, host));
         }
+    }
+
+    #[test]
+    fn only_the_users_own_codex_home_has_a_desktop_mode() {
+        let lab = tempfile::tempdir().unwrap();
+        assert_eq!(
+            DesktopMode::for_codex_home(&lab.path().join(".codex")).unwrap(),
+            None
+        );
+        assert_eq!(
+            DesktopMode::name_for_codex_home(&lab.path().join(".codex")).unwrap(),
+            "isolated"
+        );
+        let user = nix::unistd::User::from_uid(nix::unistd::getuid())
+            .unwrap()
+            .unwrap();
+        assert!(is_user_codex_home(&user.dir.join(".codex")).unwrap());
+        assert!(is_user_codex_home(&user.dir.join(".codex/")).unwrap());
+        assert!(!is_user_codex_home(&user.dir).unwrap());
     }
 
     #[test]

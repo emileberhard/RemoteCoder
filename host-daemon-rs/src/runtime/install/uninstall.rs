@@ -1,6 +1,7 @@
 use super::package::remove_path;
 use super::transaction::{LEGACY_DESKTOP_LAUNCHER, log_step};
-use crate::config::{CodexSettings, ConfigSources, GatewayEndpoint, HostPaths};
+use crate::config::host_profile::DesktopMode;
+use crate::config::{CodexSettings, ConfigSources, GatewayEndpoint, HostPaths, codex_home};
 use crate::providers::codex::daemon::CodexAppServer;
 use crate::runtime::bootstrap::RuntimeLease;
 use crate::runtime::desktop::control::{chatgpt_app_pids, process_lines};
@@ -76,6 +77,9 @@ impl<'a> UninstallTransaction<'a> {
         env_file: Option<&'a Path>,
         sources: &'a ConfigSources,
     ) -> Result<Self> {
+        DesktopMode::for_codex_home(&codex_home(&sources.codex_child_env())?)?.context(
+            "gateway uninstall manages this user's ChatGPT Desktop and requires the user's own Codex home",
+        )?;
         let paths = HostPaths::from_env()?;
         let gateway = LaunchdService::new(GATEWAY_LABEL, &paths);
         let desktop = LaunchdService::new(DESKTOP_LABEL, &paths);

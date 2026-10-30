@@ -164,7 +164,7 @@ async fn install_version_matched_runtime(
     // package activation and must attempt the same source-bound rollback.
     let gateway_was_loaded = gateway_launchagent_is_loaded().await.unwrap_or(true);
     let preparation = async {
-        stop_desktop("install").await?;
+        stop_desktop(app_server, "install").await?;
         unload_gateway_launchagent().await?;
         let prepared = store
             .load()?

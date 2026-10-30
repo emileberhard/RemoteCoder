@@ -1,7 +1,6 @@
 use super::CHATGPT_EXECUTABLE;
 use crate::observability::desktop as desktop_journal;
 use crate::providers::codex::daemon::CodexAppServer;
-use crate::runtime::launchd::launchctl;
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
 use std::path::Path;
@@ -116,21 +115,6 @@ pub(in crate::runtime) fn app_server_websocket_url(socket_path: &Path) -> Result
     // ws+unix transport reads the socket from the pathname, so localhost keeps
     // the connection local without changing the absolute socket path.
     Ok(format!("ws+unix://localhost{socket_path}:/rpc"))
-}
-
-async fn set_launchctl_environment(key: &str, value: &str) -> Result<()> {
-    let status = launchctl().args(["setenv", key, value]).status().await?;
-    if !status.success() {
-        bail!("failed to set ChatGPT {key} environment");
-    }
-    Ok(())
-}
-
-pub(super) async fn configure_chatgpt_environment(environment: &ChatGptEnvironment) -> Result<()> {
-    for (key, value) in environment.launch_variables() {
-        set_launchctl_environment(key, value).await?;
-    }
-    Ok(())
 }
 
 /// Reads one process's environment and classifies it. `ps` exits non-zero for

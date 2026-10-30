@@ -329,7 +329,7 @@ impl<'a> RecoveryTransaction<'a> {
         );
         let env = env_file.context("runtime rollback requires a gateway env file")?;
         require_gateway_env(env)?;
-        stop_desktop("rollback").await?;
+        stop_desktop(self.app_server, "rollback").await?;
         unload_gateway_launchagent().await?;
         let journal = self.store.load()?.context("rollback journal disappeared")?;
         let generation_id = if journal.is_prepared_handoff() {
@@ -386,7 +386,7 @@ impl<'a> RecoveryTransaction<'a> {
         }
         let env = env_file.context("unfinished rollback requires a gateway env file")?;
         require_gateway_env(env)?;
-        stop_desktop("rollback").await?;
+        stop_desktop(self.app_server, "rollback").await?;
         unload_gateway_launchagent().await?;
         self.prepare_incomplete_recovery(&journal).await?;
         journal = self
@@ -409,7 +409,7 @@ impl<'a> RecoveryTransaction<'a> {
     }
 
     pub(super) async fn transition(&self, destination: RuntimeDestination) -> Result<()> {
-        stop_desktop("transition").await?;
+        stop_desktop(self.app_server, "transition").await?;
         let result = self.restart_transaction(destination).await;
         if let Err(error) = result {
             let safe_to_reopen = self.store.load()?.is_none_or(|journal| {
@@ -668,7 +668,9 @@ impl<'a> RecoveryTransaction<'a> {
                 false
             }
         };
-        if !is_account && let Err(cleanup_error) = stop_desktop("recovery-failed").await {
+        if !is_account
+            && let Err(cleanup_error) = stop_desktop(self.app_server, "recovery-failed").await
+        {
             cleanup_errors.push(format!("stopping ChatGPT failed: {cleanup_error:#}"));
         }
         let daemon_stopped = match self.app_server.stop().await {

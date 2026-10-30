@@ -29,9 +29,7 @@ pub(super) async fn run_desktop_action(
             launch_chatgpt(app_server, journal).await
         }
         DesktopAction::Check => check_chatgpt(app_server, journal).await,
-        DesktopAction::Stop => {
-            stop_chatgpt(&MacOsDesktop, journal, DesktopStopAuthority::Requested).await
-        }
+        DesktopAction::Stop => stop_requested(app_server, journal).await,
         DesktopAction::Mode => unreachable!("desktop mode returns before its journal opens"),
     }
 }
@@ -50,12 +48,19 @@ pub(super) async fn reconcile_desktop(
     result
 }
 
-pub(super) async fn stop_desktop(origin: &'static str) -> Result<()> {
+pub(super) async fn stop_desktop(app_server: &CodexAppServer, origin: &'static str) -> Result<()> {
     let journal = DesktopJournal::open("stop", origin);
     journal.event("desktop/started", json!({ "host": host_name() }));
-    let result = stop_chatgpt(&MacOsDesktop, &journal, DesktopStopAuthority::Requested).await;
+    let result = stop_requested(app_server, &journal).await;
     record_desktop_finished(&journal, &result);
     result
+}
+
+async fn stop_requested(app_server: &CodexAppServer, journal: &DesktopJournal) -> Result<()> {
+    match MacOsDesktop::for_app_server(app_server, journal)? {
+        Some(desktop) => stop_chatgpt(&desktop, journal, DesktopStopAuthority::Requested).await,
+        None => Ok(()),
+    }
 }
 
 pub(super) async fn check_desktop(app_server: &CodexAppServer, origin: &'static str) -> Result<()> {
@@ -150,6 +155,7 @@ pub(super) enum DesktopReason {
     /// No ChatGPT bundle on this host. Reconciliation has nothing to own.
     NotInstalled,
     Disabled,
+    Isolated,
 }
 
 impl DesktopReason {
@@ -162,6 +168,7 @@ impl DesktopReason {
             DesktopReason::ObservationFailed => "observation-failed",
             DesktopReason::NotInstalled => "not-installed",
             DesktopReason::Disabled => "disabled",
+            DesktopReason::Isolated => "isolated",
         }
     }
 
@@ -173,7 +180,9 @@ impl DesktopReason {
             DesktopReason::AppAbsent => "launch",
             DesktopReason::EnvironmentMismatch => "stop-mismatched",
             DesktopReason::IncompatibleVersion | DesktopReason::ObservationFailed => "abort",
-            DesktopReason::NotInstalled | DesktopReason::Disabled => "none",
+            DesktopReason::NotInstalled | DesktopReason::Disabled | DesktopReason::Isolated => {
+                "none"
+            }
         }
     }
 }

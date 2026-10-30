@@ -84,7 +84,6 @@ pub(in crate::runtime) struct InstallationTransaction<'a> {
     recovery: RecoveryTransaction<'a>,
     env_file: &'a Path,
     probe: GatewayProbe,
-    desktop_mode: DesktopMode,
     gateway: LaunchdService,
     desktop: LaunchdService,
     staged_bundle: PathBuf,
@@ -117,7 +116,6 @@ impl<'a> InstallationTransaction<'a> {
             recovery,
             env_file,
             probe: GatewayProbe::new(GatewayEndpoint::load(sources)?)?,
-            desktop_mode: DesktopMode::for_this_host()?,
             gateway: LaunchdService::new(GATEWAY_LABEL, &paths),
             desktop: LaunchdService::new(DESKTOP_LABEL, &paths),
             launcher: Artifact::at(&bin_dir, "launch-codex-gateway", stage_id),
@@ -143,15 +141,19 @@ impl<'a> InstallationTransaction<'a> {
             &self.staged_bundle,
             config.as_deref(),
         )?);
+        let desktop_mode =
+            DesktopMode::for_codex_home(self.recovery.app_server.provider_home()?)?.context(
+                "gateway installation manages this user's ChatGPT Desktop and requires the user's own Codex home",
+            )?;
         self.back_up()?;
         if let Err(error) = self.prepare_handoff().await {
             self.discard_backups()?;
             return Err(error);
         }
-        if let Err(error) = self.cut_over().await {
+        if let Err(error) = self.cut_over(desktop_mode).await {
             return Err(self.roll_back(error).await);
         }
-        self.commit().await
+        self.commit(desktop_mode).await
     }
 
     fn artifacts_mut(&mut self) -> impl Iterator<Item = &mut Artifact> {
@@ -182,7 +184,7 @@ impl<'a> InstallationTransaction<'a> {
         self.recovery.prepare_handoff().await
     }
 
-    async fn cut_over(&self) -> Result<()> {
+    async fn cut_over(&self, desktop_mode: DesktopMode) -> Result<()> {
         let started = std::time::Instant::now();
         let mark = |phase: &str| {
             println!(
@@ -191,7 +193,7 @@ impl<'a> InstallationTransaction<'a> {
             )
         };
         self.desktop.bootout().await?;
-        stop_desktop("install").await?;
+        stop_desktop(self.recovery.app_server, "install").await?;
         mark("desktopStopped");
         self.gateway.bootout().await?;
         mark("gatewayUnloaded");
@@ -223,10 +225,10 @@ impl<'a> InstallationTransaction<'a> {
         self.verify_file_descriptor_policy()
             .await
             .context("shared Codex app-server resource-limit policy did not activate")?;
-        self.attach_desktop().await
+        self.attach_desktop(desktop_mode).await
     }
 
-    async fn commit(&self) -> Result<()> {
+    async fn commit(&self, desktop_mode: DesktopMode) -> Result<()> {
         {
             let _lease = RuntimeLease::acquire(self.recovery.store)?;
             commit_runtime_swap(self.recovery.store)?;
@@ -239,7 +241,7 @@ impl<'a> InstallationTransaction<'a> {
         self.claude_state.discard()?;
         self.discard_backups()?;
         remove_path(&self.legacy_desktop_launcher)?;
-        match self.desktop_mode {
+        match desktop_mode {
             DesktopMode::Disabled => println!(
                 "gateway initial health checks passed; ChatGPT Desktop is disabled on this host; installation committed"
             ),
@@ -366,14 +368,14 @@ impl<'a> InstallationTransaction<'a> {
         Ok(())
     }
 
-    async fn attach_desktop(&self) -> Result<()> {
-        match self.desktop_mode {
+    async fn attach_desktop(&self, desktop_mode: DesktopMode) -> Result<()> {
+        match desktop_mode {
             DesktopMode::Disabled => {
                 self.desktop.bootout().await?;
                 remove_path(&self.desktop_plist.installed)
             }
             DesktopMode::Shared => {
-                stop_desktop("install").await?;
+                stop_desktop(self.recovery.app_server, "install").await?;
                 self.desktop.bootout().await?;
                 self.desktop_plist
                     .activate_launchagent(&self.desktop)
@@ -478,7 +480,10 @@ impl<'a> InstallationTransaction<'a> {
 
     async fn restore_desktop_integration(&self) -> Result<()> {
         log_step("release the desktop service", self.desktop.bootout().await);
-        log_step("stop ChatGPT", stop_desktop("rollback").await);
+        log_step(
+            "stop ChatGPT",
+            stop_desktop(self.recovery.app_server, "rollback").await,
+        );
         clear_chatgpt_launchctl_environment().await;
         if !self.desktop_plist.had_previous {
             return remove_path(&self.desktop_plist.installed);

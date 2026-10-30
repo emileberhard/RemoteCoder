@@ -1,5 +1,5 @@
 use super::control::{DesktopControl, MacOsDesktop};
-use super::environment::{ChatGptEnvironment, configure_chatgpt_environment};
+use super::environment::ChatGptEnvironment;
 use super::observe::{
     decide_desktop_action, list_processes, observe_desktop, record_decision, record_observation,
 };
@@ -15,13 +15,16 @@ use serde_json::json;
 use std::path::Path;
 use std::time::Duration;
 
-pub(super) async fn launch_chatgpt(
+pub(in crate::runtime) async fn launch_chatgpt(
     app_server: &CodexAppServer,
     journal: &DesktopJournal,
 ) -> Result<()> {
+    let Some(desktop) = MacOsDesktop::for_app_server(app_server, journal)? else {
+        return Ok(());
+    };
     let environment = ChatGptEnvironment::for_app_server(app_server)?;
-    configure_chatgpt_environment(&environment).await?;
-    if DesktopMode::for_this_host()? == DesktopMode::Disabled {
+    desktop.configure_environment(&environment).await?;
+    if desktop.mode() == DesktopMode::Disabled {
         record_decision(journal, DesktopReason::Disabled, "none", json!({}));
         return Ok(());
     }
@@ -30,7 +33,7 @@ pub(super) async fn launch_chatgpt(
         return Ok(());
     }
     verify_chatgpt_bundled_codex(journal, app_server.expected_version())?;
-    reconcile_desktop_state(&MacOsDesktop, journal, &environment).await
+    reconcile_desktop_state(&desktop, journal, &environment).await
 }
 
 /// Observes the host, records the decision, and only then acts. Every branch
@@ -51,7 +54,7 @@ pub(in crate::runtime) async fn reconcile_desktop_state(
         DesktopReason::ObservationFailed => bail!(
             "ChatGPT's shared-daemon attachment could not be observed; the running app was left untouched"
         ),
-        DesktopReason::IncompatibleVersion | DesktopReason::Disabled => {
+        DesktopReason::IncompatibleVersion | DesktopReason::Disabled | DesktopReason::Isolated => {
             unreachable!("the bundled version and host mode are decided before observation")
         }
         DesktopReason::EnvironmentMismatch => {
@@ -200,14 +203,17 @@ pub(super) async fn check_chatgpt(
     app_server: &CodexAppServer,
     journal: &DesktopJournal,
 ) -> Result<()> {
-    if DesktopMode::for_this_host()? == DesktopMode::Disabled {
+    let Some(desktop) = MacOsDesktop::for_app_server(app_server, journal)? else {
+        bail!("ChatGPT Desktop belongs to the gateway on this user's own Codex home");
+    };
+    if desktop.mode() == DesktopMode::Disabled {
         record_decision(journal, DesktopReason::Disabled, "report-only", json!({}));
         bail!("ChatGPT Desktop is disabled on this host by config/host-profiles.json");
     }
     app_server.verify_ready().await?;
     verify_chatgpt_bundled_codex(journal, app_server.expected_version())?;
     let environment = ChatGptEnvironment::for_app_server(app_server)?;
-    match report_desktop_state(&MacOsDesktop, journal, &environment).await? {
+    match report_desktop_state(&desktop, journal, &environment).await? {
         DesktopReason::Healthy => verify_recent_thread_compatibility(app_server).await,
         DesktopReason::AppAbsent => bail!("ChatGPT is not running"),
         DesktopReason::EnvironmentMismatch => {
@@ -218,7 +224,8 @@ pub(super) async fn check_chatgpt(
         }
         DesktopReason::IncompatibleVersion
         | DesktopReason::NotInstalled
-        | DesktopReason::Disabled => {
+        | DesktopReason::Disabled
+        | DesktopReason::Isolated => {
             unreachable!("decided before observation")
         }
     }

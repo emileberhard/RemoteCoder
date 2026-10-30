@@ -634,7 +634,7 @@ impl ConfigSources {
     /// Note this map is deliberately never reused for the Claude child. It can
     /// legitimately carry `ANTHROPIC_API_KEY` for Codex-side MCP tooling, and
     /// Claude receives only its explicitly configured llm-router credentials.
-    fn codex_child_env(&self) -> HashMap<String, String> {
+    pub(crate) fn codex_child_env(&self) -> HashMap<String, String> {
         self.file_vars
             .iter()
             .filter(|(key, _)| {

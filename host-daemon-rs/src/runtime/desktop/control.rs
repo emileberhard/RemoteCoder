@@ -1,10 +1,16 @@
 use super::environment::{ChatGptEnvironment, EnvironmentObservation, observe_chatgpt_process};
+use super::observe::record_decision;
 use super::stop::{Delivery, StopMethod};
-use super::{CHATGPT_APPLICATION, CHATGPT_EXECUTABLE, DesktopApp};
+use super::{CHATGPT_APPLICATION, CHATGPT_EXECUTABLE, DesktopApp, DesktopReason};
+use crate::config::host_profile::DesktopMode;
 use crate::observability::desktop as desktop_journal;
+use crate::observability::desktop::DesktopJournal;
 use crate::platform::macos::application::request_quit;
 use crate::platform::process as mac_app;
+use crate::providers::codex::daemon::CodexAppServer;
+use crate::runtime::launchd::launchctl;
 use anyhow::{Context, Result, bail};
+use serde_json::json;
 use std::path::Path;
 use std::process::Stdio;
 use std::time::Duration;
@@ -32,7 +38,41 @@ pub(in crate::runtime) trait DesktopControl {
     async fn open_application(&self, environment: &ChatGptEnvironment) -> Result<()>;
 }
 
-pub(super) struct MacOsDesktop;
+pub(in crate::runtime) struct MacOsDesktop {
+    mode: DesktopMode,
+}
+
+impl MacOsDesktop {
+    pub(in crate::runtime) fn for_app_server(
+        app_server: &CodexAppServer,
+        journal: &DesktopJournal,
+    ) -> Result<Option<Self>> {
+        match DesktopMode::for_codex_home(app_server.provider_home()?)? {
+            Some(mode) => Ok(Some(Self { mode })),
+            None => {
+                record_decision(journal, DesktopReason::Isolated, "none", json!({}));
+                Ok(None)
+            }
+        }
+    }
+
+    pub(super) fn mode(&self) -> DesktopMode {
+        self.mode
+    }
+
+    pub(super) async fn configure_environment(
+        &self,
+        environment: &ChatGptEnvironment,
+    ) -> Result<()> {
+        for (key, value) in environment.launch_variables() {
+            let status = launchctl().args(["setenv", key, value]).status().await?;
+            if !status.success() {
+                bail!("failed to set ChatGPT {key} environment");
+            }
+        }
+        Ok(())
+    }
+}
 
 impl DesktopControl for MacOsDesktop {
     async fn processes(&self) -> Result<Vec<DesktopApp>> {

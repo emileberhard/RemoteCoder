@@ -1095,6 +1095,10 @@ scoped receipt reads require the exact sender conversation.
     health gate still runs. It still publishes the managed socket
     in Aqua launchd for manual ChatGPT launches; the operator owns CA policy.
     Runtime transactions stop a running ChatGPT before a cutover.
+  - Only the gateway on the user's own `~/.codex` (from the account database,
+    not `HOME`) holds a `MacOsDesktop`, the handle every Desktop observation,
+    stop, launch and launchd environment change requires. A gateway on any
+    other Codex home is `isolated` and never touches the user's ChatGPT.
   - It is the low-level detached worker, not an agent entry point. For a
     gateway-only cutover, use `just gateway-install` or
     `just gateway-install-prebuilt <gateway>`; both submit the launchd-owned

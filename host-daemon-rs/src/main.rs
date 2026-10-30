@@ -133,11 +133,13 @@ async fn run(
         let sources = ConfigSources::load(args.env_file.as_deref())?;
         let settings = Settings::load(&sources)?;
         let authority = config::host_profile::AutomationAuthority::authority()?;
-        let desktop = config::host_profile::DesktopMode::for_this_host()?;
+        let desktop = config::host_profile::DesktopMode::name_for_codex_home(&config::codex_home(
+            &settings.codex_child_env,
+        )?)?;
         let full_disk_access = config::host_profile::FullDiskAccessRequirement::for_this_host()?;
         println!(
             "{}",
-            serde_json::json!({"valid":true,"routerConfigured":settings.router.is_some(),"userNameConfigured":settings.user_name.is_some(),"claudeAuthentication":if settings.router.is_some() { "router" } else { "native" },"automationsAuthority":authority,"desktopMode":desktop.as_str(),"fullDiskAccessRequired":full_disk_access})
+            serde_json::json!({"valid":true,"routerConfigured":settings.router.is_some(),"userNameConfigured":settings.user_name.is_some(),"claudeAuthentication":if settings.router.is_some() { "router" } else { "native" },"automationsAuthority":authority,"desktopMode":desktop,"fullDiskAccessRequired":full_disk_access})
         );
         return Ok(());
     }
@@ -215,9 +217,12 @@ async fn run(
             },
     }) = &args.command
     {
+        let sources = ConfigSources::load(args.env_file.as_deref())?;
         println!(
             "{}",
-            config::host_profile::DesktopMode::for_this_host()?.as_str()
+            config::host_profile::DesktopMode::name_for_codex_home(&config::codex_home(
+                &sources.codex_child_env()
+            )?)?
         );
         return Ok(());
     }

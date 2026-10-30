@@ -1,9 +1,11 @@
-use super::desktop::control::{DesktopControl, chatgpt_app_pids, current_app, listed_apps};
+use super::desktop::control::{
+    DesktopControl, MacOsDesktop, chatgpt_app_pids, current_app, listed_apps,
+};
 use super::desktop::environment::{
     ChatGptEnvironment, EnvironmentObservation, app_server_websocket_url, classify_probe_output,
 };
 use super::desktop::observe::{decide_desktop_action, record_observation};
-use super::desktop::reconcile::{reconcile_desktop_state, report_desktop_state};
+use super::desktop::reconcile::{launch_chatgpt, reconcile_desktop_state, report_desktop_state};
 use super::desktop::stop::{Delivery, DesktopStopAuthority, StopMethod, stop_chatgpt};
 use super::desktop::{CHATGPT_EXECUTABLE, DesktopApp, DesktopReason};
 use super::install::transaction::Artifact;
@@ -193,6 +195,36 @@ async fn reconcile_scenario(state: FakeDesktopState) -> (FakeDesktop, Vec<Value>
     let control = FakeDesktop::new(state);
     let result = reconcile_desktop_state(&control, &journal, &test_environment()).await;
     (control, journal.records(), result)
+}
+
+#[tokio::test]
+async fn a_gateway_on_another_codex_home_never_touches_the_users_chatgpt() {
+    let lab = tempfile::tempdir().expect("lab home");
+    let app_server = CodexAppServer::new_for_test_socket(lab.path().join(".codex"));
+    let directory = tempfile::tempdir().expect("journal directory");
+    let journal = DesktopJournal::in_dir(directory.path(), "launch", "recovery-complete");
+
+    assert!(
+        MacOsDesktop::for_app_server(&app_server, &journal)
+            .expect("desktop mode")
+            .is_none()
+    );
+    launch_chatgpt(&app_server, &journal)
+        .await
+        .expect("an isolated launch is a no-op");
+    run_desktop_action(crate::config::DesktopAction::Stop, &app_server, &journal)
+        .await
+        .expect("an isolated stop is a no-op");
+    run_desktop_action(crate::config::DesktopAction::Check, &app_server, &journal)
+        .await
+        .expect_err("an isolated gateway has no Desktop attachment to check");
+
+    let records = journal.records();
+    assert_eq!(
+        decisions(&records),
+        vec![("isolated".to_string(), "none".to_string()); 4]
+    );
+    assert_eq!(records.len(), 4, "{records:?}");
 }
 
 fn managed_command() -> String {

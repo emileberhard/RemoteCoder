@@ -547,6 +547,13 @@ On a disabled host:
 To restore automatic Desktop management, remove the host from the private list and restart the
 gateway there; the installer then reinstalls the helper and requires attachment.
 
+ChatGPT Desktop belongs only to the gateway whose Codex home is the user's own
+`~/.codex` from the account database, whatever `HOME` says. A gateway on any
+other Codex home, such as an isolated probe, reports `isolated`: it never
+observes, stops, opens or configures ChatGPT, never publishes its socket in the
+Aqua launchd session, journals the `isolated` decision instead, and refuses
+`runtime install-gateway` and `runtime uninstall`.
+
 The restart and recovery contract (every SIGTERM interrupts and resumes exact
 work, `just codex-daemon-restart`, `prepare-shutdown`, `prepare-handoff`) lives
 in [`AGENTS.md`](AGENTS.md), *Install, restart and recovery*.
