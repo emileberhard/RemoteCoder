@@ -48,7 +48,7 @@ jobs:
             if gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=$name&per_page=100" \
                 --jq '[.artifacts[] | select((.expired | not) and .workflow_run.head_repository_id == .workflow_run.repository_id)] | length > 0' | grep -qx true; then
               echo "${lane%%:*} already passed on these inputs; reusing $name."
-              name=
+              name=reused
             fi
             printf '%s=%s\n' "${lane%%:*}" "$name" >> "$GITHUB_OUTPUT"
           done
@@ -78,7 +78,7 @@ jobs:
 
   gateway:
     needs: reuse
-    if: ${{ needs.reuse.outputs.gateway != '' }}
+    if: ${{ needs.reuse.outputs.gateway != 'reused' }}
     runs-on: xcode-27
     timeout-minutes: 35
     env:
@@ -109,7 +109,7 @@ jobs:
 
   gateway-lint:
     needs: reuse
-    if: ${{ needs.reuse.outputs.gateway-lint != '' }}
+    if: ${{ needs.reuse.outputs.gateway-lint != 'reused' }}
     runs-on: xcode-27
     timeout-minutes: 35
     env:
@@ -127,7 +127,7 @@ jobs:
 
   swift:
     needs: reuse
-    if: ${{ needs.reuse.outputs.swift != '' }}
+    if: ${{ needs.reuse.outputs.swift != 'reused' }}
     runs-on: xcode-27
     timeout-minutes: 45
     steps:
@@ -151,7 +151,7 @@ jobs:
 
   apps-ios:
     needs: reuse
-    if: ${{ needs.reuse.outputs.apps-ios != '' }}
+    if: ${{ needs.reuse.outputs.apps-ios != 'reused' }}
     runs-on: xcode-27
     timeout-minutes: 60
     env:
@@ -193,7 +193,7 @@ jobs:
 
   apps-mac:
     needs: reuse
-    if: ${{ needs.reuse.outputs.apps-mac != '' }}
+    if: ${{ needs.reuse.outputs.apps-mac != 'reused' }}
     runs-on: xcode-27
     timeout-minutes: 60
     env:
@@ -255,7 +255,7 @@ jobs:
       - name: Write the passed-lane marker
         if: always() && env.TRUSTED == 'true'
         run: printf '%s\n' "$GITHUB_SHA" > "$RUNNER_TEMP/passed"
-      - if: always() && env.TRUSTED == 'true' && needs.gateway.result == 'success'
+      - if: always() && env.TRUSTED == 'true' && needs.gateway.result == 'success' && startsWith(needs.reuse.outputs.gateway, 'ci-lane-')
         continue-on-error: true
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -263,7 +263,7 @@ jobs:
           path: ${{ runner.temp }}/passed
           retention-days: 14
           overwrite: true
-      - if: always() && env.TRUSTED == 'true' && needs.gateway-lint.result == 'success'
+      - if: always() && env.TRUSTED == 'true' && needs.gateway-lint.result == 'success' && startsWith(needs.reuse.outputs.gateway-lint, 'ci-lane-')
         continue-on-error: true
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -271,7 +271,7 @@ jobs:
           path: ${{ runner.temp }}/passed
           retention-days: 14
           overwrite: true
-      - if: always() && env.TRUSTED == 'true' && needs.swift.result == 'success'
+      - if: always() && env.TRUSTED == 'true' && needs.swift.result == 'success' && startsWith(needs.reuse.outputs.swift, 'ci-lane-')
         continue-on-error: true
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -279,7 +279,7 @@ jobs:
           path: ${{ runner.temp }}/passed
           retention-days: 14
           overwrite: true
-      - if: always() && env.TRUSTED == 'true' && needs.apps-ios.result == 'success'
+      - if: always() && env.TRUSTED == 'true' && needs.apps-ios.result == 'success' && startsWith(needs.reuse.outputs.apps-ios, 'ci-lane-')
         continue-on-error: true
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -287,7 +287,7 @@ jobs:
           path: ${{ runner.temp }}/passed
           retention-days: 14
           overwrite: true
-      - if: always() && env.TRUSTED == 'true' && needs.apps-mac.result == 'success'
+      - if: always() && env.TRUSTED == 'true' && needs.apps-mac.result == 'success' && startsWith(needs.reuse.outputs.apps-mac, 'ci-lane-')
         continue-on-error: true
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -295,8 +295,9 @@ jobs:
           path: ${{ runner.temp }}/passed
           retention-days: 14
           overwrite: true
-      - name: Require every lane that ran to pass
+      - name: Require every lane to pass or reuse a pass
         if: always()
         env:
           RESULTS: ${{ toJSON(needs) }}
-        run: jq -e 'all(.[]; .result == "success" or .result == "skipped")' <<< "$RESULTS"
+        run: |
+          jq -e '.reuse.outputs as $reused | .reuse.result == "success" and all(to_entries[] | select(.key != "reuse"); .value.result == "success" or (.value.result == "skipped" and $reused[.key] == "reused"))' <<< "$RESULTS"
