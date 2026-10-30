@@ -53,30 +53,36 @@ def archive(platform, directory):
         'platform': platform, 'build': os.environ['BUILD_NUMBER']}) + '\n')
 
 
-def export(platform, directory, mode):
+def exported_package(platform, directory):
+    output = directory / 'check'
+    if platform == 'ios':
+        return output / 'RemoteCoder.ipa'
+    packages = list(output.glob('*.pkg'))
+    if len(packages) != 1:
+        raise SystemExit('The Mac export must contain one package.')
+    return packages[0]
+
+
+def check(platform, directory):
     scheme = 'RemoteCoder' if platform == 'ios' else 'RemoteCoderMac'
     config = json.loads(os.environ['RC_RELEASE_CONFIGURATION'])
     options = plistlib.loads((ROOT / 'Config/ExportOptions.plist').read_bytes())
-    options |= {'teamID': config['xcodeSettings']['DEVELOPMENT_TEAM'], 'destination': 'export' if mode == 'check' else 'upload'}
-    plist = directory / f'{mode}.plist'
+    options |= {'teamID': config['xcodeSettings']['DEVELOPMENT_TEAM']}
+    plist = directory / 'check.plist'
     plist.write_bytes(plistlib.dumps(options))
-    output = directory / mode
+    output = directory / 'check'
     run('xcodebuild', '-exportArchive', '-archivePath', str(directory / f'{scheme}.xcarchive'), '-exportPath', str(output),
         '-exportOptionsPlist', str(plist), '-allowProvisioningUpdates',
         '-authenticationKeyPath', os.environ['APP_STORE_CONNECT_KEY_PATH'],
         '-authenticationKeyID', os.environ['APP_STORE_CONNECT_KEY_ID'], '-authenticationKeyIssuerID', os.environ['APP_STORE_CONNECT_ISSUER_ID'])
-    if mode != 'check':
-        return
+    package = exported_package(platform, directory)
     if platform == 'ios':
-        run('ditto', '-x', '-k', str(output / 'RemoteCoder.ipa'), str(output / 'expanded'))
+        run('ditto', '-x', '-k', str(package), str(output / 'expanded'))
         app = output / 'expanded/Payload/RemoteCoder.app'
-        run('python3', 'scripts/release-config.py', 'verify-ipa', str(output / 'RemoteCoder.ipa'))
+        run('python3', 'scripts/release-config.py', 'verify-ipa', str(package))
     else:
-        packages = list(output.glob('*.pkg'))
-        if len(packages) != 1:
-            raise SystemExit('The Mac export must contain one package.')
-        run('pkgutil', '--check-signature', str(packages[0]))
-        run('pkgutil', '--expand-full', str(packages[0]), str(output / 'expanded'))
+        run('pkgutil', '--check-signature', str(package))
+        run('pkgutil', '--expand-full', str(package), str(output / 'expanded'))
         apps = list((output / 'expanded').rglob('RemoteCoder.app'))
         if len(apps) != 1:
             raise SystemExit('The Mac package must contain one app.')
@@ -91,6 +97,13 @@ def export(platform, directory, mode):
                         '--distribution', 'app-store', '--app', str(app)], env=env | {'RC_MAINTAINER_CONFIG': file.name}, check=True)
 
 
+def upload(platform, directory):
+    run('xcrun', 'altool', '--upload-app', '--type', 'ios' if platform == 'ios' else 'macos',
+        '--file', str(exported_package(platform, directory)),
+        '--api-key', os.environ['APP_STORE_CONNECT_KEY_ID'], '--api-issuer', os.environ['APP_STORE_CONNECT_ISSUER_ID'],
+        '--p8-file-path', os.environ['APP_STORE_CONNECT_KEY_PATH'])
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('action', choices=['configure', 'archive', 'check', 'upload'])
@@ -102,8 +115,10 @@ def main():
         configure()
     elif args.action == 'archive':
         archive(args.platform, args.directory)
+    elif args.action == 'check':
+        check(args.platform, args.directory)
     else:
-        export(args.platform, args.directory, args.action)
+        upload(args.platform, args.directory)
 
 
 if __name__ == '__main__':
