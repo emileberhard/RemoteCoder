@@ -103,15 +103,51 @@ def mdm_target(requested, bundle, *, device=None):
         raise ManagedAppNotConfigured(
             "Accept this app's initial SimpleMDM managed installation before using automatic updates"
         )
-    attributes = installed[0]["attributes"]
-    if store_build(attributes):
-        raise ManagedAppNotConfigured(
-            f"SimpleMDM's inventory from {attributes.get('last_seen_at')} shows the TestFlight build "
-            f"{attributes['short_version']} ({attributes['version']}), "
-            "which iOS refuses to replace through SimpleMDM; one direct install with the iPhone unlocked "
-            "near this Mac returns it to managed updates"
-        )
-    return device, catalog, installed[0]
+    if not store_build(installed[0]["attributes"]):
+        return device, catalog, installed[0]
+    fresh = refreshed_install(device, catalog, bundle, installed[0]["attributes"])
+    if fresh is not None and not store_build(fresh["attributes"]):
+        if fresh["attributes"].get("managed") is not True:
+            raise ManagedAppNotConfigured(
+                "Accept this app's initial SimpleMDM managed installation before using automatic updates"
+            )
+        return device, catalog, fresh
+    seen = (fresh or installed[0])["attributes"]
+    raise ManagedAppNotConfigured(
+        f"SimpleMDM's inventory from {seen.get('last_seen_at')} shows the TestFlight build "
+        f"{seen['short_version']} ({seen['version']})"
+        f"{'' if fresh else ' and did not refresh within two minutes'}. "
+        "iOS refuses to replace a TestFlight copy through SimpleMDM; one direct install with the iPhone "
+        "unlocked near this Mac returns it to managed updates"
+    )
+
+
+def refreshed_install(device, catalog, bundle, stale):
+    helper = load_coordinator()
+    deadline = time.monotonic() + 120
+    api = helper.SimpleMDM(deadline + 30)
+    baseline = helper.inventory_time(stale.get("last_seen_at"))
+    try:
+        with helper.CatalogLease(
+            CATALOG_COORDINATOR_HOST, str(catalog["id"]), deadline + 30
+        ) as lease:
+            api.lease = lease
+            refresh = helper.InventoryRefresh(api, device["id"])
+            while time.monotonic() < deadline:
+                refresh.request_when_due()
+                row = helper.installed_app(
+                    api, device["id"], bundle, allow_pending=True
+                )
+                if (
+                    row is not None
+                    and helper.inventory_time(row["attributes"].get("last_seen_at"))
+                    > baseline
+                ):
+                    return row
+                time.sleep(3)
+    except helper.InstallError as error:
+        raise RuntimeError(str(error)) from error
+    return None
 
 
 def store_build(attributes):

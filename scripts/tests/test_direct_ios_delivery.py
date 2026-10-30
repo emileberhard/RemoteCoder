@@ -28,6 +28,40 @@ class DirectDeliveryTests(unittest.TestCase):
                     testflight,
                 )
 
+    def test_testflight_refusal_requires_a_refreshed_inventory(self):
+        phone = {"id": 27, "attributes": {"unique_identifier": "phone-udid"}}
+
+        def row(build, seen):
+            return {
+                "id": 98,
+                "attributes": {
+                    "identifier": "bundle",
+                    "managed": True,
+                    "short_version": "3.76.6",
+                    "version": build,
+                    "last_seen_at": seen,
+                },
+            }
+
+        stale = row("3073012", "2026-10-29T08:00:00Z")
+        for refreshed, refused in (
+            (row("3076006", "2026-10-30T01:00:00Z"), False),
+            (row("3073012", "2026-10-30T01:00:00Z"), True),
+            (None, True),
+        ):
+            with (
+                self.subTest(refreshed=refreshed),
+                patch.object(module, "mdm_api", return_value=[stale]),
+                patch.object(module, "catalog_app", return_value={"id": 19}),
+                patch.object(module, "refreshed_install", return_value=refreshed),
+            ):
+                if refused:
+                    with self.assertRaises(module.ManagedAppNotConfigured):
+                        module.mdm_target("", "bundle", device=phone)
+                else:
+                    _, _, installed = module.mdm_target("", "bundle", device=phone)
+                    self.assertIs(installed, refreshed)
+
     def test_automatic_managed_target_uses_model_name_not_hardware_product_code(self):
         phone = {
             "id": 27,
