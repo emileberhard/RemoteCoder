@@ -11,7 +11,6 @@ use crate::rpc::{RpcError, RpcResult};
 use anyhow::{Context, Result, anyhow, bail, ensure};
 use futures_util::{FutureExt, StreamExt};
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
@@ -537,7 +536,7 @@ impl AgentService<'_> {
         }
         warnings.sort();
         warnings.dedup();
-        let revision = format!("{:x}", Sha256::digest(serde_json::to_vec(&native)?));
+        let revision = crate::ids::sha256_hex(serde_json::to_vec(&native)?);
         let mut views = self.gateway.agents.views.lock().await;
         views.retain(|entry| entry.root != root);
         views.push_back(AgentViewSnapshot {

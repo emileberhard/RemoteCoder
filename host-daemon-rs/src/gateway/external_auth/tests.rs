@@ -6,7 +6,6 @@ use crate::providers::router::RouterConfig;
 use crate::test_support::{FakeControl, TestGateway};
 use axum::{Json, Router as HttpRouter, extract::State, routing::post};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use sha2::{Digest, Sha256};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tokio::sync::Notify;
 
@@ -55,7 +54,7 @@ fn token(account: &str, label: &str) -> Value {
     let access = format!("e30.{}.fixture", URL_SAFE_NO_PAD.encode(claims.to_string()));
     json!({"access_token":access, "account_id":account, "plan_type":"pro",
         "expires_at":expiry.format(&time::format_description::well_known::Rfc3339).unwrap(),
-        "generation":format!("{:x}", Sha256::digest(access.as_bytes()))})
+        "generation":crate::ids::sha256_hex(access.as_bytes())})
 }
 
 fn copilot_fallback(

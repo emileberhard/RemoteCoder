@@ -3,9 +3,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result, ensure};
-use rand_core::RngCore;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use tokio::sync::Semaphore;
 
 use super::{Coverage, DismissRequest, Dismissal, Facts, Record, Resolution, Snapshot};
@@ -216,8 +214,7 @@ impl Document {
 
 fn epoch() -> Result<String> {
     let mut bytes = [0u8; 16];
-    rand_core::OsRng
-        .try_fill_bytes(&mut bytes)
+    getrandom::fill(&mut bytes)
         .map_err(|error| anyhow::anyhow!("question epoch entropy unavailable: {error}"))?;
     Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
 }
@@ -304,5 +301,5 @@ impl QuestionStore {
 }
 
 fn state_name(thread: &str) -> String {
-    format!("{:x}.json", Sha256::digest(thread.as_bytes()))
+    format!("{}.json", crate::ids::sha256_hex(thread.as_bytes()))
 }

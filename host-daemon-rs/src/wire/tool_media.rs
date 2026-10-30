@@ -482,11 +482,10 @@ mod tests {
 
     #[tokio::test]
     async fn stored_media_annotates_each_tool_item_once() {
-        use sha2::{Digest, Sha256};
         let home = tempfile::tempdir().unwrap();
         let store = ToolMediaStore::new(home.path().to_path_buf());
         let media = |bytes: &[u8], extension: &str, mime_type: &str| {
-            let name = format!("tool-media/{:x}.{extension}", Sha256::digest(bytes));
+            let name = format!("tool-media/{}.{extension}", crate::ids::sha256_hex(bytes));
             json!({"path": home.path().join(name), "mimeType": mime_type})
         };
         let nested =

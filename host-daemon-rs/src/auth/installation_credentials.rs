@@ -12,7 +12,6 @@ use anyhow::{Context, Result, ensure};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use clap::Subcommand;
 use hkdf::Hkdf;
-use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
@@ -307,7 +306,7 @@ pub(crate) async fn run(command: CredentialCommand) -> Result<()> {
                 "invalid installation label"
             );
             let mut random = [0_u8; 48];
-            OsRng.fill_bytes(&mut random);
+            getrandom::fill(&mut random).expect("operating system entropy");
             let id = URL_SAFE_NO_PAD.encode(&random[..16]);
             let token = format!("rc1.{id}.{}", URL_SAFE_NO_PAD.encode(&random[16..]));
             let mut file = OpenOptions::new()

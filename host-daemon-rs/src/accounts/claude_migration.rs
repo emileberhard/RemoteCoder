@@ -2,7 +2,6 @@ use crate::storage::no_follow::{EntryKind, Root};
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 #[cfg(test)]
 use std::fs;
@@ -553,7 +552,7 @@ fn handoff_owners(handoffs: &Value) -> Result<BTreeMap<String, Option<String>>> 
             thread.trim_start_matches("claude_").to_owned(),
             account.clone(),
         );
-        owners.insert(format!("{:x}", Sha256::digest(thread.as_bytes())), account);
+        owners.insert(crate::ids::sha256_hex(thread.as_bytes()), account);
     }
     Ok(owners)
 }
@@ -622,7 +621,7 @@ fn restart_owners(
                     account.clone(),
                 );
                 owners.insert(
-                    format!("{:x}", Sha256::digest(item.thread_id.as_bytes())),
+                    crate::ids::sha256_hex(item.thread_id.as_bytes()),
                     account.clone(),
                 );
             }
@@ -773,9 +772,9 @@ fn native_owners(
             let thread = format!("claude_{session}");
             let reason = "Byte-prefix transcript merge; kept the longer copy".to_owned();
             owners.insert(session.clone(), owner.clone());
-            owners.insert(format!("{:x}", Sha256::digest(thread.as_bytes())), owner);
+            owners.insert(crate::ids::sha256_hex(thread.as_bytes()), owner);
             reasons.insert(session, reason.clone());
-            reasons.insert(format!("{:x}", Sha256::digest(thread.as_bytes())), reason);
+            reasons.insert(crate::ids::sha256_hex(thread.as_bytes()), reason);
             continue;
         }
         let mut ambiguous = false;
@@ -834,9 +833,9 @@ fn native_owners(
         };
         let thread = format!("claude_{session}");
         owners.insert(session.clone(), owner.clone());
-        owners.insert(format!("{:x}", Sha256::digest(thread.as_bytes())), owner);
+        owners.insert(crate::ids::sha256_hex(thread.as_bytes()), owner);
         reasons.insert(session, reason.clone());
-        reasons.insert(format!("{:x}", Sha256::digest(thread.as_bytes())), reason);
+        reasons.insert(crate::ids::sha256_hex(thread.as_bytes()), reason);
     }
     Ok(())
 }
@@ -871,11 +870,11 @@ fn native_history(files: &MigrationFiles, path: &Path) -> Result<NativeHistory> 
             continue;
         }
         let identity = format!(
-            "{}:{:x}",
+            "{}:{}",
             record["uuid"]
                 .as_str()
                 .context("Native root message has no UUID")?,
-            Sha256::digest(serde_json::to_vec(&record["message"])?)
+            crate::ids::sha256_hex(serde_json::to_vec(&record["message"])?)
         );
         history.messages.insert(identity);
         if let Some(timestamp) = record["timestamp"]
@@ -2235,7 +2234,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let path = home
             .path()
-            .join(format!("{:x}.json", Sha256::digest(b"claude_a")));
+            .join(format!("{}.json", crate::ids::sha256_hex(b"claude_a")));
         crate::storage::private_state::write_json(&path, &merged).unwrap();
         let read = crate::questions::QuestionStore::new(Some(home.path().to_owned()))
             .read("claude_a")

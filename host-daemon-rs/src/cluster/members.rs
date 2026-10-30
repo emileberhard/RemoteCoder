@@ -5,7 +5,6 @@ use std::sync::{Arc, Mutex};
 use anyhow::{Context, Result, ensure};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use hkdf::Hkdf;
-use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
@@ -219,7 +218,7 @@ impl Members {
                 seed_path.parent().context("seed has no parent")?,
             )?;
             let mut seed = [0u8; 32];
-            OsRng.fill_bytes(&mut seed);
+            getrandom::fill(&mut seed).expect("operating system entropy");
             private_state::create_new(&seed_path, &seed)?;
             private_state::read_bounded(&seed_path, 32)
                 .map_err(|error| anyhow::anyhow!("cannot read member credential seed: {error:?}"))?

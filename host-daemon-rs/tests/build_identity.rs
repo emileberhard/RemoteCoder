@@ -90,8 +90,8 @@ fn failed_worker_sync_prevents_gateway_handoff_and_preserves_installed_selection
         "target": "aarch64-apple-darwin", "variant": "codex", "entrypoint": "bin/codex",
         "resourcesDir": "codex-resources", "pathDir": "codex-path",
         "binaries": {
-            "bin/codex": {"sha256": format!("{:x}", Sha256::digest(std::fs::read(&codex).unwrap()))},
-            "bin/codex-code-mode-host": {"sha256": format!("{:x}", Sha256::digest(std::fs::read(&code_host).unwrap()))}
+            "bin/codex": {"sha256": sha256_hex(std::fs::read(&codex).unwrap())},
+            "bin/codex-code-mode-host": {"sha256": sha256_hex(std::fs::read(&code_host).unwrap())}
         }
     })).unwrap()).unwrap();
     std::fs::write(
@@ -120,7 +120,7 @@ fn failed_worker_sync_prevents_gateway_handoff_and_preserves_installed_selection
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
     let env_file = home.path().join("gateway.env");
-    let operator_token = format!("{:x}", Sha256::digest(b"gateway build fixture"));
+    let operator_token = sha256_hex(b"gateway build fixture");
     std::fs::write(&env_file, format!("RC_CODEX_GATEWAY_CODEX_PATH={}\nRC_CODEX_GATEWAY_BIND_HOST=127.0.0.1\nRC_CODEX_GATEWAY_PORT=8765\nRC_CODEX_GATEWAY_AUTH_TOKEN={}\n", codex.display(), operator_token)).unwrap();
     let output = Command::new(&staged)
         .args([
@@ -196,11 +196,16 @@ fn install_worker_cli_emits_only_the_verified_contract_without_startup_banners()
         version.join("call-delivery.json"),
     )
     .unwrap();
-    std::fs::write(version.join("pair.json"), serde_json::to_vec(&json!({
-        "gatewayHash": format!("{:x}", Sha256::digest(std::fs::read(&binary).unwrap())),
-        "configHash": format!("{:x}", Sha256::digest(std::fs::read(version.join("call-delivery.json")).unwrap())),
-        "workerHash": env!("RC_CALL_WORKER_HASH")
-    })).unwrap()).unwrap();
+    std::fs::write(
+        version.join("pair.json"),
+        serde_json::to_vec(&json!({
+            "gatewayHash": sha256_hex(std::fs::read(&binary).unwrap()),
+            "configHash": sha256_hex(std::fs::read(version.join("call-delivery.json")).unwrap()),
+            "workerHash": env!("RC_CALL_WORKER_HASH")
+        }))
+        .unwrap(),
+    )
+    .unwrap();
     std::os::unix::fs::symlink(
         "RemoteCoderGateway.app/Contents/MacOS/remote-coder-codex-gateway",
         version.join("remote-coder-codex-gateway"),
@@ -235,4 +240,11 @@ fn install_worker_cli_emits_only_the_verified_contract_without_startup_banners()
     assert_eq!(result["workerHash"], env!("RC_CALL_WORKER_HASH"));
     assert_eq!(result["protocolVersion"], 1);
     assert!(!home.path().join("Library/Logs").exists());
+}
+
+fn sha256_hex(bytes: impl AsRef<[u8]>) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }

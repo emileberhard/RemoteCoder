@@ -2,7 +2,6 @@ use super::types::{AccountSnapshot, AccountState, Identity, UsageWindow};
 use crate::time::unix_seconds;
 use anyhow::{Result, ensure};
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 
 const LAST_KNOWN_USAGE_SECONDS: f64 = 1800.0;
 
@@ -24,8 +23,8 @@ pub(crate) fn codex_identity_in_workspace(account: &Value, workspace: &str) -> O
     let email_key = email.as_deref()?;
     let workspace_key = workspace.as_deref()?;
     let key = format!(
-        "codex:{:x}",
-        Sha256::digest(format!("{email_key}\0{workspace_key}").as_bytes())
+        "codex:{}",
+        crate::ids::sha256_hex(format!("{email_key}\0{workspace_key}"))
     );
     Some(Identity {
         key,

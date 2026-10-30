@@ -4,7 +4,6 @@ use crate::runtime::install::package::sha256_file;
 use crate::storage::private_state;
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::fs::File;
 use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
@@ -200,14 +199,14 @@ fn version(
         "Gateway call configuration exceeds installation capacity"
     );
     let gateway_hash = sha256_file(&binary)?;
-    let config_hash = config.map(|bytes| format!("{:x}", Sha256::digest(bytes)));
+    let config_hash = config.map(crate::ids::sha256_hex);
     let metadata = Identity {
         gateway_hash,
         config_hash,
         worker_hash: worker,
     };
     let bytes = serde_json::to_vec(&metadata)?;
-    let hash = format!("{:x}", Sha256::digest(&bytes));
+    let hash = crate::ids::sha256_hex(&bytes);
     let destination = root.join("versions").join(hash);
     if destination.exists() {
         ensure!(
@@ -437,18 +436,11 @@ mod tests {
             serde_json::from_slice(&std::fs::read(version.join("pair.json")).unwrap()).unwrap();
         assert_eq!(
             metadata["gatewayHash"],
-            format!(
-                "{:x}",
-                Sha256::digest(
-                    std::fs::read(candidate.join("Contents/MacOS/remote-coder-codex-gateway"))
-                        .unwrap()
-                )
+            crate::ids::sha256_hex(
+                std::fs::read(candidate.join("Contents/MacOS/remote-coder-codex-gateway")).unwrap()
             )
         );
-        assert_eq!(
-            metadata["configHash"],
-            format!("{:x}", Sha256::digest(b"candidate"))
-        );
+        assert_eq!(metadata["configHash"], crate::ids::sha256_hex(b"candidate"));
         assert_eq!(
             metadata["workerHash"],
             crate::build_identity::IDENTITY.worker_hash

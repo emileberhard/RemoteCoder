@@ -3,7 +3,6 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, ensure};
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 
 use super::{ClaudeSupervisor, TurnOrigin, TurnStartError, process::ReapState};
 use crate::agents::jobs::model::{
@@ -171,7 +170,7 @@ impl ClaudeSupervisor {
                     conversation: conversation.clone(),
                     input: JobInput {
                         id: input_id.to_owned(),
-                        fingerprint: format!("{:x}", Sha256::digest(spec.prompt.as_bytes())),
+                        fingerprint: crate::ids::sha256_hex(spec.prompt.as_bytes()),
                     },
                     recovery_input: None,
                     tool_scope: spec.tool_scope.clone(),
@@ -374,7 +373,7 @@ impl ClaudeSupervisor {
         };
         let next = JobInput {
             id: input_id.to_owned(),
-            fingerprint: format!("{:x}", Sha256::digest(spec.prompt.as_bytes())),
+            fingerprint: crate::ids::sha256_hex(spec.prompt.as_bytes()),
         };
         let previous = previous.clone();
         let thread = previous.conversation.thread_id.clone();
@@ -700,7 +699,7 @@ impl ClaudeSupervisor {
                 id: request.input.client_id.clone().ok_or_else(|| {
                     TurnStartError::internal("Claude job input identity is missing")
                 })?,
-                fingerprint: format!("{:x}", Sha256::digest(request.input.text.as_bytes())),
+                fingerprint: crate::ids::sha256_hex(request.input.text.as_bytes()),
             };
         if matches!(saved.phase, JobPhase::Prepared) && saved.owner.is_none() {
             if saved.current_input() == &input

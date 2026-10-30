@@ -368,8 +368,7 @@ async fn successful_photo_keeps_images_when_original_is_invalid_and_names_a_veri
     declare(&gateway, 1);
     gateway.device_tools.record_driver(1, "thread");
     for valid in [false, true] {
-        use sha2::{Digest, Sha256};
-        let digest = format!("{:x}", Sha256::digest(JPEG));
+        let digest = crate::ids::sha256_hex(JPEG);
         let stored = stored_original(&store, &digest).await;
         let work = invoke(&gateway, "thread", "turn");
         let message = notification(&mut receiver).await;
@@ -423,8 +422,7 @@ async fn both_camera_results_match_the_phone_shape_with_optional_originals_and_d
             if missing_front && camera == "front" {
                 continue;
             }
-            use sha2::{Digest, Sha256};
-            let digest = format!("{:x}", Sha256::digest(JPEG));
+            let digest = crate::ids::sha256_hex(JPEG);
             let stored = stored_original(&store, &digest).await;
             originals.push(json!({"path":stored.path,"bytes":stored.bytes,"sha256":digest,"camera":camera,"lens":"wide","width":320,"height":240}));
         }

@@ -8,7 +8,6 @@ use std::time::{Duration, SystemTime};
 use anyhow::{Context, Result, ensure};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 use tokio::time::Instant;
 
 use super::content_store::{Limits, inventory, retain};
@@ -302,7 +301,7 @@ fn publish_bytes(paths: &HostPaths, bytes: &[u8]) -> Result<String> {
     let directory = paths.state("visuals");
     root.ensure_directory(&directory)?;
     let _lock = root.lock_file(&directory.join("store.lock"))?;
-    let hash = format!("{:x}", Sha256::digest(bytes));
+    let hash = crate::ids::sha256_hex(bytes);
     let destination = directory.join(format!("{hash}.html"));
     let entries = inventory(&root, &directory, &LIMITS, &["html"])?;
     let existing = root.open_file(&destination)?;

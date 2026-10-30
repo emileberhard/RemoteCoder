@@ -13,7 +13,6 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result, bail, ensure};
 use serde::de::DeserializeOwned;
-use sha2::{Digest, Sha256};
 
 use super::model::*;
 use crate::storage::private_state::{self, ReadError};
@@ -992,7 +991,7 @@ fn expire_payload(payload: &mut CompletionPayload) {
 }
 
 pub(crate) fn fingerprint(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    crate::ids::sha256_hex(bytes)
 }
 
 fn read<T: DeserializeOwned>(path: &Path, maximum: u64) -> Result<T> {

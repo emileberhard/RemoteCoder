@@ -4,7 +4,6 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 
 use crate::providers::claude::records::{LineKind, read_bounded_line};
 
@@ -100,7 +99,7 @@ fn recorded_inputs<'a>(
                     } else {
                         text
                     };
-                    format!("{:x}", Sha256::digest(text.as_bytes()))
+                    crate::ids::sha256_hex(text.as_bytes())
                 }),
             );
         }
@@ -164,7 +163,7 @@ mod tests {
             "{\"type\":\"user\",\"uuid\":\"delivery-1\",\"message\":{\"content\":\"[MESSAGE FROM NON-USER SOURCE - NOT USER INPUT]\\n completed work \\n\"}}\n",
             "{\"type\":\"attachment\",\"attachment\":{\"type\":\"queued_command\",\"source_uuid\":\"delivery-2\",\"prompt\":\" completed work \\n\"}}\n",
         ));
-        let expected = format!("{:x}", Sha256::digest(b" completed work \n"));
+        let expected = crate::ids::sha256_hex(b" completed work \n");
         assert_eq!(
             recorded_fingerprint(&path, "delivery-1").unwrap(),
             Some(Some(expected.clone()))
@@ -188,7 +187,7 @@ mod tests {
             .map(|record| format!("{record}\n"))
             .collect::<String>();
         let (_dir, path) = transcript(&contents);
-        let expected = Some(Some(format!("{:x}", Sha256::digest(payload.as_bytes()))));
+        let expected = Some(Some(crate::ids::sha256_hex(payload.as_bytes())));
         assert_eq!(recorded_fingerprint(&path, "native").unwrap(), expected);
         assert_eq!(recorded_fingerprint(&path, "queued").unwrap(), expected);
         assert_eq!(

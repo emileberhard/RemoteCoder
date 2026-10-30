@@ -836,7 +836,7 @@ impl UploadStore {
             let Some(hasher) = state.hasher.clone() else {
                 return Err(UploadError::Io("the upload's digest was lost".to_string()));
             };
-            let sha256 = hex(&hasher.finalize());
+            let sha256 = crate::ids::lower_hex(&hasher.finalize());
             if sha256 != session.record.sha256 {
                 forget(&sessions, &id, &session);
                 remove_upload(&session.dir, "digest mismatch");
@@ -925,7 +925,7 @@ impl UploadStore {
         let (_, digest) = hash_reader(&mut file, || false)?
             .ok_or_else(|| anyhow::anyhow!("original upload hashing stopped"))?;
         ensure!(
-            hex(&digest.finalize()).eq_ignore_ascii_case(&upload.sha256),
+            crate::ids::lower_hex(&digest.finalize()).eq_ignore_ascii_case(&upload.sha256),
             "original upload SHA-256 does not match"
         );
         std::fs::create_dir_all(&directory)?;
@@ -1330,10 +1330,6 @@ fn epoch_seconds(time: SystemTime) -> u64 {
         .map_or(0, |elapsed| elapsed.as_secs())
 }
 
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1371,7 +1367,7 @@ mod tests {
     }
 
     fn digest(bytes: &[u8]) -> String {
-        hex(&Sha256::digest(bytes))
+        crate::ids::lower_hex(&Sha256::digest(bytes))
     }
 
     fn file(length: usize) -> Vec<u8> {

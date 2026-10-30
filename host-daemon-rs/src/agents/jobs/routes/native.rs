@@ -4,7 +4,6 @@ use std::time::Duration;
 
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
 
 use crate::agents::jobs::model::{
@@ -47,7 +46,7 @@ impl NativeMessage {
     ) -> Result<Self> {
         let fields = MessageFields {
             input_id: delivery_uuid(&conversation.thread_id, &delivery_id),
-            fingerprint: format!("{:x}", Sha256::digest(text.as_bytes())),
+            fingerprint: crate::ids::sha256_hex(text.as_bytes()),
             conversation,
             delivery_id,
             text,
@@ -91,7 +90,7 @@ impl TryFrom<MessageFields> for NativeMessage {
             && fields.text.len() <= MAX_PROMPT_BYTES
             && fields.input_id
                 == delivery_uuid(&fields.conversation.thread_id, &fields.delivery_id)
-            && fields.fingerprint == format!("{:x}", Sha256::digest(fields.text.as_bytes()));
+            && fields.fingerprint == crate::ids::sha256_hex(fields.text.as_bytes());
         if !valid {
             return Err("Claude native delivery identity or payload is invalid".into());
         }

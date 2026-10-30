@@ -336,12 +336,11 @@ impl JobOwner {
                             return Ok(false);
                         }
                         Inspection::TransientFailure { binding, reason } => {
-                            use rand_core::RngCore;
                             let at = now_ms();
                             let retry_at = super::retry::retry_at_ms(
                                 at,
                                 job.provider_retries.len(),
-                                rand_core::OsRng.next_u64(),
+                                getrandom::u64().expect("operating system entropy"),
                             );
                             store
                                 .schedule_provider_retry(

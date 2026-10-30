@@ -466,7 +466,7 @@ pub(in crate::runtime) fn sha256_file(path: &Path) -> Result<String> {
         }
         hash.update(&buffer[..read]);
     }
-    Ok(format!("{:x}", hash.finalize()))
+    Ok(crate::ids::lower_hex(&hash.finalize()))
 }
 
 pub(super) fn copy_tree(source: &Path, destination: &Path) -> Result<()> {

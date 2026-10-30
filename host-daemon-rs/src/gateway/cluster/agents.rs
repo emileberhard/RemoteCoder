@@ -161,10 +161,8 @@ impl Gateway {
         });
         result["agents"] = json!(rows);
         result["warnings"] = json!(warnings);
-        use sha2::{Digest, Sha256};
-        result["revision"] = json!(format!(
-            "{:x}",
-            Sha256::digest(serde_json::to_vec(&result["agents"]).map_err(anyhow::Error::from)?)
+        result["revision"] = json!(crate::ids::sha256_hex(
+            serde_json::to_vec(&result["agents"]).map_err(anyhow::Error::from)?
         ));
         Ok(result)
     }

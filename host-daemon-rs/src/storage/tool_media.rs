@@ -5,7 +5,6 @@ use std::time::SystemTime;
 use anyhow::Result;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
-use sha2::{Digest, Sha256};
 use tokio::sync::Semaphore;
 
 use super::content_store::{Limits, inventory, retain};
@@ -73,7 +72,7 @@ impl ToolMediaStore {
         let bytes = STANDARD.decode(base64).ok()?;
         let path = self
             .directory()
-            .join(format!("{:x}.{extension}", Sha256::digest(&bytes)));
+            .join(format!("{}.{extension}", crate::ids::sha256_hex(&bytes)));
         if !batch.staged.iter().any(|staged| staged.path == path) {
             batch.staged.push(Staged {
                 path: path.clone(),

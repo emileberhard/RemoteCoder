@@ -9,7 +9,6 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chacha20poly1305::aead::Aead;
 use chacha20poly1305::{ChaCha20Poly1305, KeyInit, Nonce};
 use hkdf::Hkdf;
-use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -402,7 +401,7 @@ impl NavigationManager {
         let session_id = random_identifier(16);
         let upload_token = random_identifier(32);
         let upload_token_hash = Sha256::digest(upload_token.as_bytes()).into();
-        let decryption_key = StaticSecret::random_from_rng(OsRng);
+        let decryption_key = StaticSecret::random();
         let server_public_key = PublicKey::from(&decryption_key);
         let now = unix_seconds();
         let expires_at_unix_seconds = now as i64 + SESSION_LIFETIME_SECONDS;
@@ -687,12 +686,15 @@ fn decrypt_event(
     let combined = URL_SAFE_NO_PAD
         .decode(encoded_payload)
         .context("invalid sealed event encoding")?;
-    if combined.len() < 12 + 16 {
+    let Some((nonce, sealed)) = combined
+        .split_first_chunk::<12>()
+        .filter(|(_, sealed)| sealed.len() >= 16)
+    else {
         bail!("sealed event is too short");
-    }
+    };
     let cipher = ChaCha20Poly1305::new((&key).into());
     cipher
-        .decrypt(Nonce::from_slice(&combined[..12]), &combined[12..])
+        .decrypt(&Nonce::from(*nonce), sealed)
         .map_err(|_| anyhow!("navigation event authentication failed"))
 }
 
@@ -784,9 +786,9 @@ mod tests {
     #[test]
     fn decrypts_x25519_chacha20poly1305_combined_payload() {
         let session_id = "session-1";
-        let server_secret = StaticSecret::random_from_rng(OsRng);
+        let server_secret = StaticSecret::random();
         let server_public = PublicKey::from(&server_secret);
-        let device_secret = StaticSecret::random_from_rng(OsRng);
+        let device_secret = StaticSecret::random();
         let device_public = PublicKey::from(&device_secret);
         let shared = device_secret.diffie_hellman(&server_public);
         let hkdf = Hkdf::<Sha256>::new(Some(session_id.as_bytes()), shared.as_bytes());
@@ -798,7 +800,7 @@ mod tests {
             br#"{"schemaVersion":1,"sessionId":"session-1","sequence":1,"kind":"bootstrap"}"#;
         let cipher = ChaCha20Poly1305::new((&key).into());
         let ciphertext = cipher
-            .encrypt(Nonce::from_slice(&nonce), plaintext.as_slice())
+            .encrypt(&Nonce::from(nonce), plaintext.as_slice())
             .unwrap();
         let mut combined = nonce.to_vec();
         combined.extend(ciphertext);
@@ -927,7 +929,7 @@ mod tests {
             created_at_unix_seconds: 0.0,
             expires_at_unix_seconds: i64::MAX,
             upload_token_hash: [0; 32],
-            decryption_key: StaticSecret::random_from_rng(OsRng),
+            decryption_key: StaticSecret::random(),
             events: VecDeque::new(),
             event_bytes: 0,
             dropped_through_sequence: 0,

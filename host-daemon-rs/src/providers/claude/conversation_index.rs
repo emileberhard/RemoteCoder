@@ -12,7 +12,6 @@ use std::sync::Arc;
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 
 use crate::providers::claude::capacity::{
     MAX_PROVIDER_ID_BYTES, MAX_PROVIDER_ITEM_ID_BYTES, validate_id,
@@ -173,7 +172,7 @@ impl Parent {
             .map(|delivery| delivery.fingerprint.as_str())
             .or_else(|| {
                 self.delivery_fingerprints
-                    .get(&format!("{:x}", Sha256::digest(id.as_bytes())))
+                    .get(&crate::ids::sha256_hex(id.as_bytes()))
                     .map(String::as_str)
             })
     }
@@ -214,7 +213,7 @@ impl Parent {
             };
             if let Some(delivery) = self.deliveries.remove(position) {
                 self.delivery_fingerprints.insert(
-                    format!("{:x}", Sha256::digest(delivery.id.as_bytes())),
+                    crate::ids::sha256_hex(delivery.id.as_bytes()),
                     delivery.fingerprint,
                 );
             }
@@ -256,7 +255,7 @@ impl Index {
 }
 
 fn path(home: &Path, thread_id: &str) -> PathBuf {
-    let key = format!("{:x}", Sha256::digest(thread_id.as_bytes()));
+    let key = crate::ids::sha256_hex(thread_id.as_bytes());
     home.join("remotecoder-history")
         .join(format!("{key}.jsonl"))
 }

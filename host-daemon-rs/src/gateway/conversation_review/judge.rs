@@ -52,13 +52,15 @@ impl JudgeApi {
         operation: &'static str,
         trace: &Trace,
     ) -> Result<Value> {
-        use sha2::{Digest, Sha256};
         trace.protect_secret(&self.key);
         let request = trace.request_id();
         let wire = body.to_string();
-        trace.event("request", json!({"requestId":request,"operation":operation,
+        trace.event(
+            "request",
+            json!({"requestId":request,"operation":operation,
             "endpoint":url,"model":body["model"],"body":body,
-            "requestBytes":wire.len(),"requestSha256":format!("{:x}",Sha256::digest(wire.as_bytes()))}));
+            "requestBytes":wire.len(),"requestSha256":crate::ids::sha256_hex(wire.as_bytes())}),
+        );
         let started = Instant::now();
         let response = self
             .client
@@ -110,7 +112,7 @@ impl JudgeApi {
             "status":status.as_u16(),"upstreamRequestId":upstream_request,
             "responseBody":String::from_utf8_lossy(&bytes),"responseUtf8":utf8,
             "responseBytes":complete.then_some(bytes.len()),"capturedResponseBytes":bytes.len(),"payloadComplete":complete && utf8,
-            "capturedResponseSha256":format!("{:x}",Sha256::digest(&bytes)),
+            "capturedResponseSha256":crate::ids::sha256_hex(&bytes),
             "body":parsed.as_ref().ok(),"usage":parsed.as_ref().ok().and_then(|body| body.get("usage")),
             "actualModel":parsed.as_ref().ok().and_then(|body| body.get("model")),
             "upstreamProvider":parsed.as_ref().ok().and_then(|body| body.get("provider")),

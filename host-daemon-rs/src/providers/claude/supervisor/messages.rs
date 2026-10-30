@@ -8,7 +8,6 @@ use crate::providers::claude::{
 };
 use crate::rpc::error::RpcCode;
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use tracing::error;
 
@@ -236,7 +235,7 @@ impl ClaudeSupervisor {
         let session_uuid = session_uuid_from_thread_id(&message.thread_id)
             .ok_or_else(|| rejected("Claude parent thread id is invalid"))?
             .to_owned();
-        let fingerprint = format!("{:x}", Sha256::digest(message.text.as_bytes()));
+        let fingerprint = crate::ids::sha256_hex(message.text.as_bytes());
         let _lifecycle = self.lifecycles.lock(&message.thread_id).await;
         let parent = self
             .conversation_index
@@ -1478,7 +1477,10 @@ mod tests {
         let mut fixture = Fixture::new();
         fixture.initial_turn().await;
         let history_dir = fixture.root.root_path().join("remotecoder-history");
-        let lock = history_dir.join(format!("{:x}.lock", Sha256::digest(THREAD.as_bytes())));
+        let lock = history_dir.join(format!(
+            "{}.lock",
+            crate::ids::sha256_hex(THREAD.as_bytes())
+        ));
         if lock.exists() {
             fs::remove_file(&lock).unwrap();
         }
@@ -1513,7 +1515,7 @@ mod tests {
                 .update_parent(THREAD, move |parent| {
                     parent.record_delivery(Delivery {
                         id,
-                        fingerprint: format!("{:x}", Sha256::digest(b"completed work")),
+                        fingerprint: crate::ids::sha256_hex(b"completed work"),
                         state: DeliveryState::Sending,
                         receipt: Value::Null,
                     });
@@ -1557,7 +1559,7 @@ mod tests {
                 for index in 0..300 {
                     parent.record_delivery(Delivery {
                         id: format!("saved-{index}"),
-                        fingerprint: format!("{:x}", Sha256::digest(b"completed work")),
+                        fingerprint: crate::ids::sha256_hex(b"completed work"),
                         state: DeliveryState::Submitted,
                         receipt: json!({"delivery":"gateway-steered"}),
                     });

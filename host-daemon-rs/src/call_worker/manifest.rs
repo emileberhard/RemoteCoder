@@ -30,5 +30,9 @@ pub(crate) fn content_hash(
         digest.update((bytes.len() as u64).to_be_bytes());
         digest.update(bytes);
     }
-    Ok(format!("{:x}", digest.finalize()))
+    Ok(digest
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
 }

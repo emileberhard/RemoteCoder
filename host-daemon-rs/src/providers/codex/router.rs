@@ -2,7 +2,6 @@ use anyhow::{Context, Result, ensure};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 pub(crate) const REFRESH_METHOD: &str = "account/chatgptAuthTokens/refresh";
@@ -47,7 +46,7 @@ impl Token {
             "Codex router returned a different account"
         );
         ensure!(
-            self.generation == format!("{:x}", Sha256::digest(self.access_token.as_bytes())),
+            self.generation == crate::ids::sha256_hex(self.access_token.as_bytes()),
             "Codex router token generation is invalid"
         );
         let payload = self

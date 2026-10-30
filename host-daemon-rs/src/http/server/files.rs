@@ -328,11 +328,9 @@ mod tests {
 
     #[tokio::test]
     async fn legacy_upload_route_stores_a_whole_body_and_discards_a_failed_one() {
-        use sha2::{Digest, Sha256};
-
         let lan = LanHarness::start().await;
         let bytes = b"sent by an app before resumable uploads";
-        let valid = format!("{:x}", Sha256::digest(bytes));
+        let valid = crate::ids::sha256_hex(bytes);
         let wrong = "0".repeat(64);
         let mut stored = None;
         for (digest, expected) in [(valid.as_str(), 201), (wrong.as_str(), 400)] {

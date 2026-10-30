@@ -2,8 +2,8 @@ use std::fs;
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use rand_core::{OsRng, RngCore};
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct UuidBytes(pub(crate) [u8; 16]);
@@ -52,8 +52,15 @@ pub(crate) fn format_uuid(id: UuidBytes) -> String {
     )
 }
 
+pub(crate) fn lower_hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+pub(crate) fn sha256_hex(bytes: impl AsRef<[u8]>) -> String {
+    lower_hex(&Sha256::digest(bytes))
+}
+
 pub(crate) fn hash_uuid(scope: &str, fields: &[&str]) -> String {
-    use sha2::{Digest, Sha256};
     let mut digest = Sha256::new().chain_update(scope.as_bytes());
     for field in fields {
         digest.update(b"\0");
@@ -89,7 +96,7 @@ pub(crate) fn is_session_uuid(value: &str) -> bool {
 
 pub(crate) fn random_identifier(byte_count: usize) -> String {
     let mut bytes = vec![0_u8; byte_count];
-    OsRng.fill_bytes(&mut bytes);
+    getrandom::fill(&mut bytes).expect("operating system entropy");
     URL_SAFE_NO_PAD.encode(bytes)
 }
 

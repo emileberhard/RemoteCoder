@@ -3,7 +3,6 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, ensure};
 use futures_util::{SinkExt, StreamExt};
-use rand_core::RngCore;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio_tungstenite::tungstenite::{Error as WebSocketError, Message};
@@ -299,7 +298,7 @@ async fn same_session(home: &Path, owner: &NativeSessionOwner) -> Result<bool> {
 async fn reconnect_delay(failures: &mut u32) {
     *failures = failures.saturating_add(1);
     let base = 250u64.saturating_mul(1u64 << (*failures).min(5)).min(5000);
-    let jitter = u64::from(rand_core::OsRng.next_u32() % 256);
+    let jitter = u64::from(getrandom::u32().expect("operating system entropy") % 256);
     tokio::time::sleep(Duration::from_millis(base + jitter)).await;
 }
 
