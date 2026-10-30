@@ -325,6 +325,8 @@ ios-simulator-test-local *test_ids: setup
         CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- {{ simulator_compile_settings }})
     mkdir -p "$derived_data"
     xcodebuild -project RemoteCoder.xcodeproj -alltargets -configuration Debug \
+        -derivedDataPath "$derived_data" \
+        -disableAutomaticPackageResolution -onlyUsePackageVersionsFromResolvedFile -skipPackageUpdates \
         -sdk iphonesimulator CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- \
         -showBuildSettings -json >"$derived_data/simulator-build-settings.json" &
     settings=$!
