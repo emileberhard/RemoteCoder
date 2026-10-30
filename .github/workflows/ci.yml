@@ -90,9 +90,24 @@ jobs:
           HOMEBREW_NO_INSTALL_CLEANUP: '1'
         run: brew list tmux >/dev/null 2>&1 || brew install tmux
       - run: rustup show
+      - run: cargo test --manifest-path host-daemon-rs/Cargo.toml --locked
+
+  gateway-lint:
+    needs: reuse
+    if: ${{ needs.reuse.outputs.run == 'true' }}
+    runs-on: xcode-27
+    timeout-minutes: 35
+    env:
+      CARGO_BUILD_JOBS: '4'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: scripts/select-xcode
+      - run: rustup show
       - run: cargo fmt --manifest-path host-daemon-rs/Cargo.toml --check
       - run: cargo clippy --manifest-path host-daemon-rs/Cargo.toml --locked --all-targets --all-features -- -D warnings
-      - run: cargo test --manifest-path host-daemon-rs/Cargo.toml --locked
 
   swift:
     needs: reuse
@@ -218,7 +233,7 @@ jobs:
         working-directory: web-client
 
   passed:
-    needs: [reuse, agent-calls, gateway, swift, apps-ios, apps-mac, web]
+    needs: [reuse, agent-calls, gateway, gateway-lint, swift, apps-ios, apps-mac, web]
     if: ${{ always() && !github.event.repository.private }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
