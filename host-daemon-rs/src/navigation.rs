@@ -786,9 +786,9 @@ mod tests {
     #[test]
     fn decrypts_x25519_chacha20poly1305_combined_payload() {
         let session_id = "session-1";
-        let server_secret = StaticSecret::random();
+        let server_secret = StaticSecret::from([0x11; 32]);
         let server_public = PublicKey::from(&server_secret);
-        let device_secret = StaticSecret::random();
+        let device_secret = StaticSecret::from([0x22; 32]);
         let device_public = PublicKey::from(&device_secret);
         let shared = device_secret.diffie_hellman(&server_public);
         let hkdf = Hkdf::<Sha256>::new(Some(session_id.as_bytes()), shared.as_bytes());
@@ -804,15 +804,20 @@ mod tests {
             .unwrap();
         let mut combined = nonce.to_vec();
         combined.extend(ciphertext);
+        let encoded_public_key = URL_SAFE_NO_PAD.encode(device_public.as_bytes());
+        let sealed = URL_SAFE_NO_PAD.encode(combined);
 
-        let decrypted = decrypt_event(
-            session_id,
-            &server_secret,
-            &URL_SAFE_NO_PAD.encode(device_public.as_bytes()),
-            &URL_SAFE_NO_PAD.encode(combined),
-        )
-        .unwrap();
+        let decrypted =
+            decrypt_event(session_id, &server_secret, &encoded_public_key, &sealed).unwrap();
 
+        assert_eq!(
+            encoded_public_key,
+            "D6poTtKIZ7l_Smot7l34zpdOdrcBjj8iocTPJnhXDyA"
+        );
+        assert_eq!(
+            sealed,
+            "BwcHBwcHBwcHBwcHG5qTTouaBhngv7iiGHu77K2zNimXufBtLajq3zWPX2n1XPwl2pTydQNAmY5ZIOwMLGmroUTNWcBwGn05nB9jGeDBmFsV-H-4bJ7HaDoBsveAJJ9IMYPhMeUbnw"
+        );
         assert_eq!(decrypted, plaintext);
     }
 
