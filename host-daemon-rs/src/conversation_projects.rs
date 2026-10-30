@@ -39,6 +39,7 @@ struct Cached {
 pub(crate) struct ProjectResolver {
     cache: Mutex<HashMap<String, Cached>>,
     admission: Arc<Semaphore>,
+    git_timeout: Duration,
 }
 
 impl Default for ProjectResolver {
@@ -46,6 +47,7 @@ impl Default for ProjectResolver {
         Self {
             cache: Mutex::new(HashMap::new()),
             admission: Arc::new(Semaphore::new(CONCURRENT_RESOLUTIONS)),
+            git_timeout: GIT_TIMEOUT,
         }
     }
 }
@@ -76,9 +78,10 @@ impl ProjectResolver {
         let mut tasks = tokio::task::JoinSet::new();
         for directory in missing {
             let admission = Arc::clone(&self.admission);
+            let git_timeout = self.git_timeout;
             tasks.spawn(async move {
                 let _permit = admission.acquire_owned().await?;
-                Ok::<_, anyhow::Error>(identify(&directory).await)
+                Ok::<_, anyhow::Error>(identify(&directory, git_timeout).await)
             });
         }
         let mut fresh = Vec::new();
@@ -108,7 +111,7 @@ impl ProjectResolver {
     }
 }
 
-async fn identify(directory: &str) -> Option<ProjectIdentity> {
+async fn identify(directory: &str, git_timeout: Duration) -> Option<ProjectIdentity> {
     let GitOutput::Succeeded(lines) = git(
         directory,
         &[
@@ -117,6 +120,7 @@ async fn identify(directory: &str) -> Option<ProjectIdentity> {
             "--show-toplevel",
             "--git-common-dir",
         ],
+        git_timeout,
     )
     .await?
     else {
@@ -127,8 +131,12 @@ async fn identify(directory: &str) -> Option<ProjectIdentity> {
         return Some(directory_identity(directory));
     };
     let root = repository_root(toplevel, common);
-    if let GitOutput::Succeeded(url) =
-        git(directory, &["config", "--get", "remote.origin.url"]).await?
+    if let GitOutput::Succeeded(url) = git(
+        directory,
+        &["config", "--get", "remote.origin.url"],
+        git_timeout,
+    )
+    .await?
         && let Some(remote) = normalized_remote(url.trim())
     {
         let name = remote.rsplit('/').next().unwrap_or(&remote).to_string();
@@ -206,9 +214,9 @@ enum GitOutput {
     Failed,
 }
 
-async fn git(directory: &str, arguments: &[&str]) -> Option<GitOutput> {
+async fn git(directory: &str, arguments: &[&str], timeout: Duration) -> Option<GitOutput> {
     let output = tokio::time::timeout(
-        GIT_TIMEOUT,
+        timeout,
         tokio::process::Command::new("/usr/bin/git")
             .arg("-C")
             .arg(directory)
@@ -272,7 +280,11 @@ mod tests {
     async fn a_directory_outside_any_repository_is_its_own_project() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().to_string_lossy().into_owned();
-        let resolved = ProjectResolver::default()
+        let resolver = ProjectResolver {
+            git_timeout: Duration::MAX,
+            ..ProjectResolver::default()
+        };
+        let resolved = resolver
             .resolve(vec![path.clone(), path.clone()])
             .await
             .unwrap();
