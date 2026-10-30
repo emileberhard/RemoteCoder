@@ -417,7 +417,6 @@ mod tests {
     use nix::unistd::Pid;
     use serde_json::{Value, json};
     use std::fs;
-    use std::time::Duration;
     use tokio::sync::mpsc;
 
     struct Fixture {
@@ -452,17 +451,17 @@ mod tests {
         }
 
         async fn next_completion(&mut self) -> Value {
-            tokio::time::timeout(Duration::from_secs(5), async {
-                loop {
-                    let event =
-                        crate::test_support::claude_event(self.events.recv().await.unwrap());
-                    if event["method"] == "turn/completed" {
-                        return event;
-                    }
+            loop {
+                let event = crate::test_support::claude_event(
+                    self.events
+                        .recv()
+                        .await
+                        .expect("a notification was emitted"),
+                );
+                if event["method"] == "turn/completed" {
+                    return event;
                 }
-            })
-            .await
-            .unwrap()
+            }
         }
 
         async fn running_turn(&self) {

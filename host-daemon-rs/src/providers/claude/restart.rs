@@ -483,7 +483,6 @@ fn local_time(unix_ms: u64) -> String {
 pub(crate) mod test_support {
     use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
-    use std::time::Duration;
 
     use serde_json::Value;
 
@@ -570,17 +569,12 @@ pub(crate) mod test_support {
 
         pub(crate) async fn wait_for_log(&self, name: &str, count: usize) -> Vec<Value> {
             let path = self.state.join(name);
-            tokio::time::timeout(Duration::from_secs(5), async {
-                loop {
-                    let values = read_log(&path);
-                    if values.len() >= count {
-                        return values;
-                    }
-                    tokio::time::sleep(Duration::from_millis(10)).await;
-                }
+            crate::test_support::wait_until("the Claude stub log entries", {
+                let path = path.clone();
+                move || read_log(&path).len() >= count
             })
-            .await
-            .unwrap_or_else(|_| panic!("{name} never reached {count} entries"))
+            .await;
+            read_log(&path)
         }
 
         pub(crate) fn item(&self, session_uuid: &str, status: ItemStatus) -> Item {
