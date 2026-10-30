@@ -501,16 +501,28 @@ fn real_native_history_and_gateway_state_resume_after_collision_without_repeatin
 fn overlapping_native_threads_preserve_the_prior_database_family_on_resume() {
     let fixture = Fixture::new();
     fixture.native();
+    let source = fixture.source.join("c");
     let root = Root::open(fixture.home.path()).unwrap();
     for database in DATABASES {
-        let source = fixture.source.join("c").join(database);
-        if source.exists() {
-            root.clone_from(&root, &source, &fixture.target.join(database))
+        let path = source.join(database);
+        if path.exists() {
+            root.clone_from(&root, &path, &fixture.target.join(database))
                 .unwrap();
         }
     }
     python(
-        "import sqlite3,sys\nwith sqlite3.connect(sys.argv[1]) as db: db.execute('UPDATE threads SET title=? WHERE id=?', ('Prior host title',sys.argv[2]))\nprint('{}')",
+        "import sqlite3,sys\nwith sqlite3.connect(sys.argv[1]) as db: db.execute('INSERT INTO guardian_review_feedback VALUES(?,?,?)', ('01a14ab9-0000-7000-8000-000000000001',sys.argv[2],b'{\"decision\":\"approve\"}'))\nprint('{}')",
+        &[source.join("state_5.sqlite"), THREAD.into()],
+    );
+    python(
+        r#"
+import sqlite3,sys
+with sqlite3.connect(sys.argv[1]) as db:
+    db.execute('UPDATE threads SET title=? WHERE id=?', ('Prior host title',sys.argv[2]))
+    db.execute('UPDATE thread_read_receipts SET first_unread_turn=NULL,revision=? WHERE thread_id=?', ('prior-revision',sys.argv[2]))
+    db.execute('INSERT INTO guardian_review_feedback VALUES(?,?,?)', ('01a14ab9-0000-7000-8000-000000000002',sys.argv[2],b'{"decision":"deny"}'))
+print('{}')
+"#,
         &[fixture.target.join("state_5.sqlite"), THREAD.into()],
     );
     let originals = DATABASES
@@ -522,6 +534,7 @@ fn overlapping_native_threads_preserve_the_prior_database_family_on_resume() {
         })
         .collect::<BTreeMap<_, _>>();
     run(fixture.home.path(), &fixture.target, &fixture.claude_home).unwrap();
+    assert_eq!(native_summary(&fixture.target), native_summary(&source));
     let conflicts = fixture
         .home
         .path()
@@ -531,10 +544,25 @@ fn overlapping_native_threads_preserve_the_prior_database_family_on_resume() {
         assert_eq!(&std::fs::read(conflicts.join(name)).unwrap(), bytes);
     }
     let restored = python(
-        "import sqlite3,sys,json\nwith sqlite3.connect(sys.argv[1]) as db: print(json.dumps(db.execute('SELECT title FROM threads WHERE id=?',(sys.argv[2],)).fetchone()[0]))",
+        r#"
+import json,sqlite3,sys
+with sqlite3.connect(sys.argv[1]) as db:
+    print(json.dumps({
+        'title':db.execute('SELECT title FROM threads WHERE id=?',(sys.argv[2],)).fetchone()[0],
+        'receipt':db.execute('SELECT first_unread_turn,revision FROM thread_read_receipts WHERE thread_id=?',(sys.argv[2],)).fetchone(),
+        'guardian':db.execute('SELECT id FROM guardian_review_feedback WHERE thread_id=?',(sys.argv[2],)).fetchall(),
+    }))
+"#,
         &[conflicts.join("state_5.sqlite"), THREAD.into()],
     );
-    assert_eq!(restored, "Prior host title");
+    assert_eq!(
+        restored,
+        json!({
+            "title":"Prior host title",
+            "receipt":[null,"prior-revision"],
+            "guardian":[["01a14ab9-0000-7000-8000-000000000002"]],
+        })
+    );
     run(fixture.home.path(), &fixture.target, &fixture.claude_home).unwrap();
     for (name, bytes) in &originals {
         assert_eq!(&std::fs::read(conflicts.join(name)).unwrap(), bytes);
