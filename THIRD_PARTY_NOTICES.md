@@ -6,7 +6,7 @@ RemoteCoder's license applies to its own code. The components below retain their
 | --- | --- | --- |
 | iOS and Mac apps | SpeechKit | MIT; [notice](LICENSES/SpeechKit.txt), [source](https://github.com/emileberhard/SpeechKit) |
 | iOS and Mac apps, browser client | Codex mark path from Lobe Icons (`@lobehub/icons-static-svg` 1.95.0) | MIT; [license](LICENSES/LobeHub-icons.txt), [source](https://github.com/lobehub/lobe-icons) |
-| iOS app | WebRTC 152.0.0 | BSD-3-Clause; [WebRTC](LICENSES/WebRTC.txt), [native third-party notices](LICENSES/WebRTC-third-party.md) and [Swift package wrapper](LICENSES/WebRTC-package.txt) |
+| iOS app | WebRTC 156.0.0 | BSD-3-Clause; [WebRTC](LICENSES/WebRTC.txt), [native third-party notices](LICENSES/WebRTC-third-party.md) and [Swift package wrapper](LICENSES/WebRTC-package.txt) |
 | iOS app, when enabled | Google Maps and Navigation SDKs 11.1.0 | [Google terms and bundled notices](LICENSES/Google-SDKs.md); Google licenses also remain available in Settings |
 | iOS and Mac apps | Mermaid 12.0.0 and its bundled dependencies | MIT, Apache-2.0, BSD, ISC and EPL-2.0; [native bundle notices](LICENSES/mermaid-native.md) and [EPL-2.0 text](LICENSES/EPL-2.0.txt) |
 | Gateway | Rust dependencies | [Versioned inventory, source and license texts](LICENSES/gateway-rust.md) |
