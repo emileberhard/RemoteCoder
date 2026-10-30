@@ -676,28 +676,28 @@ and its caller re-reads its snapshot or row state afterwards.
 
 `ConversationWarmer` processes eligible conversations in drawer rank order,
 filtering completed coverage. The first two retain their existing hot-session policy. For a
-selected conversation, it first stores the opening tail. If no claimed, active,
-fully laid-out preparation surface permits background work, that history-only
-coverage completes without scanning visual references or retrying an impossible
-render. A temporary loss of capability does not erase stronger visual coverage
-for the same observation.
+selected conversation, it first stores the opening tail and scans its visual
+references off the main actor. `HistoryWarmLedger` retains those references with
+coverage of that exact history observation. If no claimed, active, fully laid-out
+preparation surface permits background work, history coverage still completes.
+A temporary loss of capability does not erase stronger visual coverage for the
+same observation, so an unchanged drawer close starts no warming work.
 
 Each screen reports a new usable background preparation context to the target.
 The target retains a request received during an active pass and drains it before
-ending. It reuses the covered stored tail, including hot conversations whose raw
-page-cache freshness has expired. With a usable surface, it scans visual
-references off the main actor and awaits `prepareInBackground` in chunks of at
-most 16. They get geometry and a stored snapshot only, never a decode.
+ending. For covered history, context changes and unfinished preparation reuse the
+recorded references, including hot conversations, without loading stored tails.
+Conversations with no visuals need no context-specific work. `prepareInBackground`
+filters out digests already prepared for the current width and theme, then awaits
+missing geometry and stored snapshots in chunks of at most 16, never a decode.
 The outcome is `settled` only when every eligible visual is stored or recorded
-unpreparable; a visual whose render timed out leaves it `incomplete`, and the
-next warm pass retries it from the stored tail. Deactivation, energy
-conservation, a layout context change, `cancelDemand` and task cancellation
-return `interrupted`, which never counts as warmed. Mac background capability is
-absent, so the warmer completes history only; the preparation API retains its
-explicit `unsupported` result. `HistoryWarmLedger`
-records the width and theme a conversation was warmed for, so a new context
-prepares it again without another history read. An agent message with a visual
-in a conversation that is not shown moves the thread's header revision, and
+unpreparable; a visual whose render timed out leaves it `incomplete`.
+Deactivation, energy conservation, a layout context change, `cancelDemand` and
+task cancellation return `interrupted`. Neither outcome claims visual coverage;
+both retain completed history and references for the next legitimate request.
+Mac background capability is absent, so the warmer completes history only; the
+preparation API retains its explicit `unsupported` result. Ledger entries and
+references share the existing bounded retention and invalidation owner. An agent message with a visual in a conversation that is not shown moves the thread's header revision, and
 the next eligible warm pass reads and prepares it. Opening such a conversation reserves
 the final height at once and decodes the stored snapshot, so the block fades
 in without changing size. A visual that was never prepared still opens with a

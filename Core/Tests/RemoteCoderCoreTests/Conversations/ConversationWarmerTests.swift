@@ -95,6 +95,20 @@ struct ConversationWarmerTests {
         #expect(await fixture.gateway.itemReads == 2)
     }
 
+    @Test func coveredOpeningHistoryIsSkippedWhilePreparationIsUnavailable() async {
+        let fixture = WarmingFixture()
+        defer { fixture.cleanUp() }
+        let warmer = fixture.warmer()
+        let header = ConversationHeader.historyFixture(id: "opened")
+        warmer.readSucceeded(threadID: header.id, observation: warmer.observation(threadID: header.id, revision: header.updatedAt))
+
+        fixture.host.htmlVisualPreparationContext = nil
+        #expect(!warmer.needsWarm(header))
+        await warmer.warm([header], hot: [], agentThreadIDs: [])
+        #expect(await fixture.gateway.itemReads == 0)
+        #expect(fixture.host.prepared.isEmpty)
+    }
+
     @Test func aNewerHeaderRevisionIsReadAgainEvenWhenTheStoredTailLooksFresh() async throws {
         let fixture = WarmingFixture()
         defer { fixture.cleanUp() }
@@ -133,13 +147,111 @@ struct ConversationWarmerTests {
 }
 
 @MainActor
+struct ConversationWarmingCoverageTests {
+    private static let theme = HTMLVisualTheme(fontSize: 17, text: "#000", secondaryText: "#333", background: "#fff",
+        surface: "#eee", accent: "#00f", isDark: false)
+    private static let portrait = HTMLVisualPreparationContext(width: 402, theme: theme)
+    private static let landscape = HTMLVisualPreparationContext(width: 874, theme: theme)
+    private static let firstDigest = String(repeating: "a", count: 64)
+    private static let secondDigest = String(repeating: "b", count: 64)
+    private static let threads = ["first", "second", "plain"].map { ConversationHeader.historyFixture(id: $0) }
+
+    private static func fixture() -> WarmingFixture {
+        WarmingFixture(gateway: VisualTailGateway(text: { [firstDigest, secondDigest] threadID in
+            switch threadID {
+            case "first": "![First](rc-visual:\(firstDigest))"
+            case "second": "![Second](rc-visual:\(secondDigest))"
+            default: "No visual in this answer."
+            }
+        }))
+    }
+
+    @Test func closingAnUnchangedDrawerDoesNoWorkAfterHistoryAndVisualCoverage() async {
+        let fixture = Self.fixture()
+        defer { fixture.cleanUp() }
+        let warmer = fixture.warmer()
+
+        fixture.host.htmlVisualPreparationContext = nil
+        await warmer.warm(Self.threads, hot: [], agentThreadIDs: [])
+        #expect(await fixture.gateway.itemReads == 3)
+        #expect(fixture.host.prepared.isEmpty)
+        #expect(Self.threads.filter(warmer.needsWarm).isEmpty)
+
+        fixture.host.htmlVisualPreparationContext = Self.portrait
+        await warmer.warm(Self.threads.filter(warmer.needsWarm), hot: [], agentThreadIDs: [])
+        #expect(fixture.host.prepared.flatMap { $0.map(\.digest) } == [Self.firstDigest, Self.secondDigest])
+        fixture.host.htmlVisualPreparationContext = nil
+        #expect(Self.threads.filter(warmer.needsWarm).isEmpty)
+        fixture.host.htmlVisualPreparationContext = Self.portrait
+        #expect(Self.threads.filter(warmer.needsWarm).isEmpty)
+        await warmer.warm(Self.threads, hot: [], agentThreadIDs: [])
+        #expect(await fixture.gateway.itemReads == 3)
+        #expect(fixture.host.prepared.count == 2)
+    }
+
+    @Test(arguments: [false, true])
+    func contextChangesReuseVisualReferencesEvenWhenStoredTailsAreGone(hot: Bool) async {
+        let fixture = Self.fixture()
+        defer { fixture.cleanUp() }
+        let history = fixture.history()
+        let warmer = ConversationWarmer(host: fixture.host, conversations: fixture.sessions, history: history)
+        let hotIDs: Set<String> = hot ? ["first", "second"] : []
+
+        fixture.host.htmlVisualPreparationContext = Self.portrait
+        await warmer.warm(Self.threads, hot: hotIDs, agentThreadIDs: [])
+        await history.invalidateAll()
+        fixture.host.htmlVisualPreparationContext = Self.landscape
+        #expect(Self.threads.filter(warmer.needsWarm).map(\.id) == ["first", "second"])
+        await warmer.warm(Self.threads.filter(warmer.needsWarm), hot: hotIDs, agentThreadIDs: [])
+        #expect(await fixture.gateway.itemReads == 3)
+        #expect(fixture.host.prepared.flatMap { $0.map(\.digest) }
+            == [Self.firstDigest, Self.secondDigest, Self.firstDigest, Self.secondDigest])
+        #expect(fixture.host.preparedContexts == [Self.portrait, Self.portrait, Self.landscape, Self.landscape])
+        #expect(Self.threads.filter(warmer.needsWarm).isEmpty)
+    }
+
+    @Test func aFirstWarmCompletingWhileAnotherThreadStreamsIsRecorded() async {
+        let fixture = Self.fixture()
+        defer { fixture.cleanUp() }
+        fixture.host.htmlVisualPreparationContext = Self.portrait
+        await fixture.warmer().warm(Self.threads, hot: [], agentThreadIDs: [])
+
+        let relaunched = fixture.warmer()
+        fixture.host.onPrepare = { relaunched.changed("streaming-elsewhere") }
+        await relaunched.warm(Self.threads, hot: [], agentThreadIDs: [])
+        #expect(Self.threads.filter(relaunched.needsWarm).isEmpty)
+        await relaunched.warm(Self.threads.filter(relaunched.needsWarm), hot: [], agentThreadIDs: [])
+        #expect(await fixture.gateway.itemReads == 3)
+        #expect(fixture.host.prepared.count == 4)
+    }
+
+    @Test(arguments: [HTMLVisualPreparationOutcome.incomplete(missing: 1), .interrupted])
+    func unfinishedPreparationRetainsReferencesWithoutClaimingVisualCoverage(outcome: HTMLVisualPreparationOutcome) async {
+        let fixture = Self.fixture()
+        defer { fixture.cleanUp() }
+        let history = fixture.history()
+        let warmer = ConversationWarmer(host: fixture.host, conversations: fixture.sessions, history: history)
+        let header = Self.threads[0]
+        fixture.host.outcomes = [outcome]
+        await warmer.warm([header], hot: [], agentThreadIDs: [])
+        #expect(warmer.needsWarm(header))
+        await history.invalidateAll()
+        await warmer.warm([header].filter(warmer.needsWarm), hot: [], agentThreadIDs: [])
+        #expect(!warmer.needsWarm(header))
+        #expect(await fixture.gateway.itemReads == 1)
+        #expect(fixture.host.prepared.flatMap { $0.map(\.digest) } == [Self.firstDigest, Self.firstDigest])
+    }
+}
+
+@MainActor
 private struct WarmingFixture {
     let temporary = TemporaryHostStorage()
     let sessions: ConversationSessions
-    let gateway = VisualTailGateway(text: "Compare ![Chart](rc-visual:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855) and ![Chart](rc-visual:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855)")
+    let gateway: VisualTailGateway
     let host = WarmingHost()
 
-    init() {
+    init(gateway: VisualTailGateway = VisualTailGateway(text: "Compare ![Chart](rc-visual:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855) and ![Chart](rc-visual:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855)")) {
+        self.gateway = gateway
         let hostID = UUID()
         sessions = ConversationSessions(hostID: hostID,
             sessionIndex: ConversationIndex(hostID: hostID, storage: temporary.storage),
@@ -147,8 +259,12 @@ private struct WarmingFixture {
     }
 
     func warmer() -> ConversationWarmer {
-        ConversationWarmer(host: host, conversations: sessions, history: GatewayHistoryService(gateway: gateway,
-            cache: HistoryPageCache(directory: temporary.storage.root.appending(path: "pages"), freshnessInterval: 0)))
+        ConversationWarmer(host: host, conversations: sessions, history: history())
+    }
+
+    func history() -> GatewayHistoryService {
+        GatewayHistoryService(gateway: gateway,
+            cache: HistoryPageCache(directory: temporary.storage.root.appending(path: "pages"), freshnessInterval: 0))
     }
 
     func cleanUp() { temporary.cleanUp() }
@@ -164,10 +280,12 @@ private final class WarmingHost: ConversationWarmingHost {
     var outcomes: [HTMLVisualPreparationOutcome] = []
     var onPrepare: (@MainActor () -> Void)?
     private(set) var prepared: [[HTMLVisualReference]] = []
+    private(set) var preparedContexts: [HTMLVisualPreparationContext?] = []
     func refreshAgents(threadID: String) async {}
     func didWarm(_ snapshot: ConversationSnapshot, session: ConversationSession) {}
     func prepareHTMLVisuals(_ references: [HTMLVisualReference]) async -> HTMLVisualPreparationOutcome {
         prepared.append(references)
+        preparedContexts.append(htmlVisualPreparationContext)
         onPrepare?()
         return outcomes.isEmpty ? .settled(stored: references.count, unpreparable: 0) : outcomes.removeFirst()
     }
@@ -175,16 +293,21 @@ private final class WarmingHost: ConversationWarmingHost {
 
 private actor VisualTailGateway: CodexHistoryGateway {
     let historyHostID = "warming-host"
-    let text: String
+    let text: @Sendable (String) -> String
     private(set) var itemReads = 0
 
-    init(text: String) { self.text = text }
+    init(text: String) { self.init(text: { _ in text }) }
+
+    init(text: @escaping @Sendable (String) -> String) {
+        self.text = text
+    }
 
     func historyPageData(method: String, params: JSONValue) throws -> Data {
         if method == "thread/items/list" {
             itemReads += 1
+            let threadID = params.objectValue?["threadId"]?.stringValue ?? ""
             return try JSONEncoder().encode(WarmingEnvelope(result: CodexAppServerV2.ThreadItemsListResponse(
-                data: [.init(turnId: "turn", item: .agentMessage(id: "answer", text: text), startedAtOrdinal: 1, isComplete: true)],
+                data: [.init(turnId: "turn", item: .agentMessage(id: "answer", text: text(threadID)), startedAtOrdinal: 1, isComplete: true)],
                 nextCursor: nil, backwardsCursor: nil)))
         }
         guard method == "thread/turns/list" else { throw CancellationError() }

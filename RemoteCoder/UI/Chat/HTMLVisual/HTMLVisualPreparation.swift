@@ -109,9 +109,7 @@ final class HTMLVisualPreparation {
         guard layoutContext != context else { return }
         layoutContext = context
         finish(&background)
-        #if DEBUG
-        Self.logger.notice("html visual context width=\(context.width ?? -1) theme=\(context.theme != nil) scale=\(context.displayScale ?? -1)")
-        #endif
+        Self.logger.notice("html visual context width=\(context.width ?? -1) theme=\(context.theme.map { "dark=\($0.isDark) font=\($0.fontSize) text=\($0.text) background=\($0.background) surface=\($0.surface) accent=\($0.accent)" } ?? "none") scale=\(context.displayScale ?? -1)")
         planNear()
         stateChanged()
         notifyBackgroundPreparationReady(previous: previous)

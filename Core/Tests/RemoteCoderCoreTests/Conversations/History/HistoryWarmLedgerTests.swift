@@ -1,20 +1,23 @@
+import Foundation
 import Testing
 @testable import RemoteCoderCore
 
 struct HistoryWarmLedgerTests {
-    @Test func unavailablePreparationPreservesCompletedVisualCoverageForTheSameRevision() {
+    @Test func unavailablePreparationPreservesCompletedVisualCoverageForTheSameRevision() throws {
         var ledger = HistoryWarmLedger()
+        let url = try #require(URL(string: "rc-visual:" + String(repeating: "a", count: 64)))
+        let visual = try #require(HTMLVisualReference(url: url))
         let context = HTMLVisualPreparationContext(width: 320,
             theme: HTMLVisualTheme(fontSize: 17, text: "#000", secondaryText: "#333", background: "#fff",
                 surface: "#eee", accent: "#00f", isDark: false))
         let observation = ledger.observation(threadID: "t", revision: 1)
-        ledger.succeeded(threadID: "t", observation: observation, context: context)
+        ledger.succeeded(threadID: "t", observation: observation, context: context, visuals: [visual])
         #expect(!ledger.needsWarm(threadID: "t", revision: 1, context: nil))
-        ledger.succeeded(threadID: "t", observation: observation, context: nil)
+        ledger.succeeded(threadID: "t", observation: observation, context: nil, visuals: [visual])
         #expect(!ledger.needsWarm(threadID: "t", revision: 1, context: context))
 
         ledger.changed("t")
-        ledger.succeeded(threadID: "t", observation: ledger.observation(threadID: "t", revision: 1), context: nil)
+        ledger.succeeded(threadID: "t", observation: ledger.observation(threadID: "t", revision: 1), context: nil, visuals: [visual])
         #expect(ledger.needsWarm(threadID: "t", revision: 1, context: context))
     }
 
@@ -22,14 +25,14 @@ struct HistoryWarmLedgerTests {
         var ledger = HistoryWarmLedger()
         #expect(ledger.readCovers(threadID: "old", revision: 1) != true)
         let original = ledger.observation(threadID: "old", revision: 1)
-        ledger.succeeded(threadID: "old", observation: original, context: nil)
+        ledger.succeeded(threadID: "old", observation: original, context: nil, visuals: [])
         #expect(ledger.readCovers(threadID: "old", revision: 1) == true)
         for index in 0..<ConversationHeaderRetention.countLimit {
             if index == ConversationHeaderRetention.countLimit - 1 {
                 #expect(ledger.readCovers(threadID: "old", revision: 1) == true)
             }
             let thread = "thread-\(index)"
-            ledger.succeeded(threadID: thread, observation: ledger.observation(threadID: thread, revision: 1), context: nil)
+            ledger.succeeded(threadID: thread, observation: ledger.observation(threadID: thread, revision: 1), context: nil, visuals: [])
         }
         #expect(ledger.needsWarm(threadID: "old", revision: 1, context: nil))
         #expect(ledger.readCovers(threadID: "old", revision: 1) != true)
@@ -52,16 +55,27 @@ struct HistoryWarmLedgerTests {
         ledger.changed("t")
         let first = ledger.observation(threadID: "t", revision: 1)
         #expect(ledger.needsWarm(threadID: "t", revision: 1, context: nil))
-        ledger.succeeded(threadID: "t", observation: first, context: nil)
+        ledger.succeeded(threadID: "t", observation: first, context: nil, visuals: [])
         #expect(!ledger.needsWarm(threadID: "t", revision: 1, context: nil))
         ledger.changed("t")
         let second = ledger.observation(threadID: "t", revision: 1)
         ledger.changed("t")
-        ledger.succeeded(threadID: "t", observation: second, context: nil)
+        ledger.succeeded(threadID: "t", observation: second, context: nil, visuals: [])
         #expect(ledger.needsWarm(threadID: "t", revision: 1, context: nil))
-        ledger.succeeded(threadID: "t", observation: ledger.observation(threadID: "t", revision: 1), context: nil)
+        ledger.succeeded(threadID: "t", observation: ledger.observation(threadID: "t", revision: 1), context: nil, visuals: [])
         #expect(!ledger.needsWarm(threadID: "t", revision: 1, context: nil))
         #expect(ledger.needsWarm(threadID: "t", revision: 2, context: nil))
+    }
+
+    @Test func unrelatedNotificationsDoNotInvalidateAFirstRead() {
+        var ledger = HistoryWarmLedger()
+        let first = ledger.observation(threadID: "first", revision: 1)
+        ledger.changed("running")
+        ledger.readSucceeded(threadID: "first", observation: first)
+        #expect(ledger.readCovers(threadID: "first", revision: 1) == true)
+        ledger.changed("running")
+        ledger.succeeded(threadID: "first", observation: first, context: nil, visuals: [])
+        #expect(!ledger.needsWarm(threadID: "first", revision: 1, context: nil))
     }
 
     @Test func invalidationAndClearingEndEarlierObservations() {

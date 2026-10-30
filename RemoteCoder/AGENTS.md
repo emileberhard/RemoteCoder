@@ -538,7 +538,10 @@ entrypoint linked above.
     that exact header revision, or without a ledger entry while the stored tail
     is newer than the thread's `updatedAt`. History coverage completes even when
     visual preparation is unavailable. A newly usable preparation context
-    explicitly requests missing visual work from stored tails; the target
+    explicitly requests missing visual work from ledger-retained references without
+    loading tails; conversations without visuals need no context-specific work. The ledger
+    retains completed history and references across unfinished preparation, and its
+    absent-entry observation changes only on eviction or clear. The target
     retains requests arriving during an active pass. Incomplete renders wait
     for another legitimate request, and cancellation never marks success.
     Background warming must not cancel near-viewport preparation demand.

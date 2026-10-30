@@ -61,7 +61,13 @@ final class ConversationWarmer {
         }
         for thread in threads {
             guard mayContinue else { return }
+            guard needsWarm(thread) else { continue }
             let observation = ledger.observation(threadID: thread.id, revision: thread.updatedAt)
+            if let context = host?.htmlVisualPreparationContext,
+               let references = ledger.pendingVisuals(threadID: thread.id, revision: thread.updatedAt, context: context) {
+                guard await prepare(thread, references, observation: observation, context: context, source: "recorded") else { return }
+                continue
+            }
             let covered = ledger.readCovers(threadID: thread.id, revision: thread.updatedAt)
             do {
                 let tail: HistoryWindow
@@ -95,23 +101,14 @@ final class ConversationWarmer {
                     ledger.readSucceeded(threadID: thread.id, observation: observation)
                     source = "read"
                 }
+                let references = await Self.visualReferences(in: tail)
                 guard mayContinue, let host else { return }
-                guard let context = host.htmlVisualPreparationContext else {
-                    ledger.succeeded(threadID: thread.id, observation: observation, context: nil)
-                    logger.notice("warmed thread=\(thread.id) revision=\(thread.updatedAt) source=\(source) outcome=historyOnly")
+                ledger.succeeded(threadID: thread.id, observation: observation, context: nil, visuals: references)
+                guard let context = host.htmlVisualPreparationContext, !references.isEmpty else {
+                    logger.notice("warmed thread=\(thread.id) revision=\(thread.updatedAt) source=\(source) visuals=\(references.count) outcome=historyOnly")
                     continue
                 }
-                let references = await Self.visualReferences(in: tail)
-                guard mayContinue else { return }
-                let outcome = await host.prepareHTMLVisuals(references)
-                logger.notice("warmed thread=\(thread.id) revision=\(thread.updatedAt) source=\(source) visuals=\(references.count) outcome=\(String(describing: outcome))")
-                switch outcome {
-                case .settled, .unsupported:
-                    guard mayContinue, host.htmlVisualPreparationContext == context else { return }
-                    ledger.succeeded(threadID: thread.id, observation: observation, context: context)
-                case .incomplete: continue
-                case .interrupted: return
-                }
+                guard await prepare(thread, references, observation: observation, context: context, source: source) else { return }
             } catch is CancellationError {
                 return
             } catch {
@@ -120,6 +117,21 @@ final class ConversationWarmer {
         }
         guard let host else { return }
         await conversations.evictIdle(keeping: host.presentedConversationIDs)
+    }
+
+    private func prepare(_ thread: ConversationHeader, _ references: [HTMLVisualReference], observation: HistoryWarmLedger.Observation,
+                         context: HTMLVisualPreparationContext, source: String) async -> Bool {
+        guard let host else { return false }
+        let outcome = await host.prepareHTMLVisuals(references)
+        logger.notice("warmed thread=\(thread.id) revision=\(thread.updatedAt) source=\(source) visuals=\(references.count) outcome=\(String(describing: outcome))")
+        switch outcome {
+        case .settled, .unsupported:
+            guard mayContinue, host.htmlVisualPreparationContext == context else { return false }
+            ledger.succeeded(threadID: thread.id, observation: observation, context: context, visuals: references)
+            return true
+        case .incomplete: return true
+        case .interrupted: return false
+        }
     }
 
     @concurrent private static func visualReferences(in window: HistoryWindow) async -> [HTMLVisualReference] {
