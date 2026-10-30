@@ -185,15 +185,35 @@ export class IsolatedGateway {
             || await Bun.file(join(home, "app-server-daemon/daemon.pid")).exists();
     }
 
+    async nativeDaemonPids(home) {
+        const pids = [];
+        for (const name of ["app-server.pid", "daemon.pid"]) {
+            const file = Bun.file(join(home, "app-server-daemon", name));
+            if (await file.exists()) pids.push((await file.json()).pid);
+        }
+        return pids;
+    }
+
     async stopNativeDaemon(home) {
+        const pids = await this.nativeDaemonPids(home);
         const child = Bun.spawn([this.codex, "app-server", "daemon", "stop"], {
             env: { ...this.safeEnv, CODEX_HOME: home }, stdout: "ignore", stderr: "ignore",
         });
-        return await this.within(child.exited, 12000, "Owned native daemon did not stop").catch(async () => {
+        const status = await this.within(child.exited, 12000, "Owned native daemon did not stop").catch(async () => {
             child.kill("SIGTERM");
             await child.exited;
             return -1;
         });
+        if (status !== 0) return status;
+        const alive = pid => {
+            try { process.kill(pid, 0); return true; } catch (error) { return error.code !== "ESRCH"; }
+        };
+        const deadline = Date.now() + 12000;
+        while (pids.some(alive)) {
+            if (Date.now() > deadline) return -1;
+            await Bun.sleep(50);
+        }
+        return 0;
     }
 
     async removeRoot() { await rm(this.root, { recursive: true, force: true }); }
