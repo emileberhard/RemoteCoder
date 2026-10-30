@@ -6,7 +6,7 @@ import Synchronization
 final class PersistenceMetrics: Sendable {
     static let shared = PersistenceMetrics()
     enum Owner: String, Sendable, CaseIterable, Codable {
-        case historyPages, threadHeaders, checkpoints, drafts, diagnostics
+        case historyPages, threadHeaders, checkpoints, drafts, diagnostics, htmlVisuals
     }
     struct Counters: Sendable, Codable, Equatable {
         var writes = 0

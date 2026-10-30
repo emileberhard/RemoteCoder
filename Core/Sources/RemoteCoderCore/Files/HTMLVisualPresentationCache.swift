@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import OSLog
 
@@ -7,7 +8,25 @@ actor HTMLVisualPresentationCache {
         let hasImage: Bool
     }
 
+    private struct StoredImage: Codable, Equatable {
+        let bytes: Int
+        let file: String
+        var order: UInt64
+    }
+
     private struct Record: Codable {
+        let key: HTMLVisualLayoutKey
+        var height: Double
+        var heightOrder: UInt64
+        var image: StoredImage?
+    }
+
+    private struct Index: Codable {
+        let version: Int
+        let records: [Record]
+    }
+
+    private struct LegacyRecord: Codable {
         let key: HTMLVisualLayoutKey
         var height: Double
         var heightOrder: UInt64
@@ -15,20 +34,26 @@ actor HTMLVisualPresentationCache {
         var imageOrder: UInt64?
     }
 
-    private struct Envelope: Codable {
+    private struct LegacyEnvelope: Codable {
         let version: Int
-        let records: [Record]
+        let records: [LegacyRecord]
     }
 
-    private static let version = 2
-    private static let maximumHeights = 256
-    private static let maximumImages = 128
-    private static let maximumImageBytes = 24 << 20
-    private static let maximumFileBytes = (24 << 20) + (1 << 20)
+    private struct Version: Decodable {
+        let version: Int
+    }
+
+    private static let version = 3
+    static let maximumHeights = 512
+    static let maximumImageBytes = 24 << 20
+    private static let maximumIndexBytes = 1 << 20
+    private static let maximumLegacyFileBytes = (24 << 20) + (1 << 20)
     private let directory: URL
     private let clock: any Clock<Duration>
     private let logger = AppLogger(category: "HTMLVisualPresentationCache")
     private var records: [HTMLVisualLayoutKey: Record] = [:]
+    private var unwrittenImages: [HTMLVisualLayoutKey: Data] = [:]
+    private var committedImageFiles: Set<String> = []
     private var sequence: UInt64 = 0
     private var loaded = false
     private var retired = false
@@ -54,10 +79,43 @@ actor HTMLVisualPresentationCache {
         try requireActive()
         try prepare()
         try requireActive()
-        return records[key]?.image
+        guard let stored = records[key]?.image else { return nil }
+        if let unwritten = unwrittenImages[key] {
+            try touch(key)
+            return unwritten
+        }
+        let data: Data
+        do {
+            let file = try FileHandle(forReadingFrom: imageDirectory.appending(path: stored.file))
+            defer { try? file.close() }
+            data = try file.read(upToCount: stored.bytes + 1) ?? Data()
+        }
+        catch let error as CocoaError where error.code == .fileNoSuchFile || error.code == .fileReadNoSuchFile {
+            discardImage(key)
+            return nil
+        }
+        guard data.count == stored.bytes, Self.imageFileName(data) == stored.file else {
+            discardImage(key)
+            return nil
+        }
+        try touch(key)
+        return data
+    }
+
+    func touch(_ key: HTMLVisualLayoutKey) throws {
+        try requireActive()
+        guard records[key] != nil else { return }
+        guard sequence < UInt64.max else { throw HTMLVisualPresentationError.invalidRecord }
+        sequence += 1
+        records[key]?.image?.order = sequence
+        records[key]?.heightOrder = sequence
     }
 
     func store(_ key: HTMLVisualLayoutKey, height: Double, image: Data?) throws -> [HTMLVisualLayoutKey: Entry] {
+        try store(key, height: height, image: image, protecting: [])
+    }
+
+    func store(_ key: HTMLVisualLayoutKey, height: Double, image: Data?, protecting protected: Set<HTMLVisualLayoutKey>) throws -> [HTMLVisualLayoutKey: Entry] {
         try requireActive()
         try prepare()
         try requireActive()
@@ -65,20 +123,31 @@ actor HTMLVisualPresentationCache {
             throw HTMLVisualPresentationError.invalidRecord
         }
         guard (image?.count ?? 0) <= Self.maximumImageBytes else { throw HTMLVisualPresentationError.tooLarge }
+        let protected = protected.subtracting([key])
+        let protectedBytes = records.values.filter { protected.contains($0.key) }.reduce(0) { $0 + ($1.image?.bytes ?? 0) }
+        guard protectedBytes + (image?.count ?? records[key]?.image?.bytes ?? 0) <= Self.maximumImageBytes,
+              records[key] != nil || protected.count < Self.maximumHeights else {
+            throw HTMLVisualPresentationError.capacity
+        }
         guard sequence < UInt64.max else { throw HTMLVisualPresentationError.invalidRecord }
         sequence += 1
-        var record = records[key] ?? Record(key: key, height: height, heightOrder: sequence,
-            image: nil, imageOrder: nil)
+        let changed = records[key]?.height != height || image != nil
+        var record = records[key] ?? Record(key: key, height: height, heightOrder: sequence, image: nil)
         record.height = height
         record.heightOrder = sequence
+        record.image?.order = sequence
         if let image {
-            record.image = image
-            record.imageOrder = sequence
+            record.image = StoredImage(bytes: image.count, file: Self.imageFileName(image), order: sequence)
+            unwrittenImages[key] = image
         }
         records[key] = record
-        trim()
-        dirty = true
-        scheduleWrite()
+        trim(protecting: protected.union([key]))
+        if changed {
+            dirty = true
+            scheduleWrite()
+        } else {
+            PersistenceMetrics.shared.skipped(.htmlVisuals)
+        }
         return metadata()
     }
 
@@ -101,49 +170,123 @@ actor HTMLVisualPresentationCache {
         guard !retired else { throw HTMLVisualPresentationError.retired }
     }
 
+    private var indexURL: URL { directory.appending(path: "presentations.plist") }
+    private var imageDirectory: URL { directory.appending(path: "images", directoryHint: .isDirectory) }
+
+    private static func imageFileName(_ data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() + ".pdf"
+    }
+
     private func prepare() throws {
         guard !loaded else { return }
-        let url = directory.appending(path: "presentations.plist")
         let file: FileHandle
-        do { file = try FileHandle(forReadingFrom: url) }
+        do { file = try FileHandle(forReadingFrom: indexURL) }
         catch let error as CocoaError where error.code == .fileNoSuchFile || error.code == .fileReadNoSuchFile {
+            removeOrphanedImages(keeping: [])
             loaded = true
             return
         }
         defer { try? file.close() }
-        guard let data = try file.read(upToCount: Self.maximumFileBytes + 1),
-              data.count <= Self.maximumFileBytes else { throw HTMLVisualPresentationError.invalidRecord }
-        let envelope = try PropertyListDecoder().decode(Envelope.self, from: data)
-        guard (1...Self.version).contains(envelope.version), envelope.records.count <= Self.maximumHeights else {
+        guard let data = try file.read(upToCount: Self.maximumLegacyFileBytes + 1),
+              data.count <= Self.maximumLegacyFileBytes else { throw HTMLVisualPresentationError.invalidRecord }
+        let version = try PropertyListDecoder().decode(Version.self, from: data).version
+        switch version {
+        case Self.version:
+            guard data.count <= Self.maximumIndexBytes else { throw HTMLVisualPresentationError.invalidRecord }
+            try restore(PropertyListDecoder().decode(Index.self, from: data).records)
+        case 1...2:
+            try restoreLegacy(PropertyListDecoder().decode(LegacyEnvelope.self, from: data))
+        default:
             throw HTMLVisualPresentationError.invalidRecord
         }
+        committedImageFiles = referencedImageFiles().subtracting(Set(unwrittenImages.values.map(Self.imageFileName)))
+        removeOrphanedImages(keeping: referencedImageFiles())
+        loaded = true
+    }
+
+    private func restore(_ stored: [Record]) throws {
+        guard stored.count <= Self.maximumHeights else { throw HTMLVisualPresentationError.invalidRecord }
         var restored: [HTMLVisualLayoutKey: Record] = [:]
-        var imageCount = 0
         var imageBytes = 0
         var latest: UInt64 = 0
-        for var record in envelope.records {
+        for var record in stored {
             guard Self.valid(record.key), record.height.isFinite, (0...20_000).contains(record.height),
-                  restored[record.key] == nil,
-                  (record.image == nil) == (record.imageOrder == nil) else {
+                  restored[record.key] == nil else {
                 throw HTMLVisualPresentationError.invalidRecord
             }
-            if envelope.version == 1 {
-                record.image = nil
-                record.imageOrder = nil
-            }
             if let image = record.image {
-                imageCount += 1
-                imageBytes += image.count
+                let size = (try? imageDirectory.appending(path: image.file).resourceValues(forKeys: [.fileSizeKey]))?.fileSize
+                if size == image.bytes, (0...Self.maximumImageBytes).contains(image.bytes),
+                   image.file.count == 68, image.file.hasSuffix(".pdf"),
+                   image.file.prefix(64).utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) {
+                    imageBytes += image.bytes
+                } else {
+                    record.image = nil
+                    dirty = true
+                }
             }
-            latest = max(latest, max(record.heightOrder, record.imageOrder ?? 0))
+            latest = max(latest, max(record.heightOrder, record.image?.order ?? 0))
             restored[record.key] = record
         }
-        guard imageCount <= Self.maximumImages, imageBytes <= Self.maximumImageBytes else {
+        guard imageBytes <= Self.maximumImageBytes else {
             throw HTMLVisualPresentationError.invalidRecord
         }
         records = restored
         sequence = latest
-        loaded = true
+    }
+
+    private func restoreLegacy(_ envelope: LegacyEnvelope) throws {
+        guard envelope.records.count <= Self.maximumHeights else { throw HTMLVisualPresentationError.invalidRecord }
+        var restored: [HTMLVisualLayoutKey: Record] = [:]
+        var images: [HTMLVisualLayoutKey: Data] = [:]
+        var imageBytes = 0
+        var latest: UInt64 = 0
+        for legacy in envelope.records {
+            guard Self.valid(legacy.key), legacy.height.isFinite, (0...20_000).contains(legacy.height),
+                  restored[legacy.key] == nil,
+                  (legacy.image == nil) == (legacy.imageOrder == nil) else {
+                throw HTMLVisualPresentationError.invalidRecord
+            }
+            var record = Record(key: legacy.key, height: legacy.height, heightOrder: legacy.heightOrder, image: nil)
+            if envelope.version == 2, let image = legacy.image, let order = legacy.imageOrder {
+                record.image = StoredImage(bytes: image.count, file: Self.imageFileName(image), order: order)
+                images[legacy.key] = image
+                imageBytes += image.count
+            }
+            latest = max(latest, max(record.heightOrder, record.image?.order ?? 0))
+            restored[legacy.key] = record
+        }
+        guard imageBytes <= Self.maximumImageBytes else {
+            throw HTMLVisualPresentationError.invalidRecord
+        }
+        records = restored
+        unwrittenImages = images
+        sequence = latest
+        dirty = true
+    }
+
+    private func removeOrphanedImages(keeping referenced: Set<String>) {
+        do {
+            let files = try FileManager.default.contentsOfDirectory(atPath: imageDirectory.path)
+            for file in files where !referenced.contains(file) {
+                try FileManager.default.removeItem(at: imageDirectory.appending(path: file))
+            }
+        } catch let error as CocoaError where error.code == .fileNoSuchFile || error.code == .fileReadNoSuchFile {
+        } catch {
+            logger.error("Could not reclaim unused HTML visual images: \(error.localizedDescription)")
+        }
+    }
+
+    private func referencedImageFiles() -> Set<String> {
+        Set(records.values.compactMap { $0.image?.file })
+    }
+
+    private func discardImage(_ key: HTMLVisualLayoutKey) {
+        guard records[key]?.image != nil else { return }
+        records[key]?.image = nil
+        unwrittenImages.removeValue(forKey: key)
+        dirty = true
+        scheduleWrite()
     }
 
     private static func valid(_ key: HTMLVisualLayoutKey) -> Bool {
@@ -159,20 +302,20 @@ actor HTMLVisualPresentationCache {
         records.mapValues { Entry(height: $0.height, hasImage: $0.image != nil) }
     }
 
-    private func trim() {
-        let oldestHeights = records.values.sorted { $0.heightOrder < $1.heightOrder }
+    private func trim(protecting protected: Set<HTMLVisualLayoutKey>) {
+        let oldestHeights = records.values.filter { !protected.contains($0.key) }.sorted { $0.heightOrder < $1.heightOrder }
         for record in oldestHeights.prefix(max(0, records.count - Self.maximumHeights)) {
+            unwrittenImages.removeValue(forKey: record.key)
             records.removeValue(forKey: record.key)
         }
-        let images = records.values.filter { $0.image != nil }.sorted { ($0.imageOrder ?? 0) < ($1.imageOrder ?? 0) }
-        var count = images.count
-        var bytes = images.reduce(0) { $0 + ($1.image?.count ?? 0) }
+        let images = records.values.filter { $0.image != nil }.sorted { ($0.image?.order ?? 0) < ($1.image?.order ?? 0) }
+        var bytes = images.reduce(0) { $0 + ($1.image?.bytes ?? 0) }
         for record in images {
-            guard count > Self.maximumImages || bytes > Self.maximumImageBytes else { break }
+            guard bytes > Self.maximumImageBytes else { break }
+            if protected.contains(record.key) { continue }
             records[record.key]?.image = nil
-            records[record.key]?.imageOrder = nil
-            count -= 1
-            bytes -= record.image?.count ?? 0
+            unwrittenImages.removeValue(forKey: record.key)
+            bytes -= record.image?.bytes ?? 0
         }
     }
 
@@ -210,14 +353,32 @@ actor HTMLVisualPresentationCache {
 
     private func writePending() throws {
         guard dirty else { return }
-        let encoder = PropertyListEncoder()
-        encoder.outputFormat = .binary
-        let data = try encoder.encode(Envelope(version: Self.version, records: records.values.sorted { $0.heightOrder < $1.heightOrder }))
-        guard data.count <= Self.maximumFileBytes else { throw HTMLVisualPresentationError.tooLarge }
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
-            attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication])
-        try data.write(to: directory.appending(path: "presentations.plist"), options: .atomic)
-        dirty = false
+        let started = ContinuousClock.now
+        var bytes = 0
+        do {
+            let encoder = PropertyListEncoder()
+            encoder.outputFormat = .binary
+            let index = try encoder.encode(Index(version: Self.version, records: records.values.sorted { $0.heightOrder < $1.heightOrder }))
+            guard index.count <= Self.maximumIndexBytes else { throw HTMLVisualPresentationError.tooLarge }
+            try FileManager.default.createDirectory(at: imageDirectory, withIntermediateDirectories: true,
+                attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication])
+            for key in Array(unwrittenImages.keys) {
+                guard let image = unwrittenImages[key], let stored = records[key]?.image else { continue }
+                try image.write(to: imageDirectory.appending(path: stored.file), options: .atomic)
+                unwrittenImages.removeValue(forKey: key)
+                bytes += image.count
+            }
+            try index.write(to: indexURL, options: .atomic)
+            bytes += index.count
+            committedImageFiles = referencedImageFiles()
+            removeOrphanedImages(keeping: committedImageFiles)
+            dirty = false
+            PersistenceMetrics.shared.wrote(.htmlVisuals, bytes: bytes, elapsed: started.duration(to: .now))
+        } catch {
+            removeOrphanedImages(keeping: committedImageFiles.union(referencedImageFiles()))
+            PersistenceMetrics.shared.failed(.htmlVisuals)
+            throw error
+        }
     }
 }
 
@@ -225,11 +386,13 @@ enum HTMLVisualPresentationError: Error, LocalizedError, Sendable, Equatable {
     case invalidRecord
     case tooLarge
     case retired
+    case capacity
 
     var errorDescription: String? {
         switch self {
         case .invalidRecord: "The saved HTML visual layout is invalid."
         case .tooLarge: "The HTML visual snapshot exceeds the presentation cache limit."
+        case .capacity: "The HTML visual presentation cache is full."
         case .retired: "The HTML visual presentation cache has retired."
         }
     }

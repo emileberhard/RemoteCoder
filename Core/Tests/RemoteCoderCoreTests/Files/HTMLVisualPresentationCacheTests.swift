@@ -51,7 +51,7 @@ struct HTMLVisualPresentationCacheTests {
         try await cache.retire()
     }
 
-    @Test func boundsEncodedBytesAndImageCountWhileRetainingHeights() async throws {
+    @Test func boundsEncodedBytesWhileRetainingMoreThan128ImagesAndTheirHeights() async throws {
         let directory = URL.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let cache = HTMLVisualPresentationCache(directory: directory, clock: FrozenVisualClock())
@@ -68,9 +68,9 @@ struct HTMLVisualPresentationCacheTests {
         let restored = HTMLVisualPresentationCache(directory: directory, clock: ContinuousClock())
         let loaded = try await restored.load()
         #expect(loaded.count == 130)
-        #expect(loaded.values.filter(\.hasImage).count == 128)
+        #expect(loaded.values.filter(\.hasImage).count == 129)
         #expect(loaded[key(1)]?.height == 481)
-        #expect(try await restored.image(for: key(1)) == nil)
+        #expect(try await restored.image(for: key(1)) == large)
         #expect(try await restored.image(for: key(129)) == Data([129]))
         try await restored.retire()
     }
@@ -79,18 +79,18 @@ struct HTMLVisualPresentationCacheTests {
         let directory = URL.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let cache = HTMLVisualPresentationCache(directory: directory, clock: FrozenVisualClock())
-        for index in 0..<256 {
+        for index in 0..<512 {
             _ = try await cache.store(key(index), height: Double(index), image: nil)
         }
         _ = try await cache.store(key(0), height: 900, image: nil)
-        _ = try await cache.store(key(256), height: 256, image: nil)
+        _ = try await cache.store(key(512), height: 512, image: nil)
         try await cache.retire()
         let restored = HTMLVisualPresentationCache(directory: directory, clock: ContinuousClock())
         let loaded = try await restored.load()
-        #expect(loaded.count == 256)
+        #expect(loaded.count == 512)
         #expect(loaded[key(1)] == nil)
         #expect(loaded[key(0)]?.height == 900)
-        #expect(loaded[key(256)]?.height == 256)
+        #expect(loaded[key(512)]?.height == 512)
         try await restored.retire()
     }
 
@@ -114,6 +114,213 @@ struct HTMLVisualPresentationCacheTests {
         #expect(try await restored.image(for: key(0)) == Data([1]))
         await #expect(throws: HTMLVisualPresentationError.retired) { try await cache.load() }
         try await restored.retire()
+    }
+
+    @Test func storesEachImageInItsOwnFileAndRewritesOnlyChangedImagesAndTheIndex() async throws {
+        let directory = URL.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let cache = HTMLVisualPresentationCache(directory: directory, clock: FrozenVisualClock())
+        for index in 0..<3 {
+            _ = try await cache.store(key(index), height: 300, image: Data(repeating: UInt8(index), count: 50_000))
+        }
+        try await cache.flush()
+        let images = directory.appending(path: "images")
+        let written = try imageFiles(images)
+        #expect(written.count == 3)
+        let index = try Data(contentsOf: directory.appending(path: "presentations.plist"))
+        #expect(index.count < 4_096)
+        _ = try await cache.store(key(0), height: 300, image: nil)
+        try await cache.flush()
+        #expect(try imageFiles(images) == written)
+        #expect(try Data(contentsOf: directory.appending(path: "presentations.plist")) == index)
+        try await cache.retire()
+    }
+
+    @Test func dropsImagesWhoseFilesAreMissingOrTruncatedAndRemovesOrphans() async throws {
+        let directory = URL.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let images = directory.appending(path: "images")
+        let first = HTMLVisualPresentationCache(directory: directory, clock: FrozenVisualClock())
+        _ = try await first.store(key(0), height: 300, image: Data(repeating: 1, count: 2_000))
+        try await first.retire()
+        let truncated = try #require(try imageFiles(images).first)
+        try Data(repeating: 1, count: 1_000).write(to: images.appending(path: truncated))
+
+        let second = HTMLVisualPresentationCache(directory: directory, clock: FrozenVisualClock())
+        #expect(try await second.load()[key(0)] == .init(height: 300, hasImage: false))
+        #expect(try await second.image(for: key(0)) == nil)
+        _ = try await second.store(key(1), height: 400, image: Data(repeating: 2, count: 3_000))
+        try await second.retire()
+        #expect(try imageFiles(images).count == 1)
+        try Data([9]).write(to: images.appending(path: "orphan.pdf"))
+
+        let third = HTMLVisualPresentationCache(directory: directory, clock: FrozenVisualClock())
+        let loaded = try await third.load()
+        #expect(loaded[key(0)] == .init(height: 300, hasImage: false))
+        #expect(loaded[key(1)] == .init(height: 400, hasImage: true))
+        #expect(try await third.image(for: key(1)) == Data(repeating: 2, count: 3_000))
+        #expect(!(try imageFiles(images).contains("orphan.pdf")))
+        for file in try imageFiles(images) { try FileManager.default.removeItem(at: images.appending(path: file)) }
+        try await third.retire()
+
+        let fourth = HTMLVisualPresentationCache(directory: directory, clock: FrozenVisualClock())
+        #expect(try await fourth.load()[key(1)] == .init(height: 400, hasImage: false))
+        try await fourth.retire()
+    }
+
+    @Test func versionTwoCacheMigratesItsImagesIntoSeparateFiles() async throws {
+        struct Record: Codable {
+            let key: HTMLVisualLayoutKey
+            let height: Double
+            let heightOrder: UInt64
+            let image: Data?
+            let imageOrder: UInt64?
+        }
+        struct Envelope: Codable {
+            let version: Int
+            let records: [Record]
+        }
+        let directory = URL.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let encoder = PropertyListEncoder()
+        encoder.outputFormat = .binary
+        try encoder.encode(Envelope(version: 2, records: [
+            Record(key: key(0), height: 500, heightOrder: 1, image: Data(repeating: 7, count: 40_000), imageOrder: 1),
+            Record(key: key(1), height: 600, heightOrder: 2, image: nil, imageOrder: nil),
+        ])).write(to: directory.appending(path: "presentations.plist"))
+        let cache = HTMLVisualPresentationCache(directory: directory, clock: FrozenVisualClock())
+        #expect(try await cache.load()[key(0)] == .init(height: 500, hasImage: true))
+        try await cache.retire()
+        #expect(try imageFiles(directory.appending(path: "images")).count == 1)
+        #expect(try Data(contentsOf: directory.appending(path: "presentations.plist")).count < 4_096)
+        let restored = HTMLVisualPresentationCache(directory: directory, clock: ContinuousClock())
+        #expect(try await restored.load() == [key(0): .init(height: 500, hasImage: true), key(1): .init(height: 600, hasImage: false)])
+        #expect(try await restored.image(for: key(0)) == Data(repeating: 7, count: 40_000))
+        try await restored.retire()
+    }
+
+    @Test func bothThemesSurvivePreparationAndRelaunchWithoutMissingSnapshots() async throws {
+        let directory = URL.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let cache = HTMLVisualPresentationCache(directory: directory, clock: FrozenVisualClock())
+        for dark in [false, true] {
+            for index in 0..<168 {
+                _ = try await cache.store(key(index, dark: dark), height: dark ? 420 : 400,
+                    image: Data(repeating: UInt8(index), count: 57_000), protecting: [])
+            }
+        }
+        try await cache.retire()
+        let restored = HTMLVisualPresentationCache(directory: directory, clock: FrozenVisualClock())
+        for dark in [false, true, false] {
+            let entries = try await restored.load()
+            for index in 0..<168 {
+                let key = key(index, dark: dark)
+                #expect(entries[key] == .init(height: dark ? 420 : 400, hasImage: true))
+                #expect(try await restored.image(for: key) == Data(repeating: UInt8(index), count: 57_000))
+            }
+        }
+        try await restored.retire()
+    }
+
+    @Test func laterPreparationEvictsLeastRecentlyUsedImagesAndPreservesPresentedKeys() async throws {
+        let directory = URL.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let cache = HTMLVisualPresentationCache(directory: directory, clock: FrozenVisualClock())
+        let image = Data(repeating: 1, count: 8 << 20)
+        for index in 0..<3 {
+            _ = try await cache.store(key(index), height: 100, image: image, protecting: [])
+        }
+        #expect(try await cache.image(for: key(1)) == image)
+        let entries = try await cache.store(key(3), height: 200, image: image, protecting: [key(0)])
+        #expect(entries[key(0)]?.hasImage == true)
+        #expect(entries[key(1)]?.hasImage == true)
+        #expect(entries[key(2)]?.hasImage == false)
+        #expect(entries[key(3)]?.hasImage == true)
+        await #expect(throws: HTMLVisualPresentationError.capacity) {
+            try await cache.store(key(4), height: 300, image: image, protecting: [key(0), key(1), key(3)])
+        }
+        #expect(try await cache.load() == entries)
+        try await cache.retire()
+        #expect(try imageFiles(directory.appending(path: "images")).count == 1)
+    }
+
+    @Test func sameSizeCorruptionNeverServesTheWrongImage() async throws {
+        let directory = URL.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let cache = HTMLVisualPresentationCache(directory: directory, clock: FrozenVisualClock())
+        _ = try await cache.store(key(0), height: 300, image: Data([1, 2, 3]))
+        try await cache.retire()
+        let images = directory.appending(path: "images")
+        let file = try #require(try imageFiles(images).first)
+        try Data([4, 5, 6]).write(to: images.appending(path: file))
+        let restored = HTMLVisualPresentationCache(directory: directory, clock: FrozenVisualClock())
+        #expect(try await restored.image(for: key(0)) == nil)
+        #expect(try await restored.load()[key(0)] == .init(height: 300, hasImage: false))
+        try await restored.retire()
+        #expect(try imageFiles(images).isEmpty)
+    }
+
+    @Test func oldReaderRejectsNewImagesAndUpgradeReclaimsFilesAfterAnOldCacheReplacement() async throws {
+        struct Record3768: Codable {
+            let key: HTMLVisualLayoutKey
+            let height: Double
+            let heightOrder: UInt64
+            let image: Data?
+            let imageOrder: UInt64?
+        }
+        struct Envelope3768: Codable {
+            let version: Int
+            let records: [Record3768]
+        }
+        let directory = URL.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let cache = HTMLVisualPresentationCache(directory: directory, clock: FrozenVisualClock())
+        _ = try await cache.store(key(0), height: 100, image: Data([7]))
+        try await cache.retire()
+        let url = directory.appending(path: "presentations.plist")
+        let index = try Data(contentsOf: url)
+        #expect(throws: DecodingError.self) { try PropertyListDecoder().decode(Envelope3768.self, from: index) }
+        let old = Envelope3768(version: 2, records: [
+            Record3768(key: key(1), height: 200, heightOrder: 1, image: Data([8]), imageOrder: 1),
+        ])
+        let encoder = PropertyListEncoder()
+        encoder.outputFormat = .binary
+        try encoder.encode(old).write(to: url, options: .atomic)
+        let restored = HTMLVisualPresentationCache(directory: directory, clock: FrozenVisualClock())
+        #expect(try await restored.load() == [key(1): .init(height: 200, hasImage: true)])
+        #expect(try await restored.image(for: key(1)) == Data([8]))
+        try await restored.retire()
+        #expect(try imageFiles(directory.appending(path: "images")).count == 1)
+    }
+
+    @Test func failedIndexCommitsKeepPreviousImagesAndReclaimSupersededFiles() async throws {
+        let directory = URL.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let cache = HTMLVisualPresentationCache(directory: directory, clock: FrozenVisualClock())
+        _ = try await cache.store(key(0), height: 100, image: Data([0]))
+        try await cache.flush()
+        let url = directory.appending(path: "presentations.plist")
+        let committed = try Data(contentsOf: url)
+        try FileManager.default.removeItem(at: url)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: false)
+        for value in 1...8 {
+            _ = try await cache.store(key(0), height: Double(value), image: Data([UInt8(value)]))
+            await #expect(throws: (any Error).self) { try await cache.flush() }
+            #expect(try imageFiles(directory.appending(path: "images")).count == 2)
+        }
+        try FileManager.default.removeItem(at: url)
+        try committed.write(to: url)
+        let previous = HTMLVisualPresentationCache(directory: directory, clock: FrozenVisualClock())
+        #expect(try await previous.image(for: key(0)) == Data([0]))
+        try await previous.retire()
+        _ = try await cache.store(key(0), height: 8, image: Data([8]))
+        try await cache.retire()
+        #expect(try imageFiles(directory.appending(path: "images")).count == 1)
+    }
+
+    private func imageFiles(_ directory: URL) throws -> [String] {
+        try FileManager.default.contentsOfDirectory(atPath: directory.path).sorted()
     }
 
     private func key(_ index: Int, width: Int = 360, dark: Bool = false) -> HTMLVisualLayoutKey {

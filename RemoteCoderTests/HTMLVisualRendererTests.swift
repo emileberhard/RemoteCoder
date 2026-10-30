@@ -35,7 +35,7 @@ struct HTMLVisualRendererTests {
         let renderer = HTMLVisualRenderer(cache: cache, webContent: Self.webContent)
         await renderer.load()
         let evicted = renderer.snapshot(for: key)
-        for width in 321...352 {
+        for width in 321...832 {
             _ = renderer.snapshot(for: HTMLVisualLayoutKey(digest: key.digest, width: width, theme: theme))
         }
         let restored = await renderer.restoreImage(for: key)
@@ -44,6 +44,41 @@ struct HTMLVisualRendererTests {
         #expect(restored.image == bytes)
         #expect(restored.height == 80)
         try await cache.retire()
+        try await Self.remove(directory)
+    }
+
+    @Test func preparedThemeFlipAndBackNeedsNoDocumentFetchOrWebKitRender() async throws {
+        let directory = URL.temporaryDirectory.appending(path: UUID().uuidString)
+        let cache = HTMLVisualPresentationCache(directory: directory, clock: ContinuousClock())
+        let dark = HTMLVisualTheme(fontSize: 17, text: "white", secondaryText: "gray",
+            background: "black", surface: "black", accent: "blue", isDark: true)
+        let references = try (0..<168).map { index in
+            let url = try #require(URL(string: "rc-visual:" + String(format: "%064x", index)))
+            return try #require(HTMLVisualReference(url: url))
+        }
+        for theme in [theme, dark] {
+            for reference in references {
+                _ = try await cache.store(HTMLVisualLayoutKey(digest: reference.digest, width: 320, theme: theme),
+                    height: theme.isDark ? 120 : 80, image: Data(repeating: 1, count: 57_000))
+            }
+        }
+        try await cache.flush()
+        let restored = HTMLVisualPresentationCache(directory: directory, clock: ContinuousClock())
+        let renderer = HTMLVisualRenderer(cache: restored, webContent: Self.webContent)
+        await renderer.load()
+        let access = RendererCacheOnlyAccess()
+        let documents = HTMLVisualDocumentStore(hostID: UUID(), access: access,
+            cache: HTMLVisualDocumentCache(directory: directory.appending(path: "documents"), writer: HTMLVisualDocumentFileWriter()))
+        let preparation = HTMLVisualPreparation(renderer: renderer)
+        for theme in [theme, dark, theme] {
+            preparation.updateLayoutContext { $0.width = 320; $0.theme = theme; $0.displayScale = 1 }
+            #expect(await preparation.prepareInBackground(references, documents: documents) == .settled(stored: 168, unpreparable: 0))
+        }
+        #expect(await access.visualRequests == 0)
+        preparation.cancelDemand()
+        await documents.retire()
+        try await cache.retire()
+        try await restored.retire()
         try await Self.remove(directory)
     }
 
@@ -1813,8 +1848,12 @@ private actor RendererPageDeadline {
 }
 
 private actor RendererCacheOnlyAccess: HostFileAccess {
+    private(set) var visualRequests = 0
     func open(reference: HostFileReference, containingDirectory: String?, progress: @escaping @Sendable (HostFileProgress) -> Void) throws -> HostFileLease { throw HostFileError.unavailable }
-    func openVisual(reference: HTMLVisualReference, progress: @escaping @Sendable (HostFileProgress) -> Void) throws -> HostFileLease { throw HostFileError.unavailable }
+    func openVisual(reference: HTMLVisualReference, progress: @escaping @Sendable (HostFileProgress) -> Void) throws -> HostFileLease {
+        visualRequests += 1
+        throw HostFileError.unavailable
+    }
     func cachedCopy(for reference: HostFileReference) -> HostFileLease? { nil }
     func release(_ lease: HostFileLease) {}
 }

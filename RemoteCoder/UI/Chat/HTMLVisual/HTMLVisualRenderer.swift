@@ -208,9 +208,17 @@ final class HTMLVisualRenderer {
     }
 
     func restoreImage(for key: HTMLVisualLayoutKey) async -> HTMLVisualSnapshot {
-        if let cached = snapshots[key], cached.image != nil { return cached }
+        if let cached = snapshots[key], cached.image != nil {
+            do { try await cache.touch(key) }
+            catch is CancellationError {}
+            catch { Self.logger.error("html visual cache access failed reason=\(error.localizedDescription)") }
+            return cached
+        }
         do {
-            guard let data = try await cache.image(for: key) else { return snapshot(for: key) }
+            guard let data = try await cache.image(for: key) else {
+                persistedImages.remove(key)
+                return snapshot(for: key)
+            }
             try Task.checkCancellation()
             let cached = snapshot(for: key)
             guard cached.image == nil else { return cached }
@@ -692,7 +700,7 @@ final class HTMLVisualRenderer {
             heights[key] = height
             heightOrder.removeAll { $0 == key }
             heightOrder.append(key)
-            if heightOrder.count > 256 { heights.removeValue(forKey: heightOrder.removeFirst()) }
+            if heightOrder.count > HTMLVisualPresentationCache.maximumHeights { heights.removeValue(forKey: heightOrder.removeFirst()) }
             instance.snapshot?.height = height
             persist(key, height: height, image: nil)
         }
@@ -756,7 +764,16 @@ final class HTMLVisualRenderer {
                     #endif
                     try Task.checkCancellation()
                     guard instance.page === page, instance.key == key else { continue }
-                    guard let captured = store(data, for: key, height: instance.height) else {
+                    let captured: HTMLVisualCapturedImage?
+                    if instance.preparing {
+                        let entries = try await cache.store(key, height: instance.height, image: data, protecting: Set(rasterPins.keys))
+                        persistedImages = Set(entries.filter(\.value.hasImage).keys)
+                        guard instance.page === page, instance.key == key else { continue }
+                        captured = retainSnapshot(data, for: key, height: instance.height)
+                    } else {
+                        captured = store(data, for: key, height: instance.height)
+                    }
+                    guard let captured else {
                         instance.capturedImage = nil
                         Self.logger.notice("html visual snapshot discarded bytes=\(data.count) limit=\(HTMLVisualCapturedImage.maximumBytes)")
                         continue
@@ -766,6 +783,11 @@ final class HTMLVisualRenderer {
                     instance.onSnapshotStored()
                 }
             } catch is CancellationError {
+            } catch HTMLVisualPresentationError.capacity {
+                guard instance.page === page else { return }
+                instance.needsSnapshot = false
+                instance.status = .unavailable(HTMLVisualPresentationError.capacity.localizedDescription)
+                instance.onSnapshotStored()
             } catch {
                 instance.needsSnapshot = false
                 Self.logger.error("html visual snapshot failed reason=\(error.localizedDescription)")
@@ -774,8 +796,19 @@ final class HTMLVisualRenderer {
     }
 
     func store(_ data: Data, for key: HTMLVisualLayoutKey, height: Double) -> HTMLVisualCapturedImage? {
+        guard let captured = retainSnapshot(data, for: key, height: height) else { return nil }
+        persist(key, height: height, image: data)
+        return captured
+    }
+
+    private func retainSnapshot(_ data: Data, for key: HTMLVisualLayoutKey, height: Double) -> HTMLVisualCapturedImage? {
         guard let captured = HTMLVisualCapturedImage(data: data, key: key, revision: nextSnapshotRevision()) else { return nil }
+        heights[key] = height
+        heightOrder.removeAll { $0 == key }
+        heightOrder.append(key)
+        if heightOrder.count > HTMLVisualPresentationCache.maximumHeights { heights.removeValue(forKey: heightOrder.removeFirst()) }
         let cached = snapshot(for: key)
+        cached.height = height
         cached.image = data
         cached.byteCount = data.count
         cached.revision = captured.revision
@@ -783,7 +816,6 @@ final class HTMLVisualRenderer {
         snapshotOrder.append(key)
         for stale in rasterOrder where stale.key == key && stale.revision < captured.revision { superseded.insert(stale) }
         trimSnapshots()
-        persist(key, height: height, image: data)
         return captured
     }
 
@@ -812,12 +844,12 @@ final class HTMLVisualRenderer {
             pendingImageOrder.removeAll { $0 == key }
             pendingImageOrder.append(key)
         }
-        if pending.count >= 256, pending[key] == nil, let first = pending.keys.first {
+        if pending.count >= HTMLVisualPresentationCache.maximumHeights, pending[key] == nil, let first = pending.keys.first {
             pendingImageBytes -= pending.removeValue(forKey: first)?.image?.count ?? 0
             pendingImageOrder.removeAll { $0 == first }
         }
         pending[key] = value
-        while pendingImageOrder.count > 32 || pendingImageBytes > 24 << 20 {
+        while pendingImageBytes > HTMLVisualPresentationCache.maximumImageBytes {
             let first = pendingImageOrder.removeFirst()
             pendingImageBytes -= pending[first]?.image?.count ?? 0
             pending[first]?.image = nil
@@ -830,7 +862,7 @@ final class HTMLVisualRenderer {
                 pendingImageBytes -= value.image?.count ?? 0
                 pendingImageOrder.removeAll { $0 == key }
                 do {
-                    let entries = try await cache.store(key, height: value.height, image: value.image)
+                    let entries = try await cache.store(key, height: value.height, image: value.image, protecting: Set(rasterPins.keys))
                     persistedImages = Set(entries.filter(\.value.hasImage).keys)
                 } catch { Self.logger.error("html visual cache save failed reason=\(error.localizedDescription)") }
                 if Task.isCancelled { return }
@@ -840,7 +872,7 @@ final class HTMLVisualRenderer {
 
     private func trimSnapshots() {
         var bytes = snapshots.values.reduce(0) { $0 + $1.byteCount }
-        while snapshotOrder.count > 32 || bytes > 24 << 20 {
+        while snapshotOrder.count > HTMLVisualPresentationCache.maximumHeights || bytes > HTMLVisualPresentationCache.maximumImageBytes {
             let key = snapshotOrder.removeFirst()
             if let snapshot = snapshots.removeValue(forKey: key) {
                 bytes -= snapshot.byteCount

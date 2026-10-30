@@ -474,17 +474,31 @@ opaque and a translucent conic gradient vanishes. Solid translucent colors,
 motion and before the live page loads; the live page is unaffected. The publish
 guidance therefore asks for opaque gradient stops.
 Snapshot keys contain renderer version, digest, rounded width and
-complete theme. The in-memory image cache retains at most 32 entries/24 MiB;
-a separate height cache retains 256 keys so evicting an image need not erase
-known geometry. The actor-owned persistent binary presentation cache under
-`RemoteCoder/html-visuals/presentations/` keeps the same byte and height
-limits and up to 128 snapshots, so warmed conversations keep theirs across
-launches. Real snapshots measured 13-117 KB, with rare multi-megabyte
-outliers, so the byte limit usually binds first. Its
-version 2 envelope stores PDF snapshots; a version 1 file keeps its heights and
-drops its PNG snapshots, which covered at most 800 CSS pixels. Snapshots remain
-encoded until a visible occurrence or background preparation rasterizes one
-off-main at display scale.
+complete theme. Heights stay theme-specific because authored CSS can change geometry
+with appearance. The renderer and persistent cache retain 512 height keys, enough
+for both themes of the document cache's 256 digests. Encoded images are bounded by
+24 MiB, with no separate image-count cap; metadata is bounded by the height keys.
+The renderer's raster pins also protect persistent snapshots for presented and
+near-viewport content. Stores and image reads refresh recency; new stores evict the
+least-recently-used unpinned images. When pinned images leave insufficient room,
+the store reports capacity instead of evicting a pinned or newly stored image.
+
+The actor-owned presentation cache under
+`RemoteCoder/html-visuals/presentations/` stores a small version 3 binary index and
+one content-addressed PDF per image in `images/`. It writes images atomically
+before committing the index, then reclaims unreferenced files. Immutable image
+names preserve the previously committed image if an index update fails. A failed
+commit retains only the last committed and current image sets (at most 48 MiB
+combined); a successful commit returns storage to the 24 MiB live budget. Loading
+reclaims orphan files; a missing, truncated or hash-mismatched image loses only its
+snapshot, retaining geometry. Repeated unchanged height measurements do not write.
+The actor reads version 2 embedded PDFs and migrates them on its next write;
+version 1 keeps heights and drops its partial PNGs. The 3.76.8 decoder rejects the
+version 3 image metadata, which the renderer catches as a cache miss; that build
+continues rendering live content but cannot persist presentations until the cache
+is replaced or a newer build returns. A later new-build load reclaims files left
+behind by any old-format replacement. Snapshots remain encoded until a visible
+occurrence or background preparation rasterizes one off-main at display scale.
 The renderer's `HTMLVisualRasterBudget` owns every prepared and in-flight
 raster: 32 MiP (128 MiB) in total, and at most 8 MiP and 16,384 pixels per
 side for one raster. A raster that does not fit is drawn at a lower scale, down
