@@ -1138,6 +1138,12 @@ scoped receipt reads require the exact sender conversation.
       (`ClaudeSupervisor::suspend`). Never send the CLI's `interrupt` here: it marks
       background agents stopped by the user, and no message can resume them
       afterwards.
+    - Capture first closes the supervisor to starts. A start or fold checks
+      that fence under the runtimes lock in each section that changes its
+      runtime and is admitted (`admit_start`) where it commits its turn.
+      Capture waits for every admitted start to queue its input before it
+      snapshots, so it records either the untouched turn or the new turn with
+      its input, never a fold in between.
     - Once the replacement's listener is up, it resumes each thread with
       `--resume` in the host-default profile, using the recorded cwd, model,
       effort and Fast.

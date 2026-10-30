@@ -26,6 +26,8 @@ impl ClaudeSupervisor {
             .lock()
             .expect("Claude process registry poisoned")
             .closing = true;
+        self.admitted_starts.close();
+        self.admitted_starts.wait().await;
         self.capture().await
     }
 

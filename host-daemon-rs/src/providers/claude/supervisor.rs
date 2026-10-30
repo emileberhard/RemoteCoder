@@ -97,6 +97,14 @@ impl TurnStartError {
         }
     }
 
+    fn owner_stopping() -> Self {
+        Self {
+            code: RpcCode::ServerBusy,
+            message: "Claude runtime owner is stopping".into(),
+            data: None,
+        }
+    }
+
     fn is_queued_stall(&self) -> bool {
         matches!(self.data, Some(TurnErrorData::DeliveryUncertain))
     }
@@ -468,6 +476,7 @@ pub(crate) struct ClaudeSupervisor {
     lifecycles: lifecycle::ThreadLifecycles,
     starting: Arc<StdMutex<HashSet<String>>>,
     process_registry: Arc<StdMutex<ProcessRegistry>>,
+    admitted_starts: tokio_util::task::TaskTracker,
     reapers: tokio_util::task::TaskTracker,
     io_tasks: crate::tasks::owned_tasks::OwnedTasks,
     timers: crate::tasks::owned_tasks::OwnedTasks,
@@ -502,6 +511,7 @@ impl ClaudeSupervisor {
             lifecycles: lifecycle::ThreadLifecycles::default(),
             starting: Arc::new(StdMutex::new(HashSet::new())),
             process_registry: Arc::default(),
+            admitted_starts: tokio_util::task::TaskTracker::new(),
             reapers: tokio_util::task::TaskTracker::new(),
             io_tasks: crate::tasks::owned_tasks::OwnedTasks::default(),
             timers: crate::tasks::owned_tasks::OwnedTasks::default(),

@@ -2060,6 +2060,136 @@ async fn dispatching_during_an_agent_initiated_turn_completes_it_before_starting
     let _ = child.kill().await;
 }
 
+async fn next_control_reply(
+    agent: &ClaudeSupervisor,
+    thread_id: &str,
+) -> oneshot::Sender<Result<Value, String>> {
+    loop {
+        let reply = agent
+            .runtimes
+            .lock()
+            .await
+            .get_mut(thread_id)
+            .and_then(|runtime| runtime.pending_controls.drain().next())
+            .map(|(_, reply)| reply);
+        if let Some(reply) = reply {
+            return reply;
+        }
+        tokio::task::yield_now().await;
+    }
+}
+
+#[tokio::test]
+async fn a_start_held_in_its_settings_exchange_never_folds_after_restart_capture_closes() {
+    let (tx, _rx) = mpsc::channel(16);
+    let (_home, agent) = isolated_agent(tx);
+    let (mut runtime, mut child) = placeholder_runtime(&request("claude_a", false)).await;
+    runtime.active_turn = Some(wake_turn("claude-turn-wake"));
+    agent
+        .runtimes
+        .lock()
+        .await
+        .insert("claude_a".to_string(), runtime);
+    let start = tokio::spawn({
+        let agent = Arc::clone(&agent);
+        async move {
+            agent
+                .start_turn(ClaudeTurnRequest {
+                    selection: selection("different-model", Some("high")),
+                    ..request("claude_a", false)
+                })
+                .await
+        }
+    });
+    let apply = next_control_reply(&agent, "claude_a").await;
+
+    let captured = agent.capture_for_restart().await;
+    apply.send(Ok(json!({}))).unwrap();
+    next_control_reply(&agent, "claude_a")
+        .await
+        .send(Ok(json!({
+            "applied": {"model": "different-model", "effort": "high"},
+            "effective": {"fastMode": false}
+        })))
+        .unwrap();
+    let refused = start.await.unwrap().unwrap_err();
+
+    assert_eq!(refused.code, RpcCode::ServerBusy);
+    assert_eq!(refused.message, "Claude runtime owner is stopping");
+    assert_eq!(captured.len(), 1);
+    assert_eq!(
+        captured[0].interrupted_turn_id.as_deref(),
+        Some("claude-turn-wake")
+    );
+    assert!(captured[0].agent_initiated);
+    let runtimes = agent.runtimes.lock().await;
+    let wake = runtimes["claude_a"]
+        .running_turn()
+        .expect("the agent-initiated turn keeps running");
+    assert_eq!(wake.translator.turn_id(), "claude-turn-wake");
+    assert!(wake.agent_initiated);
+    assert!(runtimes["claude_a"].input.unconsumed().pending().is_empty());
+    drop(runtimes);
+    let _ = child.kill().await;
+}
+
+#[tokio::test]
+async fn restart_capture_waits_for_a_fold_admitted_before_closing_to_queue_its_input() {
+    let (tx, mut rx) = mpsc::channel(1);
+    let (_home, agent) = isolated_agent(tx);
+    let (mut runtime, mut child) = placeholder_runtime(&request("claude_a", false)).await;
+    runtime.active_turn = Some(wake_turn("claude-turn-wake"));
+    agent
+        .runtimes
+        .lock()
+        .await
+        .insert("claude_a".to_string(), runtime);
+    let start = tokio::spawn({
+        let agent = Arc::clone(&agent);
+        async move { agent.start_turn(request("claude_a", false)).await }
+    });
+    while agent.runtimes.lock().await["claude_a"]
+        .active_turn
+        .as_ref()
+        .is_some_and(|turn| turn.agent_initiated)
+    {
+        tokio::task::yield_now().await;
+    }
+    let capture = tokio::spawn({
+        let agent = Arc::clone(&agent);
+        async move { agent.capture_for_restart().await }
+    });
+    while !agent.process_registry.lock().unwrap().closing {
+        tokio::task::yield_now().await;
+    }
+
+    let completed = next_notification(&mut rx).await;
+    let started = next_notification(&mut rx).await;
+    let turn_id = start
+        .await
+        .unwrap()
+        .expect("a fold admitted before closing completes");
+    let captured = capture.await.unwrap();
+
+    assert_eq!(completed["params"]["turn"]["id"], json!("claude-turn-wake"));
+    assert_eq!(started["params"]["turn"]["id"], json!(turn_id));
+    assert_eq!(captured.len(), 1);
+    assert_eq!(
+        captured[0].interrupted_turn_id.as_deref(),
+        Some(turn_id.as_str())
+    );
+    assert!(!captured[0].agent_initiated);
+    assert_eq!(
+        captured[0]
+            .queued_inputs
+            .iter()
+            .map(|input| input.text.as_str())
+            .collect::<Vec<_>>(),
+        ["hi"]
+    );
+    let _ = child.kill().await;
+}
+
 /// The subscription guard is the money invariant, and the stream reader is
 /// the only thing enforcing it: `system/init` fires per turn, so a violating
 /// init must kill the runtime whether or not a turn is open.

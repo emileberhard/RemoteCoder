@@ -8,11 +8,12 @@ use crate::providers::claude::translate::TurnTranslator;
 use crate::providers::claude::{ClaudeTurnRequest, ClaudeUserInput, claude_thread_id};
 use crate::rpc::error::RpcCode;
 use nix::unistd::Pid;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use tokio_util::task::task_tracker::TaskTrackerToken;
 use tracing::{debug, info, warn};
 
 impl ClaudeSupervisor {
@@ -188,6 +189,7 @@ impl ClaudeSupervisor {
 
         let stale_group = {
             let mut runtimes = self.runtimes.lock().await;
+            self.refuse_while_closing()?;
             match runtimes.get(&request.thread_id) {
                 Some(runtime) if runtime.matches(&request) && runtime.launch == policy => None,
                 Some(runtime) => {
@@ -219,8 +221,9 @@ impl ClaudeSupervisor {
             .await?;
         self.check_callback_generation(&request.thread_id, origin)
             .await?;
-        let (slot, process_group_id, mut process_admission) = {
+        let (admitted, slot, process_group_id, mut process_admission) = {
             let mut runtimes = self.runtimes.lock().await;
+            let admitted = self.admit_start(&runtimes)?;
             if let Some(runtime) = runtimes.get_mut(&request.thread_id) {
                 let Some((group, slot)) =
                     warm.filter(|(group, _)| *group == runtime.process_group_id)
@@ -237,6 +240,7 @@ impl ClaudeSupervisor {
                     request.input.client_id.clone(),
                 ));
                 (
+                    admitted,
                     slot,
                     group,
                     ProcessAdmission::new(group, Arc::clone(&self.process_registry)),
@@ -279,7 +283,7 @@ impl ClaudeSupervisor {
                     stdout,
                     stderr,
                 );
-                (slot, process_group_id, process_admission)
+                (admitted, slot, process_group_id, process_admission)
             }
         };
 
@@ -320,6 +324,7 @@ impl ClaudeSupervisor {
                 return Err(error);
             }
         };
+        drop(admitted);
         if let Err(err) = pending.written().await {
             if InputWriter::is_stalled(&err) {
                 process_admission.accept();
@@ -428,9 +433,10 @@ impl ClaudeSupervisor {
         let started = translator.turn_started();
         let dispatched = RuntimeTurn::new(translator, false, request.input.client_id.clone());
 
-        let closing_wake = {
+        let (admitted, closing_wake) = {
             let mut runtimes = self.runtimes.lock().await;
-            runtimes
+            let admitted = self.admit_start(&runtimes)?;
+            let closing_wake = runtimes
                 .get_mut(&request.thread_id)
                 .filter(|runtime| runtime.process_group_id == reserved_group)
                 .and_then(|runtime| {
@@ -443,7 +449,8 @@ impl ClaudeSupervisor {
                     let mut completed = wake.translator.turn_completed("completed", None, None);
                     annotate_agent_initiated(&mut completed, None);
                     Some((group, wake.translator.turn_id().to_owned(), completed))
-                })
+                });
+            (admitted, closing_wake)
         };
         // The agent-initiated turn ended while the translator was being built;
         // the normal dispatch path applies.
@@ -523,6 +530,7 @@ impl ClaudeSupervisor {
                 return Err(error);
             }
         };
+        drop(admitted);
         if let Err(err) = pending.written().await {
             if InputWriter::is_stalled(&err) {
                 process_admission.accept();
@@ -686,13 +694,23 @@ impl ClaudeSupervisor {
             .expect("Claude process registry poisoned")
             .closing
         {
-            return Err(TurnStartError {
-                data: None,
-                code: RpcCode::ServerBusy,
-                message: "Claude runtime owner is stopping".into(),
-            });
+            return Err(TurnStartError::owner_stopping());
         }
         Ok(())
+    }
+
+    fn admit_start(
+        &self,
+        _runtimes: &HashMap<String, ClaudeRuntime>,
+    ) -> Result<TaskTrackerToken, TurnStartError> {
+        let registry = self
+            .process_registry
+            .lock()
+            .expect("Claude process registry poisoned");
+        if registry.closing {
+            return Err(TurnStartError::owner_stopping());
+        }
+        Ok(self.admitted_starts.token())
     }
 
     pub(super) async fn reserve_start(
