@@ -959,6 +959,8 @@ scoped receipt reads require the exact sender conversation.
   commit-scoped metadata. After building a matched package, run
   `just codex-runtime-approve <package>` instead of hand-editing the duplicated
   version, source and hash pins; `just gateway-check` fails fast on drift.
+  Approval also refuses the package until `accounts/codex_migration/native.py`
+  handles its new migrations and `schema.json` pins its fresh databases.
 - Never copy a bare `codex` executable. Build the canonical package with the
   fork's `scripts/build_codex_package.py` and install it through
   `host-daemon-rs/scripts/install-codex-runtime.zsh <package-directory>`. The

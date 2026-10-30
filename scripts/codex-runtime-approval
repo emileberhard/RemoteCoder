@@ -6,16 +6,23 @@
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
+import sqlite3
 import stat
+import subprocess
 import sys
 import tempfile
+import threading
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
 from build_artifacts import tree_digest
+
+ADOPTION = Path("host-daemon-rs/src/accounts/codex_migration")
+FRESH_HOME_SECONDS = 60
 
 Sha256 = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
 GitCommit = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{40}$")]
@@ -262,6 +269,106 @@ def resolve_package(path: Path, packages: Path) -> Path:
     )
 
 
+def request(server: subprocess.Popen[str], identifier: int, method: str, params: dict[str, Any]) -> Any:
+    server.stdin.write(json.dumps({"id": identifier, "method": method, "params": params}) + "\n")
+    server.stdin.flush()
+    for line in server.stdout:
+        try:
+            message = json.loads(line)
+        except json.JSONDecodeError as error:
+            raise ApprovalError(f"approved runtime wrote invalid JSON-RPC: {error}") from error
+        if message.get("id") == identifier:
+            if "error" in message:
+                raise ApprovalError(f"approved runtime rejected {method}: {message['error']}")
+            return message["result"]
+    raise ApprovalError(f"approved runtime exited before answering {method}")
+
+
+def create_fresh_home(codex: Path, home: Path) -> None:
+    (home / "memories_v2_1.sqlite").touch()
+    server = subprocess.Popen(
+        [str(codex), "app-server"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        env={"HOME": str(home), "CODEX_HOME": str(home), "PATH": "/usr/bin:/bin"},
+        cwd=home,
+        text=True,
+    )
+    deadline = threading.Timer(FRESH_HOME_SECONDS, server.kill)
+    deadline.start()
+    try:
+        with server:
+            request(
+                server,
+                1,
+                "initialize",
+                {
+                    "clientInfo": {"name": "codex-runtime-approval", "version": "1"},
+                    "capabilities": {"experimentalApi": True},
+                },
+            )
+            server.stdin.write(json.dumps({"method": "initialized"}) + "\n")
+            thread = request(
+                server,
+                2,
+                "thread/start",
+                {
+                    "cwd": str(home),
+                    "historyMode": "paginated",
+                    "model": "gpt-5.4",
+                    "approvalPolicy": "never",
+                    "sandbox": "read-only",
+                },
+            )["thread"]["id"]
+            request(server, 3, "thread/name/set", {"threadId": thread, "name": "adoption pins"})
+    finally:
+        deadline.cancel()
+    if server.returncode != 0:
+        raise ApprovalError(f"approved runtime app-server exited with {server.returncode}")
+
+
+def adoption_pins(root: Path, package: Path) -> dict[str, int]:
+    directory = root.resolve() / ADOPTION
+    specification = importlib.util.spec_from_file_location("codex_adoption", directory / "native.py")
+    if specification is None or specification.loader is None:
+        raise ApprovalError(f"cannot load {directory / 'native.py'}")
+    native = importlib.util.module_from_spec(specification)
+    specification.loader.exec_module(native)
+    pins = load_json(directory / "schema.json")
+    latest = {}
+    with tempfile.TemporaryDirectory() as temporary:
+        home = Path(temporary).resolve()
+        create_fresh_home(package.resolve() / "bin/codex", home)
+        databases = {path.name for path in home.glob("*.sqlite")}
+        unknown = sorted(databases - set(pins) - native.HOST_DATABASES)
+        missing = sorted(set(pins) - databases)
+        if unknown or missing:
+            raise ApprovalError(
+                f"approved runtime databases differ from the adoption pins (unknown {unknown}, "
+                f"missing {missing}); classify them in {directory / 'native.py'}"
+            )
+        for name in sorted(pins):
+            path = home / name
+            try:
+                with native.connect(path, True) as connection:
+                    fingerprint = native.fingerprint(connection)
+                    try:
+                        native.validate(connection, path, pins[name])
+                    except ValueError as error:
+                        raise ApprovalError(
+                            f"{error}. The approved runtime creates {name} with schema "
+                            f"{fingerprint['schema']} and migrations {fingerprint['migrations']} "
+                            f"through {fingerprint['latestMigration']}; review what those migrations "
+                            f"require {directory / 'native.py'} to copy or preserve, then update "
+                            f"{directory / 'schema.json'}"
+                        ) from error
+            except (ValueError, sqlite3.Error) as error:
+                raise ApprovalError(f"cannot fingerprint {name} from the approved runtime: {error}") from error
+            latest[name] = fingerprint["latestMigration"]
+    return latest
+
+
 def apply(path: Path, approval: Approval, package_sha256: str) -> None:
     compatibility = load_json(path)
     if not isinstance(compatibility, dict) or not isinstance(
@@ -295,9 +402,11 @@ def main() -> int:
         if args.command == "resolve":
             args.package = resolve_package(path, args.packages_dir)
         expected = package_approval(args.package) if args.package else None
+        adoption = None
         if args.command == "apply":
             if expected is None:
                 raise ApprovalError("apply requires a verified package")
+            adoption = adoption_pins(args.repo_root, args.package)
             apply(path, expected, tree_digest(args.package))
         actual = repo_approval(path)
         if expected is not None and actual != expected:
@@ -320,6 +429,7 @@ def main() -> int:
                     else "Codex runtime approval record is valid"
                 ),
                 "approval": actual.model_dump(),
+                "adoptionMigrations": adoption,
                 "package": str(args.package.resolve()) if args.package else None,
             },
             args.json,

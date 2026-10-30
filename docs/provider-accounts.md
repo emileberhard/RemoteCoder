@@ -427,6 +427,9 @@ the `memories/` and `memories_v2/` files. Global migration cursors and provider
 registrations stay with the default runtime. Each database commits independently;
 file copies and recorded import plans make an interrupted import safe to repeat.
 Divergent histories or incompatible schemas fail startup with originals intact.
+`just codex-runtime-approve` creates a fresh home with the package being approved
+and refuses it until the adapter classifies every database and table and its pins
+match that runtime, so a new migration cannot ship unreviewed.
 Snapshot rollback takes the same native write lock as the importer, so a helper
 surviving a killed gateway finishes before restoration can replace its databases.
 

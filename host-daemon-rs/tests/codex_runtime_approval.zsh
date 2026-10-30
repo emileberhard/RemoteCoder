@@ -6,11 +6,42 @@ script="${repo_root}/scripts/codex-runtime-approval"
 temp_root="$(mktemp -d)"
 trap 'rm -rf -- "${temp_root}"' EXIT
 
-mkdir -p "${temp_root}/docs/codex" "${temp_root}/package/bin"
+adoption="host-daemon-rs/src/accounts/codex_migration"
+mkdir -p "${temp_root}/docs/codex" "${temp_root}/package/bin" "${temp_root}/${adoption}"
 cp "${repo_root}/docs/codex/compatibility.json" \
   "${temp_root}/docs/codex/compatibility.json"
+cp "${repo_root}/${adoption}/native.py" "${temp_root}/${adoption}/native.py"
 
-print -rn -- 'test-codex' >"${temp_root}/package/bin/codex"
+cat >"${temp_root}/package/bin/codex" <<'EOF'
+#!/usr/bin/python3 -I
+import json, os, pathlib, sqlite3, sys
+home = pathlib.Path(os.environ["CODEX_HOME"])
+layout = pathlib.Path(sys.argv[0]).resolve().parent.parent / "databases.json"
+for name, statements in json.loads(layout.read_text()).items():
+    with sqlite3.connect(home / name) as database:
+        database.execute("CREATE TABLE _sqlx_migrations(version INTEGER PRIMARY KEY, checksum BLOB, success BOOLEAN)")
+        database.execute("INSERT INTO _sqlx_migrations VALUES(1, x'01', 1)")
+        for statement in statements:
+            database.execute(statement)
+    database.close()
+for line in sys.stdin:
+    message = json.loads(line)
+    if "id" in message:
+        result = {"thread": {"id": "thread"}} if message["method"] == "thread/start" else {}
+        print(json.dumps({"id": message["id"], "result": result}), flush=True)
+EOF
+cat >"${temp_root}/package/databases.json" <<'EOF'
+{
+  "state_5.sqlite": ["CREATE TABLE threads(id TEXT PRIMARY KEY)"],
+  "thread_history_1.sqlite": ["CREATE TABLE thread_turns(id TEXT PRIMARY KEY)"],
+  "queue_1.sqlite": ["CREATE TABLE queued_items(id TEXT PRIMARY KEY)"],
+  "goals_1.sqlite": ["CREATE TABLE thread_goals(id TEXT PRIMARY KEY)"],
+  "memories_1.sqlite": ["CREATE TABLE jobs(id TEXT PRIMARY KEY)"],
+  "memories_v2_1.sqlite": ["CREATE TABLE jobs(id TEXT PRIMARY KEY)"],
+  "logs_2.sqlite": ["CREATE TABLE logs(id TEXT PRIMARY KEY)"]
+}
+EOF
+cp "${temp_root}/package/databases.json" "${temp_root}/databases.json"
 print -rn -- 'test-code-mode-host' >"${temp_root}/package/bin/codex-code-mode-host"
 chmod 755 "${temp_root}/package/bin/codex" \
   "${temp_root}/package/bin/codex-code-mode-host"
@@ -35,9 +66,62 @@ EOF
 
 manifest_hash="$(shasum -a 256 "${temp_root}/package/codex-package.json" | awk '{print $1}')"
 
+pin_adoption() {
+  local home="${temp_root}/pinned-home"
+  rm -rf -- "${home}"
+  mkdir "${home}"
+  : >"${home}/memories_v2_1.sqlite"
+  CODEX_HOME="${home}" "${temp_root}/package/bin/codex" app-server </dev/null
+  python3 -I - "${temp_root}/${adoption}/native.py" "${home:A}" \
+    >"${temp_root}/${adoption}/schema.json" <<'EOF'
+import importlib.util, json, pathlib, sys
+specification = importlib.util.spec_from_file_location("native", sys.argv[1])
+native = importlib.util.module_from_spec(specification)
+specification.loader.exec_module(native)
+pins = {}
+for name in native.TABLES:
+    with native.connect(pathlib.Path(sys.argv[2]) / name, True) as connection:
+        fingerprint = native.fingerprint(connection)
+    pins[name] = {"schema": fingerprint["schema"], "migrations": fingerprint["migrations"]}
+print(json.dumps(pins))
+EOF
+}
+
+refuse_apply() {
+  local reason="$1" expected="$2" output
+  if output="$(uv run --script "${script}" apply --repo-root "${temp_root}" --json \
+    --package "${temp_root}/package")"; then
+    print -u2 -- "approval accepted ${reason}"
+    exit 1
+  fi
+  if ! jq -e --arg expected "${expected}" '.ok == false and (.error | contains($expected))' \
+    <<<"${output}" >/dev/null; then
+    print -u2 -- "approval refused ${reason} without naming it: ${output}"
+    exit 1
+  fi
+  cmp -s "${temp_root}/before.json" "${temp_root}/docs/codex/compatibility.json"
+}
+
 cp "${temp_root}/docs/codex/compatibility.json" "${temp_root}/before.json"
+pin_adoption
+jq '.["state_5.sqlite"] += ["CREATE INDEX threads_by_id ON threads(id)"]' \
+  "${temp_root}/databases.json" >"${temp_root}/package/databases.json"
+refuse_apply "a runtime schema that differs from the adoption pins" \
+  "Unsupported pinned Codex schema"
+jq '.["state_5.sqlite"] += ["CREATE TABLE unexpected_feature(id TEXT)"]' \
+  "${temp_root}/databases.json" >"${temp_root}/package/databases.json"
+pin_adoption
+refuse_apply "a table adoption does not classify" "Unclassified Codex tables"
+jq '. + {"unexpected_store_1.sqlite": ["CREATE TABLE value(id TEXT)"]}' \
+  "${temp_root}/databases.json" >"${temp_root}/package/databases.json"
+pin_adoption
+refuse_apply "a database adoption does not classify" "unexpected_store_1.sqlite"
+cp "${temp_root}/databases.json" "${temp_root}/package/databases.json"
+pin_adoption
+
 uv run --script "${script}" apply --repo-root "${temp_root}" --json \
-  --package "${temp_root}/package" | jq -e '.ok == true' >/dev/null
+  --package "${temp_root}/package" |
+  jq -e '.ok == true and .adoptionMigrations["state_5.sqlite"] == 1' >/dev/null
 jq -e --slurpfile before "${temp_root}/before.json" \
   --arg codex "${codex_hash}" --arg host "${code_mode_hash}" '
     del(.runtimePackageSHA256) == ($before[0] | del(.runtimePackageSHA256) |
@@ -92,13 +176,14 @@ rm -- "${temp_root}/approvals/${manifest_hash}.json"
 cp -p "${temp_root}/original-approval.json" "${temp_root}/approvals/${manifest_hash}.json"
 
 
+cp -p "${temp_root}/package/bin/codex" "${temp_root}/codex"
 print -rn -- 'tampered' >>"${temp_root}/package/bin/codex"
 if uv run --script "${script}" check --repo-root "${temp_root}" \
   --package "${temp_root}/package" >/dev/null 2>&1; then
   print -u2 -- "approval check accepted a package hash mismatch"
   exit 1
 fi
-print -rn -- 'test-codex' >"${temp_root}/package/bin/codex"
+cp -p "${temp_root}/codex" "${temp_root}/package/bin/codex"
 
 jq '.codexCliVersion = "9.8.7-alpha.5"' "${temp_root}/docs/codex/compatibility.json" \
   >"${temp_root}/drifted.json"
