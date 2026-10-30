@@ -1035,7 +1035,10 @@ async fn a_running_runtime_agent_reads_its_live_conversation() {
     let job_id = JobId::for_mutation(Provider::Codex, "fixture-1").unwrap();
     let file = root.join("jobs").join(format!("{}.json", job_id.as_str()));
     let mut job: JobRecord = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
-    job.execution = ExecutionState::Bound { conversation };
+    job.execution = ExecutionState::Dispatching {
+        conversation,
+        input_id: "fixture-input".into(),
+    };
     std::fs::write(&file, serde_json::to_vec(&job).unwrap()).unwrap();
     let mut control = crate::test_support::FakeControl::attach(&gateway, 2)
         .await

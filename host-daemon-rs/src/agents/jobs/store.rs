@@ -206,9 +206,10 @@ impl JobStore {
                 evidence.provider.is_none_or(|provider| provider == conversation.provider)
                     && evidence.provider_home.as_ref().is_none_or(|home| matches!(&conversation.provider_home, ProviderHome::Known { path } if path == home))
                     && evidence.thread_id.as_ref().is_none_or(|thread| thread == &conversation.thread_id)
-                    && (evidence.thread_id.is_some() || created_at_ms.zip(evidence.latest_possible_creation_ms).is_none_or(|(created, latest)| created <= latest))
+                    && (evidence.thread_id.is_some() || (created_at_ms.zip(evidence.latest_possible_creation_ms).is_none_or(|(created, latest)| created <= latest)
+                        && !JobId::try_from(evidence.source_run_id.clone()).ok().and_then(|run| inner.jobs.get(&run)).is_some_and(|job| job.execution.conversation().is_some())))
             }) {
-                return Ok(Some(Origin::Unknown { reason: format!("historical ancestry is unresolved: {}", evidence.reason) }));
+                return Ok(Some(Origin::Unknown { reason: format!("historical ancestry of run {} is unresolved: {}", evidence.source_run_id, evidence.reason) }));
             }
             let unresolved = inner.jobs.values().any(|job| job.execution.conversation().is_some_and(|known| {
                 known.provider == conversation.provider && known.thread_id == conversation.thread_id && (known.provider_home == conversation.provider_home || matches!(known.provider_home, ProviderHome::Unknown { .. }))

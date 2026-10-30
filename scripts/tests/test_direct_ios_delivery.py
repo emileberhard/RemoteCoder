@@ -20,6 +20,14 @@ spec.loader.exec_module(module)
 
 
 class DirectDeliveryTests(unittest.TestCase):
+    def test_only_an_app_store_connect_build_number_reads_as_testflight(self):
+        for build, testflight in (("3073012", True), ("3076006", False), ("1.2.3", False)):
+            with self.subTest(build=build):
+                self.assertEqual(
+                    module.store_build({"short_version": "3.76.6", "version": build}),
+                    testflight,
+                )
+
     def test_automatic_managed_target_uses_model_name_not_hardware_product_code(self):
         phone = {
             "id": 27,

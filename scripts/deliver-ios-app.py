@@ -106,7 +106,8 @@ def mdm_target(requested, bundle, *, device=None):
     attributes = installed[0]["attributes"]
     if store_build(attributes):
         raise ManagedAppNotConfigured(
-            f"the iPhone runs the TestFlight build {attributes['short_version']} ({attributes['version']}), "
+            f"SimpleMDM's inventory from {attributes.get('last_seen_at')} shows the TestFlight build "
+            f"{attributes['short_version']} ({attributes['version']}), "
             "which iOS refuses to replace through SimpleMDM; one direct install with the iPhone unlocked "
             "near this Mac returns it to managed updates"
         )

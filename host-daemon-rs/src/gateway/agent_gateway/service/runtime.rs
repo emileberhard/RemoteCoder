@@ -329,10 +329,22 @@ impl AgentService<'_> {
             ExecutionState::Terminal { terminal } => Some(terminal),
             _ => None,
         };
+        let dispatched = !matches!(
+            view.job.execution,
+            ExecutionState::Admitted
+                | ExecutionState::WaitingForProvider { .. }
+                | ExecutionState::Bound { .. }
+        );
         if terminal.is_none()
-            && let Some(thread) = &node.thread_id
+            && dispatched
+            && let Some(ConversationBinding::Known { conversation }) =
+                view.agent.as_ref().map(|agent| &agent.conversation)
         {
-            return self.read_thread_output(thread).await;
+            ensure!(
+                self.gateway.agent_conversation(&conversation.thread_id)? == *conversation,
+                "Agent conversation belongs to another provider home; open it on its own host"
+            );
+            return self.read_thread_output(&conversation.thread_id).await;
         }
         let mut output = Output::default();
         if let SpecEvidence::Known { spec } = &view.job.spec {
