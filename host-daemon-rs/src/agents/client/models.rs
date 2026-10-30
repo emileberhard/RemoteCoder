@@ -21,7 +21,7 @@ struct Effort {
 
 fn family(model: &str) -> Option<(Vec<u32>, &str)> {
     let (version, family) = model.strip_prefix("gpt-")?.rsplit_once('-')?;
-    if !matches!(family, "luna" | "sol" | "astra") {
+    if !is_family_name(family) {
         return None;
     }
     let version = version
@@ -30,6 +30,10 @@ fn family(model: &str) -> Option<(Vec<u32>, &str)> {
         .collect::<Result<Vec<u32>, _>>()
         .ok()?;
     (!version.is_empty()).then_some((version, family))
+}
+
+fn is_family_name(family: &str) -> bool {
+    !family.is_empty() && family.bytes().all(|byte| byte.is_ascii_lowercase())
 }
 
 pub(super) fn codex(
@@ -41,7 +45,7 @@ pub(super) fn codex(
     let normalized = input.to_ascii_lowercase();
     let requested_family = normalized
         .strip_prefix("codex-")
-        .filter(|family| matches!(*family, "luna" | "sol" | "astra"))
+        .filter(|family| is_family_name(family))
         .or_else(|| family(&normalized).map(|(_, family)| family));
     let selected = if normalized == "codex-daybreak-blue" {
         models.iter().find(|model| model.model_provider.is_none() && model.model == "gpt-6-sol")
@@ -55,7 +59,12 @@ pub(super) fn codex(
         }).max_by(|(left, _), (right, _)| left.cmp(right)).map(|(_, model)| model)
     } else {
         models.iter().find(|model| model.model_provider.is_some() && model.id == input)
-    }.with_context(|| format!("Model {input:?} is not available in the gateway catalog; use codex-luna, codex-sol, codex-astra or an exact external model ID"))?;
+    }.with_context(|| {
+        let mut families: Vec<_> = models.iter().filter(|model| model.model_provider.is_none()).filter_map(|model| family(&model.model).map(|(_, family)| format!("codex-{family}"))).collect();
+        families.sort();
+        families.dedup();
+        format!("Model {input:?} is not available in the gateway catalog; use {} or an exact external model ID", families.join(", "))
+    })?;
     ensure!(
         selected.model_provider.as_deref() != Some("claude"),
         "Claude catalog entries require spawn_agent claude MODEL; they cannot run through the native Codex adapter"
@@ -71,7 +80,7 @@ pub(super) fn codex(
         match family(&selected.model).map(|(_, family)| family) {
             Some("luna") => "xhigh",
             Some("sol" | "astra") => "medium",
-            _ => bail!("The selected native model has no supported family default"),
+            _ => selected.default_reasoning_effort.as_str(),
         }
     };
     let effort = effort.unwrap_or(default);
@@ -126,6 +135,31 @@ mod tests {
             }
         );
         assert!(codex("codex-sol", Some("high"), None, &catalog()).is_err());
+    }
+
+    #[test]
+    fn a_catalog_family_without_local_policy_uses_its_newest_model_and_catalog_effort() {
+        let mut models = catalog();
+        models.extend(serde_json::from_value::<Vec<Model>>(serde_json::json!([
+            {"id":"gpt-5.6-terra","model":"gpt-5.6-terra","supportedReasoningEfforts":[{"reasoningEffort":"medium"}],"defaultReasoningEffort":"medium"},
+            {"id":"gpt-6.1-terra","model":"gpt-6.1-terra","supportedReasoningEfforts":[{"reasoningEffort":"low"}],"defaultReasoningEffort":"low"}
+        ])).unwrap());
+        for alias in ["codex-terra", "gpt-6.1-terra"] {
+            assert_eq!(
+                codex(alias, None, None, &models).unwrap(),
+                ExecutionSettings::Codex {
+                    model: "gpt-6.1-terra".into(),
+                    model_provider: "openai".into(),
+                    effort: "low".into(),
+                    service_tier: None,
+                    cyber_access_program: None,
+                }
+            );
+        }
+        let error = codex("codex-nova", None, None, &models)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("codex-sol, codex-terra"));
     }
 
     #[test]

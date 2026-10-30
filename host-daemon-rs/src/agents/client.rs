@@ -374,6 +374,7 @@ async fn settings(
                         | "best"
                         | "fable"
                         | "fable[1m]"
+                        | "haiku"
                         | "opus"
                         | "opus[1m]"
                         | "opusplan"
