@@ -173,7 +173,7 @@ if uv run --script "${script}" install-record --repo-root "${temp_root}" --json 
   exit 1
 fi
 [[ "$(shasum -a 256 "${temp_root}/approvals/${manifest_hash}.json" | awk '{print $1}')" == "${divergent_digest}" ]]
-rm -- "${temp_root}/approvals/${manifest_hash}.json"
+rm -f -- "${temp_root}/approvals/${manifest_hash}.json"
 cp -p "${temp_root}/original-approval.json" "${temp_root}/approvals/${manifest_hash}.json"
 
 
