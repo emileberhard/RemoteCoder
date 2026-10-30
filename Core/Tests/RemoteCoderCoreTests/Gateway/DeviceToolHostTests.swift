@@ -523,7 +523,6 @@ actor DeviceToolSocketFixture {
     private let declarationReply: DeclarationReply
     private let pongDelay: Duration?
     private let answersPings: Bool
-    private var repliesEnabled = true
     private var withholdsReady = false
     private var closeBeforeReadyCode: NWProtocolWebSocket.CloseCode?
     private var initializeRejected = false
@@ -599,7 +598,7 @@ actor DeviceToolSocketFixture {
             close(connection, code: closeBeforeReadyCode)
             return
         }
-        let sendsReady = !withholdsReady && repliesEnabled && (answersPings || acceptedConnections == 1)
+        let sendsReady = !withholdsReady && (answersPings || acceptedConnections == 1)
         guard sendsReady else { return }
         var ready: [String: JSONValue] = ["notificationEpoch": .string("fixture"), "notificationSequence": .number(0)]
         if let cancelRequestCapability { ready["capabilities"] = .object(["cancelRequest": .bool(cancelRequestCapability)]) }
@@ -648,11 +647,7 @@ actor DeviceToolSocketFixture {
     }
 
     private func answers(_ connection: NWConnection) -> Bool {
-        repliesEnabled && !stopped && !stalledConnections.contains { $0 === connection }
-    }
-
-    func stopReplyingToPings() {
-        repliesEnabled = false
+        !stopped && !stalledConnections.contains { $0 === connection }
     }
 
     func stallExistingConnections() {

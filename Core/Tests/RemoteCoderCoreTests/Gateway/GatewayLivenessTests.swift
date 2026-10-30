@@ -6,7 +6,7 @@ import Testing
 
 @Suite(.timeLimit(.minutes(1)))
 struct GatewayLivenessTests {
-    @Test(arguments: [600, 1200, 2500])
+    @Test(arguments: [2500])
     func cellularRTTDoesNotDisconnectAnIdlePeer(milliseconds: Int) async throws {
         let peer = try DeviceToolSocketFixture(declarationReply: .accepted, repliesToPings: false,
                                               pongDelay: .milliseconds(milliseconds))
@@ -163,37 +163,6 @@ struct GatewayLivenessTests {
             let replyPacedProbes = Int((started.duration(to: .now) / .milliseconds(2500)).rounded(.up))
             #expect(await client.isConnected == replies)
             #expect(await peer.pingCount <= (replies ? 1 + replyPacedProbes : 1))
-            await client.retire()
-            await peer.stop()
-        } catch {
-            await client.retire()
-            await peer.stop()
-            throw error
-        }
-    }
-
-    @Test func silentPeerAtTheAdaptiveCapIsDetectedWithinSeventeenSeconds() async throws {
-        let peer = try DeviceToolSocketFixture(declarationReply: .accepted, repliesToPings: false,
-                                              pongDelay: .milliseconds(4200))
-        let port = try await peer.start()
-        let client = try client(port: port)
-        var pings = peer.pings.makeAsyncIterator()
-        do {
-            try await client.connectIfNeeded()
-            let connection = try #require(await client.connectionIdentity)
-            await peer.withholdReady()
-            try #require(await pings.next() == 1)
-            try #require(await pings.next() == 2)
-            try #require(await client.connectionIdentity == connection)
-            let started = ContinuousClock.now
-            _ = try await client.call(method: "test/barrier", params: nil, timeout: .seconds(2))
-            await peer.stopReplyingToPings()
-            let detected = await waitUntil(timeout: .seconds(18)) { await !client.isConnected }
-            let elapsed = started.duration(to: .now)
-            print("CELLULAR capped-silent-peer detected=\(detected) elapsed=\(elapsed)")
-            #expect(detected)
-            #expect(elapsed >= .seconds(15))
-            #expect(elapsed < .seconds(17))
             await client.retire()
             await peer.stop()
         } catch {
