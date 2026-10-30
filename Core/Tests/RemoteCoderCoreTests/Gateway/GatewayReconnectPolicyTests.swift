@@ -35,17 +35,31 @@ struct GatewayReconnectPolicyTests {
         policy.connected(at: start + .seconds(3))
         #expect(policy.permits(at: start + .seconds(3)))
 
-        policy.disconnected(at: start + .seconds(5), restartingSince: nil)
+        policy.lost(at: start + .seconds(5), restartingSince: nil)
         #expect(policy.failures == 3)
         #expect(policy.notBefore == start + .seconds(9))
 
-        policy.disconnected(at: start + .seconds(6), restartingSince: nil)
+        policy.lost(at: start + .seconds(6), restartingSince: nil)
         #expect(policy.failures == 3)
 
         policy.connected(at: start + .seconds(10))
-        policy.disconnected(at: start + .seconds(40), restartingSince: nil)
+        policy.lost(at: start + .seconds(40), restartingSince: nil)
         #expect(policy.failures == 0)
         #expect(policy.permits(at: start + .seconds(40)))
+    }
+
+    @Test func aRequestedCloseNeverDelaysTheNextConnectionAndAStableOneStillResetsTheStreak() {
+        var policy = GatewayReconnectPolicy(jitter: { 1 })
+        for _ in 0..<4 { policy.failed(at: start, restartingSince: nil) }
+        policy.connected(at: start + .seconds(16))
+        policy.closed(at: start + .seconds(18))
+        #expect(policy.permits(at: start + .seconds(18)))
+        #expect(policy.failures == 4)
+
+        policy.connected(at: start + .seconds(20))
+        policy.closed(at: start + .seconds(50))
+        #expect(policy.failures == 0)
+        #expect(policy.permits(at: start + .seconds(50)))
     }
 
     @Test func expeditingSkipsOneWaitAtMostEveryFiveSeconds() {

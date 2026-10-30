@@ -244,6 +244,11 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
         case networkPath
     }
 
+    private enum ConnectionEnd {
+        case requested
+        case failed(any Error)
+    }
+
     func connectIfNeeded() async throws {
         try await connect(waitingAtMost: timeouts.request)
     }
@@ -310,7 +315,7 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
                 error
             }
             if !Task.isCancelled, !isRetired, !(error is CancellationError) { lastConnectionFailure = failure }
-            if !Task.isCancelled { await disconnectTransport(reason: error) }
+            if !Task.isCancelled { await disconnectTransport(.failed(error)) }
             guard !Task.isCancelled, !isRetired, !(error is CancellationError) else { throw failure }
             let delay = reconnect.failed(at: .now, restartingSince: restartObservedAt)
             logger.notice("Gateway connection attempt trigger=\(trigger.rawValue) step=\(step) routes=\(candidates.count) elapsedMs=\(started.duration(to: .now) / .milliseconds(1)) outcome=failed nextDelayMs=\(delay / .milliseconds(1)) error=\(failure.localizedDescription)")
@@ -324,7 +329,7 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
         try Task.checkCancellation()
         if let webSocket {
             logger.notice("WebSocket stale (state=\(webSocket.state.rawValue)), reconnecting")
-            await disconnectTransport()
+            await disconnectTransport(.failed(ClientError.connectionClosed))
         }
 
         guard config.url.scheme == "ws" || config.url.scheme == "wss" else {
@@ -496,7 +501,7 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
             guard generation == connectionGeneration, webSocket === task else { throw ClientError.connectionClosed }
         } catch {
             if generation == connectionGeneration {
-                let lostGeneration = closeSocket(failing: error)
+                let lostGeneration = closeSocket(.failed(error))
                 await deviceTools?.host.connectionLost(generation: lostGeneration)
             }
             guard isRestarting, !(error is CancellationError), !isRetired else { throw error }
@@ -513,7 +518,7 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
 
     private func handOver(to socket: GatewaySocket, over route: GatewayRoute) async -> Bool {
         logger.notice("Handing the gateway connection over to the \(String(describing: route.kind)) route")
-        let lostGeneration = closeSocket(failing: ClientError.connectionClosed)
+        let lostGeneration = closeSocket(.failed(ClientError.connectionClosed))
         let installation = Task(name: "Gateway handover") { [self] in try await install(socket, over: route) }
         connectionInFlight = installation
         await endConnection(lostGeneration)
@@ -524,7 +529,7 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
         } catch {
             guard connectionInFlight == installation else { return false }
             connectionInFlight = nil
-            if !isRetired { await disconnectTransport(reason: error) }
+            if !isRetired { await disconnectTransport(.failed(error)) }
             return false
         }
     }
@@ -541,7 +546,7 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
                     await routes?.failed(stalled, error: URLError(.timedOut), startedAt: receiveDeadline.lastReceive)
                 }
                 guard generation == connectionGeneration, webSocket === socket else { return }
-                await disconnect(reason: ClientError.connectionClosed)
+                await disconnect(failing: ClientError.connectionClosed)
                 return
             }
             if standby == nil, let stalled = route, receiveDeadline.claimStandby(at: now) {
@@ -595,7 +600,7 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
         guard generation == connectionGeneration, pendingPingID == id else { return }
         pendingPingID = nil
         if let error {
-            await disconnect(reason: error)
+            await disconnect(failing: error)
         } else {
             receiveDeadline.recordPong(at: receivedAt, processedAt: .now)
         }
@@ -696,17 +701,23 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
         hub.finishEvents()
     }
 
-    func disconnect(reason: Error? = nil) async {
+    func disconnect() async {
         connectionInFlight?.cancel()
         connectionInFlight = nil
-        await disconnectTransport(reason: reason)
+        await disconnectTransport(.requested)
     }
 
-    private func disconnectTransport(reason: Error? = nil) async {
+    private func disconnect(failing error: any Error) async {
+        connectionInFlight?.cancel()
+        connectionInFlight = nil
+        await disconnectTransport(.failed(error))
+    }
+
+    private func disconnectTransport(_ end: ConnectionEnd) async {
         logger.info(
-            "ws disconnect start reason=\(String(describing: reason)) pending=\(self.pending.count) notificationStreams=\(self.hub.streamCount)"
+            "ws disconnect start end=\(String(describing: end)) pending=\(self.pending.count) notificationStreams=\(self.hub.streamCount)"
         )
-        let lostGeneration = closeSocket(failing: reason ?? ClientError.connectionClosed)
+        let lostGeneration = closeSocket(end)
         announceUnavailability()
         disconnections += 1
         await endConnection(lostGeneration)
@@ -721,11 +732,20 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
         await deviceTools?.host.connectionLost(generation: lostGeneration)
     }
 
-    private func closeSocket(failing error: Error) -> UUID {
+    private func closeSocket(_ end: ConnectionEnd) -> UUID {
         let wasConnected = isConnected
         if wasConnected { restartObservedAt = nil }
-        let error = webSocket.map(observeRestart(closing:)) == true ? ClientError.gatewayRestarting : error
-        if wasConnected { reconnect.disconnected(at: .now, restartingSince: restartObservedAt) }
+        let failure: any Error = switch end {
+        case .requested: ClientError.connectionClosed
+        case .failed(let error): error
+        }
+        let error = webSocket.map(observeRestart(closing:)) == true ? ClientError.gatewayRestarting : failure
+        if wasConnected {
+            switch end {
+            case .requested: reconnect.closed(at: .now)
+            case .failed: reconnect.lost(at: .now, restartingSince: restartObservedAt)
+            }
+        }
         let lostGeneration = connectionGeneration
         connectionGeneration = UUID()
         receiveDeadline = GatewayReceiveDeadline(now: .now)
@@ -1084,7 +1104,7 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
     private func handleSendFailure(id: Int64, error: Error, generation: UUID) async {
         _ = failPending(id: id, error: error)
         guard generation == connectionGeneration, didInitialize else { return }
-        await disconnect(reason: error)
+        await disconnect(failing: error)
     }
 
     private func makeTimeoutTask(id: Int64, method: String, timeout: Duration, generation: UUID) -> Task<Void, Never> {
@@ -1214,7 +1234,7 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
                         payload: rawString
                     )
                     if case .transportError(let error) = server, error.kind == "messageTooLarge" {
-                        await disconnect(reason: ClientError.historyCapacity(
+                        await disconnect(failing: ClientError.historyCapacity(
                             actualBytes: error.actualBytes ?? 0,
                             limitBytes: error.limitBytes ?? GatewayTransportLimits.maximumMessageSizeBytes))
                         return
@@ -1247,9 +1267,9 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
                     logger.error("Gateway receive loop failed: \(String(describing: error))")
                 }
                 if didInitialize {
-                    await disconnect(reason: error)
+                    await disconnect(failing: error)
                 } else {
-                    let lostGeneration = closeSocket(failing: error)
+                    let lostGeneration = closeSocket(.failed(error))
                     await deviceTools?.host.connectionLost(generation: lostGeneration)
                 }
                 return

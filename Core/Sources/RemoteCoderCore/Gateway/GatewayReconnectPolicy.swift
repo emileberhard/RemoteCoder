@@ -36,7 +36,7 @@ nonisolated struct GatewayReconnectPolicy {
         notBefore = nil
     }
 
-    mutating func disconnected(at now: ContinuousClock.Instant, restartingSince: ContinuousClock.Instant?) {
+    mutating func lost(at now: ContinuousClock.Instant, restartingSince: ContinuousClock.Instant?) {
         guard let connectedAt else { return }
         self.connectedAt = nil
         if connectedAt.duration(to: now) >= Self.stableConnection {
@@ -44,6 +44,12 @@ nonisolated struct GatewayReconnectPolicy {
         } else {
             failed(at: now, restartingSince: restartingSince)
         }
+    }
+
+    mutating func closed(at now: ContinuousClock.Instant) {
+        guard let connectedAt else { return }
+        self.connectedAt = nil
+        if connectedAt.duration(to: now) >= Self.stableConnection { failures = 0 }
     }
 
     mutating func expedite(at now: ContinuousClock.Instant) -> Bool {
