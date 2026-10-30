@@ -494,7 +494,9 @@ entrypoint linked above.
   - `GatewayClient` owns the reconnect schedule (`GatewayReconnectPolicy`):
     failed attempts wait jittered (50–100 %) steps of 1, 2, 4 … 60 s, capped at
     4 s for 45 s after an observed gateway restart, and a connection that lived
-    30 s resets it. A request during the wait joins the scheduled attempt
+    30 s resets it. A lost connection shorter than that counts as a failure; one
+    the app closes itself, such as on backgrounding, never delays the next
+    connection. A request during the wait joins the scheduled attempt
     within its own deadline or fails fast with the last attempt's error; the
     pump waits until cancelled. Foregrounding or a network path change
     expedites one attempt at most every 5 s. Each attempt logs its trigger,
