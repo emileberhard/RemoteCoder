@@ -190,14 +190,14 @@ final class HTMLVisualRenderer {
         if loadTask == nil {
             loadTask = Task {
                 do {
-                    let snapshot = try await cache.load()
+                    let cacheSnapshot = try await cache.load()
                     try Task.checkCancellation()
-                    for (key, entry) in snapshot.entries {
+                    for (key, entry) in cacheSnapshot.entries {
                         heights[key] = entry.height
                         heightOrder.append(key)
                         snapshots[key]?.height = entry.height
                     }
-                    persistedImages.apply(snapshot)
+                    persistedImages.apply(cacheSnapshot)
                 } catch is CancellationError { return }
                 catch { Self.logger.error("html visual cache load failed reason=\(error.localizedDescription)") }
                 isReady = true
@@ -788,8 +788,8 @@ final class HTMLVisualRenderer {
     func store(_ data: Data, for key: HTMLVisualLayoutKey, height: Double) async throws -> HTMLVisualCapturedImage? {
         guard let captured = HTMLVisualCapturedImage(data: data, key: key, revision: nextSnapshotRevision()) else { return nil }
         pendingHeights.removeValue(forKey: key)
-        let snapshot = try await cache.store(key, height: height, image: data, protecting: Set(rasterPins.keys))
-        persistedImages.apply(snapshot)
+        let cacheSnapshot = try await cache.store(key, height: height, image: data, protecting: Set(rasterPins.keys))
+        persistedImages.apply(cacheSnapshot)
         if let current = snapshots[key], current.revision > captured.revision { return captured }
         heights[key] = height
         heightOrder.removeAll { $0 == key }
@@ -829,8 +829,8 @@ final class HTMLVisualRenderer {
             while let (key, height) = pendingHeights.first {
                 pendingHeights.removeValue(forKey: key)
                 do {
-                    let snapshot = try await cache.store(key, height: height, image: nil, protecting: Set(rasterPins.keys))
-                    persistedImages.apply(snapshot)
+                    let cacheSnapshot = try await cache.store(key, height: height, image: nil, protecting: Set(rasterPins.keys))
+                    persistedImages.apply(cacheSnapshot)
                 } catch { Self.logger.error("html visual cache save failed reason=\(error.localizedDescription)") }
                 if Task.isCancelled { return }
             }
