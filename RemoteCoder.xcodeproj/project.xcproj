@@ -15,21 +15,21 @@
       "kind": "remote",
       "repository": "https://github.com/emileberhard/SpeechKit.git",
       "version": {
-        "revision": "4a7d06482656e925d2c2e7c17d8b281c2a2d2c69"
+        "version": "0.2.0"
       }
     },
     {
       "kind": "remote",
       "repository": "https://github.com/googlemaps/ios-navigation-sdk",
       "version": {
-        "version": "11.1.0"
+        "version": "11.2.0"
       }
     },
     {
       "kind": "remote",
       "repository": "https://github.com/stasel/WebRTC.git",
       "version": {
-        "version": "152.0.0"
+        "version": "156.0.0"
       }
     }
   ],
