@@ -112,7 +112,7 @@ tools-test:
 
 [private]
 dev-tools-test-local:
-    uv run --project dev-tools --locked --quiet --with numpy==2.4.1 --with pillow==12.0.0 python -m pytest -q dev-tools/tests
+    uv run --project dev-tools --locked --quiet --with numpy==2.5.4 --with pillow==13.0.0 python -m pytest -q dev-tools/tests
 
 [private]
 agent-calls-test-local:

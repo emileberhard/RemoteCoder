@@ -1,7 +1,7 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.12"
-# dependencies = ["numpy==2.4.1"]
+# dependencies = ["numpy==2.5.4"]
 # ///
 """Measure scroll motion per recorded frame in a transcript crop of a variable-frame-rate screen recording."""
 
