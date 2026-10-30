@@ -3,7 +3,9 @@ use crate::agents::jobs::model::{ConversationIdentity, Provider, ProviderHome};
 use crate::platform::process::{ProcessInstance, identify};
 use crate::providers::claude::native_parent::{NativeParentForwarder, NativeSessionOwner};
 use crate::wire::agent_jobs::ScopedRequest;
+use nix::sys::socket::{AddressFamily, SockFlag, SockType, UnixAddr, bind, socket};
 use serde_json::{Value, json};
+use std::os::fd::AsRawFd;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
@@ -213,12 +215,24 @@ async fn scoped_endpoint_reclaims_only_a_definitely_stale_socket_and_preserves_l
  {
     let directory = tempfile::tempdir_in("/tmp").unwrap();
     let path = directory.path().join("scoped");
-    let listener = UnixListener::bind(&path).unwrap();
-    drop(listener);
+    let bound = socket(
+        AddressFamily::Unix,
+        SockType::Stream,
+        SockFlag::empty(),
+        None,
+    )
+    .unwrap();
+    bind(bound.as_raw_fd(), &UnixAddr::new(&path).unwrap()).unwrap();
+    drop(bound);
     let handler: ScopedHandler = Arc::new(|_, _| Box::pin(async { Ok(json!({})) }));
     let endpoints = ScopedEndpoints::default();
     let lease = endpoints.bind(&path, Arc::clone(&handler)).await.unwrap();
-    assert!(endpoints.bind(&path, Arc::clone(&handler)).await.is_err());
+    assert!(
+        ScopedEndpoints::default()
+            .bind(&path, Arc::clone(&handler))
+            .await
+            .is_err()
+    );
     assert!(UnixStream::connect(&path).await.is_ok());
     lease.close().await;
     std::fs::write(&path, "unowned file").unwrap();
