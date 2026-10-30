@@ -112,6 +112,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
     @ObservationIgnored private var activitySnapshotVersion: (epoch: String, revision: UInt64)?
     @ObservationIgnored private var activityReadFailures = 0
     #if os(iOS)
+    @ObservationIgnored private var liveActivitySyncRequested = false
     @ObservationIgnored private let liveActivityService: ActiveTasksLiveActivityService
     #endif
     private var isInBackground: Bool { lifecycle.isBackgrounded }
@@ -1022,29 +1023,29 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
     private func scheduleLiveActivitySync() {
         guard acceptsWork else { return }
         guard gatewayPolicy.registersDevice else { return }
-        let now = Date.now
-        let activeTaskCount = turns.liveActivityTaskCount
-
-        // Keep the Live Activity alive once we've backgrounded at least once during an active task.
-        let requestsActivity = lifecycle.app != .active || lifecycle.backgroundSticky
-
-        logger.notice(
-            "scheduleLiveActivitySync requested requestsActivity=\(requestsActivity) bg=\(self.isInBackground) sticky=\(self.lifecycle.backgroundSticky) activeTaskCount=\(activeTaskCount) epochSeconds=\(now.timeIntervalSince1970) summary=\(self.liveActivityDebugSummary())"
-        )
+        liveActivitySyncRequested = true
+        guard !ownedTasks.isRunning(.liveActivitySync) else { return }
         let registration = hostServices.registration
         ownedTasks.start(.liveActivitySync) { [self] in
-            await liveActivityService.sync(
-                requestsActivity: requestsActivity,
-                now: now,
-                onPushTokenUpdate: { @Sendable token in
-                    let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard trimmed.isEmpty == false else { return }
-                    await registration.update(liveActivityToken: trimmed)
-                },
-                onEnded: {
-                    await registration.update(liveActivityToken: nil)
-                }
-            )
+            while liveActivitySyncRequested {
+                await Task.yield()
+                guard acceptsWork, !Task.isCancelled else { return }
+                liveActivitySyncRequested = false
+                // Keep the Live Activity alive once we've backgrounded at least once during an active task.
+                let requestsActivity = lifecycle.app != .active || lifecycle.backgroundSticky
+                await liveActivityService.sync(
+                    requestsActivity: requestsActivity,
+                    now: .now,
+                    onPushTokenUpdate: { @Sendable token in
+                        let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard trimmed.isEmpty == false else { return }
+                        await registration.update(liveActivityToken: trimmed)
+                    },
+                    onEnded: {
+                        await registration.update(liveActivityToken: nil)
+                    }
+                )
+            }
         }
     }
     #endif
@@ -1531,9 +1532,11 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
             applyActivity(snapshot, observedAt: .now)
         case .liveActivity(let snapshot):
             #if os(iOS)
-            await liveActivityService.receive(snapshot)
+            let hasActivity = await liveActivityService.receive(snapshot)
             guard !isRetired else { return }
-            scheduleLiveActivitySync()
+            if hasActivity || lifecycle.app != .active || lifecycle.backgroundSticky {
+                scheduleLiveActivitySync()
+            }
             #endif
         case .warning(let warning):
             gatewayWarning = warning

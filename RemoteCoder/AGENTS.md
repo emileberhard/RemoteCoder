@@ -319,7 +319,9 @@ entrypoint linked above.
     loop with the menu bar's appearance, costing up to 364 ms of main-thread
     time per second while the transcript scrolled.
   - **Live Activities.** `ActiveTasksLiveActivityScope` keeps one aggregate Live
-    Activity per host, so an idle host cannot end another's.
+    Activity per host, so an idle host cannot end another's. The service retains
+    its restored/requested activity; foreground idle snapshots do not schedule
+    sync, and one pending sync consumes the latest lifecycle and snapshot state.
   - **Audio.** Audio has one route. `ChatTargetModel.ownsAudioRoute` gates
     spoken replies to the host on screen, and hiding or retiring a host stops
     the reply it is speaking. Hiding a host completes its in-flight
@@ -343,6 +345,9 @@ entrypoint linked above.
   `turn/*` and `command/exec`.
   - Each host's `GatewayRoutes` orders the gateway's published `lanEndpoint`
     first on Wi-Fi or Ethernet, then the configured address, then the relay.
+    `GatewayNetworkMonitor` shares one path monitor across route owners and stops
+    it after the last retires. Only status, used interface types and LAN
+    availability change routing identity; other path churn preserves penalties.
     `GatewayClient` races them, replaces a stalled route with a standby
     connection, and hands idle connections to a preferred route on connect,
     foreground, the idle edge, every network path change and every 30 s off

@@ -1,4 +1,5 @@
 import Foundation
+import Network
 import Synchronization
 import Testing
 @testable import RemoteCoderCore
@@ -16,6 +17,14 @@ struct GatewayRoutePolicyTests {
         rotated = try GatewayLANEndpoint(host: "mini.local", port: 8789, spkiSHA256: Data(repeating: 2, count: 32))
         relay = try GatewayRelayEndpoint(proxyHost: "192.0.2.10", proxyPort: 443, proxySPKISHA256: Data(repeating: 3, count: 32),
                                          targetHost: "mini.relay.example.com", targetPort: 20001, username: "relay", password: "secret")
+    }
+
+    @Test func routingPathIdentityUsesAvailabilityAndInterfaceTypes() {
+        let cellular = GatewayRoutingPath(status: .satisfied, interfaceTypes: [.cellular], localNetworkAvailable: false)
+        #expect(cellular == GatewayRoutingPath(status: .satisfied, interfaceTypes: [.cellular, .cellular], localNetworkAvailable: false))
+        #expect(cellular != GatewayRoutingPath(status: .unsatisfied, interfaceTypes: [.cellular], localNetworkAvailable: false))
+        #expect(cellular != GatewayRoutingPath(status: .satisfied, interfaceTypes: [.wifi], localNetworkAvailable: false))
+        #expect(cellular != GatewayRoutingPath(status: .satisfied, interfaceTypes: [.cellular], localNetworkAvailable: true))
     }
 
     @Test func offersLANOnlyWithALearnedEndpointOnALocalNetwork() {

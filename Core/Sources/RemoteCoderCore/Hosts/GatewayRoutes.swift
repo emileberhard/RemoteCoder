@@ -92,6 +92,79 @@ struct GatewayNetworkPath: Equatable, Sendable {
     let localNetworkAvailable: Bool
 }
 
+struct GatewayRoutingPath: Equatable, Sendable {
+    let status: NWPath.Status
+    let interfaceTypes: [NWInterface.InterfaceType]
+    let localNetworkAvailable: Bool
+
+    init(status: NWPath.Status, interfaceTypes: [NWInterface.InterfaceType], localNetworkAvailable: Bool) {
+        self.status = status
+        self.interfaceTypes = [.wifi, .cellular, .wiredEthernet, .loopback, .other].filter { interfaceTypes.contains($0) }
+        self.localNetworkAvailable = localNetworkAvailable
+    }
+
+    init(_ path: NWPath) {
+        self.init(status: path.status,
+                  interfaceTypes: [.wifi, .cellular, .wiredEthernet, .loopback, .other].filter { path.usesInterfaceType($0) },
+                  localNetworkAvailable: path.availableInterfaces.contains { $0.type == .wifi || $0.type == .wiredEthernet })
+    }
+}
+
+private actor GatewayNetworkMonitor {
+    static let shared = GatewayNetworkMonitor()
+    private var monitor: NWPathMonitor?
+    private var observation: Task<Void, Never>?
+    private var generation: UInt64 = 0
+    private var previous: GatewayNetworkPath?
+    private var subscribers: [UUID: AsyncStream<GatewayNetworkPath>.Continuation] = [:]
+
+    func observe(_ updates: AsyncStream<GatewayNetworkPath>.Continuation) {
+        let id = UUID()
+        subscribers[id] = updates
+        updates.onTermination = { _ in Task { await self.remove(id) } }
+        if let previous { updates.yield(previous) }
+        guard monitor == nil else { return }
+        generation &+= 1
+        let generation = generation
+        let monitor = NWPathMonitor()
+        let (paths, continuation) = AsyncStream.makeStream(of: GatewayNetworkPath.self, bufferingPolicy: .bufferingNewest(1))
+        let previousKey = Mutex<GatewayRoutingPath?>(nil)
+        monitor.pathUpdateHandler = { path in
+            let key = GatewayRoutingPath(path)
+            let changed = previousKey.withLock { previous in
+                guard previous != key else { return false }
+                previous = key
+                return true
+            }
+            if changed { continuation.yield(GatewayNetworkPath(identity: UUID(), localNetworkAvailable: key.localNetworkAvailable)) }
+        }
+        observation = Task {
+            for await path in paths {
+                guard !Task.isCancelled else { return }
+                receive(path, generation: generation)
+            }
+        }
+        self.monitor = monitor
+        monitor.start(queue: DispatchQueue(label: "RemoteCoder.GatewayRoutes.localNetwork"))
+    }
+
+    private func receive(_ path: GatewayNetworkPath, generation: UInt64) {
+        guard self.generation == generation, monitor != nil else { return }
+        previous = path
+        for updates in subscribers.values { updates.yield(path) }
+    }
+
+    private func remove(_ id: UUID) {
+        subscribers.removeValue(forKey: id)
+        guard subscribers.isEmpty else { return }
+        monitor?.cancel()
+        monitor = nil
+        observation?.cancel()
+        observation = nil
+        previous = nil
+    }
+}
+
 struct GatewayRoutePolicy: Sendable {
     static let lanRetryDelay = Duration.seconds(300)
     static let firstFallbackRetryDelay = Duration.seconds(60)
@@ -310,20 +383,7 @@ actor GatewayRoutes {
     }
 
     static func observeLocalNetwork(_ updates: AsyncStream<GatewayNetworkPath>.Continuation) {
-        let monitor = NWPathMonitor()
-        let previousPath = Mutex<(path: NWPath, identity: UUID)?>(nil)
-        monitor.pathUpdateHandler = { path in
-            let identity = previousPath.withLock { previous in
-                if let previous, previous.path == path { return previous.identity }
-                let identity = UUID()
-                previous = (path, identity)
-                return identity
-            }
-            updates.yield(GatewayNetworkPath(identity: identity,
-                localNetworkAvailable: path.availableInterfaces.contains { $0.type == .wifi || $0.type == .wiredEthernet }))
-        }
-        updates.onTermination = { _ in monitor.cancel() }
-        monitor.start(queue: DispatchQueue(label: "RemoteCoder.GatewayRoutes.localNetwork"))
+        Task { await GatewayNetworkMonitor.shared.observe(updates) }
     }
 
     func connectionRoutes() -> [GatewayRoute] {

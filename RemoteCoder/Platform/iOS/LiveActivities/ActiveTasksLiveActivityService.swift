@@ -18,6 +18,10 @@ actor ActiveTasksLiveActivityService {
     private var lastPushTokenHex: String?
     private var snapshot: ActiveTasksLiveActivitySnapshot?
     private var snapshotGeneration: UInt64 = 0
+    private var activity: Activity<RemoteCoderActiveTasksAttributes>?
+    private var isRequesting = false
+    private var hasRestoredActivity = false
+    private var legacyActivities: [Activity<RemoteCoderActiveTasksAttributes>] = []
 
     init(hostID: UUID, hostName: String, legacyHostIDs: Set<UUID>) {
         self.hostID = hostID
@@ -31,13 +35,19 @@ actor ActiveTasksLiveActivityService {
         onPushTokenUpdate: @escaping @Sendable (String) async -> Void,
         onEnded: @escaping @Sendable () async -> Void
     ) async {
+        guard !Task.isCancelled, !isRequesting else { return }
+        restoreActivityIfNeeded()
+        if let activity, ![.active, .stale].contains(activity.activityState) {
+            self.activity = nil
+        }
+        guard activity != nil || !legacyActivities.isEmpty || (requestsActivity && snapshot?.content.isEmpty == false) else { return }
         guard ActivityAuthorizationInfo().areActivitiesEnabled else {
             logger.notice("sync ending all activities because activities are disabled")
             await endActivities(onEnded: onEnded)
             return
         }
 
-        if let activity = currentActivity() {
+        if let activity {
             ensurePushTokenObserver(activity: activity, onPushTokenUpdate: onPushTokenUpdate)
             return
         }
@@ -45,6 +55,8 @@ actor ActiveTasksLiveActivityService {
 
         // A nil-host activity belongs to an earlier build; retire it before
         // requesting this host's own, so the lock screen never shows both.
+        isRequesting = true
+        defer { isRequesting = false }
         await endLegacyActivities()
         guard !Task.isCancelled, let snapshot, !snapshot.content.isEmpty else { return }
 
@@ -65,6 +77,7 @@ actor ActiveTasksLiveActivityService {
                 content: ActivityContent(state: state, staleDate: now.addingTimeInterval(300), relevanceScore: snapshot.relevanceScore),
                 pushType: .token
             )
+            self.activity = activity
             ensurePushTokenObserver(activity: activity, onPushTokenUpdate: onPushTokenUpdate)
             logger.notice("Started active-tasks live activity id=\(activity.id) count=\(state.activeTaskCount)")
         } catch {
@@ -84,16 +97,28 @@ actor ActiveTasksLiveActivityService {
         receive(incoming)
     }
 
-    func receive(_ incoming: ActiveTasksLiveActivitySnapshot?) {
-        if let snapshot, let incoming, snapshot.epoch == incoming.epoch, snapshot.revision >= incoming.revision { return }
+    @discardableResult
+    func receive(_ incoming: ActiveTasksLiveActivitySnapshot?) -> Bool {
+        restoreActivityIfNeeded()
+        if let snapshot, let incoming, snapshot.epoch == incoming.epoch, snapshot.revision >= incoming.revision {
+            return activity != nil || !legacyActivities.isEmpty || isRequesting
+        }
         snapshotGeneration += 1
         snapshot = incoming
+        return activity != nil || !legacyActivities.isEmpty || isRequesting
     }
 
-    private func currentActivity() -> Activity<RemoteCoderActiveTasksAttributes>? {
-        Activity<RemoteCoderActiveTasksAttributes>.activities.first {
+    private func restoreActivityIfNeeded() {
+        guard !hasRestoredActivity else { return }
+        hasRestoredActivity = true
+        let activities = Activity<RemoteCoderActiveTasksAttributes>.activities
+        activity = activities.first {
             ActiveTasksLiveActivityScope.owns(activityHostID: $0.attributes.hostID, serviceHostID: hostID)
                 && [.active, .stale].contains($0.activityState)
+        }
+        legacyActivities = activities.filter {
+            ActiveTasksLiveActivityScope.isLegacy(activityHostID: $0.attributes.hostID)
+                || $0.attributes.hostID.map { legacyHostIDs.contains($0) } == true
         }
     }
 
@@ -102,6 +127,7 @@ actor ActiveTasksLiveActivityService {
             ActiveTasksLiveActivityScope.isLegacy(activityHostID: $0.attributes.hostID)
                 || $0.attributes.hostID.map { legacyHostIDs.contains($0) } == true
         }
+        legacyActivities = []
         guard legacy.isEmpty == false else { return }
         for activity in legacy {
             await activity.end(nil, dismissalPolicy: .immediate)
@@ -113,6 +139,8 @@ actor ActiveTasksLiveActivityService {
         let activities = Activity<RemoteCoderActiveTasksAttributes>.activities.filter {
             ActiveTasksLiveActivityScope.mayEnd(activityHostID: $0.attributes.hostID, serviceHostID: hostID)
         }
+        activity = nil
+        legacyActivities = []
         observedPushTokenActivityID = nil
         pushTokenObserverTask?.cancel()
         pushTokenObserverTask = nil

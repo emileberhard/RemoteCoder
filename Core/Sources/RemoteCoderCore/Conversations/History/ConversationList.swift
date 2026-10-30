@@ -5,6 +5,13 @@ import OSLog
 @Observable
 @MainActor
 final class ConversationList {
+    private func reportAgentCoverage(_ warnings: [String]) {
+        let warnings = Set(warnings)
+        guard warnings != agentCoverageWarnings else { return }
+        agentCoverageWarnings = warnings
+        for warning in warnings.sorted() { logger.notice("Agent coverage: \(warning)") }
+    }
+
     private enum RefreshIntent {
         case mergeRecent, pollRecent, eventRecent, eventFullRecent, replaceCoverage
 
@@ -38,6 +45,7 @@ final class ConversationList {
 
     @ObservationIgnored var lastSuccessfulRefreshAt: Date?
     @ObservationIgnored private var lastFullRefreshAt: Date?
+    @ObservationIgnored private var agentCoverageWarnings: Set<String> = []
     @ObservationIgnored private var eventRefreshTask: Task<Void, Never>?
     @ObservationIgnored private var eventRefreshGeneration: UInt64 = 0
     @ObservationIgnored private var pendingEventRefresh: RefreshIntent?
@@ -512,7 +520,7 @@ final class ConversationList {
             if result.isUnchanged, result.failures.isEmpty, !result.isDeferred,
                !classificationsChanged, !threads.contains(where: { $0.pendingHistorySince != nil }) {
                 lastSuccessfulRefreshAt = .now
-                for warning in Set(result.agentWarnings + classifications.warnings) { logger.notice("Agent coverage: \(warning)") }
+                reportAgentCoverage(result.agentWarnings + classifications.warnings)
             } else {
                 let previousHeaders = Dictionary(uniqueKeysWithValues: threads.map { ($0.id, $0) })
                 let fetched = result.threads.map { thread in
@@ -572,9 +580,7 @@ final class ConversationList {
                 refreshDeferred = result.isDeferred
                 let failure = result.failures.isEmpty ? nil : result.failures.joined(separator: "\n")
                 if errorMessage != failure { errorMessage = failure }
-                for warning in Set(result.agentWarnings + retained.warnings) {
-                    logger.notice("Agent coverage: \(warning)")
-                }
+                reportAgentCoverage(result.agentWarnings + retained.warnings)
                 logger.info("refresh success (reason=\(reason), requested=\(limit), fetched=\(result.threads.count), merged=\(merged.count))")
                 persisted = nextHeaderSnapshot()
             }
@@ -737,7 +743,7 @@ final class ConversationList {
             if query.isEmpty { continuation = advanced; olderProvider = next }
             else { searchContinuation = advanced; searchProvider = next }
             errorMessage = result.unavailable.isEmpty ? nil : "Some completion times couldn't be loaded; keeping their last known values."
-            for warning in result.warnings { logger.notice("Agent coverage: \(warning)") }
+            reportAgentCoverage(result.warnings)
             await threadStore.save(snapshot: nextHeaderSnapshot())
             guard !headerReadsRetired, generation == listReadGeneration, !Task.isCancelled else { return }
             await resolveProjects()
