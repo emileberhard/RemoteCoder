@@ -127,6 +127,7 @@ struct HistoryRefreshTests {
             await list.refresh()
             #expect(!published.withLock { $0 })
             #expect(list.threads.first?.updatedAt == 2)
+            await list.flushHeaders()
             #expect(try Data(contentsOf: file) == before)
             #expect(try FileManager.default.attributesOfItem(atPath: file.path)[.systemFileNumber] as? NSNumber == fileNumber)
             var renamed = Self.child(updatedAt: 101)
@@ -136,6 +137,7 @@ struct HistoryRefreshTests {
             #expect(published.withLock { $0 })
             #expect(list.threads.first?.name == "New child title")
             #expect(list.threads.first?.updatedAt == 101)
+            await list.flushHeaders()
             #expect(try Data(contentsOf: file) != before)
             #expect(try FileManager.default.attributesOfItem(atPath: file.path)[.systemFileNumber] as? NSNumber != fileNumber)
             let envelope = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
@@ -217,7 +219,8 @@ struct HistoryRefreshTests {
             let completed = list.lastSuccessfulRefreshAt
             list.refresh(after: .threadChanged(threadID: "root", sequence: nil))
             try #require(await waitUntil {
-                list.lastSuccessfulRefreshAt != completed && (try? Data(contentsOf: file)) != before
+                await list.flushHeaders()
+                return list.lastSuccessfulRefreshAt != completed && (try? Data(contentsOf: file)) != before
             })
             #expect(list.header(id: "old-unknown")?.agentParentThreadID == "parent")
         }

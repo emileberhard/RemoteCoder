@@ -353,6 +353,10 @@ final class ConversationList {
         acceptsMarks = true
     }
 
+    func flushHeaders() async {
+        await threadStore.flush()
+    }
+
     @discardableResult
     func flushMarks() async -> Bool {
         await loadPersistedMarksIfNeeded()

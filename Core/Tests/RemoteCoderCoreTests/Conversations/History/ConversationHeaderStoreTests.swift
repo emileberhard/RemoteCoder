@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import Testing
 @testable import RemoteCoderCore
 
@@ -250,14 +251,94 @@ struct ConversationHeaderStoreTests {
         changed.lastTurnCompletedAt = 150
         try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: directory.path)
         await store.save(snapshot: .init(threads: [changed], lastSuccessfulRefreshAt: .now, revision: 5))
+        await store.flush()
         #expect(try FileIdentity(url) == before)
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
         await store.save(snapshot: .init(threads: [changed], lastSuccessfulRefreshAt: .now, revision: 6))
         #expect(await ConversationHeaderStore(hostID: nil, directory: directory).load().threads.first?.lastTurnCompletedAt == 150)
     }
 
+    @Test func changedHeadersCoalesceUntilTheIntervalAndRetireFlushesTheLatest() async throws {
+        let directory = URL.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let clock = HeaderWriteClock()
+        let store = ConversationHeaderStore(hostID: nil, directory: directory, clock: clock)
+        await store.save(snapshot: .init(threads: [try thread("t", updatedAt: 1)], lastSuccessfulRefreshAt: nil, revision: 1))
+        await clock.waitUntilSleeping()
+        for revision in 2...10 {
+            await store.save(snapshot: .init(threads: [try thread("t", updatedAt: Int64(revision))],
+                lastSuccessfulRefreshAt: nil, revision: UInt64(revision)))
+        }
+        #expect(await store.load().revision == 10)
+        #expect(await ConversationHeaderStore(hostID: nil, directory: directory).load().revision == 1)
+        clock.advance(by: .seconds(30))
+        await clock.waitUntilSleeping()
+        #expect(await ConversationHeaderStore(hostID: nil, directory: directory).load().revision == 10)
+        await store.save(snapshot: .init(threads: [try thread("t", updatedAt: 11)], lastSuccessfulRefreshAt: nil, revision: 11))
+        await store.retire()
+        #expect(await ConversationHeaderStore(hostID: nil, directory: directory).load().revision == 11)
+    }
+
     private func thread(_ id: String, updatedAt: Int64, preview: String = "Test") throws -> ConversationHeader {
         try ThreadFixture.basic(id, updatedAt: updatedAt, preview: preview)
     }
 
+}
+
+private final class HeaderWriteClock: Clock {
+    private struct State {
+        var now = ContinuousClock.now
+        var waiters: [UUID: CheckedContinuation<Void, any Error>] = [:]
+        var observers: [CheckedContinuation<Void, Never>] = []
+    }
+
+    var now: ContinuousClock.Instant { state.withLock { $0.now } }
+    let minimumResolution: Duration = .nanoseconds(1)
+    private let state = Mutex(State())
+
+    var waitingCount: Int { state.withLock { $0.waiters.count } }
+
+    func sleep(until deadline: ContinuousClock.Instant, tolerance: Duration?) async throws {
+        try Task.checkCancellation()
+        guard deadline > now else { return }
+        let id = UUID()
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+                let observers = state.withLock { state -> [CheckedContinuation<Void, Never>] in
+                    guard !Task.isCancelled else {
+                        continuation.resume(throwing: CancellationError())
+                        return []
+                    }
+                    state.waiters[id] = continuation
+                    let observers = state.observers
+                    state.observers.removeAll()
+                    return observers
+                }
+                for observer in observers { observer.resume() }
+            }
+        } onCancel: {
+            self.state.withLock { $0.waiters.removeValue(forKey: id) }?.resume(throwing: CancellationError())
+        }
+    }
+
+    func advance(by duration: Duration) {
+        let waiters = state.withLock { state in
+            state.now = state.now.advanced(by: duration)
+            let waiters = Array(state.waiters.values)
+            state.waiters.removeAll()
+            return waiters
+        }
+        for waiter in waiters { waiter.resume() }
+    }
+
+    func waitUntilSleeping() async {
+        await withCheckedContinuation { continuation in
+            let ready = state.withLock { state in
+                if !state.waiters.isEmpty { return true }
+                state.observers.append(continuation)
+                return false
+            }
+            if ready { continuation.resume() }
+        }
+    }
 }

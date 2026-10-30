@@ -209,6 +209,12 @@ struct HistoryWindow: Codable, Sendable {
 
     func turn(_ id: String) -> Turn? { turnIndex[id].map { turns[$0] } }
 
+    var hasRunningTurn: Bool {
+        guard let newest = turns.last else { return false }
+        if let status = newest.metadata?.status { return status == .inProgress }
+        return newest.entries.contains { $0.isComplete == false }
+    }
+
     @discardableResult
     mutating func apply(_ update: Update) -> Bool {
         if case .tail = update.placement, newer != nil { return false }

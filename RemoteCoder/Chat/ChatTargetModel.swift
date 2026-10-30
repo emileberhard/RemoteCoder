@@ -906,6 +906,8 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
             failures += checkpoints.map { "Conversation checkpoint \($0.conversationID): \($0.reason)" }
             pendingTerminationOperation = "Conversation marks"
             if !(await conversationList.flushMarks()) { failures.append("Conversation marks: Save failed") }
+            pendingTerminationOperation = "Conversation headers"
+            await conversationList.flushHeaders()
             pendingTerminationOperation = "Voice history"
             if !(await voiceHistoryStore.flush()) { failures.append("Voice history: Save failed") }
             var reported: Set<String> = []
@@ -936,6 +938,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
         _ = await drafts.flush()
         await conversations.flush()
         await conversationList.flushMarks()
+        await conversationList.flushHeaders()
         await voiceHistoryStore.flush()
     }
 

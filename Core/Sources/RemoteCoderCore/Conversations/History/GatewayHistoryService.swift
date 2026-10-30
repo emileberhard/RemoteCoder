@@ -736,6 +736,7 @@ actor GatewayHistoryService {
         guard let encoded = try? await Self.encodeWindow(snapshot.window),
               epoch == readEpoch, generations[snapshot.header.id] == generation else { return }
         try await cache.store(encoded.data, for: key, fetchedAt: snapshot.fetchedAt, startedAt: startedAt, readStartedAt: readStartedAt,
+                              persistence: snapshot.window.hasRunningTurn ? .memoryOverDisk : .disk,
                               comparisonFingerprint: encoded.fingerprint)
     }
 

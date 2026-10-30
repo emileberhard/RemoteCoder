@@ -8,7 +8,12 @@ lose unknown fields, so JSONDecoder remains the validator and the byte scan
 only locates the retained span. Duplicate
 result keys are rejected.
 
-The assembled tail window is the one durable tail representation. Its raw
+The assembled tail window is the one durable tail representation. While its
+newest turn is running, refreshed tails replace memory only and preserve the
+last settled tail on disk. Turn status is authoritative when available; incomplete
+items are the fallback when status is unavailable. The first settled read commits
+the final tail. Conversation checkpoints remain the crash-recovery owner for
+active sessions. Its raw
 cursorless item/turn pages use only the existing bounded memory cache; older
 cursor-addressed pages remain independently durable. Refreshing a cursorless
 page removes its obsolete disk copy, including files from older app versions.
@@ -38,15 +43,13 @@ every decoded item and turn again. Pages changed by overlap still remeasure thei
 retained content before enforcing the window budget.
 
 
-Thread headers still save immediately on content changes and skip identical
-saves. Their encoder no longer sorts JSON keys: equality is determined from the
-snapshot before encoding. A new debounce was rejected because the write counts
-alone do not establish redundant changed snapshots within a burst; it would add
-lifecycle and flush ownership without evidence that it reduces those writes.
-The separate earlier Mac mini Release header benchmark encoded 1,024 synthetic headers 44 times:
-key sorting used 125.401 ms of process CPU versus 114.610 ms without sorting,
-with the same 7,790,948 total JSON bytes. This reduces encoding work, not write
-count or encoded size.
+Thread headers are a rebuildable launch cache with the gateway as source of
+truth. A changed header list saves immediately, then at most once per 30 seconds;
+reads always see the newest in-memory snapshot. Backgrounding, termination and
+retirement flush pending changes. A failed write remains pending for the next
+save or flush. A foreground kill can lose up to 30 seconds of header changes,
+which the next gateway refresh restores. Identical header content and freshness-only
+updates do not encode or write. The encoder preserves its existing unsorted keys.
 
 A MacBook Pro M1 Max Release Core workload (50 synthetic items, about 480 KB, one initial
 read and 20 unchanged forced tail refreshes) reduced logical persistence from
@@ -67,7 +70,7 @@ events and local submission/receipt changes
 commit immediately. Remote changes to a session nobody observes wait until a
 snapshot observer attaches; completion, eviction and backgrounding still flush.
 Prefetched history pages commit their cached tail once a 2 s burst settles,
-while any other read commits at once. Submissions remain durable before dispatch. Generation checks,
+while other settled reads commit at once. Running tails remain memory-only. Submissions remain durable before dispatch. Generation checks,
 local-only records, unreadable-file preservation and cold restore remain intact.
 
 Checkpoint generations come from one monotonic store counter. The session registry

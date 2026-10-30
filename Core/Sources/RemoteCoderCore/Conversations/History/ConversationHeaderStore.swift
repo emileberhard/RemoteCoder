@@ -4,6 +4,7 @@ import OSLog
 actor ConversationHeaderStore {
     private static let formatVersion = 4
     private static let pendingHistoryGrace: TimeInterval = 5 * 60
+    private static let writeInterval = Duration.seconds(30)
 
     struct Snapshot: Equatable, Sendable {
         let threads: [ConversationHeader]
@@ -30,13 +31,18 @@ actor ConversationHeaderStore {
     private var cache: Snapshot?
     private var persistedSnapshot: Snapshot?
     private var isRetired = false
+    private let clock: any Clock<Duration>
+    private var cooldown: (id: UUID, task: Task<Void, Never>)?
 
-    init(hostID: UUID?, directory: URL? = nil, storage: HostStorage = .live) {
+    init(hostID: UUID?, directory: URL? = nil, storage: HostStorage = .live, clock: any Clock<Duration> = ContinuousClock()) {
+        self.clock = clock
         hostKey = hostID?.uuidString ?? "default"
         encoder.dateEncodingStrategy = .iso8601
         decoder.dateDecodingStrategy = .iso8601
         baseDirectory = directory ?? Self.defaultBaseDirectory(storage: storage)
     }
+
+    isolated deinit { cooldown?.task.cancel() }
 
     func load() -> Snapshot {
         if let cached = cache {
@@ -80,7 +86,46 @@ actor ConversationHeaderStore {
             return
         }
         cache = snapshot
+        guard cooldown == nil, writePending() else {
+            PersistenceMetrics.shared.skipped(.threadHeaders)
+            return
+        }
+        startCooldown()
+    }
 
+    func flush() {
+        cooldown?.task.cancel()
+        cooldown = nil
+        writePending()
+    }
+
+    func retire() {
+        flush()
+        isRetired = true
+    }
+
+    private func startCooldown() {
+        let id = UUID()
+        let clock = clock
+        cooldown = (id, Task { [weak self] in
+            guard (try? await clock.sleep(for: Self.writeInterval)) != nil else { return }
+            await self?.finishCooldown(id)
+        })
+    }
+
+    private func finishCooldown(_ id: UUID) {
+        guard cooldown?.id == id else { return }
+        cooldown = nil
+        guard !isRetired else { return }
+        if writePending() { startCooldown() }
+    }
+
+    @discardableResult
+    private func writePending() -> Bool {
+        guard let snapshot = cache else { return false }
+        guard persistedSnapshot?.threads != snapshot.threads || persistedSnapshot?.hasDiscardedHeaders != snapshot.hasDiscardedHeaders else {
+            return false
+        }
         let envelope = Envelope(
             version: Self.formatVersion,
             updatedAt: Date(),
@@ -89,25 +134,20 @@ actor ConversationHeaderStore {
             hasDiscardedHeaders: snapshot.hasDiscardedHeaders,
             revision: snapshot.revision
         )
-
         let started = ContinuousClock.now
         do {
-            if persistedSnapshot?.threads == snapshot.threads && persistedSnapshot?.hasDiscardedHeaders == snapshot.hasDiscardedHeaders {
-                PersistenceMetrics.shared.skipped(.threadHeaders)
-                return
-            }
             let data = try encoder.encode(envelope)
             try FileManager.default.createDirectory(at: baseDirectory, withIntermediateDirectories: true)
             try data.write(to: fileURL, options: [.atomic])
             persistedSnapshot = snapshot
             PersistenceMetrics.shared.wrote(.threadHeaders, bytes: data.count, elapsed: started.duration(to: .now))
+            return true
         } catch {
             PersistenceMetrics.shared.failed(.threadHeaders)
             logger.error("Failed to persist thread history cache for \(self.hostKey): \(error.localizedDescription)")
+            return false
         }
     }
-
-    func retire() { isRetired = true }
 
     static func scoped(to target: ExecutionTarget, storage: HostStorage) -> ConversationHeaderStore {
         ConversationHeaderStore(hostID: target.hostID, storage: storage)

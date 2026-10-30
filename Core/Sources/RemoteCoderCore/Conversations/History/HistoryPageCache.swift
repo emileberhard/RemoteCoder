@@ -16,7 +16,7 @@ nonisolated struct HistoryPageKey: Hashable, Codable, Sendable {
 }
 
 actor HistoryPageCache {
-    enum Persistence { case memory, disk }
+    enum Persistence { case memory, disk, memoryOverDisk }
 
     private enum Scope: Hashable {
         case host(String)
@@ -131,13 +131,19 @@ actor HistoryPageCache {
         // Huge single items may be displayed, but must not evict the whole cache.
         guard data.count <= memoryBudgetBytes else {
             removeMemory(key)
-            discardDisk(key)
+            if persistence != .memoryOverDisk { discardDisk(key) }
             return
         }
         insertMemory(data, for: key, fetchedAt: fetchedAt, readStartedAt: startedAt)
-        guard persistence == .disk else {
+        switch persistence {
+        case .memory:
             discardDisk(key)
             return
+        case .memoryOverDisk:
+            PersistenceMetrics.shared.skipped(.historyPages)
+            return
+        case .disk:
+            break
         }
         let fingerprint = comparisonFingerprint.map { Data($0) } ?? Data(SHA256.hash(data: data))
         if disk[key]?.fingerprint == fingerprint, !invalidatedKeys.contains(key) {

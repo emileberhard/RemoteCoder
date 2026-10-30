@@ -60,6 +60,7 @@ struct ConversationListDeferralTests {
             marksStore: ConversationMarksStore(directory: directory), defaults: defaults)
         try await body(list, gateway)
         if let placed = list.header(id: "old-child") {
+            await list.flushHeaders()
             let reopened = ConversationHeaderStore.scoped(to: target, storage: temporary.storage)
             #expect(await reopened.load().threads.first { $0.id == placed.id }?.agentClassification == placed.agentClassification)
         }
