@@ -348,7 +348,8 @@ entrypoint linked above.
     `GatewayNetworkMonitor` shares one path monitor across route owners and stops
     it after the last retires. Status, used interface types, LAN availability
     and gateways while using Wi-Fi/Ethernet change routing identity; cellular
-    gateway churn preserves penalties.
+    gateway churn preserves penalties. Stream termination is installed before
+    asynchronous registration; terminated subscriptions are never retained.
     `GatewayClient` races them, replaces a stalled route with a standby
     connection, and hands idle connections to a preferred route on connect,
     foreground, the idle edge, every network path change and every 30 s off

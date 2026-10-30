@@ -113,19 +113,38 @@ struct GatewayRoutingPath: Equatable, Sendable {
     }
 }
 
-private actor GatewayNetworkMonitor {
+final class GatewayNetworkSubscription: Sendable {
+    let id = UUID()
+    let updates: AsyncStream<GatewayNetworkPath>.Continuation
+    private let terminated = Mutex(false)
+
+    var isTerminated: Bool { terminated.withLock { $0 } }
+
+    init(_ updates: AsyncStream<GatewayNetworkPath>.Continuation, onTermination: @escaping @Sendable (UUID) -> Void) {
+        self.updates = updates
+        let id = id
+        updates.onTermination = { [weak self] _ in
+            self?.terminated.withLock { $0 = true }
+            onTermination(id)
+        }
+    }
+}
+
+actor GatewayNetworkMonitor {
     static let shared = GatewayNetworkMonitor()
     private var monitor: NWPathMonitor?
     private var observation: Task<Void, Never>?
     private var generation: UInt64 = 0
     private var previous: GatewayNetworkPath?
-    private var subscribers: [UUID: AsyncStream<GatewayNetworkPath>.Continuation] = [:]
+    private(set) var subscribers: [UUID: GatewayNetworkSubscription] = [:]
 
-    func observe(_ updates: AsyncStream<GatewayNetworkPath>.Continuation) {
-        let id = UUID()
-        subscribers[id] = updates
-        updates.onTermination = { _ in Task { await self.remove(id) } }
-        if let previous { updates.yield(previous) }
+    func observe(_ subscription: GatewayNetworkSubscription) {
+        guard !subscription.isTerminated else { return }
+        subscribers[subscription.id] = subscription
+        if let previous, case .terminated = subscription.updates.yield(previous) {
+            remove(subscription.id)
+            return
+        }
         guard monitor == nil else { return }
         generation &+= 1
         let generation = generation
@@ -154,10 +173,14 @@ private actor GatewayNetworkMonitor {
     private func receive(_ path: GatewayNetworkPath, generation: UInt64) {
         guard self.generation == generation, monitor != nil else { return }
         previous = path
-        for updates in subscribers.values { updates.yield(path) }
+        let terminated = subscribers.values.compactMap { subscription in
+            if case .terminated = subscription.updates.yield(path) { return subscription.id }
+            return nil as UUID?
+        }
+        for id in terminated { remove(id) }
     }
 
-    private func remove(_ id: UUID) {
+    func remove(_ id: UUID) {
         subscribers.removeValue(forKey: id)
         guard subscribers.isEmpty else { return }
         monitor?.cancel()
@@ -386,7 +409,9 @@ actor GatewayRoutes {
     }
 
     static func observeLocalNetwork(_ updates: AsyncStream<GatewayNetworkPath>.Continuation) {
-        Task { await GatewayNetworkMonitor.shared.observe(updates) }
+        let monitor = GatewayNetworkMonitor.shared
+        let subscription = GatewayNetworkSubscription(updates) { id in Task { await monitor.remove(id) } }
+        Task { await monitor.observe(subscription) }
     }
 
     func connectionRoutes() -> [GatewayRoute] {
