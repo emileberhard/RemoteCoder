@@ -2527,6 +2527,7 @@ async fn bounds_review_capacity_failure_records_and_publishes_the_accepted_assis
 
 #[tokio::test]
 async fn live_checkpoint_snapshot_covers_a_pending_start_and_orders_the_continuation() {
+    use std::io::Write;
     let (tx, mut rx) = mpsc::channel(1);
     tx.send(ClaudeNotification::Event(json!({"held":true})))
         .await
@@ -2547,38 +2548,32 @@ async fn live_checkpoint_snapshot_covers_a_pending_start_and_orders_the_continua
         json!({"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"text","text":"AB"}}}),
         json!({"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"C"}}}),
     ];
-    fs::create_dir_all(&agent.settings.claude_home).unwrap();
-    let path = agent.settings.claude_home.join("stream.jsonl");
-    fs::write(
-        &path,
-        records
-            .iter()
-            .map(|record| format!("{record}\n"))
-            .collect::<String>(),
-    )
+    let (stdout, mut feeder) = std::io::pipe().unwrap();
+    for record in records {
+        writeln!(feeder, "{record}").unwrap();
+    }
+    let stdout = tokio::process::ChildStdout::from_std(std::process::ChildStdout::from(
+        std::os::fd::OwnedFd::from(stdout),
+    ))
     .unwrap();
-    let mut feeder = Command::new("/usr/bin/python3").args(["-c",
-        "import pathlib,sys; sys.stdout.write(pathlib.Path(sys.argv[1]).read_text()); sys.stdout.flush(); sys.stdin.read()"])
-        .arg(&path).stdin(Stdio::piped()).stdout(Stdio::piped()).kill_on_drop(true).spawn().unwrap();
-    let stdout = feeder.stdout.take().unwrap();
     let reader = tokio::spawn(Arc::clone(&agent).read_runtime_stream(
         "claude_a".into(),
         group,
         stdout,
         CancellationToken::new(),
     ));
-    let checkpoint = tokio::time::timeout(Duration::from_secs(3), async {
-        loop {
-            if let Some(snapshot) = agent.live_checkpoint("claude_a").await
-                && snapshot["liveItems"][0]["item"]["text"] == "AB"
-            {
-                break snapshot;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
+    let observer = Arc::clone(&agent);
+    crate::test_support::wait_until("the stream to hold the pending start", move || {
+        observer.runtimes.try_lock().is_ok_and(|runtimes| {
+            runtimes
+                .get("claude_a")
+                .and_then(ClaudeRuntime::running_turn)
+                .and_then(|turn| turn.translator.live_checkpoint())
+                .is_some_and(|snapshot| snapshot["liveItems"][0]["item"]["text"] == "AB")
+        })
     })
-    .await
-    .unwrap();
+    .await;
+    let checkpoint = agent.live_checkpoint("claude_a").await.unwrap();
     assert_eq!(checkpoint["throughSequence"], 2);
     assert_eq!(checkpoint["activeTurn"]["itemsView"], "notLoaded");
     assert_eq!(
@@ -2605,8 +2600,7 @@ async fn live_checkpoint_snapshot_covers_a_pending_start_and_orders_the_continua
     );
     reader.abort();
     let _ = reader.await;
-    feeder.kill().await.unwrap();
-    let _ = feeder.wait().await;
+    drop(feeder);
     let retired = agent.runtimes.lock().await.remove("claude_a").unwrap();
     drop(retired);
     assert!(agent.live_checkpoint("claude_a").await.is_none());
