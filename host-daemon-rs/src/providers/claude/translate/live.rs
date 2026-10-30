@@ -15,7 +15,7 @@ pub(crate) struct LivePrefixBudget {
 impl LivePrefixBudget {
     fn reserve(&self, bytes: usize) -> Result<(), CapacityExceeded> {
         self.bytes
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
                 current
                     .checked_add(bytes)
                     .filter(|next| *next <= MAX_GATEWAY_LIVE_BYTES)

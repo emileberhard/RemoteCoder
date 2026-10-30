@@ -366,7 +366,7 @@ impl SpeechRelay {
             uri.query(),
             transport,
         )
-        .map_err(&refuse)?;
+        .map_err(refuse)?;
         let (name, value) = provider.credential_header(&key);
         let Ok(mut value) = HeaderValue::from_str(&value) else {
             return Err(refuse(Rejection::CredentialsUnavailable));
