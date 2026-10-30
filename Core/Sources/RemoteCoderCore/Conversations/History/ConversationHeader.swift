@@ -164,6 +164,10 @@ struct ConversationHeader: Codable, Identifiable, Equatable, Sendable {
         return agentRelation?.parentThreadId ?? nativeParentThreadID
     }
 
+    func agentParentAddress(localHostID: UUID) -> ConversationAddress? {
+        agentParentThreadID.map { .init(hostID: agentRelation?.parentHostID ?? localHostID, threadID: $0) }
+    }
+
     var acceptsDirectInput: Bool { !isNativeAgent && canAcceptDirectInput != false }
 
     var displayTitle: String {

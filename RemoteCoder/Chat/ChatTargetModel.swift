@@ -368,7 +368,9 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
         let protected = conversationActivity.knownActiveThreadIDs.union(historyBusySessionIDs)
             .union(screens.compactMap(\.activeSessionID))
             .union(screens.compactMap { screen in
-                screen.activeConversation?.id == screen.activeSessionID ? screen.activeConversation?.agentParentThreadID : nil
+                guard let conversation = screen.activeConversation, conversation.id == screen.activeSessionID,
+                      let parent = conversation.agentParentAddress(localHostID: hostID), parent.hostID == hostID else { return nil }
+                return parent.threadID
             })
             .union(questionAskTimesByThreadID.compactMap { $0.value.isEmpty ? nil : $0.key })
         if conversationList.setProtectedThreadIDs(protected), !isRetired, !ownedTasks.isRunning(.historyHeaderRecovery) {

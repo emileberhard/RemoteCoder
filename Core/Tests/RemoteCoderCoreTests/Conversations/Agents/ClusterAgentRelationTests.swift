@@ -30,6 +30,7 @@ struct ClusterAgentRelationTests {
         let moved = try ThreadFixture.decode(fields)
         #expect(moved.agentRelation?.parentHostID == parent)
         #expect(moved.agentParentThreadID == "current")
+        #expect(moved.agentParentAddress(localHostID: UUID()) == .init(hostID: parent, threadID: "current"))
         #expect(moved.isDelegatedAgent)
         var promoted = fields
         promoted["parent"] = NSNull()
