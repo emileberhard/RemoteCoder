@@ -110,7 +110,7 @@ def wait(description, check):
     while (result := check()) is None:
         if time.monotonic() > DEADLINE:
             sys.exit(f"{description} did not finish processing within 40 minutes of the start.")
-        time.sleep(20)
+        time.sleep(10)
     return result
 
 
