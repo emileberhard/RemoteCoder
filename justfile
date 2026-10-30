@@ -329,12 +329,8 @@ ios-simulator-test-local *test_ids: setup
         -clonedSourcePackagesDirPath "$derived_data/SourcePackages" \
         -disableAutomaticPackageResolution -onlyUsePackageVersionsFromResolvedFile -skipPackageUpdates \
         -sdk iphonesimulator CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- \
-        -showBuildSettings -json >"$derived_data/simulator-build-settings.json" &
-    settings=$!
-    trap 'kill "$settings" 2>/dev/null || true' EXIT
+        -showBuildSettings -json >"$derived_data/simulator-build-settings.json"
     ./scripts/run-logged ios-simulator-build python3 scripts/xcode_build.py ios-build "${build_command[@]}" build-for-testing
-    wait "$settings"
-    trap - EXIT
     python3 scripts/verify-simulator-app.py "$derived_data/Build/Products/Debug-iphonesimulator/RemoteCoder.app" --settings "$derived_data/simulator-build-settings.json"
     command=(./scripts/run-logged ios-simulator-tests python3 scripts/hosted-tests.py "${build_command[@]}" test-without-building)
     for test_id in "$@"; do

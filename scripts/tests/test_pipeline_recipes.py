@@ -304,6 +304,8 @@ with Path('arguments.jsonl').open('a') as output:
     output.write(json.dumps(args) + '\\n')
 settings = {'RC_BUNDLE_ID': 'example.fixture', 'RC_APP_GROUP': 'group.example.fixture', 'RC_ICLOUD_CONTAINER': 'iCloud.example.fixture'}
 if '-showBuildSettings' in args:
+    if os.environ.get('SIGNING_FIXTURE_FAILURE') == 'settingsFailed':
+        sys.exit(42)
     targets = json.loads(Path('project.json').read_text())['targets']
     targets.append(targets[0])
     if '-alltargets' not in args:
@@ -416,9 +418,7 @@ else:
                     arguments = commands[-1]
                     if recipe == "ios-simulator-test-local":
                         self.assertEqual(len(commands), 3)
-                        build, settings = sorted(
-                            commands[:2], key=lambda command: "-showBuildSettings" in command
-                        )
+                        settings, build = commands[:2]
                         self.assertIn("build-for-testing", build)
                         self.assertIn("-showBuildSettings", settings)
                         self.assertIn("-alltargets", settings)
@@ -496,6 +496,23 @@ else:
                         "Hosted simulator app validation failed", rejected.stderr
                     )
                     self.assertIn("tests were not launched", rejected.stderr)
+
+            (root / "arguments.jsonl").unlink()
+            rejected = subprocess.run(
+                ["just", "ios-simulator-test-local", *selectors],
+                cwd=root,
+                env=environment | {"SIGNING_FIXTURE_FAILURE": "settingsFailed"},
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertNotEqual(rejected.returncode, 0)
+            commands = [
+                json.loads(line)
+                for line in (root / "arguments.jsonl").read_text().splitlines()
+            ]
+            self.assertEqual(len(commands), 1)
+            self.assertIn("-showBuildSettings", commands[0])
 
     def test_app_has_one_lock_with_only_linked_package_pins(self):
         resolved = json.loads((ROOT / "RemoteCoder.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved").read_text())

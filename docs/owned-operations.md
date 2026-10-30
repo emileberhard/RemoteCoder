@@ -634,6 +634,11 @@ Cold SourcePackages and Cargo targets can be APFS-cloned from an idle matching
 sibling. Resolution, compiler and Cargo configuration checks select compatible
 seeds; Cargo still owns artifact validation and rebuilds. Each clone is private.
 DerivedData, module caches and SwiftPM scratch remain per worktree/toolchain.
+The simulator settings probe finishes before compilation starts: both Xcode
+commands resolve packages and mutate the same private SourcePackages tree.
+Concurrent resolution can remove or make a checkout read-only while the other
+resolver updates it. Existing interrupted trees are reconciled by the next
+serialized Xcode resolution; checkout permissions remain SwiftPM-owned.
 The worker opts into Xcode compilation caching and project prefix mapping using
 physical snapshot paths. Optional shared native CAS storage and bounds are
 operator-owned; release archive compiler and signing settings remain unchanged.
