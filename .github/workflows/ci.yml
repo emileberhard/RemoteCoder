@@ -83,6 +83,7 @@ jobs:
     timeout-minutes: 35
     env:
       CARGO_BUILD_JOBS: '4'
+      CARGO_INCREMENTAL: '0'
       RUST_TEST_THREADS: '4'
       CARGO_PROFILE_DEV_DEBUG: '0'
     steps:
@@ -94,12 +95,16 @@ jobs:
         run: |
           /usr/bin/time -p /usr/bin/git --version
           /usr/bin/time -p /usr/bin/python3 -c 'import json, pathlib'
-      - name: Install tmux for the agent client tests
+      - run: rustup show
+      - name: Build the tests while tmux installs for the agent client tests
         env:
           HOMEBREW_NO_AUTO_UPDATE: '1'
           HOMEBREW_NO_INSTALL_CLEANUP: '1'
-        run: brew list tmux >/dev/null 2>&1 || brew install tmux
-      - run: rustup show
+        run: |
+          { brew list tmux >/dev/null 2>&1 || brew install tmux; } >"$RUNNER_TEMP/tmux.log" 2>&1 &
+          tmux_install=$!
+          cargo test --manifest-path host-daemon-rs/Cargo.toml --locked --no-run
+          wait "$tmux_install" || { cat "$RUNNER_TEMP/tmux.log"; exit 1; }
       - run: cargo test --manifest-path host-daemon-rs/Cargo.toml --locked
 
   gateway-lint:
@@ -109,6 +114,7 @@ jobs:
     timeout-minutes: 35
     env:
       CARGO_BUILD_JOBS: '4'
+      CARGO_INCREMENTAL: '0'
       CARGO_PROFILE_DEV_DEBUG: '0'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
