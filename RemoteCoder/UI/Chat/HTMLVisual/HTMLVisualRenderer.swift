@@ -159,7 +159,7 @@ final class HTMLVisualRenderer {
     private var rasterWork: [RasterKey: RasterWork] = [:]
     private var rasterPins: [HTMLVisualLayoutKey: Int] = [:]
     private var superseded: Set<RasterKey> = []
-    private var persistedImages: Set<HTMLVisualLayoutKey> = []
+    private var persistedImages = HTMLVisualPresentationCoverage()
     private var snapshotRevisions = 0
     private static let retainedRasterPixels = HTMLVisualRasterBudget.maximumPixels / 2
     private let cache: HTMLVisualPresentationCache
@@ -190,14 +190,14 @@ final class HTMLVisualRenderer {
         if loadTask == nil {
             loadTask = Task {
                 do {
-                    let entries = try await cache.load()
+                    let snapshot = try await cache.load()
                     try Task.checkCancellation()
-                    for (key, entry) in entries {
+                    for (key, entry) in snapshot.entries {
                         heights[key] = entry.height
                         heightOrder.append(key)
                         snapshots[key]?.height = entry.height
                     }
-                    persistedImages = Set(entries.filter(\.value.hasImage).keys)
+                    persistedImages.apply(snapshot)
                 } catch is CancellationError { return }
                 catch { Self.logger.error("html visual cache load failed reason=\(error.localizedDescription)") }
                 isReady = true
@@ -214,7 +214,7 @@ final class HTMLVisualRenderer {
         }
         do {
             guard let data = try await cache.image(for: key) else {
-                persistedImages.remove(key)
+                persistedImages.apply(try await cache.load())
                 return snapshot(for: key)
             }
             try Task.checkCancellation()
@@ -788,8 +788,8 @@ final class HTMLVisualRenderer {
     func store(_ data: Data, for key: HTMLVisualLayoutKey, height: Double) async throws -> HTMLVisualCapturedImage? {
         guard let captured = HTMLVisualCapturedImage(data: data, key: key, revision: nextSnapshotRevision()) else { return nil }
         pendingHeights.removeValue(forKey: key)
-        let entries = try await cache.store(key, height: height, image: data, protecting: Set(rasterPins.keys))
-        persistedImages = Set(entries.filter(\.value.hasImage).keys)
+        let snapshot = try await cache.store(key, height: height, image: data, protecting: Set(rasterPins.keys))
+        persistedImages.apply(snapshot)
         if let current = snapshots[key], current.revision > captured.revision { return captured }
         heights[key] = height
         heightOrder.removeAll { $0 == key }
@@ -829,8 +829,8 @@ final class HTMLVisualRenderer {
             while let (key, height) = pendingHeights.first {
                 pendingHeights.removeValue(forKey: key)
                 do {
-                    let entries = try await cache.store(key, height: height, image: nil, protecting: Set(rasterPins.keys))
-                    persistedImages = Set(entries.filter(\.value.hasImage).keys)
+                    let snapshot = try await cache.store(key, height: height, image: nil, protecting: Set(rasterPins.keys))
+                    persistedImages.apply(snapshot)
                 } catch { Self.logger.error("html visual cache save failed reason=\(error.localizedDescription)") }
                 if Task.isCancelled { return }
             }

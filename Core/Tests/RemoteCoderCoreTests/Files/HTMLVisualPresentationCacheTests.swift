@@ -13,7 +13,7 @@ struct HTMLVisualPresentationCacheTests {
         _ = try await cache.store(key, height: 460, image: png)
         try await cache.retire()
         let restored = HTMLVisualPresentationCache(directory: directory, clock: ContinuousClock())
-        let metadata = try await restored.load()
+        let metadata = try await restored.load().entries
         #expect(metadata[key] == .init(height: 460, hasImage: true))
         #expect(try await restored.image(for: key) == png)
         #expect(metadata[self.key(0, width: 640)] == nil)
@@ -44,7 +44,7 @@ struct HTMLVisualPresentationCacheTests {
             Record(key: key(1), height: 300, heightOrder: 2, image: nil, imageHeight: nil, imageOrder: nil),
         ])).write(to: directory.appending(path: "presentations.plist"))
         let cache = HTMLVisualPresentationCache(directory: directory, clock: ContinuousClock())
-        let metadata = try await cache.load()
+        let metadata = try await cache.load().entries
         #expect(metadata[key(0)] == .init(height: 2_400, hasImage: false))
         #expect(metadata[key(1)] == .init(height: 300, hasImage: false))
         #expect(try await cache.image(for: key(0)) == nil)
@@ -57,7 +57,7 @@ struct HTMLVisualPresentationCacheTests {
         let cache = HTMLVisualPresentationCache(directory: directory, clock: FrozenVisualClock())
         let large = Data(repeating: 42, count: 13 << 20)
         _ = try await cache.store(key(0), height: 480, image: large)
-        let metadata = try await cache.store(key(1), height: 481, image: large)
+        let metadata = try await cache.store(key(1), height: 481, image: large).entries
         #expect(metadata[key(0)] == .init(height: 480, hasImage: false))
         #expect(try await cache.image(for: key(0)) == nil)
         #expect(try await cache.image(for: key(1))?.count == 13 << 20)
@@ -66,7 +66,7 @@ struct HTMLVisualPresentationCacheTests {
         }
         try await cache.retire()
         let restored = HTMLVisualPresentationCache(directory: directory, clock: ContinuousClock())
-        let loaded = try await restored.load()
+        let loaded = try await restored.load().entries
         #expect(loaded.count == 130)
         #expect(loaded.values.filter(\.hasImage).count == 129)
         #expect(loaded[key(1)]?.height == 481)
@@ -86,7 +86,7 @@ struct HTMLVisualPresentationCacheTests {
         _ = try await cache.store(key(512), height: 512, image: nil)
         try await cache.retire()
         let restored = HTMLVisualPresentationCache(directory: directory, clock: ContinuousClock())
-        let loaded = try await restored.load()
+        let loaded = try await restored.load().entries
         #expect(loaded.count == 512)
         #expect(loaded[key(1)] == nil)
         #expect(loaded[key(0)]?.height == 900)
@@ -109,10 +109,10 @@ struct HTMLVisualPresentationCacheTests {
         try await cache.retire()
         #expect(clock.waitingCount == 0)
         let restored = HTMLVisualPresentationCache(directory: directory, clock: ContinuousClock())
-        let metadata = try await restored.load()
+        let metadata = try await restored.load().entries
         #expect(metadata[key(0)] == .init(height: 120, hasImage: true))
         #expect(try await restored.image(for: key(0)) == Data([1]))
-        await #expect(throws: HTMLVisualPresentationError.retired) { try await cache.load() }
+        await #expect(throws: HTMLVisualPresentationError.retired) { try await cache.load().entries }
         try await restored.retire()
     }
 
@@ -147,7 +147,7 @@ struct HTMLVisualPresentationCacheTests {
         try Data(repeating: 1, count: 1_000).write(to: images.appending(path: truncated))
 
         let second = HTMLVisualPresentationCache(directory: directory, clock: FrozenVisualClock())
-        #expect(try await second.load()[key(0)] == .init(height: 300, hasImage: false))
+        #expect(try await second.load().entries[key(0)] == .init(height: 300, hasImage: false))
         #expect(try await second.image(for: key(0)) == nil)
         _ = try await second.store(key(1), height: 400, image: Data(repeating: 2, count: 3_000))
         try await second.retire()
@@ -155,7 +155,7 @@ struct HTMLVisualPresentationCacheTests {
         try Data([9]).write(to: images.appending(path: "orphan.pdf"))
 
         let third = HTMLVisualPresentationCache(directory: directory, clock: FrozenVisualClock())
-        let loaded = try await third.load()
+        let loaded = try await third.load().entries
         #expect(loaded[key(0)] == .init(height: 300, hasImage: false))
         #expect(loaded[key(1)] == .init(height: 400, hasImage: true))
         #expect(try await third.image(for: key(1)) == Data(repeating: 2, count: 3_000))
@@ -164,7 +164,7 @@ struct HTMLVisualPresentationCacheTests {
         try await third.retire()
 
         let fourth = HTMLVisualPresentationCache(directory: directory, clock: FrozenVisualClock())
-        #expect(try await fourth.load()[key(1)] == .init(height: 400, hasImage: false))
+        #expect(try await fourth.load().entries[key(1)] == .init(height: 400, hasImage: false))
         try await fourth.retire()
     }
 
@@ -190,12 +190,12 @@ struct HTMLVisualPresentationCacheTests {
             Record(key: key(1), height: 600, heightOrder: 2, image: nil, imageOrder: nil),
         ])).write(to: directory.appending(path: "presentations.plist"))
         let cache = HTMLVisualPresentationCache(directory: directory, clock: FrozenVisualClock())
-        #expect(try await cache.load()[key(0)] == .init(height: 500, hasImage: true))
+        #expect(try await cache.load().entries[key(0)] == .init(height: 500, hasImage: true))
         try await cache.retire()
         #expect(try imageFiles(directory.appending(path: "images")).count == 1)
         #expect(try Data(contentsOf: directory.appending(path: "index-v3.plist")).count < 4_096)
         let restored = HTMLVisualPresentationCache(directory: directory, clock: ContinuousClock())
-        #expect(try await restored.load() == [key(0): .init(height: 500, hasImage: true), key(1): .init(height: 600, hasImage: false)])
+        #expect(try await restored.load().entries == [key(0): .init(height: 500, hasImage: true), key(1): .init(height: 600, hasImage: false)])
         #expect(try await restored.image(for: key(0)) == Data(repeating: 7, count: 40_000))
         try await restored.retire()
     }
@@ -213,7 +213,7 @@ struct HTMLVisualPresentationCacheTests {
         try await cache.retire()
         let restored = HTMLVisualPresentationCache(directory: directory, clock: FrozenVisualClock())
         for dark in [false, true, false] {
-            let entries = try await restored.load()
+            let entries = try await restored.load().entries
             for index in 0..<168 {
                 let key = key(index, dark: dark)
                 #expect(entries[key] == .init(height: dark ? 420 : 400, hasImage: true))
@@ -232,7 +232,7 @@ struct HTMLVisualPresentationCacheTests {
             _ = try await cache.store(key(index), height: 100, image: image, protecting: [])
         }
         #expect(try await cache.image(for: key(1)) == image)
-        let entries = try await cache.store(key(3), height: 200, image: image, protecting: [key(0)])
+        let entries = try await cache.store(key(3), height: 200, image: image, protecting: [key(0)]).entries
         #expect(entries[key(0)]?.hasImage == true)
         #expect(entries[key(1)]?.hasImage == true)
         #expect(entries[key(2)]?.hasImage == false)
@@ -240,7 +240,7 @@ struct HTMLVisualPresentationCacheTests {
         await #expect(throws: HTMLVisualPresentationError.capacity) {
             try await cache.store(key(4), height: 300, image: image, protecting: [key(0), key(1), key(3)])
         }
-        #expect(try await cache.load() == entries)
+        #expect(try await cache.load().entries == entries)
         try await cache.retire()
         #expect(try imageFiles(directory.appending(path: "images")).count == 1)
     }
@@ -256,7 +256,7 @@ struct HTMLVisualPresentationCacheTests {
         try Data([4, 5, 6]).write(to: images.appending(path: file))
         let restored = HTMLVisualPresentationCache(directory: directory, clock: FrozenVisualClock())
         #expect(try await restored.image(for: key(0)) == nil)
-        #expect(try await restored.load()[key(0)] == .init(height: 300, hasImage: false))
+        #expect(try await restored.load().entries[key(0)] == .init(height: 300, hasImage: false))
         try await restored.retire()
         #expect(try imageFiles(images).isEmpty)
     }
@@ -284,7 +284,7 @@ struct HTMLVisualPresentationCacheTests {
         ])
         try encoder.encode(old).write(to: legacy, options: .atomic)
         let cache = HTMLVisualPresentationCache(directory: directory, clock: FrozenVisualClock())
-        #expect(try await cache.load()[key(0)] == .init(height: 100, hasImage: true))
+        #expect(try await cache.load().entries[key(0)] == .init(height: 100, hasImage: true))
         #expect(!FileManager.default.fileExists(atPath: legacy.path))
         _ = try await cache.store(key(1), height: 200, image: Data([8]))
         try await cache.retire()
@@ -303,7 +303,7 @@ struct HTMLVisualPresentationCacheTests {
         #expect(coldOld.records.first?.image == Data([9]))
 
         let restored = HTMLVisualPresentationCache(directory: directory, clock: FrozenVisualClock())
-        #expect(try await restored.load() == [key(0): .init(height: 100, hasImage: true), key(1): .init(height: 200, hasImage: true)])
+        #expect(try await restored.load().entries == [key(0): .init(height: 100, hasImage: true), key(1): .init(height: 200, hasImage: true)])
         #expect(try await restored.image(for: key(0)) == Data([7]))
         #expect(try await restored.image(for: key(1)) == Data([8]))
         #expect(!FileManager.default.fileExists(atPath: legacy.path))
@@ -335,6 +335,28 @@ struct HTMLVisualPresentationCacheTests {
         _ = try await cache.store(key(0), height: 8, image: Data([8]))
         try await cache.retire()
         #expect(try imageFiles(directory.appending(path: "images")).count == 1)
+    }
+
+    @Test func outOfOrderStoreCompletionsCannotRestoreEvictedCoverage() async throws {
+        let directory = URL.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let cache = HTMLVisualPresentationCache(directory: directory, clock: FrozenVisualClock())
+        let image = Data(repeating: 1, count: 13 << 20)
+        let earlier = try await cache.store(key(0), height: 100, image: image)
+        let later = try await cache.store(key(1), height: 200, image: image)
+        #expect(later.generation > earlier.generation)
+        #expect(later.entries[key(0)]?.hasImage == false)
+        var coverage = HTMLVisualPresentationCoverage()
+        coverage.apply(later)
+        coverage.apply(earlier)
+        #expect(!coverage.contains(key(0)))
+        #expect(coverage.contains(key(1)))
+        let heightSave = try await cache.store(key(1), height: 201, image: nil)
+        coverage.apply(heightSave)
+        coverage.apply(later)
+        #expect(!coverage.contains(key(0)))
+        #expect(coverage.contains(key(1)))
+        try await cache.retire()
     }
 
     private func imageFiles(_ directory: URL) throws -> [String] {

@@ -814,7 +814,7 @@ struct HTMLVisualRendererTests {
             #expect(!fixture.renderer.hasStoredSnapshot(for: key))
             try await fixture.renderer.flush()
             let cold = HTMLVisualPresentationCache(directory: fixture.directory.appending(path: "presentations"), clock: ContinuousClock())
-            #expect(try await cold.load()[key] == nil)
+            #expect(try await cold.load().entries[key] == nil)
             try await cold.retire()
         }
     }

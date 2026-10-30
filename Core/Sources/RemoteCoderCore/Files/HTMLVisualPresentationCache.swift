@@ -8,6 +8,11 @@ actor HTMLVisualPresentationCache {
         let hasImage: Bool
     }
 
+    struct Snapshot: Sendable {
+        let generation: UInt64
+        let entries: [HTMLVisualLayoutKey: Entry]
+    }
+
     private struct StoredImage: Codable, Equatable {
         let bytes: Int
         let file: String
@@ -55,6 +60,7 @@ actor HTMLVisualPresentationCache {
     private var unwrittenImages: [HTMLVisualLayoutKey: Data] = [:]
     private var committedImageFiles: Set<String> = []
     private var sequence: UInt64 = 0
+    private var mutationGeneration: UInt64 = 0
     private var loaded = false
     private var retired = false
     private var dirty = false
@@ -68,7 +74,7 @@ actor HTMLVisualPresentationCache {
 
     isolated deinit { scheduledWrite?.cancel() }
 
-    func load() throws -> [HTMLVisualLayoutKey: Entry] {
+    func load() throws -> Snapshot {
         try requireActive()
         try prepare()
         try requireActive()
@@ -91,11 +97,11 @@ actor HTMLVisualPresentationCache {
             data = try file.read(upToCount: stored.bytes + 1) ?? Data()
         }
         catch let error as CocoaError where error.code == .fileNoSuchFile || error.code == .fileReadNoSuchFile {
-            discardImage(key)
+            try discardImage(key)
             return nil
         }
         guard data.count == stored.bytes, Self.imageFileName(data) == stored.file else {
-            discardImage(key)
+            try discardImage(key)
             return nil
         }
         try touch(key)
@@ -111,11 +117,11 @@ actor HTMLVisualPresentationCache {
         records[key]?.heightOrder = sequence
     }
 
-    func store(_ key: HTMLVisualLayoutKey, height: Double, image: Data?) throws -> [HTMLVisualLayoutKey: Entry] {
+    func store(_ key: HTMLVisualLayoutKey, height: Double, image: Data?) throws -> Snapshot {
         try store(key, height: height, image: image, protecting: [])
     }
 
-    func store(_ key: HTMLVisualLayoutKey, height: Double, image: Data?, protecting protected: Set<HTMLVisualLayoutKey>) throws -> [HTMLVisualLayoutKey: Entry] {
+    func store(_ key: HTMLVisualLayoutKey, height: Double, image: Data?, protecting protected: Set<HTMLVisualLayoutKey>) throws -> Snapshot {
         try requireActive()
         try prepare()
         try requireActive()
@@ -129,8 +135,9 @@ actor HTMLVisualPresentationCache {
               records[key] != nil || protected.count < Self.maximumHeights else {
             throw HTMLVisualPresentationError.capacity
         }
-        guard sequence < UInt64.max else { throw HTMLVisualPresentationError.invalidRecord }
+        guard sequence < UInt64.max, mutationGeneration < UInt64.max else { throw HTMLVisualPresentationError.invalidRecord }
         sequence += 1
+        mutationGeneration += 1
         let changed = records[key]?.height != height || image != nil
         var record = records[key] ?? Record(key: key, height: height, heightOrder: sequence, image: nil)
         record.height = height
@@ -298,8 +305,10 @@ actor HTMLVisualPresentationCache {
         Set(records.values.compactMap { $0.image?.file })
     }
 
-    private func discardImage(_ key: HTMLVisualLayoutKey) {
+    private func discardImage(_ key: HTMLVisualLayoutKey) throws {
         guard records[key]?.image != nil else { return }
+        guard mutationGeneration < UInt64.max else { throw HTMLVisualPresentationError.invalidRecord }
+        mutationGeneration += 1
         records[key]?.image = nil
         unwrittenImages.removeValue(forKey: key)
         dirty = true
@@ -315,8 +324,8 @@ actor HTMLVisualPresentationCache {
                 .allSatisfy({ !$0.isEmpty && $0.utf8.count <= 128 })
     }
 
-    private func metadata() -> [HTMLVisualLayoutKey: Entry] {
-        records.mapValues { Entry(height: $0.height, hasImage: $0.image != nil) }
+    private func metadata() -> Snapshot {
+        Snapshot(generation: mutationGeneration, entries: records.mapValues { Entry(height: $0.height, hasImage: $0.image != nil) })
     }
 
     private func trim(protecting protected: Set<HTMLVisualLayoutKey>) {
@@ -414,4 +423,17 @@ enum HTMLVisualPresentationError: Error, LocalizedError, Sendable, Equatable {
         case .retired: "The HTML visual presentation cache has retired."
         }
     }
+}
+
+struct HTMLVisualPresentationCoverage {
+    private var generation: UInt64?
+    private var images: Set<HTMLVisualLayoutKey> = []
+
+    mutating func apply(_ snapshot: HTMLVisualPresentationCache.Snapshot) {
+        guard generation.map({ snapshot.generation > $0 }) ?? true else { return }
+        generation = snapshot.generation
+        images = Set(snapshot.entries.filter(\.value.hasImage).keys)
+    }
+
+    func contains(_ key: HTMLVisualLayoutKey) -> Bool { images.contains(key) }
 }

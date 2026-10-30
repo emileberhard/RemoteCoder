@@ -500,6 +500,8 @@ and the next new-build load removes any legacy file produced during a downgrade.
 Capacity pressure leaves preparation incomplete and retryable after pins are released;
 it never classifies the document as unpreparable. Live and background captures share
 one acceptance path that enforces the 8 MiB capture limit before updating the cache.
+Cache metadata carries a mutation generation; the renderer accepts only newer
+coverage, so reordered capture and height-save completions cannot restore evicted keys.
 Snapshots remain encoded until a visible occurrence or background preparation
 rasterizes one off-main at display scale.
 The renderer's `HTMLVisualRasterBudget` owns every prepared and in-flight
