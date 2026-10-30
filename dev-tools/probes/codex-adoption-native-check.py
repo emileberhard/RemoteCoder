@@ -7,7 +7,12 @@ import urllib.parse
 
 source, target = [pathlib.Path(value).resolve(strict=True) for value in sys.argv[1:]]
 counts = {}
-for database in ["thread_history_1.sqlite", "queue_1.sqlite", "goals_1.sqlite"]:
+for database, only in [
+    ("thread_history_1.sqlite", None),
+    ("queue_1.sqlite", None),
+    ("goals_1.sqlite", None),
+    ("state_5.sqlite", {"thread_read_receipts", "guardian_review_feedback"}),
+]:
     if not (source / database).exists():
         continue
     path = urllib.parse.quote(str(target / database))
@@ -18,6 +23,8 @@ for database in ["thread_history_1.sqlite", "queue_1.sqlite", "goals_1.sqlite"]:
             "SELECT name FROM incoming.sqlite_master WHERE type='table' AND name NOT LIKE '_sqlx%' AND name NOT LIKE 'sqlite_%' AND name NOT IN ('thread_history_projection_state','queued_thread_revisions')"
         ).fetchall()
         for (table,) in tables:
+            if only is not None and table not in only:
+                continue
             quoted = '"' + table.replace('"', '""') + '"'
             columns = [row[1] for row in connection.execute(f"PRAGMA incoming.table_info({quoted})")]
             names = ",".join('"' + column.replace('"', '""') + '"' for column in columns)
