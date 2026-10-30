@@ -679,6 +679,10 @@ struct ChatComposerView: View {
             ComposerTextInput(document: document, prompt: inputPrompt, focus: focus,
                               actions: inputActions, maximumLines: isCompact ? 1 : 6)
                 .id(document.id)
+                .onChange(of: focus.wrappedValue, initial: true) { _, focused in
+                    screen.isComposerFocused = focused
+                }
+                .onDisappear { screen.isComposerFocused = false }
         } else {
             Text(inputPrompt).scaledFont(.body).foregroundStyle(.secondary)
         }

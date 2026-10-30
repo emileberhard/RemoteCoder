@@ -126,6 +126,24 @@ struct FieldTelemetryTests {
         #expect(try JSONDecoder().decode(UsageContext.self, from: encoded) == recording)
     }
 
+    @Test func composingTelemetrySeparatesEditingAndPreservesLegacyUnknown() throws {
+        let encodedLegacy = try JSONEncoder().encode(context)
+        #expect(try JSONDecoder().decode(UsageContext.self, from: encodedLegacy).composing == nil)
+        var editing = context
+        editing.composing = true
+        #expect(editing != context)
+        #expect(UsageStateLabels(editing, conservesEnergy: false).composing == "editing")
+        let encoded = try JSONEncoder().encode(editing)
+        let payload = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        #expect(payload["composing"] as? Bool == true)
+        #expect(try JSONDecoder().decode(UsageContext.self, from: encoded) == editing)
+        editing.composing = false
+        #expect(UsageStateLabels(editing, conservesEnergy: false).composing == nil)
+        editing.composing = true
+        editing.scene = .background
+        #expect(UsageStateLabels(editing, conservesEnergy: false).composing == nil)
+    }
+
     @Test func historyStateShowsAnyOpenBeforePagingAndClearsOnEnteringTheBackground() {
         var operations = HistoryOperations()
         operations.sceneChanged(background: true)

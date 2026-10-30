@@ -42,6 +42,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         Set(messages.map(\.id)).union(preparingRenderWindows.values.flatMap { $0 })
     }
     private(set) var forkableMessageIDs: Set<UUID> = []
+    var isComposerFocused = false
     private(set) var composerSends = 0
     @ObservationIgnored private var currentStreamItems: [ChatStreamItem] = []
     private(set) var streamItems: [ChatStreamItem] {

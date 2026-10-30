@@ -13,6 +13,7 @@ struct UsageContext: Codable, Sendable, Equatable {
     var turnRunningVisible: Bool?
     var voiceCall: Bool
     var recording: Bool? = nil
+    var composing: Bool? = nil
     var thermal: Thermal?
     var lowPower: Bool
     var batteryPercent: Int?

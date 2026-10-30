@@ -599,11 +599,15 @@ only, never WebKit's processes, and it cannot apportion battery to a feature.
   device run validates them.
 - **State.** `TelemetryContext` (app) projects the scene, the visible surface
   (chat or drawer), whether the shown conversation has a running turn, a voice
-  call, whether any loaded target is recording composer dictation, thermal state
+  call, whether any loaded target is recording composer dictation, whether the
+  visible composer is focused for editing (`composing`), thermal state
   and Low Power Mode, battery level, charging and
   brightness in 10 % steps (iOS), the network interface and the shown host's
-  route. Each sample carries the whole state; an absent field is unknown. The
-  same projection drives the MetricKit state domains (see *iOS 27 performance
+  route. Each sample carries the whole state; an absent field is unknown.
+  `composing` covers the focused editing session, including pauses between keys;
+  it clears when focus leaves, the drawer opens or the scene becomes inactive.
+  Older samples without it remain unknown, distinct from `false` (unfocused).
+  The same projection drives the MetricKit state domains (see *iOS 27 performance
   reports*); `TelemetryContext.publish` feeds both, including scene changes,
   which are not observable.
 - **Records.** `TelemetryRecord` lines go into `<stamp>-<id>-telemetry.jsonl`
@@ -620,7 +624,9 @@ only, never WebKit's processes, and it cannot apportion battery to a feature.
   scan and after its export record, so an abrupt kill normally loses at most
   the last drain interval. An overflow keeps the newest and writes a `loss` line.
 - **Reading.** `just app-telemetry timeline` merges sample intervals into
-  stretches of unchanged state; `activity` sums them per state; `export-cost`
+  stretches of unchanged state; `activity` sums them per state. Both split on
+  `composing` by default, separating editing from unfocused chat and older
+  unknown samples; `export-cost`
   totals the drains and their CPU share, counting only exports that lie inside
   a run's sampled span. Intervals are `incomplete` (records missing in between),
   `background` (all use from backgrounding until the return, sampler stopped),
@@ -798,6 +804,7 @@ report stream, and the StateReporting domains under `emileberhard.RemoteCoder.`:
 | `turn` | `running` | the shown conversation has a running turn, foreground only |
 | `route` | `lan`, `configured`, `relay`, `restarting`, `disconnected` | the shown host's route, foreground only |
 | `voice` | `call`, `recording` | a voice call takes priority; otherwise composer dictation recording, also in the background |
+| `composing` | `editing` | the visible composer is focused for editing, active chat only |
 | `energy` | `conserving` | `AppEnergyPolicy.conservesEnergy` |
 | `history` | `opening`, `paging` | history opens and user-requested pages (not prefetch), stable metadata `provider` |
 

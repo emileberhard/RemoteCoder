@@ -240,6 +240,19 @@ def test_recording_activity_and_timeline_keep_idle_and_legacy_unknown_apart():
     assert [row["state"]["recording"] for row in timeline(intervals)] == [None, False, True]
 
 
+def test_composing_activity_and_timeline_keep_editing_idle_and_legacy_unknown_apart():
+    records = [
+        sample(1, 0, 0),
+        sample(2, 30, 100, composing=False),
+        sample(3, 60, 300, composing=True),
+        sample(4, 90, 900, composing=False),
+    ]
+    intervals = sample_intervals(records)
+    rows = {row["state"]["composing"]: row for row in activity(intervals)}
+    assert {key: row["cpuSeconds"] for key, row in rows.items()} == {None: 0.1, False: 0.2, True: 0.6}
+    assert [row["state"]["composing"] for row in timeline(intervals)] == [None, False, True]
+
+
 def test_export_share_counts_only_exports_inside_the_sampled_coverage():
     cost = export_costs(telemetry_runs(run_records()))
 

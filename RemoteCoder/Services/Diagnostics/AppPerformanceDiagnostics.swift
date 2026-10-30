@@ -28,6 +28,7 @@ actor AppPerformanceDiagnostics {
     private static let surfaceDomain = "emileberhard.RemoteCoder.surface"
     private static let turnDomain = "emileberhard.RemoteCoder.turn"
     private static let voiceDomain = "emileberhard.RemoteCoder.voice"
+    private static let composingDomain = "emileberhard.RemoteCoder.composing"
     private static let energyDomain = "emileberhard.RemoteCoder.energy"
     private let manager: MetricManager
     private let historyReporter: StateReporter<StableMetadata, VolatileMetadata>
@@ -35,6 +36,7 @@ actor AppPerformanceDiagnostics {
     private let surfaceReporter: StateReporter<StableMetadata, VolatileMetadata>
     private let turnReporter: StateReporter<StableMetadata, VolatileMetadata>
     private let voiceReporter: StateReporter<StableMetadata, VolatileMetadata>
+    private let composingReporter: StateReporter<StableMetadata, VolatileMetadata>
     private let energyReporter: StateReporter<StableMetadata, VolatileMetadata>
     private let history = Mutex(HistoryOperations())
     private let logger = AppLogger(category: "PerformanceDiagnostics")
@@ -44,7 +46,7 @@ actor AppPerformanceDiagnostics {
     private init() {
         let domains = [
             Self.historyDomain, Self.routeDomain, Self.surfaceDomain, Self.turnDomain, Self.voiceDomain,
-            Self.energyDomain
+            Self.energyDomain, Self.composingDomain
         ]
         manager = MetricManager(enabledStateReportingDomains: Set(domains.map(StateReportingDomain.init(rawValue:))))
         func reporter(_ domain: String) -> StateReporter<StableMetadata, VolatileMetadata> {
@@ -56,6 +58,7 @@ actor AppPerformanceDiagnostics {
         turnReporter = reporter(Self.turnDomain)
         voiceReporter = reporter(Self.voiceDomain)
         energyReporter = reporter(Self.energyDomain)
+        composingReporter = reporter(Self.composingDomain)
     }
 
     func start() {
@@ -114,6 +117,7 @@ actor AppPerformanceDiagnostics {
         routeReporter.reportTransition(to: labels.route)
         voiceReporter.reportTransition(to: labels.voice)
         energyReporter.reportTransition(to: labels.energy)
+        composingReporter.reportTransition(to: labels.composing)
         history.withLock { operations in
             operations.sceneChanged(background: context.scene == .background)
             reportHistory(&operations)

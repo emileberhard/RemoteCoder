@@ -93,6 +93,7 @@ final class TelemetryContext {
             turnRunningVisible: screen.map { $0.runningTurn != nil },
             voiceCall: voiceCalls.call.isActive,
             recording: workspace.models.contains { $0.voice.isRecording },
+            composing: screen.map { scenes.phase == .active && !window.isHistoryDrawerOpen && $0.isComposerFocused },
             thermal: Self.thermal(policy.thermalState),
             lowPower: policy.isLowPowerModeEnabled,
             batteryPercent: device.batteryPercent,

@@ -6,6 +6,7 @@ struct UsageStateLabels: Equatable, Sendable {
     let route: String?
     let voice: String?
     let energy: String?
+    var composing: String? = nil
 }
 
 extension UsageStateLabels {
@@ -16,6 +17,7 @@ extension UsageStateLabels {
         route = foreground ? context.route?.rawValue : nil
         voice = context.voiceCall ? "call" : context.recording == true ? "recording" : nil
         energy = conservesEnergy ? "conserving" : nil
+        composing = foreground && context.composing == true ? "editing" : nil
     }
 }
 
