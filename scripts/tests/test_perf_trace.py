@@ -18,6 +18,56 @@ sys.modules[spec.name] = trace
 loader.exec_module(trace)
 
 
+class RenderMetricsTests(unittest.TestCase):
+    def test_window_clipping_refresh_gpu_and_power(self):
+        import xml.etree.ElementTree as ET
+
+        def value(tag, text):
+            element = ET.Element(tag)
+            element.text = str(text)
+            return element
+
+        display = value("display-name", "Built-In Display 1")
+        app = ET.Element("process", fmt="RemoteCoder (12)")
+        server = ET.Element("process", fmt="backboardd (42)")
+        rows = {
+            "display-vsyncs-interval": [
+                {"timestamp": value("start-time", timestamp), "display-name": display, "event": value("vsync-event", "VSYNC")}
+                for timestamp in (0, 8_333_333, 16_666_666, 33_333_333, 113_333_333)
+            ],
+            "metal-gpu-intervals": [
+                {"process": server, "event-depth": value("depth", 0), "start": value("start", 10_000_000), "duration": value("duration", 10_000_000)},
+                {"process": server, "event-depth": value("depth", 1), "start": value("start", 10_000_000), "duration": value("duration", 10_000_000)},
+            ],
+            "ProcessSubsystemPowerImpact": [
+                {"process": app, "row-kind": value("kind", 0), "start": value("start", 0), "duration": value("duration", 20_000_000),
+                 "cpu-impact": value("impact", 2), "gpu-impact": value("impact", -0.000000001), "display-impact": value("impact", 0)},
+                {"process": app, "row-kind": value("kind", 0), "start": value("start", 20_000_000), "duration": value("duration", 20_000_000),
+                 "cpu-impact": value("impact", 4), "gpu-impact": value("impact", -0.000000001), "display-impact": value("impact", 0)},
+                {"process": app, "row-kind": value("kind", 2), "start": value("start", 0), "duration": value("duration", 40_000_000),
+                 "cpu-impact": value("impact", -0.000000001), "gpu-impact": value("impact", 3), "display-impact": value("impact", -0.000000001)},
+            ],
+        }
+        run = trace.Run(1, "Time limit reached", "iOS", frozenset(rows), "")
+        with patch.object(trace, "table_rows", side_effect=lambda _trace, schema, _columns: iter(rows[schema])):
+            result = trace.render_metrics("recording.trace", run, {"window": [(5_000_000, 35_000_000)]})["window"]
+        refresh = result["refreshRates"]["Built-In Display 1"]
+        self.assertEqual(refresh["rates"]["120"]["seconds"], 0.012)
+        self.assertEqual(refresh["rates"]["60"]["seconds"], 0.017)
+        self.assertEqual(refresh["unknownSeconds"], 0.002)
+        self.assertEqual(result["backboardGpuChannelMs"], 20)
+        self.assertEqual(result["powerImpact"]["cpu"]["average"], 1.5)
+        self.assertEqual(result["powerImpact"]["gpu"]["average"], 1.5)
+        self.assertEqual(result["powerImpact"]["display"]["average"], 0)
+
+    def test_missing_data_stays_unknown(self):
+        run = trace.Run(1, "Time limit reached", "iOS", frozenset(), "")
+        result = trace.render_metrics("recording.trace", run, {"window": [(0, 1e9)]})["window"]
+        self.assertIsNone(result["refreshRates"])
+        self.assertIsNone(result["backboardGpuChannelMs"])
+        self.assertIsNone(result["powerImpact"])
+
+
 class ExplicitSymbolsTests(unittest.TestCase):
     def test_dsym_and_direct_binary(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -833,13 +883,14 @@ class PerfTraceTests(unittest.TestCase):
         self.assertFalse(any("hitches-updates" in xpath or "metal-gpu-intervals" in xpath or "swiftui-updates" in xpath
                              for xpath in exported))
 
-    def test_collected_empty_tables_remain_measured_zero(self):
+    def test_empty_gpu_table_is_unknown_while_empty_commits_are_zero(self):
         result, exported = self.summary({"time-profile", "hitches-updates", "metal-gpu-intervals"})
-        for key in ("commits", "commitsPerSecond", "gpuMs"):
+        for key in ("commits", "commitsPerSecond"):
             self.assertEqual(result["app"][key], 0)
+        self.assertIsNone(result["app"]["gpuMs"])
         self.assertIsNone(result["app"]["commitsUnavailableReason"])
-        self.assertIsNone(result["app"]["gpuMsUnavailableReason"])
-        self.assertEqual(result["renderServer"]["gpuMs"], 0)
+        self.assertIn("no rows", result["app"]["gpuMsUnavailableReason"])
+        self.assertIsNone(result["renderServer"]["gpuMs"])
         self.assertTrue(any("hitches-updates" in xpath for xpath in exported))
         self.assertTrue(any("metal-gpu-intervals" in xpath for xpath in exported))
 

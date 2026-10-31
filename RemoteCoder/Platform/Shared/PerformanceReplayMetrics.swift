@@ -1,7 +1,6 @@
 #if RC_PERF_HARNESS
 import Foundation
 import Observation
-import QuartzCore
 #if os(iOS)
 import UIKit
 #else
@@ -10,19 +9,11 @@ import AppKit
 
 @MainActor
 final class PerformanceReplayMetrics: NSObject {
-    private struct Frame {
-        let at: Double
-        let intervalMs: Double
-        let expectedMs: Double
-    }
     private let started = ContinuousClock.now
     private let startedAt = Date.now
     private let mainCPU = ProcessMetrics.mainThreadCPUSeconds()
     private let counters = PerfBuild.counters
-    private var link: CADisplayLink?
-    private var lastTimestamp: Double?
-    private var lastDrain = -1.0
-    private var intervals: [Frame] = []
+    private var sampler: Task<Void, Never>?
     private var samples: [[String: Any]] = []
     private var activeThroughout = true
     private var conservedEnergy = false
@@ -45,15 +36,12 @@ final class PerformanceReplayMetrics: NSObject {
         self.fixtureWork = fixtureWork
         fixtureCPU = fixtureWork?.snapshot.cpuNanoseconds
         super.init()
-        intervals.reserveCapacity(110_000)
         #if os(iOS)
         if let window = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).flatMap(\.windows).first(where: \.isKeyWindow) {
             display = ["width": window.bounds.width, "height": window.bounds.height,
                 "scale": window.screen.scale, "maximumFramesPerSecond": window.screen.maximumFramesPerSecond,
                 "contentSizeCategory": window.traitCollection.preferredContentSizeCategory.rawValue]
         }
-        let link = CADisplayLink(target: self, selector: #selector(tick(_:)))
-        link.preferredFrameRateRange = .default
         NotificationCenter.default.addObserver(self, selector: #selector(resigned), name: UIApplication.willResignActiveNotification, object: nil)
         #else
         let window = NSApp.keyWindow
@@ -63,10 +51,14 @@ final class PerformanceReplayMetrics: NSObject {
             "scale": window.backingScaleFactor, "maximumFramesPerSecond": window.screen?.maximumFramesPerSecond ?? 0]
         NotificationCenter.default.addObserver(self, selector: #selector(resigned), name: NSApplication.didResignActiveNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(resigned), name: NSWindow.didResignKeyNotification, object: window)
-        let link = window.displayLink(target: self, selector: #selector(tick(_:)))
         #endif
-        link.add(to: .main, forMode: .common)
-        self.link = link
+        sampler = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(1))
+                guard let self, !Task.isCancelled else { return }
+                drain()
+            }
+        }
         fieldSampler = ProcessResourceSampler(recorder: fieldBuffer, read: { [weak self] in
             guard let self, let resources = ProcessResources.current() else { return nil }
             guard reads.count < 128 else { overflow = true; return nil }
@@ -101,20 +93,7 @@ final class PerformanceReplayMetrics: NSObject {
 
     @objc private func resigned(_ notification: Notification) { activeThroughout = false }
 
-    @objc private func tick(_ link: CADisplayLink) {
-        let elapsed = started.duration(to: .now) / .seconds(1)
-        if let lastTimestamp {
-            if intervals.count < 110_000 {
-                intervals.append(Frame(at: elapsed, intervalMs: (link.timestamp - lastTimestamp) * 1000,
-                    expectedMs: (link.targetTimestamp - link.timestamp) * 1000))
-            } else { overflow = true }
-        }
-        lastTimestamp = link.timestamp
-        if elapsed - lastDrain >= 1 { drain() }
-    }
-
     private func drain() {
-        lastDrain = started.duration(to: .now) / .seconds(1)
         #if os(iOS)
         let active = UIApplication.shared.applicationState == .active
         #else
@@ -146,8 +125,8 @@ final class PerformanceReplayMetrics: NSObject {
         NotificationCenter.default.removeObserver(self)
         observation?.cancel()
         observation = nil
-        link?.invalidate()
-        link = nil
+        sampler?.cancel()
+        sampler = nil
         fieldSampler?.finishPerformanceReplay()
         fieldSampler = nil
         drain()
@@ -155,9 +134,7 @@ final class PerformanceReplayMetrics: NSObject {
         let info = Bundle.main.infoDictionary ?? [:]
         return ["seconds": elapsed, "startedAt": startedAt.timeIntervalSince1970,
             "endedAt": Date.now.timeIntervalSince1970, "activeThroughout": activeThroughout,
-            "conservedEnergy": conservedEnergy, "frames": intervals.count,
-            "frameIntervals": intervals.map { ["at": $0.at, "intervalMs": $0.intervalMs, "expectedMs": $0.expectedMs] },
-            "frameIntervalsOverflowed": overflow, "samples": samples,
+            "conservedEnergy": conservedEnergy, "telemetryOverflowed": overflow, "samples": samples,
             "processCPUms": samples.last?["processCPUms"] ?? NSNull(),
             "mainThreadCPUms": samples.last?["mainThreadCPUms"] ?? NSNull(),
             "fixtureCPUAttribution": ["cpuMs": samples.last?["fixtureCPUms"] ?? NSNull(),
@@ -175,8 +152,7 @@ final class PerformanceReplayMetrics: NSObject {
             "locale": Locale.current.identifier,
             "processors": ProcessInfo.processInfo.processorCount,
             "disabled": PerfBuild.disabled.sorted(),
-            "stateAggregationVersion": 2,
-            "frameMetric": "CADisplayLink callback intervals; use Instruments Hitches for presentation hitches"]
+            "stateAggregationVersion": 2]
     }
 }
 #endif

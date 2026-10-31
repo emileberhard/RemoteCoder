@@ -4,7 +4,8 @@
 The trace is recorded and summarized on the configured device host or, with
 --mac, the selected Mac. --host overrides that routing. Traces stay on that host
 because system-wide exports are large. The summary reports the app's CPU time by thread, its
-Core Animation commits, GPU time, and hitches, plus the render server's CPU time
+Core Animation commits, GPU time, and hitches, plus refresh-rate shares,
+render-server GPU time, and per-app power impact where available. Render-server CPU is reported
 when the trace covers it (an iPhone recording is system-wide and includes
 backboardd; a Mac recording attaches to the app, so WindowServer is unknown), so
 two runs of the same journey can be compared. A Mac recording also samples the
@@ -48,7 +49,7 @@ import xml.etree.ElementTree as ET
 from collections import Counter, defaultdict
 from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from functools import cache
 from pathlib import Path
@@ -63,7 +64,7 @@ APP = "RemoteCoder"
 MAC_APP_EXECUTABLE = f"/{APP}.app/Contents/MacOS/{APP}"
 IPHONE_RENDER_SERVER = "backboardd"
 MAC_RENDER_SERVER = "WindowServer"
-INSTRUMENTS = ["Hitches", "GPU", "Thermal State"]
+INSTRUMENTS = ["Hitches", "GPU", "Display", "Power Profiler", "Points of Interest", "Thermal State"]
 TEMPLATES = ("Time Profiler", "Processor Trace", "Swift Concurrency", "System Trace", "File Activity", "Allocations")
 AUTOMATION_CPU_SHARE_LIMIT_PERCENT = 1
 AUTOMATION_FRAME_NAMES = ("_accessibilityUserTestingSnapshot", "_AXXMIGCopyParameterizedAttributeValue")
@@ -694,6 +695,94 @@ def gpu_ms_by_process(trace: str) -> tuple[Counter, Counter]:
     return gpu_ms, unavailable
 
 
+def render_metrics(trace: str, run: Run, windows: dict[str, list[tuple[float, float]]]) -> dict:
+    result = {name: {"seconds": round(sum(end - start for start, end in intervals) / 1e9, 3),
+                     "refreshRates": None, "backboardGpuChannelMs": None, "powerImpact": None}
+              for name, intervals in windows.items()}
+    if "display-vsyncs-interval" in run.schemas:
+        totals = {name: defaultdict(Counter) for name in windows}
+        previous = {}
+        for row in table_rows(trace, "display-vsyncs-interval", {"timestamp", "display-name", "event"}):
+            display = element_text(row.get("display-name"))
+            timestamp = trace_number(row.get("timestamp"))
+            if display is None or timestamp is None or element_text(row.get("event")) != "VSYNC":
+                continue
+            prior = previous.get(display)
+            previous[display] = timestamp
+            if prior is None or timestamp <= prior:
+                continue
+            delta = timestamp - prior
+            hz = 1e9 / delta
+            nearest = min((1, 5, 10, 15, 20, 24, 30, 40, 48, 60, 80, 90, 120, 144), key=lambda rate: abs(rate - hz))
+            label = str(nearest) if abs(nearest - hz) <= nearest * 0.12 else "unknown"
+            for name, intervals in windows.items():
+                totals[name][display][label] += overlap_ns(intervals, prior, timestamp)
+        for name, displays in totals.items():
+            duration = sum(end - start for start, end in windows[name]) / 1e9
+            if displays and duration > 0:
+                result[name]["refreshRates"] = {
+                    display: {"rates": {rate: {"seconds": round(value / 1e9, 3),
+                                                 "sharePercent": round(value / 1e7 / duration, 2)}
+                                          for rate, value in sorted(bins.items()) if rate != "unknown" and value > 0},
+                              "unknownSeconds": round(bins["unknown"] / 1e9, 3),
+                              "uncoveredSeconds": round(max(0, duration - sum(bins.values()) / 1e9), 3)}
+                    for display, bins in displays.items() if sum(bins.values()) > 0} or None
+    if "metal-gpu-intervals" in run.schemas:
+        totals = Counter()
+        observed = Counter()
+        invalid = set()
+        for row in table_rows(trace, "metal-gpu-intervals", {"process", "start", "duration"}):
+            if process_name(row.get("process")) != IPHONE_RENDER_SERVER:
+                continue
+            start, duration = trace_number(row.get("start")), trace_number(row.get("duration"))
+            if start is None or duration is None or duration < 0:
+                invalid.update(windows)
+                continue
+            for name, intervals in windows.items():
+                covered = overlap_ns(intervals, start, start + duration)
+                if covered:
+                    observed[name] += 1
+                    totals[name] += covered
+        for name in windows:
+            if observed[name] and name not in invalid:
+                result[name]["backboardGpuChannelMs"] = round(totals[name] / 1e6, 1)
+    if "ProcessSubsystemPowerImpact" in run.schemas:
+        totals = {name: Counter() for name in windows}
+        weights = {name: Counter() for name in windows}
+        row_weights = Counter()
+        invalid = {name: set() for name in windows}
+        for row in table_rows(trace, "ProcessSubsystemPowerImpact", {"start", "duration", "process", "row-kind", "cpu-impact", "gpu-impact", "display-impact"}):
+            if process_name(row.get("process")) != APP:
+                continue
+            start, duration = trace_number(row.get("start")), trace_number(row.get("duration"))
+            if start is None or duration is None or duration <= 0:
+                for components in invalid.values():
+                    components.update(("cpu", "gpu", "display"))
+                continue
+            kind = trace_number(row.get("row-kind"))
+            for name, intervals in windows.items():
+                covered = overlap_ns(intervals, start, start + duration)
+                if not covered:
+                    continue
+                row_weights[name] += covered
+                for component, owner in (("cpu", 0), ("display", 0), ("gpu", 2)):
+                    value = trace_number(row.get(f"{component}-impact"))
+                    if kind not in (0, 2) or (kind == owner and (value is None or value < 0)):
+                        invalid[name].add(component)
+                    elif value is not None and value >= 0:
+                        totals[name][component] += value * covered
+                        weights[name][component] += covered
+        for name in windows:
+            if weights[name]:
+                result[name]["powerImpact"] = {
+                    component: {"average": round(totals[name][component] / row_weights[name], 3),
+                                "valueSeconds": round(weights[name][component] / 1e9, 3),
+                                "rowSeconds": round(row_weights[name] / 1e9, 3)}
+                    if weights[name][component] and component not in invalid[name] else None
+                    for component in ("cpu", "gpu", "display")}
+    return result
+
+
 def swiftui_updates(trace: str, seconds: float) -> dict | None:
     types = Counter()
     descriptions = Counter()
@@ -995,7 +1084,7 @@ def swift_concurrency(trace: str, schemas: frozenset[str]) -> dict | None:
             "scope": "summed task state lifetimes; overlapping tasks are not CPU time"}
 
 
-def summarize(trace: str, frames: int, callers: list[str], apps: list[Path]) -> dict:
+def summarize(trace: str, frames: int, callers: list[str], apps: list[Path], window: tuple[float, float] | None = None) -> dict:
     run = recorded_run(trace)
     scroll = scroll_receipt(trace)
     render_server = MAC_RENDER_SERVER if run.platform == "macOS" else IPHONE_RENDER_SERVER
@@ -1022,6 +1111,35 @@ def summarize(trace: str, frames: int, callers: list[str], apps: list[Path]) -> 
     swiftui = measure("swiftui", lambda: swiftui_updates(trace, run.seconds)) if SWIFTUI_UPDATES in run.schemas else None
     intervals = measure("TranscriptScroll", lambda: operation_intervals(trace, run.schemas, MOTION_SIGNPOST))
     journey_intervals = measure("ReplayJourney", lambda: operation_intervals(trace, run.schemas, "ReplayJourney"))
+    perf_intervals = measure("PerfWindow", lambda: operation_intervals(trace, run.schemas, "PerfWindow"))
+    render_windows = {"wholeTrace": [(0, run.seconds * 1e9)]}
+    if journey_intervals:
+        render_windows["journey"] = journey_intervals
+    if perf_intervals:
+        render_windows["perfWindow"] = perf_intervals
+    if window is not None:
+        start, end = window
+        if not (0 <= start < end <= run.seconds):
+            raise ValueError("window must lie within the trace duration")
+        render_windows["selectedWindow"] = [(start * 1e9, end * 1e9)]
+    render = {name: {"seconds": round(sum(end - start for start, end in spans) / 1e9, 3),
+                     "refreshRates": None, "backboardGpuChannelMs": None, "powerImpact": None}
+              for name, spans in render_windows.items()}
+    for schema, key in (("display-vsyncs-interval", "refreshRates"),
+                        ("metal-gpu-intervals", "backboardGpuChannelMs"),
+                        ("ProcessSubsystemPowerImpact", "powerImpact")):
+        if schema in run.schemas:
+            values = measure(key, lambda: render_metrics(trace, replace(run, schemas=frozenset({schema})), render_windows))
+            if values is not None:
+                for name in render:
+                    render[name][key] = values[name][key]
+    for name, spans in render_windows.items():
+        seconds = sum(end - start for start, end in spans) / 1e9
+        hitch_summary = motion_hitches(spans, hitch_rows, seconds)
+        hitch_summary.pop("hitchRateRating", None)
+        if "hitches" in failures:
+            hitch_summary["hitchesUnavailableReason"] = failures["hitches"]["unavailableReason"]
+        render[name]["hitches"] = hitch_summary
     file_summary = measure("fileActivity", lambda: file_activity(trace, run.schemas))
     system_summary = measure("systemTrace", lambda: system_trace(trace, run.schemas))
     concurrency_summary = measure("swiftConcurrency", lambda: swift_concurrency(trace, run.schemas))
@@ -1047,7 +1165,8 @@ def summarize(trace: str, frames: int, callers: list[str], apps: list[Path]) -> 
             failures["metal-gpu-intervals"]["unavailableReason"] if "metal-gpu-intervals" in failures else
             "trace did not collect metal-gpu-intervals" if gpu_ms is None else
             f"metal-gpu-intervals has {unavailable_gpu[process]} contributing rows with unavailable durations for {process}"
-            if unavailable_gpu[process] else None
+            if unavailable_gpu[process] else
+            f"metal-gpu-intervals has no rows for {process}" if process not in gpu_ms else None
         )
         return {
             "gpuMs": None if reason else round(gpu_ms[process], 1),
@@ -1149,11 +1268,12 @@ def summarize(trace: str, frames: int, callers: list[str], apps: list[Path]) -> 
             "trace has no OSSignpostIntervals table" if intervals is None else
             f"no {MOTION_SIGNPOST} interval completed in {APP}" if not intervals else None
         ),
+        "renderMetrics": render,
         "renderServer": {
             "process": render_server,
             **cpu_summary(render_server),
             **gpu_summary(render_server),
-        } if render_server in cpu_ms or unweighted[render_server] else None,
+        },
         "swiftui": swiftui if "swiftui" not in failures else {**failures["swiftui"], "updates": None},
         "fileActivity": file_summary if "fileActivity" not in failures else {**failures["fileActivity"], "paths": None},
         "systemTrace": system_summary if "systemTrace" not in failures else {**failures["systemTrace"], "blockedMsByThreadAndReason": None},
@@ -1251,7 +1371,8 @@ def recording(trace: Path, seconds: int, target: list[str], instruments: list[st
 
 
 def selected_instruments(template: str, swiftui: bool, extra: Iterable[str]) -> list[str]:
-    instruments = INSTRUMENTS if template == "Time Profiler" else ["Time Profiler"]
+    instruments = INSTRUMENTS if template == "Time Profiler" else ["Time Profiler", *INSTRUMENTS]
+    instruments = [instrument for instrument in instruments if instrument != template]
     return list(dict.fromkeys([*instruments, *(["SwiftUI"] if swiftui else []), *extra]))
 
 
@@ -1404,6 +1525,8 @@ def main() -> None:
     record_parser.add_argument("--force", action="store_true", help="skip only the scripted scroll's initial HID idle gate")
     summarize_parser = commands.add_parser("summarize", help="summarize an existing trace on the host")
     summarize_parser.add_argument("trace")
+    summarize_parser.add_argument("--window", nargs=2, type=float, metavar=("START", "END"),
+                                  help="trace-relative window bounds in seconds")
     args = parser.parse_args()
 
     if args.command == "record":
@@ -1430,7 +1553,7 @@ def main() -> None:
         sys.exit(remote(host, forwarded))
     with exclusive_host():
         if args.command == "summarize":
-            summary = summarize(args.trace, args.frames, args.callers, args.symbols)
+            summary = summarize(args.trace, args.frames, args.callers, args.symbols, tuple(args.window) if args.window else None)
             print(json.dumps(summary, indent=2))
             reject_automation(summary)
             require_app_measurement(summary)

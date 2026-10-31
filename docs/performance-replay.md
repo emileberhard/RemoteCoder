@@ -219,8 +219,7 @@ synthetic log spam. Export CPU includes concurrent work. A bounded run that
 cannot reproduce the field uptime effect must report that result and its scale.
 
 Low-overhead runs establish CPU spreads. Use separate matching Instruments runs
-for call-tree attribution and actual presentation hitches. Display-link callback
-gaps are cadence evidence, not Apple's hitch count or presented FPS. Missing
+for call-tree attribution and actual presentation hitches. VSync interval shares describe panel refresh, not presented FPS or Apple's hitch count. Missing
 GPU, main-thread field measurements, retained bytes or export evidence remain
 unknown. No measured battery-life or joule estimate is produced.
 
@@ -282,14 +281,12 @@ journey. In Instruments select the corresponding interval, then inspect:
 
 JSONL keeps every delivery/action deadline and completion, periodic and context-transition CPU,
 footprint/thermal/power samples, applied input frames and actual notification
-recipient counts, raw display-link intervals, and render/layout
-counters. Render/layout counters cover the measured window. `rpcRequests`
+recipient counts and render/layout counters. Render/layout counters cover the measured window. `rpcRequests`
 subtracts preparation and excludes post-window content verification, which has
 its own `verificationRPCRequests`; `httpRequests` includes preparation and
 verification. Use the action/signpost intervals and CPU
 stacks, rather than those broader request counts, to attribute window cost. Main-thread CPU is a thread measurement; it does not by itself prove
-Main Actor isolation. Display-link callbacks measure callback cadence, not
-presented FPS or Apple's hitch rate. Peak sampled footprint can miss shorter
+Main Actor isolation. Peak sampled footprint can miss shorter
 spikes; allocation/VM traces provide the deeper view. CPU and thermal state are
 energy evidence, not a measured battery-life or joule estimate.
 

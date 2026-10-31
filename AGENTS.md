@@ -364,6 +364,7 @@ measurably beat SwiftUI.
   1% of app CPU or main-thread CPU, or when an observed automation share is unknown.
   `dev-tools/streaming-motion-report` measures streaming jitter from a screen
   recording.
+- UI performance comparisons report refresh-rate shares, backboardd GPU and power impact alongside app CPU. Measurement code must not change the display frame rate.
 - `perf-trace record --template` selects `Time Profiler` (default),
   `Processor Trace`, `Swift Concurrency`, `System Trace`, `File Activity`, or
   `Allocations`; repeat `--instrument` to add Apple instruments. Processor

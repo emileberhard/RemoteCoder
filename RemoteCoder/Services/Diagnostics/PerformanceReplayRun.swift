@@ -128,9 +128,9 @@ final class PerformanceReplayRun {
             report["omittedVisualFetches"] = PerformanceReplayHTTP.omittedVisualFetches
             report["blockedVisualLoads"] = PerformanceReplayHTTP.blockedVisualLoads
             report["valid"] = report["activeThroughout"] as? Bool == true && report["conservedEnergy"] as? Bool == false
-                && (report["frames"] as? Int ?? 0) > 0 && diagnostics.failures.isEmpty && diagnostics.unsupported.isEmpty && http.missing.isEmpty
+                && diagnostics.failures.isEmpty && diagnostics.unsupported.isEmpty && http.missing.isEmpty
                 && http.blockedExternal == 0 && PerformanceReplayHTTP.blockedVisualLoads == 0
-                && report["frameIntervalsOverflowed"] as? Bool == false
+                && report["telemetryOverflowed"] as? Bool == false
                 && !verification.isEmpty && verification.allSatisfy { $0["matches"] as? Bool == true }
             report["cleanupFailures"] = await stop()
             report["telemetryFiles"] = PerformanceReplayHTTP.telemetryCapture.files
@@ -210,7 +210,7 @@ final class PerformanceReplayRun {
             report["fixtureSHA256"] = hash
             report["scenario"] = scenario.name
             report["windowValid"] = report["activeThroughout"] as? Bool == true && report["conservedEnergy"] as? Bool == false
-                && (report["frames"] as? Int ?? 0) > 0 && report["frameIntervalsOverflowed"] as? Bool == false
+                && report["telemetryOverflowed"] as? Bool == false
             report["valid"] = false
             return report
         } catch {

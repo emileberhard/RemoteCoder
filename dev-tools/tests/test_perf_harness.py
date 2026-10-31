@@ -46,6 +46,21 @@ class LeaseTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "exceeds 4 MiB"):
                 perf_harness.instrumentation(SimpleNamespace(), str(template), [])
 
+    def test_windows_do_not_require_display_link_frames(self) -> None:
+        result = {"activeThroughout": True, "conservedEnergy": False}
+        with patch.object(perf_harness, "send", return_value=result):
+            self.assertEqual(perf_harness.measured(None, {"cmd": "window"}, 1, 1), result)
+        with patch.object(perf_harness, "send", return_value=result | {"activeThroughout": False}):
+            with self.assertRaisesRegex(SystemExit, "invalid window"):
+                perf_harness.measured(None, {"cmd": "window"}, 1, 1)
+
+    def test_builtin_trace_adds_render_instruments(self) -> None:
+        with patch.object(perf_harness, "built_in_templates", return_value={"Time Profiler", "Power Profiler"}):
+            result = perf_harness.instrumentation(SimpleNamespace(), "Time Profiler", [])
+            self.assertEqual(result["instruments"], ["Hitches", "GPU", "Display", "Power Profiler", "Points of Interest"])
+            power = perf_harness.instrumentation(SimpleNamespace(), "Power Profiler", [])
+            self.assertNotIn("Power Profiler", power["instruments"])
+
     def test_device_lease_is_the_installers_per_device_lock(self) -> None:
         with tempfile.TemporaryDirectory() as directory, patch.object(build_support, "cache_root", return_value=Path(directory)):
             expected = Path(directory) / "device-locks" / (hashlib.sha256(b"UDID-1").hexdigest() + ".lock")

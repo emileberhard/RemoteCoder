@@ -65,8 +65,9 @@ PERF_DIR = "Library/Caches/perf"
 SWITCHES = {
     "growth", "readingFrames", "geometryProjections", "visibility",
     "scrollTargets", "scrollPosition", "geometryGroup", "latestEdge",
-    "contextMenu", "textSelection", "tooltips", "growthGate", "resourceSampler", "measurementDisplayLink",
+    "contextMenu", "textSelection", "tooltips", "growthGate", "resourceSampler",
 }
+TRACE_INSTRUMENTS = ("Hitches", "GPU", "Display", "Power Profiler", "Points of Interest")
 TRACE_WARMUP = 2
 TRACE_COMPLETE = "Time limit reached"
 CLOCK_SLACK = 0.5
@@ -508,7 +509,7 @@ def screenshot(args, device: Simulator | Device) -> None:
 
 
 def instrumentation(device: Simulator | Device, template: str | None, instruments: list[str] | None) -> dict:
-    instruments = instruments or []
+    instruments = list(dict.fromkeys([*(instrument for instrument in TRACE_INSTRUMENTS if instrument != template), *(instruments or [])])) if template and not saved_template_data(template) else (instruments or [])
     app_only = not isinstance(device, Device) or template in {"Allocations", "Power Profiler"}
     result = {"template": template, "instruments": instruments,
               "scope": ("app" if app_only else "allProcesses") if template else None}
@@ -601,7 +602,7 @@ def tracing(device: Simulator | Device, template: str, instruments: list[str] | 
         notification = "com.remotecoder.perf.trace." + uuid.uuid4().hex
         command = ["xcrun", "xctrace", "record", "--template", selected_template, "--device", device.udid, *scope,
                    "--time-limit", f"{seconds}s", "--output", path, "--no-prompt", "--notify-tracing-started", notification]
-        for instrument in instruments or []:
+        for instrument in configuration["instruments"]:
             command += ["--instrument", instrument]
         with _trace_notification(notification) as (descriptor, token):
             recorder = None
@@ -700,11 +701,10 @@ def measured(device: Simulator | Device, command: dict, timeout: float, quiet_se
     result = send(device, command, timeout, quiet_seconds=quiet_seconds)
     if result is None or "error" in result:
         raise SystemExit(f"{command['cmd']} failed: {result['error'] if result else 'timed out'}")
-    missing_frames = not result["frames"] and "measurementDisplayLink" not in result["disabled"]
-    if not result["activeThroughout"] or result["conservedEnergy"] or missing_frames:
-        raise SystemExit("invalid window: the app left the active state, conserved energy or drew no frames "
+    if not result["activeThroughout"] or result["conservedEnergy"]:
+        raise SystemExit("invalid window: the app left the active state or conserved energy "
                          f"(activeThroughout={result['activeThroughout']}, "
-                         f"conservedEnergy={result['conservedEnergy']}, frames={result['frames']})")
+                         f"conservedEnergy={result['conservedEnergy']})")
     return result
 
 
@@ -1018,10 +1018,10 @@ def run_scenario(args, device: Simulator | Device, index: int, deadline: float) 
             if trace_path:
                 result["trace"] = trace_path
             if result.get("error") or not result.get("valid") or not result.get("activeThroughout") \
-                    or result.get("conservedEnergy") or not result.get("frames"):
+                    or result.get("conservedEnergy"):
                 failures = [key for key in ["error", "serverFailures", "unsupportedRPCs", "uncapturedHTTP", "cleanupFailures"] if result.get(key)]
                 failures += ["finalContent"] if any(not item.get("matches") for item in result.get("finalContent", [])) else []
-                failures += [key for key in ["activeThroughout", "frames"] if not result.get(key)]
+                failures += [key for key in ["activeThroughout"] if not result.get(key)]
                 failures += ["conservedEnergy"] if result.get("conservedEnergy") else []
                 raise SystemExit("invalid scenario window: " + ", ".join(failures or ["app validity check"]))
             if result.get("fixtureSHA256") != hashlib.sha256(data).hexdigest():

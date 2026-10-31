@@ -256,9 +256,11 @@ profiles to permit profiling attachment; its reports compare only with each
 other. A simulator build is Debug at `-O`, good for checking a journey, not for numbers. Harness builds never enroll shared-gateway notifications. `stream` replays a recorded turn into an open
 thread and `open-bench` opens a thread in a window that ends `--tail` seconds after
 its transcript loads. Both fresh-install per run and print one JSON window per run;
-a window is rejected unless the app stayed active at full energy and drew frames.
+a window is rejected unless the app stayed active at full energy. Measurement windows do not drive the display refresh rate.
 
 A saved trace template does not prove the recorded mode. Missing journey or scroll signposts leave hitch coverage unknown even when app CPU counters and timestamped CPU samples remain usable. Supply the matching dSYM explicitly when resolving sampled app frames.
+
+Traced runs add Display, GPU, Hitches, Power Profiler and Points of Interest by default for built-in templates. `perf-trace` reports panel VSync interval shares, backboardd GPU channel time and app power impact for each available signposted window, with missing coverage explicit. GPU channel time sums overlapping channel rows, unlike the top-level depth-zero GPU total; power impact averages weight all Power Profiler rows by their overlap with the window, and report component and row durations. For older traces without signposts, `summarize TRACE --window START END` selects trace-relative seconds.
 
 The implementation is `src/remotecoder_tools/perf_harness.py`. `build` takes the
 worktree's source lease and a background compiler slot from
@@ -288,7 +290,7 @@ second. Sessions drift by up to 20 %, and a `--disable` switch also removes
 everything its feature gates: on 2026-10-20 `--disable readingFrames` cut
 scroll CPU 15 % because it also removed the reading target and runway
 trimming, while actually replacing those observers measured no change. Each
-run has only a handful of hitches, so rank by CPU, not hitch rate. A
+run has only a handful of hitches; compare render-side cost as well as CPU. A
 scroll-loop result's `counts` show work beside timing; `layout.measure` is a
 full `TranscriptLayout` re-measure.
 
