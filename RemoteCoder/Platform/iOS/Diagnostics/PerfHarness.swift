@@ -477,10 +477,12 @@ private final class MeasurementWindow: NSObject {
         startMainCPU = ProcessMetrics.mainThreadCPUSeconds()
         signpostState = PerfHarness.signposter.beginInterval("PerfWindow", id: PerfHarness.signposter.makeSignpostID(), "\(label, privacy: .public)")
         super.init()
-        let link = CADisplayLink(target: self, selector: #selector(tick(_:)))
-        link.preferredFrameRateRange = CAFrameRateRange(minimum: 60, maximum: 120, preferred: 120)
-        link.add(to: .main, forMode: .common)
-        self.link = link
+        if !PerfBuild.isDisabled("measurementDisplayLink") {
+            let link = CADisplayLink(target: self, selector: #selector(tick(_:)))
+            link.preferredFrameRateRange = CAFrameRateRange(minimum: 60, maximum: 120, preferred: 120)
+            link.add(to: .main, forMode: .common)
+            self.link = link
+        }
         NotificationCenter.default.addObserver(self, selector: #selector(resignedActive(_:)),
             name: UIApplication.willResignActiveNotification, object: nil)
     }
@@ -523,7 +525,9 @@ private final class MeasurementWindow: NSObject {
     }
 
     func finish() -> [String: Any] {
+        let measuredFrames = link != nil
         cancel()
+        conservedEnergy = conservedEnergy || AppEnergyPolicy.current.conservesEnergy
         let elapsed = started.duration(to: .now)
         let seconds = Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) / 1e18
         let footprint = ProcessMetrics.footprint()
@@ -533,14 +537,14 @@ private final class MeasurementWindow: NSObject {
             "seconds": seconds,
             "startedAt": startedAt.timeIntervalSince1970,
             "endedAt": Date.now.timeIntervalSince1970,
-            "frames": frames,
+            "frames": measuredFrames ? frames as Any : NSNull(),
             "activeThroughout": activeThroughout,
             "conservedEnergy": conservedEnergy,
-            "refreshHz": expectedInterval > 0 ? (1 / expectedInterval).rounded() : 0,
-            "hitches": hitches,
-            "hitchMs": hitchSeconds * 1000,
-            "hitchMsPerSecond": seconds > 0 ? hitchSeconds * 1000 / seconds : 0,
-            "longestFrameMs": longestInterval * 1000,
+            "refreshHz": measuredFrames ? (expectedInterval > 0 ? (1 / expectedInterval).rounded() : 0) as Any : NSNull(),
+            "hitches": measuredFrames ? hitches as Any : NSNull(),
+            "hitchMs": measuredFrames ? hitchSeconds * 1000 as Any : NSNull(),
+            "hitchMsPerSecond": measuredFrames ? (seconds > 0 ? hitchSeconds * 1000 / seconds : 0) as Any : NSNull(),
+            "longestFrameMs": measuredFrames ? longestInterval * 1000 as Any : NSNull(),
             "longFrames": longFrames,
             "omittedLongFrames": omittedLongFrames,
             "processCPUms": ProcessMetrics.cpuMilliseconds(from: startProcessCPU, to: ProcessMetrics.processCPUSeconds()).map { $0 as Any } ?? NSNull(),

@@ -65,7 +65,7 @@ PERF_DIR = "Library/Caches/perf"
 SWITCHES = {
     "growth", "readingFrames", "geometryProjections", "visibility",
     "scrollTargets", "scrollPosition", "geometryGroup", "latestEdge",
-    "contextMenu", "textSelection", "tooltips", "growthGate", "resourceSampler",
+    "contextMenu", "textSelection", "tooltips", "growthGate", "resourceSampler", "measurementDisplayLink",
 }
 TRACE_WARMUP = 2
 TRACE_COMPLETE = "Time limit reached"
@@ -509,7 +509,7 @@ def screenshot(args, device: Simulator | Device) -> None:
 
 def instrumentation(device: Simulator | Device, template: str | None, instruments: list[str] | None) -> dict:
     instruments = instruments or []
-    app_only = not isinstance(device, Device) or template == "Allocations"
+    app_only = not isinstance(device, Device) or template in {"Allocations", "Power Profiler"}
     result = {"template": template, "instruments": instruments,
               "scope": ("app" if app_only else "allProcesses") if template else None}
     if (data := saved_template_data(template)) is not None:
@@ -700,7 +700,8 @@ def measured(device: Simulator | Device, command: dict, timeout: float, quiet_se
     result = send(device, command, timeout, quiet_seconds=quiet_seconds)
     if result is None or "error" in result:
         raise SystemExit(f"{command['cmd']} failed: {result['error'] if result else 'timed out'}")
-    if not result["activeThroughout"] or result["conservedEnergy"] or not result["frames"]:
+    missing_frames = not result["frames"] and "measurementDisplayLink" not in result["disabled"]
+    if not result["activeThroughout"] or result["conservedEnergy"] or missing_frames:
         raise SystemExit("invalid window: the app left the active state, conserved energy or drew no frames "
                          f"(activeThroughout={result['activeThroughout']}, "
                          f"conservedEnergy={result['conservedEnergy']}, frames={result['frames']})")
