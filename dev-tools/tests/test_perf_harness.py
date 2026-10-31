@@ -55,9 +55,10 @@ class LeaseTests(unittest.TestCase):
                 perf_harness.measured(None, {"cmd": "window"}, 1, 1)
 
     def test_builtin_trace_adds_render_instruments(self) -> None:
-        with patch.object(perf_harness, "built_in_templates", return_value={"Time Profiler", "Power Profiler"}):
+        with patch.object(perf_harness, "built_in_templates", return_value={"Time Profiler", "Power Profiler", "Allocations"}):
             result = perf_harness.instrumentation(SimpleNamespace(), "Time Profiler", [])
-            self.assertEqual(result["instruments"], ["Hitches", "GPU", "Display", "Points of Interest", "Power Profiler"])
+            self.assertEqual(result["scope"], "app")
+            self.assertEqual(result["instruments"], ["Hitches", "GPU", "Display", "Points of Interest"])
             power = perf_harness.instrumentation(SimpleNamespace(), "Power Profiler", [])
             self.assertNotIn("Power Profiler", power["instruments"])
             device = Mock(spec=perf_harness.Device)
@@ -67,6 +68,8 @@ class LeaseTests(unittest.TestCase):
             attached = perf_harness.instrumentation(device, "Power Profiler", [])
             self.assertEqual(attached["scope"], "app")
             self.assertNotIn("Power Profiler", attached["instruments"])
+            allocations = perf_harness.instrumentation(device, "Allocations", [])
+            self.assertEqual(allocations["instruments"], ["Hitches", "GPU", "Display", "Points of Interest", "Power Profiler"])
             explicit = perf_harness.instrumentation(device, "Time Profiler", ["Power Profiler"])
             self.assertIn("Power Profiler", explicit["instruments"])
 

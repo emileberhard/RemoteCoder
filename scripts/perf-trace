@@ -1385,10 +1385,10 @@ def recording(trace: Path, seconds: int, target: list[str], instruments: list[st
         raise subprocess.CalledProcessError(recorder.returncode, command)
 
 
-def selected_instruments(template: str, swiftui: bool, extra: Iterable[str], app_attached: bool) -> list[str]:
+def selected_instruments(template: str, swiftui: bool, extra: Iterable[str], profiles_power: bool) -> list[str]:
     instruments = INSTRUMENTS if template == "Time Profiler" else ["Time Profiler", *INSTRUMENTS]
     instruments = [instrument for instrument in instruments if instrument != template]
-    return list(dict.fromkeys([*instruments, *(["Power Profiler"] if app_attached and template != "Power Profiler" else []),
+    return list(dict.fromkeys([*instruments, *(["Power Profiler"] if profiles_power and template != "Power Profiler" else []),
                                *(["SwiftUI"] if swiftui else []), *extra]))
 
 
@@ -1489,7 +1489,7 @@ def record_mac(label: str, seconds: int, frames: int, callers: list[str], apps: 
     trace = new_trace(label)
     scroll = None
     with recording(trace, seconds, ["--attach", str(pid)],
-                   selected_instruments(args.template, args.swiftui, args.instrument, True), args.template):
+                   selected_instruments(args.template, args.swiftui, args.instrument, False), args.template):
         with ThreadPoolExecutor(max_workers=1) as pool:
             sampling = pool.submit(top_window, pid, seconds)
             if driver is not None:

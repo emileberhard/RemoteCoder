@@ -510,7 +510,7 @@ def screenshot(args, device: Simulator | Device) -> None:
 
 def instrumentation(device: Simulator | Device, template: str | None, instruments: list[str] | None) -> dict:
     app_only = not isinstance(device, Device) or template in {"Allocations", "Power Profiler"}
-    defaults = [*TRACE_INSTRUMENTS, *(["Power Profiler"] if app_only else [])]
+    defaults = [*TRACE_INSTRUMENTS, *(["Power Profiler"] if app_only and isinstance(device, Device) else [])]
     instruments = list(dict.fromkeys([*(instrument for instrument in defaults if instrument != template), *(instruments or [])])) if template and not saved_template_data(template) else (instruments or [])
     result = {"template": template, "instruments": instruments,
               "scope": ("app" if app_only else "allProcesses") if template else None}
