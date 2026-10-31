@@ -4,11 +4,12 @@ struct RenderedMessage: Sendable {
     let sourceText: String
     let sourceBytes: Int
     let isStreaming: Bool
-    let extendsStream: Bool
     let body: String
     let document: MarkdownDocument
     let inline: RenderedInlineMessage?
     let revision: Int
+    var arrival = StreamingArrival.none
+    var reveal = StreamingReveal.settled
 
     var blocks: [RenderedMarkdownBlock] { document.blocks }
     var containsHTMLVisual: Bool { document.containsHTMLVisual }
@@ -18,14 +19,22 @@ struct RenderedMessage: Sendable {
         let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let document = inline == nil ? MarkdownRendering.parse(body, previous: previous?.document,
             isStreaming: isStreaming, highlighting: &highlighting) : .empty
-        // A terminal update may contain the last suffix, so it still animates;
-        // a first render or loaded history does not continue a stream.
+        // A terminal update may contain the last suffix, so it still reveals;
+        // finished history does not.
+        let arrival = isStreaming || previous?.isStreaming == true
+            ? StreamingArrival(previous: previous?.blocks ?? [], current: document.blocks) : .none
         return RenderedMessage(
             sourceText: text, sourceBytes: (inline?.plainText ?? text).utf8.count, isStreaming: isStreaming,
-            extendsStream: previous.map { isStreaming || $0.isStreaming } ?? false,
             body: body, document: document, inline: inline.map(RenderedInlineMessage.init),
-            revision: (previous?.revision ?? 0) + 1
+            revision: (previous?.revision ?? 0) + 1, arrival: arrival
         )
+    }
+
+    func publishing(after previous: RenderedMessage?, at now: TimeInterval) -> RenderedMessage {
+        var published = self
+        published.reveal = (previous?.reveal ?? .settled).advanced(by: arrival, at: now)
+        published.arrival = .none
+        return published
     }
 }
 

@@ -490,7 +490,7 @@ return up to 30 frames later, so a 2 pt twitch that snaps back after 150 ms
 counts. Review opposite-direction candidates against the recording and exclude
 intentional scrolling and keyboard transitions. The regression target is zero
 unexplained jump and snap-back pairs; luma-change counts are descriptive, not a
-publish-count gate, since deliberate fades and smooth growth change several frames
+publish-count gate, since deliberate word fades change several frames
 per published snapshot. Uniform opacity changes are normalized out. App debug logs
 use the `streaming-motion` category for publication cadence without recording
 message content.

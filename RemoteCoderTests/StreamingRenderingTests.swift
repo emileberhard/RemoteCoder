@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 import Testing
 import UIKit
 @testable import RemoteCoder
@@ -87,12 +88,101 @@ struct StreamingRenderingTests {
         #expect(result.blocks.flatMap(\.inlines).map { String($0.characters) } == ["**unfinished", "tail"])
     }
 
-    @Test func onlyUpdatesOfAStreamExtendIt() {
-        let first = render("a")
-        let terminal = render("ab", previous: first, streaming: false)
-        #expect(!first.extendsStream)
-        #expect(terminal.extendsStream)
-        #expect(!render("abc", previous: render("ab", streaming: false), streaming: false).extendsStream)
+    @Test func onlyStreamedTextReveals() {
+        let first = render("Hello")
+        let terminal = render("Hello world", previous: first, streaming: false)
+        #expect(first.arrival.targets == [.text(StreamingRevealTextSlot(block: 0, slot: 0), utf16: 0..<5)])
+        #expect(terminal.arrival.targets == [.text(StreamingRevealTextSlot(block: 0, slot: 0), utf16: 6..<11)])
+        #expect(render("Hello world", streaming: false).arrival.targets.isEmpty)
+        #expect(render("Hello world!", previous: render("Hello world", streaming: false), streaming: false)
+            .arrival.targets.isEmpty)
+    }
+
+    @Test func arrivalsCoverOnlyNewWordsAndNewBlocks() {
+        let slot = { StreamingRevealTextSlot(block: $0, slot: $1) }
+        let previous = render("Intro wor\n\n- one\n- tw")
+        let current = render("Intro world again\n\n- one\n- two\n- three\n\n```\nlet x\n```", previous: previous)
+        #expect(current.arrival.targets == [
+            .text(slot(0, 0), utf16: 9..<12), .text(slot(0, 0), utf16: 12..<17),
+            .text(slot(1, 1), utf16: 2..<3), .text(slot(1, 2), utf16: 0..<5), .block(2),
+        ])
+        #expect(current.arrival.continuations == [
+            .text(slot(0, 0), utf16: 9..<12), .text(slot(1, 1), utf16: 2..<3),
+        ])
+        let grown = render("Intro world again\n\n- one\n- two\n- three\n\n```\nlet x = 1\n```", previous: current)
+        #expect(grown.arrival.targets.isEmpty)
+        #expect(grown.arrival.carries(.block(2)))
+        #expect(grown.arrival.carries(.text(slot(0, 0), utf16: 12..<17)))
+    }
+
+    @MainActor @Test func revealCoversMatchMarkedRunsAcrossParagraphsWrapsAndReplacements() throws {
+        let segments: [(text: String, mark: Int?)] = [
+            ("alpha ", nil), ("beta", 6), ("\ngamma ", nil), ("\u{00A0}", 17), ("ab", 17), (" ", 17),
+            ("delta epsilon zeta ", 22), ("eta theta", nil),
+        ]
+        let spans = [StreamingRevealSpan(utf16: 6..<10, begin: 1), StreamingRevealSpan(utf16: 17..<22, begin: 2),
+                     StreamingRevealSpan(utf16: 22..<41, begin: 3)]
+        let source = AttributedString("alpha beta\ngamma LINK delta epsilon zeta eta theta")
+        let map = StreamingRevealLayoutMap(text: source, spans: spans,
+                                           replacements: [.init(source: 17..<21, length: 3)])
+        let plain = try #require(Self.layout(of: Text(segments.map(\.text).joined())))
+        let marked = try #require(Self.layout(of: segments.reduce(Text(verbatim: "")) { text, segment in
+            let piece = segment.mark.map { Text(segment.text).customAttribute(RevealOracleMark(id: $0)) } ?? Text(segment.text)
+            return Text("\(text)\(piece)")
+        }))
+        var expected: [Int: [CGRect]] = [:]
+        for line in marked {
+            var lineRects: [Int: CGRect] = [:]
+            for run in line {
+                guard let mark = run[RevealOracleMark.self] else { continue }
+                let bounds = run.typographicBounds.rect
+                let rect = CGRect(x: bounds.minX, y: line.typographicBounds.rect.minY, width: bounds.width,
+                                  height: line.typographicBounds.rect.height)
+                lineRects[mark.id] = lineRects[mark.id]?.union(rect) ?? rect
+            }
+            for (id, rect) in lineRects { expected[id, default: []].append(rect) }
+        }
+        #expect(expected[22]?.count ?? 0 > 1)
+        for layout in [plain, marked] {
+            let covers = StreamingRevealCover.covers(for: map, in: layout, at: .zero)
+            #expect(covers.map(\.id) == [6, 17, 22])
+            for cover in covers {
+                let reference = expected[cover.id] ?? []
+                #expect(cover.rects.count == reference.count)
+                #expect(zip(cover.rects, reference).allSatisfy { lhs, rhs in
+                    [lhs.minX - rhs.minX, lhs.minY - rhs.minY, lhs.width - rhs.width, lhs.height - rhs.height]
+                        .allSatisfy { abs($0) < 0.5 }
+                })
+            }
+        }
+    }
+
+    @MainActor private static func layout(of text: Text) -> Text.Layout? {
+        var layout: Text.Layout?
+        let renderer = ImageRenderer(content: text.frame(width: 140, alignment: .leading)
+            .overlayPreferenceValue(Text.LayoutKey.self) { layouts in
+                let _ = layout = layouts.first?.layout
+                Color.clear
+            })
+        _ = renderer.uiImage
+        return layout
+    }
+
+    @Test func revealsStaggerWordsAndCarryOnlyFadingUnchangedText() {
+        let first = render("One two three").publishing(after: nil, at: 10)
+        let spans = first.reveal.block(0).spans(slot: 0)
+        #expect(spans.map(\.utf16) == [0..<4, 4..<8, 8..<13])
+        #expect(zip(spans.map(\.begin), [10, 10.07, 10.14]).allSatisfy { abs($0 - $1) < 1e-9 })
+        #expect(first.reveal.end.map { abs($0 - 10.64) < 1e-9 } == true)
+        let continued = render("One two threefold four", previous: first).publishing(after: first, at: 10.2)
+        let next = continued.reveal.block(0).spans(slot: 0)
+        #expect(next.map(\.utf16) == [0..<4, 4..<8, 8..<13, 13..<18, 18..<22])
+        #expect(next[3].begin == spans[2].begin)
+        #expect(abs(next[4].begin - 10.21) < 1e-9)
+        let corrected = render("Uno", previous: continued).publishing(after: continued, at: 10.3)
+        #expect(corrected.reveal.block(0).spans(slot: 0).map(\.utf16) == [0..<3])
+        let settled = render("Uno", previous: corrected, streaming: false).publishing(after: corrected, at: 11)
+        #expect(settled.reveal == .settled)
     }
 
     @Test func inlineStylesAndLinksSurvivePreparation() throws {
@@ -500,4 +590,8 @@ extension RenderedMarkdownBlock {
         case .table(let headers, _, let rows, _): headers + rows.flatMap { $0 }
         }
     }
+}
+
+private struct RevealOracleMark: TextAttribute {
+    let id: Int
 }

@@ -1374,17 +1374,37 @@ SwiftUI skips a reused block without comparing its attributed text. Only the fin
 optimistic inline delimiter closing; escapes, code spans and completed text keep
 their literal semantics. Nested unordered list indentation is retained, and
 consecutive `>` lines form one quote block of inline Markdown.
-Streamed text appears as it arrives, and each new block fades in. Bubble growth
-uses a scoped 0.25-second smooth animation keyed to the prepared render
-revision, not the incoming text length, and the block fade rides the same
-animation. Only a live prepared render or a render that continues a stream
-(`RenderedMessage.extendsStream`) animates: loaded history never does, while a
-terminal update's last blocks still do. The animation covers
-geometry and block opacity only: `contentTransition(.identity)` keeps text from
-cross-animating between revisions. An opacity transition needs no text or
-transcript re-measurement. The former per-word fade did both on every clock
-tick; replacing it cut main-thread time during a streamed turn by 13% and peak
-memory by half on an iPad Pro. Reduce Motion bypasses the animation.
+Streamed words fade in as they arrive, matching the ChatGPT iOS app's reveal:
+each word fades over 0.5 s, successive words start 70 ms apart, and once the
+backlog passes 0.3 s the gap shrinks, so the reveal stays under a second behind
+the stream (`StreamingRevealSchedule`). The render worker diffs each render
+against the previous one (`StreamingArrival`). New characters in paragraphs,
+headings, quotes and list items become at most 48 word units per render, and a
+new code block, table or Mermaid diagram becomes one block unit; images and
+HTML visuals keep their own loading presentation. `RenderedMessageStore` stamps
+start times when it publishes (`StreamingReveal`), so the stagger follows what
+the reader sees. `InlineMarkdownText` keeps one plain `Text` and, only while
+some of its words fade, reads its `Text.LayoutKey` layout, mapping the units'
+UTF-16 offsets onto the layout's character indices, which are UTF-16 offsets
+that restart at each hard line break and shift after a link chip by the
+difference between its label and its source text. The text hosts
+one background-colored `CALayer` per word line, and a 30 Hz `CADisplayLink` sets
+their eased opacity until the last cover clears; the chat background is a flat
+system color. Between publications the text, its layout and the view inputs stay
+unchanged, and a settlement task re-renders plain text after the last fade.
+Bubble geometry changes without animation and `contentTransition(.identity)`
+keeps text from cross-animating, as in ChatGPT. Only a live render or a stream's
+terminal update reveals; loaded history never does. Reduce Motion, energy
+conservation, an inactive scene and hidden visuals show text at once. Reading
+`Text.Layout` makes SwiftUI lay the paragraph out again with TextKit 2, which is
+most of the reveal's main-thread cost.
+Earlier designs were removed for their cost: a per-word `TextRenderer` fade
+re-resolved and re-measured text on every clock tick; a 0.25-second growth
+animation kept a ProMotion iPad at 120 Hz for 84% of a streamed reply; marking
+fading words as interpolated `Text` segments added 1.5 s of main-thread time to
+a 22-second iPad replay; and per-word `CABasicAnimation` fades held that iPad at
+120 Hz for 82–86% of the replay and nearly tripled backboardd CPU, even with an
+exact 30 Hz frame-rate range.
 On Mac, the mutable last block of a streaming assistant render disables text
 selection. A block restores selection when another block follows or the render
 settles; a closed code fence is already selectable. Mermaid source enables
@@ -1548,8 +1568,7 @@ excluded. Unhosted and not-yet-placed rows are excluded from emitted visibility.
 Only changed membership and height/near-top/bottom/latest thresholds
 reach SwiftUI. Exact bounds and the index remain unobserved. The final sample
 is published before idle policy runs. `TranscriptVisibility` keeps one observable
-visibility flag and one unobserved steady-growth snapshot per mounted row.
-Growth animation samples that snapshot when the render revision changes. Its
+visibility flag per mounted row. Its
 membership set, scrolling flag and row registry are unobserved; consumers read
 only their own row state. Membership changes update
 only entering/leaving rows, phase changes update only visible rows, and logical
@@ -1679,7 +1698,7 @@ delivery deliberately bypasses that boundary; `queue` remains available for
 comparison.
 
 `dev-tools/streaming-motion-report` records luma changes and normalized geometric
-jump/snap-back candidates. Deliberate fades and growth can change many frames per
+jump/snap-back candidates. Deliberate word and block fades can change many frames per
 publication, so luma counts are descriptive rather than a publish-count gate.
 Regression acceptance requires no unexplained opposite-direction layout jumps
 in a stable transcript crop, plus visual checks of intentional motion and

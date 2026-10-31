@@ -937,7 +937,6 @@ private struct TranscriptContentView<QuestionContent: View, BottomBar: View>: Vi
         return ChatBubble(
             message: message,
             renderedMessages: renderedMessages,
-            visibility: visibility,
             onFork: forkableMessageIDs.contains(message.id) ? fork : nil,
             queuedActions: message.delivery == .queued ? queued : nil,
             onSelectText: textSelectionAction(for: message),
@@ -1760,7 +1759,6 @@ fileprivate final class TranscriptRowVisibilityState {
     private(set) var isVisible = false
     private(set) var isScrolling = false
     private(set) var isMoving = false
-    @ObservationIgnored private(set) var isSteadilyVisible = false
 
     fileprivate func update(visible: Bool, phase: ScrollPhase) {
         let scrolling = phase != .idle
@@ -1770,11 +1768,6 @@ fileprivate final class TranscriptRowVisibilityState {
         if isVisible != visible {
             PerfBuild.count("row.visible")
             isVisible = visible
-        }
-        let steady = visible && phase == .idle
-        if isSteadilyVisible != steady {
-            PerfBuild.count("row.steady")
-            isSteadilyVisible = steady
         }
     }
 }
@@ -1789,7 +1782,6 @@ struct TranscriptRowVisibility: Equatable {
     @MainActor var isVisible: Bool { state.isVisible }
     @MainActor var isScrolling: Bool { state.isScrolling }
     @MainActor var isMoving: Bool { state.isMoving }
-    @MainActor var isSteadilyVisible: Bool { state.isSteadilyVisible }
 
     static func == (lhs: Self, rhs: Self) -> Bool { lhs.state === rhs.state }
 }

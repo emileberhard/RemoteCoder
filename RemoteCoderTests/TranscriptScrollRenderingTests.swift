@@ -421,7 +421,7 @@ struct TranscriptScrollRenderingTests {
 
     private func settle(_ scroll: UIScrollView) async throws {
         // Allow SwiftUI's layout/geometry observations to traverse the run loop.
-        // Consecutive identical samples also wait out the finite scroll/growth animations.
+        // Consecutive identical samples also wait out the finite scroll animations.
         var previous = (CGFloat.nan, CGFloat.nan)
         var stable = 0
         for _ in 0..<100 {

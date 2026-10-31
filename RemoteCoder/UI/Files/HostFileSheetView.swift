@@ -127,7 +127,7 @@ struct HostFileSheetView: View {
                     } else {
                         LazyVStack(alignment: .leading, spacing: MarkdownBlockView.spacing * interfaceScale) {
                             ForEach(content.blocks.indices, id: \.self) { index in
-                                MarkdownBlockView(block: content.blocks[index], isFirst: index == 0)
+                                MarkdownBlockView(block: content.blocks[index], isFirst: index == 0, reveal: .settled)
                                     .accessibilityFocused($focusedElement, equals: index)
                             }
                         }

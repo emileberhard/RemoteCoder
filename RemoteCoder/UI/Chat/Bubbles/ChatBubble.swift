@@ -10,7 +10,6 @@ struct ChatBubble: View {
     let message: ChatMessage
     /// Previous presentation remains visible until its replacement is ready.
     let renderedMessages: RenderedMessageStore
-    let visibility: TranscriptVisibility
     let onFork: ((ChatMessage) -> Void)?
     let queuedActions: QueuedMessageActions?
     var onSelectText: ((String) -> Void)? = nil
@@ -18,12 +17,11 @@ struct ChatBubble: View {
     static let messageVerticalInset: CGFloat = 8
     private static let sendingRevealDelay: Duration = .milliseconds(500)
 
-    init(message: ChatMessage, renderedMessages: RenderedMessageStore, visibility: TranscriptVisibility,
+    init(message: ChatMessage, renderedMessages: RenderedMessageStore,
          onFork: ((ChatMessage) -> Void)?, queuedActions: QueuedMessageActions?,
          onSelectText: ((String) -> Void)? = nil, onOpenAttachment: ((MessageAttachment) -> Void)? = nil) {
         self.message = message
         self.renderedMessages = renderedMessages
-        self.visibility = visibility
         self.onFork = onFork
         self.queuedActions = queuedActions
         self.onSelectText = onSelectText
@@ -97,8 +95,7 @@ private extension ChatBubble {
                     .accessibilityElement(children: .combine)
                 }
             } else if message.role == .codex {
-                PreparedAssistantContent(messageID: message.id, renderedMessages: renderedMessages,
-                    visibility: TranscriptRowVisibility(rowID: ChatStreamItem.message(message).id, visibility: visibility))
+                PreparedAssistantContent(messageID: message.id, renderedMessages: renderedMessages)
                     .equatable()
             } else {
                 userContent
@@ -125,7 +122,7 @@ private extension ChatBubble {
             }
         } else if let rendered = renderedMessages[message.id] {
             if !rendered.blocks.isEmpty {
-                PreparedMessageText(rendered: rendered)
+                PreparedMessageText(rendered: rendered, reveal: .settled)
                     .scaledFont(.body)
             }
         } else if !message.text.isEmpty {
@@ -148,13 +145,12 @@ private struct PreparedAssistantContent: View, Equatable {
     #endif
     let messageID: UUID
     let renderedMessages: RenderedMessageStore
-    let visibility: TranscriptRowVisibility
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.appEnergyPolicy) private var energyPolicy
     @Environment(\.visualsVisible) private var visualsVisible
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    private static let perfDisablesGrowth = PerfBuild.isDisabled("growth")
-    private static let perfUngatesGrowth = PerfBuild.isDisabled("growthGate")
+    @State private var settledReveal = -TimeInterval.infinity
+    private static let perfDisablesReveal = PerfBuild.isDisabled("reveal")
 
     var body: some View {
         let _ = PerfBuild.count("prepared.body")
@@ -162,10 +158,11 @@ private struct PreparedAssistantContent: View, Equatable {
         let _ = surfaceActivity?.recordBody()
         #endif
         let rendered = renderedMessages[messageID]
+        let reveal = revealing(rendered)
         Group {
             if let rendered {
                 if !rendered.blocks.isEmpty {
-                    PreparedMessageText(rendered: rendered)
+                    PreparedMessageText(rendered: rendered, reveal: reveal)
                         .scaledFont(.body)
                 }
             } else {
@@ -179,26 +176,28 @@ private struct PreparedAssistantContent: View, Equatable {
         .environment(\.transcriptTextSelectionEnabled, rendered?.isStreaming != true)
         #endif
         .transcriptPerfFeature("geometryGroup") { $0.geometryGroup() }
-        .animation(growthAnimation(rendered), value: rendered?.revision)
+        .background {
+            if let end = reveal.end {
+                StreamingRevealSettlement(end: end) { settledReveal = end }
+            }
+        }
     }
 
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.messageID == rhs.messageID && lhs.renderedMessages === rhs.renderedMessages
-            && lhs.visibility == rhs.visibility
     }
 
-    private func growthAnimation(_ rendered: RenderedMessage?) -> Animation? {
-        guard rendered?.isStreaming == true || rendered?.extendsStream == true, !Self.perfDisablesGrowth,
-              visibility.isSteadilyVisible || Self.perfUngatesGrowth,
+    private func revealing(_ rendered: RenderedMessage?) -> StreamingReveal {
+        guard !Self.perfDisablesReveal, let reveal = rendered?.reveal, let end = reveal.end, end > settledReveal,
               energyPolicy.animatesDecorations(sceneActive: scenePhase == .active, visible: visualsVisible,
-                                               reduceMotion: reduceMotion) else { return nil }
-        PerfBuild.count("growth.animates")
-        return .smooth(duration: 0.25)
+                                               reduceMotion: reduceMotion) else { return .settled }
+        return reveal
     }
 }
 
 private struct PreparedMessageText: View {
     let rendered: RenderedMessage
+    let reveal: StreamingReveal
     @Environment(\.htmlVisualCaptureAllowed) private var captureAllowed
 
     var body: some View {
@@ -208,10 +207,10 @@ private struct PreparedMessageText: View {
             Text(rendered.sourceText)
                 .transcriptTextSelection()
         } else {
-            MarkdownBlocksView(blocks: rendered.blocks)
+            MarkdownBlocksView(blocks: rendered.blocks, reveal: reveal)
         }
         #else
-        MarkdownBlocksView(blocks: rendered.blocks)
+        MarkdownBlocksView(blocks: rendered.blocks, reveal: reveal)
         #endif
         }
         .environment(\.htmlVisualCaptureAllowed, captureAllowed && !rendered.isStreaming)
@@ -348,7 +347,7 @@ private struct ChatBubbleContextPreview: View {
                 if rendered.containsHTMLVisual {
                     Text(rendered.plainText).lineLimit(8)
                 } else {
-                    MarkdownBlocksView(blocks: Array(rendered.blocks.prefix(4)))
+                    MarkdownBlocksView(blocks: Array(rendered.blocks.prefix(4)), reveal: .settled)
                 }
             } else {
                 Text(text).lineLimit(8)

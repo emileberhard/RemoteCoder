@@ -331,7 +331,7 @@ struct RenderedMessageStoreTests {
 
     nonisolated private static let rawRenderer: RenderedMessageStore.Renderer = { input in
         input.map { ($0.id, RenderedMessage(sourceText: $0.text, sourceBytes: ($0.inline?.plainText ?? $0.text).utf8.count, isStreaming: $0.isStreaming,
-            extendsStream: false, body: $0.text, document: .empty, inline: $0.inline.map(RenderedInlineMessage.init), revision: ($0.previous?.revision ?? 0) + 1)) }
+            body: $0.text, document: .empty, inline: $0.inline.map(RenderedInlineMessage.init), revision: ($0.previous?.revision ?? 0) + 1)) }
     }
 }
 

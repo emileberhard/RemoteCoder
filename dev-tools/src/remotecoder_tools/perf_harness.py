@@ -63,9 +63,9 @@ RUNTIME = "com.apple.CoreSimulator.SimRuntime.iOS-27-0"
 NOTIFICATION = "com.remotecoder.perf.command"
 PERF_DIR = "Library/Caches/perf"
 SWITCHES = {
-    "growth", "readingFrames", "geometryProjections", "visibility",
+    "reveal", "readingFrames", "geometryProjections", "visibility",
     "scrollTargets", "scrollPosition", "geometryGroup", "latestEdge",
-    "contextMenu", "textSelection", "tooltips", "growthGate", "resourceSampler",
+    "contextMenu", "textSelection", "tooltips", "resourceSampler",
 }
 TRACE_INSTRUMENTS = ("Hitches", "GPU", "Display", "Points of Interest")
 TRACE_WARMUP = 2
@@ -1143,7 +1143,7 @@ def configure_identity() -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--device", help="exact physical test UDID from maintainer testDeviceUDIDs instead of the perf simulator")
-    parser.add_argument("--disable", help="comma-separated costs the harness build switches off for an A/B run, e.g. growth")
+    parser.add_argument("--disable", help="comma-separated costs the harness build switches off for an A/B run, e.g. reveal")
     commands = parser.add_subparsers(dest="command", required=True)
     from .config import add_connection_arguments
     from .perf_replay import capture_command, compare

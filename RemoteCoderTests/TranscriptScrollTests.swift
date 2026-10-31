@@ -1,28 +1,10 @@
 import CoreGraphics
 import Foundation
-import Observation
 import SwiftUI
-import Synchronization
 import Testing
 @testable import RemoteCoder
 
 struct TranscriptScrollTests {
-    @Test @MainActor func growthAnimationSamplesVisibilityWithoutSubscribingToScrollChanges() {
-        let visibility = TranscriptVisibility()
-        let row = TranscriptRowVisibility(rowID: "reply", visibility: visibility)
-        let steadyChanged = Mutex(false)
-        let visibleChanged = Mutex(false)
-        withObservationTracking { _ = row.isSteadilyVisible } onChange: { steadyChanged.withLock { $0 = true } }
-        withObservationTracking { _ = row.isVisible } onChange: { visibleChanged.withLock { $0 = true } }
-        visibility.setVisibleRowIDs(["reply"])
-        #expect(row.isSteadilyVisible)
-        #expect(!steadyChanged.withLock { $0 })
-        #expect(visibleChanged.withLock { $0 })
-        visibility.setVisibleRowIDs([])
-        #expect(!row.isSteadilyVisible)
-        #expect(!steadyChanged.withLock { $0 })
-    }
-
     @Test(arguments: [false, true])
     func rowsWithoutUserTurnsCannotBypassMountLimits(activityOnly: Bool) {
         let rows = (0..<200).map { index in

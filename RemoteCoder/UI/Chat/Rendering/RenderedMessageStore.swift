@@ -1,4 +1,5 @@
 import Foundation
+import QuartzCore
 
 /// One worker owns parsing and highlighting. Obsolete work may finish, but can
 /// never overwrite a newer request or publish after retirement.
@@ -200,6 +201,7 @@ final class RenderedMessageStore {
             let rendered = await renderer(input)
             guard !retired, !Task.isCancelled else { return }
             let span = PerfBuild.span("render.publish"); defer { span.end() }
+            let now = CACurrentMediaTime()
             for (id, message) in rendered {
                 guard let request = requested[id], request.text == message.sourceText,
                       request.inline == message.inline?.source,
@@ -212,7 +214,7 @@ final class RenderedMessageStore {
                 #if RC_PERF_HARNESS
                 PerfBuild.count("renderPublish")
                 #endif
-                entry.replace(with: message)
+                entry.replace(with: message.publishing(after: entry.rendered, at: now))
                 requested.removeValue(forKey: id)
             }
             evictIfNeeded()

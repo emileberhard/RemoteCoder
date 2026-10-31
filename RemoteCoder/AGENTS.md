@@ -755,10 +755,8 @@ entrypoint linked above.
     represented there unless their existing observable owner updates them.
     Native display-linked sampling emits only membership changes and semantic
     height/threshold changes.
-    `TranscriptVisibility` owns bounded per-row state. Only visibility is
-    observed; growth animation samples the unobserved steady flag when a render
-    revision changes. Only entering or leaving rows change visibility; scroll
-    phase changes steady flags only for visible rows. The membership set and row-state registry are
+    `TranscriptVisibility` owns bounded per-row state. Only entering or leaving
+    rows change visibility. The membership set and row-state registry are
     unobserved, and rows evicted from the logical source are pruned. Native runway decisions use the
     first visible index position and cached prefix budgets. Follow and
     phase policy stay outside transcript-body observation. Mac has no
@@ -801,7 +799,11 @@ entrypoint linked above.
     subscript. The screen and drawer must not read the render dictionary.
   - Never make `RenderedMarkdownBlock` comparison content-based or use its
     version as `ForEach` identity. Streaming text never animates per revision
-    (`contentTransition(.identity)`), and an assistant message without a render
+    (`contentTransition(.identity)`); word reveals stay in
+    `StreamingRevealCoverLayers` and must not change the
+    text or its layout while they play. Do not fade covers with Core Animation
+    animations: per-word animations hold a ProMotion display at 120 Hz whatever
+    frame-rate range they request. An assistant message without a render
     shows a blank line, never raw Markdown. `RenderedMessageStore` keeps its
     serial worker, source and state matching, retirement, deadlines and bounds
     together.

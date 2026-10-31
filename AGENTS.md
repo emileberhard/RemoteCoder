@@ -297,8 +297,11 @@ measurably beat SwiftUI.
   render version. Never make that comparison content-based, and never use the
   version as `ForEach` identity. Clocks, timelines and animations stop when
   nothing is moving.
-- Streaming text never animates per revision. Bubbles animate geometry and new
-  blocks' opacity only (`.contentTransition(.identity)`).
+- Streaming text and bubble geometry never animate per revision
+  (`.contentTransition(.identity)`). New words fade in under background-colored
+  covers that `StreamingReveal` schedules once per publication; one 30 Hz display
+  link per covered text sets their opacity while the text and its layout stay
+  unchanged, and stops when the last cover clears.
 - Each observation has one owner. Transcript visibility comes from a single
   `onScrollTargetVisibilityChange` on iOS and `AppKitTranscriptContainer`'s
   bounded native row index on Mac; do not add per-row visibility tracking.

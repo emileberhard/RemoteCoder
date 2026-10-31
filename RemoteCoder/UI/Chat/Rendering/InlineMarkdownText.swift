@@ -2,6 +2,7 @@ import SwiftUI
 
 struct InlineMarkdownText: View {
     let text: AttributedString
+    let reveal: [StreamingRevealSpan]
     @Environment(\.font) private var font
     @Environment(\.fontResolutionContext) private var fontContext
     @Environment(\.siteIcons) private var siteIcons
@@ -22,6 +23,8 @@ struct InlineMarkdownText: View {
                     }
             }
         }
+        .streamingRevealCovers(reveal.isEmpty ? nil : StreamingRevealLayoutMap(
+            text: text, spans: reveal, replacements: chips.map { $0.replacement(in: text) }))
         .animation(nil, value: chips.isEmpty)
     }
 
@@ -42,7 +45,7 @@ struct InlineMarkdownText: View {
             if cursor < chip.range.lowerBound {
                 interpolation.appendInterpolation(Text(AttributedString(text[cursor..<chip.range.lowerBound])))
             }
-            var slot = AttributedString("\u{00A0}")
+            var slot = AttributedString(LinkChipSpan.slot)
             slot.link = chip.url
             slot.kern = pointSize * LinkChipRenderer.slotKern
             var label = chip.style.shortLabel.map(AttributedString.init) ?? AttributedString(text[chip.range])
@@ -62,12 +65,20 @@ struct InlineMarkdownText: View {
 }
 
 private struct LinkChipSpan {
+    static let slot = "\u{00A0}"
+
     let range: Range<AttributedString.Index>
     let url: URL
     let style: LinkChipStyle
 
     var iconHost: String? {
         if case .web(let host) = style.chip { host } else { nil }
+    }
+
+    func replacement(in text: AttributedString) -> StreamingRevealLayoutMap.Replacement {
+        let start = text.utf16.distance(from: text.startIndex, to: range.lowerBound)
+        let source = start..<(start + text.utf16.distance(from: range.lowerBound, to: range.upperBound))
+        return .init(source: source, length: Self.slot.utf16.count + (style.shortLabel?.utf16.count ?? source.count))
     }
 
     static func spans(in text: AttributedString) -> [LinkChipSpan] {

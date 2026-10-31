@@ -26,6 +26,7 @@ extension EnvironmentValues {
 /// off the main actor in `MarkdownRendering`; these views only draw.
 struct MarkdownBlocksView: View {
     let blocks: [RenderedMarkdownBlock]
+    let reveal: StreamingReveal
     @Environment(\.interfaceScale) private var interfaceScale
     @Environment(\.transcriptRowPresentation) private var rowPresentation
     #if os(macOS)
@@ -50,13 +51,12 @@ struct MarkdownBlocksView: View {
         #endif
         VStack(alignment: .leading, spacing: MarkdownBlockView.spacing * interfaceScale) {
             ForEach(blocks.indices, id: \.self) { index in
-                MarkdownBlockView(block: blocks[index], isFirst: index == 0)
+                MarkdownBlockView(block: blocks[index], isFirst: index == 0, reveal: reveal.block(index))
                     .equatable()
                     .environment(\.transcriptBlockIndex, index)
                     #if os(macOS)
                     .environment(\.transcriptTextSelectionEnabled, selectionEnabled(at: index))
                     #endif
-                    .transition(.opacity)
             }
         }
         .onChange(of: blocks.count, initial: true) { _, count in rowPresentation?.retainBlocks(count: count) }
@@ -67,6 +67,7 @@ struct MarkdownBlockView: View, Equatable {
     static let spacing: CGFloat = 14
     let block: RenderedMarkdownBlock
     let isFirst: Bool
+    let reveal: StreamingRevealBlock
     @Environment(\.interfaceScale) private var interfaceScale
     @Environment(\.chatBubbleMenuOwner) private var menuOwner
     #if DEBUG
@@ -88,14 +89,14 @@ struct MarkdownBlockView: View, Equatable {
     }
 
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.block == rhs.block && lhs.isFirst == rhs.isFirst
+        lhs.block == rhs.block && lhs.isFirst == rhs.isFirst && lhs.reveal == rhs.reveal
     }
 
     @ViewBuilder private var blockContent: some View {
         switch block.content {
         case .heading(let level, let text):
             let _ = PerfBuild.count("block.body.other")
-            InlineMarkdownText(text: text)
+            InlineMarkdownText(text: text, reveal: reveal.spans(slot: 0))
                 .scaledFont(headingFont(for: level))
                 .fontWeight(.semibold)
                 .foregroundStyle(.primary)
@@ -119,11 +120,12 @@ struct MarkdownBlockView: View, Equatable {
         case .bulletList(let items):
             let _ = PerfBuild.count("block.body.list")
             VStack(alignment: .leading, spacing: 16 * interfaceScale) {
-                ForEach(Array(items.enumerated()), id: \.offset) { _, item in
+                ForEach(Array(items.enumerated()), id: \.offset) { index, item in
+                    let spans = reveal.spans(slot: index)
                     HStack(alignment: .top, spacing: 6) {
-                        Text("•")
+                        bullet(revealedWith: spans)
                             .foregroundStyle(.secondary)
-                        InlineMarkdownText(text: item.content)
+                        InlineMarkdownText(text: item.content, reveal: spans)
                             .foregroundStyle(.primary)
                     }
                     .padding(.leading, CGFloat(item.level) * 16)
@@ -135,28 +137,31 @@ struct MarkdownBlockView: View, Equatable {
         case .codeBlock(let language, let code, let presentation):
             let _ = PerfBuild.count("block.body.code")
             CodeBlockView(code: code, language: language, presentation: presentation)
+                .streamingRevealCover(begin: reveal.cover)
                 .padding(.vertical, isFirst ? 0 : 6 * interfaceScale)
 
         case .mermaid(let source, let isComplete):
             let _ = PerfBuild.count("block.body.other")
             MermaidDiagramView(source: source, isComplete: isComplete)
+                .streamingRevealCover(begin: reveal.cover)
                 .padding(.vertical, isFirst ? 0 : 6 * interfaceScale)
 
         case .table(let headers, let alignments, let rows, let columnCharacterCounts):
             let _ = PerfBuild.count("block.body.table")
             MarkdownTableView(headers: headers, alignments: alignments, rows: rows,
                               columnCharacterCounts: columnCharacterCounts)
+                .streamingRevealCover(begin: reveal.cover)
 
         case .paragraph(let text):
             let _ = PerfBuild.count("block.body.paragraph")
-            InlineMarkdownText(text: text)
+            InlineMarkdownText(text: text, reveal: reveal.spans(slot: 0))
                 .foregroundStyle(.primary)
                 .padding(.bottom, 2 * interfaceScale)
                 .transcriptTextSelection()
 
         case .quote(let text):
             let _ = PerfBuild.count("block.body.other")
-            InlineMarkdownText(text: text)
+            InlineMarkdownText(text: text, reveal: reveal.spans(slot: 0))
                 .foregroundStyle(.secondary)
                 .padding(.leading, 12)
                 .overlay(alignment: .leading) {
@@ -167,6 +172,10 @@ struct MarkdownBlockView: View, Equatable {
                 .padding(.bottom, 2 * interfaceScale)
                 .transcriptTextSelection()
         }
+    }
+
+    private func bullet(revealedWith spans: [StreamingRevealSpan]) -> some View {
+        Text("•").streamingRevealCover(begin: spans.first { $0.utf16.lowerBound == 0 }?.begin)
     }
 
     private func headingFont(for level: Int) -> Font {
@@ -224,7 +233,7 @@ private struct MarkdownTableView: View {
             // Header row
             HStack(spacing: 0) {
                 ForEach(Array(headers.enumerated()), id: \.offset) { colIdx, header in
-                    InlineMarkdownText(text: header)
+                    InlineMarkdownText(text: header, reveal: [])
                         .scaledFont(.caption)
                         .fontWeight(.semibold)
                         .foregroundStyle(.primary)
@@ -246,7 +255,7 @@ private struct MarkdownTableView: View {
             ForEach(Array(rows.enumerated()), id: \.offset) { rowIdx, row in
                 HStack(spacing: 0) {
                     ForEach(Array(row.enumerated()), id: \.offset) { colIdx, cell in
-                        InlineMarkdownText(text: cell)
+                        InlineMarkdownText(text: cell, reveal: [])
                             .scaledFont(.caption)
                             .foregroundStyle(.primary)
                             .frame(

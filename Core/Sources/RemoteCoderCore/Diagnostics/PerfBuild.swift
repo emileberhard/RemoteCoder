@@ -68,7 +68,7 @@ enum PerfBuild {
     static let isHarness = true
 
     /// A/B switches for isolating one cost: `-rcPerfDisable <name>` launch
-    /// arguments, comma separated, e.g. `growth`.
+    /// arguments, comma separated, e.g. `reveal`.
     nonisolated static let disabled = Set(
         (AppStorageScope.current.defaults.string(forKey: "rcPerfDisable") ?? "").split(separator: ",").map(String.init)
     )
