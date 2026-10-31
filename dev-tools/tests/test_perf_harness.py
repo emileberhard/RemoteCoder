@@ -57,9 +57,18 @@ class LeaseTests(unittest.TestCase):
     def test_builtin_trace_adds_render_instruments(self) -> None:
         with patch.object(perf_harness, "built_in_templates", return_value={"Time Profiler", "Power Profiler"}):
             result = perf_harness.instrumentation(SimpleNamespace(), "Time Profiler", [])
-            self.assertEqual(result["instruments"], ["Hitches", "GPU", "Display", "Power Profiler", "Points of Interest"])
+            self.assertEqual(result["instruments"], ["Hitches", "GPU", "Display", "Points of Interest", "Power Profiler"])
             power = perf_harness.instrumentation(SimpleNamespace(), "Power Profiler", [])
             self.assertNotIn("Power Profiler", power["instruments"])
+            device = Mock(spec=perf_harness.Device)
+            system = perf_harness.instrumentation(device, "Time Profiler", [])
+            self.assertEqual(system["scope"], "allProcesses")
+            self.assertNotIn("Power Profiler", system["instruments"])
+            attached = perf_harness.instrumentation(device, "Power Profiler", [])
+            self.assertEqual(attached["scope"], "app")
+            self.assertNotIn("Power Profiler", attached["instruments"])
+            explicit = perf_harness.instrumentation(device, "Time Profiler", ["Power Profiler"])
+            self.assertIn("Power Profiler", explicit["instruments"])
 
     def test_device_lease_is_the_installers_per_device_lock(self) -> None:
         with tempfile.TemporaryDirectory() as directory, patch.object(build_support, "cache_root", return_value=Path(directory)):

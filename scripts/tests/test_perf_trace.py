@@ -48,7 +48,7 @@ class RenderMetricsTests(unittest.TestCase):
                  "cpu-impact": value("impact", -0.000000001), "gpu-impact": value("impact", 3), "display-impact": value("impact", -0.000000001)},
             ],
         }
-        run = trace.Run(1, "Time limit reached", "iOS", frozenset(rows), "")
+        run = trace.Run(1, "Time limit reached", "iOS", frozenset(rows), "", app_attached=True)
         with patch.object(trace, "table_rows", side_effect=lambda _trace, schema, _columns: iter(rows[schema])):
             result = trace.render_metrics("recording.trace", run, {"window": [(5_000_000, 35_000_000)]})["window"]
         refresh = result["refreshRates"]["Built-In Display 1"]
@@ -56,9 +56,14 @@ class RenderMetricsTests(unittest.TestCase):
         self.assertEqual(refresh["rates"]["60"]["seconds"], 0.017)
         self.assertEqual(refresh["unknownSeconds"], 0.002)
         self.assertEqual(result["backboardGpuChannelMs"], 20)
-        self.assertEqual(result["powerImpact"]["cpu"]["average"], 1.5)
-        self.assertEqual(result["powerImpact"]["gpu"]["average"], 1.5)
+        self.assertEqual(result["powerImpact"]["cpu"]["average"], 3)
+        self.assertEqual(result["powerImpact"]["gpu"]["average"], 3)
         self.assertEqual(result["powerImpact"]["display"]["average"], 0)
+        rows["ProcessSubsystemPowerImpact"].pop()
+        with patch.object(trace, "table_rows", side_effect=lambda _trace, schema, _columns: iter(rows[schema])):
+            without_gpu = trace.render_metrics("recording.trace", run, {"window": [(5_000_000, 35_000_000)]})["window"]
+        self.assertEqual(without_gpu["powerImpact"]["cpu"]["average"], 3)
+        self.assertIsNone(without_gpu["powerImpact"]["gpu"])
 
     def test_missing_data_stays_unknown(self):
         run = trace.Run(1, "Time limit reached", "iOS", frozenset(), "")
@@ -66,6 +71,43 @@ class RenderMetricsTests(unittest.TestCase):
         self.assertIsNone(result["refreshRates"])
         self.assertIsNone(result["backboardGpuChannelMs"])
         self.assertIsNone(result["powerImpact"])
+
+    def test_power_requires_an_app_attached_recording(self):
+        run = trace.Run(1, "Time limit reached", "iOS", frozenset({"ProcessSubsystemPowerImpact"}), "")
+        with patch.object(trace, "table_rows", side_effect=AssertionError("system power is not per-app impact")):
+            result = trace.render_metrics("recording.trace", run, {"window": [(0, 1e9)]})["window"]
+        self.assertIsNone(result["powerImpact"])
+        self.assertIn("app-attached", result["powerImpactUnavailableReason"])
+        attached = trace.Run(1, "Time limit reached", "iOS", frozenset({"ProcessSubsystemPowerImpact"}), "", app_attached=True)
+        with patch.object(trace, "table_rows", return_value=iter([])):
+            result = trace.render_metrics("recording.trace", attached, {"window": [(0, 1e9)]})["window"]
+        self.assertIsNone(result["powerImpact"])
+        self.assertIn("no usable app power", result["powerImpactUnavailableReason"])
+
+    def test_gpu_without_backboard_rows_is_zero_in_covered_window(self):
+        import xml.etree.ElementTree as ET
+        server = ET.Element("process", fmt="backboardd (42)")
+        rows = [{"process": server, "start": ET.fromstring("<start>2000000000</start>"),
+                 "duration": ET.fromstring("<duration>1000000</duration>")}]
+        run = trace.Run(3, "Time limit reached", "iOS", frozenset({"metal-gpu-intervals"}), "")
+        with patch.object(trace, "table_rows", return_value=iter(rows)):
+            result = trace.render_metrics("recording.trace", run, {"window": [(0, 1e9)]})["window"]
+        self.assertEqual(result["backboardGpuChannelMs"], 0)
+
+    def test_recording_scope_comes_from_trace_target(self):
+        toc = ('<trace-toc><run><info><target><device platform="iPadOS"/>{target}</target>'
+               '<summary><duration>1</duration><start-date>2026-10-31T00:00:00+01:00</start-date></summary>'
+               '</info><data/></run></trace-toc>')
+        for target, attached in (("<all-processes/>", False),
+                                 ('<process type="attached" name="RemoteCoder"/>', True),
+                                 ('<process type="attached" name="Other"/>', False)):
+            with self.subTest(target=target), patch.object(trace, "guarded_export", return_value=Export(toc.format(target=target))):
+                self.assertEqual(trace.recorded_run("recording.trace").app_attached, attached)
+
+    def test_default_power_instrument_follows_recording_scope(self):
+        self.assertNotIn("Power Profiler", trace.selected_instruments("Time Profiler", False, [], False))
+        self.assertIn("Power Profiler", trace.selected_instruments("Time Profiler", False, [], True))
+        self.assertIn("Power Profiler", trace.selected_instruments("Time Profiler", False, ["Power Profiler"], False))
 
 
 class ExplicitSymbolsTests(unittest.TestCase):
@@ -813,6 +855,8 @@ class PerfTraceTests(unittest.TestCase):
         self.assertEqual(motion["hitchRateRating"], "critical")
         self.assertEqual(motion["commits"], 1)
         self.assertEqual(result["app"]["hitches"], 2)
+        self.assertEqual(result["renderMetrics"]["motion"]["seconds"], 0.5)
+        self.assertEqual(result["renderMetrics"]["motion"]["hitches"]["hitches"], 1)
         self.assertIsNone(result["motionUnavailableReason"])
 
     def test_motion_counts_only_the_hitch_time_inside_its_windows(self):
@@ -883,16 +927,19 @@ class PerfTraceTests(unittest.TestCase):
         self.assertFalse(any("hitches-updates" in xpath or "metal-gpu-intervals" in xpath or "swiftui-updates" in xpath
                              for xpath in exported))
 
-    def test_empty_gpu_table_is_unknown_while_empty_commits_are_zero(self):
+    def test_empty_gpu_table_is_zero_when_collected(self):
         result, exported = self.summary({"time-profile", "hitches-updates", "metal-gpu-intervals"})
         for key in ("commits", "commitsPerSecond"):
             self.assertEqual(result["app"][key], 0)
-        self.assertIsNone(result["app"]["gpuMs"])
+        self.assertEqual(result["app"]["gpuMs"], 0)
         self.assertIsNone(result["app"]["commitsUnavailableReason"])
-        self.assertIn("no rows", result["app"]["gpuMsUnavailableReason"])
+        self.assertIsNone(result["app"]["gpuMsUnavailableReason"])
         self.assertIsNone(result["renderServer"]["gpuMs"])
         self.assertTrue(any("hitches-updates" in xpath for xpath in exported))
         self.assertTrue(any("metal-gpu-intervals" in xpath for xpath in exported))
+        device, _ = self.summary({"time-profile", "metal-gpu-intervals"}, platform="iOS")
+        self.assertEqual(device["renderServer"]["gpuMs"], 0)
+        self.assertEqual(device["renderMetrics"]["wholeTrace"]["backboardGpuChannelMs"], 0)
 
     def test_unavailable_contributing_gpu_durations_make_each_process_total_unknown(self):
         for duration in ("", "<duration/>", "<sentinel/>", "<duration>nan</duration>"):

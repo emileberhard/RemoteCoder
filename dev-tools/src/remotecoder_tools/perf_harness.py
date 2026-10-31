@@ -67,7 +67,7 @@ SWITCHES = {
     "scrollTargets", "scrollPosition", "geometryGroup", "latestEdge",
     "contextMenu", "textSelection", "tooltips", "growthGate", "resourceSampler",
 }
-TRACE_INSTRUMENTS = ("Hitches", "GPU", "Display", "Power Profiler", "Points of Interest")
+TRACE_INSTRUMENTS = ("Hitches", "GPU", "Display", "Points of Interest")
 TRACE_WARMUP = 2
 TRACE_COMPLETE = "Time limit reached"
 CLOCK_SLACK = 0.5
@@ -509,8 +509,9 @@ def screenshot(args, device: Simulator | Device) -> None:
 
 
 def instrumentation(device: Simulator | Device, template: str | None, instruments: list[str] | None) -> dict:
-    instruments = list(dict.fromkeys([*(instrument for instrument in TRACE_INSTRUMENTS if instrument != template), *(instruments or [])])) if template and not saved_template_data(template) else (instruments or [])
     app_only = not isinstance(device, Device) or template in {"Allocations", "Power Profiler"}
+    defaults = [*TRACE_INSTRUMENTS, *(["Power Profiler"] if app_only else [])]
+    instruments = list(dict.fromkeys([*(instrument for instrument in defaults if instrument != template), *(instruments or [])])) if template and not saved_template_data(template) else (instruments or [])
     result = {"template": template, "instruments": instruments,
               "scope": ("app" if app_only else "allProcesses") if template else None}
     if (data := saved_template_data(template)) is not None:
