@@ -397,7 +397,7 @@ control separate from the canonical measured journey.
 ## Drawer and conversation-switch callback driver
 
 The iOS `RC_PERF_HARNESS` build extends the existing command-file and Darwin
-notification transport with two commands. Shipped builds exclude the driver.
+notification transport with drawer commands. Shipped builds exclude the driver.
 Every command carries `id`; its terminal result is appended to `results.jsonl`.
 After an offline command session, `scenario-stop` cancels active work, retires the
 fixture host and removes its benchmark storage. Await its receipt before process
@@ -408,14 +408,22 @@ that benchmark scope, so restarting does not collide with an earlier preparation
 | --- | --- | --- |
 | `sidebar` | `open`: Boolean | Published sidebar state and drawer spring have settled. |
 | `drawer-drag` | `travel`: −1…1 drawer widths, `seconds`: 0.05…5, `velocity`: −20…20 widths/second | Production begin/track/end callbacks have run and the spring has settled. |
+| `drawer-switch` | `host`: exact UUID, `thread`: exact thread ID | From a closed drawer, opens through the button action, waits for the spring, then immediately selects the row and waits for content and closed/rest. |
 | `select-row` | `host`: exact UUID, `thread`: exact thread ID | The production row action has selected a different transcript, its first-content callback has fired, and the drawer has closed and settled; receipt reports whether its recent presentation was cached. |
 
 `drawer-drag` requires an attached compact drawer at rest. Its normalized travel
 bypasses UIKit recognition, arbitration and coordinate conversion; positive opens
 and negative closes in either layout direction. It samples at absolute deadlines
 120 times per second without setting the display rate. The receipt records sample
-count, maximum scheduling lateness and initial/final progress. Input cadence is
+count, skipped samples, maximum scheduling lateness and initial/final progress.
+Late input advances to the elapsed-time position and skips missed samples rather
+than replaying a burst of stale positions. Input cadence is
 synthetic and is not evidence of touch delivery or actuator latency.
+
+`drawer-switch` keeps the open/select sequence in-process so host command polling
+does not give prefetch an artificial dwell before a cold selection. Its receipt
+reports the observed cache state; never infer a cache miss merely from a fresh
+process. `DrawerSwitchJourney` spans the complete sequence.
 
 Sidebar, drag and row-selection commands share one task. A replacement cancels
 and awaits the previous command's cleanup; drawer removal cancels the task.
@@ -437,3 +445,15 @@ cannot establish 120 Hz delivery: attribute main-thread and commit work against
 an 8.33 ms budget, then verify ProMotion on the test iPad only when its observed
 compact layout actually presents this drawer. Keep energy state equal between
 runs. Confirm a chosen improvement with hand input and a device preview.
+
+Select the same intervals in Instruments exports with
+`just perf-trace --motion-signpost DrawerMotion --frames 15 summarize TRACE`.
+Use `DrawerSpring` or `ConversationSwitch` to isolate settling or switching.
+`motionFrameWork` assigns timestamped CPU sample weights to complete panel VSYNC
+intervals wholly inside the selected spans and reports median, p95, maximum and
+share above 8.33 ms. This estimates work per refresh; it does not establish that
+all app frames were presented. Render-server CPU sums threads and is not a serial
+render-stage duration. Core Animation update durations come from the exported
+`hitches-updates` timing fields; absent timing stays unknown. Edge refreshes are
+excluded and covered seconds are reported. `renderMetrics.motion` adds scoped
+render-server CPU beside refresh shares, GPU channel time and available power.

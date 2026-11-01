@@ -426,11 +426,12 @@ def is_automation_frame(frame: Frame) -> bool:
             or (frame.binary is not None and DEVELOPER_TOOLING.search(frame.binary.path) is not None))
 
 
-def time_profile(trace: str) -> tuple[Counter, Counter, list[Sample], Counter]:
+def time_profile(trace: str) -> tuple[Counter, Counter, list[Sample], Counter, list[tuple[str, float | None, float]]]:
     cpu_ms = Counter()
     unweighted = Counter()
     samples = []
     automation_samples = Counter()
+    render_samples = []
     for row in table_rows(trace, "time-profile", {"time", "thread", "process", "weight", "stack"}):
         process = process_name(row.get("process"))
         weight = trace_number(row.get("weight"))
@@ -438,6 +439,8 @@ def time_profile(trace: str) -> tuple[Counter, Counter, list[Sample], Counter]:
             unweighted[process] += 1
         else:
             cpu_ms[process] += weight / 1e6
+        if process in (IPHONE_RENDER_SERVER, MAC_RENDER_SERVER) and weight is not None:
+            render_samples.append((process, trace_number(row.get("time")), weight / 1e6))
         if process != APP:
             continue
         thread = row.get("thread")
@@ -450,7 +453,7 @@ def time_profile(trace: str) -> tuple[Counter, Counter, list[Sample], Counter]:
             automation_samples[name] += 1
         if weight is not None:
             samples.append(Sample(trace_number(row.get("time")), name, weight / 1e6, stack, automation))
-    return cpu_ms, unweighted, samples, automation_samples
+    return cpu_ms, unweighted, samples, automation_samples, render_samples
 
 
 def thread_ms(samples: Iterable[Sample]) -> Counter:
@@ -869,11 +872,11 @@ def motion_hitches(intervals: list[tuple[float, float]], rows: list[Hitch] | Non
 
 def motion_summary(intervals: list[tuple[float, float]], samples: list[Sample], cpu_unavailable: str | None,
                    hitch_rows: list[Hitch] | None, commit_starts: list[float | None] | None, names: dict,
-                   frames: int) -> dict:
+                   frames: int, signpost: str = MOTION_SIGNPOST) -> dict:
     inside = within(intervals)
     seconds = sum(end - start for start, end in intervals) / 1e9
     summary = {
-        "source": f"{SIGNPOST_SUBSYSTEM} {MOTION_SIGNPOST} Points of Interest intervals, merged; "
+        "source": f"{SIGNPOST_SUBSYSTEM} {signpost} Points of Interest intervals, merged; "
                   "hitch time counts only its overlap with them",
         "intervals": len(intervals),
         "seconds": round(seconds, 2),
@@ -901,6 +904,81 @@ def motion_summary(intervals: list[tuple[float, float]], samples: list[Sample], 
         commits = sum(map(inside, commit_starts))
         summary |= {"commits": commits, "commitsPerSecond": round(commits / seconds, 2)}
     return summary | motion_hitches(intervals, hitch_rows, seconds)
+
+
+def motion_frame_work(trace: str, schemas: frozenset[str], intervals: list[tuple[float, float]],
+                      samples: list[Sample], render_samples: list[tuple[float | None, float]],
+                      app_reason: str | None, render_reason: str | None) -> dict:
+    inside = within(intervals)
+    result = {"source": "sample weights assigned by timestamp to complete panel VSYNC intervals inside motion; "
+                        "sampling estimates, not callback or actuator latency",
+              "budgetMs": round(1000 / 120, 3), "displays": None, "commitDurations": None}
+
+    def distribution(values: list[float]) -> dict | None:
+        if not values:
+            return None
+        return interval_statistics([value * 1e6 for value in values]) | {
+            "maxMs": round(max(values), 3),
+            "above120HzBudgetShare": round(sum(value > 1000 / 120 for value in values) / len(values), 3),
+        }
+
+    def cpu_index(values: list[tuple[float | None, float]], reason: str | None):
+        if reason or any(timestamp is None for timestamp, _ in values):
+            return None
+        ordered = sorted(values)
+        timestamps, totals = [], [0.0]
+        for timestamp, weight in budgeted(ordered, "motionFrameWork"):
+            timestamps.append(timestamp)
+            totals.append(totals[-1] + weight)
+        return timestamps, totals
+
+    app_reason = app_reason or ("app samples have no timestamp" if any(sample.time_ns is None for sample in samples) else None)
+    main = cpu_index([(sample.time_ns, sample.weight_ms) for sample in samples if sample.thread == "main"], app_reason)
+    server = cpu_index(render_samples, render_reason)
+    if "display-vsyncs-interval" in schemas:
+        previous, frames = {}, defaultdict(list)
+        for row in table_rows(trace, "display-vsyncs-interval", {"timestamp", "display-name", "event"}):
+            display, timestamp = element_text(row.get("display-name")), trace_number(row.get("timestamp"))
+            if display is None or timestamp is None or element_text(row.get("event")) != "VSYNC":
+                continue
+            prior = previous.get(display)
+            previous[display] = timestamp
+            if prior is not None and timestamp > prior and overlap_ns(intervals, prior, timestamp) >= timestamp - prior:
+                frames[display].append((prior, timestamp))
+        displays = {}
+        for display, spans in frames.items():
+            def weights(index):
+                if index is None:
+                    return None
+                timestamps, totals = index
+                return distribution([totals[bisect.bisect_left(timestamps, end)] - totals[bisect.bisect_left(timestamps, start)]
+                                     for start, end in spans])
+            displays[display] = {"frames": len(spans), "coveredSeconds": round(sum(end - start for start, end in spans) / 1e9, 4),
+                                 "mainThreadCpu": weights(main), "mainThreadCpuUnavailableReason": app_reason,
+                                 "renderServerCpu": weights(server), "renderServerCpuUnavailableReason": render_reason}
+        result["displays"] = displays or None
+        result["framesUnavailableReason"] = None if displays else "no complete VSYNC interval inside motion"
+    else:
+        result["framesUnavailableReason"] = "trace did not collect display-vsyncs-interval"
+    if "hitches-updates" in schemas:
+        durations, missing = [], 0
+        for row in table_rows(trace, "hitches-updates", {"start", "duration", "process"}):
+            if process_name(row.get("process")) != APP:
+                continue
+            start, duration = trace_number(row.get("start")), trace_number(row.get("duration"))
+            if start is None:
+                missing += 1
+            elif inside(start):
+                if duration is None or duration < 0:
+                    missing += 1
+                else:
+                    durations.append(duration / 1e6)
+        result["commitUpdates"] = len(durations) if not missing else None
+        result["commitDurations"] = distribution(durations) if not missing else None
+        result["commitDurationsUnavailableReason"] = f"{missing} app updates lack timing" if missing else None
+    else:
+        result["commitDurationsUnavailableReason"] = "trace did not collect hitches-updates"
+    return result
 
 
 def frame_statistics(samples: list[Sample], names: dict):
@@ -1089,7 +1167,8 @@ def swift_concurrency(trace: str, schemas: frozenset[str]) -> dict | None:
             "scope": "summed task state lifetimes; overlapping tasks are not CPU time"}
 
 
-def summarize(trace: str, frames: int, callers: list[str], apps: list[Path], window: tuple[float, float] | None = None) -> dict:
+def summarize(trace: str, frames: int, callers: list[str], apps: list[Path], window: tuple[float, float] | None = None,
+              motion_signpost: str = MOTION_SIGNPOST) -> dict:
     run = recorded_run(trace)
     scroll = scroll_receipt(trace)
     render_server = MAC_RENDER_SERVER if run.platform == "macOS" else IPHONE_RENDER_SERVER
@@ -1098,9 +1177,9 @@ def summarize(trace: str, frames: int, callers: list[str], apps: list[Path], win
     def measure(label, operation):
         return measurement(label, operation, failures)
 
-    cpu_ms, unweighted, samples, automation_samples = (
+    cpu_ms, unweighted, samples, automation_samples, render_samples = (
         measure("time-profile", lambda: time_profile(trace)) if "time-profile" in run.schemas else None
-    ) or (Counter(), Counter(), [], Counter())
+    ) or (Counter(), Counter(), [], Counter(), [])
     app_threads = thread_ms(samples)
     app_threads_without_automation = thread_ms(sample for sample in samples if not sample.automation)
     commits, app_frames, commit_starts = (
@@ -1114,7 +1193,7 @@ def summarize(trace: str, frames: int, callers: list[str], apps: list[Path], win
     cadence = (measure("presentedFrames", lambda: presented_frames(trace, run, scroll, app_frames))
                if "hitches-updates" not in failures else None)
     swiftui = measure("swiftui", lambda: swiftui_updates(trace, run.seconds)) if SWIFTUI_UPDATES in run.schemas else None
-    intervals = measure("TranscriptScroll", lambda: operation_intervals(trace, run.schemas, MOTION_SIGNPOST))
+    intervals = measure(motion_signpost, lambda: operation_intervals(trace, run.schemas, motion_signpost))
     journey_intervals = measure("ReplayJourney", lambda: operation_intervals(trace, run.schemas, "ReplayJourney"))
     perf_intervals = measure("PerfWindow", lambda: operation_intervals(trace, run.schemas, "PerfWindow"))
     render_windows = {"wholeTrace": [(0, run.seconds * 1e9)]}
@@ -1189,6 +1268,16 @@ def summarize(trace: str, frames: int, callers: list[str], apps: list[Path], win
         }
 
     app_cpu = cpu_summary(APP)
+    server_samples = [(timestamp, weight) for process, timestamp, weight in render_samples if process == render_server]
+    server_reason = cpu_summary(render_server)["cpuUnavailableReason"] or (
+        "render-server samples have no timestamp" if any(timestamp is None for timestamp, _ in server_samples) else None)
+    for name, spans in render_windows.items():
+        selected = within(spans)
+        render[name]["renderServerCpuMs"] = None if server_reason else round(
+            sum(weight for timestamp, weight in server_samples if selected(timestamp)), 2)
+        render[name]["renderServerCpuUnavailableReason"] = server_reason
+    frame_work = measure("motionFrameWork", lambda: motion_frame_work(trace, run.schemas, intervals, samples, server_samples,
+                         app_cpu["cpuUnavailableReason"], server_reason)) if intervals else None
 
     def analyze_sampled_frames():
         all_frames = {frame for frame in budgeted((frame for sample in samples for frame in sample.stack), "sampledFrames")}
@@ -1226,7 +1315,7 @@ def summarize(trace: str, frames: int, callers: list[str], apps: list[Path], win
         return {
             "journey": journey,
             "motion": motion_summary(intervals, samples, app_cpu["cpuUnavailableReason"], hitch_rows, commit_starts, names,
-                                     frames) if intervals else None,
+                                     frames, motion_signpost) if intervals else None,
             "mainTopFunctionsSelfMs": top_functions([sample for sample in budgeted(samples, "sampledFrames") if sample.thread == "main"], names, frames)
                                       if frames and "time-profile" not in failures else None,
             "appFramesInclusiveMs": None if "time-profile" in failures else heaviest(inclusive["app"], frames),
@@ -1260,6 +1349,7 @@ def summarize(trace: str, frames: int, callers: list[str], apps: list[Path], win
         "platform": run.platform,
         "scriptedScroll": scroll,
         **frame_details,
+        "motionFrameWork": frame_work,
         "app": {
             **app_cpu,
             "cpuMsByThread": None if app_cpu["cpuUnavailableReason"] else {name: round(ms, 1) for name, ms in app_threads.most_common(8)},
@@ -1279,9 +1369,9 @@ def summarize(trace: str, frames: int, callers: list[str], apps: list[Path], win
         },
         "motionUnavailableReason": (
             failures["sampledFrames"]["unavailableReason"] if intervals and "sampledFrames" in failures else
-            failures["TranscriptScroll"]["unavailableReason"] if "TranscriptScroll" in failures else
+            failures[motion_signpost]["unavailableReason"] if motion_signpost in failures else
             "trace has no OSSignpostIntervals table" if intervals is None else
-            f"no {MOTION_SIGNPOST} interval completed in {APP}" if not intervals else None
+            f"no {motion_signpost} interval completed in {APP}" if not intervals else None
         ),
         "renderMetrics": render,
         "renderServer": {
@@ -1422,13 +1512,13 @@ def report(summary: dict, remedy: str) -> None:
     require_app_measurement(summary)
 
 
-def record_device(device: str, label: str, seconds: int, frames: int, callers: list[str], apps: list[Path], swiftui: bool, template: str = "Time Profiler", instruments: Iterable[str] = ()) -> None:
+def record_device(device: str, label: str, seconds: int, frames: int, callers: list[str], apps: list[Path], swiftui: bool, template: str = "Time Profiler", instruments: Iterable[str] = (), motion_signpost: str = MOTION_SIGNPOST) -> None:
     trace = new_trace(label)
     app_attached = template in ("Allocations", "Processor Trace")
     with recording(trace, seconds, ["--device", device, *(["--attach", APP] if app_attached else ["--all-processes"])],
                    selected_instruments(template, swiftui, instruments, app_attached), template):
         pass
-    summary = summarize(str(trace), frames, callers, apps)
+    summary = summarize(str(trace), frames, callers, apps, motion_signpost=motion_signpost)
     report(summary, "keep the device connected and unlocked, then record again")
     if swiftui and summary["swiftui"] is None:
         sys.exit(f"{trace} has no swiftui-updates for {APP}; keep the app in the foreground and exercise its views, "
@@ -1509,7 +1599,7 @@ def record_mac(label: str, seconds: int, frames: int, callers: list[str], apps: 
                 if outcome.stderr:
                     sys.stderr.write(outcome.stderr)
             top = sampling.result()
-    report({**summarize(str(trace), frames, callers, apps), "top": top}, "record again")
+    report({**summarize(str(trace), frames, callers, apps, motion_signpost=args.motion_signpost), "top": top}, "record again")
     if scroll is not None and scroll["exitCode"] != 0:
         sys.exit("scripted scroll failed; see scriptedScroll in the summary")
 
@@ -1525,6 +1615,8 @@ def main() -> None:
                         help="attribute time in frames matching REGEX to their nearest RemoteCoder caller; repeatable")
     parser.add_argument("--symbols", action="append", default=[], type=Path, metavar="PATH",
                         help="matching .app, .dSYM, or Mach-O symbol file; repeatable")
+    parser.add_argument("--motion-signpost", default=MOTION_SIGNPOST,
+                        help="Points of Interest interval for the motion window, e.g. DrawerMotion or DrawerSpring")
     commands = parser.add_subparsers(dest="command", required=True)
     record_parser = commands.add_parser("record", help="record a system-wide trace of the current journey, then summarize it")
     record_parser.add_argument("label", help="trace name, e.g. before-streaming")
@@ -1570,14 +1662,14 @@ def main() -> None:
         sys.exit(remote(host, forwarded))
     with exclusive_host():
         if args.command == "summarize":
-            summary = summarize(args.trace, args.frames, args.callers, args.symbols, tuple(args.window) if args.window else None)
+            summary = summarize(args.trace, args.frames, args.callers, args.symbols, tuple(args.window) if args.window else None, args.motion_signpost)
             print(json.dumps(summary, indent=2))
             reject_automation(summary)
             require_app_measurement(summary)
         elif args.mac:
             record_mac(args.label, args.seconds, args.frames, args.callers, args.symbols, args)
         else:
-            record_device(args.device, args.label, args.seconds, args.frames, args.callers, args.symbols, args.swiftui, args.template, args.instrument)
+            record_device(args.device, args.label, args.seconds, args.frames, args.callers, args.symbols, args.swiftui, args.template, args.instrument, args.motion_signpost)
 
 
 if __name__ == "__main__":

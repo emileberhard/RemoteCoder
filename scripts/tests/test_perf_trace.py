@@ -19,6 +19,50 @@ loader.exec_module(trace)
 
 
 class RenderMetricsTests(unittest.TestCase):
+    def test_motion_frame_work_assigns_cpu_to_complete_panel_intervals(self):
+        import xml.etree.ElementTree as ET
+
+        def value(tag, text):
+            element = ET.Element(tag)
+            element.text = str(text)
+            return element
+
+        display = value("display-name", "Built-In Display 1")
+        app = ET.Element("process", fmt="RemoteCoder (12)")
+        rows = {
+            "display-vsyncs-interval": [
+                {"timestamp": value("time", timestamp), "display-name": display, "event": value("event", "VSYNC")}
+                for timestamp in (0, 10_000_000, 20_000_000, 30_000_000)
+            ],
+            "hitches-updates": [
+                {"process": app, "start": value("time", 2_000_000), "duration": value("duration", 2_000_000)},
+                {"process": app, "start": value("time", 12_000_000), "duration": value("duration", 3_000_000)},
+                {"process": app, "start": value("time", 25_000_000), "duration": value("duration", 90_000_000)},
+            ],
+        }
+        samples = [trace.Sample(1_000_000, "main", 5, (), False), trace.Sample(15_000_000, "main", 9, (), False),
+                   trace.Sample(25_000_000, "main", 50, (), False), trace.Sample(5_000_000, "worker", 80, (), False)]
+        with patch.object(trace, "table_rows", side_effect=lambda _trace, schema, _columns: iter(rows[schema])):
+            result = trace.motion_frame_work("trace", frozenset(rows), [(0, 20_000_000)], samples,
+                                             [(12_000_000, 3)], None, None)
+        frame = result["displays"]["Built-In Display 1"]
+        self.assertEqual(frame["frames"], 2)
+        self.assertEqual(frame["mainThreadCpu"], {"count": 2, "medianMs": 7, "p95Ms": 9, "maxMs": 9,
+                                                 "above120HzBudgetShare": 0.5})
+        self.assertEqual(frame["renderServerCpu"]["medianMs"], 1.5)
+        self.assertEqual(result["commitDurations"]["maxMs"], 3)
+
+    def test_motion_frame_work_keeps_missing_timings_unknown(self):
+        import xml.etree.ElementTree as ET
+        app = ET.Element("process", fmt="RemoteCoder (12)")
+        with patch.object(trace, "table_rows", return_value=iter([{"process": app}])):
+            result = trace.motion_frame_work("trace", frozenset({"hitches-updates"}), [(0, 20_000_000)],
+                                             [], [], "unweighted CPU", "no render samples")
+        self.assertIsNone(result["displays"])
+        self.assertIn("did not collect", result["framesUnavailableReason"])
+        self.assertIsNone(result["commitDurations"])
+        self.assertIn("lack timing", result["commitDurationsUnavailableReason"])
+
     def test_window_clipping_refresh_gpu_and_power(self):
         import xml.etree.ElementTree as ET
 
@@ -549,7 +593,8 @@ class PerfTraceTests(unittest.TestCase):
         _, keys, _ = trace.hitch_updates("recording.trace")
         return trace.presented_frames("recording.trace", run, scroll, keys)
 
-    def summary(self, schemas, gpu_rows="", swiftui_xml=SWIFTUI_XML, platform="macOS", tables=None, frames=0):
+    def summary(self, schemas, gpu_rows="", swiftui_xml=SWIFTUI_XML, platform="macOS", tables=None, frames=0,
+                motion_signpost=trace.MOTION_SIGNPOST):
         toc = '<trace-toc><run number="1"><info><summary><duration>2</duration><end-reason>Time limit reached</end-reason><start-date>2026-10-08T00:00:00+02:00</start-date></summary><target><device platform="macOS"/><environment><item key="SENTINEL_SECRET" value="fixture-secret-must-not-reach-summary"/></environment></target></info><data>'
         toc = toc.replace('platform="macOS"', f'platform="{platform}"')
         toc += ''.join(f'<table schema="{name}"/>' for name in schemas)
@@ -584,7 +629,7 @@ class PerfTraceTests(unittest.TestCase):
             return Export('<trace-query-result><node/></trace-query-result>')
 
         with patch.object(trace.subprocess, "Popen", side_effect=export), patch.object(trace, "scroll_receipt", return_value=None):
-            result = trace.summarize("recording.trace", frames, [], [])
+            result = trace.summarize("recording.trace", frames, [], [], motion_signpost=motion_signpost)
         return result, exported
 
     def test_device_swiftui_cli_preflights_then_records_and_reports(self):
@@ -857,6 +902,16 @@ class PerfTraceTests(unittest.TestCase):
         self.assertEqual(result["app"]["hitches"], 2)
         self.assertEqual(result["renderMetrics"]["motion"]["seconds"], 0.5)
         self.assertEqual(result["renderMetrics"]["motion"]["hitches"]["hitches"], 1)
+        self.assertIsNone(result["motionUnavailableReason"])
+
+    def test_drawer_motion_selection_scopes_cpu_hitches_and_render_windows(self):
+        tables = {"time-profile": PROFILE_XML, "OSSignpostIntervals": SIGNPOST_XML.replace("TranscriptScroll", "DrawerMotion"),
+                  "hitches": MOTION_HITCH_XML, "hitches-updates": MOTION_UPDATES_XML}
+        result, _ = self.summary(set(tables), tables=tables, platform="iOS", motion_signpost="DrawerMotion")
+        self.assertEqual(result["motion"]["mainThreadCpuMs"], 4)
+        self.assertEqual(result["motion"]["hitchMs"], 25)
+        self.assertIn("DrawerMotion", result["motion"]["source"])
+        self.assertEqual(result["renderMetrics"]["motion"]["seconds"], 0.5)
         self.assertIsNone(result["motionUnavailableReason"])
 
     def test_motion_counts_only_the_hitch_time_inside_its_windows(self):

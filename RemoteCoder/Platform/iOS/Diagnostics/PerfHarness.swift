@@ -108,6 +108,8 @@ final class PerfHarness {
             dragDrawer(command, commandID: id)
         case "select-row":
             selectRow(address(command), commandID: id)
+        case "drawer-switch":
+            switchFromClosedDrawer(address(command), commandID: id)
         case "scroll":
             guard let model = workspace?.selectedScreen,
                   let index = command["message"] as? Int, model.messages.indices.contains(index) else {
@@ -294,14 +296,18 @@ final class PerfHarness {
             let start = clock.now
             let steps = Int(ceil(seconds * 120))
             var maximumLateness = 0.0
-            for step in 1...steps {
-                let fraction = Double(step) / Double(steps)
-                let deadline = start + .seconds(seconds * fraction)
+            var step = 1
+            var delivered = 0
+            while step <= steps {
+                let deadline = start + .seconds(seconds * Double(step) / Double(steps))
                 try await clock.sleep(until: deadline)
                 try Task.checkCancellation()
                 guard self.drawer === view, view.window != nil else { throw JourneyFailure.unavailableDrawer }
                 maximumLateness = max(maximumLateness, deadline.duration(to: clock.now) / .milliseconds(1))
+                let fraction = min(1, start.duration(to: clock.now) / .seconds(seconds))
                 view.track(CGFloat(travel * fraction))
+                delivered += 1
+                step = max(step + 1, Int(floor(fraction * Double(steps))) + 1)
             }
             HapticService.shared.signposter.emitEvent("drawer-gesture-end")
             view.end(CGFloat(velocity))
@@ -312,29 +318,44 @@ final class PerfHarness {
                 try await Task.sleep(for: .milliseconds(16))
             }
             return ["before": initial, "after": view.motion.progress, "travel": travel,
-                    "seconds": seconds, "velocity": velocity, "samples": steps,
+                    "seconds": seconds, "velocity": velocity, "samples": delivered, "skippedSamples": steps - delivered,
                     "maximumInputLatenessMs": maximumLateness]
         }
     }
 
     private func selectRow(_ address: ConversationAddress?, commandID: String) {
         runJourney("select-row", id: commandID) {
-            guard let address, let window = self.workspace?.keyWindow,
-                  let commands = window.performanceSidebar, commands.isOpen else {
-                throw JourneyFailure.unavailableWindow
-            }
-            guard !self.isOpen(address) else { throw JourneyFailure.invalidSelection }
-            let cached = self.workspace?.model(for: address.hostID)?.recentPresentation(threadID: address.threadID) != nil
-            let outcome = commands.select(address)
-            guard outcome == .changed else { throw JourneyFailure.invalidSelection }
-            let deadline = ContinuousClock.now + .seconds(30)
-            while !self.hasLoaded(address) || self.appearedAddress != address || window.isHistoryDrawerOpen || self.drawer?.motion.isAtRest == false {
-                guard ContinuousClock.now < deadline else { throw JourneyFailure.timedOut }
-                try await Task.sleep(for: .milliseconds(16))
-            }
-            return ["host": address.hostID.uuidString, "thread": address.threadID, "recentPresentationHit": cached,
-                    "loaded": true, "drawerClosed": true]
+            guard let address else { throw JourneyFailure.invalidSelection }
+            return try await self.performRowSelection(address)
         }
+    }
+
+    private func switchFromClosedDrawer(_ address: ConversationAddress?, commandID: String) {
+        runJourney("drawer-switch", id: commandID) {
+            guard let address, let drawer = self.drawer, drawer.motion.isAtRest,
+                  drawer.motion.progress == 0 else { throw JourneyFailure.unavailableDrawer }
+            let interval = Self.signposter.beginInterval("DrawerSwitchJourney", id: Self.signposter.makeSignpostID())
+            defer { Self.signposter.endInterval("DrawerSwitchJourney", interval) }
+            _ = try await self.performSidebarOpen(true)
+            return try await self.performRowSelection(address)
+        }
+    }
+
+    private func performRowSelection(_ address: ConversationAddress) async throws -> [String: Any] {
+        guard let window = workspace?.keyWindow, let commands = window.performanceSidebar, commands.isOpen else {
+            throw JourneyFailure.unavailableWindow
+        }
+        guard !isOpen(address) else { throw JourneyFailure.invalidSelection }
+        let cached = workspace?.model(for: address.hostID)?.recentPresentation(threadID: address.threadID) != nil
+        let outcome = commands.select(address)
+        guard outcome == .changed else { throw JourneyFailure.invalidSelection }
+        let deadline = ContinuousClock.now + .seconds(30)
+        while !hasLoaded(address) || appearedAddress != address || window.isHistoryDrawerOpen || drawer?.motion.isAtRest == false {
+            guard ContinuousClock.now < deadline else { throw JourneyFailure.timedOut }
+            try await Task.sleep(for: .milliseconds(16))
+        }
+        return ["host": address.hostID.uuidString, "thread": address.threadID, "recentPresentationHit": cached,
+                "loaded": true, "drawerClosed": true]
     }
 
     private func status() -> [String: Any] {
@@ -378,24 +399,26 @@ final class PerfHarness {
 
     private func setSidebarOpen(_ requested: Bool?, commandID: String) {
         runJourney("sidebar", id: commandID) {
-            guard let requested, let window = self.workspace?.keyWindow else {
-                throw JourneyFailure.unavailableWindow
-            }
-            let deadline = ContinuousClock.now + .seconds(3)
-            while window.performanceSidebar == nil {
-                guard ContinuousClock.now < deadline else { throw JourneyFailure.timedOut }
-                try await Task.sleep(for: .milliseconds(16))
-            }
-            guard let commands = window.performanceSidebar else { throw JourneyFailure.unavailableWindow }
-            let previous = commands.isOpen
-            if previous != requested { commands.toggle() }
-            while window.performanceSidebar?.isOpen != requested || window.isHistoryDrawerOpen != requested
-                    || self.drawer?.motion.isAtRest == false {
-                guard ContinuousClock.now < deadline else { throw JourneyFailure.timedOut }
-                try await Task.sleep(for: .milliseconds(16))
-            }
-            return ["before": previous, "after": requested]
+            guard let requested else { throw JourneyFailure.unavailableWindow }
+            return try await self.performSidebarOpen(requested)
         }
+    }
+
+    private func performSidebarOpen(_ requested: Bool) async throws -> [String: Any] {
+        guard let window = workspace?.keyWindow else { throw JourneyFailure.unavailableWindow }
+        let deadline = ContinuousClock.now + .seconds(3)
+        while window.performanceSidebar == nil {
+            guard ContinuousClock.now < deadline else { throw JourneyFailure.timedOut }
+            try await Task.sleep(for: .milliseconds(16))
+        }
+        guard let commands = window.performanceSidebar else { throw JourneyFailure.unavailableWindow }
+        let previous = commands.isOpen
+        if previous != requested { commands.toggle() }
+        while window.performanceSidebar?.isOpen != requested || window.isHistoryDrawerOpen != requested || drawer?.motion.isAtRest == false {
+            guard ContinuousClock.now < deadline else { throw JourneyFailure.timedOut }
+            try await Task.sleep(for: .milliseconds(16))
+        }
+        return ["before": previous, "after": requested]
     }
 
     private func measureOpen(_ address: ConversationAddress?, tail: Double, label: String, commandID: String) {
