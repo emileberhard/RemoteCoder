@@ -177,8 +177,9 @@ receipt shape, and note what each leaves behind:
   purpose right after `thread/start` or `thread/fork`, so its completions are
   never unread and the drawer hides it unless it is running or selected.
   `turn` and `claude-turn` take `--purpose probe|automation` for the same mark
-  on a new thread; schedulers pass `automation` (`codex-threads start
-  --purpose`). A probe that creates threads another way must mark them too.
+  on a new thread; schedulers pass `automation`, as the configs automation
+  service does when it starts a fresh `turn` or `claude-turn`. A probe that
+  creates threads another way must mark them too.
   `e2e-files-live` is the exception: its conversations stay visible for
   opening the files on the phone.
 
