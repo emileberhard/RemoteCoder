@@ -29,6 +29,7 @@ pub(crate) struct Usage {
     pub free_bytes: u64,
     pub cap_bytes: u64,
     pub reserve_bytes: u64,
+    pub headroom_bytes: u64,
     pub stale_reason: Option<&'static str>,
 }
 
@@ -163,24 +164,59 @@ impl Storage {
         );
         let stats = unsafe { stats.assume_init() };
         let free = stats.f_bavail as u64 * stats.f_frsize;
-        let database = file_bytes(&self.database)?;
-        let checkpoint = database
-            .saturating_sub(self.wal_bytes()?)
-            .saturating_add(database / 128)
-            .saturating_add(65536);
+        let headroom_bytes = headroom(used, free, self.wal_bytes()?);
         Ok(Usage {
             used_bytes: used,
             free_bytes: free,
             cap_bytes: CAP_BYTES,
             reserve_bytes: RESERVE_BYTES,
+            headroom_bytes,
             stale_reason: if self.path(".accounting.dirty").exists() {
                 Some("accounting_incomplete")
-            } else if admit(used, checkpoint, free).is_ok() {
-                None
-            } else {
+            } else if headroom_bytes < 65536 {
                 Some("budget")
+            } else {
+                None
             },
         })
+    }
+
+    pub fn publish_cap(&self, destination: &Path) -> Result<()> {
+        let (used, unmet, reason) = match self.usage() {
+            Ok(usage) if usage.stale_reason == Some("accounting_incomplete") => {
+                (None, None, "session accounting is incomplete".to_owned())
+            }
+            Ok(usage) if usage.stale_reason == Some("budget") => (
+                Some(usage.used_bytes),
+                Some(true),
+                "session catalog cannot grow within its 64 GiB cap and 20 GiB free-disk reserve"
+                    .to_owned(),
+            ),
+            Ok(usage) => (
+                Some(usage.used_bytes),
+                Some(false),
+                format!(
+                    "session catalog has {} bytes of headroom",
+                    usage.headroom_bytes
+                ),
+            ),
+            Err(error) => (None, None, format!("{error:#}")),
+        };
+        let status = serde_json::json!({
+            "version": 1,
+            "owner": "remotecoder-sessions",
+            "observed_at": time::OffsetDateTime::now_utc().format(&time::format_description::well_known::Rfc3339)?,
+            "unmet": unmet,
+            "used_bytes": used,
+            "cap_bytes": CAP_BYTES,
+            "reason": reason,
+        });
+        std::fs::create_dir_all(
+            destination
+                .parent()
+                .context("Disk cap status needs a directory")?,
+        )?;
+        crate::storage::private_state::replace(destination, &serde_json::to_vec(&status)?)
     }
 
     pub fn lease(&self, incoming: u64) -> Result<Lease> {
@@ -201,10 +237,10 @@ impl Storage {
         } else if let Some(cache) = cache {
             *self.cache.lock().expect("Session accounting poisoned") = cache;
         }
-        if incoming > 0 {
-            let usage = self.usage()?;
-            admit(usage.used_bytes, incoming, usage.free_bytes)?;
-        }
+        ensure!(
+            incoming == 0 || incoming <= self.usage()?.headroom_bytes,
+            "stale: budget; session state needs space within 64 GiB and a 20 GiB free-disk reserve"
+        );
         Ok(lock)
     }
 
@@ -244,16 +280,11 @@ fn milliseconds() -> Result<u64> {
     )?)
 }
 
-pub(crate) fn admit(used: u64, incoming: u64, free: u64) -> Result<()> {
-    ensure!(
-        used.checked_add(incoming.saturating_add(65536))
-            .is_some_and(|bytes| bytes <= CAP_BYTES)
-            && free
-                .checked_sub(incoming.saturating_add(65536))
-                .is_some_and(|bytes| bytes >= RESERVE_BYTES),
-        "stale: budget; session state needs space within 64 GiB and a 20 GiB free-disk reserve"
-    );
-    Ok(())
+pub(crate) fn headroom(used: u64, free: u64, wal: u64) -> u64 {
+    CAP_BYTES
+        .saturating_sub(used)
+        .min(free.saturating_sub(RESERVE_BYTES))
+        .saturating_sub(WAL_BYTES.saturating_sub(wal))
 }
 
 fn file_bytes(path: &Path) -> Result<u64> {

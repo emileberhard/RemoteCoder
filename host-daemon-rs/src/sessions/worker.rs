@@ -210,7 +210,7 @@ fn watch(
 }
 
 impl Worker {
-    pub fn start(store: Store, mut origins: Vec<Origin>) -> Result<Self> {
+    pub fn start(store: Store, mut origins: Vec<Origin>, cap_status: PathBuf) -> Result<Self> {
         let home = crate::config::HostPaths::from_env()?.home().to_owned();
         let mut skills = vec![home.join(".agents/skills")];
         skills.extend(
@@ -305,6 +305,9 @@ impl Worker {
                         hot.observe(&*store.reader()?, &origins)?;
                         Ok(outcome)
                     })();
+                    if full && let Err(error) = store.storage.publish_cap(&cap_status) {
+                        tracing::warn!(%error,"Session disk cap status unavailable");
+                    }
                     match result {
                         Ok(_) => {
                             retry_delay = Duration::from_secs(2);
@@ -547,8 +550,12 @@ mod tests {
 
     #[test]
     fn sessions_worker_follows_cold_appends_and_new_directories() -> Result<()> {
-        let (_directory, store, origin, path) = fixture();
-        let worker = Worker::start(store.clone(), vec![origin.clone()])?;
+        let (directory, store, origin, path) = fixture();
+        let worker = Worker::start(
+            store.clone(),
+            vec![origin.clone()],
+            directory.path().join("disk-cap-status.json"),
+        )?;
         let deadline = Instant::now() + Duration::from_secs(10);
         while store
             .reader()?
@@ -576,9 +583,13 @@ mod tests {
     }
     #[test]
     fn sessions_hot_worker_observes_appends_while_the_writer_fd_stays_open() -> Result<()> {
-        let (_directory, store, origin, path) = fixture();
+        let (directory, store, origin, path) = fixture();
         std::fs::File::open(&path)?.set_modified(std::time::SystemTime::now())?;
-        let worker = Worker::start(store.clone(), vec![origin])?;
+        let worker = Worker::start(
+            store.clone(),
+            vec![origin],
+            directory.path().join("disk-cap-status.json"),
+        )?;
         let deadline = Instant::now() + Duration::from_secs(10);
         while store.reader()?.query_row(
             "SELECT count(*) FROM coverage WHERE indexed_through IS NOT NULL",

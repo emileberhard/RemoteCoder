@@ -20,29 +20,15 @@ impl Store {
             .context("Session database needs a parent directory")?;
         private_state::ensure_private_directory(parent)?;
         let storage = std::sync::Arc::new(super::storage::Storage::new(&path)?);
+        discard_other_schema(&path, &storage)?;
         let store = Self {
             anchor: std::sync::Arc::new(std::sync::Mutex::new(Connection::open(&path)?)),
             path,
             storage,
             worker: Default::default(),
         };
-        let mut db = store.writer()?;
-        let version: u32 = db.pragma_query_value(None, "user_version", |r| r.get(0))?;
-        if version != 0 && version != 4 && version != SCHEMA_VERSION {
-            db.pragma_update(None, "foreign_keys", false)?;
-            let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-            let objects:Vec<(String,String)>=tx.prepare("SELECT name,type FROM sqlite_schema WHERE type IN ('trigger','view','table') AND name NOT LIKE 'sqlite_%' ORDER BY CASE type WHEN 'trigger' THEN 0 WHEN 'view' THEN 1 ELSE CASE WHEN sql LIKE 'CREATE VIRTUAL TABLE%' THEN 2 ELSE 3 END END")?.query_map([],|r|Ok((r.get(0)?,r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
-            for (name, kind) in objects {
-                tx.execute_batch(&format!(
-                    "DROP {kind} IF EXISTS \"{}\"",
-                    name.replace('"', "\"\"")
-                ))?;
-            }
-            tx.commit()?;
-            db.pragma_update(None, "foreign_keys", true)?;
-        }
-        db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON; PRAGMA auto_vacuum=INCREMENTAL;")?;
-        migrate_change(&mut db)?;
+        let db = store.writer()?;
+        db.execute_batch("PRAGMA auto_vacuum=INCREMENTAL; PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;")?;
         db.execute_batch(include_str!("schema.sql"))?;
         db.execute_batch(include_str!("views.sql"))?;
         db.pragma_update(None, "user_version", SCHEMA_VERSION)?;
@@ -109,37 +95,18 @@ impl Store {
     }
 
     pub fn writer(&self) -> Result<Writer> {
-        let storage = &self.storage;
-        let lease = storage.lease(0)?;
+        let lease = self.storage.lease(0)?;
         let db = Connection::open(&self.path)?;
         db.busy_timeout(Duration::from_secs(5))?;
         db.execute_batch("PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON; PRAGMA cache_size=-32768; PRAGMA mmap_size=0; PRAGMA temp_store=MEMORY; PRAGMA journal_size_limit=16777216;")?;
-        let wal = storage.wal_bytes()?;
-        let before = storage.usage()?;
-        super::storage::admit(before.used_bytes, wal, before.free_bytes)?;
-        let (busy, _, _): (i64, i64, i64) =
-            db.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
-            })?;
-        ensure!(
-            busy == 0,
-            "unavailable: session snapshot prevents reclaiming its WAL"
-        );
-        let usage = storage.usage()?;
-        let size = self.path.metadata()?.len();
-        let page_size: u32 = db.pragma_query_value(None, "page_size", |r| r.get(0))?;
-        let page_count: u32 = db.pragma_query_value(None, "page_count", |r| r.get(0))?;
-        let limit = page_limit(
-            size,
-            usage.used_bytes.saturating_sub(size),
-            usage.free_bytes,
-            u64::from(page_size),
-        );
-        ensure!(
-            u64::from(page_count) <= limit,
-            "stale: budget; catalog cannot reserve its database and WAL within the shared cap"
-        );
-        db.pragma_update(None, "max_page_count", i64::try_from(limit)?)?;
+        let headroom = self.storage.usage()?.headroom_bytes;
+        let page_size: i64 = db.pragma_query_value(None, "page_size", |r| r.get(0))?;
+        let page_count: i64 = db.pragma_query_value(None, "page_count", |r| r.get(0))?;
+        db.pragma_update(
+            None,
+            "max_page_count",
+            (page_count + i64::try_from(headroom)? / page_size).max(1),
+        )?;
         Ok(Writer { db, _lease: lease })
     }
 
@@ -151,38 +118,29 @@ impl Store {
     }
 }
 
-pub(super) fn page_limit(size: u64, other: u64, free: u64, page_size: u64) -> u64 {
-    super::storage::CAP_BYTES
-        .saturating_sub(other)
-        .min(
-            free.saturating_sub(super::storage::RESERVE_BYTES)
-                .saturating_add(size),
-        )
-        .saturating_sub(65536)
-        .saturating_sub(super::storage::WAL_BYTES)
-        / page_size
-}
-
-fn migrate_change(db: &mut Connection) -> Result<()> {
-    let columns: std::collections::BTreeSet<String> = db
-        .prepare("PRAGMA table_info(change)")?
-        .query_map([], |row| row.get(1))?
-        .collect::<rusqlite::Result<_>>()?;
-    if columns.is_empty() || columns.contains("origin_host") && columns.contains("evidence_path") {
+fn discard_other_schema(path: &Path, storage: &super::storage::Storage) -> Result<()> {
+    if !path.try_exists()? {
         return Ok(());
     }
-    let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-    for column in ["origin_host", "evidence_path"] {
-        if !columns.contains(column) {
-            tx.execute_batch(&format!("ALTER TABLE change ADD COLUMN {column} TEXT"))?;
+    let _lease = storage.lease(0)?;
+    let version: u32 = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?
+        .pragma_query_value(None, "user_version", |r| r.get(0))?;
+    if version == SCHEMA_VERSION {
+        return Ok(());
+    }
+    for suffix in ["", "-wal", "-shm"] {
+        let mut file = path.as_os_str().to_owned();
+        file.push(suffix);
+        match std::fs::remove_file(&file) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
         }
     }
-    for table in ["source", "dependency"] {
-        for event in ["INSERT", "UPDATE", "DELETE"] {
-            tx.execute_batch(&format!("DROP TRIGGER IF EXISTS feed_{table}_{event}"))?;
-        }
-    }
-    tx.commit()?;
+    tracing::info!(
+        version,
+        "Session catalog rebuilds for schema {SCHEMA_VERSION}"
+    );
     Ok(())
 }
 

@@ -105,6 +105,15 @@ fn fixture() -> Fixture {
 fn scan(f: &Fixture) -> Value {
     ingest::scan(&f.store, &f.origins, &AtomicBool::new(false)).unwrap()
 }
+fn start_worker(store: &Store, origins: &[Origin]) -> super::worker::Worker {
+    let status = store
+        .path
+        .parent()
+        .unwrap()
+        .with_file_name("disk-cap-status.json");
+    super::worker::Worker::start(store.clone(), origins.to_vec(), status).unwrap()
+}
+
 fn search(store: &Store, term: &str) -> Value {
     query::search(
         &store.reader().unwrap(),
@@ -411,12 +420,43 @@ fn sessions_previous_schema_rebuilds_projection_and_expires_cursor() {
     scan(&f);
     let raw = std::fs::read(&f.codex).unwrap();
     let cursor = changes::cursor(&f.store.reader().unwrap()).unwrap();
+    let mirrored = f.store.path.with_file_name("mirrored.jsonl");
+    std::fs::write(&mirrored, b"kept").unwrap();
     f.store
         .writer()
         .unwrap()
-        .pragma_update(None, "user_version", 3)
+        .execute_batch("CREATE TABLE padding(data BLOB); INSERT INTO padding VALUES(zeroblob(52428800)); PRAGMA user_version=5; PRAGMA wal_checkpoint(TRUNCATE);")
         .unwrap();
+    let bytes = |store: &Store| {
+        ["", "-wal"]
+            .iter()
+            .map(|suffix| {
+                let mut path = store.path.clone().into_os_string();
+                path.push(suffix);
+                std::fs::metadata(path).map_or(0, |m| m.len())
+            })
+            .sum::<u64>()
+    };
+    assert!(bytes(&f.store) > 50 << 20);
     Store::open(f.store.path.clone()).unwrap();
+    assert!(bytes(&f.store) < 4 << 20, "{}", bytes(&f.store));
+    let db = f.store.reader().unwrap();
+    assert_eq!(
+        db.pragma_query_value(None, "auto_vacuum", |r| r.get::<_, i64>(0))
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        db.query_row(
+            "SELECT count(*) FROM sqlite_schema WHERE name='padding'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        0
+    );
+    drop(db);
+    assert_eq!(std::fs::read(&mirrored).unwrap(), b"kept");
     assert!(
         changes::read(
             &f.store.reader().unwrap(),
@@ -448,7 +488,7 @@ fn sessions_previous_schema_rebuilds_projection_and_expires_cursor() {
 fn sessions_spawn_then_resolve_catches_up_before_worker_scan() {
     let f = fixture();
     scan(&f);
-    let worker = super::worker::Worker::start(f.store.clone(), f.origins.clone()).unwrap();
+    let worker = start_worker(&f.store, &f.origins);
     let new = f.codex.with_file_name("newly-spawned.jsonl");
     write(
         &new,
@@ -470,7 +510,7 @@ fn sessions_spawn_then_resolve_catches_up_before_worker_scan() {
         1
     );
     let next = Store::open(f.store.path.clone()).unwrap();
-    let worker = super::worker::Worker::start(next.clone(), f.origins.clone()).unwrap();
+    let worker = start_worker(&next, &f.origins);
     std::fs::write(f.codex.with_file_name("pending-identity.jsonl"), b"{").unwrap();
     assert!(ingest::refresh_inventory(&next).is_err());
     worker.stop().unwrap();
@@ -483,7 +523,7 @@ fn sessions_inventory_reports_an_ingest_failure_instead_of_waiting_out_the_backo
     scan(&f);
     let locked = f.origins[0].path().join("2026");
     std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
-    let worker = super::worker::Worker::start(f.store.clone(), f.origins.clone()).unwrap();
+    let worker = start_worker(&f.store, &f.origins);
     let started = std::time::Instant::now();
     let error = ingest::refresh_inventory(&f.store).unwrap_err();
     let elapsed = started.elapsed();
@@ -652,11 +692,6 @@ async fn sessions_mirror_preserves_sidecars_and_refuses_over_budget() {
         )
         .unwrap();
     assert_eq!(remaining, 0);
-
-    assert!(super::storage::admit(64 << 30, 1, 100 << 30).is_err());
-    assert!(super::storage::admit(0, 1, 19 << 30).is_err());
-    assert!(super::storage::admit(0, 1, 30 << 30).is_ok());
-    assert!(super::storage::admit(0, 1, 50 << 30).is_ok());
 }
 
 #[tokio::test]
@@ -976,13 +1011,54 @@ fn sessions_budget_counts_catalog_wal_and_temporary_mirrors() {
 }
 
 #[test]
-fn sessions_catalog_grows_past_half_of_its_space_while_keeping_the_floor() {
+fn sessions_headroom_keeps_the_floor_and_the_remaining_wal_allowance() {
     let gib = 1u64 << 30;
-    let limit = super::store::page_limit(25 * gib, gib, 48 * gib, 4096) * 4096;
-    assert!(limit > 36 * gib, "{limit}");
-    assert!(
-        limit + super::storage::WAL_BYTES <= 48 * gib - super::storage::RESERVE_BYTES + 25 * gib
+    let headroom = super::storage::headroom;
+    assert_eq!(headroom(0, 30 * gib, 0), 2 * gib);
+    assert_eq!(headroom(0, 30 * gib, 8 * gib), 10 * gib);
+    assert_eq!(headroom(0, 30 * gib, 12 * gib), 10 * gib);
+    assert_eq!(headroom(0, 19 * gib, 0), 0);
+    assert_eq!(headroom(52 * gib, 100 * gib, 0), 4 * gib);
+    assert_eq!(headroom(64 * gib, 100 * gib, 8 * gib), 0);
+}
+
+#[test]
+fn sessions_cap_status_reports_usage_and_unknown_accounting() {
+    let f = fixture();
+    scan(&f);
+    let status = f
+        .store
+        .path
+        .parent()
+        .unwrap()
+        .with_file_name("disk-cap-status.json");
+    let storage = &f.store.storage;
+    storage.publish_cap(&status).unwrap();
+    let report: Value = serde_json::from_slice(&std::fs::read(&status).unwrap()).unwrap();
+    let mut keys: Vec<_> = report.as_object().unwrap().keys().cloned().collect();
+    keys.sort();
+    assert_eq!(
+        keys,
+        [
+            "cap_bytes",
+            "observed_at",
+            "owner",
+            "reason",
+            "unmet",
+            "used_bytes",
+            "version"
+        ]
     );
+    assert_eq!(report["version"], 1);
+    assert_eq!(report["owner"], "remotecoder-sessions");
+    assert_eq!(report["cap_bytes"], super::storage::CAP_BYTES);
+    assert_eq!(report["used_bytes"], storage.usage().unwrap().used_bytes);
+    assert!(report["unmet"].is_boolean());
+    assert!(report["observed_at"].as_str().unwrap().ends_with('Z'));
+    std::fs::write(f.store.path.with_file_name(".accounting.dirty"), b"1").unwrap();
+    storage.publish_cap(&status).unwrap();
+    let report: Value = serde_json::from_slice(&std::fs::read(&status).unwrap()).unwrap();
+    assert!(report["used_bytes"].is_null() && report["unmet"].is_null());
 }
 
 #[test]
@@ -1904,7 +1980,7 @@ fn sessions_rotation_retires_only_proven_missing_identity_owners() {
     scan(&f);
     let replacement = f.codex.with_file_name("a-replacement.jsonl");
     std::fs::rename(&f.codex, &replacement).unwrap();
-    let worker = super::worker::Worker::start(f.store.clone(), f.origins.clone()).unwrap();
+    let worker = start_worker(&f.store, &f.origins);
     ingest::refresh_inventory(&f.store).unwrap();
     let headers = query::inventory(&f.store.reader().unwrap(), None, 1000).unwrap();
     assert_eq!(
@@ -2368,52 +2444,6 @@ async fn sessions_mirror_replays_changes_that_race_the_initial_listing() -> Resu
             .unwrap()
             .len(),
         1
-    );
-    Ok(())
-}
-
-#[test]
-fn sessions_mirror_feed_upgrade_preserves_v4_rows_and_epoch() -> Result<()> {
-    let f = fixture();
-    scan(&f);
-    let cursor = changes::cursor(&*f.store.reader()?)?;
-    let rows: i64 = f
-        .store
-        .reader()?
-        .query_row("SELECT count(*) FROM item", [], |r| r.get(0))?;
-    {
-        let db = f.store.writer()?;
-        for table in ["source", "dependency"] {
-            for event in ["INSERT", "UPDATE", "DELETE"] {
-                db.execute_batch(&format!("DROP TRIGGER feed_{table}_{event}"))?;
-            }
-        }
-        db.execute_batch("DROP INDEX change_evidence; ALTER TABLE change DROP COLUMN origin_host; ALTER TABLE change DROP COLUMN evidence_path; PRAGMA user_version=4;")?;
-    }
-    let upgraded = Store::open(f.store.path.clone())?;
-    assert_eq!(changes::cursor(&*upgraded.reader()?)?, cursor);
-    assert_eq!(
-        upgraded
-            .reader()?
-            .query_row("SELECT count(*) FROM item", [], |r| r.get::<_, i64>(0))?,
-        rows
-    );
-    upgraded.writer()?.execute(
-        "UPDATE source SET revision=revision+1 WHERE provider='codex'",
-        [],
-    )?;
-    let events: i64 = upgraded.reader()?.query_row(
-        "SELECT count(*) FROM change WHERE origin_host='fixture' AND evidence_path IS NOT NULL",
-        [],
-        |r| r.get(0),
-    )?;
-    assert_eq!(events, 2);
-    let reopened = Store::open(f.store.path.clone())?;
-    assert_eq!(
-        reopened
-            .reader()?
-            .query_row("SELECT count(*) FROM item", [], |r| r.get::<_, i64>(0))?,
-        rows
     );
     Ok(())
 }

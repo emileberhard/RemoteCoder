@@ -45,9 +45,13 @@ impl Gateway {
                         local_home: claude,
                     },
                 ];
+                let cap_status = crate::config::HostPaths::from_env()?
+                    .home()
+                    .join(".local/state/disk-cap-status/remotecoder-sessions.json");
                 tokio::task::spawn_blocking(move || -> Result<Arc<Runtime>> {
                     let store = Store::open(root.join("catalog.sqlite3"))?;
-                    let worker = Arc::new(Worker::start(store.clone(), origins.clone())?);
+                    let worker =
+                        Arc::new(Worker::start(store.clone(), origins.clone(), cap_status)?);
                     Ok(Arc::new(Runtime {
                         store,
                         origins,

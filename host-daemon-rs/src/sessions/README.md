@@ -64,10 +64,10 @@ addresses remain not_found; multiple canonical keys remain ambiguous usage.
 SQL opens a separate read-only connection with query_only, no extensions or
 attachments, a five-second progress deadline, 10,000 rows, and an 8 MiB response
 budget. Read commands use byte ranges and return base64 plus UTF-8 when valid.
-Earlier normalization-schema mismatches rebuild the projection with a new epoch.
-The v4-to-v5 mirror feed metadata upgrade adds columns and replaces its source/dependency
-triggers in place, preserving accepted rows and the epoch; fresh v5 needs no
-ALTER. Provider evidence and mirrored raw files remain intact. Change cursors
+Any other schema version deletes the catalog, WAL and SHM under the storage lease
+and rebuilds a fresh file with a new epoch, so deleted index pages never survive an
+upgrade. Fresh files set incremental auto-vacuum before WAL mode, and each scan
+returns freed pages to the filesystem. Provider evidence and mirrored raw files remain intact. Change cursors
 carry schema version, database epoch and monotonic sequence;
 30-day expiry requires a SQL snapshot and its changeCursor. Item and source
 updates and their feed records share a transaction. Retention never deletes raw
@@ -78,9 +78,14 @@ admission gate; an independent process holding the flock still refuses admission
 The mirror transfer owner never holds that lease across network I/O. Every flock lease explicitly unlocks before closing, so forked provider
 children cannot prolong a released lease. Cached raw-byte accounting is adjusted on each owned mutation; DB, WAL
 and SHM are measured by stat. Startup and bounded ten-minute reconciliation recover
-orphans, and a dirty marker forces reconciliation after incomplete accounting. Catalog writes reserve room for both database pages and a full WAL;
-raw transfers admit each chunk. Refusal appears in coverage without growing the
-store. SQLite temporary query state stays in memory. The ingest worker is one
+orphans, and a dirty marker forces reconciliation after incomplete accounting. One headroom value governs growth: the smaller
+of the cap's remainder and the free space above the floor, minus the unused part of
+the 8 GiB WAL allowance. Writers cap max_page_count at the current pages plus
+headroom, so reads, deletes and pruning continue at the limit, and raw transfers
+admit each chunk within headroom. Coverage reports `budget` below 64 KiB of
+headroom, and each full reconcile replaces
+`~/.local/state/disk-cap-status/remotecoder-sessions.json` for the shared
+disk-pressure owner. SQLite temporary query state stays in memory. The ingest worker is one
 utility-QoS thread, separate from the live agent runtime.
 
 Mirroring requires an explicit host role, off by default. Private operations

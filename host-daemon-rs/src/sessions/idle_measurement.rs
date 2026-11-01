@@ -161,7 +161,11 @@ pub(super) fn run(store: &Store, origins: &[Origin], mode: &str) -> Result<()> {
             .query_row("SELECT max(indexed_through) FROM coverage", [], |r| {
                 r.get(0)
             })?;
-    let worker = Worker::start(store.clone(), origins.to_vec())?;
+    let worker = Worker::start(
+        store.clone(),
+        origins.to_vec(),
+        store.path.with_file_name("disk-cap-status.json"),
+    )?;
     let started = Instant::now();
     loop {
         let current: Option<String> =
@@ -273,7 +277,11 @@ fn active(store: &Store, origins: &[Origin]) -> Result<()> {
             .query_row("SELECT max(indexed_through) FROM coverage", [], |row| {
                 row.get(0)
             })?;
-    let worker = Worker::start(store.clone(), origins.to_vec())?;
+    let worker = Worker::start(
+        store.clone(),
+        origins.to_vec(),
+        store.path.with_file_name("disk-cap-status.json"),
+    )?;
     let waiting = Instant::now();
     loop {
         let current: Option<String> =
