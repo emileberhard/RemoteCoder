@@ -4,14 +4,14 @@ import SwiftUI
 @MainActor
 struct PerformanceReplaySidebarControl {
     let owner: UUID
-    let isOpen: Bool
+    let isOpen: () -> Bool
     let toggle: () -> Void
     let select: (ConversationAddress) -> ChatWorkspaceModel.ConversationSwitchOutcome
 }
 
 struct PerformanceReplaySidebarPublisher: View {
     let window: ChatWindowModel
-    let isOpen: Bool
+    let isOpen: () -> Bool
     let toggle: () -> Void
     let select: (ConversationAddress) -> ChatWorkspaceModel.ConversationSwitchOutcome
     @State private var owner = UUID()

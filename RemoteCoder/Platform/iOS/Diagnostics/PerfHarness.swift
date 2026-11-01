@@ -345,7 +345,7 @@ final class PerfHarness {
     }
 
     private func performRowSelection(_ address: ConversationAddress) async throws -> [String: Any] {
-        guard let window = workspace?.keyWindow, let commands = window.performanceSidebar, commands.isOpen else {
+        guard let window = workspace?.keyWindow, let commands = window.performanceSidebar, commands.isOpen() else {
             throw JourneyFailure.unavailableWindow
         }
         guard !isOpen(address) else { throw JourneyFailure.invalidSelection }
@@ -445,9 +445,9 @@ final class PerfHarness {
             try await Task.sleep(for: .milliseconds(16))
         }
         guard let commands = window.performanceSidebar else { throw JourneyFailure.unavailableWindow }
-        let previous = commands.isOpen
+        let previous = commands.isOpen()
         if previous != requested { commands.toggle() }
-        while window.performanceSidebar?.isOpen != requested || window.isHistoryDrawerOpen != requested || drawer?.motion.isAtRest == false {
+        while window.performanceSidebar?.isOpen() != requested || window.isHistoryDrawerOpen != requested || drawer?.motion.isAtRest == false {
             guard ContinuousClock.now < deadline else { throw JourneyFailure.timedOut }
             try await Task.sleep(for: .milliseconds(16))
         }

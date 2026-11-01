@@ -349,9 +349,9 @@ private struct PerformanceReplayNavigation {
         guard let commands = window.performanceSidebar else {
             throw PerformanceReplayScenario.Failure.invalidScenario("window commands unavailable")
         }
-        let previous = commands.isOpen
+        let previous = commands.isOpen()
         if previous != requested { commands.toggle() }
-        while window.performanceSidebar?.isOpen != requested || window.isHistoryDrawerOpen != requested {
+        while window.performanceSidebar?.isOpen() != requested || window.isHistoryDrawerOpen != requested {
             try Task.checkCancellation()
             guard ContinuousClock.now < deadline else {
                 throw PerformanceReplayScenario.Failure.invalidScenario("sidebar presentation did not change")
@@ -378,7 +378,7 @@ private struct PerformanceReplayNavigation {
                     guard let commands = window.performanceSidebar else {
                         throw PerformanceReplayScenario.Failure.invalidScenario("window commands unavailable")
                     }
-                    let transition = try await setSidebarOpen(!commands.isOpen)
+                    let transition = try await setSidebarOpen(!commands.isOpen())
                     presentation = ["sidebarBefore": transition.before, "sidebarAfter": transition.after]
                 case .scroll:
                     guard let screen = workspace.selectedScreen, screen.openThreadID == action.threadID,

@@ -352,7 +352,7 @@ private struct ChatScreen: View {
         #endif
         #if RC_PERF_HARNESS
         .background {
-            PerformanceReplaySidebarPublisher(window: window, isOpen: isHistoryOpen, toggle: toggleHistory, select: selectConversation)
+            PerformanceReplaySidebarPublisher(window: window, isOpen: { isHistoryOpen }, toggle: toggleHistory, select: selectConversation)
         }
         #endif
         .onChange(of: usesPersistentSidebar, initial: true) { _, persistent in isHistoryOpen = persistent }
