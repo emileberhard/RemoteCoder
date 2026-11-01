@@ -59,7 +59,7 @@ impl JobOwner {
                 if !gateway.is_draining() {
                     self.reconcile_native(&job).await?;
                 }
-                return Ok(notices_pending);
+                return Ok(false);
             }
             if matches!(job.stop, StopState::Requested { .. }) {
                 self.stop_execution(&gateway, &job).await?;
