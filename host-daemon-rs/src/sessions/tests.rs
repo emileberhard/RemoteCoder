@@ -2065,7 +2065,13 @@ async fn sessions_cluster_retries_failed_members_instead_of_exhausting_them() {
             assert_eq!(host, "peer");
             assert!(params["cursor"].is_null());
             if observed.fetch_add(1, std::sync::atomic::Ordering::SeqCst) < 2 {
-                anyhow::bail!("unreachable fixture");
+                return Err(crate::cluster::link::LinkError {
+                    cause: crate::cluster::link::Failure::Transport,
+                    class: crate::wire::cluster::ErrorClass::Unavailable,
+                    transmitted: false,
+                    message: "unreachable fixture".into(),
+                }
+                .into());
             }
             Ok(json!({"hits":[{"itemKey":"peer:item"}],"cursor":null}))
         }
@@ -2083,7 +2089,7 @@ async fn sessions_cluster_retries_failed_members_instead_of_exhausting_them() {
     )
     .await
     .unwrap();
-    assert_eq!(first["coverage"][1]["state"], "unavailable");
+    assert_eq!(first["coverage"][1]["state"], "unreachable");
     let second = cluster::search(
         "local",
         json!({"hits":[],"cursor":null}),
@@ -2555,13 +2561,8 @@ async fn sessions_mirror_appends_verified_growth_and_replaces_a_changed_prefix()
     sync_mirror(&target, peer.clone()).await?;
     assert_eq!(std::fs::metadata(&path)?.ino(), inode);
     assert_eq!(std::fs::read(&path)?, std::fs::read(&f.codex)?);
-    write(
-        &f.codex,
-        &[
-            codex_meta("codex-root", None),
-            json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"replacedmirrorneedle"}]}}),
-        ],
-    );
+    let rewritten = std::fs::read_to_string(&f.codex)?.replace("codexmiddle", "rewrittenxx");
+    std::fs::write(&f.codex, rewritten)?;
     scan(&f);
     sync_mirror(&target, peer).await?;
     assert_eq!(std::fs::read(&path)?, std::fs::read(&f.codex)?);
