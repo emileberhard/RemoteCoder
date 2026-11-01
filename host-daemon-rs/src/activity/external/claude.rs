@@ -318,7 +318,8 @@ mod tests {
                 registry,
                 listed_at: Instant::now() - age,
             }),
-            ..ClaudeInventory::default()
+            #[cfg(target_os = "macos")]
+            keychain_check: None,
         }
     }
 
