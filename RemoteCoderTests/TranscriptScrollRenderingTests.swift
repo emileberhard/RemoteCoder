@@ -19,13 +19,12 @@ struct TranscriptScrollRenderingTests {
             .environment(\.scenePhase, .active).environment(\.visualsVisible, false))
         hosted.show(controller)
         defer { hosted.close(); store.retire() }
+        controller.view.layoutIfNeeded()
         for text in ["One two", "One two three"] {
             message.text = text
             await store.prepare([message])
-            let deadline = ContinuousClock.now + .seconds(1)
-            while store.hasPendingWordHaptics(for: message.id), ContinuousClock.now < deadline {
-                try await Task.sleep(for: .milliseconds(10))
-            }
+            controller.view.setNeedsLayout()
+            controller.view.layoutIfNeeded()
             #expect(!store.hasPendingWordHaptics(for: message.id))
             let begin = try #require(store[message.id]?.reveal.hapticBegins.last)
             #expect(store.nextStreamingHaptic(for: message.id, at: begin + 0.01) == nil)
