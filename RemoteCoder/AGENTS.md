@@ -622,6 +622,13 @@ entrypoint linked above.
   ahead of anything typed since and after any IME composition. An ordinary
   message reads "Sending" only while the gateway has not accepted it after
   0.5 s, then "Not sent" (rejected) or "Unconfirmed" (uncertain).
+- `ChatScreenModel.dispatch` captures steer context synchronously at send, before
+  its first await, from the running turn's latest rendered assistant row through
+  `ChatMessage.markdownSource(rendered:)`. `SteerContext` owns the bounded tail;
+  `TurnDispatcher` adds it only to `turn/steer.additionalContext`. Keep notes out
+  of user text, local submissions and ordinary turn starts. The wire key and
+  provider envelope contract live in `docs/system-architecture.md`, *Steer and
+  fork context notes*. Do not add viewport or reveal tracking for this capture.
 - A steer appears once. Both providers take it only after the running tool
   batch finishes, and the only proof is the canonical `userMessage` whose
   `clientId` matches; a `turn/steer` response means only that the gateway

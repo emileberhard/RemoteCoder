@@ -615,6 +615,59 @@ details.
 Provider routing is explicit from the thread id or a new thread's provider
 field; gateway-only RPCs remain Codex-independent.
 
+### Steer and fork context notes
+
+These notes add facts the model cannot observe; they contain no instructions and
+never become the user's words. The app owns a steer's screen evidence. At send,
+`ChatScreenModel` captures the latest rendered assistant text in the running turn
+through `ChatMessage.markdownSource(rendered:)`, before any asynchronous message
+preparation or save. `SteerContext` keeps at most 600 trailing characters and
+removes a partial leading word when a boundary exists, retaining an unbroken tail
+otherwise. It records explicitly when no assistant text has
+been shown. This is transcript text at send, not a pixel-level reading position
+or evidence of attention; it does not track reveal animations or scroll geometry.
+
+The shared Swift/Rust wire key is `remote_coder_steer_context`: one `application`
+entry in `turn/steer.additionalContext`, alongside the existing interaction-mode
+entry. Codex owns its developer-message projection and changed-value handling.
+Claude reads only this key; interaction-mode context remains Codex-only. Voice
+steers originate in gateway handoffs and carry no app screen note.
+
+The gateway owns fork context and builds the same wording for both providers,
+using the source's name, otherwise preview, and cwd. The shared title is one line,
+bounded to 120 characters including an ellipsis when truncated. Only a
+client-originated
+`thread/fork` gets it; internal side-question forks do not. Codex's native request
+and response retain their connection, identity and bytes. After successful fork
+admission and response, the gateway holds that response while its control
+connection appends one developer message through `thread/inject_items`. One
+three-second deadline covers source read and injection. No turn
+starts. An injection/read failure journals `fork_note_failed` and still returns
+the original fork response.
+
+A Claude fork's copied transcript receives no new records. Before that transcript
+appears atomically, its index owner writes a private pending `.fork-note` beside
+its `.minted` record. The supervisor's shared input admission covers turn starts,
+agent messages, voice and recovery: under its existing thread/job fences it adds
+the pending note to the admitted input, queues it, and deletes the pending file.
+Refused input retains the note. A lock-free missing-file check preserves ordinary
+input's fast path; only a pending note acquires its index/file transaction.
+Admitted unconsumed input includes its optional
+`contextNote` in restart capture; absent notes serialize no new field. Empty notes are never added.
+The note follows the user's text in a separate stream-json text block wrapped
+in the reserved `<remotecoder_note>` envelope, before images. Envelope characters
+inside the note are escaped. Live translation, plain and `queued_command` replay,
+headers/previews and exact-delivery evidence remove this envelope; conversation
+review, title generation and voice context consume those cleaned user items.
+
+The reviewed boundary keeps screen capture in the app and provider persistence
+in the gateway. Reusing additional context, native injection and the existing
+Claude admission/restart owners avoids a second transcript or delivery path.
+Claude's pending file is necessary because changing copied provider records
+would corrupt their provenance; Codex's response hold ensures the note precedes
+the first user input. This depends on the pinned runtime allowing control-side
+injection into a just-forked client thread.
+
 ## Composer drafts
 
 Uncertain sends remain unconfirmed. Before showing a delivery error, the send

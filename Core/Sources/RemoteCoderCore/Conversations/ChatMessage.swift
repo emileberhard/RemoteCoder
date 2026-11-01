@@ -51,6 +51,10 @@ struct ChatMessage: Identifiable, Sendable, Equatable, Codable {
         self.questionReplies = questionReplies
     }
 
+    func markdownSource(renderedText: String?) -> String {
+        inlineContent?.plainText ?? (isStreaming ? renderedText : nil) ?? text
+    }
+
     private enum CodingKeys: String, CodingKey {
         case id, role, text, bodyText, attachments, attachmentOrder, inlineContent, date, wasSteered
         case canonicalTurnID, canonicalItemID, questionReplies, isStreaming

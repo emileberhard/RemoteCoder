@@ -210,6 +210,61 @@ async def cmd_e2e_fork_live(args: argparse.Namespace) -> int:
             _assert_e2e(marker_a in probe.assistant, f"probe assistant did not see {marker_a}: {probe.assistant!r}")
             _assert_e2e(marker_b not in probe.assistant, f"probe assistant still saw {marker_b}: {probe.assistant!r}")
             report("model context", f"assistant={probe.assistant!r}")
+            provenance = await _run_probe_turn(
+                ws, next_id=next_id,
+                prompt=("Without using tools, report this conversation's fork provenance. "
+                        'Return only JSON with keys "sourceTitle" (string) and "originalContinuesSeparately" (boolean).'),
+                resume=whole_id, provider=args.provider, model=args.model, cwd=args.cwd,
+                approval_policy=args.approval_policy, sandbox=args.sandbox,
+                network_access=not args.no_network_access, timeout_s=args.timeout,
+            )
+            _assert_e2e(provenance.status == "completed", "fork provenance turn failed")
+            payload = provenance.assistant.strip()
+            if payload.startswith("```") and payload.endswith("```"):
+                payload = "\n".join(payload.splitlines()[1:-1])
+            observed = json.loads(payload)
+            _assert_e2e(observed == {"sourceTitle": source_name, "originalContinuesSeparately": True},
+                        f"fork provenance was {observed!r}")
+            report("fork note model context", f"thread={whole_id} turn={provenance.turn_id} assistant={provenance.assistant!r}")
+            if args.provider == "codex":
+                async with await _ws_connect(cfg) as steer_ws:
+                    await _drain_ready(steer_ws, timeout_s=args.timeout)
+                    await _initialize(steer_ws, timeout_s=args.timeout)
+                    tool_started = asyncio.Event()
+                    steering_turn: str | None = None
+
+                    def observe_tool(message):
+                        nonlocal steering_turn
+                        if message.get("method") == "item/started" and message.get("params", {}).get("item", {}).get("type") == "commandExecution":
+                            steering_turn = message["params"]["turnId"]
+                            tool_started.set()
+
+                    async def steer_later_turn():
+                        await tool_started.wait()
+                        return await _timed_rpc(
+                            steer_ws, req_id=next_id(), method="turn/steer",
+                            params={"threadId": whole_id, "expectedTurnId": steering_turn,
+                                    "input": [{"type": "text", "text": "Instead reply only CACHE_STEERED."}],
+                                    "additionalContext": {"remote_coder_steer_context": {"kind": "application", "value":
+                                        "RemoteCoder note: the user sent their latest message while your turn was still running. When they sent it, they had not yet seen any of your output from this turn."}}},
+                            timeout_s=args.timeout,
+                        )
+
+                    steering = asyncio.create_task(steer_later_turn())
+                    try:
+                        later = await _run_probe_turn(
+                            ws, next_id=next_id, prompt="Run /bin/sleep 3 in the shell, then reply only READY.",
+                            resume=whole_id, provider=args.provider, model=args.model, cwd=args.cwd,
+                            approval_policy=args.approval_policy, sandbox=args.sandbox,
+                            network_access=not args.no_network_access, timeout_s=args.timeout, on_event=observe_tool,
+                        )
+                        _assert_e2e(tool_started.is_set(), "later Codex turn finished without the requested shell command")
+                        await steering
+                        _assert_e2e(later.status == "completed", "later steered turn failed")
+                        report("later steered turn", f"thread={whole_id} turn={later.turn_id}")
+                    finally:
+                        steering.cancel()
+                        await asyncio.gather(steering, return_exceptions=True)
 
     print(f"OK live {args.provider} fork e2e passed source={first.thread_id} fork={fork_id} whole={whole_id}")
     return 0
@@ -404,6 +459,17 @@ async def cmd_e2e_claude_steer_live(args: argparse.Namespace) -> int:
                 break
             _assert_e2e(bool(turn_id), "turn/start returned no Claude turn id")
 
+            while True:
+                message = await _ws_recv_json(ws, timeout_s=args.timeout)
+                if _event_thread_id(message) != thread_id:
+                    continue
+                if message.get("method") == "item/started" and (message.get("params") or {}).get("item", {}).get("type") == "commandExecution":
+                    break
+                _assert_e2e(message.get("method") != "turn/completed", "Claude finished before a steer could be queued")
+
+            steer_client_id = str(uuid.uuid4())
+            screen_note = ("RemoteCoder note: the user sent their latest message while your turn was still running. "
+                           "When they sent it, they had not yet seen any of your output from this turn.")
             steer_id = next_id()
             await ws.send(
                 _json(
@@ -413,7 +479,12 @@ async def cmd_e2e_claude_steer_live(args: argparse.Namespace) -> int:
                         "params": {
                             "threadId": thread_id,
                             "expectedTurnId": turn_id,
+                            "clientUserMessageId": steer_client_id,
                             "input": [{"type": "text", "text": "Instead reply with only STEERED."}],
+                            "additionalContext": {
+                                "remote_coder_steer_context": {"kind": "application", "value": screen_note},
+                                "remote_coder_interaction_mode": {"kind": "application", "value": "INTERACTION_MODE_MUST_STAY_CODEX_ONLY"},
+                            },
                         },
                     }
                 )
@@ -465,7 +536,17 @@ async def cmd_e2e_claude_steer_live(args: argparse.Namespace) -> int:
     _assert_e2e(completion_count == 1, f"expected one turn/completed, got {completion_count}")
     _assert_e2e(not active_for_thread, "steered Claude turn remained active after completion")
     _assert_e2e("STEERED" in assistant.upper(), f"steered response was not observed: {assistant!r}")
-    print(f"OK Claude steer completed once and became idle thread={thread_id} turn={turn_id}")
+    async with await _ws_connect(cfg) as replay_ws:
+        await _drain_ready(replay_ws, timeout_s=args.timeout)
+        await _initialize(replay_ws, timeout_s=args.timeout)
+        history, _, _ = await _timed_rpc(replay_ws, req_id=next_id(), method="thread/items/list",
+            params={"threadId": thread_id, "limit": 100, "sortDirection": "asc"}, timeout_s=args.timeout)
+        items = [entry["item"] for entry in _native_page_entries(history, limit=100)]
+        steers = [item for item in items if item.get("clientId") == steer_client_id]
+        _assert_e2e(len(steers) == 1, f"expected one replayed steer, found {len(steers)}")
+        _assert_e2e(steers[0].get("content") == [{"type": "text", "text": "Instead reply with only STEERED.", "textElements": []}],
+                    f"replayed steer included harness text: {steers[0]!r}")
+    print(f"OK Claude steer completed once and became idle thread={thread_id} turn={turn_id} steer={steer_client_id}; replay hides note")
     return 0
 
 

@@ -919,19 +919,22 @@ impl ClaudeSupervisor {
         slot: super::input_writer::InputSlot,
         prepared: Arc<super::input_writer::PreparedInput>,
     ) -> Result<super::input_writer::PendingWrite, TurnStartError> {
-        match policy.job() {
-            Some(handle) => self
-                .conversation_index
-                .admit_job_input(thread, handle, move || slot.send_input(prepared))
-                .await
-                .map_err(|error| {
-                    TurnStartError::internal(format!(
-                        "Claude job input was fenced before submission: {error:#}"
-                    ))
-                })?
-                .map_err(TurnStartError::from),
-            None => slot.send_input(prepared).map_err(TurnStartError::from),
-        }
+        self.conversation_index
+            .admit_input(thread, policy.job(), move |note| {
+                let prepared = if let Some(note) = note {
+                    let mut input = prepared.input.clone();
+                    input.append_note(&note);
+                    super::input_writer::InputWriter::prepare_input(&input)?
+                } else {
+                    prepared
+                };
+                slot.send_input(prepared)
+            })
+            .await
+            .map_err(|error| {
+                TurnStartError::internal(format!("Claude input admission failed: {error:#}"))
+            })?
+            .map_err(TurnStartError::from)
     }
 
     pub(super) async fn observe_job_frame(

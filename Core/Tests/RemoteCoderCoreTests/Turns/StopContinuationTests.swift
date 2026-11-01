@@ -360,7 +360,7 @@ private final class StopFixture: TurnDispatchHost {
 
     func steer(_ message: ChatMessage, input: String) {
         dispatcher.steer(.init(draft: draft, conversationID: conversationID, userMessageID: message.id, input: input,
-            interactionMode: .text, settings: settings), activeTurn: .init(threadID: turn.threadID, turnID: turn.turnID, jobID: "thread|turn"))
+            interactionMode: .text, settings: settings), activeTurn: .init(threadID: turn.threadID, turnID: turn.turnID, jobID: "thread|turn"), context: SteerContext.note(shownText: nil))
     }
 
     func stop() {

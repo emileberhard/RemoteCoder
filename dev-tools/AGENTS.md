@@ -168,6 +168,14 @@ receipt shape, and note what each leaves behind:
   `e2e-files-live` is the exception: its conversations stay visible for
   opening the files on the phone.
 
+- `probes/steer-fork-notes.mjs <candidate>` runs the steer/fork live probes in a
+  fresh `IsolatedGateway`, with private provider homes and a copied router key.
+  It verifies queued two-block Claude steer replay and checkpointed control-side
+  Codex fork injection, plus first-answer fork provenance on both providers.
+  The receipt records source/fork cache counters and a later Codex steered turn;
+  caching is observed without a pass/fail threshold.
+  It removes its gateway, daemon and private homes and retains a content-safe
+  receipt under `/tmp/steer-fork-evidence-*`. Never route it to production.
 - `e2e-reads` is read-only. `e2e-fork-live` and `e2e-claude-fork-live` leave their
   source and two forks in history. The Codex `e2e-thread-name-live` probe thread
   is archived; the Claude session stays in history like the other Claude probes.

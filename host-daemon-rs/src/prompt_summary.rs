@@ -4,13 +4,31 @@ use std::collections::HashSet;
 use serde_json::Value;
 
 pub(crate) const MARKER_PREFIX: &str = "remotecoder_";
+pub(crate) const REMOTE_CODER_NOTE_START: &str = "<remotecoder_note>";
+pub(crate) const REMOTE_CODER_NOTE_END: &str = "</remotecoder_note>";
+
 pub(crate) const ATTACHED_FILES_HEADER: &str =
     "Attached files (uploaded to this host; use these absolute paths):\n";
+
+pub(crate) fn without_remote_coder_note(text: &str) -> &str {
+    let trimmed = text.trim_end();
+    let Some(body) = trimmed.strip_suffix(REMOTE_CODER_NOTE_END) else {
+        return text;
+    };
+    let Some((user, _)) = body.rsplit_once(REMOTE_CODER_NOTE_START) else {
+        return text;
+    };
+    if user.is_empty() || user.ends_with('\n') {
+        user.trim_end()
+    } else {
+        text
+    }
+}
 
 pub(crate) fn prompt_summary(text: &str) -> Cow<'_, str> {
     const START: &str = "<remotecoder_pasted_text_v1>\n";
     const END: &str = "\n</remotecoder_pasted_text_v1>";
-    let text = text.trim();
+    let text = without_remote_coder_note(text).trim();
     let body = match text.rsplit_once(ATTACHED_FILES_HEADER) {
         Some((body, paths))
             if (body.is_empty() || body.ends_with("\n\n"))

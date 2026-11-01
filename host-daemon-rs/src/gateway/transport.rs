@@ -1220,6 +1220,15 @@ impl Gateway {
                     {
                         self.device_tools.record_driver(client_id, thread);
                     }
+                    if let Some(message) = parsed.as_ref()
+                        && message.get("error").is_none()
+                        && let Some(result) = message.get("result")
+                        && let Some(request) = &request
+                        && request.method == "thread/fork"
+                        && let Some(source) = &request.thread_id
+                    {
+                        self.note_client_fork(source, result).await;
+                    }
                     let history_method = request.as_ref().map(|request| request.method);
                     let tagged = parsed
                         .as_ref()

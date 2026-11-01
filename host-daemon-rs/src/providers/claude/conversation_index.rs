@@ -264,6 +264,38 @@ fn minted_path(home: &Path, thread_id: &str) -> PathBuf {
     path(home, thread_id).with_extension("minted")
 }
 
+fn fork_note_path(home: &Path, thread_id: &str) -> PathBuf {
+    path(home, thread_id).with_extension("fork-note")
+}
+
+fn with_fork_note<T>(
+    home: &Path,
+    thread: &str,
+    submit: impl FnOnce(Option<String>) -> std::io::Result<T>,
+) -> Result<std::io::Result<T>> {
+    private_state::transaction(
+        &fork_note_path(home, thread),
+        "Claude fork note has no parent directory",
+        |file| {
+            read_record(file, 32 * 1024)?
+                .map(String::from_utf8)
+                .transpose()
+                .map_err(Into::into)
+        },
+        |note| {
+            let pending = note.is_some();
+            let result = submit(note.take());
+            let consumed = pending && result.is_ok();
+            Ok((result, consumed))
+        },
+        |file, _| {
+            fs::remove_file(file)?;
+            fs::File::open(file.parent().context("Claude fork note has no parent")?)?.sync_all()?;
+            Ok(())
+        },
+    )
+}
+
 fn parent_path(home: &Path, thread_id: &str) -> PathBuf {
     path(home, thread_id).with_extension("parent")
 }
@@ -453,6 +485,19 @@ impl Store {
             }
         }
         index
+    }
+
+    pub(crate) async fn record_fork_note(&self, thread_id: &str, note: String) -> Result<()> {
+        ensure!(note.len() <= 32 * 1024, "Claude fork note exceeds 32 KiB");
+        let file = fork_note_path(&self.home, thread_id);
+        tokio::task::spawn_blocking(move || {
+            ensure!(
+                private_state::create_new(&file, note.as_bytes())? == Creation::Created,
+                "Claude fork note already exists"
+            );
+            Ok(())
+        })
+        .await?
     }
 
     pub(crate) async fn record_minted(&self, thread_id: &str) -> Result<()> {

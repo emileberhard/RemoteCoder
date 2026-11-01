@@ -1751,3 +1751,128 @@ async fn thread_reads_preserve_untagged_bytes_and_project_a_promoted_parent() {
     assert_eq!(response["result"]["thread"]["parentThreadId"], Value::Null);
     assert!(pending.lock().await.is_empty());
 }
+
+#[tokio::test]
+async fn client_fork_waits_for_its_note_but_injection_failure_still_returns_the_fork() {
+    for fail in [false, true] {
+        let gateway = TestGateway::new();
+        let (control, mut requests) = mpsc::channel(8);
+        gateway.attach_fake_control(control).await;
+        let pending: PendingRequests = Arc::default();
+        pending.lock().await.insert(
+            "7".into(),
+            PendingRequest::new("thread/fork", Some(&json!({"threadId":"source"})), false),
+        );
+        let response = json!({"id":7,"result":{"thread":{"id":"fork"},"cwd":"/repo"}}).to_string();
+        let stream = buffered_codex_texts(vec![response.clone()]).await;
+        let (tx, mut replies) = mpsc::channel(4);
+        let client = super::super::tests::test_client(1, tx);
+        let (upstream, _forwarded) = mpsc::channel(4);
+        let serving = gateway.codex_to_client_loop(
+            1,
+            NotificationOrigin::Client {
+                id: 1,
+                opened_after: 0,
+            },
+            stream,
+            client,
+            upstream,
+            pending,
+        );
+        let controls = async {
+            for method in ["thread/read", "thread/inject_items"] {
+                let request: Value = serde_json::from_str(&requests.recv().await.unwrap()).unwrap();
+                assert_eq!(request["method"], method);
+                assert!(
+                    replies.try_recv().is_err(),
+                    "fork response must wait until injection finishes"
+                );
+                let result = if method == "thread/read" {
+                    assert_eq!(request["params"]["threadId"], "source");
+                    json!({"thread":{"name":"Original title","preview":"Original preview","cwd":"/repo"}})
+                } else {
+                    assert_eq!(request["params"]["threadId"], "fork");
+                    let item = &request["params"]["items"][0];
+                    assert_eq!(item["role"], "developer");
+                    assert_eq!(
+                        item["content"][0]["text"],
+                        "RemoteCoder note: this conversation is a fork of \"Original title\". Its earlier history was copied from that conversation, which continues separately and may still be working in /repo."
+                    );
+                    json!({})
+                };
+                let reply = if fail && method == "thread/inject_items" {
+                    json!({"id":request["id"],"error":{"code":-32603,"message":"injection failed"}})
+                } else {
+                    json!({"id":request["id"],"result":result})
+                };
+                gateway
+                    .handle_control_text(
+                        reply.to_string(),
+                        NotificationOrigin::Control { opened_after: 0 },
+                    )
+                    .await;
+            }
+        };
+        tokio::join!(serving, controls);
+        let ClientCommand::Text(actual) = replies.recv().await.unwrap() else {
+            panic!("fork response");
+        };
+        assert_eq!(
+            actual, response,
+            "the client's response passes through unchanged"
+        );
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn client_fork_note_deadline_covers_both_control_calls_and_releases_later_frames() {
+    let gateway = TestGateway::new();
+    let (control, mut requests) = mpsc::channel(8);
+    gateway.attach_fake_control(control).await;
+    let pending: PendingRequests = Arc::default();
+    pending.lock().await.insert(
+        "7".into(),
+        PendingRequest::new("thread/fork", Some(&json!({"threadId":"source"})), false),
+    );
+    let response = json!({"id":7,"result":{"thread":{"id":"fork"}}}).to_string();
+    let later = json!({"id":8,"result":{"otherThread":"still streaming"}}).to_string();
+    let stream = buffered_codex_texts(vec![response.clone(), later.clone()]).await;
+    let (tx, mut replies) = mpsc::channel(4);
+    let client = super::super::tests::test_client(1, tx);
+    let (upstream, _forwarded) = mpsc::channel(4);
+    let started = tokio::time::Instant::now();
+    let serving = gateway.codex_to_client_loop(
+        1,
+        NotificationOrigin::Client {
+            id: 1,
+            opened_after: 0,
+        },
+        stream,
+        client,
+        upstream,
+        pending,
+    );
+    let controls = async {
+        let read: Value = serde_json::from_str(&requests.recv().await.unwrap()).unwrap();
+        assert_eq!(read["method"], "thread/read");
+        tokio::time::advance(Duration::from_secs(2)).await;
+        gateway
+            .handle_control_text(
+                json!({"id":read["id"],"result":{"thread":{"name":"Source","cwd":"/repo"}}})
+                    .to_string(),
+                NotificationOrigin::Control { opened_after: 0 },
+            )
+            .await;
+        let inject: Value = serde_json::from_str(&requests.recv().await.unwrap()).unwrap();
+        assert_eq!(inject["method"], "thread/inject_items");
+        assert!(replies.try_recv().is_err());
+    };
+    tokio::join!(serving, controls);
+    assert_eq!(started.elapsed(), Duration::from_secs(3));
+    for expected in [response, later] {
+        let ClientCommand::Text(actual) = replies.recv().await.unwrap() else {
+            panic!("response")
+        };
+        assert_eq!(actual, expected);
+    }
+}

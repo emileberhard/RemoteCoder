@@ -46,7 +46,7 @@ extension RenderedMessage {
 
 extension ChatMessage {
     func markdownSource(rendered: RenderedMessage?) -> String {
-        inlineContent?.plainText ?? (isStreaming ? rendered?.sourceText : nil) ?? text
+        markdownSource(renderedText: rendered?.sourceText)
     }
 }
 

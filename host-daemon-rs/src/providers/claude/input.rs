@@ -14,13 +14,15 @@ pub(crate) struct ClaudeImage {
 ///
 /// Claude's `--input-format stream-json` takes either a plain string or the
 /// Messages content-block array. Text-only turns keep the string form that has
-/// always worked; images require the array form.
+/// always worked; images and context notes require the array form.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct ClaudeUserInput {
     pub client_id: Option<String>,
     pub text: String,
     pub images: Vec<ClaudeImage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_note: Option<String>,
     pub(super) is_synthetic: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) notice: Option<Box<crate::providers::claude::restart::Item>>,
@@ -32,8 +34,22 @@ impl ClaudeUserInput {
             client_id: None,
             text: text.into(),
             images: Vec::new(),
+            context_note: None,
             is_synthetic: false,
             notice: None,
+        }
+    }
+
+    pub(crate) fn append_note(&mut self, note: &str) {
+        if note.is_empty() {
+            return;
+        }
+        match &mut self.context_note {
+            Some(current) => {
+                current.push_str("\n\n");
+                current.push_str(note);
+            }
+            None => self.context_note = Some(note.to_owned()),
         }
     }
 
@@ -110,15 +126,33 @@ pub(super) struct ClaudeContent<'a>(&'a ClaudeUserInput);
 impl Serialize for ClaudeContent<'_> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let input = self.0;
-        if input.images.is_empty() {
+        if input.images.is_empty() && input.context_note.is_none() {
             return serializer.serialize_str(&input.text);
         }
         let text = !input.text.trim().is_empty();
-        let mut blocks = serializer.serialize_seq(Some(input.images.len() + usize::from(text)))?;
+        let mut blocks = serializer.serialize_seq(Some(
+            input.images.len() + usize::from(text) + usize::from(input.context_note.is_some()),
+        ))?;
         if text {
             blocks.serialize_element(&TextBlock {
                 kind: "text",
                 text: &input.text,
+            })?;
+        }
+        if let Some(note) = &input.context_note {
+            let escaped = note
+                .replace('&', "&amp;")
+                .replace('<', "&lt;")
+                .replace('>', "&gt;");
+            let wrapped = format!(
+                "{}\n{}\n{}",
+                crate::prompt_summary::REMOTE_CODER_NOTE_START,
+                escaped,
+                crate::prompt_summary::REMOTE_CODER_NOTE_END
+            );
+            blocks.serialize_element(&TextBlock {
+                kind: "text",
+                text: &wrapped,
             })?;
         }
         for image in &input.images {
@@ -206,6 +240,23 @@ pub(crate) struct ClaudeTurnRequest {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn journals_without_notes_keep_the_old_shape_and_notes_survive_round_trip() {
+        let old = json!({"clientId":"u", "text":"continue", "images":[], "isSynthetic":false});
+        let mut input: ClaudeUserInput = serde_json::from_value(old.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&input).unwrap(), old);
+        input.append_note("RemoteCoder note: fork context.");
+        let restored: ClaudeUserInput =
+            serde_json::from_value(serde_json::to_value(&input).unwrap()).unwrap();
+        assert_eq!(restored, input);
+        assert!(
+            serde_json::to_value(ClaudeUserInput::text("plain"))
+                .unwrap()
+                .get("contextNote")
+                .is_none()
+        );
+    }
 
     fn image_item(url: &str) -> Value {
         json!({"type": "image", "url": url})
