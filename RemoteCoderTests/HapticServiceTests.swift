@@ -30,7 +30,9 @@ struct HapticServiceTests {
         let owner = UUID()
         fixture.service.beginInteraction(owner: owner)
         #expect(!fixture.service.canPlayStreaming)
-        #expect(!stream.isEligible())
+        #expect(stream.isEligible())
+        fixture.service.playStreaming(punch: 1, at: 10)
+        #expect(stream.punches.isEmpty)
         let gesture = try #require(fixture.players.first)
         gesture.hasActiveAccent = true
         fixture.service.finishInteraction(owner: owner)

@@ -182,12 +182,15 @@ private struct PreparedAssistantContent: View, Equatable {
         .onChange(of: rendered?.isStreaming, initial: true) {
             if allowsReveal, rendered?.isStreaming == true, rowVisibility?.isVisible == true { HapticService.shared.prepareStreaming() }
         }
-        .onChange(of: reveal.end, initial: true) {
+        .onChange(of: rendered?.revision, initial: true) {
             if reveal.end == nil {
                 renderedMessages.dropPendingWordHaptics(for: messageID)
             } else if rowVisibility?.isVisible == true, renderedMessages.hasPendingWordHaptics(for: messageID) {
                 HapticService.shared.prepareStreaming()
             }
+        }
+        .onChange(of: allowsReveal) {
+            if !allowsReveal { renderedMessages.dropPendingWordHaptics(for: messageID) }
         }
         .onDisappear {
             renderedMessages.dropPendingWordHaptics(for: messageID)
