@@ -160,14 +160,14 @@ final class StreamingRevealCoverLayers: NSObject {
     private let makeDisplayLink: (Any, Selector) -> CADisplayLink
     private var covers: [Int: (begin: TimeInterval, layers: [CALayer])] = [:]
     private var displayLink: CADisplayLink?
-    private var hapticFrame: ((TimeInterval) -> Void)?
+    private var hapticFrame: (@MainActor (TimeInterval) -> Void)?
 
     init(host: CALayer, displayLink: @escaping (Any, Selector) -> CADisplayLink) {
         self.host = host
         makeDisplayLink = displayLink
     }
 
-    func update(_ updated: [StreamingRevealCover], color: CGColor, hapticFrame: ((TimeInterval) -> Void)?) {
+    func update(_ updated: [StreamingRevealCover], color: CGColor, hapticFrame: (@MainActor (TimeInterval) -> Void)?) {
         self.hapticFrame = hapticFrame
         CATransaction.begin()
         CATransaction.setDisableActions(true)

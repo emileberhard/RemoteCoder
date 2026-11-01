@@ -11,7 +11,7 @@ struct StreamingHapticHandle: Equatable {
         lhs.store === rhs.store && lhs.messageID == rhs.messageID && lhs.row == rhs.row
     }
 
-    func frame(at time: TimeInterval) {
+    @MainActor func frame(at time: TimeInterval) {
         guard store.hasPendingWordHaptics(for: messageID) else { return }
         let service = HapticService.shared
         let eligible = row?.isVisible == true && service.canPlayStreaming
