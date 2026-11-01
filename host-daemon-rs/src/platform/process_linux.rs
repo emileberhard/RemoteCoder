@@ -1,9 +1,10 @@
 use std::io::Read;
 use std::path::Path;
+use std::sync::OnceLock;
 
 use anyhow::{Context, Result, ensure};
 
-use super::{ProcessIdentity, ProcessLink};
+use super::{LinuxBirth, ProcessIdentity, ProcessLink};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Stat {
@@ -61,9 +62,16 @@ fn start_micros(stat: Stat) -> Result<u64> {
         .find_map(|line| line.strip_prefix("btime "))
         .context("kernel boot time is absent")?
         .parse::<u64>()?;
-    // SAFETY: sysconf reads a process-independent integer without a pointer.
-    let ticks = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
-    ensure!(ticks > 0, "kernel clock tick frequency is unavailable");
+    static CLOCK_TICKS: OnceLock<u64> = OnceLock::new();
+    let ticks = if let Some(ticks) = CLOCK_TICKS.get() {
+        *ticks
+    } else {
+        // SAFETY: sysconf reads a process-independent integer without a pointer.
+        let ticks = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
+        ensure!(ticks > 0, "kernel clock tick frequency is unavailable");
+        let ticks = ticks as u64;
+        *CLOCK_TICKS.get_or_init(|| ticks)
+    };
     seconds
         .checked_mul(1_000_000)
         .and_then(|boot| {
@@ -71,7 +79,7 @@ fn start_micros(stat: Stat) -> Result<u64> {
                 .checked_mul(1_000_000)
                 .map(|start| (boot, start))
         })
-        .and_then(|(boot, start)| boot.checked_add(start / ticks as u64))
+        .and_then(|(boot, start)| boot.checked_add(start / ticks))
         .context("kernel start time is unrepresentable")
 }
 
@@ -80,6 +88,7 @@ pub(super) fn process_link(pid: i32) -> Result<Option<ProcessLink>> {
         .map(|value| {
             Ok(ProcessLink {
                 started_micros: start_micros(value)?,
+                linux_birth: birth(value)?,
                 parent_pid: value.parent,
             })
         })
@@ -96,10 +105,29 @@ pub(super) fn identify(pid: i32) -> Result<Option<ProcessIdentity>> {
         Err(error) => return Err(error).context("reading process executable"),
     };
     let started_micros = start_micros(before)?;
+    let linux_birth = birth(before)?;
     Ok((stat(pid)? == Some(before)).then_some(ProcessIdentity {
         started_micros,
+        linux_birth,
         executable,
     }))
+}
+
+fn birth(stat: Stat) -> Result<LinuxBirth> {
+    static BOOT_ID: OnceLock<[u8; 36]> = OnceLock::new();
+    let boot_id = if let Some(boot_id) = BOOT_ID.get() {
+        *boot_id
+    } else {
+        let boot = read(Path::new("/proc/sys/kernel/random/boot_id"))?
+            .context("kernel boot identity is unavailable")?;
+        let boot_id =
+            super::boot_id::parse(boot.trim()).context("kernel boot identity is invalid")?;
+        *BOOT_ID.get_or_init(|| boot_id)
+    };
+    Ok(LinuxBirth {
+        boot_id,
+        start_ticks: stat.start_ticks,
+    })
 }
 
 pub(crate) fn kernel_identity(pid: i32) -> Result<Option<(String, u64)>> {
@@ -131,6 +159,70 @@ mod tests {
             None
         );
         assert!(parse_stat(42, "42 (name) S 40").is_err());
+    }
+
+    #[test]
+    fn ancestry_uses_boot_and_ticks_across_wall_clock_steps() {
+        use super::super::{ProcessInstance, walk_ancestry};
+        let boot_id = *b"01234567-89ab-cdef-0123-456789abcdef";
+        let birth = |ticks| LinuxBirth {
+            boot_id,
+            start_ticks: ticks,
+        };
+        let caller = ProcessInstance {
+            pid: 40,
+            started_micros: 1_000_000,
+            linux_birth: birth(400),
+        };
+        let mut reads = 0;
+        let proof = walk_ancestry(caller, |pid| {
+            reads += 1;
+            let (ticks, parent) = match pid {
+                40 => (400, 30),
+                30 => (300, 1),
+                _ => unreachable!(),
+            };
+            Ok(Some(ProcessLink {
+                started_micros: 2_000_000 + reads,
+                linux_birth: birth(ticks),
+                parent_pid: parent,
+            }))
+        })
+        .collect::<Result<Vec<_>>>()
+        .unwrap();
+        assert_eq!(proof.iter().map(|p| p.pid).collect::<Vec<_>>(), [40, 30]);
+        let changed_ticks = ProcessInstance {
+            linux_birth: birth(401),
+            ..caller
+        };
+        assert!(
+            walk_ancestry(changed_ticks, |pid| Ok(Some(ProcessLink {
+                started_micros: 1,
+                linux_birth: birth(400),
+                parent_pid: pid - 1
+            })))
+            .next()
+            .unwrap()
+            .is_err()
+        );
+        let mut changed_boot = birth(400);
+        changed_boot.boot_id[0] = b'1';
+        assert!(
+            walk_ancestry(
+                ProcessInstance {
+                    linux_birth: changed_boot,
+                    ..caller
+                },
+                |_| Ok(Some(ProcessLink {
+                    started_micros: 1,
+                    linux_birth: birth(400),
+                    parent_pid: 1
+                }))
+            )
+            .next()
+            .unwrap()
+            .is_err()
+        );
     }
 
     #[tokio::test]

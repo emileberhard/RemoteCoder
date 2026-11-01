@@ -5,7 +5,7 @@ use nix::errno::Errno;
 use nix::sys::signal::{Signal, kill, killpg};
 use nix::unistd::{Pid, getpgid};
 
-use crate::platform::process::identify;
+use crate::platform::process::{ProcessInstance, identify};
 
 const SIGNAL_GRACE: Duration = Duration::from_secs(5);
 const EXIT_POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -18,13 +18,13 @@ pub(crate) async fn stop_client(pid: i32) -> Result<()> {
     let Some(identity) = identify(pid)? else {
         return Ok(());
     };
-    let started = identity.started_micros;
+    let process = identity.instance(pid);
     let target = Pid::from_raw(pid);
     let own_group = getpgid(None).context("reading the gateway's process group failed")?;
     let leads_group =
         getpgid(Some(target)).is_ok_and(|group| group == target && group != own_group);
     for signal in [Signal::SIGTERM, Signal::SIGKILL] {
-        if !still_running(pid, started)? {
+        if !still_running(process)? {
             return Ok(());
         }
         let sent = if leads_group {
@@ -40,7 +40,7 @@ pub(crate) async fn stop_client(pid: i32) -> Result<()> {
         }
         let deadline = Instant::now() + SIGNAL_GRACE;
         while Instant::now() < deadline {
-            if !still_running(pid, started)? {
+            if !still_running(process)? {
                 return Ok(());
             }
             tokio::time::sleep(EXIT_POLL_INTERVAL).await;
@@ -49,8 +49,8 @@ pub(crate) async fn stop_client(pid: i32) -> Result<()> {
     bail!("the other client's process {pid} is still running after SIGKILL")
 }
 
-fn still_running(pid: i32, started_micros: u64) -> Result<bool> {
-    Ok(identify(pid)?.is_some_and(|identity| identity.started_micros == started_micros))
+fn still_running(process: ProcessInstance) -> Result<bool> {
+    Ok(identify(process.pid)?.is_some_and(|identity| identity.instance(process.pid) == process))
 }
 
 #[cfg(test)]

@@ -79,7 +79,7 @@ impl Gateway {
                 }
                 let provider = self.job_claude()?;
                 if provider
-                    .owned_process_session(proven.process.pid, proven.process.started_micros)
+                    .owned_process_session(proven.process)
                     .await
                     .is_some()
                 {

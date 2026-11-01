@@ -843,6 +843,11 @@ async fn an_unreadable_identity_during_a_stop_never_succeeds_or_escalates() {
 fn identity(executable: &str, started_micros: u64) -> mac_app::ProcessIdentity {
     mac_app::ProcessIdentity {
         started_micros,
+        #[cfg(target_os = "linux")]
+        linux_birth: crate::platform::process::LinuxBirth {
+            boot_id: *b"01234567-89ab-cdef-0123-456789abcdef",
+            start_ticks: started_micros,
+        },
         executable: PathBuf::from(executable),
     }
 }

@@ -98,9 +98,9 @@ impl ClaudeSupervisor {
         let admission = ProcessAdmission::new(process_group_id, Arc::clone(&self.process_registry));
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         let identity = crate::platform::process::identify(process_group_id)
-            .map(|identity| identity.map(|identity| identity.started_micros));
+            .map(|identity| identity.map(|identity| identity.instance(process_group_id)));
         #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-        let identity: anyhow::Result<Option<u64>> = Ok(None);
+        let identity: anyhow::Result<Option<crate::platform::process::ProcessInstance>> = Ok(None);
         let (reaped, reap_state) = tokio::sync::watch::channel(ReapState::Running);
         let stdin = child.stdin.take();
         let stdout = child.stdout.take();
@@ -125,7 +125,7 @@ impl ClaudeSupervisor {
         let group = OwnedGroup {
             admission,
             process_group_id,
-            process_started_micros: identity.map_err(std::io::Error::other)?,
+            process_identity: identity.map_err(std::io::Error::other)?,
             reaped: reap_state,
             stdin,
             stdout,
@@ -318,7 +318,7 @@ impl ClaudeSupervisor {
         let OwnedGroup {
             admission,
             process_group_id,
-            process_started_micros,
+            process_identity,
             reaped,
             stdin,
             stdout,
@@ -334,7 +334,7 @@ impl ClaudeSupervisor {
                 input: InputWriter::spawn(stdin),
                 pending_controls: HashMap::new(),
                 process_group_id,
-                process_started_micros,
+                process_identity,
                 reaped,
                 launch: launch.clone(),
                 session_uuid: request.session_uuid.clone(),
@@ -466,7 +466,7 @@ impl ClaudeSupervisor {
 pub(super) struct OwnedGroup {
     pub(super) admission: ProcessAdmission,
     pub(super) process_group_id: i32,
-    pub(super) process_started_micros: Option<u64>,
+    pub(super) process_identity: Option<crate::platform::process::ProcessInstance>,
     pub(super) reaped: tokio::sync::watch::Receiver<ReapState>,
     pub(super) stdin: Option<ChildStdin>,
     pub(super) stdout: Option<ChildStdout>,

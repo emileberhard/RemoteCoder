@@ -1125,20 +1125,12 @@ mod tests {
             thread_id: THREAD.into(),
         };
         let pid = std::process::id() as i32;
-        let started_micros = crate::platform::process::identify(pid)
+        let process = crate::platform::process::identify(pid)
             .unwrap()
             .unwrap()
-            .started_micros;
+            .instance(pid);
         let routes = NativeRoutes::default();
-        let (_lease, mut receiver) = routes
-            .register(
-                conversation.clone(),
-                crate::platform::process::ProcessInstance {
-                    pid,
-                    started_micros,
-                },
-            )
-            .unwrap();
+        let (_lease, mut receiver) = routes.register(conversation.clone(), process).unwrap();
         let (result, ()) = tokio::join!(
             fixture
                 .agent
@@ -1235,10 +1227,10 @@ mod tests {
             DeliveryState::Rejected
         );
         let pid = std::process::id() as i32;
-        let started_micros = crate::platform::process::identify(pid)
+        let process = crate::platform::process::identify(pid)
             .unwrap()
             .unwrap()
-            .started_micros;
+            .instance(pid);
         let conversation = crate::agents::jobs::model::ConversationIdentity {
             provider: crate::agents::jobs::model::Provider::Claude,
             provider_home: crate::agents::jobs::model::ProviderHome::Known {
@@ -1246,15 +1238,7 @@ mod tests {
             },
             thread_id: THREAD.into(),
         };
-        let (_lease, mut receiver) = routes
-            .register(
-                conversation,
-                crate::platform::process::ProcessInstance {
-                    pid,
-                    started_micros,
-                },
-            )
-            .unwrap();
+        let (_lease, mut receiver) = routes.register(conversation, process).unwrap();
         let (result, ()) = tokio::join!(
             fixture
                 .agent

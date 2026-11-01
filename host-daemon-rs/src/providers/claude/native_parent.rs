@@ -135,6 +135,16 @@ struct OwnerRecord {
     proc_start: String,
 }
 
+#[cfg(target_os = "linux")]
+pub(crate) async fn prove_owner(
+    _claude_home: &Path,
+    _pid: i32,
+    _started_micros: u64,
+) -> Result<Option<NativeSessionOwner>> {
+    Ok(None)
+}
+
+#[cfg(not(target_os = "linux"))]
 pub(crate) async fn prove_owner(
     claude_home: &Path,
     pid: i32,

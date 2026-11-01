@@ -15,19 +15,101 @@ use anyhow::Result;
 #[path = "process_linux.rs"]
 pub(crate) mod linux;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct LinuxBirth {
+    #[serde(with = "boot_id")]
+    pub boot_id: [u8; 36],
+    pub start_ticks: u64,
+}
+
+pub(super) mod boot_id {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(value: &[u8; 36], serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(std::str::from_utf8(value).map_err(serde::ser::Error::custom)?)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<[u8; 36], D::Error> {
+        let value = String::deserialize(deserializer)?;
+        parse(&value).ok_or_else(|| serde::de::Error::custom("invalid Linux boot UUID"))
+    }
+
+    pub fn parse(value: &str) -> Option<[u8; 36]> {
+        let bytes: [u8; 36] = value.as_bytes().try_into().ok()?;
+        for (index, byte) in bytes.iter().enumerate() {
+            if [8, 13, 18, 23].contains(&index) {
+                if *byte != b'-' {
+                    return None;
+                }
+            } else if !byte.is_ascii_digit() && !(b'a'..=b'f').contains(byte) {
+                return None;
+            }
+        }
+        Some(bytes)
+    }
+}
+
 /// A live process's kernel identity and current executable.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub(crate) struct ProcessIdentity {
     /// Kernel start time in microseconds since the epoch.
     pub started_micros: u64,
+    #[cfg(target_os = "linux")]
+    pub linux_birth: LinuxBirth,
     pub executable: PathBuf,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug)]
 pub(crate) struct ProcessInstance {
     pub pid: i32,
     pub started_micros: u64,
+    #[cfg(target_os = "linux")]
+    pub linux_birth: LinuxBirth,
 }
+
+impl PartialEq for ProcessIdentity {
+    fn eq(&self, other: &Self) -> bool {
+        self.executable == other.executable && {
+            #[cfg(target_os = "linux")]
+            {
+                self.linux_birth == other.linux_birth
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                self.started_micros == other.started_micros
+            }
+        }
+    }
+}
+impl Eq for ProcessIdentity {}
+
+impl ProcessIdentity {
+    pub fn instance(&self, pid: i32) -> ProcessInstance {
+        ProcessInstance {
+            pid,
+            started_micros: self.started_micros,
+            #[cfg(target_os = "linux")]
+            linux_birth: self.linux_birth,
+        }
+    }
+}
+
+impl PartialEq for ProcessInstance {
+    fn eq(&self, other: &Self) -> bool {
+        self.pid == other.pid && {
+            #[cfg(target_os = "linux")]
+            {
+                self.linux_birth == other.linux_birth
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                self.started_micros == other.started_micros
+            }
+        }
+    }
+}
+impl Eq for ProcessInstance {}
 
 #[cfg(target_os = "macos")]
 pub(crate) fn unix_peer_identity(
@@ -76,10 +158,38 @@ pub(crate) fn ancestry(process: ProcessInstance) -> impl Iterator<Item = Result<
 }
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy)]
 struct ProcessLink {
     started_micros: u64,
     parent_pid: i32,
+    #[cfg(target_os = "linux")]
+    linux_birth: LinuxBirth,
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+impl ProcessLink {
+    fn instance(self, pid: i32) -> ProcessInstance {
+        ProcessInstance {
+            pid,
+            started_micros: self.started_micros,
+            #[cfg(target_os = "linux")]
+            linux_birth: self.linux_birth,
+        }
+    }
+    fn same(self, other: Self, pid: i32) -> bool {
+        self.parent_pid == other.parent_pid && self.instance(pid) == other.instance(pid)
+    }
+    fn precedes(self, child: ProcessInstance) -> bool {
+        #[cfg(target_os = "linux")]
+        {
+            self.linux_birth.boot_id == child.linux_birth.boot_id
+                && self.linux_birth.start_ticks <= child.linux_birth.start_ticks
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            self.started_micros <= child.started_micros
+        }
+    }
 }
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -112,7 +222,7 @@ fn walk_ancestry(
                 let info = read(current.pid)?
                     .context("caller process exited during ancestry verification")?;
                 ensure!(
-                    info.started_micros == current.started_micros,
+                    info.instance(current.pid) == current,
                     "caller process identity is stale"
                 );
                 (current, info)
@@ -124,16 +234,10 @@ fn walk_ancestry(
                 let recheck = read(child.pid)?
                     .context("caller process exited during ancestry verification")?;
                 ensure!(
-                    recheck == child_info && parent.started_micros <= child.started_micros,
+                    recheck.same(child_info, child.pid) && parent.precedes(child),
                     "caller process ancestry changed during verification"
                 );
-                (
-                    ProcessInstance {
-                        pid: child_info.parent_pid,
-                        started_micros: parent.started_micros,
-                    },
-                    parent,
-                )
+                (parent.instance(child_info.parent_pid), parent)
             };
             ensure!(
                 !chain.contains(&current),
@@ -290,6 +394,7 @@ mod tests {
     use crate::platform::macos::application::request_quit;
 
     #[test]
+    #[cfg(target_os = "macos")]
     fn claude_owner_stops_before_privileged_launchers_without_hiding_proof_errors() {
         let caller = ProcessInstance {
             pid: 40,
@@ -398,10 +503,7 @@ mod tests {
     #[test]
     fn lazy_ancestry_verifies_live_parent_links_and_stale_instances() {
         let pid = std::process::id() as i32;
-        let owner = ProcessInstance {
-            pid,
-            started_micros: identify(pid).unwrap().unwrap().started_micros,
-        };
+        let owner = identify(pid).unwrap().unwrap().instance(pid);
         assert_eq!(ancestry(owner).next().transpose().unwrap(), Some(owner));
         let mut child = std::process::Command::new("/bin/cat")
             .stdin(std::process::Stdio::piped())
@@ -409,18 +511,20 @@ mod tests {
             .spawn()
             .unwrap();
         let child_pid = child.id() as i32;
-        let child_instance = ProcessInstance {
-            pid: child_pid,
-            started_micros: identify(child_pid).unwrap().unwrap().started_micros,
-        };
+        let child_instance = identify(child_pid).unwrap().unwrap().instance(child_pid);
         let proof = ancestry(child_instance).take(2).collect::<Result<Vec<_>>>();
         child.kill().unwrap();
         child.wait().unwrap();
         assert_eq!(proof.unwrap(), vec![child_instance, owner]);
-        let stale = ProcessInstance {
-            started_micros: owner.started_micros + 1,
-            ..owner
-        };
+        let mut stale = owner;
+        #[cfg(target_os = "linux")]
+        {
+            stale.linux_birth.start_ticks += 1;
+        }
+        #[cfg(target_os = "macos")]
+        {
+            stale.started_micros += 1;
+        }
         assert!(ancestry(stale).next().unwrap().is_err());
     }
 

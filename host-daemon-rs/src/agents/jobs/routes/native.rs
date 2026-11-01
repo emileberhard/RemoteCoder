@@ -211,8 +211,7 @@ impl NativeRoutes {
             return unreachable("Claude native parent has no live registered holder");
         };
         let alive = tokio::task::spawn_blocking(move || identify(owner.pid)).await;
-        if !matches!(alive, Ok(Ok(Some(identity))) if identity.started_micros == owner.started_micros)
-        {
+        if !matches!(alive, Ok(Ok(Some(identity))) if identity.instance(owner.pid) == owner) {
             return unreachable("Claude native parent process identity is no longer live");
         }
         if !self.current(conversation, epoch) {

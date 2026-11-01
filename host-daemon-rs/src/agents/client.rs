@@ -270,7 +270,14 @@ async fn capture(endpoint: &Endpoint) -> Result<CapturedContext> {
         .context("The caller process no longer has a verifiable identity")?;
     rpc(endpoint, "agent/context/capture", CaptureParams {
         pid,
-        started_at_unix_micros: identity.started_micros,
+        #[cfg(not(target_os = "linux"))]
+        started_at_unix_micros: Some(identity.started_micros),
+        #[cfg(target_os = "linux")]
+        started_at_unix_micros: None,
+        #[cfg(target_os = "linux")]
+        linux_birth: Some(identity.linux_birth),
+        #[cfg(not(target_os = "linux"))]
+        linux_birth: None,
     }).await.context("Cannot prove the calling agent; capture context before detaching, pass --caller-context explicitly, or select --operator for deliberate standalone work")
 }
 

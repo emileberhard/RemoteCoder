@@ -369,7 +369,8 @@ async fn captured_native_claude_context_outlives_its_child_but_not_its_owner_or_
     let captured = gateway
         .capture_job_context(CaptureParams {
             pid,
-            started_at_unix_micros: identity.started_micros,
+            started_at_unix_micros: Some(identity.started_micros),
+            linux_birth: None,
         })
         .await
         .unwrap();
@@ -385,7 +386,8 @@ async fn captured_native_claude_context_outlives_its_child_but_not_its_owner_or_
         gateway
             .capture_job_context(CaptureParams {
                 pid,
-                started_at_unix_micros: identity.started_micros,
+                started_at_unix_micros: Some(identity.started_micros),
+                linux_birth: None,
             })
             .await
             .is_err()

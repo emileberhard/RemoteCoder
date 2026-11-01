@@ -420,7 +420,15 @@ async fn an_unproven_owner_with_a_live_group_cannot_be_declared_stopped() {
         .agent
         .conversation_index
         .update_job(THREAD, &handle, |saved| {
-            saved.owner.as_mut().unwrap().started_micros += 1;
+            let owner = saved.owner.as_mut().unwrap();
+            #[cfg(target_os = "linux")]
+            {
+                owner.linux_birth.as_mut().unwrap().start_ticks += 1;
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                owner.started_micros += 1;
+            }
             Ok(())
         })
         .await

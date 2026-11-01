@@ -109,7 +109,14 @@ async fn serve(
         "agent/context/capture",
         serde_json::to_value(CaptureParams {
             pid: process.pid.try_into()?,
-            started_at_unix_micros: process.started_micros,
+            #[cfg(not(target_os = "linux"))]
+            started_at_unix_micros: Some(process.started_micros),
+            #[cfg(target_os = "linux")]
+            started_at_unix_micros: None,
+            #[cfg(target_os = "linux")]
+            linux_birth: Some(process.linux_birth),
+            #[cfg(not(target_os = "linux"))]
+            linux_birth: None,
         })?,
     )
     .await;
@@ -268,10 +275,7 @@ async fn send_rpc(
 fn current_process() -> Result<ProcessInstance> {
     let pid = i32::try_from(std::process::id())?;
     let identity = identify(pid)?.context("Native holder process identity is unavailable")?;
-    Ok(ProcessInstance {
-        pid,
-        started_micros: identity.started_micros,
-    })
+    Ok(identity.instance(pid))
 }
 
 async fn native_ancestor(

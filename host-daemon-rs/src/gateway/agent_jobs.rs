@@ -23,7 +23,8 @@ struct NativeToolContext {
 #[serde(rename_all = "camelCase")]
 struct NativeProcessIdentity {
     pid: i32,
-    started_at_unix_micros: u64,
+    started_at_unix_micros: Option<u64>,
+    linux_birth: Option<crate::platform::process::LinuxBirth>,
 }
 
 impl Gateway {
@@ -189,10 +190,16 @@ impl Gateway {
     ) -> Result<Option<ProvenCaller>> {
         let native = tokio::time::timeout(
             std::time::Duration::from_secs(3),
-            self.call_control(
-                "daemon/toolContext",
-                json!({"pid":process.pid,"startedAtUnixMicros":process.started_micros}),
-            ),
+            self.call_control("daemon/toolContext", {
+                #[cfg(target_os = "linux")]
+                {
+                    json!({"pid":process.pid,"linuxBirth":process.linux_birth})
+                }
+                #[cfg(not(target_os = "linux"))]
+                {
+                    json!({"pid":process.pid,"startedAtUnixMicros":process.started_micros})
+                }
+            }),
         )
         .await
         .unwrap_or_else(|_| Err(anyhow::anyhow!("native caller identity lookup timed out")));
@@ -217,9 +224,23 @@ impl Gateway {
             })?;
             found_process = true;
             if native.as_ref().is_some_and(|context| {
-                candidate.pid == context.root_process_identity.pid
-                    && candidate.started_micros
-                        == context.root_process_identity.started_at_unix_micros
+                candidate.pid == context.root_process_identity.pid && {
+                    #[cfg(target_os = "linux")]
+                    {
+                        context
+                            .root_process_identity
+                            .started_at_unix_micros
+                            .is_none()
+                            && context.root_process_identity.linux_birth
+                                == Some(candidate.linux_birth)
+                    }
+                    #[cfg(not(target_os = "linux"))]
+                    {
+                        context.root_process_identity.linux_birth.is_none()
+                            && context.root_process_identity.started_at_unix_micros
+                                == Some(candidate.started_micros)
+                    }
+                }
             }) {
                 let context = native.as_ref().context("native caller owner disappeared")?;
                 ensure!(
@@ -242,9 +263,8 @@ impl Gateway {
                 }));
             }
             if let Some(supervisor) = self.claude_agent()
-                && let Some((thread_id, turn_id)) = supervisor
-                    .owned_process_session(candidate.pid, candidate.started_micros)
-                    .await
+                && let Some((thread_id, turn_id)) =
+                    supervisor.owned_process_session(candidate).await
             {
                 return Ok(Some(ProvenCaller {
                     conversation: ConversationIdentity {
@@ -288,9 +308,37 @@ impl Gateway {
     }
 
     async fn capture_job_context(&self, request: CaptureParams) -> Result<CapturedContext> {
-        let process = ProcessInstance {
-            pid: i32::try_from(request.pid)?,
-            started_micros: request.started_at_unix_micros,
+        let pid = i32::try_from(request.pid)?;
+        #[cfg(target_os = "linux")]
+        let process = {
+            ensure!(
+                request.started_at_unix_micros.is_none(),
+                "Linux caller requires kernel birth proof"
+            );
+            let birth = request
+                .linux_birth
+                .context("Linux caller birth proof is missing")?;
+            let current = crate::platform::process::identify(pid)?
+                .context("caller process exited")?
+                .instance(pid);
+            ensure!(
+                current.linux_birth == birth,
+                "caller process identity is stale"
+            );
+            current
+        };
+        #[cfg(not(target_os = "linux"))]
+        let process = {
+            ensure!(
+                request.linux_birth.is_none(),
+                "incompatible caller birth proof"
+            );
+            ProcessInstance {
+                pid,
+                started_micros: request
+                    .started_at_unix_micros
+                    .context("caller start time is missing")?,
+            }
         };
         let proven = self.job_process_context(process).await?;
         Ok(self.jobs.contexts.capture(proven).await)
@@ -315,7 +363,7 @@ impl Gateway {
                 if saved.conversation.provider == Provider::Claude {
                     let managed = match self.claude_agent() {
                         Some(provider) => provider
-                            .owned_process_session(saved.process.pid, saved.process.started_micros)
+                            .owned_process_session(saved.process)
                             .await
                             .map(|(thread, _)| thread),
                         None => None,
@@ -324,8 +372,8 @@ impl Gateway {
                         Some(thread) => {
                             ensure!(
                                 crate::platform::process::identify(saved.process.pid)?
-                                    .is_some_and(|process| process.started_micros
-                                        == saved.process.started_micros),
+                                    .is_some_and(|process| process.instance(saved.process.pid)
+                                        == saved.process),
                                 "captured Claude runtime owner is no longer live"
                             );
                             Some(thread)
@@ -477,3 +525,7 @@ impl Gateway {
 
 #[cfg(all(test, target_os = "macos"))]
 mod tests;
+
+#[cfg(all(test, target_os = "linux"))]
+#[path = "agent_jobs/linux_tests.rs"]
+mod linux_tests;
