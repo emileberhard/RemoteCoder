@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from remotecoder_tools import config as gateway_config, diagnostics, gateway_cli, performance, probes, rpc as gateway_rpc, turns, verdict
+from remotecoder_tools import config as gateway_config, diagnostics, gateway_cli, performance, probes, rpc as gateway_rpc, transport, turns, verdict
 
 
 class GatewayTransportTests(unittest.TestCase):
@@ -993,6 +993,7 @@ class TurnSetupReceiptTests(unittest.IsolatedAsyncioTestCase):
                         if "id" not in request:
                             continue
                         if method == blocked_method:
+                            await connection.send(json.dumps({"method": "fixture/timeout"}))
                             continue
                         result = {"thread": {"id": "claude_exact"}} if method == "thread/start" else {}
                         await connection.send(json.dumps({"id": request["id"], "result": result}))
@@ -1002,9 +1003,18 @@ class TurnSetupReceiptTests(unittest.IsolatedAsyncioTestCase):
                     config = gateway_config.GatewayConfig("127.0.0.1", port, "synthetic", "ws")
                     event_log = Path(directory) / "gateway.jsonl"
                     args = gateway_cli.build_parser().parse_args(
-                        ["claude-turn", "run", "--timeout", "0.05", "--event-log", str(event_log)]
+                        ["claude-turn", "run", "--event-log", str(event_log)]
                     )
-                    with patch.object(gateway_cli, "_resolve_config", return_value=config):
+                    recv = transport._GatewayConnection.recv
+
+                    async def timeout_after_receipt(connection, *args, **kwargs):
+                        frame = await recv(connection, *args, **kwargs)
+                        if json.loads(frame).get("method") == "fixture/timeout":
+                            raise TimeoutError("fixture response timeout")
+                        return frame
+
+                    with patch.object(gateway_cli, "_resolve_config", return_value=config), \
+                         patch.object(transport._GatewayConnection, "recv", timeout_after_receipt):
                         with self.assertRaises(TimeoutError):
                             await gateway_cli.cmd_claude_turn(args)
                     self.assertIn(blocked_method, received)
