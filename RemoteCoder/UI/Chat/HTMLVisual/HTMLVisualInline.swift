@@ -347,6 +347,7 @@ struct HTMLVisualInline: View {
             if case .dismissing = presentation { presentation = .inline }
         }) { expansion in
             expanded(expansion).modifier(HostFileNestedPresentation(opener: files?.fileOpener, scope: expandedScope))
+                .chatPresentationDiagnostics("sheet-html")
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("html-visual")

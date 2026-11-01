@@ -81,6 +81,7 @@ struct VoiceModeView: View {
             ) { selectedPath in
                 screen.selectWorkingDirectory(selectedPath)
             }
+            .chatPresentationDiagnostics("sheet-voice-directory")
         }
         .sheet(isPresented: $showsTranscript) {
             NavigationStack {
@@ -99,6 +100,7 @@ struct VoiceModeView: View {
             }
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
+            .chatPresentationDiagnostics("sheet-voice-transcript")
         }
         .alert("Couldn't change speaker", isPresented: Binding(
             get: { audioRouteError != nil },

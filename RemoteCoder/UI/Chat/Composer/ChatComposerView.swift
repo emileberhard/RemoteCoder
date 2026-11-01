@@ -222,6 +222,7 @@ struct ChatComposerView: View {
             PastedTextEditor(text: editing.text) { text in
                 editing.screen.updatePastedText(text, attachmentID: editing.attachmentID, in: editing.draft)
             }
+            .chatPresentationDiagnostics("sheet-edit-attachment")
         }
         // Above the glass so empty space receives taps, with actual control
         // bounds cut out so their native touch/selection handling stays intact.
@@ -271,6 +272,7 @@ struct ChatComposerView: View {
                     }
                 }
             }
+            .chatPresentationDiagnostics("sheet-observation-error")
         }
         .alert(
             "Dictation",
@@ -522,6 +524,7 @@ struct ChatComposerView: View {
                 try await CameraCaptureBatch.discard(in: capture.directory)
                 presentations.camera = nil
             })
+            .chatPresentationDiagnostics("cover-camera")
         }
         #endif
         .onChange(of: photoSelection) { _, items in

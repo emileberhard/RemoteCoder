@@ -24,6 +24,7 @@ struct ChatScreenChrome: ViewModifier {
                     onChooseFolder: onChooseFolder,
                     onNewChatInHome: onNewChatInHome
                 )
+                .chatLayoutDiagnostics("header")
             }
     }
 }

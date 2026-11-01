@@ -139,6 +139,7 @@ struct AutomationRevisionView: View {
                 NavigationStack { AutomationEditorView(workspace: workspace, authority: authority, session: editor) {
                     drafts.discard(editor); self.editor = nil; restorePresented = false
                 } }
+                .chatPresentationDiagnostics("sheet-automation-restore")
             }
         }
     }

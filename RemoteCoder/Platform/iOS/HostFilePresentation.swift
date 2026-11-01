@@ -26,11 +26,13 @@ private struct HostFilePresentationAnchor: View {
     @Bindable var opener: HostFileOpener
     let isBlocked: Bool
     let scope: UUID?
+    @Environment(\.chatLayoutRecorder) private var layoutRecorder
 
     var body: some View {
         let shows = !isBlocked && opener.presents(in: scope)
         HostFileQuickLook(file: shows ? opener.quickLook : nil,
-            onDismiss: opener.presentationDismissed, onUnavailable: opener.quickLookUnavailable)
+            onDismiss: opener.presentationDismissed, onUnavailable: opener.quickLookUnavailable,
+            layoutRecorder: layoutRecorder)
             .frame(width: 0, height: 0)
             .onChange(of: isBlocked, initial: true) { _, blocked in
                 if blocked, opener.presents(in: scope) { opener.suspendPresentation() }
@@ -38,6 +40,7 @@ private struct HostFilePresentationAnchor: View {
             .sheet(item: Binding(get: { shows ? opener.sheet : nil }, set: { opener.sheet = $0 }),
                    onDismiss: opener.presentationDismissed) { item in
                 HostFileSheetView(item: item, opener: opener)
+                    .chatPresentationDiagnostics("sheet-host-file")
                     .presentationDetents([.large])
                     .presentationDragIndicator(.visible)
             }
@@ -48,11 +51,13 @@ private struct HostFileQuickLook: UIViewControllerRepresentable {
     let file: OpenedFile?
     let onDismiss: () -> Void
     let onUnavailable: (UUID) -> Void
+    let layoutRecorder: ChatLayoutRecorder?
 
     func makeUIViewController(context: Context) -> Host { Host() }
     func updateUIViewController(_ host: Host, context: Context) {
         host.onDismiss = onDismiss
         host.onUnavailable = onUnavailable
+        host.layoutRecorder = layoutRecorder
         host.update(file)
     }
     static func dismantleUIViewController(_ host: Host, coordinator: ()) {
@@ -63,6 +68,7 @@ private struct HostFileQuickLook: UIViewControllerRepresentable {
         private let logger = AppLogger(category: "HostFiles")
         var onDismiss: (() -> Void)?
         var onUnavailable: ((UUID) -> Void)?
+        weak var layoutRecorder: ChatLayoutRecorder?
         private var desired: OpenedFile?
         private var preview: Preview?
         private var isDismissing = false
@@ -78,6 +84,7 @@ private struct HostFileQuickLook: UIViewControllerRepresentable {
         }
 
         func stop() {
+            if preview != nil { layoutRecorder?.presentation("quick-look", isPresented: false) }
             onDismiss = nil
             onUnavailable = nil
             desired = nil
@@ -111,7 +118,10 @@ private struct HostFileQuickLook: UIViewControllerRepresentable {
                 preview.delegate = self
                 preview.modalPresentationStyle = .overFullScreen
                 logger.notice("quick look presenting file=\(desired.id.uuidString.prefix(8)) zoom=\(desired.transition != nil)")
-                present(preview, animated: true)
+                present(preview, animated: true) { [weak self, weak preview] in
+                    guard let self, let preview, self.preview === preview else { return }
+                    layoutRecorder?.presentation("quick-look", isPresented: true)
+                }
             }
         }
 
@@ -140,6 +150,7 @@ private struct HostFileQuickLook: UIViewControllerRepresentable {
             preview = nil
             desired = nil
             isDismissing = false
+            layoutRecorder?.presentation("quick-look", isPresented: false)
             onDismiss?()
         }
     }

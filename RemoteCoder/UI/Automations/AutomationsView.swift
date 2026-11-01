@@ -116,6 +116,7 @@ struct AutomationsView: View {
                         drafts.discard(editor); self.editor = nil; editorPresented = false
                     }
                 }
+                .chatPresentationDiagnostics("sheet-automation-create")
             }
         }
     }

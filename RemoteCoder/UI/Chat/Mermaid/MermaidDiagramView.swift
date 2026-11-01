@@ -84,6 +84,7 @@ struct MermaidDiagramView: View {
         }
         .appFullScreenCover(item: $viewer) { item in
             MermaidViewer(diagram: item.diagram, source: item.source)
+                .chatPresentationDiagnostics("cover-mermaid")
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("mermaid-card")

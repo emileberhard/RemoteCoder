@@ -37,7 +37,10 @@ struct ConversationHistoryView: View {
 
     var body: some View {
         historyList
-            .sheet(item: $movingAgent) { AgentPlacementPicker(agent: $0, workspace: workspace) }
+            .sheet(item: $movingAgent) {
+                AgentPlacementPicker(agent: $0, workspace: workspace)
+                    .chatPresentationDiagnostics("sheet-move-agent")
+            }
             .safeAreaInset(edge: .top) {
                 if isOpen { ClusterCoverageStrip(coverage: workspace.agentCoverage).padding(.horizontal) }
             }

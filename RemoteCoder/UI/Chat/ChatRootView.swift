@@ -65,6 +65,7 @@ struct ChatRootView: View {
             }
         }
         #if os(iOS)
+        .modifier(ChatLayoutObservation(context: ChatLayoutContext(window: window)))
         .onGeometryChange(for: CGFloat.self, of: { min(ComposerMetrics.restingSafeAreaOverlap, $0.safeAreaInsets.bottom) }) {
             composerSafeAreaOverlap = $0
         }
@@ -260,6 +261,9 @@ private struct ChatScreen: View {
     @State private var awaitedQuestionItemID: String?
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    #if os(iOS)
+    @Environment(\.chatLayoutRecorder) private var layoutRecorder
+    #endif
     @Environment(HostStore.self) private var gatewaySettings
     @Environment(AppThemeStore.self) private var themeStore
 
@@ -354,6 +358,9 @@ private struct ChatScreen: View {
         .onChange(of: usesPersistentSidebar, initial: true) { _, persistent in isHistoryOpen = persistent }
         .onAppear {
             VoiceModeDiagnostics.log("chat screen appeared")
+            #if os(iOS)
+            layoutRecorder?.drawerChanged(isHistoryOpen)
+            #endif
         }
         .onChange(of: ObjectIdentifier(screen), initial: true) { _, _ in
             logger.notice("chat screen presents view=\(viewID) window=\(window.logID) target=\(screen.executionTarget.id) thread=\(screen.activeSessionID ?? "none")")
@@ -373,6 +380,9 @@ private struct ChatScreen: View {
         }
         .onChange(of: isHistoryOpen) { _, open in
             logger.notice("drawer state open=\(open) view=\(viewID) window=\(window.logID)")
+            #if os(iOS)
+            layoutRecorder?.drawerChanged(open)
+            #endif
             if open {
                 dismissComposerFocus()
             }
@@ -401,6 +411,7 @@ private struct ChatScreen: View {
         #if os(iOS)
         .sheet(isPresented: $showSettings) {
             SettingsView(workspace: workspace)
+                .chatPresentationDiagnostics("sheet-settings")
         }
         #endif
         .environment(\.chromeTransitionNamespace, chromeNamespace)
@@ -586,6 +597,7 @@ private struct ChatScreen: View {
                 set: { if !$0 { voiceModeEntry = nil } }
             ))
             .navigationTransition(.zoom(sourceID: "voice-mode", in: composerNS))
+            .chatPresentationDiagnostics("cover-voice-mode")
         }
         #endif
     }
@@ -661,6 +673,9 @@ private struct ChatScreen: View {
         #endif
         .scaledFrame(maxWidth: ReadableContentWidth.composer)
         .frame(maxWidth: .infinity, alignment: .center)
+        #if os(iOS)
+        .chatLayoutDiagnostics("composer")
+        #endif
     }
 
     /// Scrolls to the loaded card, or opens the same card in a sheet when its page is not loaded.

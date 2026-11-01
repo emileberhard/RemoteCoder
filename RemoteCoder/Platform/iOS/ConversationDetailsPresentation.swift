@@ -24,6 +24,7 @@ struct ConversationDetailsPresentation: ViewModifier {
                 }, onAction: { agent, action, text, mutationID in
                     try await workspace.performAgentAction(action, on: agent, in: agents.address, text: text, mutationID: mutationID)
                 })
+                .chatPresentationDiagnostics("sheet-agents")
             }
     }
 }

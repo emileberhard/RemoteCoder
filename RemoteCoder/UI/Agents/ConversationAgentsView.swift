@@ -323,6 +323,7 @@ private struct ConversationAgentDetail: View {
         .sheet(isPresented: $movesUnder) {
             if let agent, let address = agent.address(localHostID: model.address.hostID) {
                 AgentPlacementPicker(agent: address, workspace: workspace)
+                    .chatPresentationDiagnostics("sheet-move-agent-detail")
             }
         }
         .task(id: promotes) {

@@ -155,6 +155,7 @@ struct AutomationDetailView: View {
                 NavigationStack { AutomationEditorView(workspace: workspace, authority: authority, session: editor) {
                     drafts.discard(editor); self.editor = nil; editorPresented = false; Task { await load(force: true) }
                 } }
+                .chatPresentationDiagnostics("sheet-automation-edit")
             }
         }
     }

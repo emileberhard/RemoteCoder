@@ -514,6 +514,42 @@ work. Persistence counters are cumulative per run, so the reader splits runs whe
 a counter falls. Raw records remain readable with
 `gunzip -c ~/Library/Logs/remote-coder/app-logs/<device>/*.jsonl.gz | jq`.
 
+**Chat safe areas.** iOS category `ChatLayout` records notice-level snapshots
+when the chat's conversation identity, scene phase, keyboard, drawer or modal
+presentation changes. Root, header and composer geometry changes coalesce for
+200 ms after layout settles; scene geometry uses `UIWindowScene.effectiveGeometry`
+change notifications. There is no timer while geometry is unchanged, native
+attachment, view mutation or dependency on the haptic attachment.
+
+Each record contains the host, thread (or `new-chat`), conversation and chat-window
+identities; SwiftUI global frames and safe-area insets; and the scene's native
+windows and controller hierarchy, with object identities, orientation, bounds,
+insets, additional insets and presentation/attachment state. The native walk is
+bounded to four scenes, eight windows per scene and sixteen controllers per
+window. `headerOutsideSafeArea` and `composerOutsideSafeArea` compare the observed
+frames to the key window's safe rectangle, allowing the composer's existing
+resting overlap. Unknown frames stay `unknown`. Each surface has an `ageMs` for
+its last SwiftUI geometry observation; `geometryPending` marks coalescing in
+progress. Presentation transforms and intermediate layout can produce temporary
+violations, so compare subsequent settled/native snapshots. Keyboard screen
+coordinates are labelled separately. Presentation appearance/disappearance records identify the actual
+sheet or cover; Quick Look records its completed presentation and dismissal.
+
+Read these alongside `ChatScreen`, `HostFiles`, `VoiceMode` and `AppLifecycle`
+around the reported time, rather than filtering for violations alone:
+
+```sh
+gunzip -c ~/Library/Logs/remote-coder/app-logs/<device>/*.jsonl.gz |
+  jq -r 'select(.category == "ChatLayout" or .category == "ChatScreen" or .category == "HostFiles") | [.ts, .category, .message] | @tsv' |
+  sort -u
+```
+
+Compare the last healthy and first failing snapshots: window/controller insets
+changing together locate a native scene/presentation transition; healthy native
+insets with collapsed SwiftUI insets locate propagation into the chat layout.
+The thin green line at the top of the chat is `ConnectionEdgeGlow`'s LAN status
+indicator, independent of Voice Mode, recording and Live Activities.
+
 **Builds.** A MetricKit report's own build label is the build installed when
 Apple delivered it, and its `includesMultipleApplicationVersions` stays false
 while the phone switches builds several times a day, so no MetricKit number

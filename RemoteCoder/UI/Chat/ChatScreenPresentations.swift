@@ -12,11 +12,13 @@ struct ChatScreenPresentations: ViewModifier {
                 // The captured host owns the sheet even if the workspace selection changes.
                 if let owner = workspace.screen(for: address.conversation.hostID) {
                     PendingQuestionSheet(screen: owner, address: address)
+                        .chatPresentationDiagnostics("sheet-question")
                 }
             }
             .sheet(isPresented: $showDirectoryPicker) {
                 WorkspaceDirectoryPicker(workspace: workspace)
                     .chromeZoomTransition("directory")
+                    .chatPresentationDiagnostics("sheet-directory")
             }
             .alert(
                 "Voice Output",

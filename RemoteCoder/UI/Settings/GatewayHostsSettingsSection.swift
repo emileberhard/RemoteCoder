@@ -19,6 +19,7 @@ struct GatewayHostsSettings<Page: View>: View {
                 GatewayHostEditorView(host: destination.host, defaultPort: settings.localConfiguration.codexGatewayPort ?? 8787) { host in
                     settings.upsert(host) ? nil : (settings.errorMessage ?? "The gateway could not be saved.")
                 }
+                .chatPresentationDiagnostics("sheet-host-editor")
             }
             .task(id: settings.hosts.map(\.configuration)) {
                 gatewayVersions = [:]

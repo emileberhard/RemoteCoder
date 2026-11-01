@@ -210,6 +210,7 @@ private struct TranscriptContentView<QuestionContent: View, BottomBar: View>: Vi
         }
         .sheet(item: $openingAttachment) { attachment in
             MessageAttachmentViewer(attachment: attachment)
+                .chatPresentationDiagnostics("sheet-attachment")
         }
         #if os(macOS)
         .transcriptCodeExportPresentation(presenter: nativePresentation.codeExport)
@@ -232,6 +233,7 @@ private struct TranscriptContentView<QuestionContent: View, BottomBar: View>: Vi
                 }
             }
             .presentationDetents([.medium, .large])
+            .chatPresentationDiagnostics("sheet-select-text")
         }
         #endif
     }
