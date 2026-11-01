@@ -61,7 +61,8 @@ holds the detailed history, recovery, voice and persistence contracts.
   `shimmer(isActive:)` modifier: SwiftUI owns text layout and accessibility,
   while the iOS arm moves one native gradient under the same content's alpha
   mask. The Mac arm stays static. Decoration policy and central row visibility
-  gate the effect; removal stops it immediately. A running `TimelineView`, even a periodic one, keeps
+  gate the effect; removal stops it immediately. A running `TimelineView`, even
+  a periodic one, keeps
   the display link re-evaluating the view graph; the earlier SwiftUI dots cost
   about 2 s of main-thread time per 41 s streamed reply (October 2026,
   perf-sim), and the UIKit symbol effect's first use took a 160–350 ms frame.
@@ -70,10 +71,8 @@ holds the detailed history, recovery, voice and persistence contracts.
   occlusion state into `visualsVisible`. Hiding the app occludes the window,
   but with Stage Manager on, a covered window stays visible as a live
   thumbnail and keeps animating.
-- Thinking UI previews and performance comparisons use controlled notification
-  fixtures, with a visually verified live row before measurement. Do not call
-  a model to obtain an unpredictable reasoning duration. Synthetic live items
-  omit recorded ordinals and timestamps so they follow the loaded history.
+- Controlled UI previews follow the fixture rules in
+  [`docs/performance-replay.md`](../docs/performance-replay.md#controlled-ui-previews).
 - The Mac interface zoom is `InterfaceZoom`: View → Actual Size (⌘0), Zoom In
   (⌘+ and ⌘= through `AppKeyMonitor`, preserving the active layout’s Shift
   translation) and Zoom Out (⌘−), 80–200 %, persisted

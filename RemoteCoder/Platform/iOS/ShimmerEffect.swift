@@ -18,9 +18,10 @@ struct ShimmerEffect: ViewModifier {
                 reduceMotion: reduceMotion
             ) {
                 ShimmerBand()
-                    .mask { content }
+                    .mask { content.foregroundStyle(.white) }
                     .allowsHitTesting(false)
                     .accessibilityHidden(true)
+                    .transition(.identity)
             }
         }
     }
@@ -33,13 +34,9 @@ private struct ShimmerBand: UIViewRepresentable {
 
     func updateUIView(_ view: ShimmerBandView, context: Context) {
         view.update(
-            color: UIColor(cgColor: Color.appSystemBackground.resolve(in: context.environment).cgColor),
+            color: Color.appSystemBackground.resolve(in: context.environment),
             direction: context.environment.layoutDirection
         )
-    }
-
-    static func dismantleUIView(_ view: ShimmerBandView, coordinator: ()) {
-        view.stop()
     }
 }
 
@@ -47,7 +44,7 @@ private final class ShimmerBandView: UIView {
     private static let period: CFTimeInterval = 1.5
     private let container = CALayer()
     private let band = CAGradientLayer()
-    private var color: UIColor?
+    private var color: Color.Resolved?
     private var direction = LayoutDirection.leftToRight
     private var geometrySize = CGSize.zero
 
@@ -63,13 +60,14 @@ private final class ShimmerBandView: UIView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { nil }
 
-    func update(color: UIColor, direction: LayoutDirection) {
+    func update(color: Color.Resolved, direction: LayoutDirection) {
         if self.color != color {
             self.color = color
             CATransaction.begin()
             CATransaction.setDisableActions(true)
+            let tint = UIColor(cgColor: color.cgColor)
             band.colors = (0..<16).map { index in
-                color.withAlphaComponent(0.8 * pow(sin(Double(index) * 0.2), 10)).cgColor
+                tint.withAlphaComponent(0.8 * pow(sin(Double(index) * 0.2), 10)).cgColor
             }
             CATransaction.commit()
         }
@@ -109,7 +107,7 @@ private final class ShimmerBandView: UIView {
         else { animate() }
     }
 
-    func stop() {
+    private func stop() {
         band.removeAllAnimations()
     }
 

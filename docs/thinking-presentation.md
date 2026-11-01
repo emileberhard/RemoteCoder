@@ -38,9 +38,8 @@ is unnecessary for the current Thinking label and is not part of this component.
 
 ## Validation
 
-Use a fixed-duration notification fixture for live, completed and expanded
-states. Verify that the Thinking row is visible before collecting a trace;
-successful replay delivery alone does not prove the intended UI was measured.
+Follow the [controlled preview contract](performance-replay.md#controlled-ui-previews)
+for live, completed and expanded states.
 Compare the same fixture and energy state on the same device, retaining the
 matching app and symbols. Check the native mask, hit testing, text scaling,
 direction, gate transitions and expanded streaming content visually. Measure

@@ -31,6 +31,17 @@ with preparation reserving its measurement and cleanup time. Use the
 explicit cabled test iPad; the runner refuses phones. Check fleet load before
 building and keep unrelated device work out of the measurement window.
 
+## Controlled UI previews
+
+Use fixed-duration notification fixtures to preview and compare transient UI
+such as Thinking. Do not call a real model to obtain an unpredictable reasoning
+duration. Verify the intended row and state visually before measuring: successful
+replay delivery does not prove they were visible. Synthetic live items omit
+historical ordinals and timestamps so they follow loaded history and use receipt
+time. Preserve positioned records when testing their ordering semantics instead.
+Start each comparison from the same retained state; earlier injected replays can
+survive relaunch through checkpoints. A changed fixture starts a new comparison.
+
 ## Calibration status
 
 The replay is not yet calibrated against field telemetry. Trust its direction

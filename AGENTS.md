@@ -504,6 +504,7 @@ Open the focused source before changing that part of the system:
   [`docs/usage-status.md`](docs/usage-status.md),
   [`docs/persistence-energy.md`](docs/persistence-energy.md),
   [`docs/haptics.md`](docs/haptics.md),
+  [`docs/thinking-presentation.md`](docs/thinking-presentation.md),
   [`docs/directory-quick-switch.md`](docs/directory-quick-switch.md),
   [`docs/reasoning-picker-motion.md`](docs/reasoning-picker-motion.md),
   [`docs/mermaid-rendering.md`](docs/mermaid-rendering.md),
