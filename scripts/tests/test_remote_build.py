@@ -496,6 +496,33 @@ class RemoteBuildTests(unittest.TestCase):
                 ):
                     self.assertEqual(module.worker(run)["exitCode"], 0)
 
+    def test_contended_maintenance_skips_successfully_without_scans_or_shared_writes(self):
+        from build_support import file_lease
+
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary).resolve()
+            root = home / "Library/Caches/RemoteCoder-Build"
+            status = home / ".local/state/disk-cap-status/remotecoder-build.json"
+            status.parent.mkdir(parents=True)
+            root.mkdir(parents=True)
+            status.write_text("previous cap report")
+            (root / "maintenance.json").write_text("previous maintenance")
+            output = io.StringIO()
+            with (
+                file_lease(root / "leases/maintenance.lock"),
+                patch.object(Path, "home", return_value=home),
+                patch.object(module, "load_policy", return_value=CachePolicy(512, 259200, 172800, 7200, 1024, 2, 0, True, 86400)),
+                patch.object(sys, "argv", ["remote-build.py", "cache-maintain"]),
+                patch("build_cache.cache_inventory", side_effect=AssertionError("Contended pass must not scan")),
+                redirect_stdout(output),
+            ):
+                module.main()
+            result = json.loads(output.getvalue())
+            self.assertEqual(result["message"], "skipped: maintenance held")
+            self.assertEqual(result["exitCode"], 0)
+            self.assertEqual(status.read_text(), "previous cap report")
+            self.assertEqual((root / "maintenance.json").read_text(), "previous maintenance")
+
     def test_maintenance_reports_total_cap_overflow_then_clears_and_preserves_unknown(self):
         policy = CachePolicy(512, 259200, 172800, 7200, 64 * 1024, 2, 0, True, 86400)
         with tempfile.TemporaryDirectory() as temporary:
@@ -529,7 +556,7 @@ class RemoteBuildTests(unittest.TestCase):
                 self.assertEqual(status["owner"], "remotecoder-build")
                 self.assertTrue(status["observed_at"].endswith("+00:00"))
                 with (
-                    patch.object(module, "cache_allocated_bytes", side_effect=TimeoutError("du unavailable")),
+                    patch("build_cache.cache_allocated_bytes", side_effect=TimeoutError("du unavailable")),
                     self.assertRaises(SystemExit),
                 ):
                     module.main()

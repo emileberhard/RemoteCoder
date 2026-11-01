@@ -25,13 +25,13 @@ from maintainer_config import configure
 from bench_lab import reject_unsafe_location
 from build_artifacts import tree_digest
 from build_cache import (
-    cache_allocated_bytes,
-    cache_inventory,
     cargo_seed_key,
     compilation_admission,
     compilation_directories,
     lease_path,
     load_policy,
+    maintain_cache,
+    preview_cache,
     local_worktrees,
     prune_caches,
     purge_xcode_environments,
@@ -40,7 +40,6 @@ from build_cache import (
     record_mirror_source,
     seed_cargo,
     seed_source_packages,
-    shared_compilation_directories,
     touch_usage,
 )
 from build_support import (
@@ -967,22 +966,6 @@ def local_build(kind: str, arguments: list[str]) -> int:
             )
 
 
-def publish_cache_cap(policy, used, reason):
-    status = {
-        "version": 1,
-        "owner": "remotecoder-build",
-        "observed_at": datetime.now(UTC).isoformat(),
-        "unmet": None if used is None else used > policy.compilation_budget_bytes,
-        "used_bytes": used,
-        "cap_bytes": policy.compilation_budget_bytes,
-        "reason": reason,
-    }
-    destination = Path.home() / ".local/state/disk-cap-status/remotecoder-build.json"
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    atomic_json(destination, status)
-    return status
-
-
 @job_sleep_assertion()
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -1015,55 +998,21 @@ def main() -> None:
             read_policy(Path(args.arguments[0])) if args.arguments else load_policy()
         )
         preview = args.kind == "cache-preview"
-        try:
-            root.mkdir(parents=True, exist_ok=True)
-            inventory = cache_inventory(root)
-            root_bytes = inventory.allocated_bytes
-            entries = compilation_directories(root, [], Path.home() / "Library/Developer/Xcode/DerivedData")
-            if root_bytes is None or root_bytes > policy.compilation_budget_bytes or shutil.disk_usage(root).free < policy.eviction_target_free_bytes:
-                entries += shared_compilation_directories(root)
-            manifest = compilation_admission(root, policy, entries, set(), preview=preview, root_bytes=root_bytes, directory_bytes=inventory.directories)
-            if inventory.error:
-                manifest["rootAllocationError"] = inventory.error
-            manifest["evidenceRetention"] = prune_caches(root, policy, "", "", preview=preview)
-        except (OSError, ValueError, subprocess.SubprocessError) as error:
-            if not preview:
-                publish_cache_cap(policy, None, str(error))
-            raise
-        if preview:
+        manifest = preview_cache(root, policy) if preview else maintain_cache(root, policy)
+        if manifest.get("maintenanceDeferred") or preview:
             print(json.dumps(manifest, indent=2))
         else:
-            try:
-                remaining = cache_allocated_bytes(root)
-                reason = (
-                    "Total cap unmet after bounded reclamation; inspect RemoteCoder-Build/maintenance.json for protected data or failures"
-                    if remaining > policy.compilation_budget_bytes
-                    else "Total cache cap met"
-                )
-            except (OSError, ValueError, subprocess.SubprocessError) as error:
-                remaining = None
-                reason = str(error)
-            status = publish_cache_cap(policy, remaining, reason)
-            manifest["rootRemainingBytes"] = remaining
-            manifest["rootInventoryComplete"] = remaining is not None
-            manifest["projectedBytes"] = remaining
-            manifest["remainingBytes"] = remaining
-            manifest["unsatisfiedBudgetBytes"] = (
-                None if remaining is None else max(0, remaining - policy.compilation_budget_bytes)
-            )
-            manifest["capStatus"] = status
-            atomic_json(root / "maintenance.json", manifest)
             print(json.dumps({
                 "receipt": str(root / "maintenance.json"),
                 "allocatedBytes": manifest.get("rootAllocatedBytes"),
-                "remainingBytes": remaining,
+                "remainingBytes": manifest["rootRemainingBytes"],
                 "unsatisfiedBudgetBytes": manifest["unsatisfiedBudgetBytes"],
                 "evictedPayloads": len(manifest["evicted"]),
                 "expiredMirrorPayloads": len(manifest["evidenceRetention"].get("mirrors", [])),
                 "inventoryComplete": manifest["inventoryComplete"],
-                "capStatus": status,
+                "capStatus": manifest["capStatus"],
             }))
-            if status["unmet"] is not False:
+            if manifest["capStatus"]["unmet"] is not False:
                 raise SystemExit(1)
         return
     if args.kind == "connected-worker":

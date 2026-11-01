@@ -1517,6 +1517,56 @@ class CacheAdmissionTests(unittest.TestCase):
             self.assertEqual(json.loads((root / "worktrees/tree/source.json").read_text()), manifest)
             self.assertTrue(json.loads(build_cache.compilation_record(root, entry.path).read_text())["active"])
 
+    def test_maintenance_holds_one_lease_through_inventory_and_shared_publication(self):
+        import json
+        import build_cache
+        from build_support import atomic_json
+
+        for failure in (False, True):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temporary:
+                home = Path(temporary).resolve()
+                root = home / "Library/Caches/RemoteCoder-Build"
+                status = home / ".local/state/disk-cap-status/remotecoder-build.json"
+                deferred = []
+                writes = []
+
+                def confirm_exclusion():
+                    with build_cache.try_lease(root / "leases/maintenance.lock") as lease:
+                        self.assertIsNone(lease)
+                    before = inventory.call_count
+                    result = build_cache.maintain_cache(root, self.policy())
+                    self.assertEqual(result["message"], "skipped: maintenance held")
+                    self.assertEqual(result["exitCode"], 0)
+                    self.assertEqual(inventory.call_count, before)
+                    deferred.append(result)
+
+                def inventory_probe(path):
+                    confirm_exclusion()
+                    if failure:
+                        raise ValueError("synthetic inventory failure")
+                    return build_cache.CacheInventory(4096, {root: 4096}, None)
+
+                def publish(path, value):
+                    confirm_exclusion()
+                    writes.append(path)
+                    atomic_json(path, value)
+
+                with (
+                    patch.object(Path, "home", return_value=home),
+                    patch("build_cache.cache_inventory", side_effect=inventory_probe) as inventory,
+                    patch("build_cache.atomic_json", side_effect=publish),
+                ):
+                    if failure:
+                        with self.assertRaisesRegex(ValueError, "synthetic inventory failure"):
+                            build_cache.maintain_cache(root, self.policy())
+                    else:
+                        build_cache.maintain_cache(root, self.policy())
+                self.assertEqual(writes, [root / "maintenance.json", status])
+                self.assertTrue(deferred)
+                self.assertEqual(json.loads((root / "maintenance.json").read_text())["capStatus"], json.loads(status.read_text()))
+                with build_cache.try_lease(root / "leases/maintenance.lock") as lease:
+                    self.assertIsNotNone(lease)
+
     def test_approval_preview_includes_old_run_evidence_and_never_deletes_or_rejects_low_space(
         self,
     ):

@@ -11,7 +11,7 @@ import tempfile
 import time
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, replace
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from build_support import (
@@ -371,6 +371,70 @@ def cache_allocated_bytes(root: Path) -> int:
     if inventory.allocated_bytes is None:
         raise ValueError(inventory.error)
     return inventory.allocated_bytes
+
+
+def maintain_cache(root: Path, policy: CachePolicy) -> dict:
+    return _cache_maintenance(root, policy, preview=False)
+
+
+def preview_cache(root: Path, policy: CachePolicy) -> dict:
+    return _cache_maintenance(root, policy, preview=True)
+
+
+def _publish_maintenance(root: Path, policy: CachePolicy, manifest: dict, used: int | None, reason: str):
+    status = {
+        "version": 1,
+        "owner": "remotecoder-build",
+        "observed_at": datetime.now(UTC).isoformat(),
+        "unmet": None if used is None else used > policy.compilation_budget_bytes,
+        "used_bytes": used,
+        "cap_bytes": policy.compilation_budget_bytes,
+        "reason": reason,
+    }
+    manifest["capStatus"] = status
+    destination = Path.home() / ".local/state/disk-cap-status/remotecoder-build.json"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    atomic_json(root / "maintenance.json", manifest)
+    atomic_json(destination, status)
+
+
+def _cache_maintenance(root: Path, policy: CachePolicy, *, preview: bool) -> dict:
+    with try_lease(root / "leases/maintenance.lock") as maintenance:
+        if maintenance is None:
+            return {"maintenanceDeferred": "maintenance-held", "message": "skipped: maintenance held", "exitCode": 0}
+        try:
+            inventory = cache_inventory(root)
+            root_bytes = inventory.allocated_bytes
+            entries = compilation_directories(root, [], Path.home() / "Library/Developer/Xcode/DerivedData")
+            if root_bytes is None or root_bytes > policy.compilation_budget_bytes or shutil.disk_usage(root).free < policy.eviction_target_free_bytes:
+                entries += shared_compilation_directories(root)
+            manifest = _compilation_admission(root, policy, entries, set(), maintenance=maintenance, preview=preview, root_bytes=root_bytes, directory_bytes=inventory.directories)
+            if inventory.error:
+                manifest["rootAllocationError"] = inventory.error
+            manifest["evidenceRetention"] = _prune_caches(root, policy, "", "", maintenance=maintenance, preview=preview)
+            if preview:
+                return manifest
+            try:
+                remaining = cache_allocated_bytes(root)
+                reason = (
+                    "Total cap unmet after bounded reclamation; inspect RemoteCoder-Build/maintenance.json for protected data or failures"
+                    if remaining > policy.compilation_budget_bytes
+                    else "Total cache cap met"
+                )
+            except (OSError, ValueError, subprocess.SubprocessError) as error:
+                remaining = None
+                reason = str(error)
+            manifest["rootRemainingBytes"] = remaining
+            manifest["rootInventoryComplete"] = remaining is not None
+            manifest["projectedBytes"] = remaining
+            manifest["remainingBytes"] = remaining
+            manifest["unsatisfiedBudgetBytes"] = None if remaining is None else max(0, remaining - policy.compilation_budget_bytes)
+        except (OSError, ValueError, subprocess.SubprocessError) as error:
+            if not preview:
+                _publish_maintenance(root, policy, {"maintenanceError": str(error), "inventoryComplete": False, "rootInventoryComplete": False}, None, str(error))
+            raise
+        _publish_maintenance(root, policy, manifest, remaining, reason)
+        return manifest
 
 
 def _tree_bytes(directory: int, deadline: float, device: int, *, exclude_linked: bool) -> int:
@@ -905,6 +969,24 @@ def compilation_admission(
     root_bytes: int | None = None,
     directory_bytes: dict[Path, int] | None = None,
 ) -> dict:
+    with try_lease(root / "leases/maintenance.lock") as maintenance:
+        return _compilation_admission(
+            root, policy, entries, current, maintenance=maintenance, preview=preview,
+            root_bytes=root_bytes, directory_bytes=directory_bytes,
+        )
+
+
+def _compilation_admission(
+    root: Path,
+    policy: CachePolicy,
+    entries: list[CompilationDirectory],
+    current: set[Path],
+    *,
+    maintenance: int | None,
+    preview: bool,
+    root_bytes: int | None = None,
+    directory_bytes: dict[Path, int] | None = None,
+) -> dict:
     current = {canonical_path(path) for path in current}
     started = time.monotonic()
     result = {
@@ -940,7 +1022,7 @@ def compilation_admission(
                 proofs[key] = retired, "proven" if retired else "not-proven"
         return proofs[key]
 
-    with try_lease(root / "leases/maintenance.lock") as maintenance, ExitStack() as ownership:
+    with ExitStack() as ownership:
         deadline = time.monotonic() + 20
         result["freeBytesBefore"] = shutil.disk_usage(root).free
         deferred = (
@@ -1462,8 +1544,15 @@ def _prune_removed_mirrors(
 def prune_caches(
     root: Path, policy: CachePolicy, worktree: str, run: str, *, preview: bool = False
 ) -> dict:
+    with try_lease(root / "leases/maintenance.lock") as maintenance:
+        return _prune_caches(root, policy, worktree, run, maintenance=maintenance, preview=preview)
+
+
+def _prune_caches(
+    root: Path, policy: CachePolicy, worktree: str, run: str, *, maintenance: int | None, preview: bool
+) -> dict:
     removed = {"runs": []}
-    with try_lease(root / "leases/maintenance.lock") as maintenance, ExitStack() as ownership:
+    with ExitStack() as ownership:
         if maintenance is None:
             return {"runs": [], "retentionDeferred": "maintenance-lease-contended"}
         deadline = time.monotonic() + 20

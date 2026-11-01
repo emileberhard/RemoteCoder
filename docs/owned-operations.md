@@ -589,6 +589,12 @@ record publication. Run retention measures each last-use key once under a
 20-second metadata budget, retains and reports unprobed runs, then sorts the
 prepared keys for a separate bounded reclamation pass. Candidate run leases
 remain held through reclamation and are released together on every exit path.
+Maintenance and preview take one nonblocking maintenance lease before scanning
+and lend it to their admission and retention helpers. Only that holder publishes
+the shared reports, atomically replacing `maintenance.json` and then the cap
+status before release. A contended invocation exits successfully with
+`skipped: maintenance held` and changes neither report. Maintenance uses normal
+priority, like other agent and CI work.
 
 Admission reports known folder allocation, unknown entries, candidates, actual
 evictions and protected overflow in `cache-admission.json` and the receipt. Its
@@ -598,7 +604,7 @@ source retirement proof. A deadline or an unperformed check is not evidence of
 missing historical records. Unknown sizes remain null. Folder allocation can
 overcount APFS clones; total-root allocation uses bounded native `du -kx -d 4`,
 counts hard links once and does not traverse foreign mounts. Whole-root scans
-run only in maintenance/preview, outside the shared maintenance lock, with a
+run only in maintenance/preview, under that pass's maintenance lease, with a
 120-second timeout. That one native depth inventory also supplies compiler
 directory allocations, avoiding another recursive scan of every worktree.
 These directory totals attribute hard links to the first subtree visited.
