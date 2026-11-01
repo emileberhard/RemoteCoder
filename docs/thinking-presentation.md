@@ -19,11 +19,15 @@ the central row-visibility owner. Outside a transcript, surface visibility is
 the caller's existing environment responsibility. The Mac arm keeps the text
 static, matching the existing platform policy for repeating decorations.
 
-The band follows a 1.5-second ease-in-out sweep with a narrow opacity profile
-and a shared media-time phase. Repeated publications do not restart it. Forty-five
-discrete native keyframes per cycle give 30 updates per second without relying
-on the frame-rate hint alone. The group also requests a 20–30 Hz range. Physical
-display rates and render-server cost remain measurement results, not API guarantees.
+The band follows a continuous 1.5-second ease-in-out sweep with a narrow opacity
+profile and a shared media-time phase. Repeated publications do not restart it.
+The native group requests a 30–60 Hz range; that preference is not a display-rate
+guarantee. A discrete 30-step variant showed no consistent benefit across the
+test iPhone and ProMotion iPad and used more GPU time on the primary iPhone, so
+it was removed. The sweep adds render-server work compared with the former dots.
+Short controlled recordings establish neither battery savings nor a fixed panel
+rate. Keep the original native renderer unless a new measured mechanism justifies
+changing it.
 
 ## Disclosure motion
 

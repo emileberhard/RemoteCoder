@@ -42,8 +42,6 @@ private struct ShimmerBand: UIViewRepresentable {
 
 private final class ShimmerBandView: UIView {
     private static let period: CFTimeInterval = 1.5
-    private static let phases = (0..<45).map { UnitCurve.easeInOut.value(at: Double($0) / 45) }
-    private static let keyTimes = (0...45).map { NSNumber(value: Double($0) / 45) }
     private let container = CALayer()
     private let band = CAGradientLayer()
     private var color: Color.Resolved?
@@ -115,21 +113,21 @@ private final class ShimmerBandView: UIView {
 
     private func animate() {
         guard window != nil, geometrySize.width > 0, geometrySize.height > 0 else { return }
-        let movement = CAKeyframeAnimation(keyPath: "transform.translation.x")
-        movement.values = Self.phases.map { container.bounds.width * (2 * $0 - 1) }
-        movement.keyTimes = Self.keyTimes
-        movement.calculationMode = .discrete
+        let movement = CABasicAnimation(keyPath: "transform.translation.x")
+        movement.fromValue = -container.bounds.width
+        movement.toValue = container.bounds.width
+        movement.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
         movement.duration = Self.period
         let opacity = CAKeyframeAnimation(keyPath: "opacity")
-        opacity.values = Self.phases.map { 1 - pow($0, 8) }
-        opacity.keyTimes = Self.keyTimes
-        opacity.calculationMode = .discrete
+        opacity.values = (0...45).map { index in
+            1 - pow(UnitCurve.easeInOut.value(at: Double(index) / 45), 8)
+        }
         opacity.duration = Self.period
         let animation = CAAnimationGroup()
         animation.animations = [movement, opacity]
         animation.duration = Self.period
         animation.repeatCount = .infinity
-        animation.preferredFrameRateRange = CAFrameRateRange(minimum: 20, maximum: 30, preferred: 30)
+        animation.preferredFrameRateRange = CAFrameRateRange(minimum: 30, maximum: 60, preferred: 60)
         let now = band.convertTime(CACurrentMediaTime(), from: nil)
         animation.beginTime = now - now.truncatingRemainder(dividingBy: Self.period)
         band.add(animation, forKey: "shimmer")
