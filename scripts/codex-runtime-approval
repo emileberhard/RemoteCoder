@@ -19,8 +19,15 @@ import threading
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
 from build_artifacts import tree_digest
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    TypeAdapter,
+    ValidationError,
+)
 
 ADOPTION = Path("host-daemon-rs/src/accounts/codex_migration")
 FRESH_HOME_SECONDS = 60
@@ -73,7 +80,9 @@ class Compatibility(BaseModel):
     model_config = ConfigDict(extra="ignore")
     version: CodexVersion = Field(alias="codexCliVersion")
     protocol_source_commit: GitCommit = Field(alias="protocolSourceCommit")
-    targets: dict[Literal["aarch64-apple-darwin", "x86_64-unknown-linux-musl"], TargetApproval] = Field(alias="runtimeTargets")
+    targets: dict[
+        Literal["aarch64-apple-darwin", "x86_64-unknown-linux-musl"], TargetApproval
+    ] = Field(alias="runtimeTargets")
 
 
 class Approval(BaseModel):
@@ -83,6 +92,15 @@ class Approval(BaseModel):
     source_commit: GitCommit
     codex_sha256: Sha256
     code_mode_host_sha256: Sha256
+
+
+class Evaluation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    schema_version: Literal[1] = 1
+    approval: Approval
+    package_sha256: Sha256
+    adoption_pins_sha256: Sha256
+    adoption_migrations: dict[str, int]
 
 
 def compatibility_path(root: Path) -> Path:
@@ -111,7 +129,9 @@ def parser() -> argparse.ArgumentParser:
         help="RemoteCoder root (default: inferred from this script)",
     )
     common.add_argument("--json", action="store_true", help="emit stable JSON")
-    common.add_argument("--target", choices=["aarch64-apple-darwin", "x86_64-unknown-linux-musl"])
+    common.add_argument(
+        "--target", choices=["aarch64-apple-darwin", "x86_64-unknown-linux-musl"]
+    )
     subcommands = command.add_subparsers(dest="command", required=True)
     check = subcommands.add_parser(
         "check", parents=[common], help="validate the approval record"
@@ -123,17 +143,41 @@ def parser() -> argparse.ArgumentParser:
         "apply", parents=[common], help="set the approval from a verified package"
     )
     apply.add_argument("--package", type=Path, required=True)
-    apply.add_argument("--source-dir", type=Path, help="exact fork checkout, required for a target-only source patch")
-    export = subcommands.add_parser("export", parents=[common], help="emit the selected flat package approval")
+    apply.add_argument(
+        "--source-dir",
+        type=Path,
+        help="exact fork checkout, required for a target-only source patch",
+    )
+    evaluate = subcommands.add_parser(
+        "evaluate",
+        parents=[common],
+        help="execute package adoption checks on its native host",
+    )
+    evaluate.add_argument("--package", type=Path, required=True)
+    evaluate.add_argument("--output", type=Path, required=True)
+    apply_set = subcommands.add_parser(
+        "apply-set",
+        parents=[common],
+        help="atomically approve native evaluations and a common protocol source",
+    )
+    apply_set.add_argument("--receipt", type=Path, action="append", required=True)
+    apply_set.add_argument("--protocol-source-commit", required=True)
+    apply_set.add_argument("--source-dir", type=Path, required=True)
+    subcommands.add_parser(
+        "export", parents=[common], help="emit the selected flat package approval"
+    )
     install = subcommands.add_parser(
-        "install-record", parents=[common], help="install immutable approval beside an already approved package"
+        "install-record",
+        parents=[common],
+        help="install immutable approval beside an already approved package",
     )
     install.add_argument("--package", type=Path, required=True)
     resolve = subcommands.add_parser(
         "resolve", parents=[common], help="resolve the approved immutable build package"
     )
     resolve.add_argument(
-        "--packages-dir", type=Path,
+        "--packages-dir",
+        type=Path,
         default=Path.home() / "Library/Caches/RemoteCoder-Build/codex-runtime/packages",
     )
     resolve.set_defaults(package=None)
@@ -218,7 +262,7 @@ def write_atomic(path: Path, content: str) -> None:
             handle.flush()
             os.fsync(handle.fileno())
             temporary = Path(handle.name)
-        temporary.chmod(path.stat().st_mode & 0o777)
+        temporary.chmod(path.stat().st_mode & 0o777 if path.exists() else 0o644)
         os.replace(temporary, path)
     except OSError as error:
         if temporary:
@@ -245,7 +289,9 @@ def install_record(package: Path, approval: Approval) -> None:
     record = flat_record(approval)
     temporary: Path | None = None
     try:
-        with tempfile.NamedTemporaryFile("w", dir=directory_path, delete=False) as handle:
+        with tempfile.NamedTemporaryFile(
+            "w", dir=directory_path, delete=False
+        ) as handle:
             json.dump(record, handle, indent=2)
             handle.write("\n")
             handle.flush()
@@ -257,9 +303,13 @@ def install_record(package: Path, approval: Approval) -> None:
         except FileExistsError:
             metadata = path.lstat()
             if not stat.S_ISREG(metadata.st_mode) or metadata.st_mode & 0o222:
-                raise ApprovalError("installed approval must be a read-only regular file")
+                raise ApprovalError(
+                    "installed approval must be a read-only regular file"
+                )
             if load_json(path) != record:
-                raise ApprovalError("installed approval differs; refusing to replace it")
+                raise ApprovalError(
+                    "installed approval differs; refusing to replace it"
+                )
         directory = os.open(directory_path, os.O_RDONLY)
         try:
             os.fsync(directory)
@@ -278,7 +328,10 @@ def resolve_package(path: Path, packages: Path, target: str) -> Path:
         if not package.is_dir():
             continue
         try:
-            if package_approval(package) == expected and tree_digest(package) == selected.package_sha256:
+            if (
+                package_approval(package) == expected
+                and tree_digest(package) == selected.package_sha256
+            ):
                 return package.resolve()
         except (ApprovalError, OSError, ValueError):
             continue
@@ -288,17 +341,25 @@ def resolve_package(path: Path, packages: Path, target: str) -> Path:
     )
 
 
-def request(server: subprocess.Popen[str], identifier: int, method: str, params: dict[str, Any]) -> Any:
-    server.stdin.write(json.dumps({"id": identifier, "method": method, "params": params}) + "\n")
+def request(
+    server: subprocess.Popen[str], identifier: int, method: str, params: dict[str, Any]
+) -> Any:
+    server.stdin.write(
+        json.dumps({"id": identifier, "method": method, "params": params}) + "\n"
+    )
     server.stdin.flush()
     for line in server.stdout:
         try:
             message = json.loads(line)
         except json.JSONDecodeError as error:
-            raise ApprovalError(f"approved runtime wrote invalid JSON-RPC: {error}") from error
+            raise ApprovalError(
+                f"approved runtime wrote invalid JSON-RPC: {error}"
+            ) from error
         if message.get("id") == identifier and "method" not in message:
             if "error" in message:
-                raise ApprovalError(f"approved runtime rejected {method}: {message['error']}")
+                raise ApprovalError(
+                    f"approved runtime rejected {method}: {message['error']}"
+                )
             return message["result"]
     raise ApprovalError(f"approved runtime exited before answering {method}")
 
@@ -340,16 +401,25 @@ def create_fresh_home(codex: Path, home: Path) -> None:
                     "sandbox": "read-only",
                 },
             )["thread"]["id"]
-            request(server, 3, "thread/name/set", {"threadId": thread, "name": "adoption pins"})
+            request(
+                server,
+                3,
+                "thread/name/set",
+                {"threadId": thread, "name": "adoption pins"},
+            )
     finally:
         deadline.cancel()
     if server.returncode != 0:
-        raise ApprovalError(f"approved runtime app-server exited with {server.returncode}")
+        raise ApprovalError(
+            f"approved runtime app-server exited with {server.returncode}"
+        )
 
 
 def adoption_pins(root: Path, package: Path) -> dict[str, int]:
     directory = root.resolve() / ADOPTION
-    specification = importlib.util.spec_from_file_location("codex_adoption", directory / "native.py")
+    specification = importlib.util.spec_from_file_location(
+        "codex_adoption", directory / "native.py"
+    )
     if specification is None or specification.loader is None:
         raise ApprovalError(f"cannot load {directory / 'native.py'}")
     native = importlib.util.module_from_spec(specification)
@@ -382,30 +452,60 @@ def adoption_pins(root: Path, package: Path) -> dict[str, int]:
                             f"{directory / 'schema.json'}"
                         ) from error
             except (ValueError, sqlite3.Error) as error:
-                raise ApprovalError(f"cannot fingerprint {name} from the approved runtime: {error}") from error
+                raise ApprovalError(
+                    f"cannot fingerprint {name} from the approved runtime: {error}"
+                ) from error
             latest[name] = fingerprint["latestMigration"]
     return latest
 
 
-def verify_source(path: Path, approval: Approval, source: Path | None) -> None:
-    compatibility = Compatibility.model_validate(load_json(path))
-    protocol = compatibility.protocol_source_commit
+def verify_source(protocol: str, approval: Approval, source: Path | None) -> None:
     if approval.source_commit == protocol:
         return
     if source is None:
         raise ApprovalError("target-only source changes require --source-dir")
-    ancestry = subprocess.run(["git", "-C", str(source), "merge-base", "--is-ancestor", protocol, approval.source_commit], capture_output=True)
+    ancestry = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(source),
+            "merge-base",
+            "--is-ancestor",
+            protocol,
+            approval.source_commit,
+        ],
+        capture_output=True,
+        check=False,
+    )
     if ancestry.returncode != 0:
-        raise ApprovalError("target source must descend from the common protocol source")
-    changed = subprocess.check_output(["git", "-C", str(source), "diff", "--name-only", protocol, approval.source_commit], text=True).splitlines()
+        raise ApprovalError(
+            "target source must descend from the common protocol source"
+        )
+    changed = subprocess.check_output(
+        [
+            "git",
+            "-C",
+            str(source),
+            "diff",
+            "--name-only",
+            protocol,
+            approval.source_commit,
+        ],
+        text=True,
+    ).splitlines()
     allowed = {"codex-rs/utils/pty/src/process_identity.rs"}
     if not changed or set(changed) - allowed:
-        raise ApprovalError("target source changes shared protocol/state or an unreviewed platform path")
+        raise ApprovalError(
+            "target source changes shared protocol/state or an unreviewed platform path"
+        )
 
 
 def apply(path: Path, approval: Approval, package_sha256: str) -> None:
     compatibility = load_json(path)
-    if compatibility["codexCliVersion"] != approval.version and len(compatibility["runtimeTargets"]) > 1:
+    if (
+        compatibility["codexCliVersion"] != approval.version
+        and len(compatibility["runtimeTargets"]) > 1
+    ):
         raise ApprovalError("a version change must update every target together")
     compatibility["codexCliVersion"] = approval.version
     compatibility["runtimeTargets"][approval.target] = {
@@ -417,6 +517,68 @@ def apply(path: Path, approval: Approval, package_sha256: str) -> None:
         },
     }
     write_atomic(path, json.dumps(compatibility, indent=2, ensure_ascii=False) + "\n")
+
+
+def apply_set(
+    path: Path, root: Path, receipts: list[Path], protocol: str, source: Path
+) -> dict[str, Any]:
+    protocol = TypeAdapter(GitCommit).validate_python(protocol)
+    compatibility = load_json(path)
+    previous = Compatibility.model_validate(compatibility)
+    if subprocess.run(
+        [
+            "git",
+            "-C",
+            str(source),
+            "merge-base",
+            "--is-ancestor",
+            previous.protocol_source_commit,
+            protocol,
+        ],
+        capture_output=True,
+        check=False,
+    ).returncode:
+        raise ApprovalError(
+            "the common protocol source must descend from its previous approval"
+        )
+    evaluations = [
+        Evaluation.model_validate(load_json(receipt)) for receipt in receipts
+    ]
+    targets = [evaluation.approval.target for evaluation in evaluations]
+    if len(set(targets)) != len(targets) or not set(previous.targets) <= set(targets):
+        raise ApprovalError(
+            "atomic approval requires exactly one evaluation for every existing target"
+        )
+    versions = {evaluation.approval.version for evaluation in evaluations}
+    if len(versions) != 1:
+        raise ApprovalError("all targets must use one Codex version")
+    pins_sha256 = file_sha256(root.resolve() / ADOPTION / "schema.json")
+    migrations = {
+        tuple(sorted(evaluation.adoption_migrations.items()))
+        for evaluation in evaluations
+    }
+    if len(migrations) != 1 or set(evaluations[0].adoption_migrations) != set(
+        load_json(root.resolve() / ADOPTION / "schema.json")
+    ):
+        raise ApprovalError(
+            "all targets must create the same pinned adoption databases and migrations"
+        )
+    selected = {}
+    for evaluation in evaluations:
+        if evaluation.adoption_pins_sha256 != pins_sha256:
+            raise ApprovalError("native evaluation used different adoption schema pins")
+        approval = evaluation.approval
+        verify_source(protocol, approval, source)
+        selected[approval.target] = {
+            "sourceCommit": approval.source_commit,
+            "runtimePackageSHA256": evaluation.package_sha256,
+            "runtimeHashes": flat_record(approval)["runtimeHashes"],
+        }
+    compatibility["codexCliVersion"] = versions.pop()
+    compatibility["protocolSourceCommit"] = protocol
+    compatibility["runtimeTargets"] = selected
+    write_atomic(path, json.dumps(compatibility, indent=2, ensure_ascii=False) + "\n")
+    return compatibility
 
 
 def host_target() -> str:
@@ -440,6 +602,16 @@ def main() -> int:
     args = parser().parse_args()
     try:
         path = compatibility_path(args.repo_root)
+        if args.command == "apply-set":
+            approved = apply_set(
+                path,
+                args.repo_root,
+                args.receipt,
+                args.protocol_source_commit,
+                args.source_dir,
+            )
+            print(json.dumps({"ok": True, "compatibility": approved}, sort_keys=True))
+            return 0
         target = args.target or host_target()
         if args.command == "export":
             print(json.dumps(flat_record(repo_approval(path, target)), sort_keys=True))
@@ -452,12 +624,40 @@ def main() -> int:
                 raise ApprovalError("package target differs from --target")
             target = expected.target
         adoption = None
+        if args.command == "evaluate":
+            if expected is None or target != host_target():
+                raise ApprovalError(
+                    "evaluation must execute on the package's operating system and architecture"
+                )
+            adoption = adoption_pins(args.repo_root, args.package)
+            receipt = Evaluation(
+                approval=expected,
+                package_sha256=tree_digest(args.package),
+                adoption_pins_sha256=file_sha256(
+                    args.repo_root.resolve() / ADOPTION / "schema.json"
+                ),
+                adoption_migrations=adoption,
+            )
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            write_atomic(args.output, receipt.model_dump_json(indent=2) + "\n")
+            print(
+                json.dumps(
+                    {"ok": True, "evaluation": receipt.model_dump()}, sort_keys=True
+                )
+            )
+            return 0
         if args.command == "apply":
             if expected is None:
                 raise ApprovalError("apply requires a verified package")
             if target != host_target():
-                raise ApprovalError("approval must execute on the package's operating system and architecture")
-            verify_source(path, expected, args.source_dir)
+                raise ApprovalError(
+                    "approval must execute on the package's operating system and architecture"
+                )
+            verify_source(
+                Compatibility.model_validate(load_json(path)).protocol_source_commit,
+                expected,
+                args.source_dir,
+            )
             adoption = adoption_pins(args.repo_root, args.package)
             apply(path, expected, tree_digest(args.package))
         actual = repo_approval(path, target)
