@@ -47,7 +47,7 @@ for user in root relay-tunnel; do
     check_sshd -C "user=$user,host=localhost,addr=127.0.0.1"
 done
 if [[ -n ${SSH_CONNECTION:-} ]]; then
-    read -r remote_addr remote_port local_addr local_port <<<"$SSH_CONNECTION"
+    read -r remote_addr _ local_addr local_port <<<"$SSH_CONNECTION"
     check_sshd -C "user=root,host=$remote_addr,addr=$remote_addr,laddr=$local_addr,lport=$local_port"
 fi
 
