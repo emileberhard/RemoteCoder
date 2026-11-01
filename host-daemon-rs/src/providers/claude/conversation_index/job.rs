@@ -22,7 +22,11 @@ pub(crate) struct JobHandle {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct ProcessOwner {
     pub pid: i32,
+    #[cfg(not(target_os = "linux"))]
     pub started_micros: u64,
+    #[cfg(target_os = "linux")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_micros: Option<u64>,
     #[cfg(target_os = "linux")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub linux_birth: Option<crate::platform::process::LinuxBirth>,
@@ -31,7 +35,7 @@ pub(crate) struct ProcessOwner {
 
 impl ProcessOwner {
     pub(crate) fn alive(&self) -> Result<bool> {
-        let Some(identity) = crate::platform::process::identify(self.pid)? else {
+        let Some(identity) = crate::platform::process::identify_instance(self.pid)? else {
             return Ok(false);
         };
         #[cfg(target_os = "linux")]
@@ -350,7 +354,7 @@ mod tests {
         let identity = crate::platform::process::identify(pid).unwrap().unwrap();
         let mut owner = ProcessOwner {
             pid,
-            started_micros: identity.started_micros + 60_000_000,
+            started_micros: Some(identity.started_micros + 60_000_000),
             linux_birth: Some(identity.linux_birth),
             session_uuid: "test".to_string(),
         };

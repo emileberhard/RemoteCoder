@@ -97,8 +97,7 @@ impl ClaudeSupervisor {
             as i32;
         let admission = ProcessAdmission::new(process_group_id, Arc::clone(&self.process_registry));
         #[cfg(any(target_os = "macos", target_os = "linux"))]
-        let identity = crate::platform::process::identify(process_group_id)
-            .map(|identity| identity.map(|identity| identity.instance(process_group_id)));
+        let identity = crate::platform::process::identify_instance(process_group_id);
         #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         let identity: anyhow::Result<Option<crate::platform::process::ProcessInstance>> = Ok(None);
         let (reaped, reap_state) = tokio::sync::watch::channel(ReapState::Running);

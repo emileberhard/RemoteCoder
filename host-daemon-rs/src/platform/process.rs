@@ -63,7 +63,10 @@ pub(crate) struct ProcessIdentity {
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ProcessInstance {
     pub pid: i32,
+    #[cfg(not(target_os = "linux"))]
     pub started_micros: u64,
+    #[cfg(target_os = "linux")]
+    pub started_micros: Option<u64>,
     #[cfg(target_os = "linux")]
     pub linux_birth: LinuxBirth,
 }
@@ -88,7 +91,10 @@ impl ProcessIdentity {
     pub fn instance(&self, pid: i32) -> ProcessInstance {
         ProcessInstance {
             pid,
+            #[cfg(not(target_os = "linux"))]
             started_micros: self.started_micros,
+            #[cfg(target_os = "linux")]
+            started_micros: Some(self.started_micros),
             #[cfg(target_os = "linux")]
             linux_birth: self.linux_birth,
         }
@@ -143,6 +149,33 @@ pub(crate) fn unix_peer_identity(_: &tokio::net::UnixStream) -> Result<(i32, Pro
     anyhow::bail!("verified Unix socket peer identity is unavailable on this platform")
 }
 
+#[cfg(target_os = "linux")]
+pub(crate) fn identify_instance(pid: i32) -> Result<Option<ProcessInstance>> {
+    linux::identify_instance(pid)
+}
+
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn identify_instance(pid: i32) -> Result<Option<ProcessInstance>> {
+    Ok(identify(pid)?.map(|identity| identity.instance(pid)))
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn unix_peer_instance(stream: &tokio::net::UnixStream) -> Result<ProcessInstance> {
+    use anyhow::{Context, ensure};
+    let peer = nix::sys::socket::getsockopt(stream, nix::sys::socket::sockopt::PeerCredentials)
+        .context("Unix socket peer credentials are unavailable")?;
+    ensure!(
+        peer.uid() == nix::unistd::geteuid().as_raw(),
+        "Unix socket peer belongs to another user"
+    );
+    identify_instance(peer.pid())?.context("Unix socket peer process exited")
+}
+
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn unix_peer_instance(stream: &tokio::net::UnixStream) -> Result<ProcessInstance> {
+    unix_peer_identity(stream).map(|(pid, identity)| identity.instance(pid))
+}
+
 #[cfg(target_os = "macos")]
 pub(crate) fn ancestry(process: ProcessInstance) -> impl Iterator<Item = Result<ProcessInstance>> {
     walk_ancestry(process, |pid| {
@@ -160,7 +193,10 @@ pub(crate) fn ancestry(process: ProcessInstance) -> impl Iterator<Item = Result<
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 #[derive(Clone, Copy)]
 struct ProcessLink {
+    #[cfg(not(target_os = "linux"))]
     started_micros: u64,
+    #[cfg(target_os = "linux")]
+    started_micros: Option<u64>,
     parent_pid: i32,
     #[cfg(target_os = "linux")]
     linux_birth: LinuxBirth,

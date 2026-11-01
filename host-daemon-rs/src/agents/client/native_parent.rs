@@ -11,7 +11,7 @@ use super::transport::{self, Socket};
 use crate::agents::jobs::model::{ConversationIdentity, Provider, ProviderHome};
 use crate::agents::jobs::routes::NativeMessage;
 use crate::config::GatewayEndpoint;
-use crate::platform::process::{ProcessInstance, ancestry, identify};
+use crate::platform::process::{ProcessInstance, ancestry, identify_instance};
 use crate::providers::claude::native_parent::{
     NativeParentForwarder, NativeSessionOwner, prove_owner,
 };
@@ -274,8 +274,7 @@ async fn send_rpc(
 
 fn current_process() -> Result<ProcessInstance> {
     let pid = i32::try_from(std::process::id())?;
-    let identity = identify(pid)?.context("Native holder process identity is unavailable")?;
-    Ok(identity.instance(pid))
+    identify_instance(pid)?.context("Native holder process identity is unavailable")
 }
 
 async fn native_ancestor(
@@ -284,7 +283,9 @@ async fn native_ancestor(
 ) -> Result<Option<NativeSessionOwner>> {
     for process in ancestry(process) {
         let process = process?;
-        if let Some(owner) = prove_owner(home, process.pid, process.started_micros).await? {
+        if let Some(owner) =
+            crate::providers::claude::native_parent::prove_process_owner(home, process).await?
+        {
             return Ok(Some(owner));
         }
     }

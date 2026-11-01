@@ -5,7 +5,7 @@ use nix::errno::Errno;
 use nix::sys::signal::{Signal, kill, killpg};
 use nix::unistd::{Pid, getpgid};
 
-use crate::platform::process::{ProcessInstance, identify};
+use crate::platform::process::{ProcessInstance, identify_instance};
 
 const SIGNAL_GRACE: Duration = Duration::from_secs(5);
 const EXIT_POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -15,10 +15,9 @@ pub(crate) async fn stop_client(pid: i32) -> Result<()> {
         u32::try_from(pid).is_ok_and(|pid| pid > 1 && pid != std::process::id()),
         "pid {pid} cannot be stopped as another client"
     );
-    let Some(identity) = identify(pid)? else {
+    let Some(process) = identify_instance(pid)? else {
         return Ok(());
     };
-    let process = identity.instance(pid);
     let target = Pid::from_raw(pid);
     let own_group = getpgid(None).context("reading the gateway's process group failed")?;
     let leads_group =
@@ -50,7 +49,7 @@ pub(crate) async fn stop_client(pid: i32) -> Result<()> {
 }
 
 fn still_running(process: ProcessInstance) -> Result<bool> {
-    Ok(identify(process.pid)?.is_some_and(|identity| identity.instance(process.pid) == process))
+    Ok(identify_instance(process.pid)?.is_some_and(|identity| identity == process))
 }
 
 #[cfg(test)]

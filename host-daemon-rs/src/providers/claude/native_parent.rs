@@ -10,7 +10,7 @@ use tokio::net::UnixStream;
 use crate::agents::jobs::model::{ConversationIdentity, Provider, ProviderHome};
 use crate::agents::jobs::routes::{NativeDeliveryState, NativeMessage};
 use crate::ids::is_session_uuid;
-use crate::platform::process::{identify, unix_peer_identity};
+use crate::platform::process::{ProcessInstance, identify, unix_peer_identity};
 use crate::providers::claude::records::read_record;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -133,6 +133,21 @@ struct OwnerRecord {
     messaging_socket_path: Option<PathBuf>,
     pid_domain: String,
     proc_start: String,
+}
+
+pub(crate) async fn prove_process_owner(
+    home: &Path,
+    process: ProcessInstance,
+) -> Result<Option<NativeSessionOwner>> {
+    #[cfg(target_os = "linux")]
+    {
+        let _ = (home, process);
+        Ok(None)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        prove_owner(home, process.pid, process.started_micros).await
+    }
 }
 
 #[cfg(target_os = "linux")]

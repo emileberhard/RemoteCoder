@@ -4,7 +4,7 @@ use std::sync::OnceLock;
 
 use anyhow::{Context, Result, ensure};
 
-use super::{LinuxBirth, ProcessIdentity, ProcessLink};
+use super::{LinuxBirth, ProcessIdentity, ProcessInstance, ProcessLink};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Stat {
@@ -87,12 +87,24 @@ pub(super) fn process_link(pid: i32) -> Result<Option<ProcessLink>> {
     stat(pid)?
         .map(|value| {
             Ok(ProcessLink {
-                started_micros: start_micros(value)?,
+                started_micros: None,
                 linux_birth: birth(value)?,
                 parent_pid: value.parent,
             })
         })
         .transpose()
+}
+
+pub(super) fn identify_instance(pid: i32) -> Result<Option<ProcessInstance>> {
+    let Some(before) = stat(pid)? else {
+        return Ok(None);
+    };
+    let linux_birth = birth(before)?;
+    Ok((stat(pid)? == Some(before)).then_some(ProcessInstance {
+        pid,
+        started_micros: None,
+        linux_birth,
+    }))
 }
 
 pub(super) fn identify(pid: i32) -> Result<Option<ProcessIdentity>> {
@@ -171,7 +183,7 @@ mod tests {
         };
         let caller = ProcessInstance {
             pid: 40,
-            started_micros: 1_000_000,
+            started_micros: Some(1_000_000),
             linux_birth: birth(400),
         };
         let mut reads = 0;
@@ -183,7 +195,7 @@ mod tests {
                 _ => unreachable!(),
             };
             Ok(Some(ProcessLink {
-                started_micros: 2_000_000 + reads,
+                started_micros: Some(2_000_000 + reads),
                 linux_birth: birth(ticks),
                 parent_pid: parent,
             }))
@@ -197,7 +209,7 @@ mod tests {
         };
         assert!(
             walk_ancestry(changed_ticks, |pid| Ok(Some(ProcessLink {
-                started_micros: 1,
+                started_micros: None,
                 linux_birth: birth(400),
                 parent_pid: pid - 1
             })))
@@ -214,7 +226,7 @@ mod tests {
                     ..caller
                 },
                 |_| Ok(Some(ProcessLink {
-                    started_micros: 1,
+                    started_micros: None,
                     linux_birth: birth(400),
                     parent_pid: 1
                 }))
@@ -228,9 +240,10 @@ mod tests {
     #[tokio::test]
     async fn socket_caller_is_the_actual_kernel_peer() {
         let (client, server) = tokio::net::UnixStream::pair().unwrap();
-        let (pid, identity) = super::super::unix_peer_identity(&server).unwrap();
-        assert_eq!(pid as u32, std::process::id());
-        assert_eq!(Some(identity), identify(pid).unwrap());
+        let identity = super::super::unix_peer_instance(&server).unwrap();
+        assert_eq!(identity.pid as u32, std::process::id());
+        assert_eq!(Some(identity), identify_instance(identity.pid).unwrap());
+        assert_eq!(identity.started_micros, None);
         drop(client);
     }
 }

@@ -266,7 +266,7 @@ fn endpoint(env_file: Option<&Path>) -> Result<Endpoint> {
 
 async fn capture(endpoint: &Endpoint) -> Result<CapturedContext> {
     let pid = std::process::id();
-    let identity = crate::platform::process::identify(i32::try_from(pid)?)?
+    let identity = crate::platform::process::identify_instance(i32::try_from(pid)?)?
         .context("The caller process no longer has a verifiable identity")?;
     rpc(endpoint, "agent/context/capture", CaptureParams {
         pid,

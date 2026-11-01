@@ -277,10 +277,9 @@ impl Gateway {
                     tool_call_id: None,
                 }));
             }
-            if let Some(owner) = crate::providers::claude::native_parent::prove_owner(
+            if let Some(owner) = crate::providers::claude::native_parent::prove_process_owner(
                 &claude_home,
-                candidate.pid,
-                candidate.started_micros,
+                candidate,
             )
             .await?
             {
@@ -318,9 +317,8 @@ impl Gateway {
             let birth = request
                 .linux_birth
                 .context("Linux caller birth proof is missing")?;
-            let current = crate::platform::process::identify(pid)?
-                .context("caller process exited")?
-                .instance(pid);
+            let current = crate::platform::process::identify_instance(pid)?
+                .context("caller process exited")?;
             ensure!(
                 current.linux_birth == birth,
                 "caller process identity is stale"
@@ -371,17 +369,15 @@ impl Gateway {
                     let current = match managed {
                         Some(thread) => {
                             ensure!(
-                                crate::platform::process::identify(saved.process.pid)?
-                                    .is_some_and(|process| process.instance(saved.process.pid)
-                                        == saved.process),
+                                crate::platform::process::identify_instance(saved.process.pid)?
+                                    .is_some_and(|process| process == saved.process),
                                 "captured Claude runtime owner is no longer live"
                             );
                             Some(thread)
                         }
-                        None => crate::providers::claude::native_parent::prove_owner(
+                        None => crate::providers::claude::native_parent::prove_process_owner(
                             &self.claude_settings.claude_home,
-                            saved.process.pid,
-                            saved.process.started_micros,
+                            saved.process,
                         )
                         .await?
                         .map(|owner| {
