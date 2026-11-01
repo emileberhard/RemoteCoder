@@ -275,13 +275,16 @@ impl Link {
     pub(crate) async fn refresh_members(&self) -> Result<()> {
         use futures_util::stream;
         let identity = self.identity.read().await.clone();
-        stream::iter(self.store.all().await?.into_iter().filter(|member| member.state == MemberState::Active))
+        let members = self.store.all().await?;
+        stream::iter(members.into_iter().filter(|member| member.state == MemberState::Active))
             .for_each_concurrent(64, |member| {
                 let identity = &identity;
                 async move {
-                    let _ = self.call(&member.host, "cluster/hello", json!({"protocol":PROTOCOL,"host":identity.host_id,"incarnation":identity.incarnation})).await;
+                    let hello = json!({"protocol":PROTOCOL,"host":identity.host_id,"incarnation":identity.incarnation});
+                    let _ = self.call(&member.host, "cluster/hello", hello).await;
                 }
-            }).await;
+            })
+            .await;
         Ok(())
     }
 
@@ -507,37 +510,11 @@ impl Link {
                     .parse()
                     .map_err(|error| LinkError::local(ErrorClass::Refused, error))?,
             );
-            let connected = tokio::time::timeout_at(attempt_deadline, async {
-                let stream = dial(request.uri()).await.map_err(|error| LinkError::transport(error, false))?;
-                let (mut socket, _) = tokio_tungstenite::client_async_tls_with_config(request, stream, Some(crate::providers::codex::daemon::websocket_config()), Some(Connector::Rustls(Arc::new(config.clone())))).await.map_err(|error| {
-                    if let tokio_tungstenite::tungstenite::Error::Http(response) = &error {
-                        if response.status() == tokio_tungstenite::tungstenite::http::StatusCode::FORBIDDEN && response.headers().get("x-remotecoder-refusal").and_then(|v|v.to_str().ok()) == Some("membership_removed") {
-                            let headers=response.headers();
-                            return LinkError::peer(json!({"message":"membership was removed","data":{"class":"refused","kind":"membership_removed","host":headers.get("x-remotecoder-peer-host").and_then(|v|v.to_str().ok()),"membership":headers.get("x-remotecoder-membership").and_then(|v|v.to_str().ok())}}));
-                        }
-                        return LinkError::local(ErrorClass::Refused, format!("member refused upgrade with {}", response.status()));
-                    }
-                    if matches!(error, tokio_tungstenite::tungstenite::Error::Tls(_)) {
-                        return LinkError::local(ErrorClass::Refused,error);
-                    }
-                    LinkError::transport(error, false)
-                })?;
-                loop {
-                    match socket.next().await.ok_or_else(||LinkError::transport("member closed before ready",false))?.map_err(|error|LinkError::transport(error,false))? {
-                        Message::Text(text) if serde_json::from_str::<Value>(&text).map_err(|error|LinkError::local(ErrorClass::Refused,error))?["method"] == "daemon/ready" => break,
-                        Message::Ping(value) => socket.send(Message::Pong(value)).await.map_err(|error|LinkError::transport(error,false))?,
-                        Message::Close(_) => return Err(LinkError::transport("member closed before ready",false)),
-                        _ => {}
-                    }
-                }
-                socket.send(Message::Text(json!({"jsonrpc":"2.0","id":0,"method":"cluster/hello","params":hello}).to_string())).await.map_err(|error|LinkError::transport(error,false))?;
-                let hello: HelloReceipt = serde_json::from_value(response(&mut socket,0).await?).map_err(|error|LinkError::local(ErrorClass::Refused,error))?;
-                if hello.host != record.host { return Err(LinkError::local(ErrorClass::Refused,"member identity changed")); }
-                if hello.protocol != PROTOCOL {return Err(LinkError {cause:Failure::Protocol,class:ErrorClass::Unsupported,transmitted:false,message:"member cluster protocol is unsupported".into()});}
-                self.observe(record,&hello).await;
-                let wake = self.wakes.lock().await.entry(record.host.clone()).or_insert_with(||tokio::sync::watch::channel(0).0).clone();
-                Ok(Connection::new(socket,hello,Arc::downgrade(slot),Some(wake)))
-            }).await;
+            let connected = tokio::time::timeout_at(
+                attempt_deadline,
+                self.handshake(request, &config, record, slot, hello),
+            )
+            .await;
             match connected {
                 Ok(Ok(connection)) => return Ok(connection),
                 Ok(Err(mut error)) if !matches!(error.cause, Failure::Transport) => {
@@ -549,6 +526,86 @@ impl Link {
             }
         }
         Err(failure)
+    }
+
+    async fn handshake(
+        &self,
+        request: tokio_tungstenite::tungstenite::http::Request<()>,
+        config: &ClientConfig,
+        record: &MemberRecord,
+        slot: &Arc<Mutex<Option<Connection>>>,
+        hello: &Value,
+    ) -> std::result::Result<Connection, LinkError> {
+        let stream = dial(request.uri())
+            .await
+            .map_err(|error| LinkError::transport(error, false))?;
+        let (mut socket, _) = tokio_tungstenite::client_async_tls_with_config(
+            request,
+            stream,
+            Some(crate::providers::codex::daemon::websocket_config()),
+            Some(Connector::Rustls(Arc::new(config.clone()))),
+        )
+        .await
+        .map_err(upgrade_error)?;
+        loop {
+            let message = socket
+                .next()
+                .await
+                .ok_or_else(|| LinkError::transport("member closed before ready", false))?
+                .map_err(|error| LinkError::transport(error, false))?;
+            match message {
+                Message::Text(text)
+                    if serde_json::from_str::<Value>(&text)
+                        .map_err(|error| LinkError::local(ErrorClass::Refused, error))?["method"]
+                        == "daemon/ready" =>
+                {
+                    break;
+                }
+                Message::Ping(value) => socket
+                    .send(Message::Pong(value))
+                    .await
+                    .map_err(|error| LinkError::transport(error, false))?,
+                Message::Close(_) => {
+                    return Err(LinkError::transport("member closed before ready", false));
+                }
+                _ => {}
+            }
+        }
+        let request = json!({"jsonrpc":"2.0","id":0,"method":"cluster/hello","params":hello});
+        socket
+            .send(Message::Text(request.to_string()))
+            .await
+            .map_err(|error| LinkError::transport(error, false))?;
+        let hello: HelloReceipt = serde_json::from_value(response(&mut socket, 0).await?)
+            .map_err(|error| LinkError::local(ErrorClass::Refused, error))?;
+        if hello.host != record.host {
+            return Err(LinkError::local(
+                ErrorClass::Refused,
+                "member identity changed",
+            ));
+        }
+        if hello.protocol != PROTOCOL {
+            return Err(LinkError {
+                cause: Failure::Protocol,
+                class: ErrorClass::Unsupported,
+                transmitted: false,
+                message: "member cluster protocol is unsupported".into(),
+            });
+        }
+        self.observe(record, &hello).await;
+        let wake = self
+            .wakes
+            .lock()
+            .await
+            .entry(record.host.clone())
+            .or_insert_with(|| tokio::sync::watch::channel(0).0)
+            .clone();
+        Ok(Connection::new(
+            socket,
+            hello,
+            Arc::downgrade(slot),
+            Some(wake),
+        ))
     }
 
     async fn observe(&self, record: &MemberRecord, hello: &HelloReceipt) {
@@ -616,6 +673,33 @@ impl Link {
     pub(crate) async fn forget(&self, membership: &str) {
         self.connections.lock().await.remove(membership);
     }
+}
+
+fn upgrade_error(error: tokio_tungstenite::tungstenite::Error) -> LinkError {
+    use tokio_tungstenite::tungstenite::{Error, http::StatusCode};
+    if let Error::Http(response) = &error {
+        let headers = response.headers();
+        if response.status() == StatusCode::FORBIDDEN
+            && headers
+                .get("x-remotecoder-refusal")
+                .and_then(|value| value.to_str().ok())
+                == Some("membership_removed")
+        {
+            return LinkError::peer(json!({"message":"membership was removed","data":{
+                "class":"refused","kind":"membership_removed",
+                "host":headers.get("x-remotecoder-peer-host").and_then(|value|value.to_str().ok()),
+                "membership":headers.get("x-remotecoder-membership").and_then(|value|value.to_str().ok())
+            }}));
+        }
+        return LinkError::local(
+            ErrorClass::Refused,
+            format!("member refused upgrade with {}", response.status()),
+        );
+    }
+    if matches!(error, Error::Tls(_)) {
+        return LinkError::local(ErrorClass::Refused, error);
+    }
+    LinkError::transport(error, false)
 }
 
 const ATTEMPT_DELAY: Duration = Duration::from_millis(250);

@@ -53,25 +53,38 @@ impl Gateway {
                 )
                 .collect(),
         };
-        let pages=stream::iter(hosts.iter().cloned()).map(|host| {
-            let position=cursor.positions.get(&host).cloned().flatten();
-            let complete=cursor.complete.contains(&host);
-            let identity=&identity;
-            let link=&link;
-            let params=&params;
-            async move {
-                if complete {return (host,Ok(json!({"agents":[],"nextCursor":null})));}
-                let request=json!({"limit":limit.min(256),"cursor":position,"active":params["active"],"provider":params["provider"]});
-                let page=if host==identity.host_id {self.local_agent_inventory(request).await.map_err(|error|crate::cluster::link::LinkError {cause:crate::cluster::link::Failure::Local,class:ErrorClass::Unavailable,transmitted:false,message:error.to_string()})}else {link.call(&host,"agent/cluster/inventory",request).await};
-                (host,page)
-            }
-        }).buffer_unordered(64).collect::<Vec<_>>().await;
+        let pages = stream::iter(hosts.iter().cloned())
+            .map(|host| {
+                let position = cursor.positions.get(&host).cloned().flatten();
+                let complete = cursor.complete.contains(&host);
+                let identity = &identity;
+                let link = &link;
+                let params = &params;
+                async move {
+                    if complete {
+                        return (host, Ok(json!({"agents":[],"nextCursor":null})));
+                    }
+                    let request = json!({"limit":limit.min(256),"cursor":position,"active":params["active"],"provider":params["provider"]});
+                    let page = if host == identity.host_id {
+                        self.local_agent_inventory(request).await
+                            .map_err(|error| crate::cluster::link::LinkError::local(ErrorClass::Unavailable, error))
+                    } else {
+                        link.call(&host, "agent/cluster/inventory", request).await
+                    };
+                    (host, page)
+                }
+            })
+            .buffer_unordered(64)
+            .collect::<Vec<_>>()
+            .await;
         let mut coverage = Vec::new();
         let mut warnings = Vec::new();
-        let mut pages=pages.into_iter().filter_map(|(host,result)| match result {
-            Err(error)=> {warnings.push(format!("{host}: {error}"));coverage.push(json!({"hostId":host,"state":error.coverage_state()}));None}
-            Ok(page)=> {warnings.extend(page["warnings"].as_array().into_iter().flatten().take(32).map(|warning|format!("{host}: {warning}")));coverage.push(json!({"hostId":host,"state":if page["complete"]==false {"stale"} else {"ok"}}));Some((host,page["agents"].as_array().cloned().unwrap_or_default().into_iter().collect::<std::collections::VecDeque<_>>(),page["nextCursor"].as_str().map(str::to_owned)))}
-        }).collect::<Vec<_>>();
+        let mut pages = pages
+            .into_iter()
+            .filter_map(|(host, result)| {
+                classify_inventory_page(host, result, &mut coverage, &mut warnings)
+            })
+            .collect::<Vec<_>>();
         warnings.truncate(256);
         pages.sort_by(|left, right| left.0.cmp(&right.0));
         let mut rows = Vec::new();
@@ -126,6 +139,43 @@ impl Gateway {
             .into());
         }
         Ok(json!({"agents":rows,"coverage":coverage,"nextCursor":next_cursor,"warnings":warnings}))
+    }
+}
+
+type InventoryPage = (String, std::collections::VecDeque<Value>, Option<String>);
+
+fn classify_inventory_page(
+    host: String,
+    result: std::result::Result<Value, crate::cluster::link::LinkError>,
+    coverage: &mut Vec<Value>,
+    warnings: &mut Vec<String>,
+) -> Option<InventoryPage> {
+    match result {
+        Err(error) => {
+            warnings.push(format!("{host}: {error}"));
+            coverage.push(json!({"hostId":host,"state":error.coverage_state()}));
+            None
+        }
+        Ok(page) => {
+            warnings.extend(
+                page["warnings"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .take(32)
+                    .map(|warning| format!("{host}: {warning}")),
+            );
+            coverage.push(
+                json!({"hostId":host,"state":if page["complete"]==false {"stale"} else {"ok"}}),
+            );
+            let agents = page["agents"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+                .into();
+            let next = page["nextCursor"].as_str().map(str::to_owned);
+            Some((host, agents, next))
+        }
     }
 }
 
