@@ -271,7 +271,7 @@ impl ClaudeSupervisor {
         // Tools ride each spawn: nothing is written to Claude's own config, so
         // they follow the runtime's dimensions and vanish when it retires.
         let mcp = match launch.scope() {
-            crate::agents::jobs::model::ToolScope::Full => self.prepare_mcp_access(request),
+            crate::agents::jobs::model::ToolScope::Full => self.prepare_mcp_access(request, launch),
             crate::agents::jobs::model::ToolScope::ReadOnly { .. } => None,
         };
         let mut args = claude_stream_args(
@@ -367,6 +367,7 @@ impl ClaudeSupervisor {
     pub(super) fn prepare_mcp_access(
         &self,
         request: &ClaudeTurnRequest,
+        launch: &super::jobs::LaunchPolicy,
     ) -> Option<McpRuntimeAccess> {
         let token = self
             .mcp_tokens
@@ -393,14 +394,17 @@ impl ClaudeSupervisor {
             let executable = crate::providers::claude::notification_hook::validated_executable(
                 &std::env::current_exe()?,
             )?;
-            let settings = json!({"fastMode":request.selection.fast,"hooks":{
+            let mut settings = json!({"fastMode":request.selection.fast,"hooks":{
                 "PreToolUse":crate::providers::claude::notification_hook::hooks(
                     &executable,
                     &config_path,
                     &request.session_uuid,
                 ),
-                "SessionStart":crate::providers::claude::session_context::hooks(&executable),
             }});
+            if launch.job().is_none() {
+                settings["hooks"]["SessionStart"] =
+                    crate::providers::claude::session_context::hooks(&executable);
+            }
             write_private_file(&runtime_settings_path(&config_path), &settings.to_string())?;
             write_private_file(&config_path, &config.to_string())
         })();

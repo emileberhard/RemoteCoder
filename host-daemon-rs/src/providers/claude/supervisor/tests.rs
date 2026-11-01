@@ -456,7 +456,12 @@ fn the_mcp_token_travels_in_a_private_file_never_in_argv() {
     let (_home, agent, tokens) = agent_with_mcp_dir(&dir);
     let turn = request("claude_a", true);
 
-    let access = agent.prepare_mcp_access(&turn).expect("mcp access");
+    let conversation = super::jobs::LaunchPolicy::Conversation {
+        scope: crate::agents::jobs::model::ToolScope::Full,
+    };
+    let access = agent
+        .prepare_mcp_access(&turn, &conversation)
+        .expect("mcp access");
     let args = claude_stream_args(&turn, Some(access.config_path.as_path()));
 
     let position = args
@@ -511,6 +516,28 @@ fn the_mcp_token_travels_in_a_private_file_never_in_argv() {
         fs::metadata(&settings_path).unwrap().permissions().mode() & 0o777,
         0o600
     );
+    let job = super::jobs::LaunchPolicy::Job {
+        handle: crate::providers::claude::conversation_index::job::JobHandle {
+            job_id: crate::agents::jobs::model::JobId::try_from(
+                "agent-claude-2026102720000000000-abcdef12".to_owned(),
+            )
+            .unwrap(),
+            evidence_path: dir.join("evidence.json"),
+        },
+        scope: crate::agents::jobs::model::ToolScope::Full,
+        coordination_socket: dir.join("coordination.sock"),
+    };
+    let delegated = agent.prepare_mcp_access(&turn, &job).expect("mcp access");
+    let delegated_settings: Value = serde_json::from_str(
+        &fs::read_to_string(runtime_settings_path(&delegated.config_path)).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        delegated_settings["hooks"].get("SessionStart").is_none(),
+        "a delegated job's parent is not a chat or voice listener"
+    );
+    assert!(delegated_settings["hooks"].get("PreToolUse").is_some());
+    drop(delegated);
 
     // Dropping the runtime's access is what revokes it — there is no
     // separate cleanup call for a retire path to forget.
