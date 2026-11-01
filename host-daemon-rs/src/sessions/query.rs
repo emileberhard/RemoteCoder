@@ -203,11 +203,6 @@ pub(crate) fn match_thread_suffix(
         !suffix.is_empty() && suffix.len() <= 512,
         "Thread suffix must be 1..=512 UTF-8 bytes"
     );
-    let incomplete: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM source INDEXED BY source_failures WHERE failure IS NOT NULL AND origin_host=?1 AND NOT EXISTS(SELECT 1 FROM session WHERE session.source_id=source.source_id))", [host], |row| row.get(0))?;
-    ensure!(
-        !incomplete,
-        "unavailable: native inventory has rejected sources; use an exact managed identity"
-    );
     let lower: Vec<_> = suffix.bytes().rev().collect();
     let mut upper = lower.clone();
     let last = upper.last_mut().context("Empty thread suffix")?;

@@ -747,8 +747,24 @@ mod tests {
         assert_eq!(page["agents"].as_array().unwrap().len(), 1, "{page}");
         assert_eq!(page["coverage"][0]["state"], "stale");
         assert_eq!(page["warnings"].as_array().unwrap().len(), 2);
-        let error = gateway.resolve_local_agent("needle").await.unwrap_err();
-        assert!(error.to_string().contains("rejected sources"), "{error:#}");
+        let id = metadata["payload"]["id"].as_str().unwrap();
+        let found = gateway
+            .resolve_local_agent(&id[id.len() - 12..])
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(found["threadId"], id);
+        assert_eq!(
+            found["ownerHostId"],
+            gateway.host_identity().await.unwrap().host_id
+        );
+        assert!(
+            gateway
+                .resolve_local_agent("missing")
+                .await
+                .unwrap()
+                .is_none()
+        );
         gateway.stop_sessions().await;
     }
 }

@@ -77,7 +77,7 @@ try {
         host: right.identity.hostId, method: "agent/cluster/resolve",
         request: { target: "missing-native-suffix", local: true }, caller: { kind: "operator" },
     });
-    assert.equal(response.error?.data?.class, "unavailable", JSON.stringify(response));
+    assert.equal(response.error?.data?.class, "not_found", JSON.stringify(response));
     assert.equal((await rpc(left, "cluster/list")).members[0].reachability.state, "reachable");
     const afterError = await rpc(left, "agent/cluster/list", { limit: 100 });
     assert.equal(afterError.agents.length, 2);
