@@ -96,10 +96,10 @@ impl ClaudeSupervisor {
             .ok_or_else(|| std::io::Error::other("claude exited before it could be tracked"))?
             as i32;
         let admission = ProcessAdmission::new(process_group_id, Arc::clone(&self.process_registry));
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         let identity = crate::platform::process::identify(process_group_id)
             .map(|identity| identity.map(|identity| identity.started_micros));
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         let identity: anyhow::Result<Option<u64>> = Ok(None);
         let (reaped, reap_state) = tokio::sync::watch::channel(ReapState::Running);
         let stdin = child.stdin.take();
