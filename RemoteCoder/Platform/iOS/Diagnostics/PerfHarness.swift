@@ -28,6 +28,11 @@ final class PerfHarness {
     private var replayCounter = 0
     private var offlineRun: PerformanceReplayRun?
     private var fixtureControlConsumed = false
+    private weak var drawer: PerformanceReplayDrawerView?
+    private var journeyTask: Task<Void, Never>?
+    private var switchInterval: OSSignpostIntervalState?
+    private var switchAddress: ConversationAddress?
+    private var appearedAddress: ConversationAddress?
 
     private struct StagedReplay {
         let address: ConversationAddress
@@ -99,6 +104,10 @@ final class PerfHarness {
             writeResult(["cmd": "status", "id": id, "status": status()])
         case "sidebar":
             setSidebarOpen(command["open"] as? Bool, commandID: id)
+        case "drawer-drag":
+            dragDrawer(command, commandID: id)
+        case "select-row":
+            selectRow(address(command), commandID: id)
         case "scroll":
             guard let model = workspace?.selectedScreen,
                   let index = command["message"] as? Int, model.messages.indices.contains(index) else {
@@ -190,6 +199,124 @@ final class PerfHarness {
         return workspace
     }
 
+    func installDrawer(_ view: PerformanceReplayDrawerView) {
+        if let drawer, drawer !== view { journeyTask?.cancel() }
+        drawer = view
+    }
+
+    func removeDrawer(_ view: PerformanceReplayDrawerView) {
+        guard drawer === view else { return }
+        journeyTask?.cancel()
+        drawer = nil
+    }
+
+    private enum JourneyFailure: Error {
+        case unavailableDrawer, unavailableWindow, invalidSelection, timedOut
+    }
+
+    func willSelectRow(_ address: ConversationAddress) {
+        if let switchInterval { Self.signposter.endInterval("ConversationSwitch", switchInterval, "superseded") }
+        switchAddress = address
+        appearedAddress = nil
+        switchInterval = Self.signposter.beginInterval("ConversationSwitch", id: Self.signposter.makeSignpostID())
+    }
+
+    func cancelRowSelection() {
+        if let switchInterval { Self.signposter.endInterval("ConversationSwitch", switchInterval, "cancelled") }
+        switchInterval = nil
+        switchAddress = nil
+    }
+
+    func transcriptAppeared(host: UUID, thread: String) {
+        let address = ConversationAddress(hostID: host, threadID: thread)
+        guard switchAddress == address, let switchInterval else { return }
+        Self.signposter.endInterval("ConversationSwitch", switchInterval, "first-content-callback")
+        self.switchInterval = nil
+        switchAddress = nil
+        appearedAddress = address
+    }
+
+    private func runJourney(_ name: String, id: String,
+                            operation: @escaping @MainActor () async throws -> [String: Any]) {
+        let previous = journeyTask
+        previous?.cancel()
+        journeyTask = Task {
+            await previous?.value
+            do {
+                try Task.checkCancellation()
+                var result = try await operation()
+                result["cmd"] = name
+                result["id"] = id
+                result["input"] = "production-callbacks"
+                writeResult(result)
+            } catch {
+                if name == "select-row" { cancelRowSelection() }
+                writeResult(["cmd": name, "id": id, "error": String(describing: error)])
+            }
+        }
+    }
+
+    private func dragDrawer(_ command: [String: Any], commandID: String) {
+        guard let travel = command["travel"] as? Double, travel.isFinite, (-1...1).contains(travel),
+              let seconds = command["seconds"] as? Double, seconds.isFinite, (0.05...5).contains(seconds),
+              let velocity = command["velocity"] as? Double, velocity.isFinite, (-20...20).contains(velocity) else {
+            writeResult(["cmd": "drawer-drag", "id": commandID, "error": "provide travel -1...1, seconds 0.05...5 and velocity -20...20 in drawer widths per second"])
+            return
+        }
+        runJourney("drawer-drag", id: commandID) {
+            guard let view = self.drawer, view.window != nil, view.motion.isAtRest else {
+                throw JourneyFailure.unavailableDrawer
+            }
+            let initial = view.motion.progress
+            var dragging = true
+            defer { if dragging { view.cancel() } }
+            view.begin(view)
+            let clock = ContinuousClock()
+            let start = clock.now
+            let steps = Int(ceil(seconds * 120))
+            var maximumLateness = 0.0
+            for step in 1...steps {
+                let fraction = Double(step) / Double(steps)
+                let deadline = start + .seconds(seconds * fraction)
+                try await clock.sleep(until: deadline)
+                try Task.checkCancellation()
+                guard self.drawer === view, view.window != nil else { throw JourneyFailure.unavailableDrawer }
+                maximumLateness = max(maximumLateness, deadline.duration(to: clock.now) / .milliseconds(1))
+                view.track(CGFloat(travel * fraction))
+            }
+            HapticService.shared.signposter.emitEvent("drawer-gesture-end")
+            view.end(CGFloat(velocity))
+            dragging = false
+            let deadline = clock.now + .seconds(3)
+            while !view.motion.isAtRest {
+                guard clock.now < deadline else { throw JourneyFailure.timedOut }
+                try await Task.sleep(for: .milliseconds(16))
+            }
+            return ["before": initial, "after": view.motion.progress, "travel": travel,
+                    "seconds": seconds, "velocity": velocity, "samples": steps,
+                    "maximumInputLatenessMs": maximumLateness]
+        }
+    }
+
+    private func selectRow(_ address: ConversationAddress?, commandID: String) {
+        runJourney("select-row", id: commandID) {
+            guard let address, let window = self.workspace?.keyWindow,
+                  let commands = window.performanceSidebar, commands.isOpen else {
+                throw JourneyFailure.unavailableWindow
+            }
+            guard !self.isOpen(address) else { throw JourneyFailure.invalidSelection }
+            let outcome = commands.select(address)
+            guard outcome == .changed else { throw JourneyFailure.invalidSelection }
+            let deadline = ContinuousClock.now + .seconds(30)
+            while !self.hasLoaded(address) || self.appearedAddress != address || window.isHistoryDrawerOpen || self.drawer?.motion.isAtRest == false {
+                guard ContinuousClock.now < deadline else { throw JourneyFailure.timedOut }
+                try await Task.sleep(for: .milliseconds(16))
+            }
+            return ["host": address.hostID.uuidString, "thread": address.threadID,
+                    "loaded": true, "drawerClosed": true]
+        }
+    }
+
     private func status() -> [String: Any] {
         guard let workspace else { return [:] }
         let model = workspace.selectedScreen
@@ -230,33 +357,24 @@ final class PerfHarness {
     }
 
     private func setSidebarOpen(_ requested: Bool?, commandID: String) {
-        guard let requested, let window = workspace?.keyWindow else {
-            writeResult(["cmd": "sidebar", "id": commandID, "error": "provide open with an available window"])
-            return
-        }
-        Task {
-            let deadline = ContinuousClock.now + .seconds(2)
+        runJourney("sidebar", id: commandID) {
+            guard let requested, let window = self.workspace?.keyWindow else {
+                throw JourneyFailure.unavailableWindow
+            }
+            let deadline = ContinuousClock.now + .seconds(3)
             while window.performanceSidebar == nil {
-                guard ContinuousClock.now < deadline,
-                      (try? await Task.sleep(for: .milliseconds(16))) != nil else {
-                    writeResult(["cmd": "sidebar", "id": commandID, "error": "window commands unavailable"])
-                    return
-                }
+                guard ContinuousClock.now < deadline else { throw JourneyFailure.timedOut }
+                try await Task.sleep(for: .milliseconds(16))
             }
-            guard let commands = window.performanceSidebar else {
-                writeResult(["cmd": "sidebar", "id": commandID, "error": "window commands unavailable"])
-                return
-            }
+            guard let commands = window.performanceSidebar else { throw JourneyFailure.unavailableWindow }
             let previous = commands.isOpen
             if previous != requested { commands.toggle() }
-            while window.performanceSidebar?.isOpen != requested || window.isHistoryDrawerOpen != requested {
-                guard ContinuousClock.now < deadline,
-                      (try? await Task.sleep(for: .milliseconds(16))) != nil else {
-                    writeResult(["cmd": "sidebar", "id": commandID, "error": "sidebar presentation did not change"])
-                    return
-                }
+            while window.performanceSidebar?.isOpen != requested || window.isHistoryDrawerOpen != requested
+                    || self.drawer?.motion.isAtRest == false {
+                guard ContinuousClock.now < deadline else { throw JourneyFailure.timedOut }
+                try await Task.sleep(for: .milliseconds(16))
             }
-            writeResult(["cmd": "sidebar", "id": commandID, "before": previous, "after": requested])
+            return ["before": previous, "after": requested]
         }
     }
 

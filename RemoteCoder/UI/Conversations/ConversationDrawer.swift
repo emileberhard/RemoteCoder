@@ -60,6 +60,12 @@ struct ConversationDrawer<Content: View, Sidebar: View>: View {
                 onEnded: { velocity in endDragging(velocity: velocity * direction / max(width, 1)) },
                 onCancelled: cancelDragging
             ))
+            #if RC_PERF_HARNESS
+            .background {
+                PerformanceReplayDrawerPublisher(motion: motion, begin: beginDragging,
+                    track: motion.track, end: endDragging, cancel: cancelDragging)
+            }
+            #endif
         }
         .background { ThemedSheetBackground() }
         .onChange(of: isOpen) { _, open in
@@ -136,9 +142,17 @@ final class DrawerMotion {
     @ObservationIgnored private var velocity: CGFloat = 0
     @ObservationIgnored private var displayLink: CADisplayLink?
     @ObservationIgnored private var frameTimestamp: CFTimeInterval?
+    #if RC_PERF_HARNESS
+    @ObservationIgnored private var motionInterval: OSSignpostIntervalState?
+    @ObservationIgnored private var springInterval: OSSignpostIntervalState?
+    #endif
 
     private static let spring = Spring(duration: 0.2, bounce: 0)
     private static let releaseProjectionSeconds: CGFloat = 0.3
+
+    #if RC_PERF_HARNESS
+    var isAtRest: Bool { dragOrigin == nil && displayLink == nil }
+    #endif
 
     init(isOpen: Bool) {
         let resting: CGFloat = isOpen ? 1 : 0
@@ -152,6 +166,9 @@ final class DrawerMotion {
 
     func beginTracking() {
         stopSettling()
+        #if RC_PERF_HARNESS
+        motionInterval = PerfHarness.signposter.beginInterval("DrawerMotion", id: PerfHarness.signposter.makeSignpostID())
+        #endif
         dragOrigin = progress
     }
 
@@ -204,6 +221,12 @@ final class DrawerMotion {
             return
         }
         guard displayLink == nil else { return }
+        #if RC_PERF_HARNESS
+        if motionInterval == nil {
+            motionInterval = PerfHarness.signposter.beginInterval("DrawerMotion", id: PerfHarness.signposter.makeSignpostID())
+        }
+        springInterval = PerfHarness.signposter.beginInterval("DrawerSpring", id: PerfHarness.signposter.makeSignpostID())
+        #endif
         let link = CADisplayLink(target: DrawerFrameTarget(motion: self), selector: #selector(DrawerFrameTarget.step(_:)))
         link.preferredFrameRateRange = CAFrameRateRange(minimum: 80, maximum: 120, preferred: 120)
         link.add(to: .main, forMode: .common)
@@ -211,6 +234,12 @@ final class DrawerMotion {
     }
 
     private func stopSettling() {
+        #if RC_PERF_HARNESS
+        if let springInterval { PerfHarness.signposter.endInterval("DrawerSpring", springInterval) }
+        if let motionInterval { PerfHarness.signposter.endInterval("DrawerMotion", motionInterval) }
+        springInterval = nil
+        motionInterval = nil
+        #endif
         displayLink?.invalidate()
         displayLink = nil
         frameTimestamp = nil
