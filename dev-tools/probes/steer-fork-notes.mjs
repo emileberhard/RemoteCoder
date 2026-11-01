@@ -49,6 +49,50 @@ async function records(directory) {
     return found;
 }
 
+function probeIds(output) {
+    return {
+        source: output.match(/passed source=(\S+)/)?.[1],
+        whole: output.match(/whole=(\S+)/)?.[1],
+        sourceTurn: output.match(/PASS source turn 2:.* turn=(\S+)/)?.[1],
+        firstForkTurn: output.match(/PASS fork note model context:.* turn=(\S+)/)?.[1],
+        laterSteeredTurn: output.match(/PASS later steered turn:.* turn=(\S+)/)?.[1],
+    };
+}
+
+function claudeUsage(records, thread) {
+    const usage = records.filter(({ file }) => file.endsWith(`/${thread?.replace(/^claude_/, "")}.jsonl`))
+        .findLast(({ record }) => record.type === "assistant" && record.message?.usage)?.record.message.usage;
+    return usage ? {
+        input_tokens: usage.input_tokens ?? null,
+        cache_read_input_tokens: usage.cache_read_input_tokens ?? null,
+        cache_creation_input_tokens: usage.cache_creation_input_tokens ?? null,
+    } : null;
+}
+
+function codexUsage(records, thread, turn) {
+    const file = records.find(({ record }) => record.type === "session_meta" && record.payload?.id === thread)?.file;
+    let total, baseline, last, active;
+    for (const entry of records.filter(entry => entry.file === file)) {
+        const { record } = entry;
+        const payload = record.payload;
+        if (record.type !== "event_msg") continue;
+        if (["task_started", "turn_started"].includes(payload?.type)) {
+            active = payload.turn_id;
+            if (active === turn) baseline = total;
+        }
+        if (payload?.type === "token_count" && payload.info) {
+            total = payload.info.total_token_usage;
+            if (active === turn) last = { total, response: payload.info.last_token_usage };
+        }
+    }
+    if (!last) return null;
+    return {
+        turn: Object.fromEntries(["input_tokens", "cached_input_tokens"].map(key =>
+            [key, last.total[key] - (baseline?.[key] ?? 0)])),
+        lastResponse: last.response,
+    };
+}
+
 try {
     const values = Object.fromEntries((await readFile(join(lab.realHome, ".remote-coder/codex-gateway.env"), "utf8"))
         .split("\n").flatMap(line => {
@@ -93,9 +137,17 @@ try {
     assert.equal(prompt[0].text, "Instead reply with only STEERED.");
     assert(prompt[1].text.startsWith("<remotecoder_note>\nRemoteCoder note:"));
     assert(!JSON.stringify(prompt).includes("INTERACTION_MODE_MUST_STAY_CODEX_ONLY"));
-    await run("gateway-e2e-claude-fork-live", ["e2e-fork-live", "--provider", "claude", "--model", "sonnet", "--cwd", lab.path("work")]);
+    const claudeFork = await run("gateway-e2e-claude-fork-live", ["e2e-fork-live", "--provider", "claude", "--model", "sonnet", "--cwd", lab.path("work")]);
+    const claudeIds = probeIds(claudeFork);
+    const claudeHistory = await records(lab.path(".claude/projects"));
+    receipt.cacheUsage = { claude: {
+        sourceLastTurn: { threadId: claudeIds.source, turnId: claudeIds.sourceTurn, usage: claudeUsage(claudeHistory, claudeIds.source) },
+        firstForkTurn: { threadId: claudeIds.whole, turnId: claudeIds.firstForkTurn, usage: claudeUsage(claudeHistory, claudeIds.whole) },
+    } };
+    console.log(JSON.stringify({ cacheUsage: receipt.cacheUsage }));
     const fork = await run("gateway-e2e-fork-live", ["e2e-fork-live", "--model", "gpt-6.1-sol", "--cwd", lab.path("work")]);
-    const forkId = fork.match(/fork=([^\s]+)/g)?.at(-1)?.slice(5);
+    const codexIds = probeIds(fork);
+    const forkId = codexIds.whole;
     const native = await records(join(lab.nativeDefault, "sessions"));
     const forkFile = native.find(({ record }) => record.type === "session_meta" && record.payload?.id === forkId)?.file;
     assert(forkFile, "No rollout for the client-forked Codex thread");
@@ -106,6 +158,12 @@ try {
     const nextUser = rollout.findIndex((record, index) => index > injected && record.type === "response_item" && record.payload?.role === "user");
     assert(nextUser > injected, "Fork note did not precede the first new user input");
     receipt.codexInjection = { threadId: forkId, checkpointedDeveloperNote: true, precedesNewUserInput: true };
+    receipt.cacheUsage.codex = {
+        sourceLastTurn: { threadId: codexIds.source, turnId: codexIds.sourceTurn, usage: codexUsage(native, codexIds.source, codexIds.sourceTurn) },
+        firstForkTurn: { threadId: forkId, turnId: codexIds.firstForkTurn, usage: codexUsage(native, forkId, codexIds.firstForkTurn) },
+        laterSteeredTurn: { threadId: forkId, turnId: codexIds.laterSteeredTurn, usage: codexUsage(native, forkId, codexIds.laterSteeredTurn) },
+    };
+    console.log(JSON.stringify({ cacheUsage: receipt.cacheUsage }));
 } catch (error) {
     failure = error;
     receipt.error = String(error.message);
