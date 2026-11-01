@@ -52,6 +52,7 @@ with p.source_lease(), p.device_lease(args.device), contextlib.ExitStack() as cl
     time.sleep(3)
     p.stage_scenario(device, fixture, json.loads(fixture.read_text()))
     send(device, {'cmd': 'scenario-load'}, 120)
+    cleanup.callback(lambda: send(device, {'cmd': 'scenario-stop'}, 120))
     send(device, {'cmd': 'status'})
     with pt.exclusive_host():
         trace = pt.new_trace(args.label)
