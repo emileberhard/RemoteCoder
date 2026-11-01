@@ -255,7 +255,20 @@ impl Store {
         handle: Option<&JobHandle>,
         submit: impl FnOnce(Option<String>) -> std::io::Result<T> + Send + 'static,
     ) -> Result<std::io::Result<T>> {
+        let file = super::fork_note_path(&self.home, thread);
+        let pending = match tokio::fs::symlink_metadata(file).await {
+            Ok(_) => true,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+            Err(error) => return Err(error.into()),
+        };
         let (home, id) = (self.home.clone(), thread.to_owned());
+        let submit = move || {
+            if pending {
+                super::with_fork_note(&home, &id, submit)
+            } else {
+                Ok(submit(None))
+            }
+        };
         if let Some(handle) = handle {
             self.transact_job(thread, handle, move |saved| {
                 let saved = saved.as_ref().context("Claude job evidence is missing")?;
@@ -263,12 +276,14 @@ impl Store {
                     matches!(saved.phase, JobPhase::Executing),
                     "Claude job no longer admits input"
                 );
-                super::with_fork_note(&home, &id, submit)
+                submit()
             })
             .await
-        } else {
+        } else if pending {
             let guard = self.thread(thread).await.lock_owned().await;
-            super::under_guards(guard, move |_| super::with_fork_note(&home, &id, submit)).await?
+            super::under_guards(guard, move |_| submit()).await?
+        } else {
+            submit()
         }
     }
 

@@ -829,15 +829,15 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         let feedback = target.feedbackForCurrentConversation()
         let conversationID = currentConversationID
         let sessionID = activeSessionID
-        let activeTurn = sessionID.flatMap { target.turns.turn(forThread: $0) }
         // A send that lands in an already-running turn is a steer, not a new turn.
-        let isSteering = activeTurn != nil
-        let steerContext = activeTurn.map { turn in
-            SteerContext.capture(in: streamItems, turnID: GatewayNotificationRouting.normalizeTurnID(turn.turnID)) { message in
+        let steering = sessionID.flatMap { target.turns.turn(forThread: $0) }.map { turn in
+            let context = SteerContext.capture(in: streamItems, turnID: turn.turnID) { message in
                 guard let rendered = renderedMessages[message.id] else { return "" }
                 return message.markdownSource(rendered: rendered)
             }
+            return (turn: turn, context: context)
         }
+        let isSteering = steering != nil
         var outgoing: ComposerDraftStore.OutgoingMessage?
         if questionReplies == nil {
             guard let message = drafts.beginSending(draft) else { throw CancellationError() }
@@ -853,7 +853,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
             attachments: prepared.attachments,
             inlineContent: prepared.inline,
             wasSteered: isSteering,
-            canonicalTurnID: isSteering ? activeTurn?.turnID : nil,
+            canonicalTurnID: steering?.turn.turnID,
             questionReplies: questionReplies
         )
         let session = await conversations.session(conversationID: conversationID, threadID: sessionID)
@@ -875,8 +875,8 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         let submission = TurnDispatcher.Submission(
             draft: draft, conversationID: conversationID, userMessageID: userMessage.id, input: prepared.text,
             interactionMode: interactionMode, settings: settings)
-        if let activeTurn {
-            target.dispatcher.steer(submission, activeTurn: activeTurn, context: steerContext ?? SteerContext.note(shownText: nil))
+        if let steering {
+            target.dispatcher.steer(submission, activeTurn: steering.turn, context: steering.context)
         } else {
             target.dispatcher.startTurn(submission, sessionID: sessionID)
         }

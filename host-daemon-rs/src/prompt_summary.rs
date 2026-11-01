@@ -7,6 +7,9 @@ pub(crate) const MARKER_PREFIX: &str = "remotecoder_";
 pub(crate) const REMOTE_CODER_NOTE_START: &str = "<remotecoder_note>";
 pub(crate) const REMOTE_CODER_NOTE_END: &str = "</remotecoder_note>";
 
+pub(crate) const ATTACHED_FILES_HEADER: &str =
+    "Attached files (uploaded to this host; use these absolute paths):\n";
+
 pub(crate) fn without_remote_coder_note(text: &str) -> &str {
     let trimmed = text.trim_end();
     let Some(body) = trimmed.strip_suffix(REMOTE_CODER_NOTE_END) else {
@@ -21,9 +24,6 @@ pub(crate) fn without_remote_coder_note(text: &str) -> &str {
         text
     }
 }
-
-pub(crate) const ATTACHED_FILES_HEADER: &str =
-    "Attached files (uploaded to this host; use these absolute paths):\n";
 
 pub(crate) fn prompt_summary(text: &str) -> Cow<'_, str> {
     const START: &str = "<remotecoder_pasted_text_v1>\n";

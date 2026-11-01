@@ -265,7 +265,7 @@ fn minted_path(home: &Path, thread_id: &str) -> PathBuf {
 }
 
 fn fork_note_path(home: &Path, thread_id: &str) -> PathBuf {
-    minted_path(home, thread_id).with_extension("fork-note")
+    path(home, thread_id).with_extension("fork-note")
 }
 
 fn with_fork_note<T>(

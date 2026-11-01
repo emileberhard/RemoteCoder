@@ -13,7 +13,7 @@ enum SteerContext {
         var tail = suffix.suffix(tailCharacterLimit)
         if suffix.count > tailCharacterLimit, let preceding = suffix.first, !preceding.isWhitespace,
            tail.first?.isWhitespace == false {
-            tail = tail.firstIndex(where: \.isWhitespace).map { tail[$0...] } ?? tail[tail.endIndex...]
+            tail = tail.firstIndex(where: \.isWhitespace).map { tail[$0...] } ?? tail
         }
         let excerpt = tail.trimmingCharacters(in: .whitespacesAndNewlines)
         return prefix + "the last of your output on their screen ended with: \"…\(excerpt)\". They had not seen anything you wrote after that."

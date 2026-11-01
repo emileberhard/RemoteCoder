@@ -12,6 +12,8 @@ struct SteerContextTests {
         #expect(excerpt.count <= 600)
         #expect(excerpt.hasPrefix("older "))
         #expect(!note.contains(text))
+        let unbroken = SteerContext.note(shownText: String(repeating: "x", count: 900))
+        #expect(unbroken.contains("\"…" + String(repeating: "x", count: 600) + "\""))
     }
 
     @Test

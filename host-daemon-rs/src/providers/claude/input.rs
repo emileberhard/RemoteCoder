@@ -21,15 +21,11 @@ pub(crate) struct ClaudeUserInput {
     pub client_id: Option<String>,
     pub text: String,
     pub images: Vec<ClaudeImage>,
-    #[serde(default, skip_serializing_if = "empty_context_note")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_note: Option<String>,
     pub(super) is_synthetic: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) notice: Option<Box<crate::providers::claude::restart::Item>>,
-}
-
-fn empty_context_note(note: &Option<String>) -> bool {
-    note.as_ref().is_none_or(String::is_empty)
 }
 
 impl ClaudeUserInput {

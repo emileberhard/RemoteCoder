@@ -300,6 +300,15 @@ fn historical_id_capacity_identity_records_refuse_keys_before_map_insertion() {
 async fn a_refused_input_keeps_the_fork_note_for_the_next_admitted_input() {
     let home = tempfile::tempdir().unwrap();
     let store = Store::new(home.path().to_owned());
+    assert!(
+        store
+            .admit_input("claude_plain", None, Ok)
+            .await
+            .unwrap()
+            .unwrap()
+            .is_none()
+    );
+    assert!(!home.path().join("remotecoder-history").exists());
     store
         .record_fork_note("claude_fork", "RemoteCoder note: fork facts.".to_owned())
         .await
