@@ -11,7 +11,6 @@ struct SlideToConfirmButton<Face: View>: View {
     @ViewBuilder let face: () -> Face
 
     @State private var phase: SlidePhase = .idle
-    @State private var isPressed = false
     @State private var owner = UUID()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
@@ -37,7 +36,6 @@ struct SlideToConfirmButton<Face: View>: View {
                                onEvent: handle, onActivate: confirm)
             }
             .zIndex(phase == .idle ? 0 : 1)
-            .appPressFeedback(.iconPress, isPressed: isPressed)
             .onChange(of: scenePhase) { if scenePhase != .active { cancel() } }
             .onChange(of: isEnabled) { if !isEnabled { cancel() } }
             .onDisappear { cancel() }
@@ -91,7 +89,7 @@ struct SlideToConfirmButton<Face: View>: View {
         guard isEnabled, scenePhase == .active else { return cancel() }
         switch event {
         case .contact:
-            isPressed = true
+            HapticService.shared.play(.iconPress)
             HapticService.shared.beginInteraction(owner: owner)
             settle(to: .tracking(distance: 0, armed: false))
         case .drag(let distance):
@@ -105,7 +103,6 @@ struct SlideToConfirmButton<Face: View>: View {
         case .release(let distance, let upwardSpeed):
             let flicked = distance >= Self.flickDistance && upwardSpeed >= Self.flickSpeed
             guard phase != .idle, phase.isArmed || flicked else { return cancel() }
-            isPressed = false
             HapticService.shared.playInteraction(.commit, owner: owner)
             HapticService.shared.finishInteraction(owner: owner)
             settle(to: .idle)
@@ -121,7 +118,6 @@ struct SlideToConfirmButton<Face: View>: View {
     }
 
     private func cancel() {
-        isPressed = false
         HapticService.shared.cancelInteraction(owner: owner)
         if phase != .idle { settle(to: .idle) }
     }

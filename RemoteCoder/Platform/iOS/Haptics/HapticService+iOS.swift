@@ -1,6 +1,5 @@
 import CoreHaptics
 import SwiftUI
-import os
 import UIKit
 
 extension HapticService {
@@ -8,25 +7,12 @@ extension HapticService {
         defaults: .standard,
         supportsHaptics: CHHapticEngine.capabilitiesForHardware().supportsHaptics,
         isActive: { UIApplication.shared.applicationState == .active },
-        makeInteractionPlayer: { PreparedHapticPlayer() },
+        makeInteractionPlayer: { PreparedHapticPlayer(native: $0) },
         makeStreamingPlayer: { PreparedStreamingHapticPlayer() }
     )
 
     func beginSelectionInteraction(owner: UUID, in view: UIView) {
         beginInteraction(owner: owner) { PreparedSelectionPlayer(view: view) }
-    }
-
-    /// Touch feedback stays on the control's SwiftUI transaction, without a second state hop.
-    func feedbackForInteraction(_ event: HapticEvent) -> SensoryFeedback? {
-        guard accept(event) else { return nil }
-        signposter.emitEvent("feedback-api-request", "\(event.rawValue, privacy: .public) control-press")
-        return event.recipe(for: strength).feedback
-    }
-
-    func feedback(for pulse: HapticPulse?) -> SensoryFeedback? {
-        guard let pulse, canPlay(pulse.event), pulse.strength == strength, pulse.isFresh(at: .now) else { return nil }
-        signposter.emitEvent("feedback-api-request", "\(pulse.event.rawValue, privacy: .public)")
-        return pulse.event.recipe(for: pulse.strength).feedback
     }
 
     func copy(_ text: String) {
@@ -35,37 +21,38 @@ extension HapticService {
     }
 }
 
-extension HapticRecipe {
-    var feedback: SensoryFeedback {
-        switch self {
-        case let .impact(.light, intensity): .impact(weight: .light, intensity: intensity)
-        case let .impact(.medium, intensity): .impact(weight: .medium, intensity: intensity)
-        case let .impact(.rigid, intensity): .impact(flexibility: .rigid, intensity: intensity)
-        case let .impact(.soft, intensity): .impact(flexibility: .soft, intensity: intensity)
-        case .selection: .selection
-        case .success: .success
-        case .warning: .warning
-        case .error: .error
-        }
-    }
-}
-
-/// App-lifetime output survives a button/card/sheet disappearing after local acceptance.
-struct HapticOutput: View {
+struct HapticAttachment: UIViewRepresentable {
     var service: HapticService = .shared
-    let voiceCall: VoiceCall
-    @Environment(\.scenePhase) private var scenePhase
 
-    var body: some View {
-        Color.clear
-            .frame(width: 0, height: 0)
-            .accessibilityHidden(true)
-            .allowsHitTesting(false)
-            .sensoryFeedback(trigger: service.pulse) { _, pulse in service.feedback(for: pulse) }
-            .onChange(of: scenePhase) { if scenePhase != .active { service.cancelPlayback() } }
-            .onChange(of: voiceCall.isActive) { _, active in
-                if active { service.cancelPlayback() }
-            }
-            .onDisappear { service.cancelPlayback() }
+    func makeUIView(context: Context) -> AttachmentView { AttachmentView(service: service) }
+    func updateUIView(_ view: AttachmentView, context: Context) {}
+    static func dismantleUIView(_ view: AttachmentView, coordinator: ()) { view.detach() }
+
+    final class AttachmentView: UIView {
+        private let service: HapticService
+        private var player: ViewHapticPlayer?
+
+        init(service: HapticService) {
+            self.service = service
+            super.init(frame: .zero)
+            isUserInteractionEnabled = false
+            isAccessibilityElement = false
+        }
+
+        required init?(coder: NSCoder) { nil }
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            detach()
+            guard let window else { return }
+            let player = ViewHapticPlayer(view: window)
+            self.player = player
+            service.attach(player)
+        }
+
+        func detach() {
+            if let player { service.detach(player) }
+            player = nil
+        }
     }
 }

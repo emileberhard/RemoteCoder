@@ -1548,7 +1548,13 @@ entrypoint linked above.
   behavior, audio policy, Standard/Strong tuning, the device comparison page and
   verification. All app feedback goes through `HapticService` and the
   `HapticEvent` / `StreamingHapticRecipe` catalogs; do not add raw generators
-  or per-screen pattern constants. Streaming word marks belong to
+  or per-screen pattern constants. Semantic events submit synchronously through
+  the service's window-attached native pool, shared with gesture players. Root
+  attachment teardown is identity-fenced and removes retained UIInteractions;
+  never add an observable pulse, sensory-feedback hop or keep-warm timer.
+  Native contact callbacks play before gesture accent preparation; SwiftUI
+  buttons dispatch directly from their native isPressed transition.
+  Streaming word marks belong to
   `RenderedMessageStore`, driven by the existing reveal-cover ticks through a
   stateless handle. `HapticService` owns global cadence and a separate streaming
   player. Ineligible frames discard pending marks; no replay, extra clock or

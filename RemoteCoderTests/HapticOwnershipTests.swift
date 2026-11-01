@@ -10,20 +10,20 @@ struct HapticOwnershipTests {
         fixture.model.setPresentation(TargetPresentation(presented: true))
         let first = fixture.model.target.feedbackForCurrentConversation()
         first(.commit)
-        #expect(fixture.haptics.service.pulse?.event == .commit)
-        let before = fixture.haptics.service.pulse?.id
+        #expect(fixture.haptics.native.events.last == HapticEvent.commit.recipe(for: .strong))
+        let before = fixture.haptics.native.events
         fixture.model.setPresentation(TargetPresentation(presented: false))
         fixture.model.setPresentation(TargetPresentation(presented: true))
         first(.error)
-        #expect(fixture.haptics.service.pulse?.id == before)
+        #expect(fixture.haptics.native.events == before)
         let second = fixture.model.target.feedbackForCurrentConversation()
         fixture.model.startNewConversation()
         second(.success)
-        #expect(fixture.haptics.service.pulse?.id == before)
+        #expect(fixture.haptics.native.events == before)
         let third = fixture.model.target.feedbackForCurrentConversation()
         fixture.model.target.beginRetirement()
         third(.success)
-        #expect(fixture.haptics.service.pulse?.id == before)
+        #expect(fixture.haptics.native.events == before)
     }
 
     @Test(arguments: [
@@ -36,10 +36,10 @@ struct HapticOwnershipTests {
         fixture.model.setActiveSessionID("claude_test")
         let event = try completion(thread: "claude_test", status: status)
         await fixture.model.target.apply(gatewayEvent: event)
-        #expect(fixture.haptics.service.pulse?.event == expected)
-        let before = fixture.haptics.service.pulse?.id
+        #expect(fixture.haptics.native.events.last == expected?.recipe(for: .strong))
+        let before = fixture.haptics.native.events
         await fixture.model.target.apply(gatewayEvent: event)
-        #expect(fixture.haptics.service.pulse?.id == before)
+        #expect(fixture.haptics.native.events == before)
     }
 
     @Test func replayAndHiddenHostCompletionRemainSilent() async throws {
@@ -47,10 +47,10 @@ struct HapticOwnershipTests {
         defer { await fixture.cleanUp() }
         fixture.model.setActiveSessionID("claude_test")
         await fixture.model.target.apply(gatewayEvent: try completion(thread: "claude_test", status: "completed"))
-        #expect(fixture.haptics.service.pulse == nil)
+        #expect(fixture.haptics.native.events.isEmpty)
         fixture.model.setPresentation(TargetPresentation(presented: true))
         await fixture.model.target.apply(gatewayEvent: try completion(thread: "claude_test", status: "completed", turn: "2"), replay: true)
-        #expect(fixture.haptics.service.pulse == nil)
+        #expect(fixture.haptics.native.events.isEmpty)
     }
 
     @Test func attachmentFeedbackCannotFollowADifferentDraft() async throws {
@@ -62,7 +62,7 @@ struct HapticOwnershipTests {
         let feedback = fixture.model.attachmentFeedback(for: draft)
         fixture.model.startNewConversation()
         feedback(.commit)
-        #expect(fixture.haptics.service.pulse == nil)
+        #expect(fixture.haptics.native.events.isEmpty)
     }
 
     @Test(arguments: [true, false])
@@ -80,15 +80,15 @@ struct HapticOwnershipTests {
         } else {
             await fixture.model.target.apply(gatewayEvent: event)
         }
-        let first = try #require(fixture.haptics.service.pulse)
-        #expect(first.event == .success)
+        let first = fixture.haptics.native.events
+        #expect(first == [HapticEvent.success.recipe(for: .strong)])
         if directFirst {
             await fixture.model.target.apply(gatewayEvent: event)
         } else {
             fixture.model.target.reportTurnFeedback(threadID: "claude_test", turnID: "turn-1",
                                              outcome: .completed, replay: false, feedback: feedback)
         }
-        #expect(fixture.haptics.service.pulse?.id == first.id)
+        #expect(fixture.haptics.native.events == first)
     }
 
     @Test func unknownOutcomeDoesNotConsumeALaterAuthoritativeResult() async {
@@ -99,10 +99,10 @@ struct HapticOwnershipTests {
         let feedback = fixture.model.target.feedbackForCurrentConversation()
         fixture.model.target.reportTurnFeedback(threadID: "claude_test", turnID: "1",
                                          outcome: .unknown, replay: false, feedback: feedback)
-        #expect(fixture.haptics.service.pulse == nil)
+        #expect(fixture.haptics.native.events.isEmpty)
         fixture.model.target.reportTurnFeedback(threadID: "claude_test", turnID: "1",
                                          outcome: .failed, replay: false, feedback: feedback)
-        #expect(fixture.haptics.service.pulse?.event == .error)
+        #expect(fixture.haptics.native.events.last == HapticEvent.error.recipe(for: .strong))
     }
 
     private func completion(thread: String, status: String, turn: String = "1") throws -> RoutedGatewayEvent {

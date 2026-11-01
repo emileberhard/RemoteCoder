@@ -18,8 +18,9 @@ class HapticLintTests(unittest.TestCase):
     def test_shared_component_and_semantic_feedback_are_allowed(self):
         self.assertEqual([], CHECK(Path("RemoteCoder/UI/NewFeature.swift"), 'AppMenu { Text("Go") }; HapticService.shared.play(.commit)'))
         self.assertEqual([], CHECK(Path("Moved/Menu.swift"), 'struct AppMenu<Label: View, Content: View> { let menu = Menu { Text("Go") } }'))
-        self.assertEqual([], CHECK(Path("Moved/Player.swift"), 'final class PreparedHapticPlayer { let impact = UIImpactFeedbackGenerator() }'))
-        self.assertEqual([], CHECK(Path("Moved/HapticService+Shared.swift"), 'extension HapticService { func f() -> SensoryFeedback? { nil } }'))
+        self.assertEqual([], CHECK(Path("Moved/Player.swift"), 'final class PreparedHapticPlayer { let engine = CHHapticEngine() }'))
+        self.assertEqual([], CHECK(Path("Moved/HapticService+Shared.swift"), 'extension HapticService { let supports = CHHapticEngine.capabilitiesForHardware() }'))
+        self.assertEqual([], CHECK(Path("Moved/Native.swift"), 'final class ViewHapticPlayer { let impact = UIImpactFeedbackGenerator(view: view) }'))
         self.assertTrue(CHECK(Path("RemoteCoder/UI/DesignSystem/AppMenu.swift"), 'let menu = Menu { Text("Go") }'))
         self.assertTrue(CHECK(Path("RemoteCoder/Platform/iOS/Haptics/Player.swift"), 'UIImpactFeedbackGenerator()'))
 
@@ -31,6 +32,11 @@ class HapticLintTests(unittest.TestCase):
         for source in ('UIImpactFeedbackGenerator()', 'view.sensoryFeedback(.impact, trigger: value)', 'CHHapticEngine()', 'let effect: SensoryFeedback = .success'):
             with self.subTest(source=source):
                 self.assertTrue(CHECK(Path("RemoteCoder/UI/NewFeature.swift"), source))
+
+    def test_sensory_feedback_cannot_restore_a_second_dispatch_path(self):
+        for owner in ("extension HapticService", "final class ViewHapticPlayer", "struct AppPressFeedback"):
+            with self.subTest(owner=owner):
+                self.assertTrue(CHECK(Path("Moved/Feedback.swift"), owner + " { view.sensoryFeedback(.selection, trigger: value) }"))
 
     def test_comments_and_strings_do_not_trigger_the_guard_and_lines_are_preserved(self):
         source = '// Menu { }\nlet label = "Menu UIImpactFeedbackGenerator"\n/* Menu\nCHHapticEngine */\nMenu { }'

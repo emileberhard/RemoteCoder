@@ -52,9 +52,7 @@ extension HapticAccent {
 @MainActor
 final class PreparedHapticPlayer: HapticInteractionPlaying {
     var hasActiveAccent: Bool { activePlayer != nil && ready }
-    private var impacts: [HapticRecipe.Impact: UIImpactFeedbackGenerator] = [:]
-    private var selection: UISelectionFeedbackGenerator?
-    private var notification: UINotificationFeedbackGenerator?
+    private let native: any HapticNativePlaying
     private var engine: CHHapticEngine?
     private var players: [HapticAccent: any CHHapticPatternPlayer] = [:]
     private var activePlayer: (any CHHapticPatternPlayer)?
@@ -63,21 +61,16 @@ final class PreparedHapticPlayer: HapticInteractionPlaying {
     private var ending = false
     private var strength: HapticStrength = .standard
     private var canPlay: @MainActor () -> Bool = { false }
-    private let logger = AppLogger(category: "Haptics")
     private let debugLogger = Logger(subsystem: AppLogger.subsystem, category: "Haptics")
+
+    init(native: any HapticNativePlaying) { self.native = native }
 
     func prepare(strength: HapticStrength, canPlay: @escaping @MainActor () -> Bool) {
         self.strength = strength
         self.canPlay = canPlay
         guard !ending, canPlay() else { return }
         for event in [HapticEvent.buttonPress, .selection, .commit, .sliderStep, .sliderGrab, .lift, .sliderMinimum, .sliderMaximum, .sliderRelease, .sliderSettle] {
-            switch event.recipe(for: strength) {
-            case let .impact(style, _): impact(for: style).prepare()
-            case .selection:
-                selection = UISelectionFeedbackGenerator()
-                selection?.prepare()
-            default: break
-            }
+            native.prepare(event.recipe(for: strength))
         }
         prepareCustomEngine()
     }
@@ -92,6 +85,7 @@ final class PreparedHapticPlayer: HapticInteractionPlaying {
         }
         if let accent = event.accent(for: strength), ready, let player = players[accent] {
             do {
+                OSSignposter(subsystem: "RemoteCoder", category: "Haptics").emitEvent("feedback-api-request", "custom-accent")
                 try player.start(atTime: CHHapticTimeImmediate)
                 activePlayer = player
                 return
@@ -99,28 +93,13 @@ final class PreparedHapticPlayer: HapticInteractionPlaying {
                 debugLogger.debug("Haptic accent unavailable; using native impact: \(error.localizedDescription, privacy: .public)")
             }
         }
-        switch event.recipe(for: strength) {
-        case let .impact(style, intensity):
-            let generator = impact(for: style)
-            generator.impactOccurred(intensity: intensity)
-            generator.prepare()
-        case .selection:
-            if selection == nil { selection = UISelectionFeedbackGenerator() }
-            selection?.selectionChanged()
-            selection?.prepare()
-        case .success, .warning, .error:
-            if notification == nil { notification = UINotificationFeedbackGenerator() }
-            notification?.notificationOccurred(event == .success ? .success : event == .warning ? .warning : .error)
-        }
+        native.play(event.recipe(for: strength))
     }
 
     /// Let the finite seating accent finish before releasing its engine.
     func finish() {
         guard !ending else { return }
         ending = true
-        impacts.removeAll()
-        selection = nil
-        notification = nil
         guard let engine, ready, activePlayer != nil else { cancel(); return }
         engine.notifyWhenPlayersFinished { [weak self] _ in
             Task { @MainActor in self?.cancel() }
@@ -130,18 +109,8 @@ final class PreparedHapticPlayer: HapticInteractionPlaying {
 
     func cancel() {
         ending = true
-        impacts.removeAll()
-        selection = nil
-        notification = nil
         discardCustomEngine()
         canPlay = { false }
-    }
-
-    private func impact(for style: HapticRecipe.Impact) -> UIImpactFeedbackGenerator {
-        if let generator = impacts[style] { return generator }
-        let generator = UIImpactFeedbackGenerator(style: style.uiStyle)
-        impacts[style] = generator
-        return generator
     }
 
     private func prepareCustomEngine() {

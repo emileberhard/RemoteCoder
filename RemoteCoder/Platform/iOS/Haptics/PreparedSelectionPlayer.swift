@@ -1,3 +1,4 @@
+import OSLog
 import UIKit
 
 @MainActor
@@ -20,6 +21,7 @@ final class PreparedSelectionPlayer: HapticInteractionPlaying {
 
     func play(_ event: HapticEvent) {
         guard event == .selection, canPlay() else { return }
+        OSSignposter(subsystem: "RemoteCoder", category: "Haptics").emitEvent("feedback-api-request", "selection")
         generator?.selectionChanged()
     }
 

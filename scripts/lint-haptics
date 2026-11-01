@@ -12,7 +12,7 @@ MENU_OWNER = re.compile(r"\bstruct\s+AppMenu\s*<")
 HAPTIC_OWNERS = (
     re.compile(r"\b(?:final\s+class|extension)\s+HapticService\b"),
     re.compile(r"\b(?:enum|extension)\s+HapticRecipe\b"),
-    re.compile(r"\bstruct\s+AppPressFeedback\b"),
+    re.compile(r"\bfinal\s+class\s+ViewHapticPlayer\b"),
     re.compile(r"\bfinal\s+class\s+PreparedHapticPlayer\b"),
     re.compile(r"\bfinal\s+class\s+PreparedSelectionPlayer\b"),
     re.compile(r"\bfinal\s+class\s+PreparedStreamingHapticPlayer\b"),
@@ -31,6 +31,8 @@ def violations(path: Path, source: str) -> list[str]:
             if owns_menu:
                 continue
             message = "Use AppMenu; it owns native menu trigger feedback."
+        elif token in ("sensoryFeedback", "SensoryFeedback"):
+            message = "Use synchronous HapticService dispatch; SwiftUI sensory feedback adds a deferred path."
         else:
             if owns_haptics:
                 continue

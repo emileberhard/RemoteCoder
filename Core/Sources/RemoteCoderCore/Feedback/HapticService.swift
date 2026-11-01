@@ -2,7 +2,6 @@ import Foundation
 import Observation
 import OSLog
 
-/// Only HapticOutput observes pulses. Transcript and control trees never read them.
 @Observable @MainActor
 final class HapticService {
     static let preferenceKey = "remoteCoder.appHapticsEnabled"
@@ -11,19 +10,18 @@ final class HapticService {
     var isEnabled: Bool {
         didSet {
             defaults.set(isEnabled, forKey: Self.preferenceKey)
-            if !isEnabled { pulse = nil; cancelPlayback() }
+            if !isEnabled { cancelPlayback() }
         }
     }
     var strength: HapticStrength {
         didSet {
             guard strength != oldValue else { return }
             defaults.set(strength.rawValue, forKey: Self.strengthKey)
-            pulse = nil
             cancelPlayback()
         }
     }
-    private(set) var pulse: HapticPulse?
-    @ObservationIgnored private let makeInteractionPlayer: () -> any HapticInteractionPlaying
+    @ObservationIgnored private var native: (any HapticNativePlaying)?
+    @ObservationIgnored private let makeInteractionPlayer: (any HapticNativePlaying) -> any HapticInteractionPlaying
     @ObservationIgnored private let makeStreamingPlayer: () -> any HapticStreamingPlaying
     @ObservationIgnored private var streamingPlayer: (any HapticStreamingPlaying)?
     @ObservationIgnored private var lastStreamingPulse = -TimeInterval.infinity
@@ -41,7 +39,7 @@ final class HapticService {
 
     init(defaults: UserDefaults, supportsHaptics: Bool,
          isActive: @escaping () -> Bool,
-         makeInteractionPlayer: @escaping () -> any HapticInteractionPlaying,
+         makeInteractionPlayer: @escaping (any HapticNativePlaying) -> any HapticInteractionPlaying,
          makeStreamingPlayer: @escaping () -> any HapticStreamingPlaying) {
         self.defaults = defaults
         self.makeInteractionPlayer = makeInteractionPlayer
@@ -98,7 +96,7 @@ final class HapticService {
     func play(_ event: HapticEvent, occurrence: HapticOccurrence? = nil) {
         if let occurrence, !consume(occurrence) { return }
         guard accept(event) else { return }
-        pulse = HapticPulse(event: event, strength: strength, requestedAt: .now)
+        native?.play(event.recipe(for: strength))
     }
 
     func consume(_ occurrence: HapticOccurrence) -> Bool {
@@ -108,8 +106,21 @@ final class HapticService {
         return true
     }
 
+    func attach(_ player: any HapticNativePlaying) {
+        guard native !== player else { return }
+        cancelPlayback()
+        native = player
+    }
+
+    func detach(_ player: any HapticNativePlaying) {
+        guard native === player else { return }
+        cancelPlayback()
+        native = nil
+    }
+
     func beginInteraction(owner: UUID) {
-        beginInteraction(owner: owner, makePlayer: makeInteractionPlayer)
+        guard let native else { return }
+        beginInteraction(owner: owner) { makeInteractionPlayer(native) }
     }
 
     func beginInteraction(owner: UUID, makePlayer: () -> any HapticInteractionPlaying) {
@@ -124,7 +135,6 @@ final class HapticService {
     /// Gesture ticks bypass SwiftUI state coalescing, but retain the central policy.
     func playInteraction(_ event: HapticEvent, owner: UUID) {
         guard let interaction, interaction.owner == owner, accept(event) else { return }
-        signposter.emitEvent("feedback-api-request", "\(event.rawValue, privacy: .public) prepared-gesture")
         interaction.player.play(event)
     }
 
@@ -156,6 +166,7 @@ final class HapticService {
 
     func cancelPlayback() {
         cancelInteractions()
+        native?.release()
         streamingPlayer?.cancel()
         streamingPlayer = nil
     }
@@ -166,7 +177,7 @@ final class HapticService {
         if strength == .strong { play(.selection) }
     }
 
-    func accept(_ event: HapticEvent) -> Bool {
+    private func accept(_ event: HapticEvent) -> Bool {
         let allowed = canPlay(event)
         if allowed { lastFeedback = .now }
         signposter.emitEvent("feedback-intent", "\(event.rawValue, privacy: .public) eligible=\(allowed)")

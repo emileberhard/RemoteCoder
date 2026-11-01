@@ -65,8 +65,8 @@ struct WorkingDirectoryHeader: View {
     private func pressChanged(_ pressed: Bool) {
         isPressed = pressed
         guard pressed, isEnabled, scenePhase == .active else { return }
+        HapticService.shared.play(.buttonPress)
         HapticService.shared.beginInteraction(owner: owner)
-        HapticService.shared.playInteraction(.buttonPress, owner: owner)
     }
 
     private func holdChanged(_ phase: TapHoldPhase, _ location: CGPoint, _ source: CGRect) {
