@@ -63,12 +63,6 @@ struct ReasoningGaugeFeedback: Equatable {
 }
 
 extension View {
-    func appGestureFeedback<Trigger: Equatable>(_ event: HapticEvent, trigger: Trigger) -> some View {
-        sensoryFeedback(trigger: trigger) { _, _ in
-            HapticService.shared.feedbackForInteraction(event)
-        }
-    }
-
     func appPressFeedback(_ event: HapticEvent?, isPressed: Bool) -> some View {
         modifier(AppPressFeedback(event: event, isPressed: isPressed))
     }

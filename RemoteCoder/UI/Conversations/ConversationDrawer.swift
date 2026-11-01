@@ -10,7 +10,7 @@ struct ConversationDrawer<Content: View, Sidebar: View>: View {
 
     @State private var motion: DrawerMotion
     @State private var committedOpen: Bool
-    @State private var releaseCount = 0
+    @State private var dragHaptics = DrawerDragHaptics()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.layoutDirection) private var layoutDirection
@@ -55,13 +55,14 @@ struct ConversationDrawer<Content: View, Sidebar: View>: View {
                 canMove: { translation in translation * direction > 0 ? motion.progress < 1 : motion.progress > 0 },
                 onBegan: beginDragging,
                 onChanged: { translation in motion.track(by: translation * direction / max(width, 1)) },
-                onEnded: { velocity in endDragging(velocity: velocity * direction / max(width, 1)) }
+                onEnded: { velocity in endDragging(velocity: velocity * direction / max(width, 1)) },
+                onCancelled: cancelDragging
             ))
         }
         .background { ThemedSheetBackground() }
-        .appGestureFeedback(.disclosure, trigger: releaseCount)
         .onChange(of: isOpen) { _, open in
             guard open != committedOpen else { return }
+            dragHaptics.cancel()
             committedOpen = open
             motion.move(open: open, animated: !reduceMotion)
         }
@@ -75,7 +76,7 @@ struct ConversationDrawer<Content: View, Sidebar: View>: View {
                 .fill(colorScheme == .dark ? Color.white.opacity(0.07) : Color.black.opacity(0.16))
                 .contentShape(.rect)
         }
-        .buttonStyle(ResponsiveButtonStyle(feedback: .disclosure, pressedScale: 1, pressedOpacity: 1))
+        .buttonStyle(ResponsiveButtonStyle(feedback: nil, pressedScale: 1, pressedOpacity: 1))
         .accessibilityLabel("Close conversations")
         .accessibilityIdentifier("close-conversations")
         .accessibilityHidden(!isOpen)
@@ -91,6 +92,7 @@ struct ConversationDrawer<Content: View, Sidebar: View>: View {
     }
 
     private func beginDragging() {
+        dragHaptics.begin(open: committedOpen)
         motion.beginTracking()
         guard !committedOpen else { return }
         committedOpen = true
@@ -99,10 +101,39 @@ struct ConversationDrawer<Content: View, Sidebar: View>: View {
     }
 
     private func endDragging(velocity: CGFloat) {
-        guard let open = motion.release(velocity: velocity) else { return }
-        releaseCount += 1
+        let progress = motion.progress
+        guard let open = motion.release(velocity: velocity) else {
+            dragHaptics.cancel()
+            return
+        }
+        if let event = dragHaptics.release(open: open, progress: progress) {
+            HapticService.shared.play(event)
+        }
         committedOpen = open
         isOpen = open
+    }
+
+    private func cancelDragging() {
+        dragHaptics.cancel()
+        endDragging(velocity: 0)
+    }
+}
+
+struct DrawerDragHaptics {
+    private var initialOpen: Bool?
+
+    mutating func begin(open: Bool) {
+        initialOpen = open
+    }
+
+    mutating func release(open: Bool, progress: CGFloat) -> HapticEvent? {
+        defer { cancel() }
+        guard let initialOpen, open != initialOpen, progress > 0, progress < 1 else { return nil }
+        return .selection
+    }
+
+    mutating func cancel() {
+        initialOpen = nil
     }
 }
 
@@ -220,6 +251,7 @@ private struct DrawerPanGesture: UIGestureRecognizerRepresentable {
     let onBegan: () -> Void
     let onChanged: (CGFloat) -> Void
     let onEnded: (CGFloat) -> Void
+    let onCancelled: () -> Void
 
     func makeCoordinator(converter: CoordinateSpaceConverter) -> Coordinator {
         Coordinator(converter: converter, canMove: canMove)
@@ -245,7 +277,7 @@ private struct DrawerPanGesture: UIGestureRecognizerRepresentable {
         case .ended:
             onEnded(context.converter.localVelocity?.x ?? 0)
         case .cancelled:
-            onEnded(0)
+            onCancelled()
         default:
             break
         }

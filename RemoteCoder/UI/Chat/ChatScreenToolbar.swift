@@ -33,7 +33,8 @@ struct ChatScreenToolbar: View {
     private var navigationButton: some View {
         GlassCircleButton(
             systemImage: returnsToParent ? "chevron.left" : "text.justify.leading",
-            symbolSize: returnsToParent ? 18 : 17
+            symbolSize: returnsToParent ? 18 : 17,
+            feedback: returnsToParent ? .iconPress : nil
         ) {
             if returnsToParent { onReturnToParent() }
             else { onOpenConversations?() }

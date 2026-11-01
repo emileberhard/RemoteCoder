@@ -33,7 +33,6 @@ struct NewChatButton: View {
                     }
             }
             .appPressFeedback(.iconPress, isPressed: isPressed)
-            .appGestureFeedback(.commit, trigger: homeStarts)
     }
 
     private func holdChanged(_ phase: TapHoldPhase, _: CGPoint, _: CGRect) {
@@ -43,6 +42,7 @@ struct NewChatButton: View {
 
     private func startInHome() {
         homeStarts += 1
+        HapticService.shared.play(.commit)
         onNewChatInHome()
     }
 }

@@ -84,10 +84,20 @@ host change. An already-selected
 custom row can acknowledge a press, but never reports a second selection change.
 Selecting an answer produces one selection tick; automatic question advancement
 is silent. Manual page changes and folder disclosures have their own quiet
-acknowledgement. The conversation drawer acknowledges finger lift after a
-horizontal drag through the shared gesture-feedback modifier in the same update.
-This includes a slow drag released at the endpoint. Touch-down, settle
-completion, and programmatically moving the drawer emit no additional pulse.
+acknowledgement. The conversation drawer captures its committed side when a
+horizontal drag begins. On release, its existing motion owner chooses the
+destination; one system selection tick acknowledges a changed destination only
+while the drawer is strictly between its endpoints. Returning to the initial
+side, cancellation, endpoint releases, touch-down, movement and settle completion
+are silent. The tick has the same recipe under Standard and Strong.
+The drawer button and scrim retain their visual press behavior without app
+haptics. Programmatic open/close is silent; accepted conversation or draft
+selection retains its existing selection feedback without another closing tick.
+`DrawerDragHaptics` owns only the initial side and consumes it on release or
+cancellation. The existing gesture recognizer, motion, geometry and spring remain
+unchanged. Inspected shipped drawer callers informed these trigger and recipe
+choices; runtime injection, feature flags and physical delivery in that app were
+not observed. Decompiled artifacts and addresses remain in the private corpus.
 Dynamic composer recovery buttons reserve their actual bounds from empty-space
 focus, just like the always-visible controls. Keyboard focus, typing, scrolling,
 tool events, upload percentages and usage updates stay silent.

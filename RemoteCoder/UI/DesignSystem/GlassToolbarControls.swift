@@ -60,6 +60,7 @@ struct GlassCircleButton: View {
     let systemImage: String
     var symbolSize: CGFloat = 17
     var role: AppTheme.GlassRole = .standard
+    var feedback: HapticEvent? = .iconPress
     let action: () -> Void
 
     var body: some View {
@@ -72,7 +73,7 @@ struct GlassCircleButton: View {
                 .frame(width: 44, height: 44)
                 .contentShape(Circle())
         }
-        .buttonStyle(ResponsiveButtonStyle(feedback: .iconPress, pressedScale: 0.96, pressedOpacity: 0.9))
+        .buttonStyle(ResponsiveButtonStyle(feedback: feedback, pressedScale: 0.96, pressedOpacity: 0.9))
         .appGlass(role, in: .circle)
         .accessibilityShowsLargeContentViewer()
     }
