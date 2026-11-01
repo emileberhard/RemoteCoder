@@ -180,7 +180,7 @@ private struct PreparedAssistantContent: View, Equatable {
         .environment(\.streamingHaptics, StreamingHapticHandle(store: renderedMessages, messageID: messageID,
                                                               row: rowVisibility))
         .onChange(of: rendered?.isStreaming, initial: true) {
-            if rendered?.isStreaming == true, rowVisibility?.isVisible == true { HapticService.shared.prepareStreaming() }
+            if allowsReveal, rendered?.isStreaming == true, rowVisibility?.isVisible == true { HapticService.shared.prepareStreaming() }
         }
         .onChange(of: reveal.end, initial: true) {
             if reveal.end == nil {
@@ -205,10 +205,13 @@ private struct PreparedAssistantContent: View, Equatable {
         lhs.messageID == rhs.messageID && lhs.renderedMessages === rhs.renderedMessages
     }
 
+    private var allowsReveal: Bool {
+        !Self.perfDisablesReveal && energyPolicy.animatesDecorations(sceneActive: scenePhase == .active,
+            visible: visualsVisible, reduceMotion: reduceMotion)
+    }
+
     private func revealing(_ rendered: RenderedMessage?) -> StreamingReveal {
-        guard !Self.perfDisablesReveal, let reveal = rendered?.reveal, let end = reveal.end, end > settledReveal,
-              energyPolicy.animatesDecorations(sceneActive: scenePhase == .active, visible: visualsVisible,
-                                               reduceMotion: reduceMotion) else { return .settled }
+        guard allowsReveal, let reveal = rendered?.reveal, let end = reveal.end, end > settledReveal else { return .settled }
         return reveal
     }
 }

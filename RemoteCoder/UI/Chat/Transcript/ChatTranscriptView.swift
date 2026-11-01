@@ -660,6 +660,12 @@ private struct TranscriptContentView<QuestionContent: View, BottomBar: View>: Vi
         PerfBuild.count("visibleRowsChanged")
         let appeared = visibleRows.filter { !visibility.visibleRowIDs.contains($0.id) }
         visibility.setVisibleRowIDs(Set(visibleRows.map(\.id)))
+        if animatesDecorations, !PerfBuild.isDisabled("reveal"), appeared.contains(where: { row in
+            guard let message = row.message, message.role == .codex else { return false }
+            return renderedMessages[message.id]?.isStreaming == true || renderedMessages.hasPendingWordHaptics(for: message.id)
+        }) {
+            HapticService.shared.prepareStreaming()
+        }
         if appeared.contains(where: \.isMessage) { onFirstContent() }
         demandHistory()
         demandNearVisuals()

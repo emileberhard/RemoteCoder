@@ -13,7 +13,7 @@ struct HapticServiceTests {
         #expect(fixture.service.consume(occurrence))
         fixture.service.prepareStreaming()
         let player = try #require(fixture.streamingPlayers.first)
-        for time in [10, 10, 10.0167, 10.025, 10.03332, 10.06672] {
+        for time in [10, 10, 10.03332, 10.05, 10.06664, 10.13336] {
             fixture.service.playStreaming(punch: 1, at: time)
         }
         #expect(player.punches == [1, 1, 1])
@@ -72,7 +72,7 @@ struct HapticServiceTests {
         #expect(fixture.streamingPlayers.count == 3)
     }
 
-    @Test func streamingPatternExportsTheRecoveredTransientRecipe() throws {
+    @Test func streamingPatternExportsTheWordTransientRecipe() throws {
         for punch in [Float(1), 0.2] {
             let pattern = try PreparedStreamingHapticPlayer.pattern(punch: punch)
             let exported = try pattern.exportDictionary()

@@ -11,14 +11,13 @@ struct StreamingRevealTextSlot: Hashable, Sendable {
 }
 
 struct StreamingArrival: Sendable {
-    static let none = StreamingArrival(targets: [], stableLengths: [:], continuingBlocks: [], continuations: [], textRuns: [:])
+    static let none = StreamingArrival(targets: [], stableLengths: [:], continuingBlocks: [], continuations: [])
     private static let unitLimit = 48
 
     let targets: [StreamingRevealTarget]
     let stableLengths: [StreamingRevealTextSlot: Int]
     let continuingBlocks: Set<Int>
     let continuations: Set<StreamingRevealTarget>
-    let textRuns: [StreamingRevealTextSlot: Int]
 
     func carries(_ target: StreamingRevealTarget) -> Bool {
         switch target {
@@ -34,10 +33,7 @@ extension StreamingArrival {
         var stableLengths: [StreamingRevealTextSlot: Int] = [:]
         var continuingBlocks: Set<Int> = []
         var continuations: Set<StreamingRevealTarget> = []
-        var textRuns: [StreamingRevealTextSlot: Int] = [:]
-        var run = 0
         for (index, block) in current.enumerated() {
-            if block.content.revealTexts == nil { run = index + 1 }
             guard let kind = block.content.revealKind else { continue }
             let old = previous.indices.contains(index) ? previous[index] : nil
             let continues = old?.content.revealKind == kind
@@ -45,7 +41,6 @@ extension StreamingArrival {
                 if continues { continuingBlocks.insert(index) } else { targets.append(.block(index)) }
                 continue
             }
-            for position in texts.indices { textRuns[StreamingRevealTextSlot(block: index, slot: position)] = run }
             if old == block {
                 for position in texts.indices { stableLengths[StreamingRevealTextSlot(block: index, slot: position)] = .max }
                 continue
@@ -67,7 +62,7 @@ extension StreamingArrival {
             }
         }
         self.init(targets: targets, stableLengths: stableLengths, continuingBlocks: continuingBlocks,
-                  continuations: continuations, textRuns: textRuns)
+                  continuations: continuations)
     }
 }
 
@@ -91,19 +86,17 @@ struct StreamingReveal: Equatable, Sendable {
     private struct Unit: Equatable, Sendable {
         let target: StreamingRevealTarget
         let begin: TimeInterval
-        let textRun: Int?
     }
 
     private let units: [Unit]
     private let schedule: StreamingRevealSchedule
     private let blocks: [Int: StreamingRevealBlock]
     let end: TimeInterval?
-    var hapticRuns: [Int: [TimeInterval]] {
-        var runs: [Int: Set<TimeInterval>] = [:]
-        for unit in units {
-            if let run = unit.textRun { runs[run, default: []].insert(unit.begin) }
-        }
-        return runs.mapValues { $0.sorted() }
+    var hapticBegins: [TimeInterval] {
+        Set(units.compactMap { unit -> TimeInterval? in
+            if case .text = unit.target { return unit.begin }
+            return nil
+        }).sorted()
     }
 
     private init(units: [Unit], schedule: StreamingRevealSchedule) {
@@ -134,9 +127,7 @@ struct StreamingReveal: Equatable, Sendable {
         var units = units.filter { $0.begin + StreamingRevealSchedule.fadeDuration > now && arrival.carries($0.target) }
         for target in arrival.targets {
             let word = arrival.continuations.contains(target) ? units.last { $0.target.precedes(target) } : nil
-            let run: Int?
-            if case .text(let slot, _) = target { run = arrival.textRuns[slot] } else { run = nil }
-            units.append(Unit(target: target, begin: word?.begin ?? schedule.start(at: now), textRun: run))
+            units.append(Unit(target: target, begin: word?.begin ?? schedule.start(at: now)))
         }
         if !arrival.targets.isEmpty { PerfBuild.count("reveal.arrival") }
         return units.isEmpty ? .settled : StreamingReveal(units: units, schedule: schedule)

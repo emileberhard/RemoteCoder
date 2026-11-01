@@ -21,29 +21,19 @@ final class RenderedMessageStore {
     // Readers observe only their own entry, so a render, insertion or eviction
     // invalidates only the bubbles showing that message.
     private var entries: [UUID: Entry] = [:]
-    private var wordHaptics: [UUID: [Int: StreamingWordHaptics]] = [:]
+    private var wordHaptics: [UUID: StreamingWordHaptics] = [:]
     private var sourceBytes = 0
     private var presentedIDs: Set<UUID> = []
 
     subscript(id: UUID) -> RenderedMessage? { entry(id).rendered }
     func hasPresentation(for id: UUID) -> Bool { entry(id).isPresent }
-    func hasPendingWordHaptics(for id: UUID) -> Bool {
-        wordHaptics[id]?.values.contains(where: \.hasPending) == true
-    }
+    func hasPendingWordHaptics(for id: UUID) -> Bool { wordHaptics[id]?.hasPending == true }
 
-    func dropPendingWordHaptics(for id: UUID) {
-        guard var runs = wordHaptics[id] else { return }
-        for key in runs.keys { runs[key]?.discard() }
-        wordHaptics[id] = runs
-    }
+    func dropPendingWordHaptics(for id: UUID) { wordHaptics[id]?.discard() }
 
     func nextStreamingHaptic(for id: UUID, at time: TimeInterval) -> Float? {
-        guard !retired, var runs = wordHaptics[id] else { return nil }
-        defer { wordHaptics[id] = runs }
-        for key in runs.keys.sorted(by: >) {
-            if let punch = runs[key]?.next(at: time) { return punch }
-        }
-        return nil
+        guard !retired else { return nil }
+        return wordHaptics[id]?.next(at: time)
     }
     private var insertionOrder: [UUID] = []
     private var requested: [UUID: Request] = [:]
@@ -240,14 +230,7 @@ final class RenderedMessageStore {
                 entry.replace(with: published)
                 #if os(iOS)
                 if message.isStreaming || previous?.isStreaming == true {
-                    let begins = published.reveal.hapticRuns
-                    var runs = wordHaptics[id] ?? [:]
-                    for key in Set(runs.keys).union(begins.keys) {
-                        var run = runs[key] ?? StreamingWordHaptics()
-                        run.update(begins: begins[key] ?? [])
-                        runs[key] = run
-                    }
-                    wordHaptics[id] = runs
+                    wordHaptics[id, default: StreamingWordHaptics()].update(begins: published.reveal.hapticBegins)
                 } else {
                     wordHaptics[id] = nil
                 }

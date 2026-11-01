@@ -64,14 +64,14 @@ final class HapticService {
     }
 
     func admitsStreamingFrame(at time: TimeInterval) -> Bool {
-        time - lastStreamingPulse >= 1.0 / 30 - 1.0 / 240
+        time - lastStreamingPulse >= StreamingRevealSchedule.stagger - 1.0 / 240
     }
 
     func prepareStreaming() {
-        guard canPlayStreaming else { return }
+        guard canPlay else { return }
         let player = streamingPlayer ?? makeStreamingPlayer()
         streamingPlayer = player
-        player.prepare { [weak self] in self?.canPlayStreaming == true }
+        player.prepare { [weak self] in self?.canPlay == true }
     }
 
     func playStreaming(punch: Float, at time: TimeInterval) {

@@ -3,40 +3,32 @@ import Foundation
 struct StreamingWordHaptics {
     private struct Part {
         let begin: TimeInterval
-        var needsHaptic: Bool
+        let punch: Float
     }
 
     private var parts: [Part] = []
-    private var hasStarted = false
+    private var newestBegin = -TimeInterval.infinity
+    private var markedCount = 0
 
-    var hasPending: Bool { parts.contains(where: \.needsHaptic) }
+    var hasPending: Bool { !parts.isEmpty }
 
     mutating func update(begins: [TimeInterval]) {
         precondition(begins == Set(begins).sorted())
-        let previous = Dictionary(uniqueKeysWithValues: parts.map { ($0.begin, $0.needsHaptic) })
-        parts = begins.map { Part(begin: $0, needsHaptic: previous[$0] ?? false) }
-        guard !parts.isEmpty else { return }
-        if !hasStarted || parts.last?.needsHaptic == true {
-            for index in parts.indices.prefix(StreamingHapticRecipe.wordCount) { parts[index].needsHaptic = true }
+        parts.removeAll { !begins.contains($0.begin) }
+        for begin in begins where begin > newestBegin {
+            newestBegin = begin
+            guard markedCount < StreamingHapticRecipe.wordCount else { continue }
+            parts.append(Part(begin: begin, punch: StreamingHapticRecipe.punch(at: markedCount)))
+            markedCount += 1
         }
-        hasStarted = true
     }
 
     mutating func next(at time: TimeInterval) -> Float? {
-        var punch: Float?
-        for index in parts.indices.reversed() {
-            let age = time - parts[index].begin
-            if age >= StreamingRevealSchedule.fadeDuration {
-                parts.remove(at: index)
-            } else if age > 0, parts[index].needsHaptic, punch == nil {
-                parts[index].needsHaptic = false
-                punch = StreamingHapticRecipe.punch(at: index)
-            }
-        }
-        return punch
+        let due = parts.last { $0.begin < time }
+        parts.removeAll { $0.begin < time }
+        guard let due, time - due.begin <= StreamingRevealSchedule.stagger else { return nil }
+        return due.punch
     }
 
-    mutating func discard() {
-        for index in parts.indices { parts[index].needsHaptic = false }
-    }
+    mutating func discard() { parts.removeAll() }
 }

@@ -10,7 +10,7 @@ struct RenderedMessageStoreTests {
         let store = RenderedMessageStore()
         let message = ChatMessage(role: .codex, text: "One two", isStreaming: true)
         await store.prepare([message])
-        let begin = try #require(store[message.id]?.reveal.hapticRuns[0]?.first)
+        let begin = try #require(store[message.id]?.reveal.hapticBegins.first)
         #expect(store.nextStreamingHaptic(for: message.id, at: begin + 0.01) == 1)
         _ = store[message.id]
         #expect(store.nextStreamingHaptic(for: message.id, at: begin + 0.04) == nil)
