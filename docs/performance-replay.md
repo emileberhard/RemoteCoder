@@ -457,3 +457,10 @@ render-stage duration. Core Animation update durations come from the exported
 `hitches-updates` timing fields; absent timing stays unknown. Edge refreshes are
 excluded and covered seconds are reported. `renderMetrics.motion` adds scoped
 render-server CPU beside refresh shares, GPU channel time and available power.
+
+Report the observed Time Profiler sample weights (`app.sampleWeights`) and its
+configured interval when available. Per-refresh CPU values are quantized by
+sampling; at 1 ms, differences below about 2 ms are not persuasive. Put hitches
+and available update durations beside these estimates. Warm switches are the
+common case after the drawer has been visible for its 1 s prefetch dwell. The
+synthetic drag includes preparation and delivery of the real selection haptic.

@@ -1352,6 +1352,8 @@ def summarize(trace: str, frames: int, callers: list[str], apps: list[Path], win
         "motionFrameWork": frame_work,
         "app": {
             **app_cpu,
+            "sampleWeights": [{"weightMs": weight, "samples": count}
+                              for weight, count in Counter(sample.weight_ms for sample in samples).most_common(10)],
             "cpuMsByThread": None if app_cpu["cpuUnavailableReason"] else {name: round(ms, 1) for name, ms in app_threads.most_common(8)},
             "mainThreadCpuMs": None if app_cpu["cpuUnavailableReason"] else round(app_threads["main"], 1),
             "mainThreadCpuMsExcludingAutomation": None if app_cpu["cpuUnavailableReason"] else round(app_threads_without_automation["main"], 1),
