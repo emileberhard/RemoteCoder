@@ -353,8 +353,9 @@ just ios-simulator-test RemoteCoderTests/HapticServiceTests \
   RemoteCoderTests/ReasoningPickerTests RemoteCoderTests/ReasoningControlLifecycleTests
 ```
 
-Core `HapticServiceTests` cover profile persistence/opt-out, recipe construction, synchronous ordered dispatch, suppression and attachment identity. Hosted tests cover view attachment/release,
-prepared-owner replacement/cancellation, same-callback delivery, native binding
+Core `HapticServiceTests` cover profile persistence/opt-out, recipes, synchronous
+ordered dispatch, suppression, attachment identity and prepared-owner replacement.
+Hosted tests cover view attachment/release, native binding
 transactions and user-only writes, detent hysteresis and final-position/release
 ownership. Fake players record API intent without driving the hardware.
 `scripts/tests/test_haptic_lint.py` tests the source guard against accidental
@@ -395,7 +396,7 @@ Preserve every recipe, eligibility gate, capture exception, call suppression, oc
 
 ### Alternatives and trade-offs
 
-Keeping root sensory feedback leaves the measured second SwiftUI hop and coalesces same-callback events. Moving sensory feedback into every view spreads policy and loses completion feedback with dismissed views. Per-control generator pools multiply ownership and resource cleanup. Reusing the gesture player as ordinary output would add native/accents configuration and duplicate pools. A shared native player protocol isolates the platform boundary; the gesture player delegates its native recipes to it. The root attachment is infrastructure, with no observation of event state.
+Keeping root sensory feedback adds a second SwiftUI hop and coalesces same-callback events. Moving sensory feedback into every view spreads policy and loses completion feedback with dismissed views. Per-control generator pools multiply ownership and resource cleanup. Reusing the gesture player as ordinary output would add native/accents configuration and duplicate pools. A shared native player protocol isolates the platform boundary; the gesture player delegates its native recipes to it. The root attachment is infrastructure, with no observation of event state.
 
 Immediate asynchronous outcomes cannot always be anticipated. A missing attachment
 drops events instead of replaying later. View-backed generators attach to the

@@ -24,10 +24,11 @@ struct HapticServiceTests {
         #expect(view.interactions.isEmpty)
     }
 
-    @Test func attachmentUsesItsWindowAndOldRemovalCannotDetachNewOutput() {
+    @Test func attachmentUsesItsWindowAndOldRemovalCannotDetachNewOutput() throws {
         let fixture = HapticFixture()
         defer { fixture.cleanUp() }
-        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        let scene = try #require(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
         let first = HapticAttachment.AttachmentView(service: fixture.service)
         window.addSubview(first)
         fixture.service.play(.copied)
