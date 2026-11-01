@@ -11,7 +11,7 @@ from contextlib import nullcontext, redirect_stderr, redirect_stdout
 from datetime import UTC, datetime
 from http import HTTPStatus
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
@@ -19,7 +19,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import NameOID
 from websockets.asyncio.server import serve
 
-from remotecoder_tools import gateway_cli, transport
+from remotecoder_tools import config, gateway_cli, rpc, transport
 
 
 class GatewayRPCBoundaryTests(unittest.IsolatedAsyncioTestCase):
@@ -91,7 +91,7 @@ class GatewayRPCBoundaryTests(unittest.IsolatedAsyncioTestCase):
                     release.set()
         return status, stdout.getvalue(), stderr.getvalue(), requests, connections, port, upgrades
 
-    async def test_setup_stall_exhausts_one_shared_deadline_without_dispatch(self):
+    async def test_setup_stall_times_out_without_dispatch(self):
         timeout_s = 0.2
         for scenario, stage, expected_connections in (("ready timeout always", "ready notification", 1),
                                                        ("ready and close stall", "ready notification", 1),
@@ -99,11 +99,8 @@ class GatewayRPCBoundaryTests(unittest.IsolatedAsyncioTestCase):
             for command, method, expected_status in (("rpc", "claude/message", 75),
                                                       ("e2e-reads", "thread/list", 2)):
                 with self.subTest(command=command, stage=stage, scenario=scenario):
-                    started = time.perf_counter()
                     status, stdout, stderr, requests, connections, port, upgrades = await self.run_cli(
                         scenario, command, method, timeout_s=timeout_s)
-                    elapsed = time.perf_counter() - started
-                    self.assertLess(elapsed, timeout_s + 0.1, f"setup exceeded its {timeout_s}s budget: {elapsed}s")
                     self.assertEqual(status, expected_status)
                     self.assertEqual(stdout, "")
                     self.assertIn(stage, stderr)
@@ -114,6 +111,31 @@ class GatewayRPCBoundaryTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(requests, [])
                     self.assertEqual(connections, expected_connections)
                     self.assertEqual(upgrades, 1)
+
+    async def test_ready_receives_the_remaining_shared_setup_budget(self):
+        now = asyncio.get_running_loop().time()
+        clock = Mock(time=Mock(return_value=now))
+        socket = Mock()
+        cfg = config.GatewayConfig("127.0.0.1", 8787, "synthetic", "ws")
+
+        async def connect(_cfg):
+            clock.time.return_value = now + 4
+            return socket
+
+        async def drain(_socket, *, timeout_s):
+            self.assertEqual(timeout_s, 6)
+            clock.time.return_value = now + 10
+            raise transport.GatewayOpeningTimeout("ready notification", "127.0.0.1:8787", 6, timeout_s)
+
+        async_api = Mock(wraps=asyncio)
+        async_api.get_running_loop.return_value = clock
+        with patch.object(rpc, "asyncio", async_api), \
+             patch.object(rpc, "_ws_connect", AsyncMock(side_effect=connect)), \
+             patch.object(rpc, "_drain_ready", AsyncMock(side_effect=drain)):
+            with self.assertRaises(TimeoutError):
+                async with rpc._open_gateway(cfg, timeout_s=10, method="thread/list"):
+                    self.fail("setup must not dispatch")
+        socket.transport.abort.assert_called_once()
 
     async def test_plain_rpc_response_timeout_names_the_sent_method_and_preserves_exit_2(self):
         for method in ("claude/message", "thread/list"):
