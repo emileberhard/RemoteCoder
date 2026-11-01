@@ -684,7 +684,6 @@ impl Gateway {
         }
 
         self.jobs.start_driver()?;
-        self.start_cluster_liveness()?;
         crate::cluster::driver::start(self)?;
         Ok(())
     }

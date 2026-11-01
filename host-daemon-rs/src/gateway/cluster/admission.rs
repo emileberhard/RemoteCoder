@@ -73,7 +73,7 @@ impl Gateway {
                     AdmissionOperation::Continue(request),
                 )
             };
-            let hello:HelloReceipt=decode(link.call(&member.host,"cluster/hello",json!({"protocol":PROTOCOL,"host":identity.host_id,"incarnation":identity.incarnation})).await.map_err(|error|crate::cluster::link::LinkError {class:if error.class==ErrorClass::Unsupported {ErrorClass::Unsupported}else{ErrorClass::Unavailable},transmitted:false,message:error.message})?)?;
+            let hello:HelloReceipt=decode(link.call(&member.host,"cluster/hello",json!({"protocol":PROTOCOL,"host":identity.host_id,"incarnation":identity.incarnation})).await.map_err(|error|crate::cluster::link::LinkError {class:if error.class==ErrorClass::Unsupported {ErrorClass::Unsupported}else{ErrorClass::Unavailable},transmitted:false,..error})?)?;
             let origin = match &authority {
                 CallerAuthority::Operator => Origin::TopLevel,
                 CallerAuthority::Agent { conversation, .. } => Origin::RemoteParent {

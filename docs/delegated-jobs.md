@@ -335,11 +335,11 @@ Other modules use `Gateway::cluster_link().await` to obtain an `Arc<Link>`.
 `Link::members().await` returns public `MemberView` rows; `host` is the UUID
 (serialized as `hostId`), and `name` is its alias. `Link::call(host, method,
 params).await` uses one pooled, pinned TLS connection per membership. A
-`LinkError` retains `class` and `transmitted`; only `transmitted == false`
+`LinkError` retains failure provenance, `class` and `transmitted`; only `transmitted == false`
 proves that the requested method was never handed to the socket owner. Each
 connection owns a continuous reader and a capacity-one request channel; close,
 EOF or an error evicts its cached socket and resolves pending receipts. A transport
-failure reconnects once within the same ten-second deadline if nothing could
+failure reconnects once within the same eight-second deadline if nothing could
 have been transmitted, or if the RPC metadata classifies the method as a query
 or status read. A possibly transmitted mutation is never replayed by Link.
 `Gateway::host_identity().await`
@@ -351,9 +351,11 @@ Reachability has `state`, `since` and nullable `lastSeenAt`, with RFC 3339 times
 A member is `unknown` until its first hello succeeds or fails. Member connects
 race a route's resolved addresses with staggered starts, and every change to a
 failure state is logged with its reason.
-Listing probes active members concurrently with a two-second hello deadline,
-updates reachability and preserves the last successful `lastSeenAt`. A successful
-hello resets that member's delivery backoff. There is no background polling.
+Listing probes active members concurrently within Link's single eight-second
+deadline and preserves the last successful `lastSeenAt`. A cold connection reuses
+its handshake hello. Socket termination wakes only that member; routing socket
+noise and unchanged hellos do not wake delivery. Peer application errors retain
+the connection and do not change reachability. No periodic hello polling runs.
 Removed tombstones stay private. Load, when available, is
 `{cpuPercent,memoryPressure,activeAgents}`. Every job read/list and conversation
 agent row adds `ownerHostId`, `parent` and `recipient`. Parent references always
@@ -480,7 +482,7 @@ membership-file edits are unsupported while the gateway is running.
 
 The existing JobStore persistence mutex still spans accounting and disk I/O.
 The per-member Link socket mutex still spans one request/response exchange, with
-a ten-second deadline, so one slow request can delay other requests to that peer.
+an eight-second deadline, including slot admission, so one slow request can delay other requests to that peer.
 These ordering boundaries remain explicit follow-up work; other peers proceed
 independently. Native session inventory freshness and ingestion remain owned by
 sessions, including its pending event-driven single-writer repair.

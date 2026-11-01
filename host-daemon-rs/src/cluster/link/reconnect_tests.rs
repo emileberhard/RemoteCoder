@@ -216,3 +216,103 @@ async fn cluster_transport_reconnect_preserves_mutation_uncertainty() {
         server.await.unwrap();
     }
 }
+
+#[tokio::test]
+async fn cluster_peer_application_error_keeps_the_connection_and_reachability() {
+    let Peer {
+        _directory,
+        link,
+        listener,
+        identity,
+        hello,
+        ..
+    } = Peer::new().await;
+    let host = hello.host.clone();
+    let server = tokio::spawn(async move {
+        let mut socket = accept_peer(&listener, &identity, &hello).await;
+        let request = receive(&mut socket).await;
+        assert_eq!(request["method"], "agent/cluster/inventory");
+        socket.send(Message::Text(json!({"id":request["id"],"error":{"code":-32600,"message":"broken historical source","data":{"class":"unavailable"}}}).to_string())).await.unwrap();
+        let request = receive(&mut socket).await;
+        assert_eq!(request["method"], "agent/cluster/inventory");
+        reply(
+            &mut socket,
+            &request,
+            json!({"agents":[],"nextCursor":null}),
+        )
+        .await;
+    });
+    let error = link
+        .call(&host, "agent/cluster/inventory", json!({}))
+        .await
+        .unwrap_err();
+    assert!(matches!(error.cause, Failure::Peer(_)));
+    assert_eq!(error.coverage_state(), "unavailable");
+    assert_eq!(
+        link.members().await.unwrap()[0].reachability.state,
+        ReachabilityState::Reachable
+    );
+    assert_eq!(
+        link.call(&host, "agent/cluster/inventory", json!({}))
+            .await
+            .unwrap()["agents"],
+        json!([])
+    );
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn cluster_cold_hello_reuses_the_handshake_receipt() {
+    let Peer {
+        _directory,
+        link,
+        listener,
+        identity,
+        hello,
+        ..
+    } = Peer::new().await;
+    let host = hello.host.clone();
+    let server = tokio::spawn(async move {
+        let mut socket = accept_peer(&listener, &identity, &hello).await;
+        let request = receive(&mut socket).await;
+        assert_eq!(request["method"], "agent/cluster/inventory");
+        reply(&mut socket, &request, json!({"agents":[]})).await;
+    });
+    assert_eq!(
+        link.call(&host, "cluster/hello", json!({})).await.unwrap()["host"],
+        host
+    );
+    link.call(&host, "agent/cluster/inventory", json!({}))
+        .await
+        .unwrap();
+    server.await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn cluster_busy_slot_uses_the_shared_deadline_without_reachability_failure() {
+    let Peer {
+        _directory,
+        link,
+        hello,
+        membership,
+        ..
+    } = Peer::new().await;
+    let slot = Arc::new(Mutex::new(None));
+    link.connections
+        .lock()
+        .await
+        .insert(membership, slot.clone());
+    let _guard = slot.lock().await;
+    let started = tokio::time::Instant::now();
+    let error = link
+        .call(&hello.host, "cluster/hello", json!({}))
+        .await
+        .unwrap_err();
+    assert_eq!(started.elapsed(), Duration::from_secs(8));
+    assert!(matches!(error.cause, Failure::Local));
+    assert!(!error.transmitted);
+    assert_eq!(
+        link.members().await.unwrap()[0].reachability.state,
+        ReachabilityState::Unknown
+    );
+}

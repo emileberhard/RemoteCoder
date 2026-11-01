@@ -8,7 +8,7 @@ use super::*;
 struct Request {
     id: u64,
     text: String,
-    receipt: oneshot::Sender<Result<Value>>,
+    receipt: oneshot::Sender<std::result::Result<Value, LinkError>>,
 }
 
 pub(super) struct Connection {
@@ -23,6 +23,7 @@ impl Connection {
         socket: Socket,
         hello: HelloReceipt,
         slot: Weak<Mutex<Option<Self>>>,
+        wake: Option<tokio::sync::watch::Sender<u64>>,
     ) -> Self {
         let (requests, receiver) = mpsc::channel(1);
         let alive = Arc::new(AtomicBool::new(true));
@@ -31,6 +32,7 @@ impl Connection {
             receiver,
             alive.clone(),
             slot,
+            wake,
         )));
         Self {
             requests,
@@ -49,16 +51,16 @@ impl Connection {
         id: u64,
         text: String,
         transmitted: Arc<AtomicBool>,
-    ) -> Result<Value> {
+    ) -> std::result::Result<Value, LinkError> {
         let (receipt, response) = oneshot::channel();
-        let permit = self
-            .requests
-            .reserve()
-            .await
-            .map_err(|_| anyhow::anyhow!("member connection closed before transmission"))?;
+        let permit = self.requests.reserve().await.map_err(|_| {
+            LinkError::transport("member connection closed before transmission", false)
+        })?;
         transmitted.store(true, Ordering::Release);
         permit.send(Request { id, text, receipt });
-        response.await.context("member connection reader ended")?
+        response
+            .await
+            .map_err(|_| LinkError::transport("member connection reader ended", true))?
     }
 }
 
@@ -67,6 +69,7 @@ async fn read_socket(
     mut requests: mpsc::Receiver<Request>,
     alive: Arc<AtomicBool>,
     slot: Weak<Mutex<Option<Connection>>>,
+    wake: Option<tokio::sync::watch::Sender<u64>>,
 ) {
     let mut pending: Option<Request> = None;
     let result: Result<()> = async {
@@ -98,11 +101,15 @@ async fn read_socket(
     alive.store(false, Ordering::Release);
     let message = result.unwrap_err().to_string();
     if let Some(request) = pending {
-        let _ = request.receipt.send(Err(anyhow::anyhow!(message.clone())));
+        let _ = request
+            .receipt
+            .send(Err(LinkError::transport(message.clone(), true)));
     }
     requests.close();
     while let Ok(request) = requests.try_recv() {
-        let _ = request.receipt.send(Err(anyhow::anyhow!(message.clone())));
+        let _ = request
+            .receipt
+            .send(Err(LinkError::transport(message.clone(), true)));
     }
     if let Some(slot) = slot.upgrade() {
         let mut cached = slot.lock().await;
@@ -111,6 +118,9 @@ async fn read_socket(
             .is_some_and(|connection| Arc::ptr_eq(&connection.alive, &alive))
         {
             cached.take();
+            if let Some(wake) = wake {
+                wake.send_modify(|revision| *revision = revision.wrapping_add(1));
+            }
         }
     }
 }

@@ -712,6 +712,11 @@ async fn sessions_cluster_coverage_preserves_link_failure_classes() {
                 _ => crate::wire::cluster::ErrorClass::Unavailable,
             };
             Err(crate::cluster::link::LinkError {
+                cause: if host == "unreachable" {
+                    crate::cluster::link::Failure::Transport
+                } else {
+                    crate::cluster::link::Failure::Local
+                },
                 class,
                 transmitted: false,
                 message: host,
@@ -2138,6 +2143,7 @@ fn sessions_cluster_search_hits_route_exact_reads_to_their_origin() -> Result<()
     local.local = true;
     assert!(cluster::forward_read("another-host", local)?.is_none());
     let error = anyhow::Error::new(crate::cluster::link::LinkError {
+        cause: crate::cluster::link::Failure::Local,
         class: crate::wire::cluster::ErrorClass::Unavailable,
         transmitted: false,
         message: "origin offline".into(),

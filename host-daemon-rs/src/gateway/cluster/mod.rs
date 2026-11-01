@@ -176,14 +176,6 @@ impl Gateway {
                 self.reconcile_member_incarnation(host, &request.incarnation)
                     .await?;
                 link.wake_member(host).await;
-                self.jobs.expedite(
-                    &self
-                        .jobs
-                        .store()
-                        .await?
-                        .member_pending_ids(host.clone())
-                        .await?,
-                );
                 Ok(json!(HelloReceipt {
                     protocol: PROTOCOL,
                     host: identity.host_id,

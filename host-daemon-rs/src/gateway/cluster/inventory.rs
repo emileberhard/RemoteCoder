@@ -60,7 +60,7 @@ impl Gateway {
             async move {
                 if complete {return (host,Ok(json!({"agents":[],"nextCursor":null})));}
                 let request=json!({"limit":limit.min(256),"cursor":position,"active":params["active"],"provider":params["provider"]});
-                let page=if host==identity.host_id {self.local_agent_inventory(request).await.map_err(|error|crate::cluster::link::LinkError {class:ErrorClass::Unavailable,transmitted:false,message:error.to_string()})}else {link.call(&host,"agent/cluster/inventory",request).await};
+                let page=if host==identity.host_id {self.local_agent_inventory(request).await.map_err(|error|crate::cluster::link::LinkError {cause:crate::cluster::link::Failure::Local,class:ErrorClass::Unavailable,transmitted:false,message:error.to_string()})}else {link.call(&host,"agent/cluster/inventory",request).await};
                 (host,page)
             }
         }).buffer_unordered(64).collect::<Vec<_>>().await;

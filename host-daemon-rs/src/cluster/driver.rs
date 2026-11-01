@@ -1,56 +1,9 @@
 use crate::gateway::Gateway;
 use crate::wire::cluster::*;
-use anyhow::{Context, Result, ensure};
+use anyhow::{Result, ensure};
 use serde_json::json;
 use std::sync::Arc;
 use std::time::Duration;
-
-impl Gateway {
-    pub(crate) fn start_cluster_liveness(self: &Arc<Self>) -> Result<()> {
-        let gateway = Arc::downgrade(self);
-        let started = self.jobs.tasks.spawn_graceful("cluster_liveness", move |shutdown| async move {
-            let mut previous = std::time::SystemTime::now();
-            let mut tick = tokio::time::interval(Duration::from_secs(2));
-            let mut route = tokio::process::Command::new("/sbin/route")
-                .args(["-n", "monitor"])
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::null())
-                .kill_on_drop(true)
-                .spawn()?;
-            use tokio::io::AsyncBufReadExt;
-            let mut changes = tokio::io::BufReader::new(route.stdout.take().context("network monitor has no output")?).lines();
-            let mut route_open = true;
-            loop {
-                let changed = tokio::select! {
-                    _ = shutdown.cancelled() => break,
-                    result = changes.next_line(), if route_open => {
-                        route_open = result?.is_some();
-                        route_open
-                    }
-                    _ = tick.tick() => {
-                        let now = std::time::SystemTime::now();
-                        let woke = now.duration_since(previous).is_ok_and(|elapsed| elapsed > Duration::from_secs(5));
-                        previous = now;
-                        woke
-                    }
-                };
-                if !changed {
-                    continue;
-                }
-                let Some(gateway) = gateway.upgrade() else { break };
-                let link = gateway.cluster_link().await?;
-                link.refresh_members().await?;
-                gateway.jobs.dirty();
-                previous = std::time::SystemTime::now();
-            }
-            route.start_kill()?;
-            route.wait().await?;
-            Ok(())
-        });
-        ensure!(started, "cluster liveness owner is closed");
-        Ok(())
-    }
-}
 
 pub(crate) fn start(gateway: &Arc<Gateway>) -> Result<()> {
     let weak = Arc::downgrade(gateway);
@@ -126,7 +79,6 @@ async fn member_worker(
     let mut wakes = link.member_wakes(&member.host).await;
     drop(owner);
     let mut delay = Duration::from_millis(250);
-    let mut introduced = false;
     loop {
         let Some(owner) = gateway.upgrade() else {
             break;
@@ -146,18 +98,18 @@ async fn member_worker(
         let ids = store.member_pending_ids(member.host.clone()).await?;
         let permit =
             tokio::select! {_=shutdown.cancelled()=>break,permit=capacity.acquire()=>permit?};
-        if !introduced && record.state == MemberState::Active {
+        let mut retry = false;
+        if record.state == MemberState::Active && !link.is_connected(&member.host).await {
             let identity = owner.host_identity().await?;
-            introduced = link
+            retry = link
                     .call(
                         &member.host,
                         "cluster/hello",
                         json!({"protocol":PROTOCOL,"host":identity.host_id,"incarnation":identity.incarnation}),
                     )
                     .await
-                    .is_ok();
+                    .is_err();
         }
-        let mut retry = !introduced && record.state == MemberState::Active;
         retry |= owner.reconcile_cluster_member(&member.host).await?;
         let outcomes=stream::iter(ids).map(|id| {
                 let owner=&owner;
