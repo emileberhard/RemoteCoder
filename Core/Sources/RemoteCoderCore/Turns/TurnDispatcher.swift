@@ -225,7 +225,7 @@ final class TurnDispatcher {
         RunningTurn(threadID: turn.threadID, turnID: GatewayNotificationRouting.normalizeTurnID(turn.turnID))
     }
 
-    func steer(_ submission: Submission, activeTurn: TrackedTurn) {
+    func steer(_ submission: Submission, activeTurn: TrackedTurn, context: String) {
         guard let host, !isClosed else { return }
         let key = Self.normalized(RunningTurn(threadID: activeTurn.threadID, turnID: activeTurn.turnID))
         let id = UUID()
@@ -249,9 +249,11 @@ final class TurnDispatcher {
             do {
                 try Task.checkCancellation()
                 guard !isClosed else { throw CancellationError() }
+                var additionalContext = submission.interactionMode.additionalContext
+                additionalContext[SteerContext.additionalContextKey] = .init(kind: .application, value: context)
                 _ = try await gateway.steerTurn(threadID: activeTurn.threadID, expectedTurnID: activeTurn.turnID,
                     clientUserMessageID: submission.userMessageID.uuidString, input: submission.input,
-                    additionalContext: submission.interactionMode.additionalContext)
+                    additionalContext: additionalContext)
                 await session.accepted(submission.userMessageID, turnID: activeTurn.turnID)
             } catch {
                 if case .turnNotRunning = (error as? GatewayRPCFailure)?.kind,
