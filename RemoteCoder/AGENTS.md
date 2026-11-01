@@ -39,7 +39,10 @@ holds the detailed history, recovery, voice and persistence contracts.
   APNs tokens, the notification-center delegate and the Dock menu) and the Mac
   attention surfaces. Shared code
   calls the seam; a plain `#if os(iOS)` is only for a single modifier or
-  property with no Mac counterpart.
+  property with no Mac counterpart. Prefer one implementation for both
+  platforms: an arm exists only for a missing platform API or a measured
+  per-platform difference, and an improvement that works on both replaces
+  both arms rather than leaving one platform on the older version.
   `lint-platform-imports` rejects UIKit, ActivityKit, CallKit, PushKit,
   LiveCommunicationKit, CoreHaptics and GoogleNavigation imports outside
   `Platform/`, `Services/`, the extension roots and its named bridge list, and
