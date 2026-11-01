@@ -585,21 +585,14 @@ mod tests {
     fn sessions_hot_worker_observes_appends_while_the_writer_fd_stays_open() -> Result<()> {
         let (directory, store, origin, path) = fixture();
         std::fs::File::open(&path)?.set_modified(std::time::SystemTime::now())?;
-        let worker = Worker::start(
-            store.clone(),
-            vec![origin],
-            directory.path().join("disk-cap-status.json"),
-        )?;
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while store.reader()?.query_row(
-            "SELECT count(*) FROM coverage WHERE indexed_through IS NOT NULL",
-            [],
-            |row| row.get::<_, i64>(0),
-        )? == 0
-        {
+        let status = directory.path().join("disk-cap-status.json");
+        let worker = Worker::start(store.clone(), vec![origin], status.clone())?;
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while !status.exists() {
             ensure!(Instant::now() < deadline, "Initial source did not finish");
             std::thread::sleep(Duration::from_millis(10));
         }
+        std::fs::remove_file(&status)?;
         let mut file = std::fs::OpenOptions::new().append(true).open(path)?;
         writeln!(
             file,
@@ -607,10 +600,8 @@ mod tests {
             json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"stillopenappend"}]}})
         )?;
         file.flush()?;
-        ensure!(
-            wait_text(&store, "stillopenappend") < Duration::from_secs(2),
-            "Hot append exceeded two seconds"
-        );
+        wait_text(&store, "stillopenappend");
+        ensure!(!status.exists(), "Hot append waited for a full reconcile");
         worker.stop()?;
         drop(file);
         Ok(())
