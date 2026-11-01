@@ -101,11 +101,7 @@ elif name == "rsync" and "scripts/build_support.py" in args:
     gateway = repo / "dev-tools/rc-gateway"
     gateway.write_text(stub)
     gateway.chmod(0o755)
-    script = (
-        (root / "scripts/shared-codex-host")
-        .read_text()
-        .replace("/bin/zsh", str(bin_dir / "zsh"))
-    )
+    script = (root / "scripts/shared-codex-host").read_text().replace("/bin/zsh", str(bin_dir / "zsh"))
     (repo / "scripts/shared-codex-host").write_text(script)
     environment = {
         **os.environ,
@@ -121,18 +117,11 @@ elif name == "rsync" and "scripts/build_support.py" in args:
 
 @pytest.mark.parametrize("identity_failure", [False, True])
 @pytest.mark.parametrize("requested_host", ["workstation", "laptop"])
-def test_gate_executes_matrix_only_on_build_host(
-    auth_gate_fixture, identity_failure, requested_host
-):
+def test_gate_executes_matrix_only_on_build_host(auth_gate_fixture, identity_failure, requested_host):
     fixture = auth_gate_fixture
     fixture.environment["GATE_TEST_IDENTITY_FAILURE"] = "1" if identity_failure else "0"
     result = subprocess.run(
-        [
-            "bash",
-            str(fixture.repo / "scripts/shared-codex-host"),
-            "check",
-            requested_host,
-        ],
+        ["bash", str(fixture.repo / "scripts/shared-codex-host"), "check", requested_host],
         env=fixture.environment,
         capture_output=True,
         text=True,
@@ -164,9 +153,7 @@ def test_gate_executes_matrix_only_on_build_host(
             assert not any("auth.json" in arg or "gateway.env" in arg for arg in args)
 
 
-def test_local_post_deploy_check_uses_the_default_local_gateway(
-    auth_gate_fixture, tmp_path
-):
+def test_local_post_deploy_check_uses_the_default_local_gateway(auth_gate_fixture, tmp_path):
     fixture = auth_gate_fixture
     configuration = fixture.repo / "RemoteCoder/Resources/RemoteCoderLocalConfig.json"
     configuration.parent.mkdir(parents=True)
@@ -185,74 +172,39 @@ print(json.dumps({{'host': cfg.host, 'port': cfg.port, 'scheme': cfg.scheme}}))
 """)
     source = Path(__file__).resolve().parents[1] / "src"
     fixture.environment["PYTHONPATH"] = str(source)
-    for name in (
-        "RC_CODEX_GATEWAY_HOST",
-        "RC_CODEX_GATEWAY_SSH_HOST",
-        "RC_CODEX_GATEWAY_PORT",
-        "RC_CODEX_GATEWAY_AUTH_TOKEN",
-    ):
+    for name in ("RC_CODEX_GATEWAY_HOST", "RC_CODEX_GATEWAY_SSH_HOST", "RC_CODEX_GATEWAY_PORT", "RC_CODEX_GATEWAY_AUTH_TOKEN"):
         fixture.environment.pop(name, None)
     with identity_health("local.gateway.fixture", 42424) as (port, requests):
-        env_file.write_text(
-            f"RC_CODEX_GATEWAY_BIND_HOST=127.0.0.1\nRC_CODEX_GATEWAY_PORT={port}\n"
-            "RC_CODEX_GATEWAY_AUTH_TOKEN=local-fixture-bearer\n"
-        )
-        result = subprocess.run(
-            ["bash", str(fixture.repo / "scripts/shared-codex-host"), "check", "local"],
-            cwd=fixture.repo,
-            env=fixture.environment,
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
+        env_file.write_text(f"RC_CODEX_GATEWAY_BIND_HOST=127.0.0.1\nRC_CODEX_GATEWAY_PORT={port}\n"
+                            "RC_CODEX_GATEWAY_AUTH_TOKEN=local-fixture-bearer\n")
+        result = subprocess.run(["bash", str(fixture.repo / "scripts/shared-codex-host"), "check", "local"],
+                                cwd=fixture.repo, env=fixture.environment, capture_output=True, text=True, timeout=10)
     records = [json.loads(line) for line in fixture.log.read_text().splitlines()]
     assert [args for name, args in records if name == "rc-gateway"] == [["e2e-reads"]]
     assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout.splitlines()[-1]) == {
-        "host": "127.0.0.1",
-        "port": 42424,
-        "scheme": "wss",
-    }
+    assert json.loads(result.stdout.splitlines()[-1]) == {"host": "127.0.0.1", "port": 42424, "scheme": "wss"}
     assert requests == [("/health", "Bearer local-fixture-bearer")]
     assert not any(name == "ssh" and args[5:6] == ["cat"] for name, args in records)
 
 
-def test_a_passed_matrix_is_reused_only_for_identical_package_and_probe_inputs(
-    auth_gate_fixture,
-):
+def test_a_passed_matrix_is_reused_only_for_identical_package_and_probe_inputs(auth_gate_fixture):
     fixture = auth_gate_fixture
 
     def check():
         fixture.log.write_text("")
         result = subprocess.run(
-            [
-                "bash",
-                str(fixture.repo / "scripts/shared-codex-host"),
-                "check",
-                "workstation",
-            ],
-            env=fixture.environment,
-            capture_output=True,
-            text=True,
-            timeout=10,
+            ["bash", str(fixture.repo / "scripts/shared-codex-host"), "check", "workstation"],
+            env=fixture.environment, capture_output=True, text=True, timeout=10,
         )
         assert result.returncode == 0, result.stderr
         records = [json.loads(line) for line in fixture.log.read_text().splitlines()]
-        matrix = [
-            args
-            for name, args in records
-            if name == "ssh" and "external_auth_probe" in args[-1]
-        ]
-        lookups = [
-            args[-1]
-            for name, args in records
-            if name == "ssh" and "external-auth/passed/" in args[-1]
-        ]
+        matrix = [args for name, args in records if name == "ssh" and "external_auth_probe" in args[-1]]
+        lookups = [args[-1] for name, args in records if name == "ssh" and "external-auth/passed/" in args[-1]]
         return result, matrix, lookups
 
     _, matrix, lookups = check()
     assert len(matrix) == 1
-    evidence = lookups[0].split("$HOME/", 1)[1].split('"', 1)[0]
+    evidence = lookups[0].split('$HOME/', 1)[1].split('"', 1)[0]
     home = Path(fixture.environment["HOME"])
     receipt = home / "Library/Logs/remote-coder/compatibility/external-auth-PASSED.json"
     receipt.parent.mkdir(parents=True)
@@ -275,19 +227,11 @@ def test_a_build_host_check_probes_its_installed_package_in_place(auth_gate_fixt
     (fixture.repo / "scripts/build-host").write_text("gate-test-host\n")
     result = subprocess.run(
         ["bash", str(fixture.repo / "scripts/shared-codex-host"), "check", "local"],
-        cwd=fixture.repo,
-        env=fixture.environment,
-        capture_output=True,
-        text=True,
-        timeout=10,
+        cwd=fixture.repo, env=fixture.environment, capture_output=True, text=True, timeout=10,
     )
     assert result.returncode == 0, result.stderr
     records = [json.loads(line) for line in fixture.log.read_text().splitlines()]
-    matrix = [
-        args
-        for _, args in records
-        if args and "-m remotecoder_tools.external_auth_probe" in args[-1]
-    ]
+    matrix = [args for _, args in records if args and "-m remotecoder_tools.external_auth_probe" in args[-1]]
     assert len(matrix) == 1
     assert matrix[0][0] == "-lc"
     assert '--package "$HOME/.codex/packages/standalone/current"' in matrix[0][-1]
