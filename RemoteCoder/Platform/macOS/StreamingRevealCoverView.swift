@@ -10,7 +10,8 @@ struct StreamingRevealCoverView: NSViewRepresentable {
     }
 
     func updateNSView(_ view: StreamingRevealCoverHost, context: Context) {
-        view.layers.update(covers, color: Color.appSystemBackground.resolve(in: context.environment).cgColor)
+        view.layers.update(covers, color: Color.appSystemBackground.resolve(in: context.environment).cgColor,
+                           hapticFrame: nil)
     }
 
     static func dismantleNSView(_ view: StreamingRevealCoverHost, coordinator: ()) {

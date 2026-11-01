@@ -21,11 +21,30 @@ final class RenderedMessageStore {
     // Readers observe only their own entry, so a render, insertion or eviction
     // invalidates only the bubbles showing that message.
     private var entries: [UUID: Entry] = [:]
+    private var wordHaptics: [UUID: [Int: StreamingWordHaptics]] = [:]
     private var sourceBytes = 0
     private var presentedIDs: Set<UUID> = []
 
     subscript(id: UUID) -> RenderedMessage? { entry(id).rendered }
     func hasPresentation(for id: UUID) -> Bool { entry(id).isPresent }
+    func hasPendingWordHaptics(for id: UUID) -> Bool {
+        wordHaptics[id]?.values.contains(where: \.hasPending) == true
+    }
+
+    func dropPendingWordHaptics(for id: UUID) {
+        guard var runs = wordHaptics[id] else { return }
+        for key in runs.keys { runs[key]?.discard() }
+        wordHaptics[id] = runs
+    }
+
+    func nextStreamingHaptic(for id: UUID, at time: TimeInterval) -> Float? {
+        guard !retired, var runs = wordHaptics[id] else { return nil }
+        defer { wordHaptics[id] = runs }
+        for key in runs.keys.sorted(by: >) {
+            if let punch = runs[key]?.next(at: time) { return punch }
+        }
+        return nil
+    }
     private var insertionOrder: [UUID] = []
     private var requested: [UUID: Request] = [:]
     private var pending: [UUID: Request] = [:]
@@ -130,6 +149,7 @@ final class RenderedMessageStore {
     }
 
     private func remove(_ id: UUID) {
+        wordHaptics[id] = nil
         retainedTranscripts?.prepareRenderChange(id, in: ObjectIdentifier(self))
         guard let entry = entries.removeValue(forKey: id) else { return }
         sourceBytes -= entry.sourceBytes
@@ -177,6 +197,7 @@ final class RenderedMessageStore {
         worker?.cancel()
         for entry in entries.values { entry.replace(with: nil) }
         entries.removeAll()
+        wordHaptics.removeAll()
         insertionOrder.removeAll()
         sourceBytes = 0
         presentedIDs.removeAll()
@@ -214,7 +235,23 @@ final class RenderedMessageStore {
                 #if RC_PERF_HARNESS
                 PerfBuild.count("renderPublish")
                 #endif
-                entry.replace(with: message.publishing(after: entry.rendered, at: now))
+                let previous = entry.rendered
+                let published = message.publishing(after: previous, at: now)
+                entry.replace(with: published)
+                #if os(iOS)
+                if message.isStreaming || previous?.isStreaming == true {
+                    let begins = published.reveal.hapticRuns
+                    var runs = wordHaptics[id] ?? [:]
+                    for key in Set(runs.keys).union(begins.keys) {
+                        var run = runs[key] ?? StreamingWordHaptics()
+                        run.update(begins: begins[key] ?? [])
+                        runs[key] = run
+                    }
+                    wordHaptics[id] = runs
+                } else {
+                    wordHaptics[id] = nil
+                }
+                #endif
                 requested.removeValue(forKey: id)
             }
             evictIfNeeded()

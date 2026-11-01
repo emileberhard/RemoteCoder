@@ -160,13 +160,15 @@ final class StreamingRevealCoverLayers: NSObject {
     private let makeDisplayLink: (Any, Selector) -> CADisplayLink
     private var covers: [Int: (begin: TimeInterval, layers: [CALayer])] = [:]
     private var displayLink: CADisplayLink?
+    private var hapticFrame: ((TimeInterval) -> Void)?
 
     init(host: CALayer, displayLink: @escaping (Any, Selector) -> CADisplayLink) {
         self.host = host
         makeDisplayLink = displayLink
     }
 
-    func update(_ updated: [StreamingRevealCover], color: CGColor) {
+    func update(_ updated: [StreamingRevealCover], color: CGColor, hapticFrame: ((TimeInterval) -> Void)?) {
+        self.hapticFrame = hapticFrame
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         defer { CATransaction.commit() }
@@ -210,12 +212,12 @@ final class StreamingRevealCoverLayers: NSObject {
         displayLink = nil
         covers.values.forEach { $0.layers.forEach { $0.removeFromSuperlayer() } }
         covers = [:]
+        hapticFrame = nil
     }
 
     @objc private func tick(_ link: CADisplayLink) {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        defer { CATransaction.commit() }
         let now = link.targetTimestamp
         for (id, cover) in covers {
             if cover.begin + StreamingRevealSchedule.fadeDuration <= now {
@@ -226,6 +228,8 @@ final class StreamingRevealCoverLayers: NSObject {
                 cover.layers.forEach { $0.opacity = opacity }
             }
         }
+        CATransaction.commit()
+        hapticFrame?(now)
         if covers.isEmpty {
             link.invalidate()
             displayLink = nil

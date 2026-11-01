@@ -43,7 +43,8 @@ must be implemented at the owning component rather than bypassed at call sites.
 
 ## Platform contract
 
-Use `HapticEvent.recipe(for:)` as the only pattern/intensity catalog. The same
+Use `HapticEvent.recipe(for:)` for semantic feedback and `StreamingHapticRecipe`
+for streaming words. The same
 `HapticRecipe` maps to SwiftUI sensory feedback for ordinary controls and UIKit
 for prepared gesture ticks. `HapticAccent` owns the two custom patterns. The newer
 `SensoryFeedback.press`, `release`, and typed `selection` members are callable from
@@ -88,8 +89,8 @@ horizontal drag through the shared gesture-feedback modifier in the same update.
 This includes a slow drag released at the endpoint. Touch-down, settle
 completion, and programmatically moving the drawer emit no additional pulse.
 Dynamic composer recovery buttons reserve their actual bounds from empty-space
-focus, just like the always-visible controls. Keyboard focus, typing, scrolling, streamed
-text/tool events, upload percentages and usage updates stay silent.
+focus, just like the always-visible controls. Keyboard focus, typing, scrolling,
+tool events, upload percentages and usage updates stay silent.
 
 Send deliberately has two meanings: touch-down confirms the button was pressed;
 `dispatch` confirms that the message was persisted locally. Keyboard submission
@@ -121,6 +122,52 @@ outcomes never become success. Replays and hidden-owner occurrences are consumed
 silently. Other-thread notification alerts remain system-owned, so the app does
 not add a competing arrival vibration. Banners preserve the actual result rather
 than labeling every terminal state successful.
+
+## Streaming words
+
+Assistant word reveals can play a brief opening sequence on supported iPhones.
+The same transient is used under Standard and Strong: intensity is `0.9 * punch`,
+and sharpness is a random value in `0.2..<0.4` plus `0.1 * punch`. The first six
+parts of a prose run are marked, with punches `1, 0.84, 0.68, 0.52, 0.36, 0.2`.
+A publication can mark them again only while that run's newest part is still
+pending. Continuation fragments share one word's start, so they do not add taps.
+Code, tables and other atomic blocks do not produce word feedback.
+
+`RenderedMessageStore` owns unobserved value state per message and prose run.
+It is removed with the render entry or store. Completed history creates no marks;
+a terminal publication can reveal and mark the final new words. Row remounting
+does not restart an opening sequence. The existing reveal-cover display links
+call a stateless handle; no additional timer or observed frame state is added.
+A frame chooses the newest due marked word and leaves the other marks pending
+until their next frame or the 500 ms reveal expiry. The service admits at most
+one pulse across hosts per `1/30 - 1/240` seconds, allowing nominal 30 Hz jitter.
+
+The handle reads the existing row visibility at tick time. A hidden row,
+inactive scene, disabled feedback, unsupported hardware, capture, call, active
+gesture, finishing accent or accepted app feedback within 200 ms flushes that
+message's pending marks. Reopening a gate never replays them. Reduce Motion,
+energy conservation and hidden transcript presentation settle the reveal and
+therefore produce no word ticks. Streaming bypasses semantic-pulse observation
+and the bounded completion/question occurrence set.
+
+`HapticService` owns a separate `PreparedStreamingHapticPlayer`; gesture players
+retain their own lifetime. A visible streaming row prepares the haptics-only engine
+asynchronously, and reveal publications prepare it after an idle stop. Each ready pulse makes and starts one
+transient player immediately. A cold or failed engine drops that pulse, without
+a native fallback or delayed replay. The engine is reused across messages and
+uses Core Haptics auto-shutdown while idle. An idle stop records it as unready;
+a later eligible publication restarts it asynchronously, never from a display
+tick. Cancellation, capture, call, scene exit, opt-out and strength changes
+release it. Reset/start/stop callbacks are generation-fenced. The layer does not
+activate audio or change its session, route or recording allowance.
+
+The scheduling and recipe follow inspected shipped UI code; RemoteCoder owns
+its visibility, audio and interaction gates. Static evidence does not establish
+which source-app rollout or device paths are enabled. Decompiled artifacts and
+addresses remain in the private research corpus. Core scheduling tests, hosted
+store/service tests and SDK pattern export verify the port's deterministic
+behavior. Requests and accepted playback signposts do not establish physical
+feel, first-pulse latency or power impact; those require the test iPhone.
 
 ## Hold, peek and open
 

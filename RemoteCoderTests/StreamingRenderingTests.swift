@@ -178,11 +178,20 @@ struct StreamingRenderingTests {
         let next = continued.reveal.block(0).spans(slot: 0)
         #expect(next.map(\.utf16) == [0..<4, 4..<8, 8..<13, 13..<18, 18..<22])
         #expect(next[3].begin == spans[2].begin)
+        #expect(continued.reveal.hapticRuns[0]?.count == 4)
         #expect(abs(next[4].begin - 10.21) < 1e-9)
         let corrected = render("Uno", previous: continued).publishing(after: continued, at: 10.3)
         #expect(corrected.reveal.block(0).spans(slot: 0).map(\.utf16) == [0..<3])
         let settled = render("Uno", previous: corrected, streaming: false).publishing(after: corrected, at: 11)
         #expect(settled.reveal == .settled)
+    }
+
+    @Test func hapticRunsSpanConsecutiveProseAndRestartAfterAtomicBlocks() {
+        let text = "# Heading\n\nParagraph words.\n\n- First\n- Second\n\n```swift\nlet x = 1\n```\n\nAfter code"
+        let message = render(text).publishing(after: nil, at: 10)
+        #expect(message.reveal.hapticRuns.keys.sorted() == [0, 4])
+        #expect(message.reveal.hapticRuns[0]?.count == 5)
+        #expect(message.reveal.hapticRuns[4]?.count == 2)
     }
 
     @Test func inlineStylesAndLinksSurvivePreparation() throws {

@@ -14,6 +14,8 @@ HAPTIC_OWNERS = (
     re.compile(r"\b(?:enum|extension)\s+HapticRecipe\b"),
     re.compile(r"\bstruct\s+AppPressFeedback\b"),
     re.compile(r"\bfinal\s+class\s+PreparedHapticPlayer\b"),
+    re.compile(r"\bfinal\s+class\s+PreparedStreamingHapticPlayer\b"),
+    re.compile(r"\bstruct\s+HapticServiceTests\b"),
 )
 
 

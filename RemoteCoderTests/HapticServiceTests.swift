@@ -6,6 +6,92 @@ import Testing
 
 @MainActor
 struct HapticServiceTests {
+    @Test func streamingTicksCoalesceAcrossHostsWithoutLosingJitteredFramesOrSemanticOccurrences() throws {
+        let fixture = HapticFixture()
+        defer { fixture.cleanUp() }
+        let occurrence = HapticOccurrence(hostID: UUID(), kind: .question, id: "question")
+        #expect(fixture.service.consume(occurrence))
+        fixture.service.prepareStreaming()
+        let player = try #require(fixture.streamingPlayers.first)
+        for time in [10, 10, 10.0167, 10.025, 10.03332, 10.06672] {
+            fixture.service.playStreaming(punch: 1, at: time)
+        }
+        #expect(player.punches == [1, 1, 1])
+        for index in 1...200 { fixture.service.playStreaming(punch: 0.2, at: 11 + Double(index) * 0.07) }
+        #expect(!fixture.service.consume(occurrence))
+        #expect(fixture.service.pulse == nil)
+    }
+
+    @Test func streamingYieldsToGesturesFinishingAccentsAndAcceptedFeedback() throws {
+        let fixture = HapticFixture()
+        defer { fixture.cleanUp() }
+        fixture.service.prepareStreaming()
+        let stream = try #require(fixture.streamingPlayers.first)
+        let owner = UUID()
+        fixture.service.beginInteraction(owner: owner)
+        #expect(!fixture.service.canPlayStreaming)
+        #expect(!stream.isEligible())
+        let gesture = try #require(fixture.players.first)
+        gesture.hasActiveAccent = true
+        fixture.service.finishInteraction(owner: owner)
+        #expect(!fixture.service.canPlayStreaming)
+        gesture.hasActiveAccent = false
+        #expect(fixture.service.canPlayStreaming)
+        fixture.service.play(.buttonPress)
+        #expect(!stream.cancelled)
+        #expect(!fixture.service.canPlayStreaming)
+        fixture.service.playStreaming(punch: 1, at: 10)
+        #expect(stream.punches.isEmpty)
+    }
+
+    @Test func streamingPolicyCancelsCaptureOptOutAndScenePlayback() throws {
+        let fixture = HapticFixture()
+        defer { fixture.cleanUp() }
+        fixture.service.prepareStreaming()
+        let first = try #require(fixture.streamingPlayers.last)
+        let capture = UUID()
+        fixture.service.beginCapture(owner: capture)
+        #expect(first.cancelled)
+        #expect(!first.isEligible())
+        fixture.service.endCapture(owner: capture)
+        fixture.service.prepareStreaming()
+        let second = try #require(fixture.streamingPlayers.last)
+        fixture.callActive = true
+        #expect(!second.isEligible())
+        fixture.service.playStreaming(punch: 1, at: 10)
+        #expect(second.punches.isEmpty)
+        fixture.service.cancelPlayback()
+        fixture.callActive = false
+        fixture.service.prepareStreaming()
+        let third = try #require(fixture.streamingPlayers.last)
+        fixture.service.isEnabled = false
+        #expect(third.cancelled)
+        fixture.service.isEnabled = true
+        fixture.active = false
+        fixture.service.prepareStreaming()
+        #expect(fixture.streamingPlayers.count == 3)
+    }
+
+    @Test func streamingPatternExportsTheRecoveredTransientRecipe() throws {
+        for punch in [Float(1), 0.2] {
+            let pattern = try PreparedStreamingHapticPlayer.pattern(punch: punch)
+            let exported = try pattern.exportDictionary()
+            let entries = try #require(exported[.pattern] as? [[String: Any]])
+            #expect(entries.count == 1)
+            let event = try #require(entries.first?[CHHapticPattern.Key.event.rawValue] as? [String: Any])
+            #expect(event[CHHapticPattern.Key.eventType.rawValue] as? String == CHHapticEvent.EventType.hapticTransient.rawValue)
+            #expect(event[CHHapticPattern.Key.time.rawValue] as? Double == 0)
+            let parameters = try #require(event[CHHapticPattern.Key.eventParameters.rawValue] as? [[String: Any]])
+            let values = Dictionary(uniqueKeysWithValues: try parameters.map { parameter in
+                (try #require(parameter[CHHapticPattern.Key.parameterID.rawValue] as? String),
+                 try #require(parameter[CHHapticPattern.Key.parameterValue.rawValue] as? Float))
+            })
+            #expect(values[CHHapticEvent.ParameterID.hapticIntensity.rawValue].map { abs($0 - 0.9 * punch) < 0.00001 } == true)
+            let sharpness = try #require(values[CHHapticEvent.ParameterID.hapticSharpness.rawValue])
+            #expect(sharpness >= 0.2 + 0.1 * punch && sharpness <= 0.4 + 0.1 * punch)
+        }
+    }
+
     @Test func preferencePersistsAndNeverReplaysSuppressedFeedback() {
         let fixture = HapticFixture()
         defer { fixture.cleanUp() }
@@ -174,7 +260,7 @@ struct HapticServiceTests {
         fixture.callActive = true
         #expect(!player.isEligible())
         fixture.service.playInteraction(.lift, owner: owner)
-        fixture.service.cancelInteractions()
+        fixture.service.cancelPlayback()
         fixture.callActive = false
         fixture.service.playInteraction(.lift, owner: owner)
         #expect(player.events.isEmpty)

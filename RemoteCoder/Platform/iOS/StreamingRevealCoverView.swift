@@ -9,7 +9,9 @@ struct StreamingRevealCoverView: UIViewRepresentable {
     }
 
     func updateUIView(_ view: StreamingRevealCoverHost, context: Context) {
-        view.layers.update(covers, color: Color.appSystemBackground.resolve(in: context.environment).cgColor)
+        let haptics = context.environment.streamingHaptics
+        view.layers.update(covers, color: Color.appSystemBackground.resolve(in: context.environment).cgColor,
+                           hapticFrame: haptics.map { handle in { handle.frame(at: $0) } })
     }
 
     static func dismantleUIView(_ view: StreamingRevealCoverHost, coordinator: ()) {

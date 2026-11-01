@@ -8,6 +8,7 @@ final class HapticFixture {
     var active = true
     var callActive = false
     var players: [RecordingHapticPlayer] = []
+    var streamingPlayers: [RecordingStreamingHapticPlayer] = []
     lazy var service = makeService()
 
     init() {
@@ -22,19 +23,24 @@ final class HapticFixture {
                                         let player = RecordingHapticPlayer()
                                         self?.players.append(player)
                                         return player
+                                    }, makeStreamingPlayer: { [weak self] in
+                                        let player = RecordingStreamingHapticPlayer()
+                                        self?.streamingPlayers.append(player)
+                                        return player
                                     })
         service.bindCallState { [weak self] in self?.callActive == true }
         return service
     }
 
     func cleanUp() {
-        service.cancelInteractions()
+        service.cancelPlayback()
         defaults.removePersistentDomain(forName: suite)
     }
 }
 
 @MainActor
 final class RecordingHapticPlayer: HapticInteractionPlaying {
+    var hasActiveAccent = false
     var events: [HapticEvent] = []
     var finished = false
     var cancelled = false
@@ -43,6 +49,17 @@ final class RecordingHapticPlayer: HapticInteractionPlaying {
     func prepare(strength: HapticStrength, canPlay: @escaping @MainActor () -> Bool) { isEligible = canPlay }
     func play(_ event: HapticEvent) { events.append(event) }
     func finish() { finished = true }
+    func cancel() { cancelled = true; hasActiveAccent = false }
+}
+
+@MainActor
+final class RecordingStreamingHapticPlayer: HapticStreamingPlaying {
+    var punches: [Float] = []
+    var cancelled = false
+    var isEligible: @MainActor () -> Bool = { false }
+
+    func prepare(canPlay: @escaping @MainActor () -> Bool) { isEligible = canPlay }
+    func play(punch: Float) { punches.append(punch) }
     func cancel() { cancelled = true }
 }
 

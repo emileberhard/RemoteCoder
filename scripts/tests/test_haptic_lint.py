@@ -23,6 +23,10 @@ class HapticLintTests(unittest.TestCase):
         self.assertTrue(CHECK(Path("RemoteCoder/UI/DesignSystem/AppMenu.swift"), 'let menu = Menu { Text("Go") }'))
         self.assertTrue(CHECK(Path("RemoteCoder/Platform/iOS/Haptics/Player.swift"), 'UIImpactFeedbackGenerator()'))
 
+    def test_sdk_pattern_oracle_stays_with_the_haptic_service_tests(self):
+        self.assertEqual([], CHECK(Path("Tests/Feedback.swift"), "struct HapticServiceTests { let key = CHHapticPattern.Key.pattern }"))
+        self.assertTrue(CHECK(Path("Tests/Feedback.swift"), "struct FeatureTests { let engine = CHHapticEngine() }"))
+
     def test_hardware_and_recipe_bypasses_are_rejected(self):
         for source in ('UIImpactFeedbackGenerator()', 'view.sensoryFeedback(.impact, trigger: value)', 'CHHapticEngine()', 'let effect: SensoryFeedback = .success'):
             with self.subTest(source=source):

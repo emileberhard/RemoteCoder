@@ -142,6 +142,8 @@ private extension ChatBubble {
 private struct PreparedAssistantContent: View, Equatable {
     #if os(macOS)
     @Environment(\.transcriptSurfaceActivity) private var surfaceActivity
+    #else
+    @Environment(\.transcriptRowVisibility) private var rowVisibility
     #endif
     let messageID: UUID
     let renderedMessages: RenderedMessageStore
@@ -174,6 +176,22 @@ private struct PreparedAssistantContent: View, Equatable {
         .contentTransition(.identity)
         #if os(macOS)
         .environment(\.transcriptTextSelectionEnabled, rendered?.isStreaming != true)
+        #else
+        .environment(\.streamingHaptics, StreamingHapticHandle(store: renderedMessages, messageID: messageID,
+                                                              row: rowVisibility))
+        .onChange(of: rendered?.isStreaming, initial: true) {
+            if rendered?.isStreaming == true, rowVisibility?.isVisible == true { HapticService.shared.prepareStreaming() }
+        }
+        .onChange(of: reveal.end, initial: true) {
+            if reveal.end == nil {
+                renderedMessages.dropPendingWordHaptics(for: messageID)
+            } else if rowVisibility?.isVisible == true, renderedMessages.hasPendingWordHaptics(for: messageID) {
+                HapticService.shared.prepareStreaming()
+            }
+        }
+        .onDisappear {
+            renderedMessages.dropPendingWordHaptics(for: messageID)
+        }
         #endif
         .transcriptPerfFeature("geometryGroup") { $0.geometryGroup() }
         .background {

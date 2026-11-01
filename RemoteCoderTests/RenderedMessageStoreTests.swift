@@ -6,6 +6,41 @@ import Testing
 
 @MainActor
 struct RenderedMessageStoreTests {
+    @Test func streamingWordFlagsSurviveReadersAndFlushWhenHiddenOrRetired() async throws {
+        let store = RenderedMessageStore()
+        let message = ChatMessage(role: .codex, text: "One two", isStreaming: true)
+        await store.prepare([message])
+        let begin = try #require(store[message.id]?.reveal.hapticRuns[0]?.first)
+        #expect(store.nextStreamingHaptic(for: message.id, at: begin + 0.01) == 1)
+        _ = store[message.id]
+        #expect(store.nextStreamingHaptic(for: message.id, at: begin + 0.04) == nil)
+        store.dropPendingWordHaptics(for: message.id)
+        #expect(!store.hasPendingWordHaptics(for: message.id))
+        #expect(store.nextStreamingHaptic(for: message.id, at: begin + 0.08) == nil)
+        store.trim(keeping: [])
+        #expect(store.nextStreamingHaptic(for: message.id, at: begin + 0.1) == nil)
+        let next = ChatMessage(role: .codex, text: "New reply", isStreaming: true)
+        await store.prepare([next])
+        #expect(store.hasPendingWordHaptics(for: next.id))
+        store.retire()
+        #expect(!store.hasPendingWordHaptics(for: next.id))
+        #expect(store.nextStreamingHaptic(for: next.id, at: begin + 0.2) == nil)
+    }
+
+    @Test func terminalSuffixCanStartWordHapticsButFinishedHistoryCannot() async {
+        let store = RenderedMessageStore()
+        var message = ChatMessage(role: .codex, text: "", isStreaming: true)
+        await store.prepare([message])
+        message.text = "Final words"
+        message.isStreaming = false
+        await store.prepare([message])
+        #expect(store.hasPendingWordHaptics(for: message.id))
+        let history = ChatMessage(role: .codex, text: "Finished history")
+        await store.prepare([history])
+        #expect(!store.hasPendingWordHaptics(for: history.id))
+        store.retire()
+    }
+
     @Test func readingFramePresenceDoesNotObserveStreamingPayloadRevisions() async {
         let store = RenderedMessageStore(renderer: Self.rawRenderer)
         var message = ChatMessage(role: .codex, text: "First render", isStreaming: true)

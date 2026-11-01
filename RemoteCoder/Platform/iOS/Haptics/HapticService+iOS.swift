@@ -8,7 +8,8 @@ extension HapticService {
         defaults: .standard,
         supportsHaptics: CHHapticEngine.capabilitiesForHardware().supportsHaptics,
         isActive: { UIApplication.shared.applicationState == .active },
-        makeInteractionPlayer: { PreparedHapticPlayer() }
+        makeInteractionPlayer: { PreparedHapticPlayer() },
+        makeStreamingPlayer: { PreparedStreamingHapticPlayer() }
     )
 
     /// Touch feedback stays on the control's SwiftUI transaction, without a second state hop.
@@ -55,10 +56,10 @@ struct HapticOutput: View {
             .accessibilityHidden(true)
             .allowsHitTesting(false)
             .sensoryFeedback(trigger: service.pulse) { _, pulse in service.feedback(for: pulse) }
-            .onChange(of: scenePhase) { if scenePhase != .active { service.cancelInteractions() } }
+            .onChange(of: scenePhase) { if scenePhase != .active { service.cancelPlayback() } }
             .onChange(of: voiceCall.isActive) { _, active in
-                if active { service.cancelInteractions() }
+                if active { service.cancelPlayback() }
             }
-            .onDisappear { service.cancelInteractions() }
+            .onDisappear { service.cancelPlayback() }
     }
 }

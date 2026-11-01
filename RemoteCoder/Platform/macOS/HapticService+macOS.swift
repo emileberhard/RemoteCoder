@@ -8,7 +8,8 @@ extension HapticService {
         defaults: AppStorageScope.current.defaults,
         supportsHaptics: false,
         isActive: { NSApplication.shared.isActive },
-        makeInteractionPlayer: { NoHapticPlayer() }
+        makeInteractionPlayer: { NoHapticPlayer() },
+        makeStreamingPlayer: { NoHapticPlayer() }
     )
 
     func feedbackForInteraction(_ event: HapticEvent) -> SensoryFeedback? {
@@ -43,11 +44,14 @@ extension HapticRecipe {
 }
 
 @MainActor
-final class NoHapticPlayer: HapticInteractionPlaying {
+final class NoHapticPlayer: HapticInteractionPlaying, HapticStreamingPlaying {
+    var hasActiveAccent: Bool { false }
     func prepare(strength: HapticStrength, canPlay: @escaping @MainActor () -> Bool) {}
     func play(_ event: HapticEvent) {}
     func finish() {}
     func cancel() {}
+    func prepare(canPlay: @escaping @MainActor () -> Bool) {}
+    func play(punch: Float) {}
 }
 
 struct HapticOutput: View {
@@ -60,8 +64,8 @@ struct HapticOutput: View {
             .accessibilityHidden(true)
             .allowsHitTesting(false)
             .sensoryFeedback(trigger: service.pulse) { _, pulse in service.feedback(for: pulse) }
-            .onChange(of: scenePhase) { if scenePhase != .active { service.cancelInteractions() } }
-            .onDisappear { service.cancelInteractions() }
+            .onChange(of: scenePhase) { if scenePhase != .active { service.cancelPlayback() } }
+            .onDisappear { service.cancelPlayback() }
     }
 }
 #endif

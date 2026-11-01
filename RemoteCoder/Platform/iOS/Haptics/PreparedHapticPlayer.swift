@@ -51,6 +51,7 @@ extension HapticAccent {
 /// no file loading or keep-warm timer, and no changes to the app's audio session.
 @MainActor
 final class PreparedHapticPlayer: HapticInteractionPlaying {
+    var hasActiveAccent: Bool { activePlayer != nil && ready }
     private var impacts: [HapticRecipe.Impact: UIImpactFeedbackGenerator] = [:]
     private var selection: UISelectionFeedbackGenerator?
     private var notification: UINotificationFeedbackGenerator?
