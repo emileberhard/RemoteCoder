@@ -197,6 +197,32 @@ mod tests {
     use super::*;
 
     #[test]
+    fn sessions_discovery_classifies_invalid_header_evidence() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let origin = Origin {
+            host: "fixture".into(),
+            provider: "codex".into(),
+            provider_home: directory.path().into(),
+            local_home: directory.path().into(),
+        };
+        let path = origin.path().join("invalid.jsonl");
+        std::fs::create_dir_all(path.parent().unwrap())?;
+        let mut db = Connection::open_in_memory()?;
+        db.execute_batch(include_str!("schema.sql"))?;
+        for body in [
+            String::new(),
+            "{\"type\":\"session_meta\",\"payload\":{\"id\":null}}\n".into(),
+            "{\"type\":\"session_meta\",\"timestamp\":\"invalid\",\"payload\":{\"id\":\"valid\"}}\n".into(),
+            "{\"type\":\"event_msg\"}\n".repeat(128),
+        ] {
+            std::fs::write(&path, body)?;
+            let error = ingest::header(&mut db, &origin, &path, &AtomicBool::new(false)).unwrap_err();
+            assert!(error.is::<ingest::InvalidHeader>(), "{error:#}");
+        }
+        Ok(())
+    }
+
+    #[test]
     fn sessions_discovery_retries_unreadable_headers_without_a_file_change() -> Result<()> {
         use std::os::unix::fs::PermissionsExt;
         let directory = tempfile::tempdir()?;

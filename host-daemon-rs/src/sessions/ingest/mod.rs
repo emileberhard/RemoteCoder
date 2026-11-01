@@ -663,10 +663,12 @@ fn ingest_source(
                 if state.thread.is_some() {
                     break;
                 }
-                ensure!(
-                    records < 128 && offset < 8 << 20,
-                    "unavailable: identity exceeds inventory read budget"
-                );
+                if records >= 128 || offset >= 8 << 20 {
+                    return Err(InvalidHeader(
+                        "Transcript has no identity within the inventory header budget",
+                    )
+                    .into());
+                }
             }
         }
     }
