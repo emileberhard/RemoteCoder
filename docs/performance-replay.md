@@ -438,6 +438,8 @@ first-content callback. Existing `HistorySelectionToFirstContent` begins when th
 target resume starts. These intervals share the trace clock and reveal overlap
 between transcript presentation work and the close spring. First content is a
 view-lifecycle proxy, not a composited-pixel timestamp; it can precede uncovering.
+The harness publishes its intervals in the Points of Interest category so the
+standard trace template exports them as named intervals.
 
 Compare a long Markdown/code conversation both cold and after an observed
 `RecentConversationCache` hit, plus a short conversation. The 60 Hz test iPhone

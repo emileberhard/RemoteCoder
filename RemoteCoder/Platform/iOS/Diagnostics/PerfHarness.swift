@@ -18,7 +18,7 @@ final class PerfHarness {
     static let shared = PerfHarness()
 
     nonisolated static let commandNotification = "com.remotecoder.perf.command"
-    nonisolated static let signposter = OSSignposter(subsystem: "RemoteCoder", category: "PerfHarness")
+    nonisolated static let signposter = OSSignposter(subsystem: "RemoteCoder", category: .pointsOfInterest)
 
     private let logger = Logger(subsystem: "RemoteCoder", category: "PerfHarness")
     private weak var workspace: ChatWorkspaceModel?
