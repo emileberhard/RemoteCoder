@@ -3,6 +3,7 @@ use crate::agents::jobs::routes::{NativeDeliveryState, NativeMessage, NativeRout
 use crate::providers::claude::conversation_index::{
     Delivery, DeliveryState, ParentDeliveryRoute, ParentSelection, delivery_uuid,
 };
+use crate::providers::claude::delivery_evidence::Verification;
 use crate::providers::claude::{
     ClaudeSelection, ClaudeTurnRequest, ClaudeUserInput, session_uuid_from_thread_id,
 };
@@ -256,14 +257,23 @@ impl ClaudeSupervisor {
         let prior = parent.delivery(&message.delivery_id);
         let home = self.settings.claude_home.clone();
         let session = session_uuid.clone();
+        let cwd = parent
+            .selection
+            .as_ref()
+            .map(|selection| selection.cwd.clone());
         let id = input_id.clone();
+        let text = message.text.clone();
         let recorded = tokio::task::spawn_blocking(move || {
-            let Some(path) =
-                crate::providers::claude::timeline::find_session_path(&session, &home)?
-            else {
+            let path = match cwd {
+                Some(cwd) => crate::providers::claude::timeline::session_path_from_cwd(
+                    &home, &cwd, &session,
+                )?,
+                None => crate::providers::claude::timeline::find_session_path(&session, &home)?,
+            };
+            let Some(path) = path else {
                 return Ok(None);
             };
-            crate::providers::claude::delivery_evidence::recorded_fingerprint(&path, &id)
+            crate::providers::claude::delivery_evidence::recorded_callback(&path, &id, &text)
         })
         .await
         .map_err(|error| uncertain(format!("Claude input evidence could not be read: {error}")))?
@@ -272,19 +282,19 @@ impl ClaudeSupervisor {
                 "Claude input evidence could not be read: {error:#}"
             ))
         })?;
-        if let Some(recorded_fingerprint) = recorded {
-            if recorded_fingerprint
-                .as_deref()
-                .is_some_and(|saved| saved != fingerprint)
-            {
-                return Err(rejected(
-                    "Delivery id is recorded in Claude history with different message content",
-                ));
-            }
-            if recorded_fingerprint.is_none() {
-                return Err(uncertain(
-                    "Claude history records this input UUID, but its original payload cannot be verified".to_owned(),
-                ));
+        if let Some(verification) = recorded {
+            match verification {
+                Verification::Matches => {}
+                Verification::Differs => {
+                    return Err(rejected(
+                        "Delivery id is recorded in Claude history with different message content",
+                    ));
+                }
+                Verification::Unverifiable => {
+                    return Err(uncertain(
+                        "Claude history records this input UUID, but its original payload cannot be verified".to_owned(),
+                    ));
+                }
             }
             let mut receipt = receipt(
                 &message,

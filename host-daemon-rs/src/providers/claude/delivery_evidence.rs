@@ -28,11 +28,28 @@ pub(super) fn recorded_ids<'a>(path: &Path, ids: &[&'a str]) -> Result<HashSet<&
 }
 
 pub(super) fn recorded_fingerprint(path: &Path, id: &str) -> Result<Option<Option<String>>> {
-    Ok(recorded_inputs(path, &[id], Payload::Callback)?.remove(id))
+    Ok(recorded_inputs(path, &[id], Payload::Callback)?
+        .remove(id)
+        .map(Recorded::fingerprint))
 }
 
 pub(super) fn recorded_plain_fingerprint(path: &Path, id: &str) -> Result<Option<Option<String>>> {
-    Ok(recorded_inputs(path, &[id], Payload::Plain)?.remove(id))
+    Ok(recorded_inputs(path, &[id], Payload::Plain)?
+        .remove(id)
+        .map(Recorded::fingerprint))
+}
+
+pub(super) fn recorded_callback(path: &Path, id: &str, text: &str) -> Result<Option<Verification>> {
+    Ok(recorded_inputs(path, &[id], Payload::Callback)?
+        .remove(id)
+        .map(|recorded| recorded.verify(text)))
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum Verification {
+    Matches,
+    Differs,
+    Unverifiable,
 }
 
 #[derive(Clone, Copy)]
@@ -41,11 +58,38 @@ enum Payload {
     Callback,
 }
 
+enum Recorded {
+    Alone(Option<String>),
+    Merged(Option<String>),
+}
+
+impl Recorded {
+    fn fingerprint(self) -> Option<String> {
+        match self {
+            Self::Alone(fingerprint) => fingerprint,
+            Self::Merged(_) => None,
+        }
+    }
+
+    fn verify(self, text: &str) -> Verification {
+        match self {
+            Self::Alone(Some(fingerprint))
+                if fingerprint == crate::ids::sha256_hex(text.as_bytes()) =>
+            {
+                Verification::Matches
+            }
+            Self::Merged(Some(content)) if content.contains(text) => Verification::Matches,
+            Self::Alone(Some(_)) | Self::Merged(Some(_)) => Verification::Differs,
+            Self::Alone(None) | Self::Merged(None) => Verification::Unverifiable,
+        }
+    }
+}
+
 fn recorded_inputs<'a>(
     path: &Path,
     ids: &[&'a str],
     payload: Payload,
-) -> Result<HashMap<&'a str, Option<String>>> {
+) -> Result<HashMap<&'a str, Recorded>> {
     let file =
         std::fs::File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
     let mut reader = BufReader::new(file);
@@ -68,59 +112,94 @@ fn recorded_inputs<'a>(
         }
         let record: Value = serde_json::from_slice(&line)
             .with_context(|| format!("failed to parse {}", path.display()))?;
-        let (recorded_id, content) = match record.get("type").and_then(Value::as_str) {
-            Some("user") => (record.get("uuid"), record.pointer("/message/content")),
+        let (recorded_id, merged, content) = match record.get("type").and_then(Value::as_str) {
+            Some("user") => (
+                record.get("uuid"),
+                record.get("mergedSendUuids").and_then(Value::as_array),
+                record.pointer("/message/content"),
+            ),
             Some("attachment")
                 if record.pointer("/attachment/type").and_then(Value::as_str)
                     == Some("queued_command") =>
             {
                 (
                     record.pointer("/attachment/source_uuid"),
+                    None,
                     record.pointer("/attachment/prompt"),
                 )
             }
-            _ => (None, None),
+            _ => (None, None, None),
         };
-        if let Some(recorded_id) = recorded_id.and_then(Value::as_str)
-            && let Some(id) = ids.iter().find(|id| **id == recorded_id)
+        let merged = merged
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>();
+        for recorded_id in recorded_id
+            .and_then(Value::as_str)
+            .into_iter()
+            .chain(merged.iter().copied())
         {
-            let text = match content {
-                Some(Value::String(text)) => {
-                    Some(crate::prompt_summary::without_remote_coder_note(text))
-                }
-                Some(Value::Array(parts)) => {
-                    let mut text = parts
-                        .iter()
-                        .filter_map(|part| {
-                            (part["type"] == "text")
-                                .then(|| part["text"].as_str())
-                                .flatten()
-                        })
-                        .map(crate::prompt_summary::without_remote_coder_note)
-                        .filter(|text| !text.is_empty());
-                    let first = text.next();
-                    if text.next().is_none() && parts.iter().all(|part| part["type"] == "text") {
-                        first
-                    } else {
-                        None
-                    }
-                }
-                _ => None,
+            let Some(id) = ids.iter().find(|id| **id == recorded_id) else {
+                continue;
             };
-            found.insert(
-                *id,
-                text.map(|text| {
-                    let text = if record["type"] == "user" && matches!(payload, Payload::Callback) {
-                        user_payload(text)
-                    } else {
-                        text
-                    };
-                    crate::ids::sha256_hex(text.as_bytes())
-                }),
-            );
+            let recorded = if merged.is_empty() {
+                Recorded::Alone(alone_fingerprint(&record, content, payload))
+            } else {
+                Recorded::Merged(merged_text(content))
+            };
+            found.insert(*id, recorded);
         }
     }
     Ok(found)
+}
+
+fn alone_fingerprint(record: &Value, content: Option<&Value>, payload: Payload) -> Option<String> {
+    let text = match content {
+        Some(Value::String(text)) => Some(crate::prompt_summary::without_remote_coder_note(text)),
+        Some(Value::Array(parts)) => {
+            let mut text = parts
+                .iter()
+                .filter_map(|part| {
+                    (part["type"] == "text")
+                        .then(|| part["text"].as_str())
+                        .flatten()
+                })
+                .map(crate::prompt_summary::without_remote_coder_note)
+                .filter(|text| !text.is_empty());
+            let first = text.next();
+            if text.next().is_none() && parts.iter().all(|part| part["type"] == "text") {
+                first
+            } else {
+                None
+            }
+        }
+        _ => None,
+    };
+    text.map(|text| {
+        let text = if record["type"] == "user" && matches!(payload, Payload::Callback) {
+            user_payload(text)
+        } else {
+            text
+        };
+        crate::ids::sha256_hex(text.as_bytes())
+    })
+}
+
+fn merged_text(content: Option<&Value>) -> Option<String> {
+    match content? {
+        Value::String(text) => Some(text.clone()),
+        Value::Array(parts) => parts
+            .iter()
+            .map(|part| {
+                (part["type"] == "text")
+                    .then(|| part["text"].as_str())
+                    .flatten()
+            })
+            .collect::<Option<Vec<_>>>()
+            .map(|texts| texts.join("\n")),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -209,6 +288,61 @@ mod tests {
         assert_eq!(
             user_payload(&format!("{NATIVE_PREFIX}missing suffix")),
             format!("{NATIVE_PREFIX}missing suffix")
+        );
+    }
+
+    #[test]
+    fn a_merged_record_proves_every_send_whose_exact_payload_it_contains() {
+        let first =
+            "<agent_message id=\"first:completion\">\n  <result>one</result>\n</agent_message>";
+        let second =
+            "<agent_message id=\"second:completion\">\n  <result>two</result>\n</agent_message>";
+        let record = serde_json::json!({
+            "type": "user",
+            "uuid": "second-input",
+            "mergedSendUuids": ["first-input"],
+            "message": {"content": format!("{SYNTHETIC_PREFIX}{first}\n{second}")},
+        });
+        let (_dir, path) = transcript(&format!("{record}\n"));
+
+        assert_eq!(
+            recorded_ids(&path, &["first-input", "second-input", "absent"]).unwrap(),
+            HashSet::from(["first-input", "second-input"]),
+        );
+        for (id, text) in [("first-input", first), ("second-input", second)] {
+            assert_eq!(
+                recorded_callback(&path, id, text).unwrap(),
+                Some(Verification::Matches)
+            );
+        }
+        assert_eq!(
+            recorded_callback(&path, "first-input", &first.replace("one", "changed")).unwrap(),
+            Some(Verification::Differs)
+        );
+        assert_eq!(
+            recorded_fingerprint(&path, "first-input").unwrap(),
+            Some(None)
+        );
+        assert_eq!(recorded_callback(&path, "absent", first).unwrap(), None);
+    }
+
+    #[test]
+    fn a_single_record_verifies_its_exact_callback_payload() {
+        let (_dir, path) = transcript(concat!(
+            "{\"type\":\"user\",\"uuid\":\"delivery-1\",\"message\":{\"content\":\"[MESSAGE FROM NON-USER SOURCE - NOT USER INPUT]\\nresult\"}}\n",
+            "{\"type\":\"user\",\"uuid\":\"delivery-2\",\"message\":{\"content\":[{\"type\":\"image\"}]}}\n",
+        ));
+        assert_eq!(
+            recorded_callback(&path, "delivery-1", "result").unwrap(),
+            Some(Verification::Matches)
+        );
+        assert_eq!(
+            recorded_callback(&path, "delivery-1", "other").unwrap(),
+            Some(Verification::Differs)
+        );
+        assert_eq!(
+            recorded_callback(&path, "delivery-2", "result").unwrap(),
+            Some(Verification::Unverifiable)
         );
     }
 

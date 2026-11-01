@@ -121,6 +121,24 @@ pub(crate) fn session_path_for_cwd(claude_home: &Path, cwd: &str, session_uuid: 
         .join(format!("{session_uuid}.jsonl"))
 }
 
+pub(crate) fn session_path_from_cwd(
+    claude_home: &Path,
+    cwd: &str,
+    session_uuid: &str,
+) -> Result<Option<PathBuf>> {
+    let canonical = std::fs::canonicalize(cwd)
+        .ok()
+        .map(|path| path.to_string_lossy().into_owned());
+    match std::iter::once(cwd.to_owned())
+        .chain(canonical)
+        .map(|cwd| session_path_for_cwd(claude_home, &cwd, session_uuid))
+        .find(|path| path.is_file())
+    {
+        Some(path) => Ok(Some(path)),
+        None => find_session_path(session_uuid, claude_home),
+    }
+}
+
 pub(crate) fn existing_recorded_cwd(
     path: &Path,
     session_uuid: &str,

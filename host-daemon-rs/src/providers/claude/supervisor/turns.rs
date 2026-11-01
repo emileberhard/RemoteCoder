@@ -9,7 +9,6 @@ use crate::providers::claude::{ClaudeTurnRequest, ClaudeUserInput, claude_thread
 use crate::rpc::error::RpcCode;
 use nix::unistd::Pid;
 use std::collections::{HashMap, HashSet};
-use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -808,26 +807,12 @@ impl ClaudeSupervisor {
     }
 
     pub(crate) fn session_history(&self, cwd: &str, session_uuid: &str) -> Option<PathBuf> {
-        let canonical = fs::canonicalize(cwd)
-            .ok()
-            .map(|path| path.to_string_lossy().into_owned());
-        std::iter::once(cwd.to_owned())
-            .chain(canonical)
-            .map(|cwd| {
-                crate::providers::claude::timeline::session_path_for_cwd(
-                    &self.settings.claude_home,
-                    &cwd,
-                    session_uuid,
-                )
-            })
-            .find(|path| path.is_file())
-            .or_else(|| {
-                crate::providers::claude::timeline::find_session_path(
-                    session_uuid,
-                    &self.settings.claude_home,
-                )
-                .ok()
-                .flatten()
-            })
+        crate::providers::claude::timeline::session_path_from_cwd(
+            &self.settings.claude_home,
+            cwd,
+            session_uuid,
+        )
+        .ok()
+        .flatten()
     }
 }
