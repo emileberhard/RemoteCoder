@@ -537,11 +537,29 @@ def hitch_rating(rate: float) -> str:
     return next((label for limit, label in HITCH_RATE_RATINGS if rate <= limit), "severe")
 
 
+def hitch_update_rows(trace: str):
+    seen = set()
+    duplicates = 0
+    columns = {"start", "duration", "process", "display", "swap-id", "surface-id"}
+    for row in table_rows(trace, "hitches-updates", columns):
+        process, frame = element_text(row.get("process")), frame_key(row)
+        start, duration = trace_number(row.get("start")), trace_number(row.get("duration"))
+        if process and frame is not None and start is not None and duration is not None and duration >= 0:
+            identity = (process, frame, start, duration)
+            if identity in seen:
+                duplicates += 1
+                continue
+            seen.add(identity)
+        yield row
+    if duplicates:
+        print(f"hitches-updates: excluded {duplicates} nested duplicate rows", file=sys.stderr)
+
+
 def hitch_updates(trace: str) -> tuple[Counter, set[tuple], list[float | None]]:
     commits = Counter()
     app_frames = set()
     app_commit_starts = []
-    for row in table_rows(trace, "hitches-updates", {"start", "process", "display", "swap-id", "surface-id"}):
+    for row in hitch_update_rows(trace):
         process = process_name(row.get("process"))
         commits[process] += 1
         if process == APP:
@@ -962,7 +980,7 @@ def motion_frame_work(trace: str, schemas: frozenset[str], intervals: list[tuple
         result["framesUnavailableReason"] = "trace did not collect display-vsyncs-interval"
     if "hitches-updates" in schemas:
         durations, missing = [], 0
-        for row in table_rows(trace, "hitches-updates", {"start", "duration", "process"}):
+        for row in hitch_update_rows(trace):
             if process_name(row.get("process")) != APP:
                 continue
             start, duration = trace_number(row.get("start")), trace_number(row.get("duration"))

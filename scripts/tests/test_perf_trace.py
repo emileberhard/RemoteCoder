@@ -19,6 +19,37 @@ loader.exec_module(trace)
 
 
 class RenderMetricsTests(unittest.TestCase):
+    def test_nested_update_rows_do_not_inflate_commit_counts_or_durations(self):
+        xml = '''<trace-query-result><node><schema name="hitches-updates">
+        <col><mnemonic>start</mnemonic><engineering-type>start-time</engineering-type></col>
+        <col><mnemonic>duration</mnemonic><engineering-type>duration</engineering-type></col>
+        <col><mnemonic>process</mnemonic><engineering-type>process</engineering-type></col>
+        <col><mnemonic>display</mnemonic><engineering-type>display-name</engineering-type></col>
+        <col><mnemonic>swap-id</mnemonic><engineering-type>uint32</engineering-type></col>
+        <col><mnemonic>surface-id</mnemonic><engineering-type>uint32</engineering-type></col>
+        <col><mnemonic>containment-level</mnemonic><engineering-type>uint32</engineering-type></col>
+        </schema>
+        <row><start-time id="1">1000000</start-time><duration id="2">15000000</duration>
+        <process id="3" fmt="RemoteCoder (12)"/><display-name id="4">Display 1</display-name>
+        <uint32 id="5">10</uint32><uint32 id="6">18</uint32><uint32 id="7">0</uint32></row>
+        <row><start-time ref="1"/><duration ref="2"/><process ref="3"/><display-name ref="4"/>
+        <uint32 ref="5"/><uint32 ref="6"/><uint32 id="8">1</uint32></row>
+        <row><start-time ref="1"/><duration id="9">2000000</duration><process ref="3"/>
+        <display-name ref="4"/><uint32 id="10">11</uint32><uint32 ref="6"/><uint32 ref="7"/></row>
+        <row><start-time ref="1"/><duration id="11">1000000</duration><process ref="3"/>
+        <display-name ref="4"/><uint32 ref="5"/><uint32 ref="6"/><uint32 ref="7"/></row>
+        <row><start-time ref="1"/><duration ref="2"/><process id="12" fmt="RemoteCoder (13)"/>
+        <display-name ref="4"/><uint32 ref="5"/><uint32 ref="6"/><uint32 ref="7"/></row>
+        </node></trace-query-result>'''
+        with patch.object(trace, "guarded_export", side_effect=lambda *_: Export(xml)):
+            commits, _, starts = trace.hitch_updates("trace")
+            result = trace.motion_frame_work("trace", frozenset({"hitches-updates"}), [(0, 20_000_000)],
+                                             [], [], None, None)
+        self.assertEqual(commits["RemoteCoder"], 4)
+        self.assertEqual(len(starts), 4)
+        self.assertEqual(result["commitUpdates"], 4)
+        self.assertEqual(result["commitDurations"]["medianMs"], 8.5)
+
     def test_motion_frame_work_assigns_cpu_to_complete_panel_intervals(self):
         import xml.etree.ElementTree as ET
 
