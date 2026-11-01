@@ -8,7 +8,7 @@ there is no flag that turns any of this off.
 
 | Surface | Path | What it holds |
 | --- | --- | --- |
-| Gateway journal | `journal/gateway-YYYYMMDD.jsonl` | Every frame in or out of a client, Claude runtime lifecycle, every push attempt |
+| Gateway journal | `journal/gateway-YYYYMMDD.jsonl` | Every frame in or out of a client, Claude runtime lifecycle, every push attempt (30 days, 4 GiB in total: each rotation and startup deletes the oldest past days, never today's file, and records `journal` `cap_evicted` or `cap_unmet`) |
 | Gateway tracing | `codex-gateway.YYYY-MM-DD.log` | The `RUST_LOG` stream (INFO by default) |
 | Managed app-server stderr | `~/.codex/app-server-daemon/app-server.stderr.log` | Codex/app-server errors, including persistence and tool failures |
 | Desktop decisions | `desktop/desktop-YYYYMMDD.jsonl` | Every ChatGPT reconciliation: what it observed, the reason it chose, and every signal or relaunch that followed |
@@ -774,8 +774,7 @@ gateways while cached content is already visible), kind-ordered host eviction
 (the 1 GiB cap does not bind at 7 days) and trusting MetricKit's build label.
 Follow-ups, tracked here while Linear is at its free cap: A/B the composer
 spinner through MetricKit's GPU time; mirror Mac dev-build dSYMs
-built on the MacBook to the Mini; background sampling during voice calls; a
-byte cap for the gateway journal (age-bounded, up to 1.2 GB a day); per-purpose
+built on the MacBook to the Mini; background sampling during voice calls; per-purpose
 network counters and gateway connection correlation; an unknown initial phase in
 `ScenePhaseAggregate`, which starts as background, so a history read begun during
 a background launch stops holding its state through suspension.

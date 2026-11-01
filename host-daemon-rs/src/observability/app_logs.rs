@@ -18,7 +18,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use serde_json::{Value, json};
 use tracing::{info, warn};
 
-use crate::observability::journal::{Journal, sweep_expired_day_files, today_utc};
+use crate::observability::journal::{
+    CapOutcome, Journal, evict_oldest, sweep_expired_day_files, today_utc,
+};
 use crate::observability::writer::WriterHandle;
 use crate::storage::private_state;
 
@@ -69,45 +71,6 @@ pub(crate) struct AppLogStore {
 pub(crate) struct StoredSegment {
     pub(crate) path: PathBuf,
     pub(crate) cap: Option<CapOutcome>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct CapOutcome {
-    pub(crate) files: usize,
-    pub(crate) bytes: u64,
-    pub(crate) retained_bytes: Option<u64>,
-    pub(crate) cap_bytes: u64,
-    pub(crate) unreadable_entries: usize,
-    pub(crate) evicted_through: Option<SystemTime>,
-    pub(crate) at: SystemTime,
-}
-
-impl CapOutcome {
-    pub(crate) fn is_met(&self) -> bool {
-        self.retained_bytes
-            .is_some_and(|retained| retained <= self.cap_bytes)
-    }
-
-    pub(crate) fn event(&self) -> &'static str {
-        match (self.is_met(), self.files) {
-            (false, _) => "cap_unmet",
-            (true, 0) => "cap_met",
-            (true, _) => "cap_evicted",
-        }
-    }
-
-    pub(crate) fn fields(&self) -> Value {
-        json!({
-            "met": self.is_met(),
-            "files": self.files,
-            "bytes": self.bytes,
-            "retainedBytes": self.retained_bytes,
-            "capBytes": self.cap_bytes,
-            "unreadableEntries": self.unreadable_entries,
-            "evictedThroughMs": self.evicted_through.map(unix_millis),
-            "atMs": unix_millis(self.at),
-        })
-    }
 }
 
 impl AppLogStore {
@@ -265,39 +228,7 @@ fn enforce_byte_cap(dir: &Path, byte_cap: u64) -> CapOutcome {
             }
         }
     }
-    let mut retained: u64 = segments.iter().map(|(_, size, _)| size).sum();
-    let mut files = 0;
-    let mut bytes = 0;
-    let mut evicted_through = None;
-    if retained > byte_cap {
-        segments.sort();
-        for (modified, size, path) in segments {
-            if retained <= byte_cap {
-                break;
-            }
-            if std::fs::remove_file(&path).is_ok() {
-                retained -= size;
-                files += 1;
-                bytes += size;
-                evicted_through = Some(modified);
-            }
-        }
-    }
-    CapOutcome {
-        files,
-        bytes,
-        retained_bytes: (unreadable_entries == 0).then_some(retained),
-        cap_bytes: byte_cap,
-        unreadable_entries,
-        evicted_through,
-        at: SystemTime::now(),
-    }
-}
-
-fn unix_millis(time: SystemTime) -> u64 {
-    time.duration_since(UNIX_EPOCH).map_or(0, |elapsed| {
-        u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
-    })
+    evict_oldest(segments, 0, unreadable_entries, byte_cap)
 }
 
 /// Reduces an arbitrary client-supplied string to one safe path component.

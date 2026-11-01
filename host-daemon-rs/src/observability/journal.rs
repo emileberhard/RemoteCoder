@@ -18,7 +18,7 @@ use serde_json::{Map, Value, json};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 
@@ -31,6 +31,7 @@ mod writer;
 /// prompts, deltas, diffs and tool output through whole while catching
 /// base64-encoded images in `turn/start` inputs.
 const MAX_STRING_BYTES: usize = 16 * 1024;
+const JOURNAL_CAP_BYTES: u64 = 4 << 30;
 
 /// Records buffered between the hot path and the writer task. Deep enough to
 /// absorb a full delta burst; past this the record is dropped, not awaited.
@@ -357,13 +358,125 @@ fn journal_file_name(day: u32) -> String {
     format!("gateway-{day:08}.jsonl")
 }
 
+fn journal_day(name: &str) -> Option<u32> {
+    name.strip_prefix("gateway-")
+        .and_then(|rest| rest.strip_suffix(".jsonl"))
+        .and_then(|day| day.parse::<u32>().ok())
+}
+
 /// Deletes journal files whose day is older than the retention window.
 fn sweep_retention(dir: &Path, today: u32, retention_days: u64) {
-    sweep_expired_day_files(dir, today, retention_days, |name| {
-        name.strip_prefix("gateway-")
-            .and_then(|rest| rest.strip_suffix(".jsonl"))
-            .and_then(|day| day.parse::<u32>().ok())
-    });
+    sweep_expired_day_files(dir, today, retention_days, journal_day);
+}
+
+fn enforce_journal_cap(dir: &Path, today: u32, byte_cap: u64) -> CapOutcome {
+    let mut unreadable_entries = 0;
+    let mut pinned_bytes = 0;
+    let mut days = Vec::new();
+    match std::fs::read_dir(dir) {
+        Ok(entries) => {
+            for entry in entries {
+                let Ok(entry) = entry else {
+                    unreadable_entries += 1;
+                    continue;
+                };
+                let Some(day) = entry.file_name().to_str().and_then(journal_day) else {
+                    continue;
+                };
+                match entry.metadata() {
+                    Ok(metadata) if day == today => pinned_bytes += metadata.len(),
+                    Ok(metadata) => days.push((
+                        metadata.modified().unwrap_or(UNIX_EPOCH),
+                        metadata.len(),
+                        entry.path(),
+                    )),
+                    Err(_) => unreadable_entries += 1,
+                }
+            }
+        }
+        Err(_) => unreadable_entries += 1,
+    }
+    evict_oldest(days, pinned_bytes, unreadable_entries, byte_cap)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CapOutcome {
+    pub(crate) files: usize,
+    pub(crate) bytes: u64,
+    pub(crate) retained_bytes: Option<u64>,
+    pub(crate) cap_bytes: u64,
+    pub(crate) unreadable_entries: usize,
+    pub(crate) evicted_through: Option<SystemTime>,
+    pub(crate) at: SystemTime,
+}
+
+impl CapOutcome {
+    pub(crate) fn is_met(&self) -> bool {
+        self.retained_bytes
+            .is_some_and(|retained| retained <= self.cap_bytes)
+    }
+
+    pub(crate) fn event(&self) -> &'static str {
+        match (self.is_met(), self.files) {
+            (false, _) => "cap_unmet",
+            (true, 0) => "cap_met",
+            (true, _) => "cap_evicted",
+        }
+    }
+
+    pub(crate) fn fields(&self) -> Value {
+        json!({
+            "met": self.is_met(),
+            "files": self.files,
+            "bytes": self.bytes,
+            "retainedBytes": self.retained_bytes,
+            "capBytes": self.cap_bytes,
+            "unreadableEntries": self.unreadable_entries,
+            "evictedThroughMs": self.evicted_through.map(unix_millis),
+            "atMs": unix_millis(self.at),
+        })
+    }
+}
+
+fn unix_millis(time: SystemTime) -> u64 {
+    time.duration_since(UNIX_EPOCH).map_or(0, |elapsed| {
+        u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
+    })
+}
+
+pub(crate) fn evict_oldest(
+    mut candidates: Vec<(SystemTime, u64, PathBuf)>,
+    pinned_bytes: u64,
+    unreadable_entries: usize,
+    byte_cap: u64,
+) -> CapOutcome {
+    let mut retained: u64 = pinned_bytes + candidates.iter().map(|(_, size, _)| size).sum::<u64>();
+    let mut files = 0;
+    let mut bytes = 0;
+    let mut evicted_through = None;
+    if retained > byte_cap {
+        candidates.sort();
+        for (modified, size, path) in candidates {
+            if retained <= byte_cap {
+                break;
+            }
+            if std::fs::remove_file(&path).is_ok() {
+                retained -= size;
+                files += 1;
+                bytes += size;
+                evicted_through = Some(modified);
+            }
+        }
+    }
+    CapOutcome {
+        files,
+        bytes,
+        retained_bytes: (unreadable_entries == 0).then_some(retained),
+        cap_bytes: byte_cap,
+        unreadable_entries,
+        evicted_through,
+        at: SystemTime::now(),
+    }
 }
 
 /// Deletes files in `dir` older than the retention window, where `day_of`
@@ -446,6 +559,55 @@ mod tests {
             rfc3339_millis(1_787_323_387.482),
             "2026-08-21T14:43:07.482Z"
         );
+    }
+
+    #[test]
+    fn the_byte_cap_evicts_oldest_days_and_never_today() {
+        let dir = temp_dir("cap");
+        std::fs::create_dir_all(&dir).expect("dir");
+        for (offset, name, size) in [
+            (1, "gateway-20261028.jsonl", 3),
+            (2, "gateway-20261029.jsonl", 3),
+            (3, "gateway-20261030.jsonl", 5),
+            (0, "codex-gateway.2026-10-01.log", 50),
+        ] {
+            let path = dir.join(name);
+            std::fs::write(&path, vec![b'x'; size]).expect("write");
+            std::fs::File::open(&path)
+                .expect("open")
+                .set_modified(UNIX_EPOCH + Duration::from_secs(1_800_000_000 + offset))
+                .expect("mtime");
+        }
+        let remaining = || {
+            let mut names: Vec<String> = std::fs::read_dir(&dir)
+                .expect("read dir")
+                .flatten()
+                .map(|entry| entry.file_name().to_string_lossy().to_string())
+                .collect();
+            names.sort();
+            names
+        };
+
+        let outcome = enforce_journal_cap(&dir, 20_261_030, 9);
+        assert_eq!((outcome.files, outcome.retained_bytes), (1, Some(8)));
+        assert_eq!(outcome.event(), "cap_evicted");
+        assert_eq!(
+            remaining(),
+            vec![
+                "codex-gateway.2026-10-01.log",
+                "gateway-20261029.jsonl",
+                "gateway-20261030.jsonl"
+            ]
+        );
+
+        let outcome = enforce_journal_cap(&dir, 20_261_030, 4);
+        assert_eq!((outcome.files, outcome.retained_bytes), (1, Some(5)));
+        assert_eq!(outcome.event(), "cap_unmet");
+        assert_eq!(
+            remaining(),
+            vec!["codex-gateway.2026-10-01.log", "gateway-20261030.jsonl"]
+        );
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

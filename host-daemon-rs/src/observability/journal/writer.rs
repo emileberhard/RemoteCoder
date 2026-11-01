@@ -8,8 +8,9 @@ use super::payload::{
     redact_call_details, rpc_thread_id, string_field,
 };
 use super::{
-    Admitted, MAX_PENDING_REQUESTS, MAX_REVIEW_RECORD_BYTES, Record, WRITE_BATCH_RECORDS,
-    civil_day, journal_file_name, sweep_retention,
+    Admitted, JOURNAL_CAP_BYTES, MAX_PENDING_REQUESTS, MAX_REVIEW_RECORD_BYTES, Record,
+    WRITE_BATCH_RECORDS, civil_day, enforce_journal_cap, journal_file_name, sweep_retention,
+    with_event,
 };
 use crate::time::{rfc3339_millis, unix_seconds};
 use serde_json::{Map, Value, json};
@@ -388,6 +389,7 @@ impl Writer {
             let _ = previous.flush().await;
         }
         sweep_retention(&self.dir, today, self.retention_days);
+        let cap = enforce_journal_cap(&self.dir, today, JOURNAL_CAP_BYTES);
 
         let path = self.dir.join(journal_file_name(today));
         match tokio::fs::OpenOptions::new()
@@ -397,7 +399,7 @@ impl Writer {
             .open(&path)
             .await
         {
-            Ok(file) => {
+            Ok(mut file) => {
                 use std::os::unix::fs::PermissionsExt;
                 if let Err(error) = file
                     .set_permissions(std::fs::Permissions::from_mode(0o600))
@@ -405,6 +407,24 @@ impl Writer {
                 {
                     self.log_io_error(&error);
                     return None;
+                }
+                if cap.files > 0 || !cap.is_met() {
+                    warn!(
+                        event = cap.event(),
+                        files = cap.files,
+                        bytes = cap.bytes,
+                        retained_bytes = cap.retained_bytes,
+                        cap_bytes = cap.cap_bytes,
+                        "gateway journal byte cap"
+                    );
+                    let mut fields = with_event(cap.event(), cap.fields());
+                    insert_kind(&mut fields, "journal");
+                    let mut line = Vec::new();
+                    append_line(&mut line, &self.stamp(fields, unix_seconds()));
+                    if let Err(error) = file.write_all(&line).await {
+                        self.log_io_error(&error);
+                        return None;
+                    }
                 }
                 self.io_error_logged = false;
                 self.open = Some((today, file));
