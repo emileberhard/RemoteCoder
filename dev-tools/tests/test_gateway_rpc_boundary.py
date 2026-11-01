@@ -5,6 +5,7 @@ import json
 import ssl
 import sys
 import tempfile
+import time
 import unittest
 from contextlib import nullcontext, redirect_stderr, redirect_stdout
 from datetime import UTC, datetime
