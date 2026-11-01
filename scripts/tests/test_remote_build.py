@@ -628,7 +628,7 @@ class RemoteBuildTests(unittest.TestCase):
                 patch.object(module, "ROOT", source),
                 patch.object(module.Path, "home", return_value=home),
                 patch.object(module, "load_policy", return_value=policy),
-                patch("build_cache._open_files", return_value=False),
+                patch("build_cache._open_file_snapshot", return_value=([], None)),
                 patch(
                     "build_cache._evict_payload",
                     side_effect=PermissionError("fixture eviction denied"),
