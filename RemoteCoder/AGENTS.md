@@ -63,9 +63,9 @@ holds the detailed history, recovery, voice and persistence contracts.
   mask. The Mac arm stays static. Decoration policy and central row visibility
   gate the effect; removal stops it immediately. A running `TimelineView`, even
   a periodic one, keeps the display link re-evaluating the view graph; the
-  earlier SwiftUI dots cost
-  about 2 s of main-thread time per 41 s streamed reply (October 2026,
-  perf-sim), and the UIKit symbol effect's first use took a 160–350 ms frame.
+  earlier SwiftUI dots cost about 2 s of main-thread time per 41 s streamed
+  reply (October 2026, perf-sim), and the UIKit symbol effect's first use took
+  a 160–350 ms frame.
   Use neither for a repeating transcript decoration. Mac decorations
   stop while macOS reports their window occluded: `WindowVisibility` feeds the
   occlusion state into `visualsVisible`. Hiding the app occludes the window,
