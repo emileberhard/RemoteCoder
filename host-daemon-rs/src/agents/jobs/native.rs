@@ -3,6 +3,9 @@ use anyhow::{Context, Result, ensure};
 use super::model::*;
 use super::owner::{JobOwner, now_ms};
 
+const OBSERVATION_ONLY: &str =
+    "This job only observes; it will not submit, retry or recover native execution.";
+
 impl JobOwner {
     pub(crate) async fn observe_native(
         &self,
@@ -69,10 +72,10 @@ impl JobOwner {
                 };
                 let binding = match observed {
                     Ok(binding) => binding,
-                    Err(error) => return self.record_unknown(job, format!("Native input/turn evidence is unavailable: {error:#}. This job only observes; it will not submit, retry or recover native execution.")).await,
+                    Err(error) => return self.record_unknown(job, format!("Native input/turn evidence is unavailable: {error:#}. {OBSERVATION_ONLY}")).await,
                 };
                 let Some(binding) = binding else {
-                    return self.record_unknown(job, "The native route has no exact input/turn evidence. This job only observes; it will not submit, retry or recover native execution.".into()).await;
+                    return self.record_unknown(job, format!("The native route has no exact input/turn evidence. {OBSERVATION_ONLY}")).await;
                 };
                 self.store()
                     .await?
@@ -102,10 +105,10 @@ impl JobOwner {
             return Ok(());
         }
         let Some(outcome) = super::codex::terminal_outcome(&inspection)? else {
-            return self.record_unknown(job, format!(
-                "The exact native turn has no terminal evidence ({}). This job only observes; it will not submit, retry or recover native execution.",
-                inspection["outcome"]["reason"].as_str().unwrap_or("evidence unavailable"),
-            )).await;
+            let reason = inspection["outcome"]["reason"]
+                .as_str()
+                .unwrap_or("evidence unavailable");
+            return self.record_unknown(job, format!("The exact native turn has no terminal evidence ({reason}). {OBSERVATION_ONLY}")).await;
         };
         let terminal_binding = ExecutionBinding {
             turn_id: inspection["executionTurnId"]

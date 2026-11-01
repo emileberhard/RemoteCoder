@@ -151,6 +151,29 @@ pub(crate) enum Recipient {
     },
 }
 
+impl Origin {
+    pub(crate) fn matches_recipient(&self, recipient: &Recipient) -> bool {
+        match (self, recipient) {
+            (
+                Self::Parent {
+                    conversation: sender,
+                },
+                Recipient::Conversation { conversation },
+            ) => sender == conversation,
+            (
+                Self::RemoteParent {
+                    host: sender_host,
+                    conversation: sender,
+                },
+                Recipient::Remote {
+                    host, conversation, ..
+                },
+            ) => sender_host == host && sender == conversation,
+            _ => false,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) enum ToolScope {

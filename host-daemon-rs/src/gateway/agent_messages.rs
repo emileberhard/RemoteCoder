@@ -138,28 +138,10 @@ impl Gateway {
                             .agent_for_conversation(&resolved.conversation)
                             .await?
                         && agent.origin_job_id.is_none()
-                        && match (&record.sender, &agent.parent_recipient) {
-                            (
-                                Origin::Parent {
-                                    conversation: sender,
-                                },
-                                Some(Recipient::Conversation {
-                                    conversation: parent,
-                                }),
-                            ) => sender == parent,
-                            (
-                                Origin::RemoteParent {
-                                    host: sender_host,
-                                    conversation: sender,
-                                },
-                                Some(Recipient::Remote {
-                                    host: parent_host,
-                                    conversation: parent,
-                                    ..
-                                }),
-                            ) => sender_host == parent_host && sender == parent,
-                            _ => false,
-                        }
+                        && agent
+                            .parent_recipient
+                            .as_ref()
+                            .is_some_and(|recipient| record.sender.matches_recipient(recipient))
                     {
                         let id = JobId::for_mutation(
                             resolved.conversation.provider,
@@ -348,19 +330,14 @@ impl Gateway {
             && let Origin::Parent { conversation } = &record.sender
             && let Some(agent) = self.jobs.agent_for_conversation(conversation).await?
         {
-            let immutable_parent = match (&agent.origin, &resolved.remote_recipient) {
-                (Origin::Parent { conversation }, None) => conversation == &resolved.conversation,
-                (
-                    Origin::RemoteParent { host, conversation },
-                    Some(Recipient::Remote {
-                        host: receiver,
-                        conversation: target,
-                        ..
-                    }),
-                ) => {
-                    host == receiver
-                        && conversation == target
-                        && conversation == &resolved.conversation
+            let immutable_parent = match &resolved.remote_recipient {
+                None => agent.origin.matches_recipient(&Recipient::Conversation {
+                    conversation: resolved.conversation.clone(),
+                }),
+                Some(recipient @ Recipient::Remote { conversation, .. })
+                    if conversation == &resolved.conversation =>
+                {
+                    agent.origin.matches_recipient(recipient)
                 }
                 _ => false,
             };
