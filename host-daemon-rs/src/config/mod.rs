@@ -856,6 +856,7 @@ mod tests {
         assert_eq!(gateway_token(&sources).unwrap(), token);
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn a_wildcard_bind_is_probed_over_loopback() {
         let endpoint = |host: &str| {
@@ -886,6 +887,25 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn plaintext_endpoints_require_a_loopback_address() {
+        for (host, allowed) in [
+            ("127.0.0.1", true),
+            ("::1", true),
+            ("0.0.0.0", false),
+            ("::", false),
+            ("100.64.0.9", false),
+            ("localhost", false),
+        ] {
+            let sources = ConfigSources::from_file_vars(HashMap::from([
+                ("RC_CODEX_GATEWAY_BIND_HOST".into(), host.into()),
+                ("RC_CODEX_GATEWAY_AUTH_TOKEN".into(), "0123456789abcdef".repeat(2)),
+            ]));
+            assert_eq!(GatewayEndpoint::load(&sources).is_ok(), allowed, "{host}");
+        }
+    }
+
     #[test]
     fn host_paths_require_a_real_home_and_keep_persisted_locations() {
         let directory = TempDir::new().expect("host home");
@@ -898,7 +918,11 @@ mod tests {
         );
         assert_eq!(
             paths.logs("journal"),
-            directory.path().join("Library/Logs/remote-coder/journal")
+            directory.path().join(if cfg!(target_os = "linux") {
+                ".local/state/remote-coder/logs/journal"
+            } else {
+                "Library/Logs/remote-coder/journal"
+            })
         );
         assert!(
             HostPaths::from_home(PathBuf::from("relative-home"))

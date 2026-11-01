@@ -769,7 +769,6 @@ mod tests {
         write_test_package(
             &staged.path,
             REQUIRED_CODEX_VERSION,
-            REQUIRED_CODEX_TARGET,
             &format!(
                 "printf '%s\\n' \"$3\" >> '{}'\nexec /bin/cat '{}'",
                 actions.display(),
