@@ -166,8 +166,7 @@ impl Gateway {
                             &record.delivery_id,
                         )
                         .map_err(anyhow::Error::msg)?;
-                        let input_id =
-                            crate::ids::hash_uuid("remotecoder-agent-input", &[id.as_str()]);
+                        let input_id = id.initial_input_id();
                         let job = self
                             .jobs
                             .observe_native(

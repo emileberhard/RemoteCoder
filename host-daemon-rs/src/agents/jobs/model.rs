@@ -37,6 +37,10 @@ impl JobId {
         &self.0
     }
 
+    pub(crate) fn initial_input_id(&self) -> String {
+        crate::ids::hash_uuid("remotecoder-agent-input", &[self.as_str()])
+    }
+
     pub(crate) fn for_mutation(provider: Provider, mutation_id: &str) -> Result<Self, String> {
         use sha2::{Digest, Sha256};
         if mutation_id.is_empty() || mutation_id.len() > 200 {
@@ -504,7 +508,7 @@ impl JobRecord {
     }
 
     pub(crate) fn initial_input_id(&self) -> String {
-        crate::ids::hash_uuid("remotecoder-agent-input", &[self.job_id.as_str()])
+        self.job_id.initial_input_id()
     }
 }
 
