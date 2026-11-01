@@ -106,8 +106,9 @@ same callback, including repeated events in one callback. There is no observable
 pulse, SwiftUI output, event queue or deferred replay. The root `HapticAttachment`
 registers one `ViewHapticPlayer` with the exact window containing its anchor;
 there is no global window lookup. Temporary presenter removal/re-addition retains
-the same window pool until SwiftUI dismantles the anchor. It survives an accepted action dismissing a
-sheet or replacing a card. Replacement/dismantle is fenced by player identity, so
+the same window pool until SwiftUI dismantles the anchor. It survives an accepted
+action dismissing a sheet or replacing a card. Replacement/dismantle is fenced by
+player identity, so
 an old anchor cannot detach a replacement. Missing output drops events.
 
 The service owns the native pool and lends it to gesture players. At most four
