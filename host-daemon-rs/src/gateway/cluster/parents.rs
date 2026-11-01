@@ -132,16 +132,28 @@ impl Gateway {
                 }
             }
         };
-        let mut row = self
-            .project_agent_record(&agent, &request.agent.thread_id)
-            .await?;
         let _operation = self.jobs.operations.write().await;
         let store = self.jobs.store().await?;
+        let agent = store.agent(agent.agent_id).await?;
         let agent_id = agent.agent_id.clone();
         let pending = store
             .pending_jobs(move |job| job.agent_id == agent_id)
             .await?;
-        let moved = store
+        let observe = if request.parent.is_some()
+            && agent.origin_job_id.is_none()
+            && match &agent.latest_job_id {
+                None => true,
+                Some(id) => matches!(
+                    self.jobs.read(id).await?.job.execution,
+                    crate::agents::jobs::model::ExecutionState::Terminal { .. }
+                ),
+            } {
+            self.native_active_execution(&self.agent_conversation(&request.agent.thread_id)?)
+                .await?
+        } else {
+            None
+        };
+        let mut moved = store
             .set_parent(
                 agent.agent_id,
                 request.parent,
@@ -150,8 +162,22 @@ impl Gateway {
                 observed,
             )
             .await?;
+        if let Some(execution) = observe {
+            let id = crate::agents::jobs::model::JobId::for_mutation(
+                self.agent_conversation(&request.agent.thread_id)?.provider,
+                &crate::agents::jobs::store::fingerprint(&serde_json::to_vec(&execution)?),
+            )
+            .map_err(anyhow::Error::msg)?;
+            self.jobs
+                .observe_native(moved.clone(), id, execution, None)
+                .await?;
+            moved = self.jobs.store().await?.agent(moved.agent_id).await?;
+        }
         self.agent_service().invalidate_parent_views().await;
         self.jobs.expedite(&pending);
+        let mut row = self
+            .project_agent_record(&moved, &request.agent.thread_id)
+            .await?;
         row.parent = moved.parent.clone();
         row.recipient = moved.parent_recipient;
         row.capabilities.ask_parent = row.parent.is_some();

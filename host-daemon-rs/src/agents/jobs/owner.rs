@@ -603,6 +603,15 @@ impl JobOwner {
     }
 
     pub(crate) async fn stop(&self, request: StopParams) -> Result<JobRecord> {
+        let current = self.store().await?.read(request.job_id.clone()).await?;
+        ensure!(
+            current.source != JobSource::Runtime
+                || !matches!(current.spec, SpecEvidence::Unknown { .. }),
+            crate::rpc::RpcError::new(
+                crate::rpc::error::RpcCode::MethodNotFound,
+                "native observation cannot stop execution; stop the exact conversation through its native owner"
+            )
+        );
         let job = self
             .store()
             .await?

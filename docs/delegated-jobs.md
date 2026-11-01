@@ -412,6 +412,32 @@ parent-chain hop is `unavailable`. Provenance and authority never change with th
 tag. The caller starting a new turn receives its result; moving a tag transfers
 unaccepted results to its new parent or to the user when promoted.
 
+An adopted native conversation has no inferred execution policy. Moving a running
+native turn under a parent creates a runtime Job with unknown specification and
+its exact native input/turn binding when proved. A parent-initiated message to an
+idle adopted conversation first commits a successor Job and freezes it in the
+message receipt, then uses the existing native input owner with the Job's stable
+input ID. Steering an obligated turn keeps that Job. App-initiated later turns
+create no callback by default. Historical imported records remain inert.
+
+Unknown-spec runtime Jobs only observe and finalize exact native evidence. They
+never dispatch, retry, launch or recover execution, infer settings from a header,
+or acknowledge managed-Claude job evidence. Explicit Job Stop is unsupported
+(exit 7); stop the exact native conversation through its owning client. Proven
+terminal outcomes use the existing bounded result reader, finalizer, completion
+envelope, recipient and retention. Missing input or terminal evidence stays
+unknown, with an interim notice describing the gap and native Stop route. Delivery
+of that notice satisfies its delivery obligation without settling execution.
+After notice acceptance, an unresolved observation requests no timer retries;
+existing provider events and shared reconciliation passes drive later reads.
+
+These Jobs add no persisted fields or enum variants. Old apps and CLI copies can
+read them. Each member applies the behavior of its installed gateway. An older
+gateway sharing the store can read an unknown-spec runtime Job but cannot
+reconcile it; it fails closed until upgraded. Roll forward instead of downgrading
+with unresolved observations. Adopting an idle conversation adds no Job until
+its parent sends input.
+
 A move changes the parent tag immediately. Positively unaccepted completion
 obligations follow the current tag. An uncertain send retains its frozen old
 receiver and delivery identity until reconciliation proves non-acceptance; it

@@ -54,6 +54,13 @@ impl JobOwner {
                 }
                 return Ok(false);
             }
+            if job.source == JobSource::Runtime && matches!(job.spec, SpecEvidence::Unknown { .. })
+            {
+                if !gateway.is_draining() {
+                    self.reconcile_native(&job).await?;
+                }
+                return Ok(notices_pending);
+            }
             if matches!(job.stop, StopState::Requested { .. }) {
                 self.stop_execution(&gateway, &job).await?;
                 let effects = if matches!(
@@ -469,7 +476,7 @@ impl JobOwner {
     }
 
     async fn stop_execution(&self, gateway: &Arc<Gateway>, job: &JobRecord) -> Result<()> {
-        if job.source == JobSource::Imported {
+        if job.source == JobSource::Imported || matches!(job.spec, SpecEvidence::Unknown { .. }) {
             return Ok(());
         }
         if matches!(
@@ -536,7 +543,7 @@ impl JobOwner {
         Ok(())
     }
 
-    async fn record_unknown(&self, job: &JobRecord, reason: String) -> Result<()> {
+    pub(super) async fn record_unknown(&self, job: &JobRecord, reason: String) -> Result<()> {
         if matches!(&job.execution, ExecutionState::Unknown { reason: current, .. } if current == &reason)
         {
             return Ok(());
@@ -546,6 +553,11 @@ impl JobOwner {
             Recipient::Conversation { .. } | Recipient::Remote { .. }
         ) {
             let host = self.gateway()?.job_host_name()?;
+            let stop = if matches!(job.spec, SpecEvidence::Unknown { .. }) {
+                "Stop native execution through its exact conversation in the owning client."
+            } else {
+                "Explicit Stop remains available."
+            };
             Some(crate::agents::envelope::message(
                 &format!("{}:notice:observation", job.job_id.as_str()),
                 &crate::agents::envelope::Sender {
@@ -556,7 +568,7 @@ impl JobOwner {
                     reply_target: job.job_id.as_str(),
                 },
                 &format!(
-                    "The outcome of delegated job {} is not yet known. This is an interim notice, not a final result. The runtime retains its identity and evidence and will report completion only when it is known. Inspect it with list_agents {} --json or explicitly stop it. Reason: {reason}",
+                    "The outcome of delegated job {} is not yet known. This is an interim notice, not a final result. The runtime retains its identity and evidence and will report completion only when it is known. Inspect it with list_agents {} --json. {stop} Reason: {reason}",
                     job.job_id.as_str(),
                     job.job_id.as_str()
                 ),
@@ -572,7 +584,7 @@ impl JobOwner {
         Ok(())
     }
 
-    async fn finalize(
+    pub(super) async fn finalize(
         &self,
         job: &JobRecord,
         outcome: JobOutcome,
@@ -614,6 +626,7 @@ impl JobOwner {
         };
         let execution = job.execution.binding().cloned();
         let cleanup = if job.source == JobSource::Runtime
+            && matches!(job.spec, SpecEvidence::Known { .. })
             && job
                 .execution
                 .conversation()

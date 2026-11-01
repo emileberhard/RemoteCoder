@@ -391,12 +391,15 @@ async fn thread_params(gateway: &Gateway, spec: &JobSpec) -> Result<Value> {
     }))
 }
 
-async fn final_result(gateway: &Gateway, binding: &ExecutionBinding) -> Result<ResultEvidence> {
+pub(super) async fn final_result(
+    gateway: &Gateway,
+    binding: &ExecutionBinding,
+) -> Result<ResultEvidence> {
     let mut cursor: Option<String> = None;
     let mut seen = HashSet::new();
     for _ in 0..RESULT_PAGES {
         let page = gateway
-            .job_native_call(
+            .cluster_history_page(
                 "thread/items/list",
                 json!({
                     "threadId":binding.conversation.thread_id,

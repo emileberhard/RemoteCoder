@@ -45,6 +45,40 @@ impl Inner {
 }
 
 impl JobStore {
+    pub(crate) async fn admit_native(&self, job: JobRecord) -> Result<JobRecord> {
+        self.access(move |inner| {
+            if let Some(existing) = inner.jobs.get(&job.job_id) {
+                ensure!(existing.agent_id == job.agent_id
+                    && existing.request_fingerprint == job.request_fingerprint,
+                    "native observation ID was reused with different inputs");
+                return Ok(existing.clone());
+            }
+            validate_job(&job)?;
+            let agent = inner.agent_view(&job.agent_id)?;
+            ensure!(agent.origin_job_id.is_none()
+                && agent.latest_job_id == job.previous_job_id
+                && agent.parent_revision == job.parent_revision
+                && agent.parent_recipient.as_ref() == Some(&job.recipient)
+                && matches!(&agent.conversation, ConversationBinding::Known { conversation } if Some(conversation) == job.execution.conversation()),
+                "native observation no longer matches its adopted agent");
+            ensure!(job.source == JobSource::Runtime && job.revision == 0
+                && matches!(job.spec, SpecEvidence::Unknown { .. })
+                && job.admission_origin.is_none(), "native observation cannot own execution policy");
+            ensure!(agent.latest_job_id.as_ref().is_none_or(|id| inner.jobs.get(id).is_some_and(is_terminal)),
+                crate::rpc::RpcError::new(crate::rpc::error::RpcCode::Conflict,
+                    "conversation already has an unresolved runtime job"));
+            ensure!(inner.jobs.values().filter(|job| live_reservation(job)).count() < MAX_UNSETTLED_JOBS,
+                "delegated-job admission capacity reached; settle or dismiss existing work");
+            inner.reclaim(job.created_at_ms.context("native observation requires creation time")?, RUNTIME_RESERVATION)?;
+            ensure!(inner.accounted_bytes()? + RUNTIME_RESERVATION + MUTATION_RESERVE <= MAX_STORE_BYTES,
+                "delegated-job storage is pinned at its cap");
+            inner.write_job(&job)?;
+            inner.insert_job(job.clone());
+            inner.ensure_agent(&job)?;
+            Ok(job)
+        }).await
+    }
+
     pub(crate) async fn parent_tags(
         &self,
         threads: Vec<ConversationIdentity>,

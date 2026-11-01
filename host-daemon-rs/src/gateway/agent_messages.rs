@@ -128,7 +128,62 @@ impl Gateway {
                 return Ok(json!(record));
             }
             let resolved = match self.resolve_message_target(&record).await {
-                Ok(resolved) => resolved,
+                Ok(mut resolved) => {
+                    self.authorize_message_target(&request.caller, &record, &resolved)
+                        .await?;
+                    if resolved.target_job_id.is_none()
+                        && resolved.remote_recipient.is_none()
+                        && let Some(agent) = self
+                            .jobs
+                            .agent_for_conversation(&resolved.conversation)
+                            .await?
+                        && agent.origin_job_id.is_none()
+                        && match (&record.sender, &agent.parent_recipient) {
+                            (
+                                Origin::Parent {
+                                    conversation: sender,
+                                },
+                                Some(Recipient::Conversation {
+                                    conversation: parent,
+                                }),
+                            ) => sender == parent,
+                            (
+                                Origin::RemoteParent {
+                                    host: sender_host,
+                                    conversation: sender,
+                                },
+                                Some(Recipient::Remote {
+                                    host: parent_host,
+                                    conversation: parent,
+                                    ..
+                                }),
+                            ) => sender_host == parent_host && sender == parent,
+                            _ => false,
+                        }
+                    {
+                        let id = JobId::for_mutation(
+                            resolved.conversation.provider,
+                            &record.delivery_id,
+                        )
+                        .map_err(anyhow::Error::msg)?;
+                        let input_id =
+                            crate::ids::hash_uuid("remotecoder-agent-input", &[id.as_str()]);
+                        let job = self
+                            .jobs
+                            .observe_native(
+                                agent,
+                                id,
+                                ExecutionState::Dispatching {
+                                    conversation: resolved.conversation.clone(),
+                                    input_id,
+                                },
+                                Some(record.request_fingerprint.clone()),
+                            )
+                            .await?;
+                        resolved.target_job_id = Some(job.job_id);
+                    }
+                    resolved
+                }
                 Err(error) => {
                     record = store
                         .update_message(
@@ -184,23 +239,39 @@ impl Gateway {
                 Err(error) => DeliveryState::Blocked { reason: bounded_reason(&format!("{error:#}")) },
             }
         } else {
-            let execution = match &resolved.target_job_id {
-                Some(id) => match store.message_execution(id.clone()).await {
-                    Ok(execution) => Some(execution),
-                    Err(error) => {
-                        record = store
-                            .update_message(
-                                record.delivery_id.clone(),
-                                DeliveryState::Uncertain {
-                                    reason: bounded_reason(&format!("{error:#}")),
-                                },
-                                now_ms(),
-                            )
-                            .await?;
-                        return Ok(json!(record));
-                    }
-                },
+            let native_input = match &resolved.target_job_id {
+                Some(id) => {
+                    let job = store.read(id.clone()).await?;
+                    (matches!(
+                        job.spec,
+                        crate::agents::jobs::model::SpecEvidence::Unknown { .. }
+                    ) && JobId::for_mutation(resolved.conversation.provider, &record.delivery_id)
+                        .ok()
+                        .as_ref()
+                        == Some(id))
+                    .then(|| job.current_input_id())
+                }
                 None => None,
+            };
+            let execution = match &resolved.target_job_id {
+                Some(id) if native_input.is_none() => {
+                    match store.message_execution(id.clone()).await {
+                        Ok(execution) => Some(execution),
+                        Err(error) => {
+                            record = store
+                                .update_message(
+                                    record.delivery_id.clone(),
+                                    DeliveryState::Uncertain {
+                                        reason: bounded_reason(&format!("{error:#}")),
+                                    },
+                                    now_ms(),
+                                )
+                                .await?;
+                            return Ok(json!(record));
+                        }
+                    }
+                }
+                _ => None,
             };
             let expected_turn =
                 if resolved.conversation.provider == crate::agents::jobs::model::Provider::Codex {
@@ -219,6 +290,7 @@ impl Gateway {
             if resolved.conversation.provider == crate::agents::jobs::model::Provider::Codex
                 && resolved.target_job_id.is_some()
                 && expected_turn.is_none()
+                && native_input.is_none()
             {
                 record = store.update_message(record.delivery_id.clone(), DeliveryState::Uncertain {
                     reason: "the target job's exact native turn is unknown; input was not submitted".into(),
@@ -241,7 +313,7 @@ impl Gateway {
                 gateway
                     .deliver_job_input(
                         &resolved.conversation,
-                        &record.delivery_id,
+                        native_input.as_deref().unwrap_or(&record.delivery_id),
                         text,
                         expected_turn.as_deref(),
                     )
@@ -387,6 +459,25 @@ impl Gateway {
             selector.len() >= 4 && selector.len() <= 512,
             "use an exact run ID, provider session ID or suffix of 4–512 bytes"
         );
+        if let Some(agent) = self
+            .jobs
+            .store()
+            .await?
+            .find_agent(selector.to_owned())
+            .await?
+        {
+            if let Some(id) = agent.latest_job_id {
+                return self.resolve_message_job(id, delivery_id).await;
+            }
+            if let ConversationBinding::Known { conversation } = agent.conversation {
+                return Ok(ResolvedMessage {
+                    remote_recipient: None,
+                    conversation,
+                    target_job_id: None,
+                    continuation: None,
+                });
+            }
+        }
         let matches = if let Ok(id) = JobId::try_from(selector.to_owned()) {
             vec![id]
         } else {
@@ -492,6 +583,17 @@ impl Gateway {
             || (view.job.source == JobSource::Imported
                 && matches!(view.job.execution, ExecutionState::Unknown { .. }))
         {
+            if matches!(
+                view.job.spec,
+                crate::agents::jobs::model::SpecEvidence::Unknown { .. }
+            ) {
+                return Ok(ResolvedMessage {
+                    remote_recipient: None,
+                    conversation,
+                    target_job_id: None,
+                    continuation: None,
+                });
+            }
             Some(MessageContinuation {
                 agent_id: agent.agent_id,
                 previous_job_id: job_id.clone(),
@@ -503,7 +605,13 @@ impl Gateway {
                 matches!(
                     view.job.execution,
                     ExecutionState::Running { .. } | ExecutionState::Recovering { .. }
-                ),
+                ) || (matches!(
+                    view.job.spec,
+                    crate::agents::jobs::model::SpecEvidence::Unknown { .. }
+                ) && JobId::for_mutation(conversation.provider, delivery_id)
+                    .ok()
+                    .as_ref()
+                    == Some(&job_id)),
                 "target job is not ready for messages; inspect its current execution state"
             );
             None

@@ -2011,6 +2011,14 @@ never add another transcript reader. An unavailable projection is not an empty
 inventory. Native parent moves need no JobSpec; continuing unknown native
 permissions fails closed.
 
+Unknown-spec runtime Jobs on adopted native conversations only observe exact
+input/turn evidence and use the existing finalizer and delivery owner. They never
+dispatch, retry, recover, stop or infer native execution policy. Parent input
+commits its observational Job before native custody; app-initiated later turns
+create no callback. Historical imports stay inert. An unresolved observation
+requests no timer retry after its interim notice is accepted; existing provider
+events and shared reconciliation passes drive reads.
+
 ## Lifecycle indexes
 
 JobStore is the only owner of conversation, parent, current-head, list-order and

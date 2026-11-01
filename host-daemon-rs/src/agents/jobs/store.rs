@@ -789,7 +789,17 @@ impl Inner {
     }
 
     fn ensure_agent(&mut self, job: &JobRecord) -> Result<()> {
-        if self.agents.contains_key(&job.agent_id) {
+        if let Some(mut agent) = self.agents.get(&job.agent_id).cloned() {
+            if agent.latest_job_id.is_none()
+                && agent.origin_job_id.is_none()
+                && job.source == JobSource::Runtime
+                && job.previous_job_id.is_none()
+                && matches!(job.spec, SpecEvidence::Unknown { .. })
+            {
+                agent.latest_job_id = Some(job.job_id.clone());
+                self.write_agent(&agent)?;
+                self.insert_agent(agent);
+            }
             return Ok(());
         }
         let Some(origin) = job.admission_origin.clone() else {

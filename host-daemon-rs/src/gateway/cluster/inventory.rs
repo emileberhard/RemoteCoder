@@ -350,6 +350,18 @@ impl Gateway {
             ));
         }
         let store = self.jobs.store().await?;
+        if let Some(agent) = store.find_agent(target.to_owned()).await? {
+            if let Some(id) = agent.latest_job_id {
+                return Ok(Some(
+                    json!({"ownerHostId":identity.host_id,"jobId":id,"agentId":agent.agent_id,"conversation":agent.conversation}),
+                ));
+            }
+            if let ConversationBinding::Known { conversation } = agent.conversation {
+                return Ok(Some(
+                    json!({"ownerHostId":identity.host_id,"threadId":conversation.thread_id,"jobId":null,"agentId":agent.agent_id,"kind":"native"}),
+                ));
+            }
+        }
         let matches = store.job_suffix_matches(target.to_owned()).await?;
         ensure!(
             matches.len() < 2,

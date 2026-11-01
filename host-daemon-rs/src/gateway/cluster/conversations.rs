@@ -47,11 +47,7 @@ impl Gateway {
         }
     }
 
-    pub(in crate::gateway) async fn cluster_history_page(
-        &self,
-        method: &str,
-        params: Value,
-    ) -> Result<Value> {
+    pub(crate) async fn cluster_history_page(&self, method: &str, params: Value) -> Result<Value> {
         let thread = params["threadId"]
             .as_str()
             .context("threadId is required")?
