@@ -367,6 +367,10 @@ mod tests {
         assert!(!owner.alive().unwrap());
         owner.linux_birth = None;
         assert!(owner.alive().is_err());
+        let previous = serde_json::json!({"pid": pid, "startedMicros": 123, "sessionUuid": "test"});
+        let previous_owner: ProcessOwner = serde_json::from_value(previous.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&previous_owner).unwrap(), previous);
+        assert!(previous_owner.alive().is_err());
     }
 
     use super::*;
