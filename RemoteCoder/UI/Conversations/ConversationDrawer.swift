@@ -167,7 +167,7 @@ final class DrawerMotion {
     func beginTracking() {
         stopSettling()
         #if RC_PERF_HARNESS
-        motionInterval = PerfHarness.signposter.beginInterval("DrawerMotion", id: PerfHarness.signposter.makeSignpostID())
+        motionInterval = PerfHarness.signposter.beginInterval("DrawerMovement", id: PerfHarness.signposter.makeSignpostID())
         #endif
         dragOrigin = progress
     }
@@ -223,7 +223,7 @@ final class DrawerMotion {
         guard displayLink == nil else { return }
         #if RC_PERF_HARNESS
         if motionInterval == nil {
-            motionInterval = PerfHarness.signposter.beginInterval("DrawerMotion", id: PerfHarness.signposter.makeSignpostID())
+            motionInterval = PerfHarness.signposter.beginInterval("DrawerMovement", id: PerfHarness.signposter.makeSignpostID())
         }
         springInterval = PerfHarness.signposter.beginInterval("DrawerSpring", id: PerfHarness.signposter.makeSignpostID())
         #endif
@@ -236,7 +236,7 @@ final class DrawerMotion {
     private func stopSettling() {
         #if RC_PERF_HARNESS
         if let springInterval { PerfHarness.signposter.endInterval("DrawerSpring", springInterval) }
-        if let motionInterval { PerfHarness.signposter.endInterval("DrawerMotion", motionInterval) }
+        if let motionInterval { PerfHarness.signposter.endInterval("DrawerMovement", motionInterval) }
         springInterval = nil
         motionInterval = nil
         #endif

@@ -905,12 +905,12 @@ class PerfTraceTests(unittest.TestCase):
         self.assertIsNone(result["motionUnavailableReason"])
 
     def test_drawer_motion_selection_scopes_cpu_hitches_and_render_windows(self):
-        tables = {"time-profile": PROFILE_XML, "OSSignpostIntervals": SIGNPOST_XML.replace("TranscriptScroll", "DrawerMotion"),
+        tables = {"time-profile": PROFILE_XML, "OSSignpostIntervals": SIGNPOST_XML.replace("TranscriptScroll", "DrawerMovement"),
                   "hitches": MOTION_HITCH_XML, "hitches-updates": MOTION_UPDATES_XML}
-        result, _ = self.summary(set(tables), tables=tables, platform="iOS", motion_signpost="DrawerMotion")
+        result, _ = self.summary(set(tables), tables=tables, platform="iOS", motion_signpost="DrawerMovement")
         self.assertEqual(result["motion"]["mainThreadCpuMs"], 4)
         self.assertEqual(result["motion"]["hitchMs"], 25)
-        self.assertIn("DrawerMotion", result["motion"]["source"])
+        self.assertIn("DrawerMovement", result["motion"]["source"])
         self.assertEqual(result["renderMetrics"]["motion"]["seconds"], 0.5)
         self.assertIsNone(result["motionUnavailableReason"])
 

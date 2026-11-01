@@ -432,7 +432,7 @@ The harness holds the current attached drawer weakly. A sibling probe can extend
 Each haptic probe must schedule its trigger on a separate main run-loop turn;
 the transport does not synthesize native button presses.
 
-`DrawerMotion` spans tracking and settling, and `DrawerSpring` isolates settling.
+`DrawerMovement` spans tracking and settling, and `DrawerSpring` isolates settling.
 `ConversationSwitch` starts at the production row action and ends at the target's
 first-content callback. Existing `HistorySelectionToFirstContent` begins when the
 target resume starts. These intervals share the trace clock and reveal overlap
@@ -449,7 +449,7 @@ compact layout actually presents this drawer. Keep energy state equal between
 runs. Confirm a chosen improvement with hand input and a device preview.
 
 Select the same intervals in Instruments exports with
-`just perf-trace --motion-signpost DrawerMotion --frames 15 summarize TRACE`.
+`just perf-trace --motion-signpost DrawerMovement --frames 15 summarize TRACE`.
 Use `DrawerSpring` or `ConversationSwitch` to isolate settling or switching.
 `motionFrameWork` assigns timestamped CPU sample weights to complete panel VSYNC
 intervals wholly inside the selected spans and reports median, p95, maximum and
