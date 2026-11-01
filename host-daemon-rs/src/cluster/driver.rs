@@ -138,7 +138,12 @@ async fn member_worker(
         drop(owner);
         tokio::select! {
             _=shutdown.cancelled()=>break,
-            result=wakes.changed()=> {if result.is_err(){break;}delay=Duration::from_millis(250);},
+            result = wakes.changed() => {
+                if result.is_err() { break; }
+                let Some(owner) = gateway.upgrade() else { break; };
+                owner.jobs.expedite(&store.member_pending_ids(member.host.clone()).await?);
+                delay = Duration::from_millis(250);
+            },
             result=changes.changed()=> {if result.is_err(){break;}},
             result=membership_changes.changed()=> {if result.is_err(){break;}},
             _=tokio::time::sleep_until(due),if retry=>{},
@@ -147,3 +152,6 @@ async fn member_worker(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests;

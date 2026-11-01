@@ -356,7 +356,9 @@ failure state is logged with its reason.
 Listing probes active members concurrently within Link's single eight-second
 deadline and preserves the last successful `lastSeenAt`. A cold connection reuses
 its handshake hello. Socket termination wakes only that member; routing socket
-noise and unchanged hellos do not wake delivery. Peer application errors retain
+noise does not wake delivery. Incoming hellos and changed reachability signal only
+`Link::wake_member`; the member worker expedites that member's pending deliveries
+before its next pass. Peer application errors retain
 the connection and do not change reachability. No periodic hello polling runs.
 Removed tombstones stay private. Load, when available, is
 `{cpuPercent,memoryPressure,activeAgents}`. Every job read/list and conversation
@@ -408,8 +410,7 @@ The execution driver owns provider custody and local delivery. The cluster
 driver owns member network work, with independent member backoff, at most 64
 members doing network work concurrently and at most 64 delivery operations per
 member. Each member link serializes its socket. A slow member cannot block local
-launches or another member. `cluster/hello` wakes that member's driver and resets
-its backoff. Both drivers belong to the gateway lifecycle and resume durable
+launches or another member. Both drivers belong to the gateway lifecycle and resume durable
 records after a planned restart. There is no separate remote outbox.
 Accepting membership wakes the driver, whose new member worker sends hello and
 retries an unavailable member with its bounded backoff.
