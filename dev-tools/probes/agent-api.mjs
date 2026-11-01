@@ -65,7 +65,9 @@ try {
     failure = error;
 } finally {
     try { await lab.stop(); } catch (error) { failure ??= error; await lab.forceStop(); }
-    if (await lab.hasNativeDaemon(lab.nativeDefault)) await lab.stopNativeDaemon(lab.nativeDefault);
+    try {
+        if (await lab.hasNativeDaemon(lab.nativeDefault)) assert.equal(await lab.stopNativeDaemon(lab.nativeDefault), 0);
+    } catch (error) { failure ??= error; }
     model.server.stop(true);
     lab.router?.stop(true);
     await lab.removeRoot();
