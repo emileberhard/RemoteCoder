@@ -121,9 +121,9 @@ struct ChatSafeAreaTests {
         let rootInsets = EdgeInsets(top: window.safeAreaInsets.top, leading: window.safeAreaInsets.left,
             bottom: window.safeAreaInsets.bottom, trailing: window.safeAreaInsets.right)
         recorder.geometry("root", .init(frame: CGRect(origin: .zero, size: safe.size), insets: rootInsets), context: context)
-        let header = ChatLayoutGeometry(frame: CGRect(x: 0, y: 0, width: safe.width, height: 44), insets: .init())
+        let header = ChatLayoutGeometry(frame: CGRect(x: 0, y: 0, width: safe.width, height: 44), insets: nil)
         recorder.geometry("header", header, context: context)
-        recorder.geometry("composer", .init(frame: CGRect(x: 0, y: safe.height - 60, width: safe.width, height: 60), insets: .init()), context: nil)
+        recorder.geometry("composer", .init(frame: CGRect(x: 0, y: safe.height - 60, width: safe.width, height: 60), insets: nil), context: nil)
         try #require(await waitUntil { records.contains { $0.contains("event=geometry[") } })
         let before = try #require(records.last)
         #expect(before.contains("headerOutsideSafeArea=false composerOutsideSafeArea=false"))
@@ -138,8 +138,8 @@ struct ChatSafeAreaTests {
         recorder.contextChanged(context)
         try await Task.sleep(for: .milliseconds(250))
         #expect(records.count == unchanged)
-        recorder.geometry("root", .init(frame: window.bounds, insets: .init()), context: nil)
-        recorder.geometry("composer", .init(frame: CGRect(x: 0, y: window.bounds.maxY - 60, width: safe.width, height: 60), insets: .init()), context: nil)
+        recorder.geometry("root", .init(frame: window.bounds, insets: EdgeInsets()), context: nil)
+        recorder.geometry("composer", .init(frame: CGRect(x: 0, y: window.bounds.maxY - 60, width: safe.width, height: 60), insets: nil), context: nil)
         try #require(await waitUntil { records.contains { $0.contains("headerOutsideSafeArea=true composerOutsideSafeArea=true") } })
         let collapsed = try #require(records.last)
         #expect(collapsed.contains("safe=\(window.safeAreaInsets.top),"))
@@ -167,7 +167,7 @@ struct ChatSafeAreaTests {
             await Task.yield()
         }
         try await Task.sleep(for: .milliseconds(250))
-        #expect(records.count == initial)
+        #expect(records.count == initial, "Unexpected records: \(records.dropFirst(initial))")
     }
 
     private struct GeometryProbe: View {

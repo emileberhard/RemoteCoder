@@ -533,9 +533,11 @@ identities; SwiftUI sizes, local frames and safe-area insets; and the scene's na
 windows and controller hierarchy, with object identities, orientation, bounds,
 insets, additional insets and presentation/attachment state. The native walk is
 bounded to four scenes, eight windows per scene and sixteen controllers per
-window. Header and composer frames use a named coordinate space inside the moving
-chat subtree, so drawer offsets do not trigger observations. Root geometry tracks
-size and insets. Only when recording, the recorder projects these local frames
+window. Header and composer observe only frames in a named coordinate space inside
+the moving chat subtree, so drawer offsets do not trigger observations. Their
+insets are `unobserved`: SwiftUI changes child insets during translation even when
+the local frames stay unchanged. Root geometry tracks size and insets. Only when
+recording, the recorder projects these local frames
 through the native root view and observed root insets into window coordinates.
 The derived frames omit the intentional drawer offset. `headerOutsideSafeArea`
 and `composerOutsideSafeArea` compare those projections to the key window's safe

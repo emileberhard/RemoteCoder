@@ -53,15 +53,15 @@ private struct ChatSurfaceObservation: ViewModifier {
     @Environment(\.chatLayoutRecorder) private var recorder
 
     func body(content: Content) -> some View {
-        content.onGeometryChange(for: ChatLayoutGeometry.self) {
-            ChatLayoutGeometry(frame: $0.frame(in: .named(ChatLayoutObservation.coordinateSpace)), insets: $0.safeAreaInsets)
-        } action: { recorder?.geometry(surface, $0, context: nil) }
+        content.onGeometryChange(for: CGRect.self) {
+            $0.frame(in: .named(ChatLayoutObservation.coordinateSpace))
+        } action: { recorder?.geometry(surface, .init(frame: $0, insets: nil), context: nil) }
     }
 }
 
 struct ChatLayoutGeometry: Equatable {
     let frame: CGRect
-    let insets: EdgeInsets
+    let insets: EdgeInsets?
 }
 
 @MainActor
@@ -183,7 +183,7 @@ final class ChatLayoutRecorder {
     private func record(_ event: String) {
         let now = Date.now
         let geometry = surfaces.sorted { $0.key < $1.key }.map {
-            "\($0.key)={ageMs=\(Int(now.timeIntervalSince($0.value.time) * 1_000)),localFrame=\(Self.rect($0.value.value.frame)),insets=\(Self.insets($0.value.value.insets))}"
+            "\($0.key)={ageMs=\(Int(now.timeIntervalSince($0.value.time) * 1_000)),localFrame=\(Self.rect($0.value.value.frame)),insets=\($0.value.value.insets.map(Self.insets) ?? "unobserved")}"
         }.joined(separator: " ")
         let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
         let native = scenes.sorted { $0.session.persistentIdentifier < $1.session.persistentIdentifier }.prefix(4).map { scene in
@@ -206,9 +206,9 @@ final class ChatLayoutRecorder {
     }
 
     private func windowFrame(_ surface: String, in window: UIWindow) -> CGRect? {
-        guard let root = surfaces["root"]?.value, let frame = surfaces[surface]?.value.frame,
+        guard let insets = surfaces["root"]?.value.insets, let frame = surfaces[surface]?.value.frame,
               let view = window.rootViewController?.viewIfLoaded, view.window === window else { return nil }
-        return view.convert(frame.offsetBy(dx: root.insets.leading, dy: root.insets.top), to: window)
+        return view.convert(frame.offsetBy(dx: insets.leading, dy: insets.top), to: window)
     }
 
     private func controllers(_ root: UIViewController?, window: UIWindow) -> String {
