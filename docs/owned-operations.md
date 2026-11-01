@@ -611,7 +611,10 @@ rejection threshold. Inventory and reclamation each have a separate 20-second
 budget, starting after maintenance-lock acquisition, so waiting for another
 owner cannot consume inventory's turn and inventory cannot consume reclamation's
 turn. A skipped reclamation check reports `reclamation-deadline`; incomplete inventory preserves unknown
-values. Operators can schedule `cache-maintain` independently of builds.
+values. Expired-mirror retention also starts a fresh reclamation budget after
+candidate discovery and its shared open-file snapshot. Owned lease descriptors
+are excluded from retirement activity checks. Operators can schedule
+`cache-maintain` independently of builds.
 The private maintainer schedule invokes it before repository synchronization, so
 a failed sync does not suppress reclamation.
 `RemoteCoder-Build/maintenance.json` is one replaced receipt; scheduled stdout

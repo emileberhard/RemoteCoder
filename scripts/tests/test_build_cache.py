@@ -537,6 +537,62 @@ class CacheAdmissionTests(unittest.TestCase):
                         self.assertIsNotNone(lease)
                     self.assertTrue((entry.path / "Build/Intermediates.noindex/object.o").exists())
 
+    def test_owned_legacy_lock_does_not_change_retired_mirror_eviction_priority(self):
+        from build_cache import CompilationDirectory, cache_allocated_bytes, compilation_admission
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            retired = self.entry(root, "derived-retired", time.time() - 3 * 86400, tree="retired")
+            live = self.entry(root, "derived-live", time.time() - 4 * 86400, tree="live")
+            legacy = retired.path.parent / "build.lock"
+            legacy.touch()
+            retired = CompilationDirectory(retired.path, "mirror:retired", (*retired.leases, legacy), None, retired.kind)
+            payload = retired.path / "Build/Intermediates.noindex"
+            reclaimable = sum(p.stat().st_blocks * 512 for p in (payload, payload / "object.o"))
+            budget = cache_allocated_bytes(root) - reclaimable
+            with (
+                patch("build_cache._retired_worktree", side_effect=lambda root, entry, completion: entry == retired),
+                patch("build_cache._open_file_snapshot", return_value=([str(legacy)], None)),
+            ):
+                result = compilation_admission(root, self.policy(budget=budget), [live, retired], set(), preview=False, root_bytes=budget + reclaimable)
+            self.assertEqual([item["worktree"] for item in result["evicted"]], ["mirror:retired"])
+            self.assertFalse(payload.exists())
+            self.assertTrue((live.path / "Build/Intermediates.noindex/object.o").exists())
+
+    def test_mirror_discovery_and_snapshot_leave_a_fresh_reclamation_budget(self):
+        import build_cache
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            mirrors = []
+            old = time.time() - 8 * 86400
+            for identity in ("first", "second"):
+                mirror = root / "worktrees" / identity
+                repo = mirror / "ios/repo"
+                repo.mkdir(parents=True)
+                (repo / "source.swift").write_text("rebuildable snapshot")
+                for path in (mirror, repo):
+                    os.utime(path, (old, old))
+                mirrors.append(repo)
+            clock = [0]
+
+            def source_probe(*args, **kwargs):
+                clock[0] += 5
+                return True
+
+            def snapshot():
+                clock[0] += 14
+                return [], None
+
+            with (
+                patch("build_cache.time.monotonic", side_effect=lambda: clock[0]),
+                patch("build_cache._removed_mirror_source", side_effect=source_probe),
+                patch("build_cache._open_file_snapshot", side_effect=snapshot),
+            ):
+                result = prune_caches(root, self.policy(), "", "")
+            self.assertEqual({item["path"] for item in result["mirrors"]}, {str(path) for path in mirrors})
+            self.assertTrue(all(not path.exists() for path in mirrors))
+
     def test_reclamation_deadline_preserves_payloads_and_reports_skipped_checks(self):
         from build_cache import compilation_admission
 

@@ -1090,6 +1090,8 @@ def compilation_admission(
                 if lease not in owned_leases:
                     owned_leases[lease] = ownership.enter_context(try_lease(lease))
         opened = _open_file_snapshot() if any(fd is not None for fd in owned_leases.values()) else ([], None)
+        lease_names = {str(path).casefold() for path, fd in owned_leases.items() if fd is not None}
+        opened = ([name for name in opened[0] if name not in lease_names], opened[1])
         removed = set()
         pressure = (
             result["allocatedBytes"] > policy.compilation_budget_bytes
@@ -1227,17 +1229,13 @@ def compilation_admission(
             removed_source = entry.worktree in removed and _removed_mirror_source(
                 root, entry, check_remote=not pressure
             )
-            opened_paths, open_error = opened
             for payload in _compiler_payloads(entry):
                 if not payload.exists() and not payload.is_symlink():
                     continue
                 try:
                     if not _real_directory(payload):
                         raise ValueError(f"Unsafe payload: {payload}")
-                    prefix = str(payload).casefold()
-                    state = open_error or (
-                        "open-files" if any(path == prefix or path.startswith(prefix + "/") for path in opened_paths) else None
-                    )
+                    state = opened[1] or ("open-files" if _open_files(payload, opened) else None)
                     if state:
                         result["protected"].append({"path": str(payload), "allocatedBytes": None, "reason": state})
                         continue
@@ -1433,6 +1431,7 @@ def _prune_removed_mirrors(
                 continue
             candidates.append((mirror, entry, payloads))
         opened = _open_file_snapshot() if candidates else ([], None)
+        deadline = time.monotonic() + 20
         for mirror, entry, payloads in candidates:
             try:
                 used = last_used(mirror, root, "worktrees")
