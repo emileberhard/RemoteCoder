@@ -53,7 +53,8 @@ export class IsolatedGateway {
         this.token = token;
         this.port = port;
         this.realHome = homedir();
-        this.codex = join(this.realHome, ".codex/packages/standalone/current/codex");
+        this.codex = join(this.realHome, ".codex/packages/standalone/current",
+            process.platform === "linux" ? "bin/codex" : "codex");
         this.nativeDefault = join(root, ".codex");
         this.safeEnv = {
             HOME: root, CODEX_HOME: this.nativeDefault, USER: userInfo().username, SHELL: process.platform === "linux" ? "/bin/bash" : "/bin/zsh",

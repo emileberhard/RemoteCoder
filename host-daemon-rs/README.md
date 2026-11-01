@@ -593,6 +593,11 @@ launchd installer, Desktop attachment, TCC permissions and local Apple computer
 use are macOS facilities. Linux sessions use the same chat, history, ownership
 and cluster protocol. Provider readiness keeps unavailable providers explicit.
 
+Keep the complete approved package unchanged and point
+`RC_CODEX_GATEWAY_CODEX_PATH` at
+`~/.codex/packages/standalone/current/bin/codex`. The `current` symlink selects
+the retained package; installation approvals live beside its release directory.
+
 Install `systemd/remote-coder-gateway.service` as a user unit and enable user
 lingering. The service runs as the account that owns the gateway and runtime
 homes. Its `KillMode=process` and 60-second stop timeout let the gateway capture

@@ -419,7 +419,11 @@ impl CodexSettings {
         let runtime = validate_codex_runtime_for_version(&codex_path, &identity.version)?;
         let current = crate::config::HostPaths::from_env()?
             .home()
-            .join(".codex/packages/standalone/current/codex");
+            .join(if cfg!(target_os = "linux") {
+                ".codex/packages/standalone/current/bin/codex"
+            } else {
+                ".codex/packages/standalone/current/codex"
+            });
         identity.verify(&current)?;
         Ok(Self {
             codex_path,
