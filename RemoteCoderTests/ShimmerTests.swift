@@ -41,7 +41,10 @@ enum ShimmerGate: CaseIterable, Sendable {
 
 @MainActor @Observable
 private final class ShimmerFixture {
-    var gate = ShimmerGate.running
+    let visibility = SurfaceVisibilityState(isVisible: true)
+    var gate = ShimmerGate.running {
+        didSet { visibility.isVisible = gate != .hidden }
+    }
 }
 
 private struct ShimmerFixtureView: View {
@@ -51,7 +54,7 @@ private struct ShimmerFixtureView: View {
         Text("Thinking")
             .shimmer(isActive: fixture.gate != .completed)
             .environment(\.scenePhase, fixture.gate == .inactive ? .inactive : .active)
-            .environment(\.surfaceVisibility, SurfaceVisibility(SurfaceVisibilityState(isVisible: fixture.gate != .hidden)))
+            .environment(\.surfaceVisibility, SurfaceVisibility(fixture.visibility))
             .environment(\.appEnergyPolicy, AppEnergyPolicy(
                 isLowPowerModeEnabled: fixture.gate == .lowPower,
                 thermalState: .nominal

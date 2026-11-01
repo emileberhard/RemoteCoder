@@ -139,8 +139,8 @@ private struct TranscriptContentView<QuestionContent: View, BottomBar: View>: Vi
     @State private var historyRead: TranscriptHistoryRead?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
-    @Environment(\.surfaceVisibility) private var surfaceVisibility
     #if os(iOS)
+    @Environment(\.surfaceVisibility) private var surfaceVisibility
     @Environment(\.appEnergyPolicy) private var energyPolicy
     #endif
     #if os(iOS)
@@ -311,9 +311,7 @@ private struct TranscriptContentView<QuestionContent: View, BottomBar: View>: Vi
             .onChange(of: scenePhase) { _, phase in
                 if phase != .active { native.suspend() } else { native.resume() }
             }
-            .onChange(of: surfaceVisibility.isVisible) { _, visible in
-                if !visible { native.suspend() } else { native.resume() }
-            }
+            .modifier(NativeTranscriptVisibility(native: native))
             #endif
     }
 
@@ -1068,6 +1066,19 @@ final class TranscriptFollow {
         return result
     }
 }
+
+#if os(macOS)
+private struct NativeTranscriptVisibility: ViewModifier {
+    let native: TranscriptNativeEndpoint
+    @Environment(\.surfaceVisibility) private var surfaceVisibility
+
+    func body(content: Content) -> some View {
+        content.onChange(of: surfaceVisibility.isVisible) { _, visible in
+            if !visible { native.suspend() } else { native.resume() }
+        }
+    }
+}
+#endif
 
 #if os(iOS)
 private struct TranscriptDecorationAnimations: ViewModifier {

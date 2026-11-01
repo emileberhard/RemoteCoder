@@ -58,8 +58,8 @@ struct ConversationHistoryView: View {
                 Text(intent.promptMessage)
             }
             .modifier(WindowActivations(count: $windowActivations))
-            .task(id: Arrangement(isOpen: isOpen, isVisible: isVisible, windowActivations: windowActivations)) {
-                guard isOpen && isVisible else { capturedWindowActivation = nil; return }
+            .task(id: Arrangement(isVisible: isVisible, windowActivations: windowActivations)) {
+                guard isVisible else { capturedWindowActivation = nil; return }
                 let capturedLayout: ConversationDrawerLayout
                 if let layout, capturedWindowActivation == windowActivations {
                     capturedLayout = layout
@@ -78,8 +78,8 @@ struct ConversationHistoryView: View {
                     receive(snapshot)
                 }
             }
-            .task(id: SearchRequest(isOpen: isOpen && isVisible, query: window.drawerQuery)) {
-                guard isOpen && isVisible, !window.drawerQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+            .task(id: SearchRequest(isVisible: isVisible, query: window.drawerQuery)) {
+                guard isVisible, !window.drawerQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
                 do { try await Task.sleep(for: .milliseconds(500)) } catch { return }
                 await workspace.loadOlderHistory(in: window)
             }
@@ -157,18 +157,17 @@ struct ConversationHistoryView: View {
     }
 
     private struct Arrangement: Equatable {
-        let isOpen: Bool
         let isVisible: Bool
         let windowActivations: Int
     }
 
     private struct SearchRequest: Equatable {
-        let isOpen: Bool
+        let isVisible: Bool
         let query: String
     }
 
     private var presented: ConversationSidebarSnapshot? {
-        sidebar ?? (isOpen && isVisible ? workspace.sidebarSnapshot(arrangedBy: .live(at: .now), in: window) : nil)
+        sidebar ?? (isVisible ? workspace.sidebarSnapshot(arrangedBy: .live(at: .now), in: window) : nil)
     }
 
     private var actions: ConversationHistoryActions {
