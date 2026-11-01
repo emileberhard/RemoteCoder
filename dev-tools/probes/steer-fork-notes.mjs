@@ -69,9 +69,12 @@ function claudeUsage(records, thread) {
     } : null;
 }
 
-function codexUsage(records, thread, turn) {
+function codexUsage(records, thread, turn, source) {
     const file = records.find(({ record }) => record.type === "session_meta" && record.payload?.id === thread)?.file;
-    let total, baseline, last, active;
+    const sourceFile = records.find(({ record }) => record.type === "session_meta" && record.payload?.id === source)?.file;
+    let total = records.findLast(({ file, record }) => file === sourceFile && record.type === "event_msg"
+        && record.payload?.type === "token_count" && record.payload.info)?.record.payload.info.total_token_usage;
+    let baseline, last, active;
     for (const entry of records.filter(entry => entry.file === file)) {
         const { record } = entry;
         const payload = record.payload;
@@ -159,9 +162,9 @@ try {
     assert(nextUser > injected, "Fork note did not precede the first new user input");
     receipt.codexInjection = { threadId: forkId, checkpointedDeveloperNote: true, precedesNewUserInput: true };
     receipt.cacheUsage.codex = {
-        sourceLastTurn: { threadId: codexIds.source, turnId: codexIds.sourceTurn, usage: codexUsage(native, codexIds.source, codexIds.sourceTurn) },
-        firstForkTurn: { threadId: forkId, turnId: codexIds.firstForkTurn, usage: codexUsage(native, forkId, codexIds.firstForkTurn) },
-        laterSteeredTurn: { threadId: forkId, turnId: codexIds.laterSteeredTurn, usage: codexUsage(native, forkId, codexIds.laterSteeredTurn) },
+        sourceLastTurn: { threadId: codexIds.source, turnId: codexIds.sourceTurn, usage: codexUsage(native, codexIds.source, codexIds.sourceTurn, codexIds.source) },
+        firstForkTurn: { threadId: forkId, turnId: codexIds.firstForkTurn, usage: codexUsage(native, forkId, codexIds.firstForkTurn, codexIds.source) },
+        laterSteeredTurn: { threadId: forkId, turnId: codexIds.laterSteeredTurn, usage: codexUsage(native, forkId, codexIds.laterSteeredTurn, codexIds.source) },
     };
     console.log(JSON.stringify({ cacheUsage: receipt.cacheUsage }));
 } catch (error) {
