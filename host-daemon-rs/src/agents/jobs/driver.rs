@@ -25,6 +25,7 @@ impl JobOwner {
             loop {
                 if gateway.is_draining() { break; }
                 let ids = gateway.jobs.store().await?.pending_ids().await?;
+                gateway.jobs.deliveries.retain(&ids);
                 let outcomes = stream::iter(ids).map(|id| {
                     let gateway = Arc::clone(&gateway);
                     async move {
@@ -42,6 +43,7 @@ impl JobOwner {
                 let retry = outcomes.into_iter().any(|retry| retry);
                 let wait = if retry { delay } else { SETTLE_DELAY };
                 let settling = std::mem::take(&mut settle);
+                let delivery_due = gateway.jobs.next_delivery_due();
                 tokio::select! {
                     _ = shutdown.cancelled() => break,
                     result = changes.changed() => { if result.is_err() { break; } delay = Duration::from_millis(250); settle = true; }
@@ -51,6 +53,7 @@ impl JobOwner {
                         settle = true;
                     }
                     _ = tokio::time::sleep(wait), if retry || settling => { if retry { delay = (delay * 2).min(Duration::from_secs(60)); } }
+                    _ = tokio::time::sleep_until(delivery_due.unwrap_or_else(tokio::time::Instant::now)), if delivery_due.is_some() => {}
                 }
             }
             Ok(())

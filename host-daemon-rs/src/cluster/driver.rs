@@ -165,19 +165,14 @@ async fn member_worker(
                 async move {
                     let _operation=owner.jobs.operations.read().await;
                     let store=owner.jobs.store().await?;
-                    let job=store.retarget_delivery(id.clone()).await?;
-                    if !matches!(&job.recipient,crate::agents::jobs::model::Recipient::Remote {host:receiver,..} if receiver==host) {owner.jobs.dirty();return Ok::<_,anyhow::Error>(false);}
-                    let notices=owner.jobs.deliver_notices(&id).await?;
-                    let job=store.read(id).await?;
-                    match &job.execution {
-                        crate::agents::jobs::model::ExecutionState::Terminal {terminal} if terminal.cleanup==crate::agents::jobs::model::CleanupState::Complete=>Ok(owner.jobs.deliver_completion(&job,terminal).await? || notices),
-                        _=>Ok(notices),
-                    }
+                    let job=store.retarget_delivery(id).await?;
+                    if !matches!(&job.recipient,crate::agents::jobs::model::Recipient::Remote {host:receiver,..} if receiver==host) {owner.jobs.dirty();return Ok::<_,anyhow::Error>(());}
+                    owner.jobs.deliver_obligations(job).await
                 }
             }).buffer_unordered(64).collect::<Vec<_>>().await;
         for outcome in outcomes {
             match outcome {
-                Ok(pending) => retry |= pending,
+                Ok(()) => {}
                 Err(error) => {
                     tracing::warn!(host=member.host,%error,"remote delivery remains pending");
                     retry = true;
@@ -186,6 +181,7 @@ async fn member_worker(
         }
         drop(permit);
         let due = tokio::time::Instant::now() + delay;
+        let delivery_due = owner.jobs.next_delivery_due();
         delay = (delay * 2).min(Duration::from_secs(60));
         drop(owner);
         tokio::select! {
@@ -194,6 +190,7 @@ async fn member_worker(
             result=changes.changed()=> {if result.is_err(){break;}},
             result=membership_changes.changed()=> {if result.is_err(){break;}},
             _=tokio::time::sleep_until(due),if retry=>{},
+            _=tokio::time::sleep_until(delivery_due.unwrap_or(due)),if delivery_due.is_some()=>{},
         }
     }
     Ok(())

@@ -17,6 +17,7 @@ pub(crate) struct JobOwner {
     pub(super) scopes: super::routes::ScopedEndpoints,
     pub(super) endpoint: Mutex<Option<super::routes::ScopedEndpointLease>>,
     pub(super) root: Option<PathBuf>,
+    pub(super) deliveries: super::schedule::DeliverySchedule,
     store: OnceCell<JobStore>,
     message_claims: Mutex<std::collections::HashMap<String, Weak<Mutex<()>>>>,
     gateway: Weak<Gateway>,
@@ -33,6 +34,7 @@ impl JobOwner {
             scopes: Default::default(),
             endpoint: Default::default(),
             root,
+            deliveries: Default::default(),
             store: OnceCell::new(),
             message_claims: Default::default(),
             gateway,
@@ -94,6 +96,15 @@ impl JobOwner {
 
     pub(crate) fn changes(&self) -> watch::Receiver<u64> {
         self.changed.subscribe()
+    }
+
+    pub(crate) fn expedite(&self, jobs: &[JobId]) {
+        self.deliveries.expedite(jobs);
+        self.dirty();
+    }
+
+    pub(crate) fn next_delivery_due(&self) -> Option<tokio::time::Instant> {
+        self.deliveries.next_due()
     }
 
     async fn admission_receipt(&self, job: JobRecord, duplicate: bool) -> Result<AdmissionReceipt> {

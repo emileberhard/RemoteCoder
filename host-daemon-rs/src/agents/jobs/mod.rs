@@ -8,6 +8,7 @@ pub(crate) mod owner;
 mod result;
 mod retry;
 pub(crate) mod routes;
+mod schedule;
 pub(crate) mod store;
 
 #[cfg(test)]

@@ -596,6 +596,25 @@ impl JobStore {
         }).await
     }
 
+    pub(crate) async fn dismiss_notices(
+        &self,
+        id: JobId,
+        revision: u64,
+        next: DeliveryState,
+        at_ms: i64,
+    ) -> Result<JobRecord> {
+        self.access(move |inner| {
+            let mut job = inner.current(&id, revision)?;
+            for notice in &mut job.notices {
+                if !delivery_settled(&notice.delivery) {
+                    notice.delivery = next.clone();
+                }
+            }
+            inner.commit(job, at_ms)
+        })
+        .await
+    }
+
     pub(crate) async fn dismiss_obligations(
         &self,
         id: JobId,
@@ -1033,7 +1052,7 @@ fn is_terminal(job: &JobRecord) -> bool {
 fn listing_active(job: &JobRecord) -> bool {
     job.source == JobSource::Runtime && !is_terminal(job)
 }
-fn delivery_settled(delivery: &DeliveryState) -> bool {
+pub(super) fn delivery_settled(delivery: &DeliveryState) -> bool {
     matches!(
         delivery,
         DeliveryState::Accepted { .. }
@@ -1042,12 +1061,13 @@ fn delivery_settled(delivery: &DeliveryState) -> bool {
     )
 }
 fn settled(job: &JobRecord) -> bool {
+    let handed_off = matches!(job.attention, Some(Attention::Surfaced { .. }));
     job.notices
         .iter()
         .all(|notice| delivery_settled(&notice.delivery))
         && matches!(&job.execution, ExecutionState::Terminal { terminal } if terminal.cleanup == CleanupState::Complete && match &terminal.completion {
             Completion::NotRequired => true,
-            Completion::Required { delivery, .. } => delivery_settled(delivery),
+            Completion::Required { delivery, .. } => handed_off || delivery_settled(delivery),
         })
 }
 fn live_reservation(job: &JobRecord) -> bool {

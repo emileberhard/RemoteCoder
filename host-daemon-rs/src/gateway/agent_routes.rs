@@ -9,7 +9,7 @@ use tokio::sync::{Mutex, oneshot};
 use tokio_util::sync::CancellationToken;
 
 use super::{ClientTx, Gateway};
-use crate::agents::jobs::model::Provider;
+use crate::agents::jobs::model::{Provider, Recipient};
 use crate::agents::jobs::routes::NativeDeliveryState;
 use crate::rpc::error::RpcCode;
 use crate::rpc::{RpcError, RpcResult};
@@ -103,6 +103,13 @@ impl Gateway {
                 provider
                     .record_native_parent(&proven.conversation.thread_id)
                     .await?;
+                let parent = proven.conversation.clone();
+                let pending = self
+                    .jobs
+                    .store()
+                    .await?
+                    .pending_jobs(move |job| matches!(&job.recipient, Recipient::Conversation { conversation } if conversation == &parent))
+                    .await?;
                 let (lease, mut requests) = self
                     .jobs
                     .native_routes
@@ -162,7 +169,7 @@ impl Gateway {
                     self.job_routes.connections.lock().await.remove(&client_id);
                     return Err(RpcError::draining());
                 }
-                self.jobs.dirty();
+                self.jobs.expedite(&pending);
                 Ok(json!({"kind":"native","routeId":route_id}))
             }
             "agent/routes/ack" => {

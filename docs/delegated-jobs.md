@@ -124,6 +124,27 @@ is reconciled against canonical provider evidence under the same ID; elapsed
 time does not authorize a new send. Accepted/recorded obligations are settled.
 A blocked or unreachable parent does not discard the child's saved result.
 
+Each unsettled obligation has its own in-memory retry schedule in `JobOwner`:
+the next attempt is due `clamp(age/8, 1 s, 10 min)` after the last one, where
+age counts from the notice or the terminal outcome, and an obligation without a
+schedule, for example after a restart, is due at once. Wakes and dirty hints never
+bypass it; a parent move, a native-route registration and a member's hello
+expedite the affected jobs. An attempt from pending, unreachable or blocked first
+records `sending`; reconciling sending, submitted or uncertain custody writes
+nothing unless the state changes. Every persisted change journals
+`agent_delivery {jobId, deliveryId, from, to}`.
+
+A completion is handed to the user through the existing attention alert when an
+attempt fails, the recipient is unknown or promoted, its receiver member was
+removed, or it is older than 24 hours. Pending, unreachable and blocked states
+past the window hand off without sending; custody states, and a failure stored
+by an older version, hand off after one final reconciliation. Hand-off keeps
+the last proven delivery state and settles the job: it leaves both drivers and
+the admission reservations, and its payloads follow the normal 30-day retention
+from the hand-off. Notices never raise attention. A terminal job's unsettled
+notices are dismissed as superseded by the final result, and a notice that would
+be handed off is dismissed instead.
+
 Claude's parent receiver owns one intent/receipt ledger for both gateway and
 native terminal routes. A terminal parent uses a holder started directly by its
 async SessionStart hook. The holder proves its exact CLI process and inbox,
@@ -249,8 +270,8 @@ can expire after 30 days or under pressure, preserving identities and hashes.
 Unknown work and unresolved deliveries are not silently evicted.
 
 The driver uses coalesced provider-change hints and bounded reconciliation.
-Healthy running work is not polled for completion; retryable failures and
-unsettled delivery use bounded backoff. Existing gateway admission and shutdown
+Healthy running work is not polled for completion; retryable failures use
+bounded backoff and unsettled delivery its per-obligation schedule. Existing gateway admission and shutdown
 own the drain. In-flight job operations quiesce before provider suspension;
 `prepare-shutdown` must fail when its preservation contract cannot be met.
 Normal restart recovery and ordinary progress use the same job owner. While a
@@ -356,7 +377,7 @@ obligations follow the current tag. An uncertain send retains its frozen old
 receiver and delivery identity until reconciliation proves non-acceptance; it
 then follows the current tag. If that reconciliation cannot finish because the
 old member was removed or its 24-hour receiver window expires, the delivery
-stays uncertain and visible to the user with its saved result. It is never
+keeps its last proven state and is handed to the user with its saved result. It is never
 readdressed to another parent or silently discarded. A promoted result remains
 available to the user. Unknown native acceptance never authorizes another turn.
 

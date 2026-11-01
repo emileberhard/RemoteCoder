@@ -1,237 +1,291 @@
+use std::sync::Arc;
+use std::time::Duration;
+
 use anyhow::{Context, Result};
+use serde_json::json;
 
 use super::model::*;
 use super::owner::{JobOwner, now_ms};
+use super::store::delivery_settled;
+use crate::gateway::Gateway;
+
+const DELIVERY_WINDOW_MS: i64 = 24 * 60 * 60 * 1000;
+const WINDOW_EXPIRED: &str = "receiver could not be reconciled within 24 hours";
+
+#[derive(Clone, Copy)]
+enum Duty {
+    Notice,
+    Completion,
+}
+
+struct Obligation {
+    duty: Duty,
+    delivery_id: String,
+    text: String,
+    state: DeliveryState,
+    at_ms: Option<i64>,
+}
 
 impl JobOwner {
-    pub(crate) async fn deliver_notices(&self, id: &JobId) -> Result<bool> {
-        let store = self.store().await?;
-        let original = store.read(id.clone()).await?;
-        if original.source != JobSource::Runtime {
-            return Ok(false);
-        }
-        if matches!(
-            &original.recipient,
-            Recipient::None | Recipient::Unknown { .. }
-        ) {
-            return Ok(false);
-        }
+    pub(crate) async fn deliver_obligations(&self, job: JobRecord) -> Result<()> {
         let gateway = self.gateway()?;
-        if gateway.is_draining() {
-            return Ok(false);
+        if job.source != JobSource::Runtime || gateway.is_draining() {
+            return Ok(());
         }
-        let mut retry = false;
-        for notice in original.notices {
-            let CompletionPayload::Prepared {
-                delivery_id, text, ..
-            } = notice.payload
-            else {
-                continue;
-            };
-            if matches!(
-                notice.delivery,
-                DeliveryState::Accepted { .. }
-                    | DeliveryState::Recorded { .. }
-                    | DeliveryState::Dismissed { .. }
-            ) {
-                continue;
-            }
-            let removed = match &original.recipient {
-                Recipient::Remote { host, .. } => !gateway.remote_receiver_active(host).await?,
-                _ => false,
-            };
-            let expired = notice
-                .at_ms
-                .is_some_and(|at| now_ms().saturating_sub(at) >= 24 * 60 * 60 * 1000)
-                && matches!(
-                    notice.delivery,
-                    DeliveryState::Unreachable { .. } | DeliveryState::Uncertain { .. }
-                );
-            if removed || expired {
-                let reason = if removed {
-                    "receiver host was removed; notice acceptance cannot be reconciled"
-                } else {
-                    "receiver could not be reconciled within 24 hours; notice requires user attention"
-                };
-                let current = store.read(id.clone()).await?;
-                if !matches!(notice.delivery, DeliveryState::Uncertain { .. }) {
-                    store
-                        .notice_delivery(
-                            id.clone(),
-                            current.revision,
-                            delivery_id,
-                            DeliveryState::Uncertain {
-                                reason: reason.into(),
-                            },
-                            now_ms(),
-                        )
-                        .await?;
-                }
-                gateway.surface_job_result(id, reason).await?;
-                continue;
-            }
-            let current = store.read(id.clone()).await?;
-            let sending = store
-                .notice_delivery(
-                    id.clone(),
-                    current.revision,
-                    delivery_id.clone(),
-                    DeliveryState::Sending { attempt: 1 },
-                    now_ms(),
-                )
-                .await?;
-            let next = match gateway
-                .deliver_job_recipient(&original.recipient, &delivery_id, &text, &notice.delivery)
-                .await
-            {
-                Ok(state) => state,
-                Err(error) => DeliveryState::Uncertain {
-                    reason: error.to_string(),
-                },
-            };
-            retry |= matches!(
-                next,
-                DeliveryState::Pending
-                    | DeliveryState::Sending { .. }
-                    | DeliveryState::Submitted { .. }
-                    | DeliveryState::Uncertain { .. }
-                    | DeliveryState::Blocked { .. }
-                    | DeliveryState::Unreachable { .. }
-            );
-            store
-                .notice_delivery(id.clone(), sending.revision, delivery_id, next, now_ms())
-                .await?;
+        let job = self.supersede_notices(&gateway, job).await?;
+        for obligation in obligations(&job) {
+            self.deliver(&gateway, &job, obligation).await?;
         }
-        Ok(retry)
+        Ok(())
     }
 
-    pub(crate) async fn deliver_completion(
-        &self,
-        job: &JobRecord,
-        terminal: &Terminal,
-    ) -> Result<bool> {
-        let Completion::Required {
-            payload:
-                CompletionPayload::Prepared {
-                    delivery_id, text, ..
-                },
-            delivery,
-        } = &terminal.completion
-        else {
-            return Ok(false);
-        };
-        if matches!(
-            delivery,
-            DeliveryState::Accepted { .. }
-                | DeliveryState::Recorded { .. }
-                | DeliveryState::Dismissed { .. }
-        ) {
-            return Ok(false);
+    async fn supersede_notices(&self, gateway: &Gateway, job: JobRecord) -> Result<JobRecord> {
+        let superseded: Vec<_> = job
+            .notices
+            .iter()
+            .filter(|notice| !delivery_settled(&notice.delivery))
+            .map(|notice| {
+                (
+                    notice.payload.delivery_id().map(str::to_owned),
+                    notice.delivery.clone(),
+                )
+            })
+            .collect();
+        if !matches!(job.execution, ExecutionState::Terminal { .. }) || superseded.is_empty() {
+            return Ok(job);
         }
+        let to = DeliveryState::Dismissed {
+            reason: "superseded by the final result".into(),
+        };
         let job = self
             .store()
             .await?
-            .retarget_delivery(job.job_id.clone())
+            .dismiss_notices(job.job_id.clone(), job.revision, to.clone(), now_ms())
             .await?;
-        let gateway = self.gateway()?;
-        if let Recipient::Remote { host, .. } = &job.recipient
-            && !gateway.remote_receiver_active(host).await?
-        {
-            let reason = "receiver host was removed; prior acceptance cannot be reconciled";
-            self.store()
-                .await?
-                .delivery(
-                    job.job_id.clone(),
-                    job.revision,
-                    DeliveryState::Uncertain {
-                        reason: reason.into(),
-                    },
-                    now_ms(),
-                )
-                .await?;
-            gateway.surface_job_result(&job.job_id, reason).await?;
-            return Ok(false);
-        }
-        if matches!(job.recipient, Recipient::None) {
-            gateway
-                .surface_job_result(
-                    &job.job_id,
-                    "agent was promoted; its result is available to the user",
-                )
-                .await?;
-            let current = self.store().await?.read(job.job_id.clone()).await?;
-            self.store()
-                .await?
-                .delivery(
-                    job.job_id.clone(),
-                    current.revision,
-                    DeliveryState::Dismissed {
-                        reason: "result surfaced to the user after promotion".into(),
-                    },
-                    now_ms(),
-                )
-                .await?;
-            return Ok(false);
-        }
-        if let ExecutionState::Terminal { terminal } = &job.execution
-            && let Completion::Required { delivery, .. } = &terminal.completion
-            && terminal
-                .at_ms
-                .is_some_and(|at| now_ms().saturating_sub(at) >= 24 * 60 * 60 * 1000)
-            && matches!(
-                delivery,
-                DeliveryState::Unreachable { .. } | DeliveryState::Uncertain { .. }
-            )
-        {
-            if matches!(delivery, DeliveryState::Unreachable { .. }) {
-                self.store().await?.delivery(job.job_id.clone(),job.revision,DeliveryState::Uncertain {reason:"receiver could not be reconciled within 24 hours; result requires user attention".into()},now_ms()).await?;
+        for (delivery_id, from) in superseded {
+            if let Some(delivery_id) = &delivery_id {
+                self.deliveries.forget(&job.job_id, delivery_id);
             }
-            gateway.surface_job_result(&job.job_id,"receiver could not be reconciled within 24 hours; result requires user attention").await?;
-            return Ok(false);
+            journal(gateway, &job.job_id, delivery_id.as_deref(), &from, &to);
         }
+        Ok(job)
+    }
 
-        let gateway = self.gateway()?;
-        if gateway.is_draining() {
-            return Ok(false);
-        }
-        let attempt = match delivery {
-            DeliveryState::Sending { attempt } => attempt
-                .checked_add(1)
-                .context("delivery attempt counter exhausted")?,
-            _ => 1,
-        };
-        let sending = self
-            .store()
-            .await?
-            .delivery(
-                job.job_id.clone(),
-                job.revision,
-                DeliveryState::Sending { attempt },
-                now_ms(),
-            )
-            .await?;
-        let next = match gateway
-            .deliver_job_recipient(&job.recipient, delivery_id, text, delivery)
-            .await
-        {
-            Ok(state) => state,
-            Err(error) => DeliveryState::Uncertain {
-                reason: error.to_string(),
-            },
-        };
-        let retry = matches!(
-            next,
-            DeliveryState::Pending
-                | DeliveryState::Sending { .. }
+    async fn deliver(
+        &self,
+        gateway: &Arc<Gateway>,
+        job: &JobRecord,
+        obligation: Obligation,
+    ) -> Result<()> {
+        let age = obligation.at_ms.map(|at| now_ms().saturating_sub(at));
+        let expired = age.is_none_or(|age| age >= DELIVERY_WINDOW_MS);
+        let custody = matches!(
+            obligation.state,
+            DeliveryState::Sending { .. }
                 | DeliveryState::Submitted { .. }
                 | DeliveryState::Uncertain { .. }
-                | DeliveryState::Blocked { .. }
-                | DeliveryState::Unreachable { .. }
         );
-        self.store()
-            .await?
-            .delivery(job.job_id.clone(), sending.revision, next, now_ms())
+        let never_accepted = matches!(
+            obligation.state,
+            DeliveryState::Pending
+                | DeliveryState::Unreachable { .. }
+                | DeliveryState::Blocked { .. }
+        );
+        let removed = match &job.recipient {
+            Recipient::Remote { host, .. } => !gateway.remote_receiver_active(host).await?,
+            _ => false,
+        };
+        let hand_off = match &job.recipient {
+            Recipient::Unknown { reason } => Some(reason.clone()),
+            Recipient::None => {
+                Some("agent was promoted; its result is available to the user".into())
+            }
+            _ if removed => Some("receiver host was removed; delivery cannot be reconciled".into()),
+            _ if expired && never_accepted => Some(WINDOW_EXPIRED.into()),
+            _ => None,
+        };
+        if let Some(reason) = hand_off {
+            return self.hand_off(gateway, job, &obligation, reason).await;
+        }
+        let age = Duration::from_millis(age.unwrap_or(DELIVERY_WINDOW_MS).try_into().unwrap_or(0));
+        if !self
+            .deliveries
+            .claim(&job.job_id, &obligation.delivery_id, age)
+        {
+            return Ok(());
+        }
+        if !custody {
+            self.record(
+                gateway,
+                &job.job_id,
+                &obligation,
+                DeliveryState::Sending { attempt: 1 },
+            )
             .await?;
-        Ok(retry)
+        }
+        let next = gateway
+            .deliver_job_recipient(
+                &job.recipient,
+                &obligation.delivery_id,
+                &obligation.text,
+                &obligation.state,
+            )
+            .await
+            .unwrap_or_else(|error| DeliveryState::Uncertain {
+                reason: error.to_string(),
+            });
+        self.record(gateway, &job.job_id, &obligation, next.clone())
+            .await?;
+        match next {
+            next if delivery_settled(&next) => {
+                self.deliveries.forget(&job.job_id, &obligation.delivery_id);
+                Ok(())
+            }
+            DeliveryState::Failed { reason } => {
+                self.hand_off(gateway, job, &obligation, reason).await
+            }
+            _ if expired => {
+                self.hand_off(gateway, job, &obligation, WINDOW_EXPIRED.into())
+                    .await
+            }
+            _ => Ok(()),
+        }
+    }
+
+    async fn hand_off(
+        &self,
+        gateway: &Arc<Gateway>,
+        job: &JobRecord,
+        obligation: &Obligation,
+        reason: String,
+    ) -> Result<()> {
+        self.deliveries.forget(&job.job_id, &obligation.delivery_id);
+        match obligation.duty {
+            Duty::Completion => gateway.surface_job_result(&job.job_id, &reason).await,
+            Duty::Notice => {
+                self.record(
+                    gateway,
+                    &job.job_id,
+                    obligation,
+                    DeliveryState::Dismissed { reason },
+                )
+                .await
+            }
+        }
+    }
+
+    async fn record(
+        &self,
+        gateway: &Gateway,
+        id: &JobId,
+        obligation: &Obligation,
+        next: DeliveryState,
+    ) -> Result<()> {
+        let store = self.store().await?;
+        let job = store.read(id.clone()).await?;
+        let delivery_id = &obligation.delivery_id;
+        let previous = match obligation.duty {
+            Duty::Notice => job
+                .notices
+                .iter()
+                .find(|notice| notice.payload.delivery_id() == Some(delivery_id.as_str()))
+                .map(|notice| &notice.delivery),
+            Duty::Completion => match &job.execution {
+                ExecutionState::Terminal { terminal } => match &terminal.completion {
+                    Completion::Required { delivery, .. } => Some(delivery),
+                    Completion::NotRequired => None,
+                },
+                _ => None,
+            },
+        }
+        .context("delivery obligation disappeared")?
+        .clone();
+        if previous == next {
+            return Ok(());
+        }
+        match obligation.duty {
+            Duty::Notice => {
+                store
+                    .notice_delivery(
+                        id.clone(),
+                        job.revision,
+                        delivery_id.clone(),
+                        next.clone(),
+                        now_ms(),
+                    )
+                    .await?
+            }
+            Duty::Completion => {
+                store
+                    .delivery(id.clone(), job.revision, next.clone(), now_ms())
+                    .await?
+            }
+        };
+        journal(gateway, id, Some(delivery_id), &previous, &next);
+        Ok(())
     }
 }
+
+fn obligations(job: &JobRecord) -> Vec<Obligation> {
+    let mut obligations: Vec<_> = job
+        .notices
+        .iter()
+        .filter_map(|notice| {
+            obligation(
+                Duty::Notice,
+                &notice.payload,
+                &notice.delivery,
+                notice.at_ms,
+            )
+        })
+        .collect();
+    if let ExecutionState::Terminal { terminal } = &job.execution
+        && terminal.cleanup == CleanupState::Complete
+        && let Completion::Required { payload, delivery } = &terminal.completion
+    {
+        obligations.extend(obligation(
+            Duty::Completion,
+            payload,
+            delivery,
+            terminal.at_ms,
+        ));
+    }
+    obligations
+}
+
+fn obligation(
+    duty: Duty,
+    payload: &CompletionPayload,
+    state: &DeliveryState,
+    at_ms: Option<i64>,
+) -> Option<Obligation> {
+    let CompletionPayload::Prepared {
+        delivery_id, text, ..
+    } = payload
+    else {
+        return None;
+    };
+    (!delivery_settled(state)).then(|| Obligation {
+        duty,
+        delivery_id: delivery_id.clone(),
+        text: text.clone(),
+        state: state.clone(),
+        at_ms,
+    })
+}
+
+fn journal(
+    gateway: &Gateway,
+    id: &JobId,
+    delivery_id: Option<&str>,
+    from: &DeliveryState,
+    to: &DeliveryState,
+) {
+    gateway.journal().runtime(
+        "agent_delivery",
+        json!({"jobId": id, "deliveryId": delivery_id, "from": from, "to": to}),
+    );
+}
+
+#[cfg(test)]
+mod tests;

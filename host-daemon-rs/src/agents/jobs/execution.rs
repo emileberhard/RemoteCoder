@@ -18,15 +18,19 @@ impl JobOwner {
     }
 
     pub(super) async fn reconcile_job(&self, id: JobId) -> Result<bool> {
+        let execution = self.reconcile_execution(id.clone()).await;
+        let gateway = self.gateway()?;
+        let job = self.store().await?.retarget_delivery(id).await?;
+        if !matches!(&job.recipient, Recipient::Remote {host,..} if gateway.remote_receiver_active(host).await?)
+        {
+            self.deliver_obligations(job).await?;
+        }
+        execution
+    }
+
+    async fn reconcile_execution(&self, id: JobId) -> Result<bool> {
         let gateway = self.gateway()?;
         let store = self.store().await?;
-        let current = store.retarget_delivery(id.clone()).await?;
-        let notices_pending = if matches!(&current.recipient, Recipient::Remote {host,..} if gateway.remote_receiver_active(host).await?)
-        {
-            false
-        } else {
-            self.deliver_notices(&id).await?
-        };
         for _ in 0..8 {
             let job = store.read(id.clone()).await?;
             if let ExecutionState::Terminal { terminal } = &job.execution {
@@ -48,16 +52,7 @@ impl JobOwner {
                         .await?;
                     continue;
                 }
-                let current = store.retarget_delivery(job.job_id.clone()).await?;
-                if let Recipient::Remote { host, .. } = &current.recipient
-                    && gateway.remote_receiver_active(host).await?
-                {
-                    return Ok(false);
-                }
-                let ExecutionState::Terminal { terminal } = &current.execution else {
-                    unreachable!()
-                };
-                return Ok(self.deliver_completion(&current, terminal).await? || notices_pending);
+                return Ok(false);
             }
             if matches!(job.stop, StopState::Requested { .. }) {
                 self.stop_execution(&gateway, &job).await?;
@@ -273,7 +268,7 @@ impl JobOwner {
                         Inspection::Running { binding } => {
                             if matches!(&job.execution, ExecutionState::Running { binding: current } if current == &binding)
                             {
-                                return Ok(notices_pending);
+                                return Ok(false);
                             }
                             store
                                 .advance(
@@ -283,7 +278,7 @@ impl JobOwner {
                                     now_ms(),
                                 )
                                 .await?;
-                            return Ok(notices_pending);
+                            return Ok(false);
                         }
                         Inspection::Recoverable { binding } => {
                             if !gateway

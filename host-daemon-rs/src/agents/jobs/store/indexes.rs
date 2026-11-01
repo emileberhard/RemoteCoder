@@ -611,6 +611,23 @@ impl JobStore {
         .await
     }
 
+    pub(crate) async fn pending_jobs(
+        &self,
+        select: impl Fn(&JobRecord) -> bool + Send + 'static,
+    ) -> Result<Vec<JobId>> {
+        self.access(move |inner| {
+            Ok(inner
+                .indexes
+                .pending_by_agent
+                .values()
+                .flatten()
+                .filter(|id| inner.jobs.get(*id).is_some_and(&select))
+                .cloned()
+                .collect())
+        })
+        .await
+    }
+
     pub(crate) async fn member_pending_ids(&self, host: String) -> Result<Vec<JobId>> {
         self.access(move |inner| {
             Ok(inner

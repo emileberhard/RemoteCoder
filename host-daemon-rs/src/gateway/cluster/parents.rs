@@ -136,10 +136,12 @@ impl Gateway {
             .project_agent_record(&agent, &request.agent.thread_id)
             .await?;
         let _operation = self.jobs.operations.write().await;
-        let moved = self
-            .jobs
-            .store()
-            .await?
+        let store = self.jobs.store().await?;
+        let agent_id = agent.agent_id.clone();
+        let pending = store
+            .pending_jobs(move |job| job.agent_id == agent_id)
+            .await?;
+        let moved = store
             .set_parent(
                 agent.agent_id,
                 request.parent,
@@ -149,7 +151,7 @@ impl Gateway {
             )
             .await?;
         self.agent_service().invalidate_parent_views().await;
-        self.jobs.dirty();
+        self.jobs.expedite(&pending);
         row.parent = moved.parent.clone();
         row.recipient = moved.parent_recipient;
         row.capabilities.ask_parent = row.parent.is_some();

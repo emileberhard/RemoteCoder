@@ -386,7 +386,12 @@ impl JobStore {
 }
 
 impl JobStore {
-    pub(crate) async fn attention(&self, id: JobId, next: Attention) -> Result<JobRecord> {
+    pub(crate) async fn attention(
+        &self,
+        id: JobId,
+        next: Attention,
+        at_ms: i64,
+    ) -> Result<JobRecord> {
         self.access(move |inner| {
             let mut job = inner.job(&id)?.clone();
             if matches!(job.attention, Some(Attention::Surfaced { .. }))
@@ -399,7 +404,6 @@ impl JobStore {
                 "attention is already pending"
             );
             job.attention = Some(next);
-            let at_ms = job.updated_at_ms;
             inner.commit(job, at_ms)
         })
         .await

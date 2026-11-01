@@ -290,6 +290,17 @@ pub(crate) enum CompletionPayload {
     },
 }
 
+impl CompletionPayload {
+    pub(crate) fn delivery_id(&self) -> Option<&str> {
+        match self {
+            Self::Prepared { delivery_id, .. } | Self::Expired { delivery_id, .. } => {
+                Some(delivery_id)
+            }
+            Self::HistoricalUnreplayable { delivery_id, .. } => delivery_id.as_deref(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) enum DeliveryState {

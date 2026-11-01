@@ -102,6 +102,7 @@ impl Gateway {
                 Attention::Pending {
                     reason: reason.to_owned(),
                 },
+                crate::time::unix_millis(),
             )
             .await?;
         let Some(Attention::Pending { reason }) = &job.attention else {
@@ -136,6 +137,7 @@ impl Gateway {
                 Attention::Surfaced {
                     reason: reason.clone(),
                 },
+                crate::time::unix_millis(),
             )
             .await?;
         Ok(())
