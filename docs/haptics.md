@@ -366,3 +366,29 @@ recording/call routes. The custom accents are tuning candidates, not remotely
 validated improvements. Simulator success cannot establish physical feel,
 microphone interference, power use or actuator latency. Signposts identify
 requests only and never contain copied text, prompts or audio.
+
+# Dispatch architecture decision
+
+### Decision
+
+HapticService remains the only policy and dispatch owner. Every accepted semantic event calls a prepared player synchronously on the main actor. SwiftUI button isPressed remains the source of press transitions, but its callback calls the service directly. Remove pulse, HapticPulse, sensory-feedback recipe conversion and HapticOutput.
+
+A small iOS view attachment registers a player factory with the service while its scene is active and its UIView is in a window. The service owns one ordinary native player and the existing exact-owner interaction/finishing players. Attachment identity fences teardown, so a disappearing old scene cannot remove its replacement. Players use view-attached UIKit generators and explicitly detach those interactions when released. The native pool is bounded to four impact styles, selection and notification. No key-window search, dispatch queue, event backlog or keep-warm timer.
+
+Preparation is an explicit operation: attachment/foreground prepares the native pool; input contact and gesture begin prepare anticipated feedback; accepted playback prepares for a subsequent event. Cold first-contact feedback still submits immediately; preparing in that same callback does not promise a warm actuator. Native ordinary playback never starts a Core Haptics engine. Gesture preparation retains Strong custom accents and native fallback; streaming retains its separate existing engine and cadence.
+
+### Goals and constraints
+
+Preserve every recipe, eligibility gate, capture exception, call suppression, occurrence deduplication, interaction ownership and streaming cadence. Preserve event ordering and repeated local actions. Semantic completion must survive the initiating control disappearing. Keep UIKit out of Core, macOS silent, and the drawer/switch owners untouched. Dispatch has no asynchronous boundary. Generator submission is measurable; physical actuator onset and perceived feel remain separate acceptance.
+
+### Alternatives and trade-offs
+
+Keeping root sensory feedback leaves the measured second SwiftUI hop and coalesces same-callback events. Moving sensory feedback into every view spreads policy and loses completion feedback with dismissed views. Per-control generator pools multiply ownership and resource cleanup. A scene-attached service pool reuses the existing player seam and needs only one bounded native owner, plus the existing independent gesture and streaming lifetimes. The root attachment is infrastructure, with no observation of event state.
+
+Immediate asynchronous outcomes cannot always be anticipated. Repeated preparation without input would waste power and is explicitly excluded. A detached/background scene drops its events rather than guessing a window or replaying later. If multi-scene hardware with haptics requires simultaneous independent output, the single active attachment must become scene-qualified at the caller boundary; do not infer a scene from global windows.
+
+### Evidence and validation
+
+Apple UIFeedbackGenerator.prepare() requires lead time and recommends preparing again after playback when more feedback is expected. init(view:) and UIImpactFeedbackGenerator.init(style:view:) attach to a real view. The Pragmatic Programmer topics 26 and 28 inform explicit resource ownership and hiding platform dispatch behind the service boundary.
+
+Before implementation: independent Opus xhigh design challenge. Before handoff: targeted hosted service/ownership/control tests and app compilation, haptic/glass/platform lints, independent pre-merge reviews, and clean test-iPhone before/after feedback-intent to feedback-api-request signposts for button, semantic event and drawer using the drawer owner’s journey driver. No merge or release in this task.
