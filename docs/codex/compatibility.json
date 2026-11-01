@@ -1,16 +1,11 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "component": "remote-coder-codex-gateway",
   "chatgptBuild": "26.1016.51333",
   "codexCliVersion": "0.163.0-alpha.11",
-  "codexForkCommit": "f97ca1b2872a81b418a46aa5d1d1a064cf136bb7",
   "codexUpstreamBaseCommit": "5425d3e625daa58eea3ad1de27c087eb3b2ffbd3",
   "codexAppServerTransport": "websocket-over-unix",
   "codexAppServerSocket": "~/.codex/app-server-control/app-server-control.sock",
-  "runtimeHashes": {
-    "bin/codex": "a1e0eabef798b237eccc9b1353c80d70c6106957e2faac16496147bd9b1c5a07",
-    "bin/codex-code-mode-host": "ad607c9873f686fc3bf0ee4f8f50d81ec83b97ad2699b1db243fdf0f0d07119a"
-  },
   "status": "runtime-identity-only",
   "externalAuthAcceptance": {
     "required": true,
@@ -45,5 +40,15 @@
     "status": "operator-acceptance-not-published",
     "liveAcceptanceStatus": "not-published"
   },
-  "runtimePackageSHA256": "4bc8e8c271b451609cf90a0d5923eb1158463e19ec60c7cfcdf3010c8fb181e0"
+  "protocolSourceCommit": "f97ca1b2872a81b418a46aa5d1d1a064cf136bb7",
+  "runtimeTargets": {
+    "aarch64-apple-darwin": {
+      "sourceCommit": "f97ca1b2872a81b418a46aa5d1d1a064cf136bb7",
+      "runtimeHashes": {
+        "bin/codex": "a1e0eabef798b237eccc9b1353c80d70c6106957e2faac16496147bd9b1c5a07",
+        "bin/codex-code-mode-host": "ad607c9873f686fc3bf0ee4f8f50d81ec83b97ad2699b1db243fdf0f0d07119a"
+      },
+      "runtimePackageSHA256": "4bc8e8c271b451609cf90a0d5923eb1158463e19ec60c7cfcdf3010c8fb181e0"
+    }
+  }
 }

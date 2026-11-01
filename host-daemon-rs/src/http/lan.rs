@@ -35,20 +35,28 @@ pub(crate) struct LanListener {
 }
 
 impl LanListener {
-    pub(crate) async fn bind(port: u16) -> Result<Self> {
-        let identity = tokio::task::spawn_blocking(|| {
-            LanIdentity::load(&lan_tls::default_key_path()?, lan_tls::mdns_host_name()?)
+    pub(crate) async fn bind(settings: &crate::config::LanSettings) -> Result<Self> {
+        let host = match &settings.binding {
+            crate::config::LanBinding::DualStack => lan_tls::mdns_host_name()?,
+            crate::config::LanBinding::Address { host, .. } => host.clone(),
+        };
+        let identity = tokio::task::spawn_blocking(move || {
+            LanIdentity::load(&lan_tls::default_key_path()?, host)
         })
         .await
         .context("LAN TLS identity task failed")??;
-        let listener =
-            bind_dual_stack(port).with_context(|| format!("failed to bind [::]:{port}"))?;
+        let listener = match &settings.binding {
+            crate::config::LanBinding::DualStack => bind_dual_stack(settings.port)?,
+            crate::config::LanBinding::Address { address, .. } => {
+                TcpListener::bind(SocketAddr::new(*address, settings.port)).await?
+            }
+        };
         Ok(Self {
             listener,
             acceptor: identity.acceptor,
             endpoint: LanEndpoint {
                 host: identity.host,
-                port,
+                port: settings.port,
                 spki_sha256: identity.spki_sha256,
             },
         })

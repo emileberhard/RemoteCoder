@@ -1,6 +1,6 @@
 use crate::config::{
     HostPaths, REQUIRED_CODE_MODE_HOST_SHA256, REQUIRED_CODEX_SHA256, REQUIRED_CODEX_SOURCE_COMMIT,
-    REQUIRED_CODEX_VERSION,
+    REQUIRED_CODEX_TARGET, REQUIRED_CODEX_VERSION,
 };
 use crate::runtime::recovery::{RecoveryJournal, RecoveryPhase, RecoveryStore, RuntimeSwap};
 use crate::storage::private_state::{self, Creation};
@@ -30,7 +30,7 @@ impl RuntimePaths {
         let standalone = paths.home().join(".codex/packages/standalone");
         let releases = standalone.join("releases");
         Ok(Self {
-            release: releases.join(format!("{REQUIRED_CODEX_VERSION}-aarch64-apple-darwin")),
+            release: releases.join(format!("{REQUIRED_CODEX_VERSION}-{REQUIRED_CODEX_TARGET}")),
             staging: releases.join(".runtime-staging"),
             previous_release: releases.join(".runtime-previous-release"),
             current: standalone.join("current"),
@@ -78,7 +78,7 @@ pub(in crate::runtime) fn validate_runtime_package(package_dir: &Path) -> Result
     if manifest.layout_version != 1
         || manifest.version != REQUIRED_CODEX_VERSION
         || manifest.source_commit != REQUIRED_CODEX_SOURCE_COMMIT
-        || manifest.target != "aarch64-apple-darwin"
+        || manifest.target != REQUIRED_CODEX_TARGET
         || manifest.variant != "codex"
         || manifest.entrypoint != "bin/codex"
         || manifest.resources_dir != "codex-resources"
@@ -769,6 +769,7 @@ mod tests {
         write_test_package(
             &staged.path,
             REQUIRED_CODEX_VERSION,
+            REQUIRED_CODEX_TARGET,
             &format!(
                 "printf '%s\\n' \"$3\" >> '{}'\nexec /bin/cat '{}'",
                 actions.display(),

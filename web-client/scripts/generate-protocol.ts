@@ -52,7 +52,7 @@ try {
   }
   await writeFile(
     join(project, "src/protocol/provenance.json"),
-    `${JSON.stringify({ codexCliVersion: compatibility.codexCliVersion, codexForkCommit: compatibility.codexForkCommit, experimental: true, files: seen.size }, null, 2)}\n`,
+    `${JSON.stringify({ codexCliVersion: compatibility.codexCliVersion, codexForkCommit: compatibility.protocolSourceCommit, experimental: true, files: seen.size }, null, 2)}\n`,
   );
 } finally {
   await rm(temporary, { recursive: true, force: true });

@@ -185,19 +185,45 @@ fn main() {
             .unwrap_or_else(|error| panic!("cannot read {}: {error}", path.display())),
     )
     .unwrap_or_else(|error| panic!("invalid JSON in {}: {error}", path.display()));
-    for (name, pointer) in [
-        ("RC_REQUIRED_CODEX_VERSION", "/codexCliVersion"),
-        ("RC_REQUIRED_CODEX_SOURCE_COMMIT", "/codexForkCommit"),
-        ("RC_REQUIRED_CODEX_SHA256", "/runtimeHashes/bin~1codex"),
+    let target = match (
+        std::env::var("CARGO_CFG_TARGET_ARCH").expect("target architecture"),
+        std::env::var("CARGO_CFG_TARGET_OS").expect("target OS"),
+    ) {
+        (architecture, os) if architecture == "aarch64" && os == "macos" => "aarch64-apple-darwin",
+        (architecture, os) if architecture == "x86_64" && os == "linux" => {
+            "x86_64-unknown-linux-musl"
+        }
+        (architecture, os) => panic!("no approved Codex target for {architecture}/{os}"),
+    };
+    let approval = record
+        .pointer(&format!("/runtimeTargets/{target}"))
+        .unwrap_or_else(|| panic!("no approved Codex package for {target}"));
+    println!("cargo::rustc-env=RC_REQUIRED_CODEX_TARGET={target}");
+    for (name, value) in [
+        (
+            "RC_REQUIRED_CODEX_VERSION",
+            record.pointer("/codexCliVersion"),
+        ),
+        (
+            "RC_REQUIRED_CODEX_PROTOCOL_SOURCE_COMMIT",
+            record.pointer("/protocolSourceCommit"),
+        ),
+        (
+            "RC_REQUIRED_CODEX_SOURCE_COMMIT",
+            approval.pointer("/sourceCommit"),
+        ),
+        (
+            "RC_REQUIRED_CODEX_SHA256",
+            approval.pointer("/runtimeHashes/bin~1codex"),
+        ),
         (
             "RC_REQUIRED_CODE_MODE_HOST_SHA256",
-            "/runtimeHashes/bin~1codex-code-mode-host",
+            approval.pointer("/runtimeHashes/bin~1codex-code-mode-host"),
         ),
     ] {
-        let value = record
-            .pointer(pointer)
+        let value = value
             .and_then(Value::as_str)
-            .unwrap_or_else(|| panic!("{} has no string at {pointer}", path.display()));
+            .unwrap_or_else(|| panic!("{} has no string for {name}/{target}", path.display()));
         println!("cargo::rustc-env={name}={value}");
     }
 }

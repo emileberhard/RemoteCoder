@@ -34,7 +34,7 @@ impl PackageIdentity {
             serde_json::from_slice(&bytes).context("parsing recovery package manifest")?;
         ensure!(
             manifest.layout_version == 1
-                && manifest.target == "aarch64-apple-darwin"
+                && manifest.target == crate::config::REQUIRED_CODEX_TARGET
                 && manifest.variant == "codex"
                 && manifest.entrypoint == "bin/codex"
                 && manifest.resources_dir == "codex-resources"
@@ -165,7 +165,7 @@ pub(super) fn write_test_package(root: &Path, version: &str, body: &str) -> std:
             .expect("executable permissions");
     }
     std::fs::write(root.join("codex-package.json"), serde_json::to_vec(&serde_json::json!({
-        "layoutVersion": 1, "version": version, "sourceCommit": "b".repeat(40), "target": "aarch64-apple-darwin", "variant": "codex", "entrypoint": "bin/codex", "resourcesDir": "codex-resources", "pathDir": "codex-path",
+        "layoutVersion": 1, "version": version, "sourceCommit": "b".repeat(40), "target": crate::config::REQUIRED_CODEX_TARGET, "variant": "codex", "entrypoint": "bin/codex", "resourcesDir": "codex-resources", "pathDir": "codex-path",
         "binaries": { "bin/codex": { "sha256": sha256_file(&codex).expect("codex hash") }, "bin/codex-code-mode-host": { "sha256": sha256_file(&host).expect("host hash") } }
     })).expect("manifest JSON")).expect("manifest");
     std::os::unix::fs::symlink("bin/codex", root.join("codex")).expect("root executable");

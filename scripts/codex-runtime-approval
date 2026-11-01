@@ -9,6 +9,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import platform
 import sqlite3
 import stat
 import subprocess
@@ -46,7 +47,7 @@ class PackageManifest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     layout_version: Literal[1] = Field(alias="layoutVersion")
     version: CodexVersion
-    target: Literal["aarch64-apple-darwin"]
+    target: Literal["aarch64-apple-darwin", "x86_64-unknown-linux-musl"]
     variant: Literal["codex"]
     entrypoint: Literal["bin/codex"]
     resources_dir: Literal["codex-resources"] = Field(alias="resourcesDir")
@@ -61,17 +62,24 @@ class RuntimeHashes(BaseModel):
     code_mode_host: Sha256 = Field(alias="bin/codex-code-mode-host")
 
 
+class TargetApproval(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    source_commit: GitCommit = Field(alias="sourceCommit")
+    hashes: RuntimeHashes = Field(alias="runtimeHashes")
+    package_sha256: Sha256 = Field(alias="runtimePackageSHA256")
+
+
 class Compatibility(BaseModel):
     model_config = ConfigDict(extra="ignore")
     version: CodexVersion = Field(alias="codexCliVersion")
-    source_commit: GitCommit = Field(alias="codexForkCommit")
-    hashes: RuntimeHashes = Field(alias="runtimeHashes")
-    package_sha256: Sha256 | None = Field(default=None, alias="runtimePackageSHA256")
+    protocol_source_commit: GitCommit = Field(alias="protocolSourceCommit")
+    targets: dict[Literal["aarch64-apple-darwin", "x86_64-unknown-linux-musl"], TargetApproval] = Field(alias="runtimeTargets")
 
 
 class Approval(BaseModel):
     model_config = ConfigDict(extra="forbid")
     version: CodexVersion
+    target: Literal["aarch64-apple-darwin", "x86_64-unknown-linux-musl"]
     source_commit: GitCommit
     codex_sha256: Sha256
     code_mode_host_sha256: Sha256
@@ -103,6 +111,7 @@ def parser() -> argparse.ArgumentParser:
         help="RemoteCoder root (default: inferred from this script)",
     )
     common.add_argument("--json", action="store_true", help="emit stable JSON")
+    common.add_argument("--target", choices=["aarch64-apple-darwin", "x86_64-unknown-linux-musl"])
     subcommands = command.add_subparsers(dest="command", required=True)
     check = subcommands.add_parser(
         "check", parents=[common], help="validate the approval record"
@@ -114,6 +123,8 @@ def parser() -> argparse.ArgumentParser:
         "apply", parents=[common], help="set the approval from a verified package"
     )
     apply.add_argument("--package", type=Path, required=True)
+    apply.add_argument("--source-dir", type=Path, help="exact fork checkout, required for a target-only source patch")
+    export = subcommands.add_parser("export", parents=[common], help="emit the selected flat package approval")
     install = subcommands.add_parser(
         "install-record", parents=[common], help="install immutable approval beside an already approved package"
     )
@@ -175,22 +186,27 @@ def package_approval(package: Path) -> Approval:
             )
     return Approval(
         version=manifest.version,
+        target=manifest.target,
         source_commit=manifest.source_commit,
         codex_sha256=manifest.binaries["bin/codex"].sha256,
         code_mode_host_sha256=manifest.binaries["bin/codex-code-mode-host"].sha256,
     )
 
 
-def repo_approval(path: Path) -> Approval:
+def repo_approval(path: Path, target: str) -> Approval:
     try:
         compatibility = Compatibility.model_validate(load_json(path))
     except ValidationError as error:
         raise ApprovalError(f"invalid compatibility approval: {error}") from error
+    selected = compatibility.targets.get(target)
+    if selected is None:
+        raise ApprovalError(f"no approved runtime for {target}")
     return Approval(
         version=compatibility.version,
-        source_commit=compatibility.source_commit,
-        codex_sha256=compatibility.hashes.codex,
-        code_mode_host_sha256=compatibility.hashes.code_mode_host,
+        target=target,
+        source_commit=selected.source_commit,
+        codex_sha256=selected.hashes.codex,
+        code_mode_host_sha256=selected.hashes.code_mode_host,
     )
 
 
@@ -210,12 +226,8 @@ def write_atomic(path: Path, content: str) -> None:
         raise ApprovalError(f"cannot update {path}: {error}") from error
 
 
-def install_record(package: Path, approval: Approval) -> None:
-    package = package.resolve()
-    directory_path = package.parent / "approvals"
-    directory_path.mkdir(exist_ok=True)
-    path = directory_path / f"{file_sha256(package / 'codex-package.json')}.json"
-    record = {
+def flat_record(approval: Approval) -> dict[str, Any]:
+    return {
         "codexCliVersion": approval.version,
         "codexForkCommit": approval.source_commit,
         "runtimeHashes": {
@@ -223,6 +235,14 @@ def install_record(package: Path, approval: Approval) -> None:
             "bin/codex-code-mode-host": approval.code_mode_host_sha256,
         },
     }
+
+
+def install_record(package: Path, approval: Approval) -> None:
+    package = package.resolve()
+    directory_path = package.parent / "approvals"
+    directory_path.mkdir(exist_ok=True)
+    path = directory_path / f"{file_sha256(package / 'codex-package.json')}.json"
+    record = flat_record(approval)
     temporary: Path | None = None
     try:
         with tempfile.NamedTemporaryFile("w", dir=directory_path, delete=False) as handle:
@@ -250,22 +270,21 @@ def install_record(package: Path, approval: Approval) -> None:
             temporary.unlink(missing_ok=True)
 
 
-def resolve_package(path: Path, packages: Path) -> Path:
+def resolve_package(path: Path, packages: Path, target: str) -> Path:
     compatibility = Compatibility.model_validate(load_json(path))
-    if compatibility.package_sha256 is None:
-        raise ApprovalError("compatibility record has no runtimePackageSHA256")
-    expected = repo_approval(path)
+    expected = repo_approval(path, target)
+    selected = compatibility.targets[target]
     for package in sorted(packages.glob("*")):
         if not package.is_dir():
             continue
         try:
-            if package_approval(package) == expected and tree_digest(package) == compatibility.package_sha256:
+            if package_approval(package) == expected and tree_digest(package) == selected.package_sha256:
                 return package.resolve()
         except (ApprovalError, OSError, ValueError):
             continue
     raise ApprovalError(
-        f"approved immutable package {compatibility.source_commit} "
-        f"with fingerprint {compatibility.package_sha256} is absent from {packages}"
+        f"approved immutable package {selected.source_commit} "
+        f"with fingerprint {selected.package_sha256} is absent from {packages}"
     )
 
 
@@ -368,22 +387,45 @@ def adoption_pins(root: Path, package: Path) -> dict[str, int]:
     return latest
 
 
+def verify_source(path: Path, approval: Approval, source: Path | None) -> None:
+    compatibility = Compatibility.model_validate(load_json(path))
+    protocol = compatibility.protocol_source_commit
+    if approval.source_commit == protocol:
+        return
+    if source is None:
+        raise ApprovalError("target-only source changes require --source-dir")
+    ancestry = subprocess.run(["git", "-C", str(source), "merge-base", "--is-ancestor", protocol, approval.source_commit], capture_output=True)
+    if ancestry.returncode != 0:
+        raise ApprovalError("target source must descend from the common protocol source")
+    changed = subprocess.check_output(["git", "-C", str(source), "diff", "--name-only", protocol, approval.source_commit], text=True).splitlines()
+    allowed = {"codex-rs/utils/pty/src/process_identity.rs"}
+    if not changed or set(changed) - allowed:
+        raise ApprovalError("target source changes shared protocol/state or an unreviewed platform path")
+
+
 def apply(path: Path, approval: Approval, package_sha256: str) -> None:
     compatibility = load_json(path)
-    if not isinstance(compatibility, dict) or not isinstance(
-        compatibility.get("runtimeHashes"), dict
-    ):
-        raise ApprovalError("compatibility record has no runtimeHashes object")
+    if compatibility["codexCliVersion"] != approval.version and len(compatibility["runtimeTargets"]) > 1:
+        raise ApprovalError("a version change must update every target together")
     compatibility["codexCliVersion"] = approval.version
-    compatibility["codexForkCommit"] = approval.source_commit
-    compatibility["runtimePackageSHA256"] = package_sha256
-    compatibility["runtimeHashes"].update(
-        {
+    compatibility["runtimeTargets"][approval.target] = {
+        "sourceCommit": approval.source_commit,
+        "runtimePackageSHA256": package_sha256,
+        "runtimeHashes": {
             "bin/codex": approval.codex_sha256,
             "bin/codex-code-mode-host": approval.code_mode_host_sha256,
-        }
-    )
+        },
+    }
     write_atomic(path, json.dumps(compatibility, indent=2, ensure_ascii=False) + "\n")
+
+
+def host_target() -> str:
+    target = (platform.system(), platform.machine())
+    if target == ("Darwin", "arm64"):
+        return "aarch64-apple-darwin"
+    if target == ("Linux", "x86_64"):
+        return "x86_64-unknown-linux-musl"
+    raise ApprovalError(f"no supported Codex package for {target}")
 
 
 def emit(payload: dict[str, Any], as_json: bool) -> None:
@@ -398,16 +440,27 @@ def main() -> int:
     args = parser().parse_args()
     try:
         path = compatibility_path(args.repo_root)
+        target = args.target or host_target()
+        if args.command == "export":
+            print(json.dumps(flat_record(repo_approval(path, target)), sort_keys=True))
+            return 0
         if args.command == "resolve":
-            args.package = resolve_package(path, args.packages_dir)
+            args.package = resolve_package(path, args.packages_dir, target)
         expected = package_approval(args.package) if args.package else None
+        if expected is not None:
+            if args.target and expected.target != args.target:
+                raise ApprovalError("package target differs from --target")
+            target = expected.target
         adoption = None
         if args.command == "apply":
             if expected is None:
                 raise ApprovalError("apply requires a verified package")
+            if target != host_target():
+                raise ApprovalError("approval must execute on the package's operating system and architecture")
+            verify_source(path, expected, args.source_dir)
             adoption = adoption_pins(args.repo_root, args.package)
             apply(path, expected, tree_digest(args.package))
-        actual = repo_approval(path)
+        actual = repo_approval(path, target)
         if expected is not None and actual != expected:
             raise ApprovalError(
                 "repository approval does not match the verified package"

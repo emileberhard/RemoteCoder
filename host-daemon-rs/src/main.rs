@@ -330,7 +330,7 @@ async fn run(
     info!(
         bind_host = %settings.bind_host,
         port = settings.port,
-        lan_port = ?settings.lan_port,
+        lan_port = ?settings.lan.as_ref().map(|lan| lan.port),
         codex_path = %settings.codex_path.display(),
         codex_version = %settings.codex_version,
         codex_code_mode_host_path = %settings.codex_code_mode_host_path.display(),
@@ -475,12 +475,15 @@ async fn serve_http(
         settings.speech_clients.clone(),
         journal.clone(),
     )?;
-    let lan = match settings.lan_port {
-        Some(lan_port) => match LanListener::bind(lan_port).await {
+    let lan = match &settings.lan {
+        Some(lan_settings) => match LanListener::bind(lan_settings).await {
             Ok(lan) => Some(lan),
             Err(error) => {
+                if cfg!(target_os = "linux") {
+                    return Err(error).context("required Linux TLS listener failed");
+                }
                 error!(
-                    lan_port,
+                    lan_port = lan_settings.port,
                     "LAN TLS listener unavailable; serving only the plaintext listener: {error:#}"
                 );
                 None
@@ -491,7 +494,7 @@ async fn serve_http(
     if let Some(listener) = &lan {
         gateway.configure_call_tls_endpoint(listener.endpoint().clone())?;
     }
-    let relay_route = match (settings.lan_port, &lan) {
+    let relay_route = match (&settings.lan, &lan) {
         (None, _) => RelayRoute::Absent,
         (Some(_), None) => RelayRoute::Unavailable,
         (Some(_), Some(_)) => {

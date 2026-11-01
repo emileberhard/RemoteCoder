@@ -10,6 +10,8 @@ adoption="host-daemon-rs/src/accounts/codex_migration"
 mkdir -p "${temp_root}/docs/codex" "${temp_root}/package/bin" "${temp_root}/${adoption}"
 cp "${repo_root}/docs/codex/compatibility.json" \
   "${temp_root}/docs/codex/compatibility.json"
+jq '.protocolSourceCommit = "0123456789abcdef0123456789abcdef01234567" | .runtimeTargets = {"aarch64-apple-darwin": .runtimeTargets["aarch64-apple-darwin"]}' "${temp_root}/docs/codex/compatibility.json" >"${temp_root}/initial.json"
+mv "${temp_root}/initial.json" "${temp_root}/docs/codex/compatibility.json"
 cp "${repo_root}/${adoption}/native.py" "${temp_root}/${adoption}/native.py"
 
 cat >"${temp_root}/package/bin/codex" <<'EOF'
@@ -125,12 +127,12 @@ uv run --script "${script}" apply --repo-root "${temp_root}" --json \
   jq -e '.ok == true and .adoptionMigrations["state_5.sqlite"] == 1' >/dev/null
 jq -e --slurpfile before "${temp_root}/before.json" \
   --arg codex "${codex_hash}" --arg host "${code_mode_hash}" '
-    del(.runtimePackageSHA256) == ($before[0] | del(.runtimePackageSHA256) |
+    del(.runtimeTargets["aarch64-apple-darwin"].runtimePackageSHA256) == ($before[0] | del(.runtimeTargets["aarch64-apple-darwin"].runtimePackageSHA256) |
       .codexCliVersion = "9.8.7-alpha.6" |
-      .codexForkCommit = "0123456789abcdef0123456789abcdef01234567" |
-      .runtimeHashes["bin/codex"] = $codex |
-      .runtimeHashes["bin/codex-code-mode-host"] = $host) and
-    .runtimePackageSHA256 != $before[0].runtimePackageSHA256' \
+      .runtimeTargets["aarch64-apple-darwin"].sourceCommit = "0123456789abcdef0123456789abcdef01234567" |
+      .runtimeTargets["aarch64-apple-darwin"].runtimeHashes["bin/codex"] = $codex |
+      .runtimeTargets["aarch64-apple-darwin"].runtimeHashes["bin/codex-code-mode-host"] = $host) and
+    .runtimeTargets["aarch64-apple-darwin"].runtimePackageSHA256 != $before[0].runtimeTargets["aarch64-apple-darwin"].runtimePackageSHA256' \
   "${temp_root}/docs/codex/compatibility.json" >/dev/null
 
 uv run --script "${script}" check --repo-root "${temp_root}" --json \
@@ -195,7 +197,7 @@ if uv run --script "${script}" check --repo-root "${temp_root}" \
   exit 1
 fi
 
-jq '.runtimeHashes["bin/codex"] = "not-a-hash"' "${temp_root}/docs/codex/compatibility.json" \
+jq '.runtimeTargets["aarch64-apple-darwin"].runtimeHashes["bin/codex"] = "not-a-hash"' "${temp_root}/docs/codex/compatibility.json" \
   >"${temp_root}/invalid.json"
 mv "${temp_root}/invalid.json" "${temp_root}/docs/codex/compatibility.json"
 if uv run --script "${script}" check --repo-root "${temp_root}" >/dev/null 2>&1; then

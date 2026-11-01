@@ -117,7 +117,7 @@ mod tests {
 
     #[test]
     fn command_boundaries_do_not_change_the_process_birth_or_parent() {
-        let fields = "S 40 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1234";
+        let fields = "S 40 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1234";
         assert_eq!(
             parse_stat(42, &format!("42 (a ) tricky name) {fields}")).unwrap(),
             Some(Stat {

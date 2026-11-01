@@ -204,7 +204,7 @@ def prepare_package(version: str) -> Path:
     if not (directory / "commit").is_file():
         raise ValueError(f"release {version} has not been admitted")
     approval = ROOT / "scripts/codex-runtime-approval"
-    expected = json.loads((ROOT / "docs/codex/compatibility.json").read_text())["runtimePackageSHA256"]
+    expected = json.loads((ROOT / "docs/codex/compatibility.json").read_text())["runtimeTargets"]["aarch64-apple-darwin"]["runtimePackageSHA256"]
     destination = directory / "codex-package"
     with file_lease(cache_root() / "codex-runtime/build.lock"), cache_lease(True):
         if not destination.exists():
