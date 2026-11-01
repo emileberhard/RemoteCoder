@@ -24,6 +24,9 @@ const settle = id => lab.waitFor(async () => {
     return view.job.execution.kind === "terminal" ? view : null;
 });
 let failure;
+let stage = "gateway startup";
+let observedJob;
+const checkpoint = name => { stage = name; console.log(`agent-api: ${name}`); };
 try {
     await mkdir(lab.path("work"));
     await mkdir(lab.path(".claude"));
@@ -32,6 +35,7 @@ try {
     await lab.writeGatewayEnv(["RC_CLAUDE_ENABLED=false", `RC_CLAUDE_HOME=${lab.path(".claude")}`,
         `RC_CODEX_GATEWAY_EXTERNAL_PROVIDERS_FILE=${lab.path("external-providers.json")}`]);
     await lab.start();
+    checkpoint("agent ID after Continue");
     const self = (await agent("cluster", "list")).self;
     const admitted = await agent("spawn", "codex", "rcjob-mock", "RCJOB_ECHO:first", "--operator", "--host", self.name);
     assert.equal(admitted.detailsLoaded, true);
@@ -80,11 +84,14 @@ try {
     await nativeTurn(parent, "RCJOB_ECHO:native-parent", "native-parent-input");
     await waitNative(parent);
     const adopted = await nativeThread();
+    checkpoint("adopt running native turn");
     await nativeTurn(adopted, "RCJOB_HOLD:native-running", "native-running-input");
     await lab.waitFor(() => model.requests.some(request => request.name === "native-running"));
     await agent("set-parent", adopted, parent, "--operator");
     const adoptedJob = await lab.waitFor(async () => (await nativeJobs(adopted))[0] ?? null);
+    observedJob = adoptedJob.jobId;
     model.release("native-running");
+    checkpoint("native adoption completion");
     const adoptionResult = await settle(adoptedJob.jobId);
     assert.equal(adoptionResult.resultText, "RCJOB_RESULT:native-running");
     assert.equal(adoptionResult.job.spec.kind, "unknown");
@@ -93,6 +100,7 @@ try {
         return JSON.stringify(items.data).includes(`${id}:completion`);
     });
     await callback(adoptedJob.jobId);
+    checkpoint("app turn without a callback");
     await waitNative(parent);
     await nativeTurn(adopted, "RCJOB_ECHO:app-initiated", "app-initiated-input");
     await waitNative(adopted);
@@ -101,8 +109,12 @@ try {
         "RCJOB_HOLD:parent-input", "--delivery-id", "adopted-parent-input", "--json"]
         .map(part => `'${part.replaceAll("'", "'\\''")}'`).join(" ");
     await nativeTurn(parent, `RCJOB_SPAWN:${Buffer.from(command).toString("base64url")}`, "parent-tool-input");
+    checkpoint("parent input creates a native job");
     await lab.waitFor(() => model.requests.some(request => request.name === "parent-input"));
     const parentJob = await lab.waitFor(async () => (await nativeJobs(adopted)).find(row => row.jobId !== adoptedJob.jobId) ?? null);
+    observedJob = parentJob.jobId;
+    await lab.waitFor(async () => (await agent("read", parentJob.jobId)).job.execution.kind === "running");
+    checkpoint("steering retains the completion obligation");
     await agent("message", parentJob.jobId, "RCJOB_ECHO:steer", "--operator", "--delivery-id", "adopted-steer");
     model.release("parent-input");
     const parentResult = await settle(parentJob.jobId);
@@ -115,7 +127,15 @@ try {
         selfHost: self.name, topLevelLifecycle: true, nativeJobs: [adoptedJob.jobId, parentJob.jobId],
         nativeCallbacks: 2, appTurnWithoutCallback: true, steeringRetainsObligation: true }));
 } catch (error) {
-    failure = error;
+    failure = new Error(`Agent API probe failed during ${stage}`, { cause: error });
+    if (observedJob) {
+        try {
+            const { job } = await agent("read", observedJob);
+            console.error(JSON.stringify({ jobId: job.jobId, execution: job.execution.kind,
+                reason: job.execution.reason, outcome: job.execution.terminal?.outcome,
+                delivery: job.execution.terminal?.completion?.delivery }));
+        } catch {}
+    }
 } finally {
     try { await lab.stop(); } catch (error) { failure ??= error; await lab.forceStop(); }
     try {
