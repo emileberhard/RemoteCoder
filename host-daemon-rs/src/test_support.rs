@@ -170,8 +170,8 @@ for line in sys.stdin:
         emit(frame)
         continue
     if MODE == 'messages':
-        append(root / 'received.jsonl', frame)
         record({'type': 'user', 'uuid': frame['uuid'], 'message': frame['message']})
+        append(root / 'received.jsonl', frame)
         emit(frame)
         content = frame['message']['content']
         if content == 'initial':
