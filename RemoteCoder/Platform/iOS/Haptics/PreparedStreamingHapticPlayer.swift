@@ -26,6 +26,7 @@ final class PreparedStreamingHapticPlayer: HapticStreamingPlaying {
                 Task { @MainActor [weak self] in
                     guard let self, self.generation == generation else { return }
                     if reason == .idleTimeout {
+                        self.generation = UUID()
                         self.state = .stopped
                         self.player = nil
                     } else {
@@ -46,7 +47,7 @@ final class PreparedStreamingHapticPlayer: HapticStreamingPlaying {
             engine.start { [weak self] error in
                 Task { @MainActor [weak self] in
                     guard let self, self.generation == generation else { return }
-                    guard error == nil, self.canPlay() else {
+                    guard error == nil else {
                         if let error { self.logger.notice("Streaming haptic start failed: \(error.localizedDescription)") }
                         self.cancel()
                         return
