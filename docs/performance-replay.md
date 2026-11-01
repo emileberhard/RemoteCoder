@@ -399,12 +399,16 @@ control separate from the canonical measured journey.
 The iOS `RC_PERF_HARNESS` build extends the existing command-file and Darwin
 notification transport with two commands. Shipped builds exclude the driver.
 Every command carries `id`; its terminal result is appended to `results.jsonl`.
+After an offline command session, `scenario-stop` cancels active work, retires the
+fixture host and removes its benchmark storage. Await its receipt before process
+termination. A new session requires a fresh offline launch. Prepared history uses
+that benchmark scope, so restarting does not collide with an earlier preparation.
 
 | Command | Required fields | Completion |
 | --- | --- | --- |
 | `sidebar` | `open`: Boolean | Published sidebar state and drawer spring have settled. |
 | `drawer-drag` | `travel`: −1…1 drawer widths, `seconds`: 0.05…5, `velocity`: −20…20 widths/second | Production begin/track/end callbacks have run and the spring has settled. |
-| `select-row` | `host`: exact UUID, `thread`: exact thread ID | The production row action has selected a different transcript, its first-content callback has fired, and the drawer has closed and settled. |
+| `select-row` | `host`: exact UUID, `thread`: exact thread ID | The production row action has selected a different transcript, its first-content callback has fired, and the drawer has closed and settled; receipt reports whether its recent presentation was cached. |
 
 `drawer-drag` requires an attached compact drawer at rest. Its normalized travel
 bypasses UIKit recognition, arbitration and coordinate conversion; positive opens

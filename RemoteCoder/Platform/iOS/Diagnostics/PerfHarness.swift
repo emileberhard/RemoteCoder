@@ -164,6 +164,25 @@ final class PerfHarness {
                     writeResult(report)
                 } catch { writeResult(["cmd": "window", "id": id, "error": String(describing: error)]) }
             }
+        case "scenario-stop":
+            guard let run = offlineRun else {
+                writeResult(["cmd": name, "id": id, "error": "no scenario loaded"])
+                return
+            }
+            let previousWindow = windowTask
+            let previousJourney = journeyTask
+            previousWindow?.cancel()
+            previousJourney?.cancel()
+            windowTask = Task {
+                await previousWindow?.value
+                await previousJourney?.value
+                guard !Task.isCancelled else { return }
+                cancelRowSelection()
+                let failures = await run.stop()
+                offlineRun = nil
+                writeResult(failures.isEmpty ? ["cmd": name, "id": id, "stopped": true]
+                    : ["cmd": name, "id": id, "error": failures.joined(separator: "; ")])
+            }
         case "fixture-footprint":
             windowTask?.cancel()
             windowTask = Task {
@@ -313,6 +332,7 @@ final class PerfHarness {
                 throw JourneyFailure.unavailableWindow
             }
             guard !self.isOpen(address) else { throw JourneyFailure.invalidSelection }
+            let cached = self.workspace?.model(for: address.hostID)?.recentPresentation(threadID: address.threadID) != nil
             let outcome = commands.select(address)
             guard outcome == .changed else { throw JourneyFailure.invalidSelection }
             let deadline = ContinuousClock.now + .seconds(30)
@@ -320,7 +340,7 @@ final class PerfHarness {
                 guard ContinuousClock.now < deadline else { throw JourneyFailure.timedOut }
                 try await Task.sleep(for: .milliseconds(16))
             }
-            return ["host": address.hostID.uuidString, "thread": address.threadID,
+            return ["host": address.hostID.uuidString, "thread": address.threadID, "recentPresentationHit": cached,
                     "loaded": true, "drawerClosed": true]
         }
     }
