@@ -43,7 +43,7 @@ mod transcript {
     struct CachedTranscript {
         revision: FileRevision,
         boundary: Option<Boundary>,
-        sampled: std::time::Instant,
+        sampled: tokio::time::Instant,
     }
 
     impl TranscriptCache {
@@ -70,7 +70,7 @@ mod transcript {
                 CachedTranscript {
                     revision,
                     boundary,
-                    sampled: std::time::Instant::now(),
+                    sampled: tokio::time::Instant::now(),
                 },
             );
             Ok(boundary)
@@ -109,7 +109,7 @@ mod transcript {
         std::fs::write(file.path(), b"work\n").unwrap();
         let cached = cache.entries.get_mut(file.path()).unwrap();
         cached.revision = FileRevision::from(std::fs::metadata(file.path()).unwrap());
-        cached.sampled = std::time::Instant::now() - std::time::Duration::from_secs(2);
+        cached.sampled = tokio::time::Instant::now() - std::time::Duration::from_secs(2);
         assert_eq!(
             cache.boundary(file.path(), project).unwrap().unwrap().state,
             ActivityState::Working

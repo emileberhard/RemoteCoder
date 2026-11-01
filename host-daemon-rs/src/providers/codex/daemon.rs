@@ -215,7 +215,9 @@ impl CodexAppServer {
             pid: i32::try_from(record.pid)?,
             started_micros: None,
             linux_birth: crate::platform::process::LinuxBirth {
-                boot_id: crate::platform::process::boot_id::parse(&boot_id)
+                boot_id: boot_id
+                    .as_bytes()
+                    .try_into()
                     .context("invalid Codex boot UUID")?,
                 start_ticks,
             },

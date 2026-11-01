@@ -199,6 +199,17 @@ async fn cluster_self_dispatch_preserves_captured_read_only_caller() {
     let caller_thread = conversation.thread_id.clone();
     let pid = std::process::id() as i32;
     let process = crate::platform::process::identify(pid).unwrap().unwrap();
+    let process_identity = {
+        let identity = json!({"pid":pid,"startedAtUnixMicros":process.started_micros});
+        #[cfg(target_os = "linux")]
+        let identity = {
+            let mut identity = identity;
+            identity["linuxBirth"] = serde_json::to_value(process.linux_birth).unwrap();
+            identity
+        };
+        identity
+    };
+    let captured_identity = process_identity.clone();
     let mut control = crate::test_support::FakeControl::attach(&host, 16).await;
     let gateway = host.clone();
     let responder = tokio::spawn(async move {
@@ -206,17 +217,12 @@ async fn cluster_self_dispatch_preserves_captured_read_only_caller() {
             let request: Value = serde_json::from_str(&raw).unwrap();
             assert_eq!(request["method"], "daemon/toolContext");
             gateway.control_requests.lock().unwrap().remove(request["id"].as_str().unwrap()).unwrap()
-                .send(Ok(json!({"context":{"threadId":caller_thread,"turnId":"fixture-turn","toolCallId":"fixture-tool","rootProcessIdentity":{"pid":pid,"startedAtUnixMicros":process.started_micros}}}))).unwrap();
+                .send(Ok(json!({"context":{"threadId":caller_thread,"turnId":"fixture-turn","toolCallId":"fixture-tool","rootProcessIdentity":process_identity}}))).unwrap();
         }
     });
     let (mut socket, server) = connect_client(&host).await;
     assert_eq!(next_json(&mut socket).await["method"], "daemon/ready");
-    let captured = request(
-        &mut socket,
-        "agent/context/capture",
-        json!({"pid":pid,"startedAtUnixMicros":process.started_micros}),
-    )
-    .await;
+    let captured = request(&mut socket, "agent/context/capture", captured_identity).await;
     assert!(captured.get("error").is_none(), "{captured}");
     let caller = json!({"kind":"captured","contextId":captured["result"]["contextId"]});
     let identity = host.host_identity().await.unwrap();

@@ -23,7 +23,7 @@ impl From<fs::Metadata> for FileRevision {
 }
 
 impl FileRevision {
-    pub(crate) fn can_reuse(&self, current: &Self, sampled: std::time::Instant) -> bool {
+    pub(crate) fn can_reuse(&self, current: &Self, sampled: tokio::time::Instant) -> bool {
         self == current
             && (!cfg!(target_os = "linux") || sampled.elapsed() < std::time::Duration::from_secs(1))
     }

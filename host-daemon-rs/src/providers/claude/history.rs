@@ -120,7 +120,7 @@ const MAX_HEADER_CACHE_ENTRIES: usize = 4_096;
 
 struct CachedHeader {
     revision: FileRevision,
-    sampled: std::time::Instant,
+    sampled: tokio::time::Instant,
     header: Option<Value>,
     bytes: usize,
 }
@@ -270,7 +270,7 @@ impl HistoryIndex {
                 path.to_path_buf(),
                 Some(Arc::new(CachedHeader {
                     revision,
-                    sampled: std::time::Instant::now(),
+                    sampled: tokio::time::Instant::now(),
                     header: header.clone(),
                     bytes,
                 })),
@@ -713,8 +713,8 @@ mod tests {
             .unwrap();
     }
 
-    #[test]
-    fn bounds_review_repeated_full_scans_rebuild_only_uncached_headers_above_entry_and_byte_budgets()
+    #[tokio::test(start_paused = true)]
+    async fn bounds_review_repeated_full_scans_rebuild_only_uncached_headers_above_entry_and_byte_budgets()
      {
         let home = tempfile::tempdir().unwrap();
         for index in 0..MAX_HEADER_CACHE_ENTRIES + 1 {

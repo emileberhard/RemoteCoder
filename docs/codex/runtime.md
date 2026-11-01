@@ -36,4 +36,6 @@ The supported targets are `aarch64-apple-darwin` and `x86_64-unknown-linux-musl`
 
 `protocolSourceCommit` owns the common wire and database contract. A target-only source patch must descend from that commit; approval requires `--source-dir` and permits only the reviewed process-identity platform implementation to differ. Protocol or migration changes move the common pin and all targets together. Run Linux package approval on Linux, because approval executes the package against the adoption schema pins. `codex-runtime-approval export --target <target>` emits a flat record for on-host verification; installed immutable records retain their existing format.
 
+For a common source move, run `scripts/codex-runtime-approval evaluate --package <package> --output <receipt>` natively for every target, then `scripts/codex-runtime-approval apply-set --receipt <mac-receipt> --receipt <linux-receipt> --protocol-source-commit <commit> --source-dir <fork-checkout>`. The atomic update rejects missing targets, mixed versions, changed adoption pins or different database migrations before writing any approval.
+
 The checked-in source pins and hashes describe exact matched runtimes. Host-specific acceptance, installed paths and private configuration are operator records outside this repository.

@@ -163,7 +163,8 @@ impl Storage {
             std::io::Error::last_os_error()
         );
         let stats = unsafe { stats.assume_init() };
-        let free = stats.f_bavail as u64 * stats.f_frsize;
+        let free = u64::try_from(u128::from(stats.f_bavail) * u128::from(stats.f_frsize))
+            .context("session free disk exceeds supported size")?;
         let headroom_bytes = headroom(used, free, self.wal_bytes()?);
         Ok(Usage {
             used_bytes: used,

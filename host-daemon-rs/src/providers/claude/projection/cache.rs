@@ -32,7 +32,7 @@ struct CacheKey {
 
 struct CacheEntry {
     key: CacheKey,
-    sampled: std::time::Instant,
+    sampled: tokio::time::Instant,
     projection: Arc<Projection>,
     bytes: usize,
     used: u64,
@@ -157,7 +157,7 @@ impl ProjectionCache {
             path.to_path_buf(),
             CacheEntry {
                 key,
-                sampled: std::time::Instant::now(),
+                sampled: tokio::time::Instant::now(),
                 projection,
                 bytes,
                 used,
