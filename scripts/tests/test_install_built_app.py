@@ -303,48 +303,66 @@ class DeviceInstallTests(unittest.TestCase):
 
 
 class DeploymentRetentionTests(unittest.TestCase):
-    def test_expired_runs_go_but_installed_symbols_and_owned_logs_stay(self):
+    def make(self, root, now, entries):
+        for name, (days, installed) in entries.items():
+            entry = root / name
+            if name.endswith(".log"):
+                entry.write_text("log\n")
+            else:
+                (entry / "symbols").mkdir(parents=True)
+                (entry / "symbols" / "payload").write_bytes(b"x" * 65536)
+                if installed is not None:
+                    (entry / "receipt.json").write_text(json.dumps({"installed": installed}))
+            os.utime(entry, (now - days * 86400, now - days * 86400))
+
+    def test_each_kind_keeps_its_newest_runs_and_installed_symbols(self):
         now = 2_000_000_000.0
         entries = {
             "ios-" + "1" * 32: (9, True),
             "ios-" + "2" * 32: (8, True),
             "ios-" + "3" * 32: (1, False),
             "ios-" + "4" * 32: (7.5, False),
+            "ios-" + "8" * 32: (0.5, False),
             "ios-release-" + "5" * 32: (30, True),
             "mac-" + "6" * 32: (10, True),
-            "mac-bench-" + "7" * 32: (9, None),
+            "mac-bench-" + "7" * 32: (90, None),
             "testflight-ios-3.30.0-3030000": (40, None),
             "shared-codex-install.out.log": (20, None),
             "ios-simulator-tests-2026-09-01T10-00-00Z.log": (8, None),
+            "ios-simulator-tests-2026-10-01T10-00-00Z.log": (2, None),
+            "ios-simulator-tests-2026-10-02T10-00-00Z.log": (1, None),
             "ios-device-build-2026-10-08T10-00-00Z.log": (1, None),
         }
         expired = {
             "ios-" + "1" * 32,
             "ios-" + "4" * 32,
-            "ios-release-" + "5" * 32,
-            "mac-bench-" + "7" * 32,
             "ios-simulator-tests-2026-09-01T10-00-00Z.log",
         }
-        with tempfile.TemporaryDirectory() as temporary:
+        with tempfile.TemporaryDirectory() as temporary, patch.object(
+            module, "DEPLOYMENT_RUNS_PER_KIND", 2
+        ):
             root = Path(temporary)
-            for name, (days, installed) in entries.items():
-                entry = root / name
-                if name.endswith(".log"):
-                    entry.write_text("log\n")
-                else:
-                    (entry / "symbols").mkdir(parents=True)
-                    if installed is not None:
-                        (entry / "receipt.json").write_text(
-                            json.dumps({"installed": installed})
-                        )
-                os.utime(entry, (now - days * 86400, now - days * 86400))
+            self.make(root, now, entries)
 
-            removed = module.prune_deployments(root, now)
+            removed = module.prune_deployments(root)
 
             self.assertEqual({entry.name for entry in removed}, expired)
-            self.assertEqual(
-                {entry.name for entry in root.iterdir()}, set(entries) - expired
-            )
+            self.assertEqual({entry.name for entry in root.iterdir()}, set(entries) - expired)
+
+    def test_the_byte_cap_evicts_oldest_runs_but_not_installed_symbols(self):
+        now = 2_000_000_000.0
+        installed, older, newer = ("ios-" + digit * 32 for digit in "abc")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.make(root, now, {installed: (3, True), older: (2, False), newer: (1, False)})
+            cap = module.allocated_bytes(root / installed) + module.allocated_bytes(root / newer)
+
+            with patch.object(module, "DEPLOYMENT_BYTE_CAP", cap):
+                self.assertEqual([entry.name for entry in module.prune_deployments(root)], [older])
+            with patch.object(module, "DEPLOYMENT_BYTE_CAP", 0):
+                self.assertEqual([entry.name for entry in module.prune_deployments(root)], [newer])
+            self.assertEqual([entry.name for entry in root.iterdir()], [installed])
+
 
 if __name__ == "__main__":
     unittest.main()

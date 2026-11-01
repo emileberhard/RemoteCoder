@@ -15,7 +15,7 @@ there is no flag that turns any of this off.
 | Desktop helper | `chatgpt-shared-codex.log` / `.error.log` | The launcher's stdout/stderr — a bare startup banner, and the final error when a check fails |
 | App logs | `app-logs/<device>/YYYYMMDD-<segment>.jsonl.gz` | The iOS OSLog stream, versioned MetricKit reports and [field telemetry](#field-telemetry), uploaded from the phone (7 days, 1 GiB in total) |
 | Voice sessions | `voice-sessions/<started>-<thread>.jsonl` | Per-call transcripts, delegation lifecycle, latencies, close summary (newest 100) |
-| Deployments | `deployments/*.log` | Install runs with their git commit (per-run entries kept 7 days, pruned by each app install) |
+| Deployments | `deployments/*.log` | Install runs with their git commit (each app install keeps the newest 5 per-run entries of each kind plus each platform's newest installed symbols, within 4 GiB; release symbols keep their own 7-day, 5 GiB rule) |
 | launchd redirect | `codex-gateway.out.log` / `.err.log` | Startup banner and panics only |
 | Relay tunnel | `relay-tunnel.log` | SSH errors from this Mac's relay tunnel ([relay route](relay-route.md#logs)) |
 

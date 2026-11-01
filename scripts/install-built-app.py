@@ -13,13 +13,13 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import time
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
 DEPLOYMENTS = Path.home() / "Library/Logs/remote-coder/deployments"
-DEPLOYMENT_RETENTION_SECONDS = 7 * 24 * 60 * 60
+DEPLOYMENT_RUNS_PER_KIND = 5
+DEPLOYMENT_BYTE_CAP = 4 * 1024**3
 PER_RUN_ENTRY = re.compile(
     r"[a-z0-9-]+-([0-9a-f]{32}|\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z\.log)"
 )
@@ -266,38 +266,64 @@ def installed_with_symbols(deployment: Path) -> bool:
     )
 
 
-def prune_deployments(root: Path, now: float) -> list[Path]:
-    entries = [entry for entry in root.iterdir() if PER_RUN_ENTRY.fullmatch(entry.name)]
-    newest = {}
-    for entry in entries:
+def allocated_bytes(path: Path) -> int:
+    if not path.is_dir() or path.is_symlink():
+        return path.lstat().st_blocks * 512
+    total = 0
+    for current, directories, files in os.walk(path):
+        for name in (".", *directories, *files):
+            total += os.lstat(Path(current) / name).st_blocks * 512
+    return total
+
+
+def prune_deployments(root: Path) -> list[Path]:
+    newest_first = sorted(
+        (entry for entry in root.iterdir() if PER_RUN_ENTRY.fullmatch(entry.name)),
+        key=lambda entry: entry.lstat().st_mtime,
+        reverse=True,
+    )
+    installed = {}
+    runs = {}
+    kept = []
+    removed = []
+    for entry in newest_first:
         match = SYMBOL_DEPLOYMENT.fullmatch(entry.name)
-        if match and installed_with_symbols(entry) and (
-            match[1] not in newest
-            or entry.lstat().st_mtime > newest[match[1]].lstat().st_mtime
-        ):
-            newest[match[1]] = entry
-    expired = [
-        entry
-        for entry in entries
-        if entry not in newest.values()
-        and now - entry.lstat().st_mtime > DEPLOYMENT_RETENTION_SECONDS
-    ]
-    for entry in expired:
+        if match and match[1] not in installed and installed_with_symbols(entry):
+            installed[match[1]] = entry
+        kind = entry.name[: PER_RUN_ENTRY.fullmatch(entry.name).start(1) - 1]
+        runs[kind] = runs.get(kind, 0) + 1
+        if runs[kind] <= DEPLOYMENT_RUNS_PER_KIND or entry in installed.values():
+            kept.append(entry)
+        else:
+            removed.append(entry)
+    sizes = {entry: allocated_bytes(entry) for entry in kept}
+    total = sum(sizes.values())
+    for entry in reversed(kept):
+        if total <= DEPLOYMENT_BYTE_CAP:
+            break
+        if entry not in installed.values():
+            removed.append(entry)
+            total -= sizes[entry]
+    for entry in removed:
         if entry.is_dir() and not entry.is_symlink():
             shutil.rmtree(entry)
         else:
             entry.unlink()
-    return expired
+    return removed
 
 
 def retire_expired_deployments() -> None:
     try:
-        removed = prune_deployments(DEPLOYMENTS, time.time())
+        removed = prune_deployments(DEPLOYMENTS)
     except OSError as error:
         print(f"warning: deployment log retention failed: {error}", file=sys.stderr)
         return
     if removed:
-        print(f"Removed {len(removed)} deployment logs older than 7 days", file=sys.stderr)
+        print(
+            f"Removed {len(removed)} deployment entries beyond the newest "
+            f"{DEPLOYMENT_RUNS_PER_KIND} per kind and the {DEPLOYMENT_BYTE_CAP}-byte cap",
+            file=sys.stderr,
+        )
 
 
 def main(arguments=None, *, delivery_guard=None) -> None:
