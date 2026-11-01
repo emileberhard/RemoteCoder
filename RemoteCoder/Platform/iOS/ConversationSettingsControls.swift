@@ -18,12 +18,16 @@ struct ConversationSettingsControls<Status: View>: View {
     @ScaledMetric(relativeTo: .footnote) private var symbolHeight = 22.0
     @Environment(ModelPickerPreferences.self) private var preferences
     @State private var ownerID = UUID()
-    @State private var rowFrame: CGRect = .zero
-    @State private var gaugeFrame: CGRect = .zero
+    @State private var frames = Frames()
     @State private var isReasoningPressed = false
     @State private var heldSession: ReasoningPickerPresentation.Session?
     @State private var gaugeChange: ReasoningGaugeChange?
     @State private var gaugePosition: ReasoningGaugePosition?
+
+    @MainActor private final class Frames {
+        var row = CGRect.zero
+        var gauge = CGRect.zero
+    }
 
     private var availableEfforts: [ReasoningEffort] {
         preferences.reasoningEfforts(for: model)
@@ -44,11 +48,11 @@ struct ConversationSettingsControls<Status: View>: View {
                 // Layout can move when a settings warning or error appears.
                 // Only a live gesture has coordinates to invalidate; a committed gauge
                 // adjustment must survive that expected composer reflow.
-                if rowFrame != frame, picker.session?.owner == ownerID {
+                if frames.row != frame, picker.session?.owner == ownerID {
                     picker.dismiss(owner: ownerID)
                     cancelGaugeFeedback()
                 }
-                rowFrame = frame
+                frames.row = frame
             }
             .onChange(of: model) {
                 picker.dismiss(owner: ownerID)
@@ -130,7 +134,7 @@ struct ConversationSettingsControls<Status: View>: View {
                 PerfBuild.count("settings.gaugeGeometry")
                 guard !PerfBuild.isDisabled("settingsGeometryWrites") else { return }
                 #endif
-                gaugeFrame = frame
+                frames.gauge = frame
             }
             .opacity(picker.presentedSession?.owner == ownerID ? 0 : 1)
             .frame(minWidth: 44, minHeight: 44)
@@ -171,7 +175,7 @@ struct ConversationSettingsControls<Status: View>: View {
         let initialReasoning = reasoning
         let initialEfforts = availableEfforts
         return picker.present(
-            owner: ownerID, model: model, efforts: initialEfforts, selection: reasoning, source: gaugeFrame,
+            owner: ownerID, model: model, efforts: initialEfforts, selection: reasoning, source: frames.gauge,
             held: held, isRightToLeft: layoutDirection == .rightToLeft
         ) { selected in
             guard isEnabled, scenePhase == .active,
