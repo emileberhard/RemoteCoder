@@ -64,12 +64,13 @@ Detailed measurements and their limitations stay in the private operator records
 A future attempt must prove the animated arm runs, then pass at least three
 alternating static/animated pairs with identical fixtures and energy state on
 an otherwise idle Mac; record background load. Require app CPU delta ≤0.5 points
-of one core, separately sampled WindowServer CPU delta ≤1 point, GPU delta
+of one core, separately sampled WindowServer CPU delta ≤1 point, WindowServer
+GPU delta
 ≤2 ms/s, no recurring animation-driven app commits (idle delta ≤0.2/s), scrolling
 hitch rate <10 ms/s with delta ≤1 ms/s, and sustained `powermetrics` CPU + GPU +
 ANE power delta ≤0.2 W. Report refresh-rate shares without changing display mode.
 Missing or noisy evidence does not pass; zero app commits alone do not pass.
-Check scrolling, glass, focus changes without
-row-host rebuilding, two windows, Stage Manager, detached rows, hit testing and
+Check scrolling, glass, focus changes without row-host rebuilding, two windows,
+Stage Manager, detached rows, hit testing and
 one accessibility element. Keep occlusion and central row visibility with their
 existing owners; do not redefine `visualsVisible` to gate decoration motion.
