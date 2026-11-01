@@ -72,7 +72,7 @@ try {
         cwd: lab.path("work"), model: "rcjob-mock", modelProvider: "probe",
     })).thread.id;
     const nativeTurn = (threadId, text, clientId) => rpc("turn/start", {
-        threadId, clientId, input: [{ type: "text", text, text_elements: [] }],
+        threadId, clientUserMessageId: clientId, input: [{ type: "text", text, text_elements: [] }],
     });
     const waitNative = threadId => lab.waitFor(async () => {
         const turns = await rpc("thread/turns/list", { threadId, limit: 1, sortDirection: "desc", itemsView: "notLoaded" });
