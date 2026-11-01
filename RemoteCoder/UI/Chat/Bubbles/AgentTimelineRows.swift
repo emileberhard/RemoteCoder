@@ -13,24 +13,38 @@ struct AgentTimelineHeader: View {
         #if os(macOS)
         let _ = surfaceActivity?.recordBody()
         #endif
-        Button {
-            onToggle()
-        } label: {
-            HStack(spacing: 5) {
-                collapsedLabel
-                DisclosureChevron(isExpanded: timeline.isExpanded)
+        Group {
+            if canExpand {
+                Button(action: onToggle) {
+                    summary
+                }
+                .buttonStyle(ResponsiveButtonStyle(feedback: .disclosure, pressedScale: 0.99))
+                .accessibilityValue(timeline.isExpanded ? "Expanded" : "Collapsed")
+                .accessibilityHint(timeline.isExpanded ? "Hides timeline details" : "Shows timeline details")
+            } else {
+                summary
             }
-            .foregroundStyle(.secondary)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
-            .padding(.vertical, 2)
         }
-        .buttonStyle(ResponsiveButtonStyle(feedback: .disclosure, pressedScale: 0.99))
         .accessibilityLabel(accessibilityLabel)
-        .accessibilityValue(timeline.isExpanded ? "Expanded" : "Collapsed")
-        .accessibilityHint(timeline.isExpanded ? "Hides timeline details" : "Shows timeline details")
         .padding(.vertical, timeline.isExpanded ? 4 : 0)
         .animation(reduceMotion ? nil : .smooth, value: timeline.isExpanded)
+    }
+
+    private var canExpand: Bool {
+        timeline.events.isEmpty == false
+    }
+
+    private var summary: some View {
+        HStack(spacing: 5) {
+            collapsedLabel
+            if canExpand {
+                DisclosureChevron(isExpanded: timeline.isExpanded)
+            }
+        }
+        .foregroundStyle(.secondary)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+        .padding(.vertical, 2)
     }
 
     private var collapsedLabel: some View {
