@@ -40,15 +40,23 @@
     "status": "operator-acceptance-not-published",
     "liveAcceptanceStatus": "not-published"
   },
-  "protocolSourceCommit": "f97ca1b2872a81b418a46aa5d1d1a064cf136bb7",
+  "protocolSourceCommit": "1f412796c9b46d46fd218d43fd47ea3455c46c55",
   "runtimeTargets": {
     "aarch64-apple-darwin": {
-      "sourceCommit": "f97ca1b2872a81b418a46aa5d1d1a064cf136bb7",
+      "sourceCommit": "1f412796c9b46d46fd218d43fd47ea3455c46c55",
+      "runtimePackageSHA256": "438db899935e297ec428f69d532e9d2c7984431b7406357d0f8dc9d34ffd89df",
       "runtimeHashes": {
-        "bin/codex": "a1e0eabef798b237eccc9b1353c80d70c6106957e2faac16496147bd9b1c5a07",
+        "bin/codex": "417584132fa4a87815b99291987403d3577f1783c659f49e5d1a6ba582da5bb2",
         "bin/codex-code-mode-host": "ad607c9873f686fc3bf0ee4f8f50d81ec83b97ad2699b1db243fdf0f0d07119a"
-      },
-      "runtimePackageSHA256": "4bc8e8c271b451609cf90a0d5923eb1158463e19ec60c7cfcdf3010c8fb181e0"
+      }
+    },
+    "x86_64-unknown-linux-musl": {
+      "sourceCommit": "f8d9f770971005e9a809460da4cf557fcbbcce03",
+      "runtimePackageSHA256": "3726c986dcf1d3a46e4863a93e5b8d051f87879b9e49db6a406e79b7f9feb6ca",
+      "runtimeHashes": {
+        "bin/codex": "60b7980748ae6ea423900fa50f4b4a9babc94d95d2fbe1b65e20fd4807263a03",
+        "bin/codex-code-mode-host": "3fb4c764b8e861171efef36b61d96f9ea2e8e34135cb955f42c02cd92695968c"
+      }
     }
   }
 }
