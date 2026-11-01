@@ -26,6 +26,14 @@ advertised capability and a usable connection afterwards. It stops its own
 processes and removes the private root on success; failure retains the root as
 evidence. It never connects to an installed gateway or starts an agent turn.
 
+## Cluster transport isolation probe
+
+`bun dev-tools/probes/cluster-transport.mjs <candidate> <matched-runtime-package>`
+uses two private gateways and copied runtimes. It checks configured pinned routes,
+partial inventory progress over a legacy header, peer application errors without
+reachability loss, idle hello silence and isolated member restart recovery. Every
+worker owns its provider homes, processes and cleanup; production is untouched.
+
 ## Delegated-job isolation probe
 
 `bun dev-tools/probes/cluster-lifecycle.mjs <candidate> <matched-runtime-package>`

@@ -316,3 +316,35 @@ async fn cluster_busy_slot_uses_the_shared_deadline_without_reachability_failure
         ReachabilityState::Unknown
     );
 }
+
+#[tokio::test]
+async fn cluster_configured_route_precedes_retained_join_routes() {
+    let Peer {
+        _directory,
+        link,
+        listener: retained,
+        identity,
+        hello,
+        ..
+    } = Peer::new().await;
+    let configured = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let host = hello.host.clone();
+    let route = format!("wss://{}/ws", configured.local_addr().unwrap());
+    link.configure_routes(HashMap::from([(host.clone(), route.clone())]))
+        .unwrap();
+    let routes = link.members().await.unwrap()[0].routes.clone();
+    assert_eq!(
+        routes,
+        vec![
+            route.clone(),
+            format!("wss://{}/ws", retained.local_addr().unwrap())
+        ]
+    );
+    assert_eq!(link.routes_for(&host, &[route.clone()]), vec![route]);
+    let server = tokio::spawn(async move { accept_peer(&configured, &identity, &hello).await });
+    assert_eq!(
+        link.call(&host, "cluster/hello", json!({})).await.unwrap()["host"],
+        host
+    );
+    server.await.unwrap();
+}

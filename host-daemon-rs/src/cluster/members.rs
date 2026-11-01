@@ -99,6 +99,22 @@ fn load(path: &Path) -> Result<Document> {
     }
 }
 
+pub(crate) fn validate_route(route: &str) -> Result<()> {
+    let url = url::Url::parse(route)?;
+    ensure!(
+        route.len() <= 2048
+            && url.scheme() == "wss"
+            && url.host_str().is_some()
+            && url.username().is_empty()
+            && url.password().is_none()
+            && url.path() == "/ws"
+            && url.query().is_none()
+            && url.fragment().is_none(),
+        "member route must be a direct wss /ws URL"
+    );
+    Ok(())
+}
+
 pub(crate) fn validate_uuid(value: &str) -> Result<()> {
     ensure!(crate::ids::parse_uuid(value).is_some(), "expected a UUID");
     Ok(())
@@ -297,18 +313,7 @@ impl Members {
             "Join requires 1–8 direct TLS routes"
         );
         for route in &request.routes {
-            let url = url::Url::parse(route)?;
-            ensure!(
-                route.len() <= 2048
-                    && url.scheme() == "wss"
-                    && url.host_str().is_some()
-                    && url.username().is_empty()
-                    && url.password().is_none()
-                    && url.path() == "/ws"
-                    && url.query().is_none()
-                    && url.fragment().is_none(),
-                "member route must be a direct wss /ws URL"
-            );
+            validate_route(route)?;
         }
         ensure!(
             base64::engine::general_purpose::STANDARD

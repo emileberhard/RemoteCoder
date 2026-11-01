@@ -158,6 +158,7 @@ pub(crate) struct Settings {
     pub bind_host: String,
     pub port: u16,
     pub lan_port: Option<u16>,
+    pub cluster_routes: HashMap<String, String>,
     pub codex_path: PathBuf,
     pub codex_code_mode_host_path: PathBuf,
     pub codex_version: String,
@@ -259,6 +260,9 @@ impl Settings {
             bind_host,
             port,
             lan_port,
+            cluster_routes: crate::cluster::routes::parse(
+                sources.raw(crate::cluster::routes::ENV_KEY).as_deref(),
+            )?,
             codex_path,
             codex_code_mode_host_path,
             codex_version,

@@ -1987,7 +1987,12 @@ credentials are journal-redacted. Each Link connection owns its socket task and
 capacity-one request channel. The task reads continuously, evicts closed sockets,
 and resolves its pending receipt on termination. Reconnection is bounded to one
 attempt within the call deadline; possibly transmitted mutations never replay.
-RPC dispatch metadata is the authority for read-only reconnection.
+RPC dispatch metadata is the authority for read-only reconnection. Link owns one
+eight-second deadline across admission, route attempts, handshake and receipt.
+Only transport failure changes a member to unreachable; a valid peer application
+error preserves its connection. Configured exact-host routes precede retained
+Join routes and use the same credential and certificate pin. Socket termination
+wakes only its member; unchanged hellos never wake global delivery.
 
 `agents/jobs` remains the only job, intent, fence and result owner. The execution
 driver owns native custody and local delivery; `cluster/driver.rs` owns network
@@ -2019,3 +2024,9 @@ catalog as a fresh file whose new epoch expires every cursor into one full listi
 mirrored raw files survive it. Idle ticks are O(members),
 changed batches use indexed evidence ranges, and full listing/tree reconciliation
 is limited to first sync, cursor expiry or the 600-second background cadence.
+
+Inventory skips rejected native headers with bounded warnings and stale coverage;
+suffix resolution cannot prove uniqueness while native coverage is incomplete.
+Mirror entry failures advance the feed, retain existing copies and log transitions.
+The 600-second full reconciliation repairs missed copies; incomplete manifests
+never authorize reclamation. Verified-prefix growth appends in place.

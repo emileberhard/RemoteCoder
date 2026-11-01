@@ -400,6 +400,10 @@ async fn run(
         )?,
         settings.user_name.clone(),
     );
+    gateway
+        .cluster_link()
+        .await?
+        .configure_routes(settings.cluster_routes.clone())?;
     gateway.start().await?;
 
     let served = serve_started(&settings, &gateway, router, journal.clone(), recovery_only).await;

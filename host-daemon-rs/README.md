@@ -675,3 +675,11 @@ The app's cache, reference routing and preview/export contract is in
 [Remote files](../docs/remote-files.md). `just gateway-e2e-files-live` exercises
 transport and provider link generation; [dev-tools](../dev-tools/AGENTS.md)
 describes its side effects and receipt.
+
+`RC_CODEX_GATEWAY_CLUSTER_ROUTES` optionally contains a JSON object mapping exact
+host UUIDs to one pinned `wss://` route each, for example
+`{"00000000-0000-4000-8000-000000000001":"wss://host.example.ts.net:8789/ws"}`.
+The configured route precedes retained Join routes. All routes share one
+eight-second call deadline, divided among the remaining route attempts; resolved
+addresses within each route retain staggered connection racing. The existing
+membership credential and certificate pin authenticate every route.

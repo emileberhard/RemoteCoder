@@ -134,6 +134,7 @@ pub(crate) struct Link {
     observations: RwLock<HashMap<String, MemberView>>,
     endpoint: RwLock<Option<crate::http::lan::LanEndpoint>>,
     wakes: Mutex<HashMap<String, tokio::sync::watch::Sender<u64>>>,
+    routes: std::sync::OnceLock<HashMap<String, String>>,
     next_id: AtomicU64,
 }
 
@@ -152,6 +153,7 @@ impl Link {
             observations: RwLock::new(HashMap::new()),
             endpoint: RwLock::new(None),
             wakes: Mutex::default(),
+            routes: std::sync::OnceLock::new(),
             next_id: AtomicU64::new(1),
         }
     }
@@ -175,6 +177,28 @@ impl Link {
         *self.endpoint.write().await = endpoint;
     }
 
+    pub(crate) fn configure_routes(&self, routes: HashMap<String, String>) -> Result<()> {
+        self.routes
+            .set(routes)
+            .map_err(|_| anyhow::anyhow!("cluster routes are already configured"))
+    }
+
+    fn routes_for(&self, host: &str, retained: &[String]) -> Vec<String> {
+        let mut routes = self
+            .routes
+            .get()
+            .and_then(|routes| routes.get(host))
+            .cloned()
+            .into_iter()
+            .collect::<Vec<_>>();
+        for route in retained {
+            if !routes.contains(route) {
+                routes.push(route.clone());
+            }
+        }
+        routes
+    }
+
     pub(crate) async fn endpoint(&self) -> Result<(Vec<String>, String)> {
         let endpoint = self
             .endpoint
@@ -183,7 +207,10 @@ impl Link {
             .clone()
             .context("cluster Join requires the pinned LAN TLS listener")?;
         Ok((
-            vec![format!("wss://{}:{}/ws", endpoint.host, endpoint.port)],
+            self.routes_for(
+                &self.identity.read().await.host_id,
+                &[format!("wss://{}:{}/ws", endpoint.host, endpoint.port)],
+            ),
             endpoint.spki_sha256,
         ))
     }
@@ -223,7 +250,7 @@ impl Link {
                     .clone();
                 view.state = record.state;
                 view.name = record.name;
-                view.routes = record.routes.clone();
+                view.routes = self.routes_for(&record.host, &record.routes);
                 view
             })
             .collect())
@@ -459,7 +486,7 @@ impl Link {
             }))
             .with_no_client_auth();
         let mut failure = LinkError::local(ErrorClass::Unavailable, "member has no routes");
-        let routes = &record.routes;
+        let routes = self.routes_for(&record.host, &record.routes);
         for (index, route) in routes.iter().enumerate() {
             let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
             let routes_left = u32::try_from(routes.len() - index).unwrap_or(u32::MAX);
