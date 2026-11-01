@@ -28,7 +28,8 @@ loader.exec_module(pt)
 receipts = []
 
 def send(device, command, timeout=45):
-    result = p.send(device, command, timeout)
+    quiet = command['count'] * 0.35 + 0.5 if command.get('cmd') == 'haptic-probe' else 0
+    result = p.send(device, command, timeout, quiet_seconds=quiet)
     receipts.append(result)
     (root / f'{args.label}-commands.json').write_text(json.dumps(receipts, indent=2))
     print(json.dumps(result), flush=True)
