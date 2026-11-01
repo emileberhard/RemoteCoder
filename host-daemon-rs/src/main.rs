@@ -41,7 +41,9 @@ mod wire;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+#[cfg(target_os = "linux")]
+use anyhow::Context;
+use anyhow::Result;
 use clap::Parser;
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
@@ -416,7 +418,15 @@ async fn run(
         .configure_routes(settings.cluster_routes.clone())?;
     gateway.start().await?;
 
-    let served = serve_started(&settings, &gateway, router, journal.clone(), recovery_only).await;
+    let served = serve_started(
+        &settings,
+        &gateway,
+        router,
+        journal.clone(),
+        recovery_only,
+        #[cfg(target_os = "linux")]
+        lan,
+    ).await;
     let _ = gateway.stop().await;
     info!("gateway stopped");
     journal.drain(JOURNAL_DRAIN_DEADLINE).await;
@@ -429,6 +439,7 @@ async fn serve_started(
     router: Arc<providers::router::Router>,
     journal: Journal,
     recovery_only: bool,
+    #[cfg(target_os = "linux")] lan: Option<LanListener>,
 ) -> Result<()> {
     let accounts = accounts::Accounts::open(
         &settings.host_paths,
@@ -444,6 +455,8 @@ async fn serve_started(
         accounts.clone(),
         journal,
         recovery_only,
+        #[cfg(target_os = "linux")]
+        lan,
     )
     .await;
     if let Some(accounts) = accounts {
@@ -460,6 +473,7 @@ async fn serve_http(
     accounts: Option<Arc<accounts::Accounts>>,
     journal: Journal,
     recovery_only: bool,
+    #[cfg(target_os = "linux")] lan: Option<LanListener>,
 ) -> Result<()> {
     if recovery_only {
         return runtime::install::wait_for_recovery_completion().await;
