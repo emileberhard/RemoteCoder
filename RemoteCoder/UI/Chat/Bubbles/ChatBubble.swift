@@ -149,7 +149,7 @@ private struct PreparedAssistantContent: View, Equatable {
     let renderedMessages: RenderedMessageStore
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.appEnergyPolicy) private var energyPolicy
-    @Environment(\.visualsVisible) private var visualsVisible
+    @Environment(\.surfaceVisibility) private var surfaceVisibility
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var settledReveal = -TimeInterval.infinity
     private static let perfDisablesReveal = PerfBuild.isDisabled("reveal")
@@ -189,8 +189,8 @@ private struct PreparedAssistantContent: View, Equatable {
                 HapticService.shared.prepareStreaming()
             }
         }
-        .onChange(of: allowsReveal) {
-            if !allowsReveal { renderedMessages.dropPendingWordHaptics(for: messageID) }
+        .onChange(of: reveal.end == nil) { _, settled in
+            if settled { renderedMessages.dropPendingWordHaptics(for: messageID) }
         }
         .onDisappear {
             renderedMessages.dropPendingWordHaptics(for: messageID)
@@ -210,11 +210,11 @@ private struct PreparedAssistantContent: View, Equatable {
 
     private var allowsReveal: Bool {
         !Self.perfDisablesReveal && energyPolicy.animatesDecorations(sceneActive: scenePhase == .active,
-            visible: visualsVisible, reduceMotion: reduceMotion)
+            visible: surfaceVisibility.isVisible, reduceMotion: reduceMotion)
     }
 
     private func revealing(_ rendered: RenderedMessage?) -> StreamingReveal {
-        guard allowsReveal, let reveal = rendered?.reveal, let end = reveal.end, end > settledReveal else { return .settled }
+        guard let reveal = rendered?.reveal, let end = reveal.end, end > settledReveal, allowsReveal else { return .settled }
         return reveal
     }
 }

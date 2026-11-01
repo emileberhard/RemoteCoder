@@ -11,7 +11,7 @@ struct ConversationActivityIndicator: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.appEnergyPolicy) private var energyPolicy
-    @Environment(\.visualsVisible) private var visualsVisible
+    @Environment(\.surfaceVisibility) private var surfaceVisibility
 
     var body: some View {
         HStack(spacing: 5) {
@@ -31,7 +31,7 @@ struct ConversationActivityIndicator: View {
     }
 
     private var animates: Bool {
-        energyPolicy.animatesDecorations(sceneActive: scenePhase == .active, visible: visualsVisible, reduceMotion: reduceMotion)
+        energyPolicy.animatesDecorations(sceneActive: scenePhase == .active, visible: surfaceVisibility.isVisible, reduceMotion: reduceMotion)
     }
 
     private var title: String {

@@ -11,14 +11,14 @@ struct ShimmerEffect: ViewModifier {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.appEnergyPolicy) private var energyPolicy
-    @Environment(\.visualsVisible) private var visualsVisible
+    @Environment(\.surfaceVisibility) private var surfaceVisibility
     @Environment(\.transcriptRowVisibility) private var rowVisibility
 
     func body(content: Content) -> some View {
         content.overlay {
             if isActive, contrast != .increased, energyPolicy.animatesDecorations(
                 sceneActive: scenePhase == .active,
-                visible: visualsVisible && (rowVisibility?.isVisible ?? true),
+                visible: surfaceVisibility.isVisible && (rowVisibility?.isVisible ?? true),
                 reduceMotion: reduceMotion
             ) {
                 ShimmerBand()

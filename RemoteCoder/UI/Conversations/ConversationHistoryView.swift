@@ -9,6 +9,7 @@ struct ConversationHistoryView: View {
     var workspace: ChatWorkspaceModel
     let window: ChatWindowModel
     let isOpen: Bool
+    let isVisible: Bool
     @Binding var layout: ConversationDrawerLayout?
     @Binding var notice: DrawerNotice?
 
@@ -26,7 +27,6 @@ struct ConversationHistoryView: View {
     @State private var pinNameDraft = ""
     @State private var windowActivations = 0
     @State private var capturedWindowActivation: Int?
-    @Environment(\.visualsVisible) private var visualsVisible
 
     let onSelect: (ConversationAddress) -> ChatWorkspaceModel.ConversationSwitchOutcome
     let onOpenDraft: (UnsentDraftAddress) -> Void
@@ -58,8 +58,8 @@ struct ConversationHistoryView: View {
                 Text(intent.promptMessage)
             }
             .modifier(WindowActivations(count: $windowActivations))
-            .task(id: Arrangement(isOpen: isOpen, isVisible: visualsVisible, windowActivations: windowActivations)) {
-                guard isOpen && visualsVisible else { capturedWindowActivation = nil; return }
+            .task(id: Arrangement(isOpen: isOpen, isVisible: isVisible, windowActivations: windowActivations)) {
+                guard isOpen && isVisible else { capturedWindowActivation = nil; return }
                 let capturedLayout: ConversationDrawerLayout
                 if let layout, capturedWindowActivation == windowActivations {
                     capturedLayout = layout
@@ -78,8 +78,8 @@ struct ConversationHistoryView: View {
                     receive(snapshot)
                 }
             }
-            .task(id: SearchRequest(isOpen: isOpen && visualsVisible, query: window.drawerQuery)) {
-                guard isOpen && visualsVisible, !window.drawerQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+            .task(id: SearchRequest(isOpen: isOpen && isVisible, query: window.drawerQuery)) {
+                guard isOpen && isVisible, !window.drawerQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
                 do { try await Task.sleep(for: .milliseconds(500)) } catch { return }
                 await workspace.loadOlderHistory(in: window)
             }
@@ -168,7 +168,7 @@ struct ConversationHistoryView: View {
     }
 
     private var presented: ConversationSidebarSnapshot? {
-        sidebar ?? (isOpen && visualsVisible ? workspace.sidebarSnapshot(arrangedBy: .live(at: .now), in: window) : nil)
+        sidebar ?? (isOpen && isVisible ? workspace.sidebarSnapshot(arrangedBy: .live(at: .now), in: window) : nil)
     }
 
     private var actions: ConversationHistoryActions {

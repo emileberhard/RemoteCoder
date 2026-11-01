@@ -41,7 +41,7 @@ struct HTMLVisualInline: View {
     @Environment(\.interfaceScale) private var interfaceScale
     @Environment(\.displayScale) private var displayScale
     @Environment(\.scenePhase) private var scenePhase
-    @Environment(\.visualsVisible) private var visible
+    @Environment(\.surfaceVisibility) private var surfaceVisibility
     @Environment(\.transcriptRowVisibility) private var rowVisibility
     @Environment(\.transcriptRowPresentation) private var rowPresentation
     @Environment(\.transcriptBlockIndex) private var blockIndex
@@ -81,6 +81,7 @@ struct HTMLVisualInline: View {
     }
 
     private var reference: HTMLVisualReference? { HTMLVisualReference(url: url) }
+    private var visible: Bool { surfaceVisibility.isVisible }
     private var key: HTMLVisualLayoutKey? {
         guard let reference, let theme, let width = layoutWidth ?? source?.preparation.layoutContext.width else { return nil }
         return HTMLVisualLayoutKey(digest: reference.digest, width: width, theme: theme)

@@ -6,7 +6,7 @@ struct MermaidDiagramView: View {
     let isComplete: Bool
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.scenePhase) private var scenePhase
-    @Environment(\.visualsVisible) private var visualsVisible
+    @Environment(\.surfaceVisibility) private var surfaceVisibility
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.transcriptRowVisibility) private var rowVisibility
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -46,7 +46,7 @@ struct MermaidDiagramView: View {
     private var currentFailure: Failure? { isCurrent ? failure : nil }
 
     private var identity: RenderIdentity {
-        RenderIdentity(request: rowVisibility?.isVisible == true && isComplete && visualsVisible
+        RenderIdentity(request: rowVisibility?.isVisible == true && isComplete && surfaceVisibility.isVisible
             && scenePhase != .background && !showSource ? request : nil, retry: retry)
     }
     private var aspectRatio: CGFloat {

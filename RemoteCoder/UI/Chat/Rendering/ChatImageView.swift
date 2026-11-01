@@ -38,7 +38,7 @@ struct ChatImageView: View {
     let alt: String
     @Environment(\.chatImageSource) private var source
     @Environment(\.openURL) private var openURL
-    @Environment(\.visualsVisible) private var visualsVisible
+    @Environment(\.surfaceVisibility) private var surfaceVisibility
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.transcriptRowVisibility) private var rowVisibility
     @State private var loaded: (reference: HostFileReference, preview: HostImagePreview)?
@@ -60,7 +60,7 @@ struct ChatImageView: View {
     private func preview(_ reference: HostFileReference, source: ChatImageSource) -> some View {
         let shown = loaded?.reference == reference ? loaded?.preview : source.previews.cached(reference)
         let failed = failure?.reference == reference ? failure?.message : nil
-        let active = shown == nil && failed == nil && rowVisibility?.isVisible == true && visualsVisible && scenePhase == .active
+        let active = shown == nil && failed == nil && rowVisibility?.isVisible == true && surfaceVisibility.isVisible && scenePhase == .active
         let request = active ? reference : nil
         return Group {
             if let shown {

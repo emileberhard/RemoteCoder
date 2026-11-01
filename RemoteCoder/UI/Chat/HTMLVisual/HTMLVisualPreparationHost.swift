@@ -8,7 +8,7 @@ struct HTMLVisualPreparationHost: View {
     @Environment(\.interfaceScale) private var interfaceScale
     @Environment(\.displayScale) private var displayScale
     @Environment(\.scenePhase) private var scenePhase
-    @Environment(\.visualsVisible) private var visible
+    @Environment(\.surfaceVisibility) private var surfaceVisibility
     @State private var id = UUID()
     @State private var claimed: HTMLVisualPreparation?
     #if DEBUG
@@ -28,6 +28,7 @@ struct HTMLVisualPreparationHost: View {
     }
 
     private var preparation: HTMLVisualPreparation? { source?.preparation }
+    private var visible: Bool { surfaceVisibility.isVisible }
 
     private var configuration: Configuration {
         Configuration(preparation: preparation.map(ObjectIdentifier.init),

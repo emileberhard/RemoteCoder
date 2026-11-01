@@ -302,6 +302,12 @@ measurably beat SwiftUI.
   render version. Never make that comparison content-based, and never use the
   version as `ForEach` identity. Clocks, timelines and animations stop when
   nothing is moving.
+- Environment values above the transcript and drawer stay constant. Every
+  write re-resolves each `Text` below it, which cost the drawer's opening
+  about 18 ms when a covered/visible `Bool` flipped there. State that changes
+  while mounted goes through an `@Observable` owner behind an
+  identity-compared value, as `SurfaceVisibility` does, and views read it
+  only where they animate.
 - Streaming text and bubble geometry never animate per revision
   (`.contentTransition(.identity)`). New words fade in under background-colored
   covers that `StreamingReveal` schedules once per publication; one 30 Hz display

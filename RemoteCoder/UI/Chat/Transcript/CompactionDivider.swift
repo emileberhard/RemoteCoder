@@ -10,7 +10,7 @@ struct CompactionDivider: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.appEnergyPolicy) private var energyPolicy
-    @Environment(\.visualsVisible) private var visualsVisible
+    @Environment(\.surfaceVisibility) private var surfaceVisibility
 
     #if os(macOS)
     @Environment(\.transcriptSurfaceActivity) private var surfaceActivity
@@ -26,7 +26,7 @@ struct CompactionDivider: View {
                 HStack(spacing: 6) {
                     if marker.compaction.isActive {
                         if energyPolicy.animatesDecorations(sceneActive: scenePhase == .active,
-                            visible: visualsVisible && visibility.shows(rowID: marker.id), reduceMotion: reduceMotion) {
+                            visible: surfaceVisibility.isVisible && visibility.shows(rowID: marker.id), reduceMotion: reduceMotion) {
                             ProgressView().controlSize(.small).accessibilityHidden(true)
                         } else {
                             Image(systemName: "ellipsis").accessibilityHidden(true)

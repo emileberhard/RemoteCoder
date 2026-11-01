@@ -51,7 +51,7 @@ private struct ShimmerFixtureView: View {
         Text("Thinking")
             .shimmer(isActive: fixture.gate != .completed)
             .environment(\.scenePhase, fixture.gate == .inactive ? .inactive : .active)
-            .environment(\.visualsVisible, fixture.gate != .hidden)
+            .environment(\.surfaceVisibility, SurfaceVisibility(SurfaceVisibilityState(isVisible: fixture.gate != .hidden)))
             .environment(\.appEnergyPolicy, AppEnergyPolicy(
                 isLowPowerModeEnabled: fixture.gate == .lowPower,
                 thermalState: .nominal

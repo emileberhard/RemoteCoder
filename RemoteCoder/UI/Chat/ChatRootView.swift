@@ -256,6 +256,8 @@ private struct ChatScreen: View {
     @State private var voiceModeEntry: VoiceModeEntry?
     #endif
     @State private var isWindowVisible = true
+    @State private var chatVisibility = SurfaceVisibilityState(isVisible: true)
+    @State private var drawerVisibility = SurfaceVisibilityState(isVisible: false)
     @State private var presentedQuestion: QuestionAddress?
     /// A question the transcript should reveal once its row or pending preview arrives.
     @State private var awaitedQuestionItemID: String?
@@ -369,6 +371,8 @@ private struct ChatScreen: View {
         .onChange(of: isWindowVisible, initial: true) { _, visible in
             workspace.setWindowVisible(window, isVisible: visible)
         }
+        .onChange(of: isChatSurfaceVisible, initial: true) { _, visible in chatVisibility.isVisible = visible }
+        .onChange(of: isDrawerSurfaceVisible, initial: true) { _, visible in drawerVisibility.isVisible = visible }
         .onDisappear {
             window.cancelComposerFocus()
             eventPresenter?.remove(screen)
@@ -548,9 +552,9 @@ private struct ChatScreen: View {
     private var mainChatSurface: some View {
         Group {
             chatTranscript
-                .environment(\.visualsVisible, isWindowVisible && !isHistoryCovering && !isVoiceModePresented && !isCameraPresented)
+                .environment(\.surfaceVisibility, SurfaceVisibility(chatVisibility))
                 .safeAreaInset(edge: .bottom, spacing: 0) {
-                    chatComposerInset.environment(\.visualsVisible, isWindowVisible && !isHistoryCovering && !isVoiceModePresented && !isCameraPresented)
+                    chatComposerInset.environment(\.surfaceVisibility, SurfaceVisibility(chatVisibility))
                 }
                 .composerAttachmentDrop(screen: screen)
                 .safeAreaBar(edge: .top, spacing: 0) { HostFileStatusBar(opener: screen.target.fileOpener) }
@@ -758,7 +762,7 @@ private struct ChatScreen: View {
     }
 
     private var historyDrawer: some View {
-        historyDrawerContent.environment(\.visualsVisible, isWindowVisible && isHistoryOpen && !isVoiceModePresented)
+        historyDrawerContent.environment(\.surfaceVisibility, SurfaceVisibility(drawerVisibility))
     }
 
     private var historyDrawerContent: some View {
@@ -766,6 +770,7 @@ private struct ChatScreen: View {
             workspace: workspace,
             window: window,
             isOpen: isHistoryOpen,
+            isVisible: isDrawerSurfaceVisible,
             layout: $drawerLayout,
             notice: $drawerNotice,
             onSelect: selectConversation,
@@ -830,6 +835,14 @@ private struct ChatScreen: View {
 
     private var isHistoryCovering: Bool {
         isHistoryOpen && !usesPersistentSidebar
+    }
+
+    private var isChatSurfaceVisible: Bool {
+        isWindowVisible && !isHistoryCovering && !isVoiceModePresented && !isCameraPresented
+    }
+
+    private var isDrawerSurfaceVisible: Bool {
+        isWindowVisible && isHistoryOpen && !isVoiceModePresented
     }
 
     private func toggleHistory() {

@@ -16,7 +16,7 @@ struct TranscriptScrollRenderingTests {
         let hosted = HostedWindow(scene: scene)
         let controller = UIHostingController(rootView: ChatBubble(message: message, renderedMessages: store,
             onFork: nil, queuedActions: nil).environment(AppThemeStore())
-            .environment(\.scenePhase, .active).environment(\.visualsVisible, false))
+            .environment(\.scenePhase, .active).environment(\.surfaceVisibility, SurfaceVisibility(SurfaceVisibilityState(isVisible: false))))
         hosted.show(controller)
         defer { hosted.close(); store.retire() }
         controller.view.layoutIfNeeded()

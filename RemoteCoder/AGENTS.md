@@ -75,7 +75,7 @@ holds the detailed history, recovery, voice and persistence contracts.
   a 160–350 ms frame.
   Use neither for a repeating transcript decoration. Mac decorations
   stop while macOS reports their window occluded: `WindowVisibility` feeds the
-  occlusion state into `visualsVisible`. Hiding the app occludes the window,
+  occlusion state into the chat's `SurfaceVisibility`. Hiding the app occludes the window,
   but with Stage Manager on, a covered window stays visible as a live
   thumbnail and keeps animating.
 - Controlled UI previews follow the fixture rules in

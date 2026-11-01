@@ -12,7 +12,7 @@ struct TranscriptHostEnvironment: Equatable {
     let layoutDirection: LayoutDirection
     let locale: Locale
     let scenePhase: ScenePhase
-    let visualsVisible: Bool
+    let surfaceVisibility: SurfaceVisibility
     let energyPolicy: AppEnergyPolicy
     let reduceMotion: Bool
     let reduceTransparency: Bool
@@ -36,7 +36,7 @@ struct TranscriptHostEnvironment: Equatable {
         layoutDirection = environment.layoutDirection
         locale = environment.locale
         scenePhase = environment.scenePhase
-        visualsVisible = environment.visualsVisible
+        surfaceVisibility = environment.surfaceVisibility
         energyPolicy = environment.appEnergyPolicy
         reduceMotion = environment.accessibilityReduceMotion
         reduceTransparency = environment.accessibilityReduceTransparency

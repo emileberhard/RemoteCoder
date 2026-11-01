@@ -124,7 +124,7 @@ struct SubagentsPill: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.appEnergyPolicy) private var energyPolicy
-    @Environment(\.visualsVisible) private var visualsVisible
+    @Environment(\.surfaceVisibility) private var surfaceVisibility
 
     var body: some View {
         Button(action: action) {
@@ -149,7 +149,7 @@ struct SubagentsPill: View {
     }
 
     private var animates: Bool {
-        energyPolicy.animatesDecorations(sceneActive: scenePhase == .active, visible: visualsVisible, reduceMotion: reduceMotion)
+        energyPolicy.animatesDecorations(sceneActive: scenePhase == .active, visible: surfaceVisibility.isVisible, reduceMotion: reduceMotion)
     }
 }
 
@@ -217,7 +217,7 @@ private struct AgentStateSymbol: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.appEnergyPolicy) private var energyPolicy
-    @Environment(\.visualsVisible) private var visualsVisible
+    @Environment(\.surfaceVisibility) private var surfaceVisibility
     @InterfaceScaledMetric(relativeTo: .body) private var width: CGFloat = 24
 
     var body: some View {
@@ -228,7 +228,7 @@ private struct AgentStateSymbol: View {
     }
 
     private var animates: Bool {
-        energyPolicy.animatesDecorations(sceneActive: scenePhase == .active, visible: visualsVisible, reduceMotion: reduceMotion)
+        energyPolicy.animatesDecorations(sceneActive: scenePhase == .active, visible: surfaceVisibility.isVisible, reduceMotion: reduceMotion)
     }
 
     private var symbol: String {

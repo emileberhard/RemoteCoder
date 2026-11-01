@@ -9,7 +9,7 @@ struct ComposerSendButton: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.appEnergyPolicy) private var energyPolicy
-    @Environment(\.visualsVisible) private var visualsVisible
+    @Environment(\.surfaceVisibility) private var surfaceVisibility
 
     var body: some View {
         control
@@ -46,7 +46,7 @@ struct ComposerSendButton: View {
     private var glyph: some View {
         Group {
             if state == .working && energyPolicy.animatesDecorations(sceneActive: scenePhase == .active,
-                visible: visualsVisible, reduceMotion: reduceMotion) {
+                visible: surfaceVisibility.isVisible, reduceMotion: reduceMotion) {
                 ProgressView()
                     .controlSize(ComposerMetrics.workingIndicatorSize)
                     .tint(.primary)

@@ -64,4 +64,4 @@ WindowServer work. Busy-host comparisons do not establish idle CPU, GPU or power
 ceilings; detailed measurements and limitations stay in the private operator
 records. A future custom renderer needs a demonstrated improvement over this
 capped baseline. Keep occlusion and central row visibility with their existing
-owners; do not redefine `visualsVisible` to gate decoration motion.
+owners; do not redefine `SurfaceVisibility` to gate decoration motion.

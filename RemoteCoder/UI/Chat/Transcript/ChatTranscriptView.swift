@@ -139,7 +139,7 @@ private struct TranscriptContentView<QuestionContent: View, BottomBar: View>: Vi
     @State private var historyRead: TranscriptHistoryRead?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
-    @Environment(\.visualsVisible) private var visualsVisible
+    @Environment(\.surfaceVisibility) private var surfaceVisibility
     #if os(iOS)
     @Environment(\.appEnergyPolicy) private var energyPolicy
     #endif
@@ -311,7 +311,7 @@ private struct TranscriptContentView<QuestionContent: View, BottomBar: View>: Vi
             .onChange(of: scenePhase) { _, phase in
                 if phase != .active { native.suspend() } else { native.resume() }
             }
-            .onChange(of: visualsVisible) { _, visible in
+            .onChange(of: surfaceVisibility.isVisible) { _, visible in
                 if !visible { native.suspend() } else { native.resume() }
             }
             #endif
@@ -352,8 +352,7 @@ private struct TranscriptContentView<QuestionContent: View, BottomBar: View>: Vi
             transcriptRows(rows, reservedBottom: reservedBottom,
                            layout: TranscriptLayout(minimumTurnHeight: visibleHeight - reservedBottom,
                                                     latestTurnIndex: rows.lastIndex(where: \.startsTurn)))
-                .modifier(TranscriptTailAnimation(follow: follow, animatesDecorations: animatesDecorations, latestRowID: rows.last?.id))
-                .animation(animatesDecorations ? .smooth(duration: 0.3) : nil, value: expandedTimelineIDs)
+                .modifier(TranscriptDecorationAnimations(follow: follow, latestRowID: rows.last?.id, expandedTimelineIDs: expandedTimelineIDs))
                 .transcriptPerfFeature("scrollTargets") { $0.scrollTargetLayout() }
                 .background(alignment: .top) {
                     TranscriptScrollHaltAnchor(halt: scrollHalt)
@@ -565,7 +564,7 @@ private struct TranscriptContentView<QuestionContent: View, BottomBar: View>: Vi
 
     #if os(iOS)
     private var animatesDecorations: Bool {
-        energyPolicy.animatesDecorations(sceneActive: scenePhase == .active, visible: visualsVisible, reduceMotion: reduceMotion)
+        energyPolicy.animatesDecorations(sceneActive: scenePhase == .active, visible: surfaceVisibility.isVisible, reduceMotion: reduceMotion)
     }
 
     private var expandedTimelineIDs: Set<String> {
@@ -1071,14 +1070,21 @@ final class TranscriptFollow {
 }
 
 #if os(iOS)
-private struct TranscriptTailAnimation: ViewModifier {
+private struct TranscriptDecorationAnimations: ViewModifier {
     let follow: TranscriptFollow
-    let animatesDecorations: Bool
     let latestRowID: String?
+    let expandedTimelineIDs: Set<String>
+    @Environment(\.appEnergyPolicy) private var energyPolicy
+    @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.surfaceVisibility) private var surfaceVisibility
 
     func body(content: Content) -> some View {
-        content.animation(follow.isFollowingLatest && animatesDecorations ? .smooth(duration: 0.25) : nil,
-                          value: latestRowID)
+        let animates = energyPolicy.animatesDecorations(sceneActive: scenePhase == .active,
+            visible: surfaceVisibility.isVisible, reduceMotion: reduceMotion)
+        content
+            .animation(follow.isFollowingLatest && animates ? .smooth(duration: 0.25) : nil, value: latestRowID)
+            .animation(animates ? .smooth(duration: 0.3) : nil, value: expandedTimelineIDs)
     }
 }
 

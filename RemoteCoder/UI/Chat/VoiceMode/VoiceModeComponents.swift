@@ -85,10 +85,10 @@ struct RealtimeVoiceStatus: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.appEnergyPolicy) private var energyPolicy
-    @Environment(\.visualsVisible) private var visualsVisible
+    @Environment(\.surfaceVisibility) private var surfaceVisibility
 
     private var animatesDecorations: Bool {
-        energyPolicy.animatesDecorations(sceneActive: scenePhase == .active, visible: visualsVisible, reduceMotion: reduceMotion)
+        energyPolicy.animatesDecorations(sceneActive: scenePhase == .active, visible: surfaceVisibility.isVisible, reduceMotion: reduceMotion)
     }
 
     let state: VoiceCall.State

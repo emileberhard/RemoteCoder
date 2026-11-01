@@ -5,13 +5,13 @@ struct ComposerWaveformView: View {
     let tint: Color
     let levels: () -> AsyncStream<[Float]>
     @Environment(\.scenePhase) private var scenePhase
-    @Environment(\.visualsVisible) private var visualsVisible
+    @Environment(\.surfaceVisibility) private var surfaceVisibility
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.appEnergyPolicy) private var energyPolicy
     @State private var renderer = ComposerWaveformRenderer()
 
     private var isAnimating: Bool {
-        isActive && scenePhase == .active && visualsVisible && !reduceMotion
+        isActive && scenePhase == .active && surfaceVisibility.isVisible && !reduceMotion
     }
 
     var body: some View {
