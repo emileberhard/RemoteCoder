@@ -361,6 +361,7 @@ struct HostFileOpenerTests {
     @Test func presentationsBelongToTheScopeThatRequestedThem() async throws {
         let opener = HostFileOpener(access: ControlledFileAccess(), canPreview: { _ in true })
         let sheet = UUID(), other = UUID()
+        #expect(!opener.presents(in: nil))
         opener.open(EmbeddedFileRequest(dataURL: "data:text/csv;base64,YSxi", suggestedName: "table"),
                     origin: origin(presentationScope: sheet), frame: nil)
         await opener.operation?.value
@@ -372,7 +373,12 @@ struct HostFileOpenerTests {
         opener.leavePresentationScope(sheet)
         #expect(opener.quickLook == nil)
         #expect(opener.lastDocument == nil)
+        #expect(!opener.presents(in: nil))
+        opener.open(EmbeddedFileRequest(dataURL: "data:text/csv;base64,YSxi", suggestedName: "table"),
+                    origin: origin(), frame: nil)
+        await opener.operation?.value
         #expect(opener.presents(in: nil))
+        #expect(!opener.presents(in: sheet))
     }
 
     private func origin(presentationScope: UUID? = nil) -> HostFileOrigin {

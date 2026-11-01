@@ -391,7 +391,8 @@ final class HostFileOpener {
     }
 
     func presents(in scope: UUID?) -> Bool {
-        origin?.presentationScope == scope
+        guard let origin else { return false }
+        return origin.presentationScope == scope
     }
 
     func leavePresentationScope(_ scope: UUID) {
