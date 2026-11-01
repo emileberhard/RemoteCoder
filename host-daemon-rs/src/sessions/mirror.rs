@@ -638,16 +638,12 @@ async fn sync_owned(
     } else {
         saved.as_ref().is_some_and(|(_, _, projected)| *projected)
     };
+    let projected =
+        projected && complete && (full || saved.as_ref().is_some_and(|(_, _, prior)| *prior));
     let cursor =
         if full { snapshot_cursor } else { cursor }.context("Mirror returned no change cursor")?;
     let complete = complete && projected;
-    let reason = if !projected {
-        Some("missing_dependency")
-    } else if !complete {
-        Some("origin_incomplete")
-    } else {
-        None
-    };
+    let reason = (!complete).then_some("origin_incomplete");
     let previous: Option<(Option<String>, Option<String>)> = store
         .reader()?
         .query_row(

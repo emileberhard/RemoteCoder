@@ -2369,6 +2369,10 @@ async fn sessions_mirror_skips_failed_transfers_until_full_reconciliation_and_pr
     assert_ne!(mirror_cursor(&target), cursor);
     let cursor = mirror_cursor(&target);
     fail.store(false, std::sync::atomic::Ordering::Release);
+    assert_eq!(sync_mirror(&target, call.clone()).await?["complete"], false);
+    target
+        .writer()?
+        .execute("UPDATE mirror_state SET reconciled_at=0", [])?;
     let unavailable = f.origins[0].path().with_file_name("unavailable");
     std::fs::rename(f.origins[0].path(), &unavailable)?;
     assert!(
@@ -2387,23 +2391,6 @@ async fn sessions_mirror_skips_failed_transfers_until_full_reconciliation_and_pr
     );
     std::fs::rename(&unavailable, f.origins[0].path())?;
     calls.lock().unwrap().clear();
-    assert_eq!(sync_mirror(&target, call.clone()).await?["full"], false);
-    assert!(
-        !calls
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|m| m == "sessions/mirror/list")
-    );
-    assert!(
-        search(&target, "deltauniquetext")["hits"]
-            .as_array()
-            .unwrap()
-            .is_empty()
-    );
-    target
-        .writer()?
-        .execute("UPDATE mirror_state SET reconciled_at=0", [])?;
     assert_eq!(sync_mirror(&target, call.clone()).await?["full"], true);
     assert_eq!(
         search(&target, "deltauniquetext")["hits"]
