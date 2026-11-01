@@ -340,7 +340,10 @@ async fn cluster_configured_route_precedes_retained_join_routes() {
             format!("wss://{}/ws", retained.local_addr().unwrap())
         ]
     );
-    assert_eq!(link.routes_for(&host, &[route.clone()]), vec![route]);
+    assert_eq!(
+        link.routes_for(&host, std::slice::from_ref(&route)),
+        vec![route]
+    );
     let server = tokio::spawn(async move { accept_peer(&configured, &identity, &hello).await });
     assert_eq!(
         link.call(&host, "cluster/hello", json!({})).await.unwrap()["host"],

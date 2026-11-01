@@ -763,7 +763,7 @@ async fn sessions_cluster_coverage_preserves_link_failure_classes() {
 }
 
 #[tokio::test]
-async fn sessions_cluster_search_reports_unreachable_members() {
+async fn sessions_cluster_search_keeps_unclassified_failures_unavailable() {
     let call: cluster::MemberCall = Arc::new(|host, method, params| {
         async move {
             assert_eq!(method, "sessions/search");
@@ -793,7 +793,7 @@ async fn sessions_cluster_search_reports_unreachable_members() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|c| c["hostId"] == "away" && c["state"] == "unreachable")
+            .any(|c| c["hostId"] == "away" && c["state"] == "unavailable")
     );
 }
 
