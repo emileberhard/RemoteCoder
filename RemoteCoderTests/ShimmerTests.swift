@@ -16,7 +16,7 @@ struct ShimmerTests {
         hosted.show(controller)
         defer { hosted.close() }
         controller.view.layoutIfNeeded()
-        #expect(hasRepeatingGradient(controller.view.layer))
+        try #require(hasRepeatingGradient(controller.view.layer))
 
         withAnimation(.linear(duration: 10)) { fixture.gate = gate }
         controller.view.setNeedsLayout()
