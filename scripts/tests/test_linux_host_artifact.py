@@ -17,6 +17,29 @@ spec.loader.exec_module(module)
 
 
 class LinuxArchiveTests(unittest.TestCase):
+    def test_approved_read_only_and_executable_modes_survive_extraction(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive = root / "host.tar.gz"
+            with tarfile.open(archive, "w:gz") as stream:
+                for name, mode in [
+                    ("approval", 0o444),
+                    ("private-cli", 0o500),
+                    ("cli", 0o755),
+                ]:
+                    entry = tarfile.TarInfo("remote-coder-host/" + name)
+                    entry.mode = mode
+                    entry.size = 7
+                    stream.addfile(entry, io.BytesIO(b"payload"))
+            extracted = module.unpack(archive, root / "extracted")
+            for name, mode in [
+                ("approval", 0o444),
+                ("private-cli", 0o500),
+                ("cli", 0o755),
+            ]:
+                self.assertEqual((extracted / name).stat().st_mode & 0o777, mode)
+                self.assertEqual((extracted / name).read_bytes(), b"payload")
+
     def test_system_bubblewrap_dependency_and_absent_fallback_are_required(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -33,12 +56,13 @@ class LinuxArchiveTests(unittest.TestCase):
                 module.verify_codex_sandbox(root)
 
     def test_unsafe_entries_are_refused_without_writing_their_payload(self):
-        for name, kind, target in [
-            ("../escaped", tarfile.REGTYPE, ""),
-            ("remote-coder-host/../escaped", tarfile.REGTYPE, ""),
-            ("remote-coder-host//file", tarfile.REGTYPE, ""),
-            ("remote-coder-host/link", tarfile.SYMTYPE, "../../escaped"),
-            ("remote-coder-host/device", tarfile.CHRTYPE, ""),
+        for name, kind, target, mode in [
+            ("../escaped", tarfile.REGTYPE, "", 0o644),
+            ("remote-coder-host/../escaped", tarfile.REGTYPE, "", 0o644),
+            ("remote-coder-host//file", tarfile.REGTYPE, "", 0o644),
+            ("remote-coder-host/link", tarfile.SYMTYPE, "../../escaped", 0o755),
+            ("remote-coder-host/device", tarfile.CHRTYPE, "", 0o644),
+            ("remote-coder-host/writable", tarfile.REGTYPE, "", 0o666),
         ]:
             with self.subTest(name=name), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
@@ -46,6 +70,7 @@ class LinuxArchiveTests(unittest.TestCase):
                 with tarfile.open(archive, "w:gz") as stream:
                     entry = tarfile.TarInfo(name)
                     entry.type = kind
+                    entry.mode = mode
                     entry.linkname = target
                     entry.size = 7 if kind == tarfile.REGTYPE else 0
                     stream.addfile(

@@ -163,7 +163,7 @@ def unpack(archive, temporary):
                 raise ValueError("unsafe or duplicate Linux archive path")
             if (
                 not (entry.isfile() or entry.isdir() or entry.issym())
-                or entry.mode & 0o7000
+                or entry.mode & ~0o755
             ):
                 raise ValueError("unsupported Linux archive entry")
             total += entry.size
@@ -172,7 +172,12 @@ def unpack(archive, temporary):
             if len(entries) > MAXIMUM_ENTRIES or total > MAXIMUM_BYTES:
                 raise ValueError("Linux archive exceeds its extraction bound")
             tarfile.data_filter(entry, temporary)
-        stream.extractall(temporary, members=entries, filter="data")
+
+        def release_filter(member, destination):
+            filtered = tarfile.data_filter(member, destination)
+            return filtered.replace(mode=member.mode) if member.isfile() else filtered
+
+        stream.extractall(temporary, members=entries, filter=release_filter)
     return temporary / NAME
 
 
@@ -263,7 +268,9 @@ def build(args):
         approval.write_text(json.dumps(approval_record(codex), indent=2) + "\n")
         approval.chmod(0o444)
         shutil.copy2(args.claude, root / "runtime/claude/claude")
+        (root / "runtime/claude/claude").chmod(0o755)
         shutil.copy2(args.claude_provenance, root / "runtime/claude/provenance.json")
+        (root / "runtime/claude/provenance.json").chmod(0o644)
         shutil.copy2(
             ROOT / "host-daemon-rs/systemd/remote-coder-gateway.service",
             root / "systemd",
