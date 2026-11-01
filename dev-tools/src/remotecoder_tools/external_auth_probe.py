@@ -366,8 +366,7 @@ stream_max_retries = 0
         self.env_keys = sorted(env)
         if sys.platform == "linux":
             require(
-                os.readlink("/proc/self/ns/net") != os.readlink("/proc/1/ns/net")
-                and {path.name for path in Path("/sys/class/net").iterdir()} == {"lo"},
+                socket.if_nameindex() == [(1, "lo")],
                 "Linux auth probe requires a private network namespace with only loopback",
             )
             command = [str(self.binary)]

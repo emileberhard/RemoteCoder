@@ -41,7 +41,7 @@ mod wire;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Parser;
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
@@ -327,6 +327,12 @@ async fn run(
         Settings::load(&sources)?
     };
 
+    #[cfg(target_os = "linux")]
+    let lan = match &settings.lan {
+        Some(lan) => Some(LanListener::bind(lan).await.context("required Linux TLS listener failed")?),
+        None => None,
+    };
+
     info!(
         bind_host = %settings.bind_host,
         port = settings.port,
@@ -475,13 +481,11 @@ async fn serve_http(
         settings.speech_clients.clone(),
         journal.clone(),
     )?;
+    #[cfg(not(target_os = "linux"))]
     let lan = match &settings.lan {
         Some(lan_settings) => match LanListener::bind(lan_settings).await {
             Ok(lan) => Some(lan),
             Err(error) => {
-                if cfg!(target_os = "linux") {
-                    return Err(error).context("required Linux TLS listener failed");
-                }
                 error!(
                     lan_port = lan_settings.port,
                     "LAN TLS listener unavailable; serving only the plaintext listener: {error:#}"

@@ -9,6 +9,8 @@ Environment=PATH=%h/.local/bin:%h/.cargo/bin:/usr/local/bin:/usr/bin:/bin
 UMask=0077
 Restart=always
 RestartSec=3
+RestartSteps=5
+RestartMaxDelaySec=60
 KillMode=process
 TimeoutStopSec=60
 
