@@ -110,6 +110,8 @@ final class PerfHarness {
             selectRow(address(command), commandID: id)
         case "drawer-switch":
             switchFromClosedDrawer(address(command), commandID: id)
+        case "drawer-layers":
+            writeResult(drawerLayers(commandID: id))
         case "scroll":
             guard let model = workspace?.selectedScreen,
                   let index = command["message"] as? Int, model.messages.indices.contains(index) else {
@@ -356,6 +358,35 @@ final class PerfHarness {
         }
         return ["host": address.hostID.uuidString, "thread": address.threadID, "recentPresentationHit": cached,
                 "loaded": true, "drawerClosed": true]
+    }
+
+    private func drawerLayers(commandID: String) -> [String: Any] {
+        guard window == nil, let drawer, drawer.motion.isAtRest, let window = drawer.window else {
+            return ["cmd": "drawer-layers", "id": commandID, "error": "requires an attached resting drawer outside a measurement window"]
+        }
+        var pending: [(CALayer, Int?)] = [(window.layer, nil)]
+        var layers: [[String: Any]] = []
+        while layers.count < 512, let (layer, parent) = pending.popLast() {
+            let index = layers.count
+            var row: [String: Any] = [
+                "class": String(describing: type(of: layer)), "parent": parent.map { $0 as Any } ?? NSNull(),
+                "bounds": [layer.bounds.minX, layer.bounds.minY, layer.bounds.width, layer.bounds.height],
+                "position": [layer.position.x, layer.position.y], "cornerRadius": layer.cornerRadius,
+                "cornerCurve": layer.cornerCurve.rawValue, "masksToBounds": layer.masksToBounds,
+                "shouldRasterize": layer.shouldRasterize, "hasMask": layer.mask != nil,
+            ]
+            if let mask = layer.mask {
+                row["mask"] = ["class": String(describing: type(of: mask)),
+                    "bounds": [mask.bounds.minX, mask.bounds.minY, mask.bounds.width, mask.bounds.height],
+                    "cornerRadius": mask.cornerRadius]
+            }
+            layers.append(row)
+            pending.append(contentsOf: (layer.sublayers ?? []).reversed().map { ($0, index) })
+        }
+        return ["cmd": "drawer-layers", "id": commandID, "layers": layers, "truncated": !pending.isEmpty,
+                "progress": drawer.motion.progress,
+                "windowBounds": [window.bounds.width, window.bounds.height],
+                "safeArea": [window.safeAreaInsets.top, window.safeAreaInsets.bottom]]
     }
 
     private func status() -> [String: Any] {
