@@ -529,20 +529,18 @@ Changes to these diagnostics are checked with the targeted hosted suite:
 scene and stays separate from the routine CI rendering suites.
 
 Each record contains the host, thread (or `new-chat`), conversation and chat-window
-identities; SwiftUI sizes, local frames and safe-area insets; and the scene's native
+identities; SwiftUI root size and safe-area insets, header global minY and composer
+global maxY; and the scene's native
 windows and controller hierarchy, with object identities, orientation, bounds,
 insets, additional insets and presentation/attachment state. The native walk is
 bounded to four scenes, eight windows per scene and sixteen controllers per
-window. Header and composer observe only frames in a named coordinate space inside
-the moving chat subtree, so drawer offsets do not trigger observations. Their
-insets are `unobserved`: SwiftUI changes child insets during translation even when
-the local frames stay unchanged. Root geometry tracks size and insets. Only when
-recording, the recorder projects these local frames
-through the native root view and observed root insets into window coordinates.
-The derived frames omit the intentional drawer offset. `headerOutsideSafeArea`
-and `composerOutsideSafeArea` compare those projections to the key window's safe
+window. Header and composer observe scalar vertical positions in the global
+coordinate space, so horizontal drawer offsets do not trigger observations while
+a vertical displacement of the entire chat remains visible. Root geometry tracks
+size and insets. `headerOutsideSafeArea` and `composerOutsideSafeArea` compare
+the measured vertical positions to the key window's safe
 rectangle, allowing the composer's existing
-resting overlap. Unknown frames stay `unknown`. Each surface has an `ageMs` for
+resting overlap. Unknown positions stay `unknown`. Each surface has an `ageMs` for
 its last SwiftUI geometry observation; `geometryPending` marks coalescing in
 progress. Presentation transforms and intermediate layout can produce temporary
 violations, so compare subsequent settled/native snapshots. Keyboard screen

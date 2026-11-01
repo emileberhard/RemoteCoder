@@ -1,3 +1,4 @@
+import Combine
 import QuickLook
 import SwiftUI
 import Testing
@@ -86,9 +87,24 @@ struct ChatSafeAreaTests {
         try #require(await waitUntil { screen.streamItems.isEmpty })
         inspect(controller, label: "populated-to-empty", expected: initial)
         let input = try #require(composer(in: controller.view))
+        var keyboardShown = false
+        var keyboardHidden = false
+        let shown = NotificationCenter.default.publisher(for: UIResponder.keyboardDidShowNotification)
+            .sink { _ in keyboardShown = true }
+        let hidden = NotificationCenter.default.publisher(for: UIResponder.keyboardDidHideNotification)
+            .sink { _ in keyboardHidden = true }
+        defer { shown.cancel(); hidden.cancel() }
+        let restingFrame = input.convert(input.bounds, to: window)
         input.becomeFirstResponder()
-        try #require(await waitUntil { input.isFirstResponder })
+        try #require(await waitUntil { keyboardShown })
+        keyboardHidden = false
         input.resignFirstResponder()
+        try #require(await waitUntil { keyboardHidden })
+        try #require(await waitUntil {
+            controller.view.layoutIfNeeded()
+            return input.convert(input.bounds, to: window) == restingFrame
+        })
+        inspect(controller, label: "keyboard-hidden", expected: initial)
         for _ in 0..<20 {
             _ = fixture.workspace.startNewConversation(onHostID: fixture.mini.id)
             controller.view.setNeedsLayout()
@@ -120,10 +136,9 @@ struct ChatSafeAreaTests {
         let safe = window.bounds.inset(by: window.safeAreaInsets)
         let rootInsets = EdgeInsets(top: window.safeAreaInsets.top, leading: window.safeAreaInsets.left,
             bottom: window.safeAreaInsets.bottom, trailing: window.safeAreaInsets.right)
-        recorder.geometry("root", .init(frame: CGRect(origin: .zero, size: safe.size), insets: rootInsets), context: context)
-        let header = ChatLayoutGeometry(frame: CGRect(x: 0, y: 0, width: safe.width, height: 44), insets: nil)
-        recorder.geometry("header", header, context: context)
-        recorder.geometry("composer", .init(frame: CGRect(x: 0, y: safe.height - 60, width: safe.width, height: 60), insets: nil), context: nil)
+        recorder.geometry(.init(frame: CGRect(origin: .zero, size: safe.size), insets: rootInsets), context: context)
+        recorder.verticalPosition("header", safe.minY)
+        recorder.verticalPosition("composer", safe.maxY)
         try #require(await waitUntil { records.contains { $0.contains("event=geometry[") } })
         let before = try #require(records.last)
         #expect(before.contains("headerOutsideSafeArea=false composerOutsideSafeArea=false"))
@@ -134,12 +149,13 @@ struct ChatSafeAreaTests {
         #expect(before.contains("window=\(ObjectIdentifier(window))"))
         #expect(before.contains("UIHostingController@\(ObjectIdentifier(host))"))
         let unchanged = records.count
-        recorder.geometry("header", header, context: context)
+        recorder.verticalPosition("header", safe.minY)
         recorder.contextChanged(context)
         try await Task.sleep(for: .milliseconds(250))
         #expect(records.count == unchanged)
-        recorder.geometry("root", .init(frame: window.bounds, insets: EdgeInsets()), context: nil)
-        recorder.geometry("composer", .init(frame: CGRect(x: 0, y: window.bounds.maxY - 60, width: safe.width, height: 60), insets: nil), context: nil)
+        recorder.geometry(.init(frame: window.bounds, insets: EdgeInsets()), context: nil)
+        recorder.verticalPosition("header", 0)
+        recorder.verticalPosition("composer", window.bounds.maxY)
         try #require(await waitUntil { records.contains { $0.contains("headerOutsideSafeArea=true composerOutsideSafeArea=true") } })
         let collapsed = try #require(records.last)
         #expect(collapsed.contains("safe=\(window.safeAreaInsets.top),"))
@@ -162,12 +178,32 @@ struct ChatSafeAreaTests {
         try #require(await waitUntil { records.contains { $0.contains("event=geometry[") } })
         let initial = records.count
         for x in stride(from: 20, through: 300, by: 20) {
-            controller.rootView = GeometryProbe(offset: CGSize(width: CGFloat(x), height: CGFloat(x)), recorder: recorder)
+            controller.rootView = GeometryProbe(offset: CGSize(width: CGFloat(x), height: 0), recorder: recorder)
             controller.view.layoutIfNeeded()
             await Task.yield()
         }
         try await Task.sleep(for: .milliseconds(250))
         #expect(records.count == initial, "Unexpected records: \(records.dropFirst(initial))")
+    }
+
+    @Test
+    func verticallyDisplacedChatReportsHeaderOutsideSafeArea() async throws {
+        let scene = try #require(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let hosted = HostedWindow(scene: scene)
+        var records: [String] = []
+        let recorder = ChatLayoutRecorder(log: { records.append($0) })
+        recorder.start(context: ChatLayoutContext(window: nil))
+        defer { recorder.stop() }
+        let controller = UIHostingController(rootView: GeometryProbe(offset: .zero, recorder: recorder))
+        hosted.show(controller)
+        defer { hosted.close() }
+        try #require(await waitUntil { records.contains { $0.contains("event=geometry[") } })
+        #expect(records.last?.contains("headerOutsideSafeArea=false") == true)
+        controller.rootView = GeometryProbe(offset: CGSize(width: 0, height: -100), recorder: recorder)
+        controller.view.layoutIfNeeded()
+        try #require(await waitUntil {
+            records.last?.contains("headerOutsideSafeArea=true") == true
+        })
     }
 
     private struct GeometryProbe: View {
@@ -180,7 +216,6 @@ struct ChatSafeAreaTests {
                 Spacer()
                 Color.clear.frame(height: 60).chatLayoutDiagnostics("composer")
             }
-            .coordinateSpace(.named(ChatLayoutObservation.coordinateSpace))
             .offset(offset)
             .environment(\.chatLayoutRecorder, recorder)
         }

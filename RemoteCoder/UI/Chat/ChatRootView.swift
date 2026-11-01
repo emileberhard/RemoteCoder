@@ -291,9 +291,6 @@ private struct ChatScreen: View {
             onBeginOpening: { dismissComposerFocus() }
         ) {
             mainChatSurface
-                #if os(iOS)
-                .coordinateSpace(.named(ChatLayoutObservation.coordinateSpace))
-                #endif
         } sidebar: {
             historyDrawer
         }

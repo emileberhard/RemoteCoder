@@ -14,7 +14,6 @@ struct ChatLayoutContext: Equatable {
 }
 
 struct ChatLayoutObservation: ViewModifier {
-    static let coordinateSpace = "chat-layout-diagnostics"
     let context: ChatLayoutContext
     @State private var recorder = ChatLayoutRecorder(log: AppLogger(category: "ChatLayout").notice)
     @Environment(\.scenePhase) private var scenePhase
@@ -24,7 +23,7 @@ struct ChatLayoutObservation: ViewModifier {
             .environment(\.chatLayoutRecorder, recorder)
             .onGeometryChange(for: ChatLayoutGeometry.self) {
                 ChatLayoutGeometry(frame: CGRect(origin: .zero, size: $0.size), insets: $0.safeAreaInsets)
-            } action: { recorder.geometry("root", $0, context: context) }
+            } action: { recorder.geometry($0, context: context) }
             .onChange(of: context, initial: true) { _, value in recorder.contextChanged(value) }
             .onChange(of: scenePhase, initial: true) { _, phase in recorder.phaseChanged(phase) }
             .onAppear { recorder.start(context: context) }
@@ -53,15 +52,16 @@ private struct ChatSurfaceObservation: ViewModifier {
     @Environment(\.chatLayoutRecorder) private var recorder
 
     func body(content: Content) -> some View {
-        content.onGeometryChange(for: CGRect.self) {
-            $0.frame(in: .named(ChatLayoutObservation.coordinateSpace))
-        } action: { recorder?.geometry(surface, .init(frame: $0, insets: nil), context: nil) }
+        content.onGeometryChange(for: CGFloat.self) {
+            let frame = $0.frame(in: .global)
+            return surface == "header" ? frame.minY : frame.maxY
+        } action: { recorder?.verticalPosition(surface, $0) }
     }
 }
 
 struct ChatLayoutGeometry: Equatable {
     let frame: CGRect
-    let insets: EdgeInsets?
+    let insets: EdgeInsets
 }
 
 @MainActor
@@ -74,7 +74,8 @@ final class ChatLayoutRecorder {
     private let log: (String) -> Void
     private var context: ChatLayoutContext?
     private var phase = "unknown"
-    private var surfaces: [String: ObservedGeometry] = [:]
+    private var rootGeometry: ObservedGeometry?
+    private var verticalPositions: [String: (value: CGFloat, time: Date)] = [:]
     private var presentations: Set<String> = []
     private var keyboard = "unknown"
     private var drawer = "unknown"
@@ -123,10 +124,16 @@ final class ChatLayoutRecorder {
         record("scene-activated")
     }
 
-    func geometry(_ surface: String, _ geometry: ChatLayoutGeometry, context: ChatLayoutContext?) {
+    func geometry(_ geometry: ChatLayoutGeometry, context: ChatLayoutContext?) {
         if let context { contextChanged(context) }
-        guard surfaces[surface]?.value != geometry else { return }
-        surfaces[surface] = ObservedGeometry(value: geometry, time: .now)
+        guard rootGeometry?.value != geometry else { return }
+        rootGeometry = ObservedGeometry(value: geometry, time: .now)
+        scheduleGeometry("root")
+    }
+
+    func verticalPosition(_ surface: String, _ position: CGFloat) {
+        guard verticalPositions[surface]?.value != position else { return }
+        verticalPositions[surface] = (value: position, time: .now)
         scheduleGeometry(surface)
     }
 
@@ -182,8 +189,11 @@ final class ChatLayoutRecorder {
 
     private func record(_ event: String) {
         let now = Date.now
-        let geometry = surfaces.sorted { $0.key < $1.key }.map {
-            "\($0.key)={ageMs=\(Int(now.timeIntervalSince($0.value.time) * 1_000)),localFrame=\(Self.rect($0.value.value.frame)),insets=\($0.value.value.insets.map(Self.insets) ?? "unobserved")}"
+        let root = rootGeometry.map {
+            "root={ageMs=\(Int(now.timeIntervalSince($0.time) * 1_000)),localFrame=\(Self.rect($0.value.frame)),insets=\(Self.insets($0.value.insets))}"
+        } ?? "root=unknown"
+        let positions = verticalPositions.sorted { $0.key < $1.key }.map {
+            "\($0.key)={ageMs=\(Int(now.timeIntervalSince($0.value.time) * 1_000)),global\($0.key == "header" ? "MinY" : "MaxY")=\($0.value.value)}"
         }.joined(separator: " ")
         let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
         let native = scenes.sorted { $0.session.persistentIdentifier < $1.session.persistentIdentifier }.prefix(4).map { scene in
@@ -192,23 +202,15 @@ final class ChatLayoutRecorder {
             }.joined(separator: " | ")
             return "scene=\(scene.session.persistentIdentifier) state=\(scene.activationState.rawValue) orientation=\(scene.effectiveGeometry.interfaceOrientation.rawValue) windows=\(scene.windows.count)[\(windows)]"
         }.joined(separator: " || ")
-        log("event=\(event) \(context?.description ?? "chatWindow=unattached thread=unknown") phase=\(phase) visible=\(visible) drawer=\(drawer) keyboard=\(keyboard) presentations=\(presentations.sorted()) geometryPending=\(geometryTask != nil) \(geometry) native=[\(native)]")
+        log("event=\(event) \(context?.description ?? "chatWindow=unattached thread=unknown") phase=\(phase) visible=\(visible) drawer=\(drawer) keyboard=\(keyboard) presentations=\(presentations.sorted()) geometryPending=\(geometryTask != nil) \(root) \(positions) native=[\(native)]")
     }
 
     private func violations(in window: UIWindow) -> String {
         guard window.isKeyWindow else { return "" }
         let safe = window.bounds.inset(by: window.safeAreaInsets)
-        let headerFrame = windowFrame("header", in: window)
-        let composerFrame = windowFrame("composer", in: window)
-        let header = headerFrame.map { String($0.minY < safe.minY - 1) } ?? "unknown"
-        let composer = composerFrame.map { String($0.maxY > safe.maxY + ComposerMetrics.restingSafeAreaOverlap + 1) } ?? "unknown"
-        return "headerOutsideSafeArea=\(header) composerOutsideSafeArea=\(composer) derivedHeaderWindowFrame=\(headerFrame.map(Self.rect) ?? "unknown") derivedComposerWindowFrame=\(composerFrame.map(Self.rect) ?? "unknown")"
-    }
-
-    private func windowFrame(_ surface: String, in window: UIWindow) -> CGRect? {
-        guard let insets = surfaces["root"]?.value.insets, let frame = surfaces[surface]?.value.frame,
-              let view = window.rootViewController?.viewIfLoaded, view.window === window else { return nil }
-        return view.convert(frame.offsetBy(dx: insets.leading, dy: insets.top), to: window)
+        let header = verticalPositions["header"].map { String($0.value < safe.minY - 1) } ?? "unknown"
+        let composer = verticalPositions["composer"].map { String($0.value > safe.maxY + ComposerMetrics.restingSafeAreaOverlap + 1) } ?? "unknown"
+        return "headerOutsideSafeArea=\(header) composerOutsideSafeArea=\(composer)"
     }
 
     private func controllers(_ root: UIViewController?, window: UIWindow) -> String {
