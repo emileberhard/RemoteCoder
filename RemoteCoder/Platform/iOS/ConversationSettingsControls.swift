@@ -37,6 +37,10 @@ struct ConversationSettingsControls<Status: View>: View {
         controls
             .frame(maxWidth: .infinity, alignment: .leading)
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame in
+                #if RC_PERF_HARNESS
+                PerfBuild.count("settings.rowGeometry")
+                guard !PerfBuild.isDisabled("settingsGeometryWrites") else { return }
+                #endif
                 // Layout can move when a settings warning or error appears.
                 // Only a live gesture has coordinates to invalidate; a committed gauge
                 // adjustment must survive that expected composer reflow.
@@ -121,7 +125,13 @@ struct ConversationSettingsControls<Status: View>: View {
             height: symbolHeight
         )
             // Measure the glyph, not its larger touch target or the finger.
-            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { gaugeFrame = $0 }
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame in
+                #if RC_PERF_HARNESS
+                PerfBuild.count("settings.gaugeGeometry")
+                guard !PerfBuild.isDisabled("settingsGeometryWrites") else { return }
+                #endif
+                gaugeFrame = frame
+            }
             .opacity(picker.presentedSession?.owner == ownerID ? 0 : 1)
             .frame(minWidth: 44, minHeight: 44)
             .accessibilityHidden(true)
