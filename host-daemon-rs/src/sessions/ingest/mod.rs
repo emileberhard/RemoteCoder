@@ -15,7 +15,15 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use walkdir::WalkDir;
 
 pub(crate) fn identity(metadata: &Metadata) -> String {
-    format!("{:?}", FileRevision::from(metadata.clone()))
+    format!(
+        "{}:{}:{}.{:09}:{}.{:09}",
+        metadata.ino(),
+        metadata.len(),
+        metadata.mtime(),
+        metadata.mtime_nsec(),
+        metadata.ctime(),
+        metadata.ctime_nsec()
+    )
 }
 
 const FINGERPRINT_WINDOW: u64 = 64 << 10;
@@ -398,8 +406,6 @@ pub(crate) fn ingest(
 #[derive(Clone, Default, serde::Deserialize, serde::Serialize)]
 #[serde(default)]
 struct AppendState {
-    device: u64,
-    inode: u64,
     head: String,
     tail: String,
     verified_revision: i64,
@@ -444,61 +450,75 @@ fn ingest_source(
     } else {
         Vec::new()
     };
-    let mut dependencies_changed = false;
+    let mut sidecar_changed = false;
+    let mut evidence_changed = false;
     if let Some(previous) = &prior {
-        let dependencies: Vec<(String, Option<String>)> = db
-            .prepare("SELECT local_path,identity FROM dependency WHERE source_id=?1")?
-            .query_map([previous.id], |row| Ok((row.get(0)?, row.get(1)?)))?
+        let dependencies: Vec<(String, String, String, Option<String>)> = db
+            .prepare("SELECT path,local_path,kind,identity FROM dependency WHERE source_id=?1")?
+            .query_map([previous.id], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            })?
             .collect::<rusqlite::Result<_>>()?;
-        for (path, old) in dependencies {
-            let current = match std::fs::metadata(path) {
-                Ok(metadata) => Some(identity(&metadata)),
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-                Err(error) => return Err(error.into()),
-            };
-            dependencies_changed |= current != old;
+        let mut known = BTreeSet::new();
+        for (path, local, kind, old) in dependencies {
+            if file_identity(Path::new(&local))? != old {
+                if kind == "sidecar" {
+                    sidecar_changed = true;
+                } else {
+                    evidence_changed = true;
+                }
+            }
+            known.insert(path);
         }
-        let known: BTreeSet<String> = db
-            .prepare("SELECT path FROM dependency WHERE source_id=?1")?
-            .query_map([previous.id], |row| row.get(0))?
-            .collect::<rusqlite::Result<_>>()?;
         for companion in &companions {
-            dependencies_changed |=
+            evidence_changed |=
                 !known.contains(&origin.original(companion)?.to_string_lossy().into_owned());
         }
     }
-    let unchanged = prior
+    let same_stamp = prior
         .as_ref()
-        .is_some_and(|previous| previous.stamp == stamp && previous.present)
-        && !dependencies_changed;
+        .is_some_and(|previous| previous.stamp == stamp && previous.present);
     let mut verified = true;
     if let Some(previous) = &prior
-        && mode == ReadMode::Full
+        && mode != ReadMode::Inventory
         && previous.offset > 0
-        && (previous.append.verified_revision != previous.revision || !unchanged)
+        && !sidecar_changed
     {
-        verified = before.len() >= previous.offset
-            && verify_prefix(path, previous.offset, &previous.chain, stop)?;
-        if unchanged && verified {
-            let mut append = previous.append.clone();
+        let mut append = previous.append.clone();
+        let check = (mode == ReadMode::Full
+            && (previous.append.verified_revision != previous.revision || !same_stamp))
+            || (!same_stamp && before.len() == previous.size);
+        if check {
+            verified = before.len() >= previous.offset
+                && verify_prefix(path, previous.offset, &previous.chain, stop)?;
             append.verified_revision = previous.revision;
-            db.execute(
-                "UPDATE source SET append_state=?1 WHERE source_id=?2",
-                params![serde_json::to_string(&append)?, previous.id],
-            )?;
-            return Ok(false);
         }
-    } else if unchanged {
+        if verified && before.len() == previous.size && !previous.stamp.is_empty() {
+            if !check && !evidence_changed {
+                return Ok(false);
+            }
+            let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            if check {
+                tx.execute(
+                    "UPDATE source SET file_identity=?1,mtime_ns=?2,present=1,append_state=?3 WHERE source_id=?4",
+                    params![stamp, before.mtime() * 1_000_000_000 + before.mtime_nsec(), serde_json::to_string(&append)?, previous.id],
+                )?;
+            }
+            if evidence_changed {
+                refresh_dependencies(&tx, origin, previous.id, &companions)?;
+            }
+            tx.commit()?;
+            return Ok(evidence_changed);
+        }
+    } else if same_stamp && !sidecar_changed && !evidence_changed {
         return Ok(false);
     }
     let append = if let Some(previous) = &prior {
         previous.present
             && verified
-            && !dependencies_changed
+            && !sidecar_changed
             && previous.offset > 0
             && before.len() > previous.size
-            && previous.append.device == before.dev()
-            && previous.append.inode == before.ino()
             && fingerprint(&mut file, previous.offset)?
                 == (previous.append.head.clone(), previous.append.tail.clone())
     } else {
@@ -629,18 +649,9 @@ fn ingest_source(
         }
     }
     drop(reader);
-    for companion in companions {
-        let metadata = std::fs::metadata(&companion)?;
-        tx.execute(
-            "INSERT OR IGNORE INTO dependency(source_id,path,local_path,kind,identity,present,origin_host) VALUES(?1,?2,?3,'companion',?4,1,?5)",
-            params![
-                source,
-                origin.original(&companion)?.to_string_lossy(),
-                companion.to_string_lossy(),
-                identity(&metadata),
-                origin.host
-            ],
-        )?;
+    normalize::save_session(&tx, origin, source, &state)?;
+    if mode != ReadMode::Inventory {
+        refresh_dependencies(&tx, origin, source, &companions)?;
     }
     let prefix = chain.to_hex().to_string();
     let (head, tail) = fingerprint(&mut file, offset)?;
@@ -676,8 +687,6 @@ fn ingest_source(
                 .map_or(0, |previous| previous.append.verified_revision)
         };
     let append_state = AppendState {
-        device: before.dev(),
-        inode: before.ino(),
         head,
         tail,
         verified_revision,
@@ -687,6 +696,45 @@ fn ingest_source(
     tx.execute("UPDATE source SET local_path=?1,file_identity=?2,size=?3,mtime_ns=?4,ingested_offset=?5,revision=?6,present=1,prefix_hash=?7,parser_state=?8,failure=?9,append_state=?10 WHERE source_id=?11",params![path.to_string_lossy(),if mode != ReadMode::Inventory {&stamp} else {""},i64::try_from(before.len())?,before.mtime()*1_000_000_000+before.mtime_nsec(),i64::try_from(offset)?,revision,prefix,serde_json::to_string(&state)?,if gap_records>0 {Some("record_gap")} else if offset<before.len(){Some("partial_record")}else{None},serde_json::to_string(&append_state)?,source])?;
     tx.commit()?;
     Ok(true)
+}
+
+pub(super) fn file_identity(path: &Path) -> Result<Option<String>> {
+    match std::fs::metadata(path) {
+        Ok(metadata) => Ok(Some(identity(&metadata))),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn refresh_dependencies(
+    db: &Connection,
+    origin: &Origin,
+    source: i64,
+    companions: &[PathBuf],
+) -> Result<()> {
+    let mut current = BTreeSet::new();
+    for companion in companions {
+        let original = origin.original(companion)?.to_string_lossy().into_owned();
+        let identity = file_identity(companion)?;
+        db.execute("INSERT INTO dependency(source_id,path,local_path,kind,identity,present,origin_host) VALUES(?1,?2,?3,'companion',?4,?5,?6) ON CONFLICT(source_id,path) DO UPDATE SET identity=excluded.identity,present=excluded.present WHERE dependency.identity IS NOT excluded.identity",params![source,original,companion.to_string_lossy(),identity,identity.is_some(),origin.host])?;
+        current.insert(original);
+    }
+    let stored: Vec<(String, String, String)> = db
+        .prepare("SELECT path,local_path,kind FROM dependency WHERE source_id=?1")?
+        .query_map([source], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    for (path, local, kind) in stored {
+        if kind == "companion" && !current.contains(&path) {
+            db.execute(
+                "DELETE FROM dependency WHERE source_id=?1 AND path=?2",
+                params![source, path],
+            )?;
+        } else if kind != "companion" {
+            let identity = file_identity(Path::new(&local))?;
+            db.execute("UPDATE dependency SET identity=?1,present=?2 WHERE source_id=?3 AND path=?4 AND identity IS NOT ?1",params![identity,identity.is_some(),source,path])?;
+        }
+    }
+    Ok(())
 }
 
 pub(super) fn skills(tool: &str, input: &Value) -> Vec<(String, &'static str)> {

@@ -419,6 +419,19 @@ mod tests {
         (directory, store, origin, path)
     }
 
+    #[test]
+    fn sessions_hot_sources_match_their_catalog_identity() -> Result<()> {
+        let (_directory, store, origin, path) = fixture();
+        std::fs::File::open(&path)?.set_modified(std::time::SystemTime::now())?;
+        let origins = [origin];
+        ingest::scan(&store, &origins, &AtomicBool::new(false))?;
+        let mut hot = Hot::default();
+        hot.observe(&*store.reader()?, &origins)?;
+        ensure!(!hot.is_empty());
+        ensure!(hot.changed()?.is_empty());
+        Ok(())
+    }
+
     fn append(path: &Path, needle: &str) {
         writeln!(std::fs::OpenOptions::new().append(true).open(path).unwrap(),"{}",json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":needle}]}})).unwrap();
     }

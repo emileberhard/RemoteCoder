@@ -1,5 +1,4 @@
 use super::Origin;
-use crate::storage::file_revision::FileRevision;
 use anyhow::Result;
 use rusqlite::{Connection, params};
 use std::collections::{BTreeMap, BTreeSet};
@@ -112,7 +111,7 @@ impl Hot {
                 }
                 Err(error) => return Err(error.into()),
             };
-            let revision = format!("{:?}", FileRevision::from(metadata));
+            let revision = super::ingest::identity(&metadata);
             if self
                 .entries
                 .get(&path)

@@ -60,9 +60,6 @@ impl Record<'_> {
         } else {
             self.claude(state, &value, timestamp.as_deref())?;
         }
-        if let Some(thread) = &state.thread {
-            self.db.execute("INSERT INTO session(session_key,origin_host,provider,provider_home,thread_id,cwd,title,started_at,last_at,parent_session_key,source_id,thread_id_reversed) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12) ON CONFLICT(session_key) DO UPDATE SET cwd=excluded.cwd,title=excluded.title,started_at=excluded.started_at,last_at=excluded.last_at,parent_session_key=excluded.parent_session_key WHERE session.source_id=excluded.source_id",params![super::super::session_key(self.origin,thread),self.origin.host,self.origin.provider,self.origin.provider_home.to_string_lossy(),thread,state.cwd,state.title,state.first,state.last,state.parent.as_ref().map(|p|super::super::session_key(self.origin,p)),self.source,thread.bytes().rev().collect::<Vec<_>>()])?;
-        }
         Ok(())
     }
 
@@ -444,21 +441,10 @@ impl Record<'_> {
             .filter(|p| !p.starts_with("inline:"))
             .chain(sidecars.iter())
         {
-            let local = match self.origin.local(std::path::Path::new(path)) {
-                Ok(local) => local,
-                Err(_) => {
-                    self.db.execute(
-                        "INSERT OR IGNORE INTO dependency(source_id,path,local_path,kind,identity,present,origin_host) VALUES(?1,?2,'','external_image',NULL,0,?3)",
-                        params![self.source, path, self.origin.host],
-                    )?;
-                    continue;
-                }
+            let Ok(local) = self.origin.local(std::path::Path::new(path)) else {
+                continue;
             };
-            let identity = match std::fs::metadata(&local) {
-                Ok(m) => Some(super::identity(&m)),
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-                Err(e) => return Err(e.into()),
-            };
+            let identity = super::file_identity(&local)?;
             self.db.execute("INSERT INTO dependency(source_id,path,local_path,kind,identity,present,origin_host) VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(source_id,path) DO UPDATE SET identity=excluded.identity,present=excluded.present",params![self.source,path,local.to_string_lossy(),if sidecars.contains(path) {"sidecar"} else {"image"},identity,identity.is_some(),self.origin.host])?;
         }
         let reference = SourceRef {
@@ -508,6 +494,18 @@ impl Record<'_> {
         }
         Ok(())
     }
+}
+
+pub(super) fn save_session(
+    db: &Connection,
+    origin: &Origin,
+    source: i64,
+    state: &State,
+) -> Result<()> {
+    if let Some(thread) = &state.thread {
+        db.execute("INSERT INTO session(session_key,origin_host,provider,provider_home,thread_id,cwd,title,started_at,last_at,parent_session_key,source_id,thread_id_reversed) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12) ON CONFLICT(session_key) DO UPDATE SET cwd=excluded.cwd,title=excluded.title,started_at=excluded.started_at,last_at=excluded.last_at,parent_session_key=excluded.parent_session_key WHERE session.source_id=excluded.source_id",params![super::super::session_key(origin,thread),origin.host,origin.provider,origin.provider_home.to_string_lossy(),thread,state.cwd,state.title,state.first,state.last,state.parent.as_ref().map(|p|super::super::session_key(origin,p)),source,thread.bytes().rev().collect::<Vec<_>>()])?;
+    }
+    Ok(())
 }
 
 fn string(value: &Value) -> Option<String> {

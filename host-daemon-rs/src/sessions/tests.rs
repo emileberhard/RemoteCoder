@@ -1521,6 +1521,134 @@ fn sessions_incremental_append_preserves_items_and_reconcile_verifies_the_chain(
     assert_eq!(chain, rebuilt_chain);
 }
 
+fn item_rows(store: &Store) -> (i64, i64, i64) {
+    store
+        .reader()
+        .unwrap()
+        .query_row("SELECT min(rowid),max(rowid),count(*) FROM item", [], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+        })
+        .unwrap()
+}
+
+fn source_stamp(store: &Store, path: &Path) -> (String, i64) {
+    store
+        .reader()
+        .unwrap()
+        .query_row(
+            "SELECT file_identity,revision FROM source WHERE local_path=?1",
+            [path.to_string_lossy().as_ref()],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap()
+}
+
+#[test]
+fn sessions_metadata_only_changes_keep_items_in_place() {
+    use std::os::unix::fs::PermissionsExt;
+    let f = fixture();
+    scan(&f);
+    let items = item_rows(&f.store);
+    let (_, revision) = source_stamp(&f.store, &f.codex);
+    std::fs::set_permissions(&f.codex, std::fs::Permissions::from_mode(0o600)).unwrap();
+    std::fs::set_permissions(&f.codex, std::fs::Permissions::from_mode(0o644)).unwrap();
+    ingest::scan_scope(
+        &f.store,
+        &f.origins,
+        ingest::Scope::Changed(std::slice::from_ref(&f.codex)),
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+    assert_eq!(item_rows(&f.store), items);
+    assert_eq!(
+        source_stamp(&f.store, &f.codex),
+        (ingest::identity(&f.codex.metadata().unwrap()), revision)
+    );
+    f.store
+        .writer()
+        .unwrap()
+        .execute(
+            "UPDATE source SET file_identity='FileRevision { device: 1 }'",
+            [],
+        )
+        .unwrap();
+    assert_eq!(scan(&f)["ingested"], 0);
+    assert_eq!(item_rows(&f.store), items);
+    assert_eq!(source_stamp(&f.store, &f.codex).1, revision);
+}
+
+#[test]
+fn sessions_companion_changes_refresh_evidence_without_rebuilding_items() {
+    let f = fixture();
+    scan(&f);
+    let items = item_rows(&f.store);
+    let (_, revision) = source_stamp(&f.store, &f.claude);
+    let companion = f.claude.with_extension("").join("tool-results/later.txt");
+    std::fs::write(&companion, "later companion").unwrap();
+    let dependency = |store: &Store| -> i64 {
+        store
+            .reader()
+            .unwrap()
+            .query_row(
+                "SELECT count(*) FROM dependency WHERE path=?1",
+                [companion.to_string_lossy().as_ref()],
+                |r| r.get(0),
+            )
+            .unwrap()
+    };
+    scan(&f);
+    assert_eq!(dependency(&f.store), 1);
+    std::fs::remove_file(&companion).unwrap();
+    scan(&f);
+    assert_eq!(dependency(&f.store), 0);
+    assert_eq!(item_rows(&f.store), items);
+    assert_eq!(source_stamp(&f.store, &f.claude).1, revision);
+}
+
+#[test]
+fn sessions_verified_copy_replacing_a_source_appends_in_place() {
+    let f = fixture();
+    scan(&f);
+    let (first, last, count) = item_rows(&f.store);
+    let copy = f.codex.with_extension("copy");
+    std::fs::copy(&f.codex, &copy).unwrap();
+    writeln!(OpenOptions::new().append(true).open(&copy).unwrap(), "{}", json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"replacedcopyappend"}]}})).unwrap();
+    std::fs::rename(&copy, &f.codex).unwrap();
+    ingest::scan_scope(
+        &f.store,
+        &f.origins,
+        ingest::Scope::Changed(std::slice::from_ref(&f.codex)),
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+    assert_eq!(item_rows(&f.store), (first, last + 1, count + 1));
+    assert_eq!(scan(&f)["ingested"], 0);
+    assert_eq!(item_rows(&f.store), (first, last + 1, count + 1));
+    assert_eq!(
+        search(&f.store, "replacedcopyappend")["hits"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn sessions_images_outside_the_provider_home_are_not_missing_evidence() {
+    let f = fixture();
+    writeln!(OpenOptions::new().append(true).open(&f.claude).unwrap(), "{}", json!({"type":"assistant","sessionId":"root","uuid":"outside-1","timestamp":"2026-10-27T10:00:04Z","message":{"content":[{"type":"tool_use","id":"tool-2","name":"Read","input":{"file_path":"/outside/photo.png"}}]}})).unwrap();
+    scan(&f);
+    let db = f.store.reader().unwrap();
+    let (dependencies, references, reason): (i64, i64, Option<String>) = db
+        .query_row(
+            "SELECT (SELECT count(*) FROM dependency WHERE path='/outside/photo.png'),(SELECT count(*) FROM item WHERE source_ref LIKE '%/outside/photo.png%'),(SELECT stale_reason FROM coverage WHERE origin_host='fixture')",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!((dependencies, references, reason), (0, 1, None));
+}
+
 #[test]
 fn sessions_reconcile_repairs_a_growing_rewrite_that_preserves_both_windows() {
     use std::io::{Seek, SeekFrom};
