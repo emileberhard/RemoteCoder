@@ -84,20 +84,13 @@ host change. An already-selected
 custom row can acknowledge a press, but never reports a second selection change.
 Selecting an answer produces one selection tick; automatic question advancement
 is silent. Manual page changes and folder disclosures have their own quiet
-acknowledgement. The conversation drawer captures its committed side when a
-horizontal drag begins. On release, its existing motion owner chooses the
-destination; one system selection tick acknowledges a changed destination only
-while the drawer is strictly between its endpoints. Returning to the initial
-side, cancellation, endpoint releases, touch-down, movement and settle completion
-are silent. The tick has the same recipe under Standard and Strong.
-The drawer button and scrim retain their visual press behavior without app
-haptics. Programmatic open/close is silent; accepted conversation or draft
-selection retains its existing selection feedback without another closing tick.
-`DrawerDragHaptics` owns only the initial side and consumes it on release or
-cancellation. The existing gesture recognizer, motion, geometry and spring remain
-unchanged. Inspected shipped drawer callers informed these trigger and recipe
-choices; runtime injection, feature flags and physical delivery in that app were
-not observed. Decompiled artifacts and addresses remain in the private corpus.
+acknowledgement. The conversation drawer plays one system selection tick on a
+horizontal drag release only when the chosen destination differs from its initial
+side and the drawer is strictly between its endpoints. Standard and Strong use
+the same tick. Cancelled drags, returns to the initial side, endpoint releases,
+touch-down, movement, settle, drawer-button and scrim taps, and programmatic
+open/close are silent. Accepted conversation or draft selection retains its
+selection feedback without another closing tick.
 Dynamic composer recovery buttons reserve their actual bounds from empty-space
 focus, just like the always-visible controls. Keyboard focus, typing, scrolling,
 tool events, upload percentages and usage updates stay silent.
@@ -178,13 +171,10 @@ call, scene exit, opt-out and strength changes release it. Reset/start/stop
 callbacks are generation-fenced. The layer does not activate audio or change
 its session, route or recording allowance.
 
-Inspected shipped UI behavior informed the recipe and reveal coupling.
 RemoteCoder deliberately uses a fixed opening budget across publications,
 one budget per message, no re-arming and no stale catch-up. These choices make
 feedback independent of chunk boundaries and keep bookkeeping constant per
-message. Static evidence does not establish which source-app rollout or device
-paths are enabled. Decompiled artifacts and addresses remain in the private
-research corpus. Core scheduling tests, hosted store/service tests and SDK
+message. Core scheduling tests, hosted store/service tests and SDK
 pattern export verify deterministic behavior. Requests and accepted-playback
 signposts do not establish physical feel, first-pulse latency or power impact;
 those require the test iPhone.
