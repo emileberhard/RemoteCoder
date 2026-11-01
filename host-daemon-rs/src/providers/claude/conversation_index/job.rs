@@ -249,21 +249,27 @@ impl Store {
         .await
     }
 
-    pub(crate) async fn admit_job_input<T: Send + 'static>(
+    pub(crate) async fn admit_input<T: Send + 'static>(
         &self,
         thread: &str,
-        handle: &JobHandle,
-        submit: impl FnOnce() -> T + Send + 'static,
-    ) -> Result<T> {
-        self.transact_job(thread, handle, move |saved| {
-            let saved = saved.as_ref().context("Claude job evidence is missing")?;
-            ensure!(
-                matches!(saved.phase, JobPhase::Executing),
-                "Claude job no longer admits input"
-            );
-            Ok(submit())
-        })
-        .await
+        handle: Option<&JobHandle>,
+        submit: impl FnOnce(Option<String>) -> std::io::Result<T> + Send + 'static,
+    ) -> Result<std::io::Result<T>> {
+        let (home, id) = (self.home.clone(), thread.to_owned());
+        if let Some(handle) = handle {
+            self.transact_job(thread, handle, move |saved| {
+                let saved = saved.as_ref().context("Claude job evidence is missing")?;
+                ensure!(
+                    matches!(saved.phase, JobPhase::Executing),
+                    "Claude job no longer admits input"
+                );
+                super::with_fork_note(&home, &id, submit)
+            })
+            .await
+        } else {
+            let guard = self.thread(thread).await.lock_owned().await;
+            super::under_guards(guard, move |_| super::with_fork_note(&home, &id, submit)).await?
+        }
     }
 
     async fn transact_job<T: Send + 'static>(

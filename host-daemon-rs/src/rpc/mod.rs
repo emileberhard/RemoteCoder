@@ -151,6 +151,7 @@ pub(crate) fn correlated_method(method: Option<&str>) -> Option<&'static str> {
     match method? {
         "turn/start" => Some("turn/start"),
         "turn/steer" => Some("turn/steer"),
+        "thread/fork" => Some("thread/fork"),
         method => history_page_method(Some(method)),
     }
 }

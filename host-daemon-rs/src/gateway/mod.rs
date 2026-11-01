@@ -7,6 +7,7 @@ pub(crate) mod agent_jobs_codex;
 mod agent_messages;
 mod agent_routes;
 mod cluster;
+mod fork_note;
 mod question_gateway;
 mod sessions;
 

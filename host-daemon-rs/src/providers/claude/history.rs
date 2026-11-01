@@ -492,6 +492,8 @@ impl Content {
                     .iter()
                     .filter(|block| block.kind == "text")
                     .filter_map(|block| block.text.as_deref())
+                    .map(crate::prompt_summary::without_remote_coder_note)
+                    .filter(|text| !text.trim().is_empty())
                     .collect::<Vec<_>>()
                     .join("\n");
                 if text.trim().is_empty() && blocks.iter().any(|block| block.kind == "image") {
@@ -500,7 +502,7 @@ impl Content {
                 text
             }
         };
-        let text = text.trim();
+        let text = crate::prompt_summary::without_remote_coder_note(&text).trim();
         if text.is_empty() || is_injected_user_text(text) || is_abort_marker(text) {
             return None;
         }

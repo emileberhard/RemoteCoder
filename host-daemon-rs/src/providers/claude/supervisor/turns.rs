@@ -765,6 +765,16 @@ impl ClaudeSupervisor {
         Ok(session_uuid)
     }
 
+    pub(crate) async fn record_fork_note(
+        &self,
+        thread_id: &str,
+        note: String,
+    ) -> anyhow::Result<()> {
+        self.conversation_index
+            .record_fork_note(thread_id, note)
+            .await
+    }
+
     pub(crate) fn is_minted(&self, thread_id: &str) -> anyhow::Result<bool> {
         self.conversation_index.is_minted(thread_id)
     }

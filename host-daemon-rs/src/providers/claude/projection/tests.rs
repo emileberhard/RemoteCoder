@@ -1408,3 +1408,38 @@ fn image_attachments_survive_live_and_history_user_items() {
         }
     }
 }
+
+#[test]
+fn context_notes_never_appear_in_plain_or_queued_user_history() {
+    let home = TempDir::new().unwrap();
+    let note = "<remotecoder_note>\nRemoteCoder note: hidden harness facts.\n</remotecoder_note>";
+    for queued in [false, true] {
+        for flattened in [false, true] {
+            let content = if flattened {
+                json!(format!("Only my words\n{note}"))
+            } else {
+                json!([{"type":"text","text":"Only my words"},{"type":"text","text":note}])
+            };
+            let mut records = sample_session();
+            records.push(if queued {
+                json!({"type":"attachment","uuid":"attachment","attachment":{"type":"queued_command","prompt":content,"source_uuid":"steer","commandMode":"prompt"}})
+            } else {
+                json!({"type":"user","uuid":"steer","cwd":CWD,"message":{"role":"user","content":content}})
+            });
+            let entries = all_entries(home.path(), "notes", &records, None);
+            let user = entries
+                .iter()
+                .find(|entry| entry["item"]["clientId"] == "steer")
+                .unwrap();
+            assert_eq!(
+                user["item"]["content"],
+                json!([{"type":"text","text":"Only my words","textElements":[]}])
+            );
+            assert!(
+                !serde_json::to_string(&entries)
+                    .unwrap()
+                    .contains("hidden harness facts")
+            );
+        }
+    }
+}

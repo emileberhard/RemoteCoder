@@ -85,9 +85,25 @@ fn recorded_inputs<'a>(
             && let Some(id) = ids.iter().find(|id| **id == recorded_id)
         {
             let text = match content {
-                Some(Value::String(text)) => Some(text.as_str()),
-                Some(Value::Array(parts)) if parts.len() == 1 && parts[0]["type"] == "text" => {
-                    parts[0]["text"].as_str()
+                Some(Value::String(text)) => {
+                    Some(crate::prompt_summary::without_remote_coder_note(text))
+                }
+                Some(Value::Array(parts)) => {
+                    let mut text = parts
+                        .iter()
+                        .filter_map(|part| {
+                            (part["type"] == "text")
+                                .then(|| part["text"].as_str())
+                                .flatten()
+                        })
+                        .map(crate::prompt_summary::without_remote_coder_note)
+                        .filter(|text| !text.is_empty());
+                    let first = text.next();
+                    if text.next().is_none() && parts.iter().all(|part| part["type"] == "text") {
+                        first
+                    } else {
+                        None
+                    }
                 }
                 _ => None,
             };

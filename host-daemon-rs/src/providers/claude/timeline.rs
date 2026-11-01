@@ -179,7 +179,7 @@ pub(crate) fn queued_user_prompt(record: &Value) -> Option<(String, &str)> {
 pub(crate) fn user_prompt_text(content: Option<&Value>) -> Option<String> {
     let text = match content? {
         Value::String(text) => {
-            let trimmed = text.trim();
+            let trimmed = crate::prompt_summary::without_remote_coder_note(text).trim();
             if trimmed.is_empty() {
                 return None;
             }
@@ -196,6 +196,8 @@ pub(crate) fn user_prompt_text(content: Option<&Value>) -> Option<String> {
                 .iter()
                 .filter(|part| part.get("type").and_then(Value::as_str) == Some("text"))
                 .filter_map(|part| part.get("text").and_then(Value::as_str))
+                .map(crate::prompt_summary::without_remote_coder_note)
+                .filter(|text| !text.trim().is_empty())
                 .collect::<Vec<_>>()
                 .join("\n");
             let trimmed = text.trim();
@@ -239,7 +241,8 @@ pub(crate) fn is_abort_marker(text: &str) -> bool {
 /// background-task completions, injected reminders, and the slash-command
 /// plumbing around local command execution. None of them carry a record-level
 /// flag, so they are recognized by the envelope itself.
-const INJECTED_TEXT_ENVELOPES: [&str; 7] = [
+const INJECTED_TEXT_ENVELOPES: [&str; 8] = [
+    crate::prompt_summary::REMOTE_CODER_NOTE_START,
     "<task-notification>",
     "<system-reminder>",
     "<local-command-caveat>",

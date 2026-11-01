@@ -51,6 +51,10 @@ impl Gateway {
                 format!("Could not fork Claude thread {source_thread}: {error:#}"),
             )
         };
+        let source_header = self
+            .claude_thread_response(&json!({"threadId": source_thread}))
+            .await?;
+        let note = super::fork_note::fork_note(&source_header["thread"]).map_err(failed)?;
         let session_uuid = agent.mint_session().await.map_err(failed)?;
         let thread_id = crate::providers::claude::claude_thread_id(&session_uuid);
         let ForkPoint { length, turns } = point;
@@ -65,6 +69,10 @@ impl Gateway {
                 .await
                 .map_err(failed)?;
         }
+        agent
+            .record_fork_note(&thread_id, note)
+            .await
+            .map_err(failed)?;
         let target = source_path.with_file_name(format!("{session_uuid}.jsonl"));
         let copy_session = session_uuid.clone();
         tokio::task::spawn_blocking(move || {
@@ -478,6 +486,82 @@ mod tests {
             "{argv:?}"
         );
         assert!(!argv.contains(&json!("--session-id")), "{argv:?}");
+    }
+
+    #[tokio::test]
+    async fn pending_fork_note_is_admitted_once_and_survives_restart_capture() {
+        let fixture = Fixture::new().await;
+        std::fs::write(&fixture.stub.settings.claude_path, r#"#!/usr/bin/env python3
+import json, os, sys
+from pathlib import Path
+state = Path(os.environ['CLAUDE_CONFIG_DIR']).parent / 'state'
+print(json.dumps({'type':'system','subtype':'init','apiKeySource':'none','fast_mode_state':'off','permissionMode':'bypassPermissions'}), flush=True)
+if '--no-session-persistence' in sys.argv:
+    print(json.dumps({'type':'result','subtype':'success','is_error':False,'result':'Detached title'}), flush=True)
+    sys.exit(0)
+for line in sys.stdin:
+    frame = json.loads(line)
+    if frame['type'] == 'user':
+        with (state / 'received.jsonl').open('a') as log:
+            log.write(json.dumps(frame) + '\n')
+"#).unwrap();
+        let response = fixture.fork(None).await;
+        let fork = response["result"]["thread"]["id"].as_str().unwrap();
+        let side = fixture
+            .agent
+            .detached_side_question(fork, &fixture.stub.cwd, "Which title?")
+            .await;
+        assert_eq!(side.unwrap(), "Detached title");
+        let started = fixture
+            .call(
+                "turn/start",
+                json!({"threadId":fork,
+            "clientUserMessageId":"fork-input", "input":[{"type":"text","text":"Continue here"}],
+            "cwd":fixture.stub.cwd, "model":"opus"}),
+            )
+            .await;
+        let turn = started["result"]["turn"]["id"].as_str().unwrap();
+        fixture.call("turn/steer", json!({"threadId":fork, "expectedTurnId":turn,
+            "clientUserMessageId":"followup", "input":[{"type":"text","text":"Also this"}],
+            "additionalContext":{"remote_coder_interaction_mode":{"kind":"application","value":"Do not copy mode instructions"}}})).await;
+        let received = fixture.stub.wait_for_log("received.jsonl", 2).await;
+        assert_eq!(
+            received[0]["message"]["content"][0]["text"],
+            "Continue here"
+        );
+        let note = received[0]["message"]["content"][1]["text"]
+            .as_str()
+            .unwrap();
+        assert!(note.contains("fork of \"Fork source\""), "{note}");
+        assert!(note.contains(&fixture.stub.cwd));
+        assert_eq!(received[1]["message"]["content"], "Also this");
+        let captured = fixture.agent.capture_for_restart().await;
+        let journal =
+            crate::providers::claude::restart::Journal::capture(None, captured, None).unwrap();
+        fixture.agent.stop_all().await;
+        let restored: crate::providers::claude::restart::Journal =
+            serde_json::from_slice(&serde_json::to_vec(&journal).unwrap()).unwrap();
+        let first = restored.items[0]
+            .queued_inputs
+            .iter()
+            .find(|input| input.client_id.as_deref() == Some("fork-input"))
+            .unwrap();
+        assert!(
+            first
+                .context_note
+                .as_deref()
+                .unwrap()
+                .contains("Fork source")
+        );
+        assert!(
+            !std::fs::read_dir(fixture.stub.claude_home.join("remotecoder-history"))
+                .unwrap()
+                .any(|entry| entry
+                    .unwrap()
+                    .path()
+                    .extension()
+                    .is_some_and(|extension| extension == "fork-note"))
+        );
     }
 
     #[tokio::test]

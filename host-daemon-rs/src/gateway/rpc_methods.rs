@@ -1471,6 +1471,12 @@ impl Gateway {
                 return Err(RpcError::new(RpcCode::InvalidParams, message));
             }
         };
+        if let Some(note) = params
+            .pointer("/additionalContext/remote_coder_steer_context/value")
+            .and_then(Value::as_str)
+        {
+            input.append_note(note);
+        }
         input.client_id = params
             .get("clientUserMessageId")
             .and_then(Value::as_str)

@@ -123,9 +123,12 @@ scoped receipt reads require the exact sender conversation.
 - Every authenticated remote WebSocket gets its own Unix WebSocket. The
   client's own `initialize`/`initialized`, request ids, capabilities,
   subscriptions, notifications and server requests pass through that exact
-  connection unchanged, with no global fan-out. The one deliberate annotation is
+  connection unchanged, with no global fan-out. The notification annotation is
   a top-level `rcSequence` on stored notifications, naming their
-  notification-history sequence without touching `params`.
+  notification-history sequence without touching `params`. Client fork responses
+  are also held until the control connection's best-effort fork-note injection
+  finishes, without changing the original response bytes (see *Steer and fork
+  context notes* in `docs/system-architecture.md`).
 - Every connection subscribed to a thread (clients, the control connection, a
   disconnect observer) receives the same notification, and the Claude
   translator is one more origin. History pairs a connection's copy with the
@@ -1448,6 +1451,13 @@ Claude. The `RC_CLAUDE_*` settings are in
     the next message empty and split its reply into an agent-initiated turn.
   - The billing guard runs on every `system/init`, including per-turn ones that
     arrive outside a turn and therefore reach no translator.
+- **Context notes stay separate from user text.** The shared wire key and note
+  envelope are defined in `docs/system-architecture.md`, *Steer and fork context
+  notes*. Claude steering accepts only the screen-context entry, never arbitrary
+  additional context. `ClaudeUserInput.context_note` owns the separate block and
+  restart persistence. `prompt_summary` owns the reserved envelope constants;
+  every provider-text reader must remove it before showing or judging user words,
+  including queued-command replay and exact-delivery fingerprints.
 - **Steering folds into one result.** Streaming input folds steering into the
   active query, and the next CLI `result` is authoritative for the whole turn.
   Never expect one result per steered input: the gateway would suppress the real
@@ -1577,7 +1587,11 @@ Claude. The `RC_CLAUDE_*` settings are in
   - The index keeps the kept turns' identities, including reasoning and plan
     rows, through `ClaudeSupervisor::fork_thread_records`. Session metadata copies
     the source's current model, effort and Fast selection at revision 1. Both
-    are written before the transcript, which appears atomically last. A
+    and a pending fork note beside `.minted` are written before the transcript,
+    which appears atomically last. The common supervisor input submission admits
+    that note once, covering text, agent messages, voice and restart paths; it
+    deletes the pending file only after queue admission. The admitted input owns
+    the note through restart capture. Never append synthetic provider records. A
     failure or cancellation before then leaves no visible thread, only records
     under the unused id: its creation record and index copy, which nothing
     reads, and its metadata record, which metadata reads still return. Once

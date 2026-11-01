@@ -378,7 +378,7 @@ struct ControlCancelFrame<'a> {
 }
 
 pub(super) struct PreparedInput {
-    input: ClaudeUserInput,
+    pub(super) input: ClaudeUserInput,
     raw: Vec<u8>,
 }
 
@@ -518,6 +518,37 @@ mod capacity_tests {
     use super::*;
     use crate::providers::claude::input::ClaudeImage;
     use serde_json::json;
+
+    #[test]
+    fn context_notes_are_separate_blocks_after_the_users_words_with_or_without_images() {
+        for images in [
+            vec![],
+            vec![ClaudeImage {
+                media_type: "image/png".into(),
+                base64_data: "QUJD".into(),
+            }],
+        ] {
+            let mut input = ClaudeUserInput {
+                client_id: Some("exact-user".into()),
+                images,
+                ..ClaudeUserInput::text("My own words")
+            };
+            input.append_note("RemoteCoder note: visible <tail>.");
+            let prepared = InputWriter::prepare_input(&input).unwrap();
+            let frame: Value = serde_json::from_slice(&prepared.raw).unwrap();
+            assert_eq!(frame["uuid"], "exact-user");
+            let blocks = frame["message"]["content"].as_array().unwrap();
+            assert_eq!(blocks[0], json!({"type":"text", "text":"My own words"}));
+            assert_eq!(
+                blocks[1],
+                json!({"type":"text", "text":"<remotecoder_note>\nRemoteCoder note: visible &lt;tail&gt;.\n</remotecoder_note>"})
+            );
+            assert_eq!(blocks.len(), 2 + input.images.len());
+            if !input.images.is_empty() {
+                assert_eq!(blocks[2]["type"], "image");
+            }
+        }
+    }
 
     #[tokio::test]
     async fn a_reserved_slot_cannot_enqueue_after_stop_claims_input() {
