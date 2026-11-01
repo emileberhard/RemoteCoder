@@ -32,21 +32,24 @@ systemctl daemon-reload
 systemctl enable --quiet remote-coder-relay-hosts
 systemctl restart remote-coder-relay-hosts
 
-install -m 0644 "$src/sshd.conf" /etc/ssh/sshd_config.d/remote-coder-relay.conf
-rm -f /etc/ssh/sshd_config.d/00-hostup-auth.conf /etc/ssh/sshd_config.d/50-cloud-init.conf
+install -m 0644 "$src/sshd.conf" /etc/ssh/sshd_config.d/00-0-remote-coder-relay.conf
+rm -f /etc/ssh/sshd_config.d/00-hostup-auth.conf /etc/ssh/sshd_config.d/50-cloud-init.conf /etc/ssh/sshd_config.d/remote-coder-relay.conf
 sshd -t
 check_sshd() {
     local sshd_config
     sshd_config="$(sshd -T "$@")"
-    grep -qx 'pubkeyauthentication yes' <<<"$sshd_config"
-    grep -qx 'passwordauthentication no' <<<"$sshd_config"
-    grep -qx 'kbdinteractiveauthentication no' <<<"$sshd_config"
-    grep -qx 'permitrootlogin without-password' <<<"$sshd_config"
+    for expected in 'pubkeyauthentication yes' 'passwordauthentication no' 'kbdinteractiveauthentication no' 'permitrootlogin without-password'; do
+        grep -qx "$expected" <<<"$sshd_config" || { echo "Unexpected sshd configuration ($*): expected $expected" >&2; return 1; }
+    done
 }
 check_sshd
 for user in root relay-tunnel; do
     check_sshd -C "user=$user,host=localhost,addr=127.0.0.1"
 done
+if [[ -n ${SSH_CONNECTION:-} ]]; then
+    read -r remote_addr remote_port local_addr local_port <<<"$SSH_CONNECTION"
+    check_sshd -C "user=root,host=$remote_addr,addr=$remote_addr,laddr=$local_addr,lport=$local_port"
+fi
 
 install -m 0644 "$src/unattended-upgrades.conf" /etc/apt/apt.conf.d/52remote-coder-relay
 systemctl unmask --quiet apt-daily.timer apt-daily.service apt-daily-upgrade.timer apt-daily-upgrade.service unattended-upgrades.service
