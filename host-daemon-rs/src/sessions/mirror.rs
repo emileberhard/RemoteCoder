@@ -255,9 +255,9 @@ pub(crate) fn fetch(store: &Store, host: &str, request: Fetch) -> Result<Value> 
     let local:String=db.query_row("SELECT local_path FROM source WHERE origin_host=?1 AND path=?2 UNION SELECT d.local_path FROM dependency d JOIN source s USING(source_id) WHERE s.origin_host=?1 AND d.path=?2 LIMIT 1",params![host,request.path],|r|r.get(0)).context("not_found: path is not session evidence owned by this host")?;
     let mut file = File::open(local)?;
     let before = file.metadata()?;
+    let identity = ingest::identity(&before);
     ensure!(
-        ingest::identity(&before) == request.identity
-            && ingest::identity(&before) == request.revision,
+        identity == request.identity && identity == request.revision,
         "conflict: source revision changed; relist and restart this file"
     );
     ensure!(

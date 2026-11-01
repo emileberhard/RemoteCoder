@@ -123,9 +123,7 @@ pub(crate) struct SessionHeader {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SessionPage {
-    #[serde(default)]
     pub warnings: Vec<String>,
-    #[serde(default)]
     pub complete: bool,
     pub sessions: Vec<SessionHeader>,
     pub cursor: Option<String>,
