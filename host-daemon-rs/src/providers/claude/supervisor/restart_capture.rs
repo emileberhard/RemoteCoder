@@ -259,6 +259,7 @@ impl ClaudeSupervisor {
                 "the resumed messages could not be checked against the history: {error:#}"
             ))
         })?;
+        let frames = self.unheld(&item.thread_id, frames).await;
         self.reprepare_captured_callbacks(&item.thread_id, &frames)
             .await?;
         let mut frames = frames.into_iter();
@@ -368,14 +369,33 @@ impl ClaudeSupervisor {
         .await?
     }
 
+    async fn unheld(&self, thread_id: &str, frames: Vec<ClaudeUserInput>) -> Vec<ClaudeUserInput> {
+        let held = self
+            .runtimes
+            .lock()
+            .await
+            .get(thread_id)
+            .map(|runtime| {
+                runtime
+                    .input
+                    .unconsumed()
+                    .pending()
+                    .into_iter()
+                    .filter_map(|input| input.client_id)
+                    .collect::<HashSet<_>>()
+            })
+            .unwrap_or_default();
+        frames
+            .into_iter()
+            .filter(|frame| frame.client_id.as_ref().is_none_or(|id| !held.contains(id)))
+            .collect()
+    }
+
     async fn reprepare_captured_callbacks(
         &self,
         thread_id: &str,
         frames: &[ClaudeUserInput],
     ) -> Result<(), TurnStartError> {
-        if self.has_runtime(thread_id).await {
-            return Ok(());
-        }
         let inputs = frames
             .iter()
             .filter_map(|frame| frame.client_id.clone())
@@ -478,6 +498,7 @@ mod tests {
     use super::*;
     use crate::agents::mcp::McpTokens;
     use crate::observability::journal::Journal;
+    use crate::providers::claude::conversation_index::{Delivery, DeliveryState, delivery_uuid};
     use crate::providers::claude::restart::Cause;
     use crate::providers::claude::restart::test_support::{SESSION, StubClaude, THREAD};
     use crate::providers::claude::supervisor::signal_group;
@@ -532,24 +553,81 @@ mod tests {
             }
         }
 
+        fn turn(&self, text: &str) -> ClaudeTurnRequest {
+            ClaudeTurnRequest {
+                thread_id: THREAD.to_owned(),
+                session_uuid: SESSION.to_owned(),
+                first_turn: false,
+                input: ClaudeUserInput::text(text),
+                selection: ClaudeSelection {
+                    model: "opus".to_owned(),
+                    effort: Some("max".to_owned()),
+                    fast: true,
+                },
+                cwd: self.stub.cwd.clone(),
+            }
+        }
+
         async fn running_turn(&self) {
+            self.agent.start_turn(self.turn("long task")).await.unwrap();
+            self.stub.wait_for_log("received.jsonl", 1).await;
+        }
+
+        async fn captured_callback(&mut self) -> (Item, ClaudeUserInput) {
+            self.running_turn().await;
+            let mut item = self.agent.capture_for_restart().await.remove(0);
+            self.agent.suspend(THREAD).await;
+            self.next_completion().await;
+            self.agent.stop_all().await;
+            let callback = ClaudeUserInput {
+                client_id: Some(delivery_uuid(THREAD, CALLBACK)),
+                is_synthetic: true,
+                ..ClaudeUserInput::text("child result")
+            };
+            item.queued_inputs.push(callback.clone());
             self.agent
-                .start_turn(ClaudeTurnRequest {
-                    thread_id: THREAD.to_owned(),
-                    session_uuid: SESSION.to_owned(),
-                    first_turn: false,
-                    input: ClaudeUserInput::text("long task"),
-                    selection: ClaudeSelection {
-                        model: "opus".to_owned(),
-                        effort: Some("max".to_owned()),
-                        fast: true,
-                    },
-                    cwd: self.stub.cwd.clone(),
+                .conversation_index
+                .transact_parent(THREAD, |parent| {
+                    parent.record_delivery(Delivery {
+                        id: CALLBACK.to_owned(),
+                        fingerprint: crate::ids::sha256_hex(b"child result"),
+                        state: DeliveryState::Submitted,
+                        receipt: Value::Null,
+                    });
+                    Ok(())
                 })
                 .await
                 .unwrap();
-            self.stub.wait_for_log("received.jsonl", 1).await;
+            (item, callback)
         }
+
+        fn replacement(
+            &self,
+        ) -> (
+            Arc<ClaudeSupervisor>,
+            mpsc::Receiver<crate::providers::claude::ClaudeNotification>,
+        ) {
+            let (sender, events) = mpsc::channel(256);
+            let replacement = ClaudeSupervisor::new(
+                self.stub.settings.clone(),
+                sender,
+                Journal::disabled(),
+                McpTokens::default(),
+            );
+            (replacement, events)
+        }
+    }
+
+    const CALLBACK: &str = "agent-child:completion";
+
+    async fn callback_state(agent: &ClaudeSupervisor) -> Option<DeliveryState> {
+        agent
+            .conversation_index
+            .parent(THREAD)
+            .await
+            .unwrap()
+            .delivery(CALLBACK)
+            .map(|delivery| delivery.state)
     }
 
     #[tokio::test]
@@ -638,54 +716,89 @@ mod tests {
 
     #[tokio::test]
     async fn resume_resubmits_a_captured_callback_that_history_never_recorded() {
-        use crate::providers::claude::conversation_index::{
-            Delivery, DeliveryState, delivery_uuid,
-        };
         let mut fixture = Fixture::new();
-        fixture.running_turn().await;
-        let mut item = fixture.agent.capture_for_restart().await.remove(0);
-        fixture.agent.suspend(THREAD).await;
-        fixture.next_completion().await;
-        fixture.agent.stop_all().await;
-        let delivery_id = "agent-child:completion";
-        let input = delivery_uuid(THREAD, delivery_id);
-        item.queued_inputs.push(ClaudeUserInput {
-            client_id: Some(input.clone()),
-            is_synthetic: true,
-            ..ClaudeUserInput::text("child result")
-        });
-        fixture
-            .agent
-            .conversation_index
-            .transact_parent(THREAD, move |parent| {
-                parent.record_delivery(Delivery {
-                    id: delivery_id.to_owned(),
-                    fingerprint: crate::ids::sha256_hex(b"child result"),
-                    state: DeliveryState::Submitted,
-                    receipt: Value::Null,
-                });
-                Ok(())
-            })
-            .await
-            .unwrap();
+        let (item, callback) = fixture.captured_callback().await;
+        let (replacement, _events) = fixture.replacement();
 
-        let (sender, _events) = mpsc::channel(256);
-        let replacement = ClaudeSupervisor::new(
-            fixture.stub.settings.clone(),
-            sender,
-            Journal::disabled(),
-            McpTokens::default(),
-        );
         replacement.resume_with_notice(&item).await.unwrap();
         let received = fixture.stub.wait_for_log("received.jsonl", 3).await;
-        let parent = replacement.conversation_index.parent(THREAD).await.unwrap();
+        let state = callback_state(&replacement).await;
         replacement.stop_all().await;
 
-        assert_eq!(received[2]["uuid"], json!(input));
+        assert_eq!(received[2]["uuid"], json!(callback.client_id));
+        assert_eq!(state, Some(DeliveryState::Submitted));
+    }
+
+    #[tokio::test]
+    async fn resume_delivers_a_captured_callback_once_after_another_turn_started_its_parent() {
+        let mut fixture = Fixture::new();
+        let (item, callback) = fixture.captured_callback().await;
+        let (replacement, _events) = fixture.replacement();
+        replacement
+            .start_turn(fixture.turn("user turn after restart"))
+            .await
+            .unwrap();
+        fixture.stub.wait_for_log("received.jsonl", 2).await;
+
+        let resumed = replacement.resume_with_notice(&item).await.unwrap();
+        let retried = replacement.resume_with_notice(&item).await.unwrap();
+        let received = fixture.stub.wait_for_log("received.jsonl", 4).await;
+        let state = callback_state(&replacement).await;
+        replacement.stop_all().await;
+
+        assert!(matches!(resumed, ResumeDelivery::Steered(_)));
+        assert!(matches!(retried, ResumeDelivery::Recorded));
         assert_eq!(
-            parent.delivery(delivery_id).map(|delivery| delivery.state),
-            Some(DeliveryState::Submitted)
+            received
+                .iter()
+                .filter(|frame| frame["uuid"] == json!(callback.client_id))
+                .count(),
+            1
         );
+        assert_eq!(state, Some(DeliveryState::Submitted));
+    }
+
+    #[tokio::test]
+    async fn resume_leaves_a_callback_the_running_process_still_holds() {
+        let mut fixture = Fixture::new();
+        let (item, callback) = fixture.captured_callback().await;
+        let (replacement, _events) = fixture.replacement();
+        replacement
+            .start_turn(fixture.turn("user turn after restart"))
+            .await
+            .unwrap();
+        fixture.stub.wait_for_log("received.jsonl", 2).await;
+        let input = replacement
+            .runtimes
+            .lock()
+            .await
+            .get(THREAD)
+            .map(|runtime| runtime.input.clone())
+            .unwrap();
+        input
+            .unconsumed()
+            .queue(Some(callback.clone()), || {})
+            .unwrap();
+
+        let resumed = replacement.resume_with_notice(&item).await.unwrap();
+        let fence = ClaudeUserInput {
+            client_id: Some("fence".to_owned()),
+            ..ClaudeUserInput::text("fence")
+        };
+        input.send_input(&fence).await.unwrap();
+        let received = fixture.stub.wait_for_log("received.jsonl", 4).await;
+        let state = callback_state(&replacement).await;
+        replacement.stop_all().await;
+
+        assert!(matches!(resumed, ResumeDelivery::Steered(_)));
+        assert_eq!(
+            received[2..]
+                .iter()
+                .map(|frame| frame["uuid"].clone())
+                .collect::<Vec<_>>(),
+            [json!(item.recovery_id), json!("fence")]
+        );
+        assert_eq!(state, Some(DeliveryState::Submitted));
     }
 
     #[tokio::test]
