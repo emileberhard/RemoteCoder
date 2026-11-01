@@ -1,5 +1,9 @@
 import SwiftUI
+#if os(macOS)
+import AppKit
+#else
 import UIKit
+#endif
 
 struct ShimmerEffect: ViewModifier {
     let isActive: Bool
@@ -27,61 +31,145 @@ struct ShimmerEffect: ViewModifier {
     }
 }
 
-private struct ShimmerBand: UIViewRepresentable {
-    func makeUIView(context: Context) -> ShimmerBandView {
-        ShimmerBandView()
-    }
+#if os(macOS)
+private struct ShimmerBand: NSViewRepresentable {
+    func makeNSView(context: Context) -> ShimmerBandView { ShimmerBandView() }
 
-    func updateUIView(_ view: ShimmerBandView, context: Context) {
-        view.update(
+    func updateNSView(_ view: ShimmerBandView, context: Context) {
+        view.shimmer.update(
             color: Color.appSystemBackground.resolve(in: context.environment),
-            direction: context.environment.layoutDirection
+            direction: context.environment.layoutDirection,
+            size: view.bounds.size
         )
     }
+
+    static func dismantleNSView(_ view: ShimmerBandView, coordinator: ()) { view.stop() }
 }
 
-private final class ShimmerBandView: UIView {
-    private static let period: CFTimeInterval = 1.5
-    private let container = CALayer()
-    private let band = CAGradientLayer()
-    private var color: Color.Resolved?
-    private var direction = LayoutDirection.leftToRight
-    private var geometrySize = CGSize.zero
+private final class ShimmerBandView: NSView {
+    let shimmer = ShimmerBandLayers()
+
+    override var isFlipped: Bool { true }
 
     init() {
         super.init(frame: .zero)
-        isUserInteractionEnabled = false
-        band.startPoint = CGPoint(x: 0, y: 0.5)
-        band.endPoint = CGPoint(x: 1, y: 0.5)
-        layer.addSublayer(container)
-        container.addSublayer(band)
+        let root = CALayer()
+        root.addSublayer(shimmer.container)
+        layer = root
+        wantsLayer = true
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { nil }
 
-    func update(color: Color.Resolved, direction: LayoutDirection) {
+    override func layout() {
+        super.layout()
+        shimmer.layout(size: bounds.size)
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        stop()
+        if let window {
+            NotificationCenter.default.addObserver(self, selector: #selector(visibilityChanged),
+                name: NSWindow.didChangeOcclusionStateNotification, object: window)
+            NotificationCenter.default.addObserver(self, selector: #selector(windowWillClose),
+                name: NSWindow.willCloseNotification, object: window)
+        }
+        visibilityChanged()
+    }
+
+    func stop() {
+        NotificationCenter.default.removeObserver(self, name: NSWindow.didChangeOcclusionStateNotification, object: nil)
+        NotificationCenter.default.removeObserver(self, name: NSWindow.willCloseNotification, object: nil)
+        shimmer.setVisible(false)
+    }
+
+    @objc private func visibilityChanged() {
+        shimmer.setVisible(window?.occlusionState.contains(.visible) == true)
+    }
+
+    @objc private func windowWillClose() { shimmer.setVisible(false) }
+}
+#else
+private struct ShimmerBand: UIViewRepresentable {
+    func makeUIView(context: Context) -> ShimmerBandView { ShimmerBandView() }
+
+    func updateUIView(_ view: ShimmerBandView, context: Context) {
+        view.shimmer.update(
+            color: Color.appSystemBackground.resolve(in: context.environment),
+            direction: context.environment.layoutDirection,
+            size: view.bounds.size
+        )
+    }
+
+    static func dismantleUIView(_ view: ShimmerBandView, coordinator: ()) { view.shimmer.setVisible(false) }
+}
+
+private final class ShimmerBandView: UIView {
+    let shimmer = ShimmerBandLayers()
+
+    init() {
+        super.init(frame: .zero)
+        isUserInteractionEnabled = false
+        layer.addSublayer(shimmer.container)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        shimmer.layout(size: bounds.size)
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        shimmer.setVisible(window != nil)
+    }
+}
+#endif
+
+@MainActor
+private final class ShimmerBandLayers {
+    private static let period: CFTimeInterval = 1.5
+    let container = CALayer()
+    private let band = CAGradientLayer()
+    private var color: Color.Resolved?
+    private var direction = LayoutDirection.leftToRight
+    private var geometrySize = CGSize.zero
+    private var isVisible = false
+
+    init() {
+        band.startPoint = CGPoint(x: 0, y: 0.5)
+        band.endPoint = CGPoint(x: 1, y: 0.5)
+        container.addSublayer(band)
+    }
+
+    func update(color: Color.Resolved, direction: LayoutDirection, size: CGSize) {
         if self.color != color {
             self.color = color
             CATransaction.begin()
             CATransaction.setDisableActions(true)
-            let tint = UIColor(cgColor: color.cgColor)
             band.colors = (0..<16).map { index in
-                tint.withAlphaComponent(0.8 * pow(sin(Double(index) * 0.2), 10)).cgColor
+                guard let tint = color.cgColor.copy(alpha: 0.8 * pow(sin(Double(index) * 0.2), 10)) else {
+                    preconditionFailure("Shimmer tint does not support alpha")
+                }
+                return tint
             }
             CATransaction.commit()
         }
         if self.direction != direction {
             self.direction = direction
             geometrySize = .zero
-            setNeedsLayout()
         }
+        layout(size: size)
     }
 
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        guard bounds.size != geometrySize else { return }
-        geometrySize = bounds.size
+    func layout(size: CGSize) {
+        guard size != geometrySize else { return }
+        geometrySize = size
+        let bounds = CGRect(origin: .zero, size: size)
         guard bounds.width > 0, bounds.height > 0 else {
             stop()
             return
@@ -101,10 +189,11 @@ private final class ShimmerBandView: UIView {
         animate()
     }
 
-    override func didMoveToWindow() {
-        super.didMoveToWindow()
-        if window == nil { stop() }
-        else { animate() }
+    func setVisible(_ visible: Bool) {
+        guard isVisible != visible else { return }
+        isVisible = visible
+        if visible { animate() }
+        else { stop() }
     }
 
     private func stop() {
@@ -112,7 +201,7 @@ private final class ShimmerBandView: UIView {
     }
 
     private func animate() {
-        guard window != nil, geometrySize.width > 0, geometrySize.height > 0 else { return }
+        guard isVisible, geometrySize.width > 0, geometrySize.height > 0 else { return }
         let movement = CABasicAnimation(keyPath: "transform.translation.x")
         movement.fromValue = -container.bounds.width
         movement.toValue = container.bounds.width
