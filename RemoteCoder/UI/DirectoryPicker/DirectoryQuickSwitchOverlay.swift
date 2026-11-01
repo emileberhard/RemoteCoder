@@ -23,7 +23,12 @@ private struct DirectoryQuickSwitchHost: ViewModifier {
                             .id(session.id)
                     }
                 }
-                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { picker.updateViewport($0) }
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame in
+                    #if RC_PERF_HARNESS
+                    PerfBuild.count("directory.viewportGeometry")
+                    #endif
+                    picker.updateViewport(frame)
+                }
                 // A recognized hold belongs to the header, not a new overlay recognizer.
                 .allowsHitTesting(false)
                 .accessibilityHidden(true)

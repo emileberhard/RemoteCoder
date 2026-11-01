@@ -144,7 +144,12 @@ struct CompletionNotificationOverlay: UIViewRepresentable {
                         .frame(maxWidth: 600)
                         .offset(drag)
                         .opacity(isLeaving ? 0 : 1 - min(hypot(drag.width, drag.height) / 400, 0.35))
-                        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { onBoundsChange($0) }
+                        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame in
+                            #if RC_PERF_HARNESS
+                            PerfBuild.count("completion.bannerGeometry")
+                            #endif
+                            onBoundsChange(frame)
+                        }
                         .padding(.horizontal, 16)
                         .padding(.top, 10)
                         .transition(reduceMotion ? .opacity : .move(edge: .top).combined(with: .opacity))

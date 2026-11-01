@@ -220,7 +220,12 @@ private struct ReasoningPickerHost: ViewModifier {
                             .transition(.identity)
                     }
                 }
-                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { picker.updateViewport($0) }
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame in
+                    #if RC_PERF_HARNESS
+                    PerfBuild.count("reasoning.viewportGeometry")
+                    #endif
+                    picker.updateViewport(frame)
+                }
             }
             .onChange(of: scenePhase) { if scenePhase != .active { picker.dismissImmediately() } }
             .onDisappear { picker.dismissImmediately() }
