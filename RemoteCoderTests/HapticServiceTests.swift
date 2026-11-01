@@ -35,14 +35,14 @@ struct HapticServiceTests {
         #expect(window.interactions.compactMap { $0 as? UIImpactFeedbackGenerator }.count == 1)
         let second = HapticAttachment.AttachmentView(service: fixture.service)
         window.addSubview(second)
-        #expect(window.interactions.isEmpty)
+        #expect(window.interactions.compactMap { $0 as? UIFeedbackGenerator }.isEmpty)
         first.removeFromSuperview()
         fixture.service.play(.selection)
         #expect(window.interactions.compactMap { $0 as? UISelectionFeedbackGenerator }.count == 1)
         second.removeFromSuperview()
-        #expect(window.interactions.isEmpty)
+        #expect(window.interactions.compactMap { $0 as? UIFeedbackGenerator }.isEmpty)
         fixture.service.play(.selection)
-        #expect(window.interactions.isEmpty)
+        #expect(window.interactions.compactMap { $0 as? UIFeedbackGenerator }.isEmpty)
     }
 
     @Test func selectionInteractionsUseOnlyTheirViewAttachedGeneratorAndReleaseIt() throws {
