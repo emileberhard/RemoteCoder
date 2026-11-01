@@ -101,24 +101,11 @@ impl JobOwner {
         ) {
             return Ok(());
         }
-        if inspection["outcome"]["state"] != "known" {
+        let Some(outcome) = super::codex::terminal_outcome(&inspection)? else {
             return self.record_unknown(job, format!(
                 "The exact native turn has no terminal evidence ({}). This job only observes; it will not submit, retry or recover native execution.",
                 inspection["outcome"]["reason"].as_str().unwrap_or("evidence unavailable"),
             )).await;
-        }
-        let outcome = match inspection["outcome"]["status"].as_str() {
-            Some("completed") => JobOutcome::Completed,
-            Some("failed") => JobOutcome::Failed {
-                reason: inspection["outcome"]["error"]["message"]
-                    .as_str()
-                    .unwrap_or("native turn failed; its error detail is unavailable")
-                    .to_owned(),
-            },
-            Some("interrupted") => JobOutcome::Stopped {
-                effects: EffectEvidence::MayHaveRun,
-            },
-            _ => anyhow::bail!("native inspection returned an unsupported terminal outcome"),
         };
         let terminal_binding = ExecutionBinding {
             turn_id: inspection["executionTurnId"]

@@ -209,44 +209,25 @@ pub(crate) async fn inspect(gateway: &Arc<Gateway>, job: &JobRecord) -> Result<I
         inspected["executionTurnId"].as_str() == Some(accepted.turn_id.as_str()),
         "exact Codex inspection returned another execution"
     );
-    if inspected["outcome"]["state"] == "known" {
-        let outcome = match inspected["outcome"]["status"].as_str() {
-            Some("completed") => JobOutcome::Completed,
-            Some("failed")
-                if accepted.has(NativeInputFact::Recorded)
-                    && super::retry::is_transient(&inspected["outcome"]["error"])
-                    && job.provider_retries.len() < super::retry::MAX_PROVIDER_RETRIES =>
+    if let Some(mut outcome) = terminal_outcome(&inspected)? {
+        if let JobOutcome::Failed { reason } = &mut outcome
+            && super::retry::is_transient(&inspected["outcome"]["error"])
+        {
+            if accepted.has(NativeInputFact::Recorded)
+                && job.provider_retries.len() < super::retry::MAX_PROVIDER_RETRIES
             {
                 return Ok(Inspection::TransientFailure {
                     binding,
-                    reason: inspected["outcome"]["error"]["message"]
-                        .as_str()
-                        .unwrap_or("transient native provider failure")
-                        .to_owned(),
+                    reason: reason.clone(),
                 });
             }
-            Some("failed") => JobOutcome::Failed {
-                reason: {
-                    let reason = inspected["outcome"]["error"]["message"]
-                        .as_str()
-                        .unwrap_or("the native turn failed without a recorded error message");
-                    if job.provider_retries.len() == super::retry::MAX_PROVIDER_RETRIES
-                        && super::retry::is_transient(&inspected["outcome"]["error"])
-                    {
-                        format!(
-                            "provider retry budget exhausted after {} retries: {reason}",
-                            job.provider_retries.len()
-                        )
-                    } else {
-                        reason.to_owned()
-                    }
-                },
-            },
-            Some("interrupted") => JobOutcome::Stopped {
-                effects: EffectEvidence::MayHaveRun,
-            },
-            _ => bail!("Codex inspection returned an unsupported terminal status"),
-        };
+            if job.provider_retries.len() == super::retry::MAX_PROVIDER_RETRIES {
+                *reason = format!(
+                    "provider retry budget exhausted after {} retries: {reason}",
+                    job.provider_retries.len()
+                );
+            }
+        }
         return Ok(Inspection::Finished {
             outcome,
             result: final_result(gateway, &binding).await?,
@@ -277,6 +258,25 @@ fn unresolved_activity(inspected: &Value, terminal: bool, binding: ExecutionBind
             reason: format!("exact Codex terminal evidence is unavailable: {reason}"),
         },
     }
+}
+
+pub(super) fn terminal_outcome(inspection: &Value) -> Result<Option<JobOutcome>> {
+    if inspection["outcome"]["state"] != "known" {
+        return Ok(None);
+    }
+    Ok(Some(match inspection["outcome"]["status"].as_str() {
+        Some("completed") => JobOutcome::Completed,
+        Some("failed") => JobOutcome::Failed {
+            reason: inspection["outcome"]["error"]["message"]
+                .as_str()
+                .unwrap_or("the native turn failed without a recorded error message")
+                .to_owned(),
+        },
+        Some("interrupted") => JobOutcome::Stopped {
+            effects: EffectEvidence::MayHaveRun,
+        },
+        _ => bail!("native inspection returned an unsupported terminal status"),
+    }))
 }
 
 pub(crate) async fn recover(gateway: &Arc<Gateway>, job: &JobRecord) -> Result<ExecutionBinding> {
