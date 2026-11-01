@@ -121,11 +121,30 @@ try {
     assert.equal(parentResult.job.spec.kind, "unknown");
     await callback(parentJob.jobId);
     assert.equal((await nativeJobs(adopted)).length, 2);
+    checkpoint("detached captured caller after tool exit");
+    const detached = await nativeThread();
+    const captureFile = lab.path("detached-caller.json");
+    const captureCommand = [binary, "--env-file", lab.path("gateway.env"), "agent", "capture", "--json"]
+        .map(part => `'${part.replaceAll("'", "'\\''")}'`).join(" ") + ` > '${captureFile}'`;
+    const captureMarker = `${Buffer.from(captureCommand).toString("base64url")}.detached-caller`;
+    await nativeTurn(detached, `RCJOB_SPAWNHOLD:${captureMarker}`, "detached-capture-input");
+    await lab.waitFor(() => model.requests.some(request => request.name === captureMarker && request.answered));
+    const captured = JSON.parse(await Bun.file(captureFile).text());
+    assert.equal(captured.threadId, detached);
+    const detachedReceipt = await agent("message", parent, "RCJOB_ECHO:detached-result",
+        "--caller-context", captured.contextId, "--delivery-id", "detached-completion");
+    assert.equal(detachedReceipt.deliveryState.kind, "accepted");
+    assert.equal(detachedReceipt.sender.conversation.threadId, detached);
+    await lab.waitFor(async () => JSON.stringify(await rpc("thread/items/list", {
+        threadId: parent, limit: 100, sortDirection: "desc",
+    })).includes("detached-completion"));
+    model.release("detached-caller");
+    await waitNative(detached);
     client.ws.close();
     console.log(JSON.stringify({ passed: true, jobs: [first.jobId, second.jobId, third.jobId],
         agentId: first.agentId, threadId: third.provider_session_id, sameReceipt: true,
         selfHost: self.name, topLevelLifecycle: true, nativeJobs: [adoptedJob.jobId, parentJob.jobId],
-        nativeCallbacks: 2, appTurnWithoutCallback: true, steeringRetainsObligation: true }));
+        nativeCallbacks: 2, appTurnWithoutCallback: true, steeringRetainsObligation: true, detachedCallerAfterExit: true }));
 } catch (error) {
     failure = new Error(`Agent API probe failed during ${stage}`, { cause: error });
     if (observedJob) {

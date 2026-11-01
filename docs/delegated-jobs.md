@@ -259,9 +259,12 @@ error. This fixes the SSH-launched Claude caller failure present in 3.74.0 and
 `aa96ebb`: their eager walk could reach a privileged SSH launcher before checking
 the valid Claude owner. It never trusts `AGENT_ID`, provider environment IDs or tmux's
 global environment. Capture briefly rechecks an unpublished process entry,
-without changing the requested identity. The ephemeral captured handle is
-revalidated before every mutation; detached work must pass it explicitly and
-fails actionably when its owner is gone. Deliberate standalone work selects
+without changing the requested identity. The captured handle is conversation-scoped, unguessable, bounded to 1,024
+in-memory entries and lost on gateway restart. Detached work passes it explicitly;
+its capturing tool process and turn may end. Codex capture freezes the exact
+conversation in this gateway's fixed provider home; tool-process re-proof is not
+conversation ownership. Claude use checks the exact runtime or native inbox owner
+against the captured PID/birth and conversation, refusing a changed owner. Deliberate standalone work selects
 operator intent explicitly.
 
 The JobOwner owns one Unix coordination listener for the gateway lifetime,

@@ -312,11 +312,39 @@ impl Gateway {
             }),
             Caller::Captured { context_id } => {
                 let saved = self.jobs.contexts.get(context_id).await?;
-                let current = self.job_process_context(saved.process).await?;
-                ensure!(
-                    saved.same_owner(&current),
-                    "captured caller owner changed; recapture from the originating agent"
-                );
+                if saved.conversation.provider == Provider::Claude {
+                    let managed = match self.claude_agent() {
+                        Some(provider) => provider
+                            .owned_process_session(saved.process.pid, saved.process.started_micros)
+                            .await
+                            .map(|(thread, _)| thread),
+                        None => None,
+                    };
+                    let current = match managed {
+                        Some(thread) => {
+                            ensure!(
+                                crate::platform::process::identify(saved.process.pid)?
+                                    .is_some_and(|process| process.started_micros
+                                        == saved.process.started_micros),
+                                "captured Claude runtime owner is no longer live"
+                            );
+                            Some(thread)
+                        }
+                        None => crate::providers::claude::native_parent::prove_owner(
+                            &self.claude_settings.claude_home,
+                            saved.process.pid,
+                            saved.process.started_micros,
+                        )
+                        .await?
+                        .map(|owner| {
+                            crate::providers::claude::claude_thread_id(&owner.session_uuid)
+                        }),
+                    };
+                    ensure!(
+                        current.as_deref() == Some(saved.conversation.thread_id.as_str()),
+                        "captured caller owner changed; recapture from the originating agent"
+                    );
+                }
                 Ok(Origin::Parent {
                     conversation: saved.conversation,
                 })

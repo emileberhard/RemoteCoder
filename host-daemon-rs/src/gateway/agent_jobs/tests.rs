@@ -333,3 +333,87 @@ async fn provider_wait_is_visible_while_another_provider_proceeds() {
     gateway.stop().await.unwrap();
     notifications.await.unwrap();
 }
+
+#[tokio::test]
+async fn captured_native_claude_context_outlives_its_child_but_not_its_owner_or_gateway() {
+    let gateway = TestGateway::new();
+    let directory = tempfile::tempdir_in("/tmp").unwrap();
+    let socket = directory.path().join("native");
+    let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+    let owner = crate::platform::process::identify(std::process::id() as i32)
+        .unwrap()
+        .unwrap();
+    let home = &gateway.claude_settings.claude_home;
+    let path = home
+        .join("sessions")
+        .join(format!("{}.json", std::process::id()));
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let format = time::format_description::parse_owned::<3>("[weekday repr:short] [month repr:short] [day padding:space] [hour]:[minute]:[second] [year]").unwrap();
+    let started =
+        time::OffsetDateTime::from_unix_timestamp((owner.started_micros / 1_000_000) as i64)
+            .unwrap()
+            .format(&format)
+            .unwrap();
+    let mut record = json!({"pid":std::process::id(),"sessionId":"11111111-2222-4333-8444-555555555555","cwd":directory.path(),"messagingSocketPath":socket,"pidDomain":"darwin","procStart":started});
+    std::fs::write(&path, serde_json::to_vec(&record).unwrap()).unwrap();
+    let mut child = tokio::process::Command::new("/bin/cat")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let pid = child.id().unwrap();
+    let identity = crate::platform::process::identify(pid as i32)
+        .unwrap()
+        .unwrap();
+    let captured = gateway
+        .capture_job_context(CaptureParams {
+            pid,
+            started_at_unix_micros: identity.started_micros,
+        })
+        .await
+        .unwrap();
+    let saved = gateway
+        .jobs
+        .contexts
+        .get(&captured.context_id)
+        .await
+        .unwrap();
+    assert_eq!(saved.process.pid, std::process::id() as i32);
+    child.kill().await.unwrap();
+    assert!(
+        gateway
+            .capture_job_context(CaptureParams {
+                pid,
+                started_at_unix_micros: identity.started_micros,
+            })
+            .await
+            .is_err()
+    );
+    let caller = Caller::Captured {
+        context_id: captured.context_id,
+    };
+    assert_eq!(
+        gateway.resolve_job_caller(&caller).await.unwrap(),
+        Origin::Parent {
+            conversation: saved.conversation
+        }
+    );
+    assert!(
+        TestGateway::new()
+            .resolve_job_caller(&caller)
+            .await
+            .is_err()
+    );
+    record["sessionId"] = json!("22222222-2222-4333-8444-555555555555");
+    std::fs::write(path, serde_json::to_vec(&record).unwrap()).unwrap();
+    assert!(
+        gateway
+            .resolve_job_caller(&caller)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("owner changed")
+    );
+    drop(listener);
+}

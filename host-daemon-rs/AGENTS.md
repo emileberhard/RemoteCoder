@@ -68,6 +68,9 @@ Native terminal Claude holders own only their process-lifetime inbox route.
 Scoped caller coordination belongs to the gateway lifetime, namespaced by its
 job-store root; it proves the actual provider process and resolves the current
 job from the conversation. Finishing a job must not remove that shared route.
+Captured caller handles retain their proven conversation for this gateway lifetime,
+subject to the 1,024-entry cap. Codex tool-process exit does not revoke capture;
+Claude use checks the recorded runtime or native inbox owner directly.
 Native caller proof validates the peer before provider lookup. One lazy walker
 verifies every link through the first proven Codex tool root or Claude session
 owner; unrelated launcher ancestors above that owner are outside the proof.
