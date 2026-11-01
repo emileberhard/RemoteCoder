@@ -127,7 +127,7 @@ private final class ShimmerBandView: UIView {
         animation.animations = [movement, opacity]
         animation.duration = Self.period
         animation.repeatCount = .infinity
-        animation.preferredFrameRateRange = CAFrameRateRange(minimum: 30, maximum: 60, preferred: 60)
+        animation.preferredFrameRateRange = CAFrameRateRange(minimum: 30, maximum: 30, preferred: 30)
         let now = band.convertTime(CACurrentMediaTime(), from: nil)
         animation.beginTime = now - now.truncatingRemainder(dividingBy: Self.period)
         band.add(animation, forKey: "shimmer")
