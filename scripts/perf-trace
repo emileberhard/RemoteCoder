@@ -1636,7 +1636,7 @@ def main() -> None:
     parser.add_argument("--symbols", action="append", default=[], type=Path, metavar="PATH",
                         help="matching .app, .dSYM, or Mach-O symbol file; repeatable")
     parser.add_argument("--motion-signpost", default=MOTION_SIGNPOST,
-                        help="Points of Interest interval for the motion window, e.g. DrawerMotion or DrawerSpring")
+                        help="Points of Interest interval for the motion window, e.g. DrawerMovement or DrawerSpring")
     commands = parser.add_subparsers(dest="command", required=True)
     record_parser = commands.add_parser("record", help="record a system-wide trace of the current journey, then summarize it")
     record_parser.add_argument("label", help="trace name, e.g. before-streaming")
