@@ -1992,7 +1992,9 @@ eight-second deadline across admission, route attempts, handshake and receipt.
 Only transport failure changes a member to unreachable; a valid peer application
 error preserves its connection. Configured exact-host routes precede retained
 Join routes and use the same credential and certificate pin. Socket termination
-wakes only its member; unchanged hellos never wake global delivery.
+wakes only its member; unchanged hellos never wake global delivery. Dialed sockets
+use kernel TCP keepalive (10-second idle, 5-second interval, three probes) to end
+silent dead connections without a polling task.
 
 `agents/jobs` remains the only job, intent, fence and result owner. The execution
 driver owns native custody and local delivery; `cluster/driver.rs` owns network

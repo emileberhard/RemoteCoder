@@ -712,7 +712,13 @@ async fn dial(
     let addresses = tokio::net::lookup_host((host, uri.port_u16().unwrap_or(443)))
         .await?
         .collect();
-    race(addresses, tokio::net::TcpStream::connect).await
+    let stream = race(addresses, tokio::net::TcpStream::connect).await?;
+    let keepalive = socket2::TcpKeepalive::new()
+        .with_time(Duration::from_secs(10))
+        .with_interval(Duration::from_secs(5))
+        .with_retries(3);
+    socket2::SockRef::from(&stream).set_tcp_keepalive(&keepalive)?;
+    Ok(stream)
 }
 
 async fn race<T, F, Attempt>(addresses: Vec<std::net::SocketAddr>, connect: F) -> std::io::Result<T>
@@ -793,6 +799,26 @@ mod reconnect_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn cluster_dial_bounds_idle_dead_peer_detection_in_the_kernel() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let uri = format!("wss://{}/ws", listener.local_addr().unwrap())
+            .parse()
+            .unwrap();
+        let stream = dial(&uri).await.unwrap();
+        let socket = socket2::SockRef::from(&stream);
+        assert!(socket.keepalive().unwrap());
+        assert_eq!(
+            socket.tcp_keepalive_time().unwrap(),
+            Duration::from_secs(10)
+        );
+        assert_eq!(
+            socket.tcp_keepalive_interval().unwrap(),
+            Duration::from_secs(5)
+        );
+        assert_eq!(socket.tcp_keepalive_retries().unwrap(), 3);
+    }
 
     #[tokio::test(start_paused = true)]
     async fn a_stalled_first_address_does_not_starve_a_later_one() {
