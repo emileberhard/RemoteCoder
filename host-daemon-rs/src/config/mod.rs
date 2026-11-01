@@ -417,13 +417,14 @@ impl CodexSettings {
             resolve_executable_path(sources.required_path("RC_CODEX_GATEWAY_CODEX_PATH")?);
         let identity = crate::runtime::identity::PackageIdentity::read(&codex_path)?;
         let runtime = validate_codex_runtime_for_version(&codex_path, &identity.version)?;
-        let current = crate::config::HostPaths::from_env()?
-            .home()
-            .join(if cfg!(target_os = "linux") {
-                ".codex/packages/standalone/current/bin/codex"
-            } else {
-                ".codex/packages/standalone/current/codex"
-            });
+        let current =
+            crate::config::HostPaths::from_env()?
+                .home()
+                .join(if cfg!(target_os = "linux") {
+                    ".codex/packages/standalone/current/bin/codex"
+                } else {
+                    ".codex/packages/standalone/current/codex"
+                });
         identity.verify(&current)?;
         Ok(Self {
             codex_path,
