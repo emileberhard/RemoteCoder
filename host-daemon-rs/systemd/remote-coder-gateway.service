@@ -1,0 +1,16 @@
+[Unit]
+Description=RemoteCoder gateway
+StartLimitIntervalSec=0
+
+[Service]
+Type=exec
+ExecStart=%h/localbin/remote-coder-gateway/remote-coder-codex-gateway --env-file %h/.remote-coder/codex-gateway.env
+Environment=PATH=%h/.local/bin:%h/.cargo/bin:/usr/local/bin:/usr/bin:/bin
+UMask=0077
+Restart=always
+RestartSec=3
+KillMode=process
+TimeoutStopSec=60
+
+[Install]
+WantedBy=default.target

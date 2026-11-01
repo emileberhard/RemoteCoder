@@ -25,7 +25,7 @@ async function timed(phase, timings, operation) {
 }
 
 async function failureLogs(lab, secrets) {
-    const directory = "Library/Logs/remote-coder";
+    const directory = process.platform === "linux" ? ".local/state/remote-coder/logs" : "Library/Logs/remote-coder";
     const names = ["gateway.log", "gateway-errors.log", ...(await readdir(lab.path(directory)).catch(() => []))
         .filter(name => name.startsWith("codex-gateway")).sort().slice(-2).map(name => `${directory}/${name}`)];
     const logs = {};
@@ -74,7 +74,7 @@ async function worker(binary, runtimePackage) {
         await mkdir(lab.path(".claude"), { recursive: true });
         await installPackage(lab, runtimePackage);
         await writeProviderConfig(lab, model);
-        const config = await readFile(join(lab.realHome, ".remote-coder/codex-gateway.env"), "utf8");
+        const config = await readFile(process.env.RC_PROBE_ROUTER_ENV ?? join(lab.realHome, ".remote-coder/codex-gateway.env"), "utf8");
         const value = name => config.match(new RegExp(`^${name}="?([^"\\n]+)"?$`, "m"))?.[1];
         const url = value("RC_CODEX_GATEWAY_ROUTER_URL");
         const keyFile = value("RC_CODEX_GATEWAY_ROUTER_KEY_FILE");
@@ -82,11 +82,18 @@ async function worker(binary, runtimePackage) {
         const key = (await readFile(keyFile, "utf8")).trim();
         secrets.push(key);
         lab.router = startStubRouter({ url, key });
+        const linuxBinding = process.platform === "linux" ? [
+            `RC_CODEX_GATEWAY_LAN_BIND_ADDRESS=${process.env.RC_PROBE_LAN_ADDRESS}`,
+            `RC_CODEX_GATEWAY_LAN_HOST=${process.env.RC_PROBE_LAN_HOST}`,
+        ] : [];
+        if (process.platform === "linux") assert(process.env.RC_PROBE_LAN_ADDRESS && process.env.RC_PROBE_LAN_HOST,
+            "Linux cluster probe requires an explicit private interface address and host name");
         await lab.writeGatewayEnv([
-            `RC_CODEX_GATEWAY_LAN_PORT=${await availablePort()}`,
+            `RC_CODEX_GATEWAY_LAN_PORT=${process.platform === "linux" ? 19878 : await availablePort()}`,
+            ...linuxBinding,
             `RC_CODEX_GATEWAY_EXTERNAL_PROVIDERS_FILE=${lab.path("external-providers.json")}`,
             "RC_CLAUDE_ENABLED=true", `RC_CLAUDE_HOME=${lab.path(".claude")}`,
-            `RC_CLAUDE_PATH=${join(lab.realHome, ".local/bin/claude")}`,
+            `RC_CLAUDE_PATH=${process.env.RC_PROBE_CLAUDE_PATH ?? join(lab.realHome, ".local/bin/claude")}`,
         ]);
         secrets.push((await readFile(lab.path("router-key"), "utf8")).trim());
         await lab.start();

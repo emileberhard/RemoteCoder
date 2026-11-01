@@ -25,7 +25,7 @@ export function startModel() {
         const tool = (body.tools ?? []).map(entry => entry.name ?? entry.function?.name).find(name => shellTools.includes(name));
         assert(tool, `No shell tool offered: ${JSON.stringify((body.tools ?? []).map(entry => entry.name ?? entry.type))}`);
         const args = tool === "exec_command" ? { cmd: command, yield_time_ms: 30000 }
-            : tool === "shell_command" ? { command } : { command: ["/bin/zsh", "-c", command] };
+            : tool === "shell_command" ? { command } : { command: [process.platform === "linux" ? "/bin/bash" : "/bin/zsh", "-c", command] };
         return { type: "response.output_item.done", item: { type: "function_call", call_id: `call_${randomUUID()}`,
             namespace: "functions", name: tool, arguments: JSON.stringify(args) } };
     };

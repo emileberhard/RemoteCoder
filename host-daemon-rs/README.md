@@ -125,8 +125,12 @@ conversations.
 ### LAN TLS listener
 
 Set `RC_CODEX_GATEWAY_LAN_PORT` (for example `8789`) to serve every gateway route
-over TLS on `[::]:<port>`, which also accepts IPv4, so the app can connect directly on the home
-network instead of over the tailnet. It is off when unset or empty; a
+over pinned TLS. macOS defaults to `[::]:<port>` with IPv4 support. Set
+`RC_CODEX_GATEWAY_LAN_BIND_ADDRESS` and `RC_CODEX_GATEWAY_LAN_HOST` together to
+select one concrete interface address and advertised DNS name. Linux requires
+both and rejects wildcard addresses; its plaintext listener must use a loopback
+IP. This supports a private HTTPS proxy for phone ingress and a separate pinned
+cluster listener. It is off when unset or empty; a
 non-numeric value, `0`, or the plaintext port fails startup. The plaintext
 listener is unchanged.
 
@@ -137,7 +141,7 @@ listener is unchanged.
   replaced. Deleting the file and restarting rotates the key.
 - Certificate: self-signed and re-derived from that key at every start, with
   SANs `<LocalHostName>.local` (from `scutil --get LocalHostName`) and
-  `localhost`. The listener speaks TLS 1.3 only with ALPN `http/1.1` and no
+  `localhost`, or the explicit advertised DNS name. The listener speaks TLS 1.3 only with ALPN `http/1.1` and no
   client certificates; WebSocket upgrades work as on the plaintext listener.
 - Pin: `spkiSha256` is the standard base64 SHA-256 of the certificate's DER
   SubjectPublicKeyInfo. It changes only with the key, not with the host name
@@ -145,7 +149,8 @@ listener is unchanged.
   `/health`, whose `lanEndpoint` is `{"host","port","spkiSha256"}` while the
   listener serves and `null` otherwise.
 - Failure: if the key, host name, or bind fails at startup, the gateway logs an
-  error, keeps serving the plaintext listener, and reports `lanEndpoint: null`.
+  error, keeps serving the plaintext listener, and reports `lanEndpoint: null` on
+  macOS. Linux fails startup instead of accepting a partial configuration.
   Each TLS handshake is bounded to 10 seconds, and each request head to 30
   seconds, including the wait for a connection's first or next request, so a
   silent LAN client cannot hold a connection or the shutdown open. When the
@@ -577,6 +582,28 @@ the desktop opt-in.
 Logs (`~/Library/Logs/remote-coder/`): `codex-gateway.out.log`,
 `codex-gateway.err.log`, `chatgpt-shared-codex.log` and
 `chatgpt-shared-codex.error.log`.
+
+## Linux supervision
+
+The native Linux host uses the full approved `x86_64-unknown-linux-musl` Codex
+package and a GNU x86_64 gateway. Build and test on Linux; the macOS app bundle,
+launchd installer, Desktop attachment, TCC permissions and local Apple computer
+use are macOS facilities. Linux sessions use the same chat, history, ownership
+and cluster protocol. Provider readiness keeps unavailable providers explicit.
+
+Install `systemd/remote-coder-gateway.service` as a user unit and enable user
+lingering. The service runs as the account that owns the gateway and runtime
+homes. Its `KillMode=process` and 60-second stop timeout let the gateway capture
+exact interrupted work before stopping Claude groups and the native Codex
+lifecycle. Agent-created long-running processes stay session-owned; deployment
+must not kill a whole cgroup. Logs live under `~/.local/state/remote-coder/logs`.
+
+Keep credentials in mode-0600 files. Docker group membership is root-equivalent;
+this service does not isolate an agent from its host account. Bind direct TLS
+only to the intended private interface, use HTTPS proxy ingress to loopback,
+and enforce container-to-host denial independently of interface binding. The
+operator owns that network policy, service ordering, artifact installation,
+backups and release acceptance in the private deployment repository.
 
 ## API
 

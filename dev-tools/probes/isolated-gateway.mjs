@@ -56,7 +56,7 @@ export class IsolatedGateway {
         this.codex = join(this.realHome, ".codex/packages/standalone/current/codex");
         this.nativeDefault = join(root, ".codex");
         this.safeEnv = {
-            HOME: root, CODEX_HOME: this.nativeDefault, USER: userInfo().username, SHELL: "/bin/zsh",
+            HOME: root, CODEX_HOME: this.nativeDefault, USER: userInfo().username, SHELL: process.platform === "linux" ? "/bin/bash" : "/bin/zsh",
             LANG: "en_US.UTF-8", PATH: "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
             ...(process.env.SSL_CERT_FILE ? { SSL_CERT_FILE: process.env.SSL_CERT_FILE } : {}), RUST_LOG: "warn",
         };
@@ -135,6 +135,7 @@ export class IsolatedGateway {
             stderr: Bun.file(this.path("gateway-errors.log")),
         });
         await this.waitFor(async () => (await this.request("/health")).status === "ok");
+        if (process.platform !== "darwin") return;
         const recorder = Bun.spawn([
             "python3", resolve(import.meta.dir, "../../scripts/bench_lab.py"), this.root, String(this.port),
             createHash("sha256").update(this.token).digest("hex"), this.binary, String(this.child.pid), String(process.pid),
