@@ -252,27 +252,31 @@ pub(crate) async fn inspect(gateway: &Arc<Gateway>, job: &JobRecord) -> Result<I
             result: final_result(gateway, &binding).await?,
         });
     }
-    Ok(match inspected["activity"].as_str() {
-        Some("running") if !accepted.has(NativeInputFact::Terminal) => {
-            Inspection::Running { binding }
-        }
-        Some("recovering" | "unknown") => Inspection::Pending {
+    Ok(unresolved_activity(
+        &inspected,
+        accepted.has(NativeInputFact::Terminal),
+        binding,
+    ))
+}
+
+fn unresolved_activity(inspected: &Value, terminal: bool, binding: ExecutionBinding) -> Inspection {
+    let reason = inspected["outcome"]["reason"]
+        .as_str()
+        .unwrap_or("unrecognized native inspection");
+    match inspected["activity"].as_str() {
+        Some("running") if !terminal => Inspection::Running { binding },
+        Some("running") => Inspection::Pending {
             reason: format!(
-                "exact Codex activity is not yet observable: {}",
-                inspected["outcome"]["reason"]
-                    .as_str()
-                    .unwrap_or("unrecognized native inspection")
+                "exact Codex turn still runs after its input became terminal: {reason}"
             ),
+        },
+        Some("recovering" | "unknown") => Inspection::Pending {
+            reason: format!("exact Codex activity is not yet observable: {reason}"),
         },
         _ => Inspection::Unknown {
-            reason: format!(
-                "exact Codex terminal evidence is unavailable: {}",
-                inspected["outcome"]["reason"]
-                    .as_str()
-                    .unwrap_or("unrecognized native inspection")
-            ),
+            reason: format!("exact Codex terminal evidence is unavailable: {reason}"),
         },
-    })
+    }
 }
 
 pub(crate) async fn recover(gateway: &Arc<Gateway>, job: &JobRecord) -> Result<ExecutionBinding> {
@@ -461,5 +465,36 @@ mod tests {
         ];
         assert_eq!(final_text(&items, "turn").unwrap(), Some("The result"));
         assert!(final_text(&items, "another-turn").is_err());
+    }
+
+    #[test]
+    fn a_turn_still_running_after_its_input_became_terminal_is_reinspected_without_a_notice() {
+        let binding = ExecutionBinding {
+            conversation: ConversationIdentity {
+                provider: Provider::Codex,
+                provider_home: ProviderHome::Known {
+                    path: "/tmp/job-fixture/codex".into(),
+                },
+                thread_id: "thread-fixture".into(),
+            },
+            input_id: "input".into(),
+            turn_id: "turn".into(),
+        };
+        let running =
+            json!({"activity":"running","outcome":{"state":"unknown","reason":"turnRunning"}});
+        assert!(matches!(
+            unresolved_activity(&running, false, binding.clone()),
+            Inspection::Running { .. }
+        ));
+        assert!(matches!(
+            unresolved_activity(&running, true, binding.clone()),
+            Inspection::Pending { reason } if reason.ends_with("turnRunning")
+        ));
+        let idle =
+            json!({"activity":"idle","outcome":{"state":"unknown","reason":"noTerminalItem"}});
+        assert!(matches!(
+            unresolved_activity(&idle, true, binding),
+            Inspection::Unknown { .. }
+        ));
     }
 }
