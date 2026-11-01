@@ -331,7 +331,11 @@ async fn run(
 
     #[cfg(target_os = "linux")]
     let lan = match &settings.lan {
-        Some(lan) => Some(LanListener::bind(lan).await.context("required Linux TLS listener failed")?),
+        Some(lan) => Some(
+            LanListener::bind(lan)
+                .await
+                .context("required Linux TLS listener failed")?,
+        ),
         None => None,
     };
 
@@ -426,7 +430,8 @@ async fn run(
         recovery_only,
         #[cfg(target_os = "linux")]
         lan,
-    ).await;
+    )
+    .await;
     let _ = gateway.stop().await;
     info!("gateway stopped");
     journal.drain(JOURNAL_DRAIN_DEADLINE).await;

@@ -437,6 +437,22 @@ impl Store {
         if journal.generation_id != generation_id || !journal.is_settled() {
             return Ok(false);
         }
+        #[cfg(target_os = "linux")]
+        crate::storage::private_state::write_json(
+            &self.path.with_file_name("claude-restart-outcome.json"),
+            &serde_json::json!({
+                "schemaVersion": 1,
+                "generationId": journal.generation_id,
+                "items": journal.items.iter().map(|item| serde_json::json!({
+                    "recoveryId": item.recovery_id,
+                    "threadId": item.thread_id,
+                    "interruptedTurnId": item.interrupted_turn_id,
+                    "resumedTurnId": item.resumed_turn_id,
+                    "status": item.status,
+                    "error": item.error.as_ref().map(|error| error.chars().take(2048).collect::<String>()),
+                })).collect::<Vec<_>>(),
+            }),
+        )?;
         std::fs::remove_file(&self.path)
             .with_context(|| format!("failed to remove {}", self.path.display()))?;
         Ok(true)
@@ -823,6 +839,16 @@ mod tests {
 
         assert!(store.remove_settled(&journal.generation_id).unwrap());
         assert_eq!(store.load().unwrap(), None);
+        #[cfg(target_os = "linux")]
+        {
+            let receipt: serde_json::Value = serde_json::from_slice(
+                &std::fs::read(store.path.with_file_name("claude-restart-outcome.json")).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(receipt["generationId"], journal.generation_id);
+            assert_eq!(receipt["items"][0]["recoveryId"], "recovery-a");
+            assert_eq!(receipt["items"][0]["status"], "dispatched");
+        }
     }
 
     #[test]

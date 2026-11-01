@@ -35,10 +35,10 @@ pub(crate) async fn suspend_codex(
     store: Option<&RecoveryStore>,
     journal: &Journal,
     decision: CodexRestart,
-) {
+) -> Result<()> {
     journal.runtime("restart_codex", json!({ "decision": decision.as_str() }));
     let (CodexRestart::Suspend, Some(store)) = (decision, store) else {
-        return;
+        return Ok(());
     };
     let result = tokio::time::timeout(
         CODEX_HANDOFF_TIMEOUT,
@@ -51,10 +51,11 @@ pub(crate) async fn suspend_codex(
             CODEX_HANDOFF_TIMEOUT.as_secs()
         ))
     });
-    report(result, journal);
+    report(&result, journal);
+    result
 }
 
-fn report(result: Result<()>, journal: &Journal) {
+fn report(result: &Result<()>, journal: &Journal) {
     match result {
         Ok(()) => {
             info!("Codex work suspended for recovery by the replacement gateway");

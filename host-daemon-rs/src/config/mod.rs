@@ -900,7 +900,10 @@ mod tests {
         ] {
             let sources = ConfigSources::from_file_vars(HashMap::from([
                 ("RC_CODEX_GATEWAY_BIND_HOST".into(), host.into()),
-                ("RC_CODEX_GATEWAY_AUTH_TOKEN".into(), "0123456789abcdef".repeat(2)),
+                (
+                    "RC_CODEX_GATEWAY_AUTH_TOKEN".into(),
+                    "0123456789abcdef".repeat(2),
+                ),
             ]));
             assert_eq!(GatewayEndpoint::load(&sources).is_ok(), allowed, "{host}");
         }
