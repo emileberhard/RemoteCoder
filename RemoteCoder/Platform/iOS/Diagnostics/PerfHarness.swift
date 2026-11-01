@@ -108,6 +108,14 @@ final class PerfHarness {
             dragDrawer(command, commandID: id)
         case "select-row":
             selectRow(address(command), commandID: id)
+        case "haptic-probe":
+            guard let rawKind = command["kind"] as? String,
+                  let kind = HapticLatencyProbe.Kind(rawValue: rawKind),
+                  let count = command["count"] as? Int else {
+                writeResult(["cmd": name, "id": id, "error": "provide kind press|semantic and count 1...60"])
+                return
+            }
+            runJourney(name, id: id) { try await HapticLatencyProbe.shared.run(kind: kind, count: count) }
         case "scroll":
             guard let model = workspace?.selectedScreen,
                   let index = command["message"] as? Int, model.messages.indices.contains(index) else {
@@ -247,7 +255,7 @@ final class PerfHarness {
                 var result = try await operation()
                 result["cmd"] = name
                 result["id"] = id
-                result["input"] = "production-callbacks"
+                if result["input"] == nil { result["input"] = "production-callbacks" }
                 writeResult(result)
             } catch {
                 if name == "select-row" { cancelRowSelection() }

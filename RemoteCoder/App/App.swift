@@ -156,6 +156,9 @@ private struct WindowRoot: View {
         .environment(\.appEnergyPolicy, app.energy.policy)
         .environment(\.siteIcons, app.workspace.siteIcons)
         .modifier(SceneLifecycle(app: app))
+        #if RC_PERF_HARNESS
+        .background { HapticLatencyProbeSurface() }
+        #endif
         .background { HapticOutput(voiceCall: app.voiceCalls.call) }
         .onAppear {
             guard supportsMultipleWindows else { return }
