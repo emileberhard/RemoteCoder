@@ -99,8 +99,12 @@ pub(in crate::runtime) fn validate_runtime_package(package_dir: &Path) -> Result
         bail!("Linux Codex packages must require system bubblewrap");
     }
     let fallback = package_dir.join("codex-resources/bwrap");
-    if manifest.linux_sandbox.is_some() && std::fs::symlink_metadata(fallback).is_ok() {
-        bail!("Linux Codex packages must not bundle bubblewrap");
+    if manifest.linux_sandbox.is_some() {
+        match std::fs::symlink_metadata(fallback) {
+            Ok(_) => bail!("Linux Codex packages must not bundle bubblewrap"),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error).context("Cannot inspect Linux bubblewrap fallback"),
+        }
     }
     for (name, approved) in [
         ("bin/codex", REQUIRED_CODEX_SHA256),

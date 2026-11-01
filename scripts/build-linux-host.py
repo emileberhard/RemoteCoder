@@ -57,14 +57,15 @@ def verify_claude_provenance(path, claude):
 def verify_codex_sandbox(package):
     manifest = json.loads((package / "codex-package.json").read_text())
     fallback = package / "codex-resources/bwrap"
-    if (
-        manifest.get("linuxSandbox") != "system"
-        or fallback.exists()
-        or fallback.is_symlink()
-    ):
+    if manifest.get("linuxSandbox") != "system":
         raise ValueError(
-            "Linux Codex package must require system bubblewrap without a bundled fallback"
+            "Linux Codex package must explicitly require system bubblewrap"
         )
+    try:
+        fallback.lstat()
+    except FileNotFoundError:
+        return
+    raise ValueError("Linux Codex package must not bundle a bubblewrap fallback")
 
 
 def inventory(root):

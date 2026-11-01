@@ -21,8 +21,16 @@ checks run on hosted macOS. This keeps public repositories free of personal
 runners and avoids billed hosted builds in the private deployment repository.
 
 The private workflow independently checks tag identity, main ancestry, ordering,
-the public release run and green main CI. Only it may use the Mini. Gateway
-build/deploy uses the existing installer and exact-turn recovery. A separate job
+the public release run and green main CI. Only it may use personal runners. The Linux lane uses a private
+runner and the public `scripts/build-linux-host.py` bundle contract: one native
+gateway, the target-approved complete Codex package, the verified Claude
+executable, licenses and the user systemd unit. The tag supplies the same version
+and source identity as the Apple artifacts. The operator retains immutable
+archives, admits deployment and owns ingress, credentials, supervision and exact
+provider recovery. Linux Codex packages require the distribution-maintained
+bubblewrap executable and contain no bundled fallback.
+
+Mac gateway build/deploy uses the existing installer and exact-turn recovery. A separate job
 archives the same admitted commit locally for ad hoc iOS and Developer ID Mac
 delivery, using the local signing keychain, existing cache/capacity leases and
 four-job host cap. The tag is the version in both paths. Direct delivery keeps

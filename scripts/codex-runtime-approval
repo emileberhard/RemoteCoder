@@ -216,8 +216,13 @@ def package_approval(package: Path) -> Approval:
     if linux != (manifest.linux_sandbox == "system"):
         raise ApprovalError("Linux packages must explicitly require system bubblewrap")
     fallback = package / "codex-resources/bwrap"
-    if linux and (fallback.exists() or fallback.is_symlink()):
-        raise ApprovalError("Linux packages must not bundle a bubblewrap fallback")
+    if linux:
+        try:
+            fallback.lstat()
+        except FileNotFoundError:
+            pass
+        else:
+            raise ApprovalError("Linux packages must not bundle a bubblewrap fallback")
 
     expected_paths = {"bin/codex", "bin/codex-code-mode-host"}
     if set(manifest.binaries) != expected_paths:

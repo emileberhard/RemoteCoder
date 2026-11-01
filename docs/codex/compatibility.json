@@ -11,7 +11,7 @@
     "required": true,
     "gate": "just shared-codex-check <host>",
     "probe": "dev-tools/src/remotecoder_tools/external_auth_probe.py",
-    "isolation": "Build-host execution only; fresh private HOME/CODEX_HOME; synthetic JWTs; loopback mocks; Seatbelt denies nonlocal outbound network; package bytes only transferred from requested host; no live credentials, host config or managed socket",
+    "isolation": "Build-host execution only; fresh private HOME/CODEX_HOME; synthetic JWTs; loopback mocks; Seatbelt on macOS or a private network namespace on Linux denies nonlocal outbound network; package bytes only transferred from requested host; no live credentials, host config or managed socket",
     "matrix": [
       "race",
       "owner_gone",
