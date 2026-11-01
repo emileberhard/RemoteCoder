@@ -225,20 +225,33 @@ async fn finished_message_admits_one_exact_continuation_and_duplicate_keeps_its_
         .agent_jobs_rpc(
             "agent/jobs/message",
             request(
-                MessageTarget::Job { job_id: previous },
+                MessageTarget::Job {
+                    job_id: previous.clone(),
+                },
                 "different-delivery",
                 "A stale follow-up",
             ),
         )
         .await
-        .unwrap();
-    assert_eq!(stale["deliveryState"]["kind"], "failed");
-    assert!(
-        stale["deliveryState"]["reason"]
-            .as_str()
-            .unwrap()
-            .contains("superseded")
+        .unwrap_err();
+    assert_eq!(stale.code, RpcCode::Conflict);
+    assert_eq!(
+        crate::wire::cluster::ErrorClass::from_rpc(
+            &stale.response(&serde_json::Value::Null)["error"]
+        )
+        .exit_code(),
+        8
     );
+    assert!(stale.message.contains(previous.as_str()));
+    assert!(stale.message.contains(id.as_str()));
+    let receipt = gateway
+        .agent_jobs_rpc(
+            "agent/messages/read",
+            json!({"deliveryId":"different-delivery"}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(receipt["deliveryState"]["kind"], "failed");
 }
 
 #[tokio::test]

@@ -139,6 +139,13 @@ impl Gateway {
                             now_ms(),
                         )
                         .await?;
+                    if let Some(conflict) = error.downcast_ref::<RpcError>()
+                        && conflict.code == RpcCode::Conflict
+                    {
+                        return Err(conflict.clone().with_data(crate::rpc::error::RpcData::Raw(
+                            json!({"class":"conflict","deliveryId":record.delivery_id}),
+                        )));
+                    }
                     return Ok(json!(record));
                 }
             };
@@ -459,7 +466,17 @@ impl Gateway {
         let agent = view.agent.context("target conversation is unresolved")?;
         ensure!(
             agent.latest_job_id.as_ref() == Some(&job_id),
-            "target job has been superseded; use its latest job"
+            RpcError::new(
+                RpcCode::Conflict,
+                format!(
+                    "target job has been superseded; agent {} latest job is {}",
+                    agent.agent_id,
+                    agent
+                        .latest_job_id
+                        .as_ref()
+                        .map_or("unknown", JobId::as_str)
+                )
+            )
         );
         let ConversationBinding::Known { conversation } = agent.conversation else {
             bail!("target provider identity is unresolved");
