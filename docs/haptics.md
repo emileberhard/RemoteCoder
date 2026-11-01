@@ -440,6 +440,9 @@ strength, power mode or thermal state changes.
 exact test-device UDID, a private fixture and an output directory. The companion
 `haptic-latency-report.py` pairs event-named intents and requests between adjacent
 input markers, reports missing inputs/requests and keeps the first sample separate.
+Pass the capture's command receipts with `--commands` and its exact UDID with
+`--device`; expected input counts come from those receipts. Raw events and duplicate
+counts remain in the report evidence.
 It also reports sampled feedback-family stacks with coverage; samples do not mark
 exact API entry. The historical sensory-feedback baseline marker precedes SwiftUI's
 internal playback, so its dispatch-marker latency is an optimistic bound. Physical

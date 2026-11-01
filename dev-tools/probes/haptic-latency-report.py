@@ -1,4 +1,5 @@
 import argparse
+import hashlib
 import importlib.machinery
 import importlib.util
 import json
@@ -13,7 +14,25 @@ parser = argparse.ArgumentParser()
 parser.add_argument('trace', type=Path)
 parser.add_argument('--repo', type=Path, required=True)
 parser.add_argument('--output', type=Path, required=True)
+parser.add_argument('--commands', type=Path, required=True)
+parser.add_argument('--device', required=True)
 args = parser.parse_args()
+expected_counts = dict.fromkeys(('press', 'semantic', 'drawer', 'context-check'), 0)
+for command in json.loads(args.commands.read_text()):
+    if 'error' in command:
+        raise ValueError('command receipt contains an error')
+    if command['cmd'] == 'drawer-drag':
+        expected_counts['drawer'] += 1
+    elif command['cmd'] == 'haptic-probe':
+        kind = command['kind']
+        if kind == 'semantic' and expected_counts['drawer']:
+            kind = 'context-check'
+        if kind not in expected_counts or expected_counts[kind]:
+            raise ValueError('unsupported repeated or unknown probe command')
+        count = command['count']
+        if type(count) is not int or count < 1:
+            raise ValueError('probe count must be a positive integer')
+        expected_counts[kind] = count
 sys.path.insert(0, str(args.repo / 'scripts'))
 loader = importlib.machinery.SourceFileLoader('haptic_report_trace', str(args.repo / 'scripts/perf-trace'))
 spec = importlib.util.spec_from_loader(loader.name, loader)
@@ -37,6 +56,7 @@ with pt.exclusive_host():
         toc = export.stdout.read()
         args.output.with_suffix('.toc.xml').write_bytes(toc)
     points = []
+    raw_points = []
     seen = set()
     columns = {'time', 'process', 'event-type', 'name', 'subsystem', 'category', 'message'}
     for row in pt.table_rows(str(args.trace), 'os-signpost', columns):
@@ -49,12 +69,14 @@ with pt.exclusive_host():
             continue
         timestamp = pt.trace_number(row.get('time'))
         message = pt.element_text(row.get('message')) or ''
+        raw_points.append({'ns': timestamp, 'name': name, 'message': message})
         key = (timestamp, name, message)
         if key in seen:
             continue
         seen.add(key)
         points.append({'ns': timestamp, 'name': name, 'message': message})
 points.sort(key=lambda point: point['ns'])
+args.output.with_suffix('.raw-events.json').write_text(json.dumps(raw_points, indent=2))
 if not points:
     raise RuntimeError('no Haptics point events exported')
 args.output.with_suffix('.events.json').write_text(json.dumps(points, indent=2))
@@ -96,7 +118,12 @@ for boundary_index, point_index in enumerate(boundaries):
             raise ValueError('negative paired latency')
     trials.append(trial)
 report = {'trace': str(args.trace), 'pointCounts': dict(Counter(p['name'] for p in points)),
-          'expectedPrimaryInputs': {'press': 30, 'semantic': 30, 'drawer': 20},
+          'deviceUDID': args.device,
+          'reportScriptSHA256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+          'commandReceipts': str(args.commands),
+          'commandReceiptsSHA256': hashlib.sha256(args.commands.read_bytes()).hexdigest(),
+          'rawMatchedRows': len(raw_points), 'duplicateRowsDropped': len(raw_points) - len(points),
+          'expectedInputs': expected_counts,
           'pairing': 'one matching event intent/request after each input and before the next input; ineligible excluded',
           'physicalTouch': False, 'actuatorOnset': 'unmeasured', 'trials': trials, 'groups': {}}
 for kind in ('press', 'semantic', 'drawer', 'context-check'):
@@ -104,13 +131,13 @@ for kind in ('press', 'semantic', 'drawer', 'context-check'):
     paired = [t for t in selected if t['status'] == 'paired']
     report['groups'][kind] = {'statuses': dict(Counter(t['status'] for t in selected)),
         'observedIndices': [t['index'] for t in selected],
-        'missingInputIndices': sorted(set(range(30)) - {t['index'] for t in selected})
-                               if kind in ('press', 'semantic') else None,
-        'missingInputCount': max(0, {'press': 30, 'semantic': 30, 'drawer': 20, 'context-check': 1}[kind] - len(selected)),
+        'missingInputIndices': sorted(set(range(expected_counts[kind])) - {t['index'] for t in selected}),
+        'missingInputCount': max(0, expected_counts[kind] - len(selected)),
         'inputToRequest': distribution([t['inputToRequestNs'] for t in paired]),
         'intentToRequest': distribution([t['intentToRequestNs'] for t in paired]),
         'firstSampleInputToRequestMs': next((t['inputToRequestNs'] / 1e6 for t in paired if t['index'] == 0), None),
-        'remainingInputToRequest': distribution([t['inputToRequestNs'] for t in paired if t['index'] != 0])}
+        'remainingInputToRequest': distribution([t['inputToRequestNs'] for t in paired if t['index'] != 0]),
+        'remainingIntentToRequest': distribution([t['intentToRequestNs'] for t in paired if t['index'] != 0])}
 family = re.compile(r'UI(?:Impact|Selection|Notification)?FeedbackGenerator|_UIFeedback', re.I)
 swiftui = re.compile(r'SensoryFeedback', re.I)
 playback = re.compile(r'play|trigger|generate|impactOccurred|selectionChanged|notificationOccurred', re.I)

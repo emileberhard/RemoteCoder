@@ -42,7 +42,7 @@ with p.source_lease(), p.device_lease(args.device), contextlib.ExitStack() as cl
     cleanup.callback(device.terminate)
     identity = json.loads((device.derived / 'perf-build-identity.json').read_text())
     p.verify_scenario_artifact(device, identity)
-    evidence = {'artifact': identity, 'driverSHA256': p.DRIVER_SHA256,
+    evidence = {'artifact': identity, 'deviceUDID': device.udid, 'driverSHA256': p.DRIVER_SHA256,
                 'journeySHA256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
                 'fixtureSHA256': hashlib.sha256(fixture.read_bytes()).hexdigest(),
                 'physicalTouch': False, 'actuatorOnset': 'unmeasured'}
