@@ -41,7 +41,9 @@ final class PerformanceReplayRun {
 
     @concurrent static func preparedFixture(_ url: URL) async throws -> (PerformanceReplayScenario, String, URL) {
         let (scenario, hash, root) = try await fixture(url)
-        let destination = root.appending(path: "prepared")
+        let cache = AppStorageScope.current.caches
+        try FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        let destination = cache.appending(path: "perf-prepared")
         return (try scenario.prepared(to: Date.now.timeIntervalSince1970, root: root, destination: destination), hash, destination)
     }
 
