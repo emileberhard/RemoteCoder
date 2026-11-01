@@ -254,15 +254,14 @@ impl ClaudeSupervisor {
         {
             return Ok(ResumeDelivery::Stopped);
         }
-        let mut frames = self
-            .undelivered(item)
-            .await
-            .map_err(|error| {
-                resume_error(format!(
-                    "the resumed messages could not be checked against the history: {error:#}"
-                ))
-            })?
-            .into_iter();
+        let frames = self.undelivered(item).await.map_err(|error| {
+            resume_error(format!(
+                "the resumed messages could not be checked against the history: {error:#}"
+            ))
+        })?;
+        self.reprepare_captured_callbacks(&item.thread_id, &frames)
+            .await?;
+        let mut frames = frames.into_iter();
         let Some(first) = frames.next() else {
             return Ok(ResumeDelivery::Recorded);
         };
@@ -369,6 +368,49 @@ impl ClaudeSupervisor {
         .await?
     }
 
+    async fn reprepare_captured_callbacks(
+        &self,
+        thread_id: &str,
+        frames: &[ClaudeUserInput],
+    ) -> Result<(), TurnStartError> {
+        if self.has_runtime(thread_id).await {
+            return Ok(());
+        }
+        let inputs = frames
+            .iter()
+            .filter_map(|frame| frame.client_id.clone())
+            .collect::<Vec<_>>();
+        let thread = thread_id.to_owned();
+        self.conversation_index
+            .transact_parent(thread_id, move |parent| {
+                parent.reprepare_captured(&thread, &inputs);
+                Ok(())
+            })
+            .await
+            .map_err(|error| {
+                resume_error(format!(
+                    "captured callbacks could not be prepared for resubmission: {error:#}"
+                ))
+            })
+    }
+
+    async fn mark_resumed_submitted(&self, thread_id: &str, frame: &ClaudeUserInput) {
+        let Some(input) = frame.client_id.clone() else {
+            return;
+        };
+        let thread = thread_id.to_owned();
+        if let Err(error) = self
+            .conversation_index
+            .transact_parent(thread_id, move |parent| {
+                parent.mark_delivery_submitted(&thread, &input);
+                Ok(())
+            })
+            .await
+        {
+            warn!(%thread_id, error = %format!("{error:#}"), "a resumed Claude callback stays sending until history records it");
+        }
+    }
+
     async fn write_resumed(
         &self,
         thread_id: &str,
@@ -405,7 +447,9 @@ impl ClaudeSupervisor {
             .await?;
         drop(admitted);
         let Err(error) = pending.written().await else {
-            return self.ensure_runtime_current(thread_id, group).await;
+            self.ensure_runtime_current(thread_id, group).await?;
+            self.mark_resumed_submitted(thread_id, frame).await;
+            return Ok(());
         };
         if InputWriter::stall_was_queued(&error) {
             self.input_stalled(thread_id, group, "restart/resume", error);
@@ -590,6 +634,58 @@ mod tests {
         assert!(notice.contains("gateway restarted"), "{notice}");
         assert!(notice.contains("cut off mid-step"), "{notice}");
         assert!(history.contains(&item.recovery_id));
+    }
+
+    #[tokio::test]
+    async fn resume_resubmits_a_captured_callback_that_history_never_recorded() {
+        use crate::providers::claude::conversation_index::{
+            Delivery, DeliveryState, delivery_uuid,
+        };
+        let mut fixture = Fixture::new();
+        fixture.running_turn().await;
+        let mut item = fixture.agent.capture_for_restart().await.remove(0);
+        fixture.agent.suspend(THREAD).await;
+        fixture.next_completion().await;
+        fixture.agent.stop_all().await;
+        let delivery_id = "agent-child:completion";
+        let input = delivery_uuid(THREAD, delivery_id);
+        item.queued_inputs.push(ClaudeUserInput {
+            client_id: Some(input.clone()),
+            is_synthetic: true,
+            ..ClaudeUserInput::text("child result")
+        });
+        fixture
+            .agent
+            .conversation_index
+            .transact_parent(THREAD, move |parent| {
+                parent.record_delivery(Delivery {
+                    id: delivery_id.to_owned(),
+                    fingerprint: crate::ids::sha256_hex(b"child result"),
+                    state: DeliveryState::Submitted,
+                    receipt: Value::Null,
+                });
+                Ok(())
+            })
+            .await
+            .unwrap();
+
+        let (sender, _events) = mpsc::channel(256);
+        let replacement = ClaudeSupervisor::new(
+            fixture.stub.settings.clone(),
+            sender,
+            Journal::disabled(),
+            McpTokens::default(),
+        );
+        replacement.resume_with_notice(&item).await.unwrap();
+        let received = fixture.stub.wait_for_log("received.jsonl", 3).await;
+        let parent = replacement.conversation_index.parent(THREAD).await.unwrap();
+        replacement.stop_all().await;
+
+        assert_eq!(received[2]["uuid"], json!(input));
+        assert_eq!(
+            parent.delivery(delivery_id).map(|delivery| delivery.state),
+            Some(DeliveryState::Submitted)
+        );
     }
 
     #[tokio::test]

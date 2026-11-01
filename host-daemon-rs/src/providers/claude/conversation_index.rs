@@ -198,6 +198,26 @@ impl Parent {
         Ok(())
     }
 
+    pub(crate) fn reprepare_captured(&mut self, thread: &str, inputs: &[String]) {
+        for delivery in &mut self.deliveries {
+            if matches!(
+                delivery.state,
+                DeliveryState::Sending | DeliveryState::Submitted | DeliveryState::Uncertain
+            ) && inputs.contains(&delivery_uuid(thread, &delivery.id))
+            {
+                delivery.state = DeliveryState::Prepared;
+            }
+        }
+    }
+
+    pub(crate) fn mark_delivery_submitted(&mut self, thread: &str, input: &str) {
+        if let Some(delivery) = self.deliveries.iter_mut().find(|delivery| {
+            delivery.state == DeliveryState::Sending && delivery_uuid(thread, &delivery.id) == input
+        }) {
+            delivery.state = DeliveryState::Submitted;
+        }
+    }
+
     pub(crate) fn record_delivery(&mut self, delivery: Delivery) {
         self.deliveries
             .retain(|recorded| recorded.id != delivery.id);
