@@ -9,7 +9,14 @@ struct StreamingRevealCoverView: UIViewRepresentable {
     }
 
     func updateUIView(_ view: StreamingRevealCoverHost, context: Context) {
-        view.layers.update(covers, color: Color.appSystemBackground.resolve(in: context.environment).cgColor)
+        let hapticFrame: (@MainActor (TimeInterval) -> Void)?
+        if let handle = context.environment.streamingHaptics {
+            hapticFrame = { time in handle.frame(at: time) }
+        } else {
+            hapticFrame = nil
+        }
+        view.layers.update(covers, color: Color.appSystemBackground.resolve(in: context.environment).cgColor,
+                           hapticFrame: hapticFrame)
     }
 
     static func dismantleUIView(_ view: StreamingRevealCoverHost, coordinator: ()) {

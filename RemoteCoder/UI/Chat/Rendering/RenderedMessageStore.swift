@@ -21,11 +21,20 @@ final class RenderedMessageStore {
     // Readers observe only their own entry, so a render, insertion or eviction
     // invalidates only the bubbles showing that message.
     private var entries: [UUID: Entry] = [:]
+    private var wordHaptics: [UUID: StreamingWordHaptics] = [:]
     private var sourceBytes = 0
     private var presentedIDs: Set<UUID> = []
 
     subscript(id: UUID) -> RenderedMessage? { entry(id).rendered }
     func hasPresentation(for id: UUID) -> Bool { entry(id).isPresent }
+    func hasPendingWordHaptics(for id: UUID) -> Bool { wordHaptics[id]?.hasPending == true }
+
+    func dropPendingWordHaptics(for id: UUID) { wordHaptics[id]?.discard() }
+
+    func nextStreamingHaptic(for id: UUID, at time: TimeInterval) -> Float? {
+        guard !retired else { return nil }
+        return wordHaptics[id]?.next(at: time)
+    }
     private var insertionOrder: [UUID] = []
     private var requested: [UUID: Request] = [:]
     private var pending: [UUID: Request] = [:]
@@ -130,6 +139,7 @@ final class RenderedMessageStore {
     }
 
     private func remove(_ id: UUID) {
+        wordHaptics[id] = nil
         retainedTranscripts?.prepareRenderChange(id, in: ObjectIdentifier(self))
         guard let entry = entries.removeValue(forKey: id) else { return }
         sourceBytes -= entry.sourceBytes
@@ -177,6 +187,7 @@ final class RenderedMessageStore {
         worker?.cancel()
         for entry in entries.values { entry.replace(with: nil) }
         entries.removeAll()
+        wordHaptics.removeAll()
         insertionOrder.removeAll()
         sourceBytes = 0
         presentedIDs.removeAll()
@@ -214,7 +225,16 @@ final class RenderedMessageStore {
                 #if RC_PERF_HARNESS
                 PerfBuild.count("renderPublish")
                 #endif
-                entry.replace(with: message.publishing(after: entry.rendered, at: now))
+                let previous = entry.rendered
+                let published = message.publishing(after: previous, at: now)
+                entry.replace(with: published)
+                #if os(iOS)
+                if message.isStreaming || previous?.isStreaming == true {
+                    wordHaptics[id, default: StreamingWordHaptics()].update(begins: published.reveal.hapticBegins)
+                } else {
+                    wordHaptics[id] = nil
+                }
+                #endif
                 requested.removeValue(forKey: id)
             }
             evictIfNeeded()

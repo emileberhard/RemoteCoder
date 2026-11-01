@@ -1535,8 +1535,12 @@ entrypoint linked above.
 - **Haptics.** `docs/haptics.md` owns the tactile vocabulary, press/preview
   behavior, audio policy, Standard/Strong tuning, the device comparison page and
   verification. All app feedback goes through `HapticService` and the
-  `HapticEvent` catalog; do not add raw generators or per-screen pattern
-  constants. New native menus use `AppMenu`. Preserve native menus and the
+  `HapticEvent` / `StreamingHapticRecipe` catalogs; do not add raw generators
+  or per-screen pattern constants. Streaming word marks belong to
+  `RenderedMessageStore`, driven by the existing reveal-cover ticks through a
+  stateless handle. `HapticService` owns global cadence and a separate streaming
+  player. Ineligible frames discard pending marks; no replay, extra clock or
+  per-frame observation is allowed. New native menus use `AppMenu`. Preserve native menus and the
   reasoning gesture bridge when adding control coverage. `scripts/lint-haptics`
   enforces these boundaries.
 

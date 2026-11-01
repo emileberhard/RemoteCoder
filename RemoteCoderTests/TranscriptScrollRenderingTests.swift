@@ -8,6 +8,29 @@ import UIKit
 @Suite(.serialized)
 @MainActor
 struct TranscriptScrollRenderingTests {
+    @Test func hiddenRevealsDropMarksFromEveryPublication() async throws {
+        let store = RenderedMessageStore()
+        var message = ChatMessage(role: .codex, text: "One", isStreaming: true)
+        await store.prepare([message])
+        let scene = try #require(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let hosted = HostedWindow(scene: scene)
+        let controller = UIHostingController(rootView: ChatBubble(message: message, renderedMessages: store,
+            onFork: nil, queuedActions: nil).environment(AppThemeStore())
+            .environment(\.scenePhase, .active).environment(\.visualsVisible, false))
+        hosted.show(controller)
+        defer { hosted.close(); store.retire() }
+        controller.view.layoutIfNeeded()
+        for text in ["One two", "One two three"] {
+            message.text = text
+            await store.prepare([message])
+            controller.view.setNeedsLayout()
+            controller.view.layoutIfNeeded()
+            #expect(!store.hasPendingWordHaptics(for: message.id))
+            let begin = try #require(store[message.id]?.reveal.hapticBegins.last)
+            #expect(store.nextStreamingHaptic(for: message.id, at: begin + 0.01) == nil)
+        }
+    }
+
     @Test func anEvictedOlderRenderDoesNotResolveItsBookmarkAgainstPlaceholderGeometry() async throws {
         let fixture = TranscriptScrollFixture()
         let messages = (0..<12).flatMap { index in [

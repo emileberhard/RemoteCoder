@@ -11,7 +11,7 @@ final class HapticService {
     var isEnabled: Bool {
         didSet {
             defaults.set(isEnabled, forKey: Self.preferenceKey)
-            if !isEnabled { pulse = nil; cancelInteractions() }
+            if !isEnabled { pulse = nil; cancelPlayback() }
         }
     }
     var strength: HapticStrength {
@@ -19,11 +19,15 @@ final class HapticService {
             guard strength != oldValue else { return }
             defaults.set(strength.rawValue, forKey: Self.strengthKey)
             pulse = nil
-            cancelInteractions()
+            cancelPlayback()
         }
     }
     private(set) var pulse: HapticPulse?
     @ObservationIgnored private let makeInteractionPlayer: () -> any HapticInteractionPlaying
+    @ObservationIgnored private let makeStreamingPlayer: () -> any HapticStreamingPlaying
+    @ObservationIgnored private var streamingPlayer: (any HapticStreamingPlaying)?
+    @ObservationIgnored private var lastStreamingPulse = -TimeInterval.infinity
+    @ObservationIgnored private var lastFeedback: ContinuousClock.Instant?
     @ObservationIgnored private var interaction: (owner: UUID, player: any HapticInteractionPlaying)?
     @ObservationIgnored private var finishingPlayer: (owner: UUID, player: any HapticInteractionPlaying)?
     @ObservationIgnored private let defaults: UserDefaults
@@ -37,9 +41,11 @@ final class HapticService {
 
     init(defaults: UserDefaults, supportsHaptics: Bool,
          isActive: @escaping () -> Bool,
-         makeInteractionPlayer: @escaping () -> any HapticInteractionPlaying) {
+         makeInteractionPlayer: @escaping () -> any HapticInteractionPlaying,
+         makeStreamingPlayer: @escaping () -> any HapticStreamingPlaying) {
         self.defaults = defaults
         self.makeInteractionPlayer = makeInteractionPlayer
+        self.makeStreamingPlayer = makeStreamingPlayer
         self.supportsHaptics = supportsHaptics
         self.isActive = isActive
         self.isEnabled = defaults.object(forKey: Self.preferenceKey) as? Bool ?? true
@@ -52,6 +58,29 @@ final class HapticService {
 
     var canPlay: Bool { isAvailable && captureOwners.isEmpty }
 
+    var canPlayStreaming: Bool {
+        canPlay && interaction == nil && finishingPlayer?.player.hasActiveAccent != true
+            && (lastFeedback.map { $0.duration(to: .now) >= .milliseconds(200) } ?? true)
+    }
+
+    func admitsStreamingFrame(at time: TimeInterval) -> Bool {
+        time - lastStreamingPulse >= StreamingRevealSchedule.stagger - 1.0 / 240
+    }
+
+    func prepareStreaming() {
+        guard canPlay else { return }
+        let player = streamingPlayer ?? makeStreamingPlayer()
+        streamingPlayer = player
+        player.prepare { [weak self] in self?.canPlay == true }
+    }
+
+    func playStreaming(punch: Float, at time: TimeInterval) {
+        guard canPlayStreaming, admitsStreamingFrame(at: time), let streamingPlayer else { return }
+        lastStreamingPulse = time
+        signposter.emitEvent("streaming-word-request", "punch=\(punch)")
+        streamingPlayer.play(punch: punch)
+    }
+
     private var isAvailable: Bool { isEnabled && supportsHaptics && isActive() && !isCallActive() }
 
     func canPlay(_ event: HapticEvent) -> Bool {
@@ -61,11 +90,11 @@ final class HapticService {
     /// Suppression starts before audio activation suspends, not from an optimistic UI flag.
     func beginCapture(owner: UUID) {
         captureOwners.insert(owner)
-        cancelInteractions()
+        cancelPlayback()
     }
     func endCapture(owner: UUID) { captureOwners.remove(owner) }
 
-    /// No delayed work, hardware engine, I/O or feedback queue. Ineligible events are discarded.
+    /// No delayed work, engine start, I/O or feedback queue. Ineligible events are discarded.
     func play(_ event: HapticEvent, occurrence: HapticOccurrence? = nil) {
         if let occurrence, !consume(occurrence) { return }
         guard accept(event) else { return }
@@ -114,11 +143,17 @@ final class HapticService {
         }
     }
 
-    func cancelInteractions() {
+    private func cancelInteractions() {
         interaction?.player.cancel()
         finishingPlayer?.player.cancel()
         interaction = nil
         finishingPlayer = nil
+    }
+
+    func cancelPlayback() {
+        cancelInteractions()
+        streamingPlayer?.cancel()
+        streamingPlayer = nil
     }
 
     /// Standard leaves native selection alone. Strong supplements only a user write,
@@ -129,6 +164,7 @@ final class HapticService {
 
     func accept(_ event: HapticEvent) -> Bool {
         let allowed = canPlay(event)
+        if allowed { lastFeedback = .now }
         signposter.emitEvent("feedback-intent", "\(event.rawValue, privacy: .public) eligible=\(allowed)")
         return allowed
     }

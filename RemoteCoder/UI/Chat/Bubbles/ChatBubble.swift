@@ -142,6 +142,8 @@ private extension ChatBubble {
 private struct PreparedAssistantContent: View, Equatable {
     #if os(macOS)
     @Environment(\.transcriptSurfaceActivity) private var surfaceActivity
+    #else
+    @Environment(\.transcriptRowVisibility) private var rowVisibility
     #endif
     let messageID: UUID
     let renderedMessages: RenderedMessageStore
@@ -174,6 +176,25 @@ private struct PreparedAssistantContent: View, Equatable {
         .contentTransition(.identity)
         #if os(macOS)
         .environment(\.transcriptTextSelectionEnabled, rendered?.isStreaming != true)
+        #else
+        .environment(\.streamingHaptics, StreamingHapticHandle(store: renderedMessages, messageID: messageID,
+                                                              row: rowVisibility))
+        .onChange(of: rendered?.isStreaming, initial: true) {
+            if allowsReveal, rendered?.isStreaming == true, rowVisibility?.isVisible == true { HapticService.shared.prepareStreaming() }
+        }
+        .onChange(of: rendered?.revision, initial: true) {
+            if reveal.end == nil {
+                renderedMessages.dropPendingWordHaptics(for: messageID)
+            } else if rowVisibility?.isVisible == true, renderedMessages.hasPendingWordHaptics(for: messageID) {
+                HapticService.shared.prepareStreaming()
+            }
+        }
+        .onChange(of: allowsReveal) {
+            if !allowsReveal { renderedMessages.dropPendingWordHaptics(for: messageID) }
+        }
+        .onDisappear {
+            renderedMessages.dropPendingWordHaptics(for: messageID)
+        }
         #endif
         .transcriptPerfFeature("geometryGroup") { $0.geometryGroup() }
         .background {
@@ -187,10 +208,13 @@ private struct PreparedAssistantContent: View, Equatable {
         lhs.messageID == rhs.messageID && lhs.renderedMessages === rhs.renderedMessages
     }
 
+    private var allowsReveal: Bool {
+        !Self.perfDisablesReveal && energyPolicy.animatesDecorations(sceneActive: scenePhase == .active,
+            visible: visualsVisible, reduceMotion: reduceMotion)
+    }
+
     private func revealing(_ rendered: RenderedMessage?) -> StreamingReveal {
-        guard !Self.perfDisablesReveal, let reveal = rendered?.reveal, let end = reveal.end, end > settledReveal,
-              energyPolicy.animatesDecorations(sceneActive: scenePhase == .active, visible: visualsVisible,
-                                               reduceMotion: reduceMotion) else { return .settled }
+        guard allowsReveal, let reveal = rendered?.reveal, let end = reveal.end, end > settledReveal else { return .settled }
         return reveal
     }
 }

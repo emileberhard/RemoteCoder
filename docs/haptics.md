@@ -43,7 +43,8 @@ must be implemented at the owning component rather than bypassed at call sites.
 
 ## Platform contract
 
-Use `HapticEvent.recipe(for:)` as the only pattern/intensity catalog. The same
+Use `HapticEvent.recipe(for:)` for semantic feedback and `StreamingHapticRecipe`
+for streaming words. The same
 `HapticRecipe` maps to SwiftUI sensory feedback for ordinary controls and UIKit
 for prepared gesture ticks. `HapticAccent` owns the two custom patterns. The newer
 `SensoryFeedback.press`, `release`, and typed `selection` members are callable from
@@ -88,8 +89,8 @@ horizontal drag through the shared gesture-feedback modifier in the same update.
 This includes a slow drag released at the endpoint. Touch-down, settle
 completion, and programmatically moving the drawer emit no additional pulse.
 Dynamic composer recovery buttons reserve their actual bounds from empty-space
-focus, just like the always-visible controls. Keyboard focus, typing, scrolling, streamed
-text/tool events, upload percentages and usage updates stay silent.
+focus, just like the always-visible controls. Keyboard focus, typing, scrolling,
+tool events, upload percentages and usage updates stay silent.
 
 Send deliberately has two meanings: touch-down confirms the button was pressed;
 `dispatch` confirms that the message was persisted locally. Keyboard submission
@@ -121,6 +122,62 @@ outcomes never become success. Replays and hidden-owner occurrences are consumed
 silently. Other-thread notification alerts remain system-owned, so the app does
 not add a competing arrival vibration. Banners preserve the actual result rather
 than labeling every terminal state successful.
+
+## Streaming words
+
+Assistant word reveals can play a brief opening sequence on supported iPhones.
+`StreamingHapticRecipe` uses one transient: intensity is `0.9 * punch`, and
+sharpness is a random value in `0.2..<0.4` plus `0.1 * punch`. Standard and Strong
+use the same decorative recipe. Up to six distinct word starts per message are
+marked as they arrive across publications, with punches
+`1, 0.84, 0.68, 0.52, 0.36, 0.2`. Continuation fragments share one word's start;
+a played or discarded start never re-arms. Code, tables and other atomic blocks
+produce no word feedback. New prose after them uses only the message's remaining
+opening budget.
+
+`RenderedMessageStore` owns one unobserved value per message: at most six pending
+starts, a latest-seen start and the consumed opening budget. It is removed with
+the render entry or store. Completed history creates no marks; a terminal
+publication can reveal and mark final new words. Row remounting does not restart
+the sequence. The existing reveal-cover display links call a stateless handle;
+no additional timer or observed frame state is added. A delayed frame chooses
+only the newest due mark and discards older due marks. Starts older than the
+70 ms word stagger are dropped. The service shares one cadence across hosts,
+with a minimum gap of `70 ms - 1/240 s` to admit jittered nominal frames without
+allowing catch-up to become a 30 Hz burst. The display link remains at 30 Hz.
+
+The handle reads the existing row visibility at tick time. A hidden row,
+inactive scene, disabled feedback, unsupported hardware, capture, call, active
+gesture, finishing accent or accepted app feedback within 200 ms drops that
+message's pending marks. Reopening a gate never replays them; genuinely new
+starts can use the remaining opening budget. Reduce Motion, energy conservation
+and hidden transcript presentation settle the reveal and therefore produce no
+word ticks or preparation. Streaming bypasses semantic-pulse observation and the
+bounded completion/question occurrence set.
+
+`HapticService` owns a separate `PreparedStreamingHapticPlayer`; gesture players
+retain their own lifetime. Visible streaming state, the existing central row
+visibility transition and eligible reveal publications prepare the haptics-only
+engine asynchronously. Temporary interaction suppression gates playback rather
+than preparation. Each ready pulse makes and starts one transient player
+immediately. A cold or failed engine drops that pulse, without a native fallback
+or delayed replay. The engine is reused across messages and uses Core Haptics
+auto-shutdown while idle. An idle stop records it as unready; later preparation
+restarts it asynchronously, never from a display tick. Cancellation, capture,
+call, scene exit, opt-out and strength changes release it. Reset/start/stop
+callbacks are generation-fenced. The layer does not activate audio or change
+its session, route or recording allowance.
+
+Inspected shipped UI behavior informed the recipe and reveal coupling.
+RemoteCoder deliberately uses a fixed opening budget across publications,
+one budget per message, no re-arming and no stale catch-up. These choices make
+feedback independent of chunk boundaries and keep bookkeeping constant per
+message. Static evidence does not establish which source-app rollout or device
+paths are enabled. Decompiled artifacts and addresses remain in the private
+research corpus. Core scheduling tests, hosted store/service tests and SDK
+pattern export verify deterministic behavior. Requests and accepted-playback
+signposts do not establish physical feel, first-pulse latency or power impact;
+those require the test iPhone.
 
 ## Hold, peek and open
 

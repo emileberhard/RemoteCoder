@@ -301,7 +301,9 @@ measurably beat SwiftUI.
   (`.contentTransition(.identity)`). New words fade in under background-colored
   covers that `StreamingReveal` schedules once per publication; one 30 Hz display
   link per covered text sets their opacity while the text and its layout stay
-  unchanged, and stops when the last cover clears.
+  unchanged, and stops when the last cover clears. On iPhone those ticks also
+  drive store-owned word haptic marks through `HapticService`'s separate streaming
+  player; ineligible frames flush marks and never replay them.
 - Each observation has one owner. Transcript visibility comes from a single
   `onScrollTargetVisibilityChange` on iOS and `AppKitTranscriptContainer`'s
   bounded native row index on Mac; do not add per-row visibility tracking.

@@ -92,6 +92,12 @@ struct StreamingReveal: Equatable, Sendable {
     private let schedule: StreamingRevealSchedule
     private let blocks: [Int: StreamingRevealBlock]
     let end: TimeInterval?
+    var hapticBegins: [TimeInterval] {
+        Set(units.compactMap { unit -> TimeInterval? in
+            if case .text = unit.target { return unit.begin }
+            return nil
+        }).sorted()
+    }
 
     private init(units: [Unit], schedule: StreamingRevealSchedule) {
         self.units = units
