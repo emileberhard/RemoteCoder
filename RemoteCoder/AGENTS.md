@@ -60,7 +60,9 @@ holds the detailed history, recovery, voice and persistence contracts.
   render server with no app commits. The timeline's live label uses the shared
   `shimmer(isActive:)` modifier: SwiftUI owns text layout and accessibility,
   while the iOS arm moves one native gradient under the same content's alpha
-  mask. The Mac arm stays static. Decoration policy and central row visibility
+  mask. The Mac arm stays static: a native gradient failed its compositor budget
+  ([Thinking presentation](../docs/thinking-presentation.md#mac-motion-admission)).
+  Decoration policy and central row visibility
   gate the effect; removal stops it immediately. A running `TimelineView`, even
   a periodic one, keeps the display link re-evaluating the view graph; the
   earlier SwiftUI dots cost about 2 s of main-thread time per 41 s streamed

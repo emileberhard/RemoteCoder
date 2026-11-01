@@ -1,8 +1,9 @@
 # Thinking presentation
 
-The live timeline header shows Thinking with a moving band. Completed headers
-keep their observed duration or action count. Timeline liveness remains owned
-by conversation projection; animation never invents an active turn.
+The live timeline header shows Thinking with a moving band on iOS and static
+text on Mac. Completed headers keep their observed duration or action count.
+Timeline liveness remains owned by conversation projection; animation never
+invents an active turn.
 
 ## Ownership
 
@@ -17,7 +18,9 @@ The modifier stops immediately when inactive, hidden, offscreen, in Reduce
 Motion, Increase Contrast, or energy conservation. Within a transcript it uses
 the central row-visibility owner. Outside a transcript, surface visibility is
 the caller's existing environment responsibility. The Mac arm keeps the text
-static, matching the existing platform policy for repeating decorations.
+static because a native gradient experiment did not meet its compositor
+budget. This is a decision about the measured shimmer, not every repeating
+decoration.
 
 The band follows a continuous 1.5-second ease-in-out sweep with a narrow opacity
 profile and a shared media-time phase. Repeated publications do not restart it.
@@ -50,3 +53,23 @@ Compare the same fixture and energy state on the same device, retaining the
 matching app and symbols. Check the native mask, hit testing, text scaling,
 direction, gate transitions and expanded streaming content visually. Measure
 ProMotion refresh-rate shares separately from the 60 Hz test iPhone.
+
+## Mac motion admission
+
+A layer-hosting native gradient eliminated recurring app commits but did not
+meet the compositor budget. Its 30 Hz preference worked on the measured Mac;
+that does not remove WindowServer work. The Mac shimmer remains static.
+Detailed measurements and their limitations stay in the private operator records.
+
+A future attempt must prove the animated arm runs, then pass at least three
+alternating static/animated pairs with identical fixtures and energy state on
+an otherwise idle Mac; record background load. Require app CPU delta ≤0.5 points
+of one core, separately sampled WindowServer CPU delta ≤1 point, GPU delta
+≤2 ms/s, no recurring animation-driven app commits (idle delta ≤0.2/s), scrolling
+hitch rate <10 ms/s with delta ≤1 ms/s, and sustained `powermetrics` CPU + GPU +
+ANE power delta ≤0.2 W. Report refresh-rate shares without changing display mode.
+Missing or noisy evidence does not pass; zero app commits alone do not pass.
+Check scrolling, glass, focus changes without
+row-host rebuilding, two windows, Stage Manager, detached rows, hit testing and
+one accessibility element. Keep occlusion and central row visibility with their
+existing owners; do not redefine `visualsVisible` to gate decoration motion.
