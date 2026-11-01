@@ -62,6 +62,9 @@ impl JobOwner {
                             .native_input_binding(conversation, &job.current_input_id())
                             .await
                     }
+                    ExecutionState::Unknown { reason, .. } => {
+                        return self.record_unknown(job, reason.clone()).await;
+                    }
                     _ => Ok(None),
                 };
                 let binding = match observed {

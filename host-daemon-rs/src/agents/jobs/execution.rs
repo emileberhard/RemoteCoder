@@ -544,14 +544,16 @@ impl JobOwner {
     }
 
     pub(super) async fn record_unknown(&self, job: &JobRecord, reason: String) -> Result<()> {
+        let has_receiver = matches!(
+            job.recipient,
+            Recipient::Conversation { .. } | Recipient::Remote { .. }
+        );
         if matches!(&job.execution, ExecutionState::Unknown { reason: current, .. } if current == &reason)
+            && (!has_receiver || !job.notices.is_empty())
         {
             return Ok(());
         }
-        let notice = if matches!(
-            job.recipient,
-            Recipient::Conversation { .. } | Recipient::Remote { .. }
-        ) {
+        let notice = if has_receiver {
             let host = self.gateway()?.job_host_name()?;
             let stop = if matches!(job.spec, SpecEvidence::Unknown { .. }) {
                 "Stop native execution through its exact conversation in the owning client."
