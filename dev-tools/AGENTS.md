@@ -172,6 +172,8 @@ receipt shape, and note what each leaves behind:
   fresh `IsolatedGateway`, with private provider homes and a copied router key.
   It verifies queued two-block Claude steer replay and checkpointed control-side
   Codex fork injection, plus first-answer fork provenance on both providers.
+  The receipt records source/fork cache counters and a later Codex steered turn;
+  caching is observed without a pass/fail threshold.
   It removes its gateway, daemon and private homes and retains a content-safe
   receipt under `/tmp/steer-fork-evidence-*`. Never route it to production.
 - `e2e-reads` is read-only. `e2e-fork-live` and `e2e-claude-fork-live` leave their
