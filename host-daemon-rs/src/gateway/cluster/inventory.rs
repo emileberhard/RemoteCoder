@@ -70,7 +70,6 @@ impl Gateway {
         let mut warnings = Vec::new();
         let mut pages=pages.into_iter().filter_map(|(host,result)| match result {
             Err(error)=> {warnings.push(format!("{host}: {error}"));coverage.push(json!({"hostId":host,"state":error.coverage_state()}));None}
-            Ok(page) if page["agents"].as_array().is_some_and(Vec::is_empty) && page["nextCursor"].as_str().is_some_and(|next| cursor.positions.get(&host).and_then(|position|position.as_deref())==Some(next)) => {warnings.push(format!("{host}: inventory cursor did not advance"));coverage.push(json!({"hostId":host,"state":"unavailable"}));None}
             Ok(page)=> {warnings.extend(page["warnings"].as_array().into_iter().flatten().take(32).map(|warning|format!("{host}: {warning}")));coverage.push(json!({"hostId":host,"state":if page["complete"]==false {"stale"} else {"ok"}}));Some((host,page["agents"].as_array().cloned().unwrap_or_default().into_iter().collect::<std::collections::VecDeque<_>>(),page["nextCursor"].as_str().map(str::to_owned)))}
         }).collect::<Vec<_>>();
         warnings.truncate(256);
@@ -276,10 +275,6 @@ impl Gateway {
         } else {
             Some(inventory_cursor(&cursor)?)
         };
-        ensure!(
-            next.is_none() || next.as_deref() != params["cursor"].as_str(),
-            "unavailable: inventory cursor did not advance"
-        );
         Ok(json!({"agents":agents,"nextCursor":next,"warnings":warnings,"complete":complete}))
     }
 }
