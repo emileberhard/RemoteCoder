@@ -276,15 +276,22 @@ impl Link {
         use futures_util::stream;
         let identity = self.identity.read().await.clone();
         let members = self.store.all().await?;
-        stream::iter(members.into_iter().filter(|member| member.state == MemberState::Active))
-            .for_each_concurrent(64, |member| {
-                let identity = &identity;
-                async move {
-                    let hello = json!({"protocol":PROTOCOL,"host":identity.host_id,"incarnation":identity.incarnation});
-                    let _ = self.call(&member.host, "cluster/hello", hello).await;
-                }
-            })
-            .await;
+        stream::iter(
+            members
+                .into_iter()
+                .filter(|member| member.state == MemberState::Active),
+        )
+        .for_each_concurrent(64, |member| {
+            let identity = &identity;
+            async move {
+                let hello = json!({
+                    "protocol":PROTOCOL, "host":identity.host_id,
+                    "incarnation":identity.incarnation
+                });
+                let _ = self.call(&member.host, "cluster/hello", hello).await;
+            }
+        })
+        .await;
         Ok(())
     }
 

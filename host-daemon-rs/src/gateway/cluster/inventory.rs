@@ -64,10 +64,14 @@ impl Gateway {
                     if complete {
                         return (host, Ok(json!({"agents":[],"nextCursor":null})));
                     }
-                    let request = json!({"limit":limit.min(256),"cursor":position,"active":params["active"],"provider":params["provider"]});
+                    let request = json!({
+                        "limit":limit.min(256), "cursor":position,
+                        "active":params["active"], "provider":params["provider"]
+                    });
                     let page = if host == identity.host_id {
-                        self.local_agent_inventory(request).await
-                            .map_err(|error| crate::cluster::link::LinkError::local(ErrorClass::Unavailable, error))
+                        self.local_agent_inventory(request).await.map_err(|error| {
+                            crate::cluster::link::LinkError::local(ErrorClass::Unavailable, error)
+                        })
                     } else {
                         link.call(&host, "agent/cluster/inventory", request).await
                     };
