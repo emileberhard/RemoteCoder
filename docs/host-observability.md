@@ -524,6 +524,9 @@ attachment, view mutation or dependency on the haptic attachment.
 These are temporary incident diagnostics: remove the recorder and its existing
 best-effort presentation hooks once the safe-area collapse is diagnosed and fixed.
 New presentations have no instrumentation requirement.
+Changes to these diagnostics are checked with the targeted hosted suite:
+`just ios-simulator-test RemoteCoderTests/ChatSafeAreaTests`. It rotates the whole
+scene and stays separate from the routine CI rendering suites.
 
 Each record contains the host, thread (or `new-chat`), conversation and chat-window
 identities; SwiftUI sizes, local frames and safe-area insets; and the scene's native
