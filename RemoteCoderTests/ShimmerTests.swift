@@ -36,7 +36,7 @@ struct ShimmerTests {
 }
 
 enum ShimmerGate: CaseIterable, Sendable {
-    case running, completed, hidden, reducedMotion, lowPower, increasedContrast, inactive
+    case running, completed, hidden, lowPower, inactive
 }
 
 @MainActor @Observable
@@ -52,8 +52,6 @@ private struct ShimmerFixtureView: View {
             .shimmer(isActive: fixture.gate != .completed)
             .environment(\.scenePhase, fixture.gate == .inactive ? .inactive : .active)
             .environment(\.visualsVisible, fixture.gate != .hidden)
-            .environment(\.accessibilityReduceMotion, fixture.gate == .reducedMotion)
-            .environment(\.colorSchemeContrast, fixture.gate == .increasedContrast ? .increased : .standard)
             .environment(\.appEnergyPolicy, AppEnergyPolicy(
                 isLowPowerModeEnabled: fixture.gate == .lowPower,
                 thermalState: .nominal

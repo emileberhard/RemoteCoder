@@ -20,8 +20,10 @@ the caller's existing environment responsibility. The Mac arm keeps the text
 static, matching the existing platform policy for repeating decorations.
 
 The band follows a 1.5-second ease-in-out sweep with a narrow opacity profile
-and a shared media-time phase. Repeated publications do not restart it. The
-frame-rate preference is a platform hint and needs physical-device validation.
+and a shared media-time phase. Repeated publications do not restart it. Forty-five
+discrete native keyframes per cycle give 30 updates per second without relying
+on the frame-rate hint alone. The group also requests a 20–30 Hz range. Physical
+display rates and render-server cost remain measurement results, not API guarantees.
 
 ## Disclosure motion
 
