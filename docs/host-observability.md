@@ -905,6 +905,12 @@ hang/hitch/termination/runtime/signpost evidence; CPU, memory and network remain
 interval metrics. An empty report stream proves no absence of failures.
 Simulated ingestion and real sampled delivery are separate acceptance facts.
 
+`ConversationList` includes the agent-warning count and at most three bounded
+samples in its existing `refresh success` log instead of replaying every warning
+as a notice. A protected header read failure emits `protected header recovery
+failed` with its exact thread and error and retains per-thread retry backoff;
+it does not mark the host's history refresh stale.
+
 On the host, every Claude `thread/items/list` or `thread/turns/list` writes one
 `claude history page` line to the gateway tracing log with the entry count,
 response bytes, projection cache outcome (`hit`, `built` or `uncached`), and

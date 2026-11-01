@@ -5,13 +5,6 @@ import OSLog
 @Observable
 @MainActor
 final class ConversationList {
-    private func reportAgentCoverage(_ warnings: [String]) {
-        let warnings = Set(warnings)
-        guard warnings != agentCoverageWarnings else { return }
-        agentCoverageWarnings = warnings
-        for warning in warnings.sorted() { logger.notice("Agent coverage: \(warning)") }
-    }
-
     private enum RefreshIntent {
         case mergeRecent, pollRecent, eventRecent, eventFullRecent, replaceCoverage
 
@@ -45,7 +38,6 @@ final class ConversationList {
 
     @ObservationIgnored var lastSuccessfulRefreshAt: Date?
     @ObservationIgnored private var lastFullRefreshAt: Date?
-    @ObservationIgnored private var agentCoverageWarnings: Set<String> = []
     @ObservationIgnored private var eventRefreshTask: Task<Void, Never>?
     @ObservationIgnored private var eventRefreshGeneration: UInt64 = 0
     @ObservationIgnored private var pendingEventRefresh: RefreshIntent?
@@ -524,7 +516,6 @@ final class ConversationList {
             if result.isUnchanged, result.failures.isEmpty, !result.isDeferred,
                !classificationsChanged, !threads.contains(where: { $0.pendingHistorySince != nil }) {
                 lastSuccessfulRefreshAt = .now
-                reportAgentCoverage(result.agentWarnings + classifications.warnings)
             } else {
                 let previousHeaders = Dictionary(uniqueKeysWithValues: threads.map { ($0.id, $0) })
                 let fetched = result.threads.map { thread in
@@ -584,8 +575,9 @@ final class ConversationList {
                 refreshDeferred = result.isDeferred
                 let failure = result.failures.isEmpty ? nil : result.failures.joined(separator: "\n")
                 if errorMessage != failure { errorMessage = failure }
-                reportAgentCoverage(result.agentWarnings + retained.warnings)
-                logger.info("refresh success (reason=\(reason), requested=\(limit), fetched=\(result.threads.count), merged=\(merged.count))")
+                let warnings = Set(result.agentWarnings + retained.warnings)
+                let warningSample = warnings.sorted().prefix(3).map { String($0.prefix(256)) }
+                logger.info("refresh success (reason=\(reason), requested=\(limit), fetched=\(result.threads.count), merged=\(merged.count), agentWarnings=\(warnings.count), warningSample=\(warningSample))")
                 persisted = nextHeaderSnapshot()
             }
             if read == .full, result.failures.isEmpty, !result.isDeferred { lastFullRefreshAt = .now }
@@ -747,7 +739,6 @@ final class ConversationList {
             if query.isEmpty { continuation = advanced; olderProvider = next }
             else { searchContinuation = advanced; searchProvider = next }
             errorMessage = result.unavailable.isEmpty ? nil : "Some completion times couldn't be loaded; keeping their last known values."
-            reportAgentCoverage(result.warnings)
             await threadStore.save(snapshot: nextHeaderSnapshot())
             guard !headerReadsRetired, generation == listReadGeneration, !Task.isCancelled else { return }
             await resolveProjects()
@@ -792,7 +783,7 @@ final class ConversationList {
             catch {
                 guard headerRecovery == .reading(id), self.header(id: id) == nil, priorityThreadIDs.contains(id) else { continue }
                 recordRecoveryFailure(id, now: now)
-                errorMessage = "Some pinned or active conversations couldn't be loaded. Try again when the host is available."
+                logger.notice("protected header recovery failed (thread=\(id)): \(error.localizedDescription)")
             }
         }
     }

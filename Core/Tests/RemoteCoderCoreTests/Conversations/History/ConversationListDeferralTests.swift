@@ -44,6 +44,25 @@ struct ConversationListDeferralTests {
         }
     }
 
+    @Test func aMissingProtectedHeaderRetriesWithoutMakingTheHostStale() async throws {
+        try await withList { list, gateway in
+            let id = "new-child"
+            let now = Date(timeIntervalSince1970: 1_000)
+            #expect(list.setProtectedThreadIDs([id]))
+            await list.recoverProtectedHeaders(now: now)
+            #expect(list.errorMessage == nil)
+            #expect(await gateway.headerReads == [id])
+            await gateway.setHeader(.historyFixture(id: id, updatedAt: 2))
+            await list.recoverProtectedHeaders(now: now.addingTimeInterval(29))
+            #expect(await gateway.headerReads == [id])
+            #expect(list.header(id: id) == nil)
+            await list.recoverProtectedHeaders(now: now.addingTimeInterval(30))
+            #expect(await gateway.headerReads == [id, id])
+            #expect(list.header(id: id) != nil)
+            #expect(list.errorMessage == nil)
+        }
+    }
+
     private func withList(_ body: (ConversationList, DeferralGateway) async throws -> Void) async throws {
         let temporary = TemporaryHostStorage()
         let suiteName = "RemoteCoderCoreTests.Deferral.\(UUID())"
@@ -94,7 +113,7 @@ private actor DeferralGateway: CodexHistoryGateway, ConversationMarksRemote {
     }
     func readThread(threadID: String, includeTurns: Bool) throws -> CodexAppServerV2.ThreadReadResponse {
         headerReads.append(threadID)
-        guard let exactHeader, exactHeader.id == threadID else { throw Failure.unexpectedRead }
+        guard let exactHeader, exactHeader.id == threadID else { throw GatewayClient.ClientError.serverError(message: "session not found", code: -32600) }
         return .init(thread: exactHeader)
     }
     func historyPageData(method: String, params: JSONValue) throws -> Data {
