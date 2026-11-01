@@ -425,3 +425,22 @@ attach to a real view. The Pragmatic Programmer topics 26 and 28 inform explicit
 resource ownership and hiding platform dispatch behind the service boundary.
 Generator submission is measurable in software; physical onset and perceived
 feel remain separate device acceptance.
+
+## Dispatch measurement
+
+The iOS `RC_PERF_HARNESS` command `haptic-probe` takes `kind: press|semantic`
+and `count: 1...60`. Each trigger starts on its own main run-loop turn. Press
+changes a synthetic pressed state through production `appPressFeedback`;
+semantic submits a local `.commit`. Neither synthesizes native touch delivery.
+The probe shares the harness's cancellable journey task and stops when eligibility,
+strength, power mode or thermal state changes.
+
+`dev-tools/probes/haptic-latency.py` records matched offline journeys with
+`os_signpost` in addition to the normal performance instruments. It requires an
+exact test-device UDID, a private fixture and an output directory. The companion
+`haptic-latency-report.py` pairs event-named intents and requests between adjacent
+input markers, reports missing inputs/requests and keeps the first sample separate.
+It also reports sampled feedback-family stacks with coverage; samples do not mark
+exact API entry. The historical sensory-feedback baseline marker precedes SwiftUI's
+internal playback, so its dispatch-marker latency is an optimistic bound. Physical
+actuator onset remains unmeasured.
