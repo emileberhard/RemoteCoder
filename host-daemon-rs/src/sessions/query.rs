@@ -1,4 +1,4 @@
-use super::{PAGE_BYTES, PAGE_ROWS, changes};
+use super::{PAGE_BYTES, PAGE_ROWS};
 use anyhow::{Context, Result, ensure};
 use base64::Engine;
 use rusqlite::{Connection, OptionalExtension, Params, params, types::ValueRef};
@@ -100,7 +100,6 @@ pub(crate) fn sql(db: &super::store::Reader, sql: &str) -> Result<Value> {
     )?;
     let tx = db.unchecked_transaction()?;
     let mut result = rows(&tx, sql, [])?;
-    result["changeCursor"] = json!(changes::cursor(&tx)?);
     result["schemaVersion"] = json!(1);
     result["coverage"] = coverage(db)?;
     Ok(result)

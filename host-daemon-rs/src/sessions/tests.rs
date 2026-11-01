@@ -277,25 +277,16 @@ fn sessions_evidence_survives_append_rewrite_and_exact_paging() {
 }
 
 #[test]
-fn sessions_feed_restart_expiry_and_atomic_rejection() {
+fn sessions_feed_records_only_evidence_and_keeps_its_newest_rows() {
     let f = fixture();
     scan(&f);
     let db = f.store.reader().unwrap();
     let cursor = changes::cursor(&db).unwrap();
     drop(db);
     let reopened = Store::open(f.store.path.clone()).unwrap();
-    assert!(
-        changes::read(
-            &reopened.reader().unwrap(),
-            changes::Request {
-                cursor: Some(cursor.clone()),
-                limit: None
-            }
-        )
-        .unwrap()["rows"]
-            .as_array()
-            .unwrap()
-            .is_empty()
+    assert_eq!(
+        changes::cursor(&reopened.reader().unwrap()).unwrap(),
+        cursor
     );
     writeln!(
         OpenOptions::new().append(true).open(&f.codex).unwrap(),
@@ -310,20 +301,34 @@ fn sessions_feed_restart_expiry_and_atomic_rejection() {
             .len(),
         1
     );
-    let writer = f.store.writer().unwrap();
-    writer
-        .execute("UPDATE change SET committed_at='2000-01-01T00:00:00Z'", [])
+    let after: i64 = cursor.rsplit_once(':').unwrap().1.parse().unwrap();
+    let evidence: Vec<String> = reopened
+        .reader()
+        .unwrap()
+        .prepare("SELECT evidence_path FROM change WHERE seq>?1")
+        .unwrap()
+        .query_map([after], |r| r.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
         .unwrap();
-    changes::prune(&writer).unwrap();
-    let error = changes::read(
-        &reopened.reader().unwrap(),
-        changes::Request {
-            cursor: Some(cursor),
-            limit: None,
-        },
-    )
-    .unwrap_err();
+    assert_eq!(evidence.len(), 1, "{evidence:?}");
+    assert!(evidence[0].ends_with(f.codex.file_name().unwrap().to_str().unwrap()));
+    let head = changes::cursor(&reopened.reader().unwrap()).unwrap();
+    scan(&f);
+    assert_eq!(changes::cursor(&reopened.reader().unwrap()).unwrap(), head);
+    let writer = f.store.writer().unwrap();
+    changes::prune(&writer, 1).unwrap();
+    let rows = |db: &rusqlite::Connection| {
+        db.query_row("SELECT count(*) FROM change", [], |r| r.get::<_, i64>(0))
+            .unwrap()
+    };
+    assert_eq!(rows(&writer), 1);
+    changes::window(&reopened.reader().unwrap(), Some(&cursor)).unwrap();
+    changes::prune(&writer, 0).unwrap();
+    assert_eq!(rows(&writer), 0);
+    let error = changes::window(&reopened.reader().unwrap(), Some(&cursor)).unwrap_err();
     assert!(error.to_string().starts_with("cursor_expired:"));
+    changes::window(&reopened.reader().unwrap(), Some(&head)).unwrap();
 }
 
 #[test]
@@ -457,16 +462,7 @@ fn sessions_previous_schema_rebuilds_projection_and_expires_cursor() {
     );
     drop(db);
     assert_eq!(std::fs::read(&mirrored).unwrap(), b"kept");
-    assert!(
-        changes::read(
-            &f.store.reader().unwrap(),
-            changes::Request {
-                cursor: Some(cursor),
-                limit: None
-            }
-        )
-        .is_err()
-    );
+    assert!(changes::window(&f.store.reader().unwrap(), Some(&cursor)).is_err());
     assert!(
         query::inventory(&f.store.reader().unwrap(), None, 1000)
             .unwrap()
@@ -1170,6 +1166,8 @@ fn sessions_measure_populated_mirror() -> Result<()> {
 fn sessions_scoped_reconcile_reclaims_deleted_sources_and_updates_sidecars() {
     let f = fixture();
     scan(&f);
+    let cursor = changes::cursor(&f.store.reader().unwrap()).unwrap();
+    let after: i64 = cursor.rsplit_once(':').unwrap().1.parse().unwrap();
     std::fs::remove_file(&f.codex).unwrap();
     std::fs::write(&f.sidecar, "changedsidecarevidence").unwrap();
     let paths = [f.codex.clone(), f.sidecar.parent().unwrap().to_owned()];
@@ -1207,14 +1205,17 @@ fn sessions_scoped_reconcile_reclaims_deleted_sources_and_updates_sidecars() {
         )
         .unwrap();
     assert_eq!(deleted, 0);
-    let tombstones: i64 = db
+    let evidence: i64 = db
         .query_row(
-            "SELECT count(*) FROM change WHERE entity='session' AND op='tombstone'",
-            [],
+            "SELECT count(*) FROM change WHERE seq>?1 AND evidence_path LIKE ?2",
+            rusqlite::params![
+                after,
+                format!("%/{}", f.codex.file_name().unwrap().to_string_lossy())
+            ],
             |r| r.get(0),
         )
         .unwrap();
-    assert!(tombstones > 0);
+    assert!(evidence > 0);
     drop(db);
     std::fs::write(&f.codex, "malformed outside the scoped subtree\n").unwrap();
     std::fs::write(&f.sidecar, "anotherchangedsidecar").unwrap();
@@ -1251,7 +1252,7 @@ fn sessions_missing_provider_root_preserves_rows_without_tombstones() {
     scan(&f);
     let counts = || {
         f.store.reader().unwrap().query_row(
-            "SELECT (SELECT count(*) FROM session), (SELECT count(*) FROM source), (SELECT count(*) FROM change WHERE op='tombstone')",
+            "SELECT (SELECT count(*) FROM session), (SELECT count(*) FROM source), (SELECT count(*) FROM change)",
             [],
             |row| Ok((row.get::<_,i64>(0)?, row.get::<_,i64>(1)?, row.get::<_,i64>(2)?)),
         ).unwrap()
@@ -2126,29 +2127,6 @@ fn sessions_cluster_search_hits_route_exact_reads_to_their_origin() -> Result<()
         message: "origin offline".into(),
     });
     assert_eq!(super::error_data(&error)["class"], "unavailable");
-    Ok(())
-}
-
-#[test]
-fn sessions_pruning_seeks_expired_feed_entries() -> Result<()> {
-    let directory = tempfile::tempdir()?;
-    let store = Store::open(directory.path().join("catalog.sqlite3"))?;
-    let db = store.writer()?;
-    db.execute_batch("INSERT INTO change(entity,key,op,revision,committed_at) VALUES('source','expired','upsert',1,'2000-01-01T00:00:00Z'),('source','recent','upsert',2,'2999-01-01T00:00:00Z')")?;
-    let plan: Vec<String> = db
-        .prepare(&format!("EXPLAIN QUERY PLAN {}", changes::PRUNE_SQL))?
-        .query_map(["-30 days"], |row| row.get(3))?
-        .collect::<rusqlite::Result<_>>()?;
-    assert!(
-        plan.iter()
-            .any(|line| line.contains("USING COVERING INDEX change_age (committed_at<?)")),
-        "{plan:?}"
-    );
-    changes::prune(&db)?;
-    assert_eq!(
-        db.query_row("SELECT key FROM change", [], |row| row.get::<_, String>(0))?,
-        "recent"
-    );
     Ok(())
 }
 

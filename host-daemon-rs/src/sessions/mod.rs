@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 pub(crate) const SCHEMA_VERSION: u32 = 6;
 pub(crate) const PAGE_BYTES: usize = 8 << 20;
 pub(crate) const PAGE_ROWS: usize = 10_000;
-pub(crate) const CHANGE_DAYS: i64 = 30;
+pub(crate) const CHANGE_ROWS: i64 = 1_000_000;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

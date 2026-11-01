@@ -1,7 +1,7 @@
 use super::Gateway;
 use crate::rpc::error::{RpcCode, RpcData};
 use crate::rpc::{RpcError, RpcResult};
-use crate::sessions::{Origin, changes, cluster, mirror, query, store::Store, worker::Worker};
+use crate::sessions::{Origin, cluster, mirror, query, store::Store, worker::Worker};
 use anyhow::{Context, Result};
 use futures_util::FutureExt;
 use serde_json::{Value, json};
@@ -273,7 +273,6 @@ impl Gateway {
                     query::sql(&store.reader()?,&request.sql)
                 }
                 "sessions/read"=>query::read(&store.reader()?,serde_json::from_value(params)?),
-                "sessions/changes"=>changes::read(&store.reader()?,serde_json::from_value(params)?),
                 "sessions/mirror/list"=>{
                     #[derive(serde::Deserialize)]
                     #[serde(deny_unknown_fields)]

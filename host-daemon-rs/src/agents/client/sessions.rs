@@ -1,4 +1,4 @@
-use crate::sessions::{changes, query};
+use crate::sessions::query;
 use anyhow::{Context, Result, ensure};
 use clap::{Args, Subcommand};
 use serde_json::{Value, json};
@@ -36,12 +36,6 @@ enum Operation {
     },
     Sql {
         sql: String,
-    },
-    Changes {
-        #[arg(long)]
-        cursor: Option<String>,
-        #[arg(long)]
-        limit: Option<usize>,
     },
     Mirror {
         #[command(subcommand)]
@@ -114,13 +108,6 @@ fn request(command: &Command) -> Result<(&'static str, Value)> {
             )
         }
         Operation::Sql { sql } => ("sessions/sql", json!({"sql":sql})),
-        Operation::Changes { cursor, limit } => (
-            "sessions/changes",
-            serde_json::to_value(changes::Request {
-                cursor: cursor.clone(),
-                limit: *limit,
-            })?,
-        ),
         Operation::Mirror { action } => match action {
             Mirror::Status => ("sessions/mirror/status", json!({})),
         },
@@ -140,7 +127,6 @@ async fn execute(command: &Command, env_file: Option<&Path>) -> Result<Value> {
             "sessions/search" => query::search(&db, &serde_json::from_value(params)?),
             "sessions/read" => query::read(&db, serde_json::from_value(params)?),
             "sessions/sql" => query::sql(&db, params["sql"].as_str().context("SQL missing")?),
-            "sessions/changes" => changes::read(&db, serde_json::from_value(params)?),
             _ => anyhow::bail!(
                 "Mirror control requires the local gateway; omit --local and --database"
             ),

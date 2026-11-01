@@ -32,56 +32,19 @@ impl Store {
         db.execute_batch(include_str!("schema.sql"))?;
         db.execute_batch(include_str!("views.sql"))?;
         db.pragma_update(None, "user_version", SCHEMA_VERSION)?;
-        for (table, key, revision) in [
-            ("source", "CAST({r}.source_id AS TEXT)", "{r}.revision"),
-            (
-                "session",
-                "{r}.session_key",
-                "coalesce((SELECT seq+1 FROM sqlite_sequence WHERE name='change'),1)",
-            ),
-            (
-                "turn",
-                "json_array({r}.session_key,{r}.turn_id)",
-                "coalesce((SELECT seq+1 FROM sqlite_sequence WHERE name='change'),1)",
-            ),
-            ("item", "{r}.item_key", "{r}.revision"),
-            (
-                "tool_call",
-                "{r}.item_key",
-                "coalesce((SELECT seq+1 FROM sqlite_sequence WHERE name='change'),1)",
-            ),
-            (
-                "tool_result",
-                "{r}.item_key",
-                "coalesce((SELECT seq+1 FROM sqlite_sequence WHERE name='change'),1)",
-            ),
-            (
-                "skill_observation",
-                "json_array({r}.item_key,{r}.skill,{r}.via)",
-                "coalesce((SELECT seq+1 FROM sqlite_sequence WHERE name='change'),1)",
-            ),
-            (
-                "skill",
-                "{r}.name",
-                "coalesce((SELECT seq+1 FROM sqlite_sequence WHERE name='change'),1)",
-            ),
-            (
-                "dependency",
-                "json_array({r}.source_id,{r}.path)",
-                "coalesce((SELECT seq+1 FROM sqlite_sequence WHERE name='change'),1)",
-            ),
-        ] {
-            for (event, row, op) in [
-                ("INSERT", "new", "upsert"),
-                ("UPDATE", "new", "upsert"),
-                ("DELETE", "old", "tombstone"),
+        for (table, identity) in [("source", "file_identity"), ("dependency", "identity")] {
+            for (event, row, guard) in [
+                ("INSERT", "new", String::new()),
+                (
+                    "UPDATE",
+                    "new",
+                    format!(
+                        " WHEN old.{identity} IS NOT new.{identity} OR old.present IS NOT new.present"
+                    ),
+                ),
+                ("DELETE", "old", String::new()),
             ] {
-                let (host, path) = if matches!(table, "source" | "dependency") {
-                    (format!("{row}.origin_host"), format!("{row}.path"))
-                } else {
-                    ("NULL".into(), "NULL".into())
-                };
-                db.execute_batch(&format!("CREATE TRIGGER IF NOT EXISTS feed_{table}_{event} AFTER {event} ON {table} BEGIN INSERT INTO change(entity,key,op,revision,origin_host,evidence_path) VALUES('{table}',{},'{op}',{},{host},{path}); END;", key.replace("{r}",row), revision.replace("{r}",row)))?;
+                db.execute_batch(&format!("CREATE TRIGGER IF NOT EXISTS feed_{table}_{event} AFTER {event} ON {table}{guard} BEGIN INSERT INTO change(origin_host,evidence_path) VALUES({row}.origin_host,{row}.path); END;"))?;
             }
         }
         use std::os::unix::fs::PermissionsExt;

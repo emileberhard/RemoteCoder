@@ -2,7 +2,7 @@
 
 Provider transcripts and sidecars remain authoritative and read-only. This module
 owns a rebuildable SQLite projection, full-text trigram index, exact byte reads,
-a transactional change feed, cluster search, and a private raw-evidence mirror.
+an evidence change feed, cluster search, and a private raw-evidence mirror.
 It does not own semantic memory or agent execution.
 
 `Gateway::session_inventory` exposes paged canonical provider headers to lifecycle
@@ -68,9 +68,10 @@ Any other schema version deletes the catalog, WAL and SHM under the storage leas
 and rebuilds a fresh file with a new epoch, so deleted index pages never survive an
 upgrade. Fresh files set incremental auto-vacuum before WAL mode, and each scan
 returns freed pages to the filesystem. Provider evidence and mirrored raw files remain intact. Change cursors
-carry schema version, database epoch and monotonic sequence;
-30-day expiry requires a SQL snapshot and its changeCursor. Item and source
-updates and their feed records share a transaction. Retention never deletes raw
+carry schema version, database epoch and monotonic sequence. The feed records
+only source and dependency evidence paths, in the transaction that changes their
+identity or presence, and keeps the newest 1,000,000 rows; an expired cursor takes
+a full listing. Retention never deletes raw
 provider evidence. The catalog, WAL, raw mirror and temporary copies share one
 64 GiB cap and a fixed 20 GiB free-space floor. One storage lock serializes disk
 mutations. In-process contenders wait up to five seconds on the storage owner's
@@ -142,14 +143,14 @@ item timestamps and ingestion order are not interchangeable. A date window with
 few qualifying hits, especially a historical before window if added later, can
 still visit every matching posting; common since queries terminate once the page
 fills. Cluster cursors retain failed or unqueried members for retry rather than
-marking them exhausted. Feed pruning seeks expired entries through change_age;
-a catalog with no expired entries does not scan the feed during restart.
+marking them exhausted. Feed pruning deletes one primary-key range below
+the newest 1,000,000 rows and never scans the feed.
 
 
 The private mirror role uses a per-member change cursor. Source and dependency
-feed triggers retain origin/path metadata for upserts and tombstones while the
-generic change-feed keys remain unchanged. `sessions/mirror/changes` seeks the
-partial origin/sequence index, reads at most 500 evidence events plus one
+triggers record origin and path for inserts, identity or presence changes and
+deletions. `sessions/mirror/changes` seeks the
+origin/sequence index, reads at most 500 evidence events plus one
 lookahead, deduplicates their paths and stats only affected evidence. An empty
 page performs no raw-file work. A missing provider root refuses changed batches
 instead of proving deletion.

@@ -62,12 +62,8 @@ CREATE TABLE IF NOT EXISTS dependency (
  PRIMARY KEY(source_id,path),
  FOREIGN KEY(source_id,origin_host) REFERENCES source(source_id,origin_host) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS change (
- seq INTEGER PRIMARY KEY AUTOINCREMENT, entity TEXT NOT NULL, key TEXT NOT NULL,
- op TEXT NOT NULL CHECK(op IN ('upsert','tombstone')), revision INTEGER NOT NULL,
- committed_at TEXT NOT NULL DEFAULT(strftime('%Y-%m-%dT%H:%M:%fZ','now')),
- origin_host TEXT, evidence_path TEXT);
-CREATE INDEX IF NOT EXISTS change_age ON change(committed_at);
-CREATE INDEX IF NOT EXISTS change_evidence ON change(origin_host,seq) WHERE evidence_path IS NOT NULL;
+ seq INTEGER PRIMARY KEY AUTOINCREMENT, origin_host TEXT NOT NULL, evidence_path TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS change_evidence ON change(origin_host,seq);
 CREATE TABLE IF NOT EXISTS coverage (
  origin_host TEXT PRIMARY KEY, mode TEXT NOT NULL CHECK(mode IN ('local','mirror')),
  indexed_through TEXT, complete_through TEXT, stale_reason TEXT,
