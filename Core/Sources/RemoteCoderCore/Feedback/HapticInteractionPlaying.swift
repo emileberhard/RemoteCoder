@@ -1,7 +1,7 @@
 @MainActor
 protocol HapticNativePlaying: AnyObject {
     func prepare(_ recipe: HapticRecipe)
-    func play(_ recipe: HapticRecipe)
+    func play(_ event: HapticEvent, strength: HapticStrength)
     func release()
 }
 

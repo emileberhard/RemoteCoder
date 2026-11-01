@@ -4,6 +4,7 @@ import UIKit
 @MainActor
 final class PreparedSelectionPlayer: HapticInteractionPlaying {
     var hasActiveAccent: Bool { false }
+    private let signposter = OSSignposter(subsystem: "RemoteCoder", category: "Haptics")
     private weak var view: UIView?
     private var generator: UISelectionFeedbackGenerator?
     private var canPlay: @MainActor () -> Bool = { false }
@@ -20,9 +21,9 @@ final class PreparedSelectionPlayer: HapticInteractionPlaying {
     }
 
     func play(_ event: HapticEvent) {
-        guard event == .selection, canPlay() else { return }
-        OSSignposter(subsystem: "RemoteCoder", category: "Haptics").emitEvent("feedback-api-request", "selection")
-        generator?.selectionChanged()
+        guard event == .selection, canPlay(), let generator else { return }
+        signposter.emitEvent("feedback-api-request", "\(event.rawValue, privacy: .public)")
+        generator.selectionChanged()
     }
 
     func finish() { cancel() }

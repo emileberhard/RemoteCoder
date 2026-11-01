@@ -61,6 +61,7 @@ final class PreparedHapticPlayer: HapticInteractionPlaying {
     private var ending = false
     private var strength: HapticStrength = .standard
     private var canPlay: @MainActor () -> Bool = { false }
+    private let signposter = OSSignposter(subsystem: "RemoteCoder", category: "Haptics")
     private let debugLogger = Logger(subsystem: AppLogger.subsystem, category: "Haptics")
 
     init(native: any HapticNativePlaying) { self.native = native }
@@ -85,7 +86,7 @@ final class PreparedHapticPlayer: HapticInteractionPlaying {
         }
         if let accent = event.accent(for: strength), ready, let player = players[accent] {
             do {
-                OSSignposter(subsystem: "RemoteCoder", category: "Haptics").emitEvent("feedback-api-request", "custom-accent")
+                signposter.emitEvent("feedback-api-request", "\(event.rawValue, privacy: .public) custom-accent")
                 try player.start(atTime: CHHapticTimeImmediate)
                 activePlayer = player
                 return
@@ -93,7 +94,7 @@ final class PreparedHapticPlayer: HapticInteractionPlaying {
                 debugLogger.debug("Haptic accent unavailable; using native impact: \(error.localizedDescription, privacy: .public)")
             }
         }
-        native.play(event.recipe(for: strength))
+        native.play(event, strength: strength)
     }
 
     /// Let the finite seating accent finish before releasing its engine.
