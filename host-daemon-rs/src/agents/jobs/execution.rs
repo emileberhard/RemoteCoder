@@ -615,6 +615,13 @@ impl JobOwner {
                     &outcome,
                     &result,
                     &git,
+                    if job.source == JobSource::Runtime
+                        && matches!(job.spec, SpecEvidence::Unknown { .. })
+                    {
+                        crate::agents::envelope::CompletionFollowup::Message
+                    } else {
+                        crate::agents::envelope::CompletionFollowup::Continue
+                    },
                 )?;
                 Completion::Required {
                     payload: CompletionPayload::Prepared {

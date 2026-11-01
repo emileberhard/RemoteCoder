@@ -380,6 +380,7 @@ mod tests {
             assert_eq!(delivery_id, format!("{}:completion", id.as_str()));
             assert_eq!(delivery, DeliveryState::Pending);
             assert!(text.contains("Native final answer"));
+            assert!(text.contains("<followup tool=\"message_agent\""));
         }
     }
 }

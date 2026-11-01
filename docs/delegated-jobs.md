@@ -425,7 +425,9 @@ never dispatch, retry, launch or recover execution, infer settings from a header
 or acknowledge managed-Claude job evidence. Explicit Job Stop is unsupported
 (exit 7); stop the exact native conversation through its owning client. Proven
 terminal outcomes use the existing bounded result reader, finalizer, completion
-envelope, recipient and retention. Missing input or terminal evidence stays
+envelope, recipient and retention. Native completion follow-ups use
+`message_agent`, keeping new input with its native policy owner instead of
+attempting a specification-based Continue. Missing input or terminal evidence stays
 unknown, with an interim notice describing the gap and native Stop route. Delivery
 of that notice satisfies its delivery obligation without settling execution.
 After notice acceptance, an unresolved observation requests no timer retries;
