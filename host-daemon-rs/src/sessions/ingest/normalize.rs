@@ -46,7 +46,14 @@ impl Record<'_> {
         let timestamp = value["timestamp"]
             .as_str()
             .map(super::super::timestamp)
-            .transpose()?;
+            .transpose()
+            .map_err(|error| {
+                if self.origin.provider == "codex" && value["type"] == "session_meta" {
+                    error.context(super::InvalidHeader("Invalid Codex session metadata"))
+                } else {
+                    error
+                }
+            })?;
         if let Some(at) = &timestamp {
             if state.first.as_ref().is_none_or(|first| at < first) {
                 state.first = Some(at.clone());
@@ -368,10 +375,9 @@ impl Record<'_> {
     }
 
     fn session(&self, state: &State) -> Result<()> {
-        let thread = state
-            .thread
-            .as_ref()
-            .context("Missing exact provider session identity")?;
+        let thread = state.thread.as_ref().ok_or(super::InvalidHeader(
+            "Missing exact provider session identity",
+        ))?;
         let key = super::super::session_key(self.origin, thread);
         let existing: Option<i64> = self
             .db

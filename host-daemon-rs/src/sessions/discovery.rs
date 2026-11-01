@@ -174,7 +174,7 @@ impl Discovery {
                     self.rejected.remove(&path);
                 }
                 Err(error) => {
-                    if error.is::<rusqlite::Error>() {
+                    if !error.is::<ingest::InvalidHeader>() {
                         return Err(error);
                     }
                     ensure!(
@@ -195,6 +195,48 @@ impl Discovery {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sessions_discovery_retries_unreadable_headers_without_a_file_change() -> Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = tempfile::tempdir()?;
+        let origin = Origin {
+            host: "fixture".into(),
+            provider: "codex".into(),
+            provider_home: directory.path().into(),
+            local_home: directory.path().into(),
+        };
+        let path = origin.path().join("valid.jsonl");
+        std::fs::create_dir_all(path.parent().unwrap())?;
+        std::fs::write(
+            &path,
+            "{\"type\":\"session_meta\",\"payload\":{\"id\":\"valid\"}}\n",
+        )?;
+        let mut db = Connection::open_in_memory()?;
+        db.execute_batch(include_str!("schema.sql"))?;
+        let mut discovery = Discovery::default();
+        discovery.refresh(std::slice::from_ref(&origin), None)?;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000))?;
+        let stop = AtomicBool::new(false);
+        let error = discovery
+            .headers(&mut db, std::slice::from_ref(&origin), &stop, None)
+            .unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<std::io::Error>().unwrap().kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+        assert!(discovery.rejected.is_empty());
+        assert!(discovery.pending.contains(&path));
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+        discovery.headers(&mut db, &[origin], &stop, None)?;
+        assert!(discovery.pending.is_empty());
+        assert_eq!(
+            db.query_row("SELECT thread_id FROM session", [], |row| row
+                .get::<_, String>(0))?,
+            "valid"
+        );
+        Ok(())
+    }
 
     #[test]
     fn sessions_discovery_recurses_new_dates_and_forgets_removed_directories() -> Result<()> {

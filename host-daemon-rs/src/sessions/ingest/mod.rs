@@ -371,6 +371,17 @@ pub(super) fn record_failure(
     Ok(())
 }
 
+#[derive(Debug)]
+pub(super) struct InvalidHeader(pub &'static str);
+
+impl std::fmt::Display for InvalidHeader {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.0)
+    }
+}
+
+impl std::error::Error for InvalidHeader {}
+
 pub(super) fn header(
     db: &mut Connection,
     origin: &Origin,
@@ -392,10 +403,9 @@ pub(super) fn header(
     }
     let original = origin.original(path)?.to_string_lossy().into_owned();
     let present: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM source JOIN session USING(source_id) WHERE source.origin_host=?1 AND source.path=?2)",params![origin.host,original],|r|r.get(0))?;
-    ensure!(
-        present,
-        "unavailable: transcript exists without a complete identity record"
-    );
+    if !present {
+        return Err(InvalidHeader("Transcript exists without a complete identity record").into());
+    }
     Ok(())
 }
 
@@ -686,10 +696,9 @@ fn ingest_source(
             "Source changed during ingestion"
         );
     }
-    ensure!(
-        state.thread.is_some() || offset == 0,
-        "Transcript has no exact provider identity"
-    );
+    if state.thread.is_none() && offset > 0 {
+        return Err(InvalidHeader("Transcript has no exact provider identity").into());
+    }
     let verified_revision =
         if mode == ReadMode::Full || (!append && stable && mode != ReadMode::Inventory) {
             revision
