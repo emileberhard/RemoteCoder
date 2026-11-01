@@ -14,6 +14,7 @@ const CAPACITY: usize = 100_000;
 pub(super) struct Discovery {
     directories: BTreeMap<PathBuf, Option<FileRevision>>,
     pending: BTreeSet<PathBuf>,
+    rejected: BTreeMap<PathBuf, FileRevision>,
 }
 
 impl Discovery {
@@ -112,6 +113,7 @@ impl Discovery {
             .range(path.clone()..)
             .find(|p| !p.starts_with(path))
             .cloned();
+        self.rejected.retain(|p, _| !p.starts_with(path));
         self.pending
             .extract_if(
                 (Included(path.clone()), end.map_or(Unbounded, Excluded)),
@@ -127,7 +129,6 @@ impl Discovery {
         stop: &AtomicBool,
         deadline: Option<Instant>,
     ) -> Result<()> {
-        let mut first_error = None;
         let paths: Vec<_> = self.pending.iter().cloned().collect();
         for path in paths {
             ensure!(
@@ -138,8 +139,8 @@ impl Discovery {
                 deadline.is_none_or(|deadline| Instant::now() < deadline),
                 "unavailable: inventory catch-up exceeded five seconds"
             );
-            match std::fs::symlink_metadata(&path) {
-                Ok(metadata) if metadata.is_file() => {}
+            let revision = match std::fs::symlink_metadata(&path) {
+                Ok(metadata) if metadata.is_file() => FileRevision::from(metadata),
                 Ok(_) => {
                     self.pending.remove(&path);
                     continue;
@@ -149,6 +150,10 @@ impl Discovery {
                     continue;
                 }
                 Err(error) => return Err(error.into()),
+            };
+            if self.rejected.get(&path) == Some(&revision) {
+                self.pending.remove(&path);
+                continue;
             }
             let Some(origin) = origins
                 .iter()
@@ -166,16 +171,22 @@ impl Discovery {
             match outcome {
                 Ok(()) => {
                     self.pending.remove(&path);
+                    self.rejected.remove(&path);
                 }
                 Err(error) => {
-                    if first_error.is_none() {
-                        first_error = Some(error);
+                    if error.is::<rusqlite::Error>() {
+                        return Err(error);
                     }
+                    ensure!(
+                        self.rejected.len() < CAPACITY || self.rejected.contains_key(&path),
+                        "capacity: too many rejected session headers"
+                    );
+                    ingest::record_failure(db, origin, &path, &error)?;
+                    tracing::warn!(path=%path.display(), %error, "Session header skipped");
+                    self.rejected.insert(path.clone(), revision);
+                    self.pending.remove(&path);
                 }
             }
-        }
-        if let Some(error) = first_error {
-            return Err(error);
         }
         Ok(())
     }

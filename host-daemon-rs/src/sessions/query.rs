@@ -123,6 +123,10 @@ pub(crate) struct SessionHeader {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SessionPage {
+    #[serde(default)]
+    pub warnings: Vec<String>,
+    #[serde(default)]
+    pub complete: bool,
     pub sessions: Vec<SessionHeader>,
     pub cursor: Option<String>,
 }
@@ -162,7 +166,15 @@ pub(crate) fn inventory(
     } else {
         None
     };
-    Ok(SessionPage { sessions, cursor })
+    let warnings = db.prepare("SELECT substr(path,1,256),substr(failure,1,256) FROM source INDEXED BY source_failures WHERE failure IS NOT NULL LIMIT 32")?
+        .query_map([], |row| Ok(format!("{}: {}", row.get::<_,String>(0)?, row.get::<_,String>(1)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(SessionPage {
+        complete: warnings.is_empty(),
+        warnings,
+        sessions,
+        cursor,
+    })
 }
 
 fn session_header(r: &rusqlite::Row<'_>) -> rusqlite::Result<SessionHeader> {
@@ -190,6 +202,11 @@ pub(crate) fn match_thread_suffix(
     ensure!(
         !suffix.is_empty() && suffix.len() <= 512,
         "Thread suffix must be 1..=512 UTF-8 bytes"
+    );
+    let incomplete: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM source INDEXED BY source_failures WHERE failure IS NOT NULL AND origin_host=?1)", [host], |row| row.get(0))?;
+    ensure!(
+        !incomplete,
+        "unavailable: native inventory has rejected sources; use an exact managed identity"
     );
     let lower: Vec<_> = suffix.bytes().rev().collect();
     let mut upper = lower.clone();

@@ -520,7 +520,14 @@ fn sessions_spawn_then_resolve_catches_up_before_worker_scan() {
     let next = Store::open(f.store.path.clone()).unwrap();
     let worker = start_worker(&next, &f.origins);
     std::fs::write(f.codex.with_file_name("pending-identity.jsonl"), b"{").unwrap();
-    assert!(ingest::refresh_inventory(&next).is_err());
+    ingest::refresh_inventory(&next).unwrap();
+    let page = query::inventory(&next.reader().unwrap(), None, 1000).unwrap();
+    assert!(!page.complete);
+    assert!(
+        page.warnings
+            .iter()
+            .any(|warning| warning.contains("pending-identity.jsonl"))
+    );
     worker.stop().unwrap();
 }
 

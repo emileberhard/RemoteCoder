@@ -25,6 +25,8 @@ impl Gateway {
             }
             None => ListCursor::default(),
         };
+        let initial_positions = cursor.positions.clone();
+        let initial_complete = cursor.complete.clone();
         let identity = self.host_identity().await?;
         let link = self.cluster_link().await?;
         let local = params["local"] == true;
@@ -67,9 +69,10 @@ impl Gateway {
         let mut coverage = Vec::new();
         let mut warnings = Vec::new();
         let mut pages=pages.into_iter().filter_map(|(host,result)| match result {
-            Err(error)=> {warnings.push(format!("{host}: {error}"));coverage.push(json!({"hostId":host,"state":match error.class {ErrorClass::Unsupported=>"unsupported",ErrorClass::Refused=>"refused",_=>"unreachable"}}));None}
-            Ok(page)=> {coverage.push(json!({"hostId":host,"state":"ok"}));Some((host,page["agents"].as_array().cloned().unwrap_or_default().into_iter().collect::<std::collections::VecDeque<_>>(),page["nextCursor"].as_str().map(str::to_owned)))}
+            Err(error)=> {warnings.push(format!("{host}: {error}"));coverage.push(json!({"hostId":host,"state":error.coverage_state()}));None}
+            Ok(page)=> {warnings.extend(page["warnings"].as_array().into_iter().flatten().take(32).map(|warning|format!("{host}: {warning}")));coverage.push(json!({"hostId":host,"state":if page["complete"]==false {"stale"} else {"ok"}}));Some((host,page["agents"].as_array().cloned().unwrap_or_default().into_iter().collect::<std::collections::VecDeque<_>>(),page["nextCursor"].as_str().map(str::to_owned)))}
         }).collect::<Vec<_>>();
+        warnings.truncate(256);
         pages.sort_by(|left, right| left.0.cmp(&right.0));
         let mut rows = Vec::new();
         loop {
@@ -108,6 +111,20 @@ impl Gateway {
         } else {
             None
         };
+        if rows.is_empty()
+            && next_cursor.is_some()
+            && cursor.positions == initial_positions
+            && cursor.complete == initial_complete
+        {
+            return Err(cluster_error(
+                ErrorClass::Unavailable,
+                "cluster inventory made no cursor progress",
+            )
+            .with_data(RpcData::Raw(
+                json!({"class":"unavailable","coverage":coverage,"warnings":warnings}),
+            ))
+            .into());
+        }
         Ok(json!({"agents":rows,"coverage":coverage,"nextCursor":next_cursor,"warnings":warnings}))
     }
 }
@@ -149,6 +166,8 @@ impl Gateway {
         }
         let identity = self.host_identity().await?;
         let mut agents = Vec::new();
+        let mut warnings = Vec::new();
+        let mut complete = true;
         if !cursor.jobs_done {
             let page = self
                 .jobs
@@ -189,6 +208,8 @@ impl Gateway {
                     (limit as usize - agents.len()).min(1000),
                 )
                 .await?;
+            complete = page.complete;
+            warnings = page.warnings;
             let mut identities = std::collections::HashMap::new();
             for session in &page.sessions {
                 if session.host_id != identity.host_id || !session.source_present {
@@ -245,7 +266,11 @@ impl Gateway {
         } else {
             Some(inventory_cursor(&cursor)?)
         };
-        Ok(json!({"agents":agents,"nextCursor":next}))
+        ensure!(
+            next.is_none() || next.as_deref() != params["cursor"].as_str(),
+            "unavailable: inventory cursor did not advance"
+        );
+        Ok(json!({"agents":agents,"nextCursor":next,"warnings":warnings,"complete":complete}))
     }
 }
 
@@ -376,7 +401,7 @@ impl Gateway {
                 }
                 Err(error) => {
                     incomplete = true;
-                    coverage.push(json!({"hostId":host,"state":match error.class {ErrorClass::Unsupported=>"unsupported",ErrorClass::Refused=>"refused",_=>"unreachable"}}));
+                    coverage.push(json!({"hostId":host,"state":error.coverage_state()}));
                 }
             }
         }
@@ -601,15 +626,18 @@ mod tests {
                     .contains("another session writer owns the storage budget")
             );
         }
-        let page = gateway
+        let error = gateway
             .cluster_rpc(
                 &Grant::Operator,
                 "agent/cluster/list",
                 json!({"local":true}),
             )
             .await
-            .unwrap();
-        assert_eq!(page["coverage"][0]["state"], "unreachable");
+            .unwrap_err();
+        let response = error.response(&Value::Null);
+        let page = &response["error"]["data"];
+        assert_eq!(page["class"], "unavailable");
+        assert_eq!(page["coverage"][0]["state"], "unavailable");
         assert!(
             page["warnings"][0]
                 .as_str()
@@ -685,5 +713,31 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(exact["threadId"], "native-one-needle");
+    }
+    #[tokio::test]
+    async fn cluster_inventory_skips_rejected_headers_and_finishes_paging() {
+        let directory = tempfile::tempdir().unwrap();
+        let sessions = directory.path().join("codex/sessions/2026/11/01");
+        std::fs::create_dir_all(&sessions).unwrap();
+        std::fs::write(sessions.join("old.jsonl"), "{\"type\":\"event_msg\"}\n").unwrap();
+        let metadata =
+            json!({"type":"session_meta","payload":{"id":"native-valid-needle","source":"cli"}});
+        std::fs::write(sessions.join("valid.jsonl"), format!("{metadata}\n")).unwrap();
+        let gateway = crate::test_support::TestGateway::with_native_runtime(directory.path());
+        let page = gateway
+            .cluster_rpc(
+                &Grant::Operator,
+                "agent/cluster/list",
+                json!({"local":true,"limit":100}),
+            )
+            .await
+            .unwrap();
+        assert!(page["nextCursor"].is_null(), "{page}");
+        assert_eq!(page["agents"].as_array().unwrap().len(), 1, "{page}");
+        assert_eq!(page["coverage"][0]["state"], "stale");
+        assert_eq!(page["warnings"].as_array().unwrap().len(), 1);
+        let error = gateway.resolve_local_agent("needle").await.unwrap_err();
+        assert!(error.to_string().contains("rejected sources"), "{error:#}");
+        gateway.stop_sessions().await;
     }
 }

@@ -131,14 +131,9 @@ pub(crate) async fn search(
                     host.clone(),
                     cursors.get(&host).cloned().unwrap_or(Position::Next(None)),
                 );
-                let state = match error
+                let state = error
                     .downcast_ref::<crate::cluster::link::LinkError>()
-                    .map(|error| &error.class)
-                {
-                    Some(crate::wire::cluster::ErrorClass::Unsupported) => "unsupported",
-                    Some(crate::wire::cluster::ErrorClass::Refused) => "refused",
-                    _ => "unreachable",
-                };
+                    .map_or("unavailable", |error| error.coverage_state());
                 coverage.push(json!({"hostId":host,"state":state,"error":format!("{error:#}")}));
             }
         }

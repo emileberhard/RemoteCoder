@@ -304,7 +304,7 @@ pub(super) fn scan_serving(
             match outcome {
                 Ok(changed) => ingested += usize::from(changed),
                 Err(error) => {
-                    db.execute("INSERT INTO source(origin_host,provider,provider_home,path,local_path,file_identity,size,mtime_ns,ingested_offset,revision,present,prefix_hash,parser_state,failure) VALUES(?1,?2,?3,?4,?5,'',0,0,0,0,1,'','{}',?6) ON CONFLICT(origin_host,path) DO UPDATE SET failure=excluded.failure",params![origin.host,origin.provider,origin.provider_home.to_string_lossy(),original,path.to_string_lossy(),format!("{error:#}")])?;
+                    record_failure(&db, origin, path, &error)?;
                 }
             }
             let elapsed = started.elapsed().as_secs_f64();
@@ -357,6 +357,18 @@ pub(crate) fn refresh_inventory(store: &Store) -> Result<()> {
         .get()
         .context("unavailable: session worker is not running")?
         .inventory()
+}
+
+pub(super) fn record_failure(
+    db: &Connection,
+    origin: &Origin,
+    path: &Path,
+    error: &anyhow::Error,
+) -> Result<()> {
+    let original = origin.original(path)?.to_string_lossy().into_owned();
+    let message = format!("{error:#}");
+    db.execute("INSERT INTO source(origin_host,provider,provider_home,path,local_path,file_identity,size,mtime_ns,ingested_offset,revision,present,prefix_hash,parser_state,failure) VALUES(?1,?2,?3,?4,?5,'',0,0,0,0,1,'','{}',?6) ON CONFLICT(origin_host,path) DO UPDATE SET failure=excluded.failure WHERE source.failure IS NOT excluded.failure",params![origin.host,origin.provider,origin.provider_home.to_string_lossy(),original,path.to_string_lossy(),message])?;
+    Ok(())
 }
 
 pub(super) fn header(
