@@ -48,6 +48,8 @@ pub(crate) struct Args {
 pub(crate) enum Command {
     Sessions(Box<crate::agents::client::sessions::Command>),
     Agent {
+        #[arg(long, global = true)]
+        json: bool,
         #[command(subcommand)]
         command: Box<crate::agents::client::AgentCommand>,
     },

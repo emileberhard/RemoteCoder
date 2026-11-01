@@ -242,6 +242,117 @@ async fn finished_message_admits_one_exact_continuation_and_duplicate_keeps_its_
 }
 
 #[tokio::test]
+async fn registered_conversation_resolves_without_reading_a_missing_transcript() {
+    let gateway = TestGateway::new();
+    let id = finished_job(&gateway).await;
+    let agent = gateway.jobs.read(&id).await.unwrap().agent.unwrap();
+    let ConversationBinding::Known { conversation } = agent.conversation else {
+        panic!("missing fixture identity")
+    };
+    let response = gateway
+        .agent_jobs_rpc(
+            "agent/jobs/message",
+            request(
+                MessageTarget::Selector {
+                    selector: conversation.thread_id,
+                },
+                "before-transcript",
+                "More work",
+            ),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response["deliveryState"]["kind"], "accepted", "{response}");
+    assert_eq!(response["resolved"]["targetJobId"], id.as_str());
+}
+
+#[tokio::test]
+async fn agent_identity_and_suffix_follow_continue_but_receipt_retry_stays_frozen() {
+    let gateway = TestGateway::new();
+    let original = finished_job(&gateway).await;
+    let source = gateway.jobs.read(&original).await.unwrap().job;
+    let continued = gateway
+        .jobs
+        .continue_job(
+            ContinueParams {
+                job_id: JobId::for_mutation(Provider::Claude, "explicit-continue").unwrap(),
+                agent_id: source.agent_id,
+                prompt: "Follow-up".into(),
+                settings: None,
+                expected_previous_job_id: Some(original.clone()),
+                intent: ContinueIntent::Explicit,
+                recipient: ContinueRecipient::Previous,
+                caller: Caller::Operator,
+            },
+            Origin::TopLevel,
+        )
+        .await
+        .unwrap()
+        .job;
+    let terminal = source.execution;
+    gateway
+        .jobs
+        .store()
+        .await
+        .unwrap()
+        .advance(
+            continued.job_id.clone(),
+            continued.revision,
+            terminal.clone(),
+            now_ms(),
+        )
+        .await
+        .unwrap();
+    let params = request(
+        MessageTarget::Selector {
+            selector: original.as_str().into(),
+        },
+        "agent-follow-up",
+        "More work",
+    );
+    let first = gateway
+        .agent_jobs_rpc("agent/jobs/message", params.clone())
+        .await
+        .unwrap();
+    assert_eq!(first["deliveryState"]["kind"], "accepted", "{first}");
+    assert_eq!(first["resolved"]["targetJobId"], continued.job_id.as_str());
+    let next: JobId =
+        serde_json::from_value(first["resolved"]["continuation"]["jobId"].clone()).unwrap();
+    let next_record = gateway.jobs.read(&next).await.unwrap().job;
+    gateway
+        .jobs
+        .store()
+        .await
+        .unwrap()
+        .advance(next.clone(), next_record.revision, terminal, now_ms())
+        .await
+        .unwrap();
+    let suffix = original.as_str().rsplit_once('-').unwrap().1;
+    let second = gateway
+        .agent_jobs_rpc(
+            "agent/jobs/message",
+            request(
+                MessageTarget::Selector {
+                    selector: suffix.into(),
+                },
+                "suffix-follow-up",
+                "More work again",
+            ),
+        )
+        .await
+        .unwrap();
+    assert_eq!(second["deliveryState"]["kind"], "accepted", "{second}");
+    assert_eq!(second["resolved"]["targetJobId"], next.as_str());
+    assert_eq!(
+        gateway
+            .agent_jobs_rpc("agent/jobs/message", params)
+            .await
+            .unwrap(),
+        first
+    );
+}
+
+#[tokio::test]
 async fn concurrent_different_messages_cannot_continue_a_newer_invocation() {
     let gateway = TestGateway::new();
     let previous = finished_job(&gateway).await;

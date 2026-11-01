@@ -36,6 +36,12 @@ worker owns its provider homes, processes and cleanup; production is untouched.
 
 ## Delegated-job isolation probe
 
+`bun dev-tools/probes/agent-api.mjs <candidate> <matched-runtime-package>` uses
+`IsolatedGateway` and the loopback model to check agent-ID messaging after an
+explicit Continue, frozen receipt retries, historical inspection, lifecycle JSON
+and local member-name routing. It stops its private gateway and daemon and
+removes its state on completion. It uses no live provider or gateway.
+
 `bun dev-tools/probes/cluster-lifecycle.mjs <candidate> <matched-runtime-package>`
 creates three private gateways with a full pinned membership mesh. Native Codex
 and Claude parents spawn remote children, receive an interim message, go offline

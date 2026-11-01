@@ -3,10 +3,7 @@ use crate::wire::cluster::{AgentAddress, PROTOCOL};
 
 #[derive(Clone, Debug, Subcommand)]
 pub(crate) enum ClusterCommand {
-    List {
-        #[arg(long)]
-        json: bool,
-    },
+    List,
     Issue {
         #[arg(long)]
         host: String,
@@ -117,7 +114,7 @@ pub(super) async fn execute(endpoint: &Endpoint, command: ClusterCommand) -> Res
         host: None,
     };
     match command {
-        ClusterCommand::List { .. } => rpc(&local, "cluster/list", json!({})).await,
+        ClusterCommand::List => rpc(&local, "cluster/list", json!({})).await,
         ClusterCommand::Issue {
             host,
             name,
@@ -363,6 +360,9 @@ pub(super) async fn set_parent(
         .context("host identity unavailable")?;
     let host_id = match &endpoint.host {
         None => local_id.to_owned(),
+        Some(host) if cluster["self"]["hostId"] == *host || cluster["self"]["name"] == *host => {
+            local_id.to_owned()
+        }
         Some(host) => cluster["members"]
             .as_array()
             .context("members unavailable")?

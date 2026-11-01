@@ -41,13 +41,19 @@ struct Dispatch {
 }
 
 impl Gateway {
+    async fn is_local_cluster_host(&self, host: &str) -> Result<bool> {
+        Ok(host == self.host_identity().await?.host_id || host == self.job_host_name()?)
+    }
+
     pub(super) async fn local_cluster_dispatch(
         &self,
         grant: &Grant,
         params: &Value,
     ) -> Result<Option<(String, Value)>, RpcError> {
         if matches!(grant, Grant::Peer { .. })
-            || params["host"].as_str() != Some(self.host_identity().await?.host_id.as_str())
+            || !self
+                .is_local_cluster_host(params["host"].as_str().unwrap_or_default())
+                .await?
         {
             return Ok(None);
         }

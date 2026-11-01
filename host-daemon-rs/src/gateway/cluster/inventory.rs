@@ -31,7 +31,9 @@ impl Gateway {
         let link = self.cluster_link().await?;
         let local = params["local"] == true;
         let hosts = match params["host"].as_str() {
-            Some(selector) if selector == identity.host_id => vec![identity.host_id.clone()],
+            Some(selector) if self.is_local_cluster_host(selector).await? => {
+                vec![identity.host_id.clone()]
+            }
             Some(selector) => {
                 ensure!(!local, "--local cannot list another host");
                 let member = link.store.resolve(selector).await?;
@@ -493,6 +495,46 @@ impl Gateway {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn cluster_self_name_routes_locally_without_granting_peer_dispatch() {
+        let gateway = crate::test_support::TestGateway::new();
+        let identity = gateway.host_identity().await.unwrap();
+        for host in [gateway.job_host_name().unwrap(), identity.host_id.clone()] {
+            let params = json!({"host":host,"method":"agent/jobs/list","request":{},"caller":{"kind":"operator"}});
+            let dispatched = gateway
+                .local_cluster_dispatch(&Grant::Operator, &params)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(dispatched, ("agent/jobs/list".into(), json!({})));
+            let peer = Grant::Peer {
+                host: "peer".into(),
+                membership: "membership".into(),
+                digest: "digest".into(),
+            };
+            assert!(
+                gateway
+                    .local_cluster_dispatch(&peer, &params)
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+            let listed = gateway
+                .cluster_rpc(
+                    &Grant::Operator,
+                    "agent/cluster/list",
+                    json!({"host":host,"local":true,"active":true}),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                listed["coverage"],
+                json!([{"hostId":identity.host_id,"state":"ok"}])
+            );
+            assert_eq!(listed["warnings"], json!([]));
+        }
+    }
 
     #[tokio::test]
     async fn cluster_active_listing_skips_history_pages_and_paginates_only_active_jobs() {

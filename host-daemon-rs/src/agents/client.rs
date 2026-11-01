@@ -45,8 +45,6 @@ pub(crate) enum AgentCommand {
         target: String,
         #[command(flatten)]
         caller: CallerArgs,
-        #[arg(long)]
-        json: bool,
     },
     Message(MessageArgs),
     Stop {
@@ -72,16 +70,12 @@ pub(crate) enum AgentCommand {
     Capture,
     Receipt {
         delivery_id: String,
-        #[arg(long)]
-        json: bool,
     },
     NativeParent,
     Items {
         target: String,
         #[arg(long)]
         host: Option<String>,
-        #[arg(long)]
-        json: bool,
     },
 }
 
@@ -122,8 +116,6 @@ pub(crate) struct SpawnArgs {
     job_id: Option<String>,
     #[command(flatten)]
     caller: CallerArgs,
-    #[arg(long)]
-    json: bool,
 }
 
 #[derive(Clone, Debug, Args)]
@@ -143,8 +135,6 @@ pub(crate) struct ListArgs {
     automations: bool,
     #[arg(long, default_value_t = 20, value_parser = clap::value_parser!(u32).range(1..=10000))]
     last: u32,
-    #[arg(long)]
-    json: bool,
 }
 
 #[derive(Clone, Debug, Args)]
@@ -163,8 +153,6 @@ pub(crate) struct MessageArgs {
     reply_target: Option<String>,
     #[command(flatten)]
     caller: CallerArgs,
-    #[arg(long)]
-    json: bool,
 }
 
 struct Endpoint {
@@ -201,7 +189,7 @@ async fn admission<P: Serialize>(
     let admitted: AdmissionReceipt = rpc(endpoint, method, params)
         .await
         .context(RequestIdentity(job_id.as_str().to_owned()))?;
-    Ok(receipt(admitted))
+    Ok(serde_json::to_value(admitted)?)
 }
 
 fn response_value(response: Value) -> Result<Value> {
@@ -426,32 +414,62 @@ async fn read(endpoint: &Endpoint, target: &str) -> Result<JobView> {
     .await
 }
 
-fn execution_status(job: &JobRecord) -> &'static str {
-    match &job.execution {
-        ExecutionState::Admitted => "admitted",
-        ExecutionState::WaitingForProvider { .. } => "waitingForProvider",
-        ExecutionState::Bound { .. } => "bound",
-        ExecutionState::Dispatching { .. } => "dispatchUncertain",
-        ExecutionState::Running { .. } => "running",
-        ExecutionState::Recovering { .. } => "recovering",
-        ExecutionState::RetryWaiting { .. } => "retryWaiting",
-        ExecutionState::Unknown { .. } => "unknown",
-        ExecutionState::Terminal { terminal } => match terminal.outcome {
-            super::jobs::model::JobOutcome::Completed => "completed",
-            super::jobs::model::JobOutcome::Failed { .. } => "failed",
-            super::jobs::model::JobOutcome::Stopped { .. } => "stopped",
-        },
+fn lifecycle(mut value: Value) -> Result<Value> {
+    if let Some(rows) = value.get_mut("agents").and_then(Value::as_array_mut) {
+        for row in rows {
+            *row = lifecycle(std::mem::take(row))?;
+        }
+        return Ok(value);
     }
-}
-
-fn receipt(receipt: AdmissionReceipt) -> Value {
-    let provider_session_id = receipt
-        .job
-        .execution
-        .conversation()
-        .map(|conversation| conversation.thread_id.as_str());
-    json!({"ownerHostId":receipt.owner_host_id,"address":format!("{}:{}",receipt.owner_host_id,receipt.job.job_id.as_str()),"run_id":receipt.job.job_id,"agent_id":receipt.job.agent_id,"previous_run_id":receipt.job.previous_job_id,
-        "provider_session_id":provider_session_id,"status":execution_status(&receipt.job),"duplicate":receipt.duplicate,"job":receipt.job})
+    if let Some(record) = value.get("job") {
+        let job: JobRecord = serde_json::from_value(record.clone())?;
+        let (result, delivery) = match &job.execution {
+            ExecutionState::Terminal { terminal } => {
+                let delivery = match &terminal.completion {
+                    super::jobs::model::Completion::Required { delivery, .. } => {
+                        serde_json::to_value(delivery)?
+                    }
+                    super::jobs::model::Completion::NotRequired => Value::Null,
+                };
+                (serde_json::to_value(&terminal.result)?, delivery)
+            }
+            _ => (json!({"kind":"pending"}), Value::Null),
+        };
+        value["jobId"] = json!(job.job_id);
+        value["agentId"] = json!(job.agent_id);
+        value["latestJobId"] = value["agent"]["latestJobId"].clone();
+        value["run_id"] = json!(job.job_id);
+        value["agent_id"] = json!(job.agent_id);
+        value["previous_run_id"] = json!(job.previous_job_id);
+        value["provider_session_id"] = json!(
+            job.execution
+                .conversation()
+                .map(|conversation| &conversation.thread_id)
+        );
+        value["recipient"] = json!(job.recipient);
+        value["attention"] = json!(job.attention);
+        if value.get("parent").is_none() {
+            value["parent"] = json!(job.initial_parent);
+        }
+        if let Some(owner) = value["ownerHostId"].as_str() {
+            value["address"] = json!(format!("{owner}:{}", job.job_id.as_str()));
+        }
+        value["status"] = json!(job.execution.state());
+        value["resultText"] = result["result"]["text"].clone();
+        value["result"] = result;
+        value["delivery"] = delivery;
+        value["detailsLoaded"] = json!(true);
+    } else {
+        value["jobId"] = value["run_id"].clone();
+        value["agentId"] = value["agent_id"].clone();
+        value["latestJobId"] = Value::Null;
+        value["resultText"] = Value::Null;
+        value["result"] = json!({"kind":"notLoaded"});
+        value["delivery"] = Value::Null;
+        value["attention"] = Value::Null;
+        value["detailsLoaded"] = json!(false);
+    }
+    Ok(value)
 }
 
 async fn spawn(endpoint: &Endpoint, arguments: SpawnArgs) -> Result<Value> {
@@ -1166,8 +1184,10 @@ fn human_listing(result: &Value) -> Result<String> {
         }
         return Ok(lines.join("\n"));
     }
-    let view: JobView = serde_json::from_value(result.clone())?;
-    let (model, cwd) = match &view.job.spec {
+    let job: JobRecord = serde_json::from_value(result["job"].clone())?;
+    let agent: Option<super::jobs::model::AgentRecord> =
+        serde_json::from_value(result["agent"].clone())?;
+    let (model, cwd) = match &job.spec {
         SpecEvidence::Known { spec } => (Some(&spec.settings), Some(&spec.cwd)),
         SpecEvidence::Expired { settings, cwd, .. } => (Some(settings), Some(cwd)),
         SpecEvidence::Unknown { .. } => (None, None),
@@ -1182,8 +1202,8 @@ fn human_listing(result: &Value) -> Result<String> {
     let mut lines = vec![
         format!(
             "{}  {}",
-            view.job.job_id.as_str(),
-            execution_status(&view.job)
+            job.job_id.as_str(),
+            result["status"].as_str().unwrap_or("unknown")
         ),
         format!("Model: {model}"),
         format!(
@@ -1192,7 +1212,7 @@ fn human_listing(result: &Value) -> Result<String> {
                 .unwrap_or_else(|| "unknown".into())
         ),
     ];
-    if let Some(agent) = view.agent {
+    if let Some(agent) = agent {
         match agent.conversation {
             ConversationBinding::Known { conversation } => lines.push(format!(
                 "Conversation: {} ({})",
@@ -1204,7 +1224,7 @@ fn human_listing(result: &Value) -> Result<String> {
             }
         }
     }
-    match &view.job.execution {
+    match &job.execution {
         ExecutionState::Unknown { reason, .. } => lines.push(format!("Status evidence: {reason}")),
         ExecutionState::Terminal { terminal } => {
             if let super::jobs::model::ResultEvidence::Available { result } = &terminal.result {
@@ -1225,20 +1245,36 @@ fn message_exit(result: &Value) -> i32 {
     }
 }
 
-pub(crate) async fn run(command: AgentCommand, env_file: Option<&Path>) -> Result<i32> {
+pub(crate) async fn run(command: AgentCommand, json: bool, env_file: Option<&Path>) -> Result<i32> {
     let format_only = matches!(&command, AgentCommand::Message(arguments) if arguments.format_only);
     let is_message = matches!(&command, AgentCommand::Message(arguments) if !arguments.target.starts_with("automation:"));
-    let human_list = matches!(&command, AgentCommand::List(arguments) if !arguments.json && !arguments.automations && !arguments.target.as_deref().is_some_and(|target| target.starts_with("automation:")));
-    let compact = match &command {
-        AgentCommand::Spawn(arguments) => arguments.json,
-        AgentCommand::Message(arguments) => arguments.json,
-        AgentCommand::List(arguments) => arguments.json,
-        AgentCommand::Read { json, .. }
-        | AgentCommand::Items { json, .. }
-        | AgentCommand::Receipt { json, .. } => *json,
-        _ => true,
+    let human_list = matches!(&command, AgentCommand::List(arguments) if !json && !arguments.automations && !arguments.target.as_deref().is_some_and(|target| target.starts_with("automation:")));
+    let compact = json
+        || !matches!(
+            &command,
+            AgentCommand::Spawn(_)
+                | AgentCommand::Message(_)
+                | AgentCommand::List(_)
+                | AgentCommand::Read { .. }
+                | AgentCommand::Items { .. }
+                | AgentCommand::Receipt { .. }
+        );
+    let projects_lifecycle = matches!(&command, AgentCommand::Spawn(_))
+        || matches!(&command, AgentCommand::Read { target, .. } if !target.starts_with("automation:"))
+        || matches!(&command, AgentCommand::List(args) if !args.automations && !args.target.as_deref().is_some_and(|target|target.starts_with("automation:")));
+    let result = execute(command, env_file).await;
+    let result = if projects_lifecycle {
+        result.and_then(|value| {
+            if value.get("job").is_some() || value.get("agents").is_some() {
+                lifecycle(value)
+            } else {
+                Ok(value)
+            }
+        })
+    } else {
+        result
     };
-    match execute(command, env_file).await {
+    match result {
         Ok(Value::String(text)) if format_only => {
             println!("{text}");
             Ok(0)
@@ -1295,6 +1331,111 @@ pub(crate) async fn run(command: AgentCommand, env_file: Option<&Path>) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_agent_command_accepts_json() {
+        use clap::Parser;
+        for command in [
+            vec!["spawn", "codex", "fixture", "prompt"],
+            vec!["list"],
+            vec!["read", "self"],
+            vec!["message", "parent", "text"],
+            vec!["stop", "target"],
+            vec!["dismiss", "target", "reason"],
+            vec!["set-title", "title"],
+            vec!["set-parent", "child", "current"],
+            vec!["capture"],
+            vec!["receipt", "receipt-id"],
+            vec!["items", "target"],
+            vec!["cluster", "list"],
+            vec!["native-parent"],
+        ] {
+            for before in [true, false] {
+                let mut args = vec!["gateway", "agent"];
+                if before {
+                    args.push("--json");
+                }
+                args.extend(command.clone());
+                if !before {
+                    args.push("--json");
+                }
+                let parsed = crate::config::Args::try_parse_from(&args).unwrap();
+                assert!(
+                    matches!(
+                        parsed.command,
+                        Some(crate::config::Command::Agent { json: true, .. })
+                    ),
+                    "{args:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn lifecycle_preserves_result_delivery_attention_and_legacy_fields() {
+        use super::super::jobs::model::*;
+        let mut job = super::super::jobs::store_tests::job(1);
+        job.attention = Some(Attention::Surfaced {
+            reason: "delivery needs attention".into(),
+        });
+        job.execution = ExecutionState::Terminal {
+            terminal: Terminal {
+                at_ms: Some(123),
+                execution: None,
+                git: GitSnapshot::Unknown {
+                    reason: "fixture".into(),
+                },
+                outcome: JobOutcome::Completed,
+                result: ResultEvidence::Available {
+                    result: JobResult {
+                        text: String::new(),
+                        truncated: false,
+                    },
+                },
+                completion: Completion::Required {
+                    payload: CompletionPayload::Expired {
+                        delivery_id: "callback-id".into(),
+                        fingerprint: "fingerprint".into(),
+                    },
+                    delivery: DeliveryState::Recorded {
+                        receipt: "exact-receipt".into(),
+                    },
+                },
+                cleanup: CleanupState::Complete,
+            },
+        };
+        let input = json!({"ownerHostId":"owner","parent":null,"job":job,"agent":null});
+        let projected = lifecycle(input.clone()).unwrap();
+        assert_eq!(projected["job"], input["job"]);
+        assert_eq!(projected["status"], "completed");
+        assert_eq!(
+            projected["result"],
+            json!({"kind":"available","result":{"text":"","truncated":false}})
+        );
+        assert_eq!(projected["resultText"], "");
+        assert_eq!(
+            projected["delivery"],
+            input["job"]["execution"]["terminal"]["completion"]["delivery"]
+        );
+        assert_eq!(projected["attention"], input["job"]["attention"]);
+        assert_eq!(projected["run_id"], input["job"]["jobId"]);
+        assert_eq!(projected["agentId"], projected["agent_id"]);
+        assert_eq!(projected["detailsLoaded"], true);
+        assert!(projected.get("agents").is_none());
+        let mut unavailable = input;
+        unavailable["job"]["execution"]["terminal"]["result"] =
+            json!({"kind":"unavailable","reason":"no transcript"});
+        let unavailable = lifecycle(unavailable).unwrap();
+        assert_eq!(unavailable["result"]["reason"], "no transcript");
+        assert!(unavailable["resultText"].is_null());
+        let listed = lifecycle(json!({"agents":[{"run_id":"job","agent_id":"agent","status":"working","ownerHostId":"owner"}]})).unwrap();
+        let row = &listed["agents"][0];
+        assert_eq!(row["status"], "working");
+        assert_eq!(row["result"], json!({"kind":"notLoaded"}));
+        assert!(row["resultText"].is_null());
+        assert!(row["delivery"].is_null());
+        assert_eq!(row["detailsLoaded"], false);
+    }
 
     #[test]
     fn message_delivery_failures_return_nonzero_without_changing_receipt() {

@@ -78,11 +78,15 @@ fn main() -> Result<()> {
                 ))?,
         );
     }
-    if let Some(config::Command::Agent { command }) = args.command.clone() {
+    if let Some(config::Command::Agent { command, json }) = args.command.clone() {
         let code = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?
-            .block_on(agents::client::run(*command, args.env_file.as_deref()))?;
+            .block_on(agents::client::run(
+                *command,
+                json,
+                args.env_file.as_deref(),
+            ))?;
         std::process::exit(code);
     }
     if let Some(config::Command::ClaudeNotificationHook {

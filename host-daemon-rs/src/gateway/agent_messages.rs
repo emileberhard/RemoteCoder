@@ -376,64 +376,33 @@ impl Gateway {
         selector: &str,
         delivery_id: &str,
     ) -> Result<ResolvedMessage> {
-        if let Ok(job_id) = JobId::try_from(selector.to_owned()) {
-            return self.resolve_message_job(job_id, delivery_id).await;
-        }
         ensure!(
             selector.len() >= 4 && selector.len() <= 512,
             "use an exact run ID, provider session ID or suffix of 4–512 bytes"
         );
-        let mut cursor = None;
-        let mut matches = Vec::new();
-        for page_index in 0..50 {
-            let page = self
-                .jobs
+        let matches = if let Ok(id) = JobId::try_from(selector.to_owned()) {
+            vec![id]
+        } else {
+            self.jobs
                 .store()
                 .await?
-                .list(crate::agents::jobs::store::Selection::Recent, 200, cursor)
-                .await?;
-            matches.extend(page.jobs.into_iter().filter(|row| row.job_id.as_str().ends_with(selector) || matches!(&row.conversation, ConversationBinding::Known { conversation } if conversation.thread_id == selector)));
-            cursor = page.next_cursor;
-            if cursor.is_none() {
-                break;
-            }
-            ensure!(
-                page_index < 49,
-                "job discovery exceeded 10,000 records; use an exact run ID"
-            );
-        }
-        let suffixes = matches
-            .iter()
-            .filter(|row| row.job_id.as_str().ends_with(selector))
-            .collect::<Vec<_>>();
-        if let [row] = suffixes.as_slice() {
-            return self
-                .resolve_message_job(row.job_id.clone(), delivery_id)
-                .await;
-        }
+                .job_suffix_matches(selector.to_owned())
+                .await?
+        };
         ensure!(
-            suffixes.is_empty(),
+            matches.len() < 2,
             "job selector is ambiguous; use an exact run ID"
         );
-        if let Some(first) = matches.first() {
-            ensure!(
-                matches.iter().all(|row| row.agent_id == first.agent_id),
-                "conversation selector is ambiguous; use an exact run ID"
-            );
-            let agent = self
-                .jobs
-                .store()
-                .await?
-                .agent(first.agent_id.clone())
-                .await?;
-            return self
-                .resolve_message_job(
-                    agent
-                        .latest_job_id
-                        .context("conversation's latest job is unresolved")?,
-                    delivery_id,
-                )
-                .await;
+        if let Some(id) = matches.into_iter().next() {
+            let view = self.jobs.read(&id).await.context(ADDRESS_GUIDANCE)?;
+            let target = if view.job.agent_id == id.as_str() {
+                view.agent
+                    .and_then(|agent| agent.latest_job_id)
+                    .context("agent's latest job is unresolved")?
+            } else {
+                id
+            };
+            return self.resolve_message_job(target, delivery_id).await;
         }
         let (provider, thread_id) = if selector.starts_with("claude_") {
             (crate::agents::jobs::model::Provider::Claude, selector)
@@ -446,6 +415,12 @@ impl Gateway {
                 "native conversation provider is unknown; use a canonical Codex UUID or claude_UUID selector"
             );
         };
+        let conversation = self.agent_conversation(thread_id)?;
+        if let Some(agent) = self.jobs.agent_for_conversation(&conversation).await?
+            && let Some(job_id) = agent.latest_job_id
+        {
+            return self.resolve_message_job(job_id, delivery_id).await;
+        }
         let header = match provider {
             crate::agents::jobs::model::Provider::Claude => self
                 .claude_thread_response(&json!({"threadId":thread_id}))
@@ -467,11 +442,6 @@ impl Gateway {
             conversation.provider == provider && conversation.thread_id == thread_id,
             "provider returned a different native conversation"
         );
-        if let Some(agent) = self.jobs.agent_for_conversation(&conversation).await?
-            && let Some(job_id) = agent.latest_job_id
-        {
-            return self.resolve_message_job(job_id, delivery_id).await;
-        }
         Ok(ResolvedMessage {
             remote_recipient: None,
             conversation,

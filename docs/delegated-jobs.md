@@ -27,6 +27,40 @@ holds its current-job slot. Origin and permission scope are immutable; an
 explicit recipient change affects completion routing only. Missing historical
 origin or provider scope stays unknown rather than becoming a root.
 
+CLI message selectors equal to an agent's original job ID, including its unique
+suffix, follow that agent's current job. Other job IDs remain exact. An explicit
+RPC `MessageTarget::Job` always targets that invocation and refuses superseded
+work. Retrying a retained delivery ID uses its frozen target and receipt.
+Native conversation selectors retain exact provider and home validation.
+
+The installed CLI uses one lifecycle projection for spawn, job inspection and
+list rows. Detailed responses retain `job` and `agent` where provided by the
+RPC, plus the existing `run_id`, `agent_id`, `previous_run_id` and
+`provider_session_id` aliases. Top-level `jobId`, `agentId`, `latestJobId`,
+`status`, `recipient`, `parent`, `result`, `resultText`, `delivery`, `attention`
+and `detailsLoaded` describe that invocation. `status` uses the inventory's
+`waiting`, `working`, `unknown`, `completed`, `failed` and `interrupted` values;
+`job.execution.kind` retains the precise execution phase. A detailed nonterminal
+result is `{kind: pending}`; terminal `result` preserves the stored evidence,
+including unavailable and expired. `resultText` is nullable and preserves an
+available empty string. `delivery` passes through the terminal completion's
+delivery record, or null when no completion is required or prepared. `attention`
+passes through the job's current attention record. Notice deliveries remain
+under `job.notices`. Summary rows have `detailsLoaded: false`,
+`result: {kind: notLoaded}` and null result text, delivery, attention and latest
+job ID; those nulls make no claim about unloaded state. Admission without an
+agent read also leaves `latestJobId` null. Raw RPC response shapes and durable
+records are unchanged, so old apps and CLI copies keep working. Mixed-version
+members apply the behavior of the gateway owning the target; old gateways can
+still refuse agent-ID messages after Continue until upgraded.
+
+Every agent subcommand accepts `--json`. `--host` accepts the local gateway's
+exact member name or host ID as well as enrolled remote members. An unresolved
+runtime job occupying a conversation's slot is conflict (exit 8), not refusal.
+The exit contract remains 0 ok, 2 usage, 3 not found, 4 refused, 5 unavailable,
+6 uncertain, 7 unsupported and 8 conflict. Retained failed message receipts keep
+their existing failure semantics (exit 4); no failure class is backfilled.
+
 ## Durable lifecycle
 
 The cluster upgrade is a one-way job-store change. After an agent gains a parent

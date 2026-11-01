@@ -392,6 +392,22 @@ pub(crate) enum ExecutionState {
 }
 
 impl ExecutionState {
+    pub(crate) fn state(&self) -> crate::agents::State {
+        match self {
+            Self::Admitted
+            | Self::WaitingForProvider { .. }
+            | Self::Bound { .. }
+            | Self::RetryWaiting { .. } => crate::agents::State::Waiting,
+            Self::Running { .. } | Self::Recovering { .. } => crate::agents::State::Working,
+            Self::Dispatching { .. } | Self::Unknown { .. } => crate::agents::State::Unknown,
+            Self::Terminal { terminal } => match terminal.outcome {
+                JobOutcome::Completed => crate::agents::State::Completed,
+                JobOutcome::Failed { .. } => crate::agents::State::Failed,
+                JobOutcome::Stopped { .. } => crate::agents::State::Interrupted,
+            },
+        }
+    }
+
     pub(crate) fn binding(&self) -> Option<&ExecutionBinding> {
         match self {
             Self::Running { binding }

@@ -439,13 +439,16 @@ async fn only_one_process_owner_and_unresolved_job_can_claim_a_conversation() {
     competing.agent_id = original.agent_id;
     competing.previous_job_id = Some(original.job_id);
     competing.admission_origin = None;
-    assert!(
-        store
-            .admit(competing)
-            .await
-            .unwrap_err()
-            .to_string()
-            .contains("unresolved runtime job")
+    let error = store.admit(competing).await.unwrap_err();
+    assert!(error.to_string().contains("unresolved runtime job"));
+    let error = error.downcast_ref::<crate::rpc::RpcError>().unwrap();
+    assert_eq!(error.code, crate::rpc::error::RpcCode::Conflict);
+    assert_eq!(
+        crate::wire::cluster::ErrorClass::from_rpc(
+            &error.response(&serde_json::Value::Null)["error"]
+        )
+        .exit_code(),
+        8
     );
 }
 

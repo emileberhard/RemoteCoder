@@ -385,7 +385,7 @@ impl JobStore {
             ensure!(matches!(job.execution, ExecutionState::Admitted), "new admission must start admitted");
             ensure!(serde_json::to_vec(&job)?.len() as u64 <= MAX_JOB_BYTES - MAX_RESULT_BYTES as u64 - 64 * 1024, "encoded job input leaves insufficient room for its terminal result; shorten the prompt or reference a file");
             ensure!(inner.jobs.values().filter(|existing| live_reservation(existing)).count() < MAX_UNSETTLED_JOBS, "delegated-job admission capacity reached; settle or dismiss existing work");
-            ensure!(!inner.jobs.values().any(|existing| existing.agent_id == job.agent_id && existing.source == JobSource::Runtime && !is_terminal(existing)), "conversation already has an unresolved runtime job");
+            ensure!(!inner.jobs.values().any(|existing| existing.agent_id == job.agent_id && existing.source == JobSource::Runtime && !is_terminal(existing)), crate::rpc::RpcError::new(crate::rpc::error::RpcCode::Conflict, "conversation already has an unresolved runtime job"));
             if let Some(previous_id) = &job.previous_job_id {
                 let previous = inner.job(previous_id)?;
                 ensure!(!require_unstopped || (matches!(previous.stop, StopState::NotRequested) && !matches!(&previous.execution, ExecutionState::Terminal { terminal } if matches!(terminal.outcome, JobOutcome::Stopped { .. }))), "automatic message continuation cannot clear Stop; use explicit Continue to restart deliberately");
@@ -728,23 +728,6 @@ impl Inner {
             .unwrap_or_else(|| ConversationBinding::Unknown {
                 reason: "historical provider conversation is unresolved".into(),
             });
-        let state = match &job.execution {
-            ExecutionState::Admitted
-            | ExecutionState::WaitingForProvider { .. }
-            | ExecutionState::Bound { .. }
-            | ExecutionState::RetryWaiting { .. } => crate::agents::State::Waiting,
-            ExecutionState::Running { .. } | ExecutionState::Recovering { .. } => {
-                crate::agents::State::Working
-            }
-            ExecutionState::Dispatching { .. } | ExecutionState::Unknown { .. } => {
-                crate::agents::State::Unknown
-            }
-            ExecutionState::Terminal { terminal } => match terminal.outcome {
-                JobOutcome::Completed => crate::agents::State::Completed,
-                JobOutcome::Failed { .. } => crate::agents::State::Failed,
-                JobOutcome::Stopped { .. } => crate::agents::State::Interrupted,
-            },
-        };
         Ok(JobSummary {
             owner_host_id: None,
             parent: self
@@ -759,7 +742,7 @@ impl Inner {
             cwd,
             title,
             model,
-            state,
+            state: job.execution.state(),
             active: listing_active(job),
             created_at_ms: job.created_at_ms,
             updated_at_ms: job.updated_at_ms,
