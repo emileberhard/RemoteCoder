@@ -90,7 +90,7 @@ struct ConversationHistoryList: View {
                 if !settleable.isEmpty { actions.settle(settleable) }
             }
         }
-        .overlay { placeholder(isEmpty: items.isEmpty && drafts.isEmpty) }
+        .overlay { placeholder(isEmpty: snapshot != nil && items.isEmpty && drafts.isEmpty) }
         .safeAreaBar(edge: .bottom) { statusBar }
         .task(id: shownConversation) {
             await Task.yield()
@@ -295,7 +295,7 @@ struct ConversationHistoryList: View {
 
     @ViewBuilder
     private func placeholder(isEmpty: Bool) -> some View {
-        if isEmpty, snapshot?.hostStates.contains(where: \.isLoading) ?? true {
+        if isEmpty, snapshot?.hostStates.contains(where: \.isLoading) == true {
             ProgressView()
                 .accessibilityLabel("Loading history")
         } else if isEmpty, snapshot?.hostStates.contains(where: { $0.canLoadMore || $0.hasDiscardedHeaders || !$0.unloadedPins.isEmpty }) == true {

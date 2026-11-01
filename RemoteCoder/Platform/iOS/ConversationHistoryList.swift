@@ -41,7 +41,7 @@ struct ConversationHistoryList: View {
                         .appContentSurface(.standard, in: .rect(cornerRadius: 18))
                 } else if items.isEmpty, snapshot?.hostStates.contains(where: { $0.canLoadMore || $0.hasDiscardedHeaders || !$0.unloadedPins.isEmpty }) == true {
                     emptyCard(systemImage: "clock.arrow.circlepath", title: "More history not loaded")
-                } else if items.isEmpty {
+                } else if items.isEmpty, snapshot != nil {
                     emptyState
                 } else {
                     ForEach(items) { item in
@@ -383,7 +383,7 @@ struct ConversationHistoryList: View {
     }
 
     private var isAnyHostLoading: Bool {
-        snapshot?.hostStates.contains { $0.isLoading } ?? true
+        snapshot?.hostStates.contains { $0.isLoading } == true
     }
 
     /// A failing gateway keeps its cached rows, so the error has to say which
