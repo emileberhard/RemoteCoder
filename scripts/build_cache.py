@@ -107,35 +107,33 @@ def record_compilation(
     root: Path, paths: list[Path], build_id: str, active: bool, source: dict
 ):
     now = time.time()
-    with file_lease(root / "leases/maintenance.lock"):
-        for path in paths:
-            path = canonical_path(path)
-            compilation_record(root, path).parent.mkdir(parents=True, exist_ok=True)
-            atomic_json(
-                compilation_record(root, path),
-                {
-                    "schemaVersion": 2,
-                    "path": str(path.absolute()),
-                    "buildId": build_id,
-                    "active": active,
-                    "lastUsed": now,
-                    "completedAt": None if active else now,
-                    "sourceCommit": source["sourceCommit"],
-                    "sourceModified": source["sourceModified"],
-                },
-            )
+    for path in paths:
+        path = canonical_path(path)
+        compilation_record(root, path).parent.mkdir(parents=True, exist_ok=True)
+        atomic_json(
+            compilation_record(root, path),
+            {
+                "schemaVersion": 2,
+                "path": str(path.absolute()),
+                "buildId": build_id,
+                "active": active,
+                "lastUsed": now,
+                "completedAt": None if active else now,
+                "sourceCommit": source["sourceCommit"],
+                "sourceModified": source["sourceModified"],
+            },
+        )
 
 
 def record_mirror_source(root: Path, manifest: dict):
     if "sourceHost" not in manifest or "sourceRoot" not in manifest:
         return
-    with file_lease(root / "leases/maintenance.lock"):
-        mirror = root / "worktrees" / manifest["worktreeId"]
-        mirror.mkdir(parents=True, exist_ok=True)
-        atomic_json(
-            mirror / "source.json",
-            {key: manifest[key] for key in ("worktreeId", "sourceHost", "sourceRoot")},
-        )
+    mirror = root / "worktrees" / manifest["worktreeId"]
+    mirror.mkdir(parents=True, exist_ok=True)
+    atomic_json(
+        mirror / "source.json",
+        {key: manifest[key] for key in ("worktreeId", "sourceHost", "sourceRoot")},
+    )
 
 
 def _mirror_source(root: Path, entry: CompilationDirectory) -> tuple[str, str] | None:
@@ -942,17 +940,20 @@ def compilation_admission(
                 proofs[key] = retired, "proven" if retired else "not-proven"
         return proofs[key]
 
-    with file_lease(root / "leases/maintenance.lock"), ExitStack() as ownership:
+    with try_lease(root / "leases/maintenance.lock") as maintenance, ExitStack() as ownership:
         deadline = time.monotonic() + 20
         result["freeBytesBefore"] = shutil.disk_usage(root).free
-        if (
-            not preview
-            and not policy.eviction_enabled
+        deferred = (
+            "maintenance-lease-contended" if maintenance is None else
+            "eviction-disabled-and-free-space-target-met"
+            if not preview and not policy.eviction_enabled
             and result["freeBytesBefore"] >= policy.eviction_target_free_bytes
-        ):
+            else None
+        )
+        if deferred:
             result.update(
                 {
-                    "inventoryDeferred": "eviction-disabled-and-free-space-target-met",
+                    "inventoryDeferred": deferred,
                     "inventoryComplete": False,
                     "allocatedBytes": None,
                     "knownAllocatedBytes": None,
@@ -961,7 +962,7 @@ def compilation_admission(
                     "unsatisfiedBudgetBytes": None,
                     "successfullyEvictedBytes": 0,
                     "remainingBytes": None,
-                    "warning": "Compilation cache inventory deferred while eviction is disabled and the free-space target is met; allocation and soft-budget status are unknown. Use cache-preview for a full inventory.",
+                    "warning": f"Compilation cache inventory deferred: {deferred}; allocation and soft-budget status are unknown. Admission continues subject to the free-space floor.",
                 }
             )
             for entry in entries:
@@ -1462,38 +1463,51 @@ def prune_caches(
     root: Path, policy: CachePolicy, worktree: str, run: str, *, preview: bool = False
 ) -> dict:
     removed = {"runs": []}
-    with file_lease(root / "leases/maintenance.lock"):
+    with try_lease(root / "leases/maintenance.lock") as maintenance, ExitStack() as ownership:
+        if maintenance is None:
+            return {"runs": [], "retentionDeferred": "maintenance-lease-contended"}
         deadline = time.monotonic() + 20
         directory = root / "runs"
-        paths = (
-            sorted(
-                (p for p in directory.iterdir() if _real_directory(p)),
-                key=lambda p: last_used(p, root, "runs"),
-            )
-            if _real_directory(directory)
-            else []
-        )
+        paths = []
+        if _real_directory(directory):
+            with os.scandir(directory) as listing:
+                paths = [Path(item.path) for item in listing if item.is_dir(follow_symlinks=False)]
         count = len(paths)
-        for path in paths:
-            age = time.time() - last_used(path, root, "runs")
-            if path.name == run or age < policy.evidence_protection_seconds:
+        measured = []
+        for index, path in enumerate(paths):
+            if time.monotonic() >= deadline:
+                removed["unprobedRuns"] = [item.name for item in paths[index:]]
+                break
+            if path.name == run or not _real_directory(path):
                 continue
-            if not _run_is_terminal(path):
-                removed.setdefault("unknownRuns", []).append(path.name)
-                continue
+            with ExitStack() as candidate:
+                lease = candidate.enter_context(try_lease(lease_path(root, "runs", path.name)))
+                if lease is None:
+                    removed.setdefault("leasedRuns", []).append(path.name)
+                    continue
+                used = last_used(path, root, "runs")
+                if time.monotonic() >= deadline:
+                    removed["unprobedRuns"] = [item.name for item in paths[index:]]
+                    break
+                if time.time() - used < policy.evidence_protection_seconds:
+                    continue
+                if not _run_is_terminal(path):
+                    removed.setdefault("unknownRuns", []).append(path.name)
+                    continue
+                ownership.enter_context(candidate.pop_all())
+                measured.append((used, path))
+        deadline = time.monotonic() + 20
+        for used, path in sorted(measured):
+            age = time.time() - used
             if count <= policy.max_runs and age < policy.run_retention_seconds:
                 continue
-            with try_lease(lease_path(root, "runs", path.name)) as lease:
-                if (
-                    lease is None
-                    or time.time() - last_used(path, root, "runs")
-                    < policy.evidence_protection_seconds
-                ):
-                    continue
+            if time.monotonic() >= deadline:
+                removed.setdefault("unreclaimedRuns", []).append(path.name)
+                continue
+            with _directory_descriptor(root) as cache:
                 deleting = False
                 try:
                     with (
-                        _directory_descriptor(root) as cache,
                         _directory_descriptor(path.parent) as parent,
                     ):
                         device = os.fstat(cache).st_dev
@@ -1557,7 +1571,9 @@ def seed_source_packages(
     target = derived / "SourcePackages"
     if target.exists() or not resolution.is_file():
         return None
-    with file_lease(root / "leases/maintenance.lock"):
+    with try_lease(root / "leases/maintenance.lock") as maintenance:
+        if maintenance is None:
+            return None
         return _seed_packages_locked(root, current, resolution, derived, target)
 
 
@@ -1643,7 +1659,9 @@ def seed_cargo(
 ) -> dict | None:
     if key is None or target.exists():
         return None
-    with file_lease(root / "leases/maintenance.lock"):
+    with try_lease(root / "leases/maintenance.lock") as maintenance:
+        if maintenance is None:
+            return None
         return _seed_cargo_locked(root, current, key, target, manifest, environment)
 
 

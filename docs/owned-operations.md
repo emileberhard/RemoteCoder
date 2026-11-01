@@ -581,6 +581,15 @@ outside-budget coverage and are neither measured nor evicted. Cargo dependency, 
 fingerprint caches are rebuildable payloads too. Filesystem traversal and
 deletion reject symlink escapes and foreign mounts.
 
+Build admission, optional retention and cache seeding try the maintenance lease
+without waiting; contention defers cleanup with unknown allocation in the
+receipt. Source and completion records are atomic publications under the
+caller's existing source/worktree lease, so maintenance cannot stall a build's
+record publication. Run retention measures each last-use key once under a
+20-second metadata budget, retains and reports unprobed runs, then sorts the
+prepared keys for a separate bounded reclamation pass. Candidate run leases
+remain held through reclamation and are released together on every exit path.
+
 Admission reports known folder allocation, unknown entries, candidates, actual
 evictions and protected overflow in `cache-admission.json` and the receipt. Its
 per-directory `inventory` separates allocation coverage from completion

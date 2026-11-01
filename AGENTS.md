@@ -163,6 +163,9 @@ the private [operations entrypoint](https://github.com/emileberhard/RemoteCoder-
   data and every sub-owner. Reclaim only proven rebuildable payloads under their
   existing leases; publish unmet or unknown totals for the disk-pressure owner
   as defined in `docs/owned-operations.md`.
+  Optional admission cleanup, retention and seeding never wait on maintenance's
+  lease. Source and completion record publication requires the caller's existing
+  source/worktree lease and uses atomic replacement.
 - Shared build admission keeps two compiler slots: simulator/background work
   uses one, leaving the other available to interactive work. A job acquires its
   source/cache lease before waiting for capacity. Do not bypass the runner or

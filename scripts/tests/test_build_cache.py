@@ -424,12 +424,14 @@ class CacheAdmissionTests(unittest.TestCase):
             ]
             clock = [0]
             allocate = build_cache._allocated_bytes
+            real_try_lease = build_cache.try_lease
 
             @contextmanager
             def contended_lease(path):
-                with file_lease(path):
-                    clock[0] += 25
-                    yield
+                with real_try_lease(path) as lease:
+                    if path.name == "maintenance.lock":
+                        clock[0] += 25
+                    yield lease
 
             def one_slow_tree(path, deadline, device):
                 if path == entries[0].path:
@@ -439,7 +441,7 @@ class CacheAdmissionTests(unittest.TestCase):
 
             with (
                 file_lease(entries[-1].leases[0]),
-                patch("build_cache.file_lease", side_effect=contended_lease),
+                patch("build_cache.try_lease", side_effect=contended_lease),
                 patch("build_cache.time.monotonic", side_effect=lambda: clock[0]),
                 patch("build_cache._allocated_bytes", side_effect=one_slow_tree),
                 patch("build_cache._open_file_snapshot", return_value=([], None)) as snapshot,
@@ -1447,6 +1449,73 @@ class CacheAdmissionTests(unittest.TestCase):
                 result = prune_caches(root, self.policy(), "tree", "current")
                 self.assertEqual(result["runs"], [])
                 self.assertTrue(run.exists())
+
+    def test_run_retention_bounds_key_probes_and_preserves_unprobed_runs(self):
+        import json
+        import build_cache
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            paths = []
+            for index in range(5):
+                path = root / "runs" / str(index)
+                path.mkdir(parents=True)
+                (path / "receipt.json").write_text(json.dumps({"exitCode": 0}))
+                paths.append(path)
+            clock = [0]
+            probed = []
+            old = time.time() - 8 * 86400
+
+            def usage(path, owner, category):
+                self.assertLess(clock[0], 20)
+                probed.append(path)
+                clock[0] += 6
+                return old
+
+            with (
+                patch("build_cache.time.monotonic", side_effect=lambda: clock[0]),
+                patch("build_cache.last_used", side_effect=usage),
+            ):
+                result = prune_caches(root, self.policy(), "", "")
+            self.assertEqual(len(probed), 4)
+            self.assertEqual(len(set(probed)), 4)
+            self.assertEqual(set(result["runs"]), {path.name for path in probed[:3]})
+            self.assertEqual(set(result["unprobedRuns"]), {path.name for path in paths} - set(result["runs"]))
+            for path in paths:
+                self.assertEqual(path.exists(), path.name in result["unprobedRuns"])
+                with build_cache.try_lease(lease_path(root, "runs", path.name)) as lease:
+                    self.assertIsNotNone(lease)
+
+    def test_build_cache_operations_never_wait_on_maintenance(self):
+        import json
+        import build_cache
+        from build_support import file_lease
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            entry = self.entry(root, "derived-cache", time.time() - 86400)
+            source = root / "source"
+            source.mkdir()
+            (source / ".package.resolved").write_text("{}")
+            manifest = {"worktreeId": "tree", "sourceHost": "host", "sourceRoot": str(source)}
+            with (
+                file_lease(root / "leases/maintenance.lock"),
+                file_lease(entry.leases[0]),
+                patch("build_cache.file_lease", side_effect=AssertionError("Maintenance wait is forbidden")),
+                patch("build_cache._allocated_bytes", side_effect=AssertionError("Contended admission must not scan")),
+            ):
+                result = build_cache.compilation_admission(root, self.policy(), [entry], set(), preview=False)
+                self.assertEqual(result["inventoryDeferred"], "maintenance-lease-contended")
+                self.assertFalse(result["inventoryComplete"])
+                self.assertIsNone(result["allocatedBytes"])
+                self.assertEqual(result["evicted"], [])
+                self.assertEqual(prune_caches(root, self.policy(), "", "")["retentionDeferred"], "maintenance-lease-contended")
+                self.assertIsNone(seed_source_packages(root, "tree", source, root / "derived"))
+                self.assertIsNone(seed_cargo(root, "tree", "key", root / "target", source / "Cargo.toml", {}))
+                build_cache.record_mirror_source(root, manifest)
+                build_cache.record_compilation(root, [entry.path], "build", True, {"sourceCommit": "commit", "sourceModified": False})
+            self.assertEqual(json.loads((root / "worktrees/tree/source.json").read_text()), manifest)
+            self.assertTrue(json.loads(build_cache.compilation_record(root, entry.path).read_text())["active"])
 
     def test_approval_preview_includes_old_run_evidence_and_never_deletes_or_rejects_low_space(
         self,
