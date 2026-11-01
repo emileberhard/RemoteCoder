@@ -72,7 +72,6 @@ private struct WindowRoot: View {
         }
             .modifier(environment)
             .modifier(SceneLifecycle(app: app))
-            .background { HapticOutput() }
             .background { WindowTabAdoption(tabbing: tabbing, value: value) }
             .frame(minWidth: 720, minHeight: 520)
             .modifier(WindowOpeners(events: app.workspace.events))

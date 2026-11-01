@@ -26,7 +26,7 @@ struct RecordingHapticTests {
             fixture.service.play(.commit)
         }
         #expect(called)
-        #expect(fixture.service.pulse?.event == .commit)
+        #expect(fixture.native.events.last == HapticEvent.commit.recipe(for: .strong))
         #expect(!controller.isTranscribing)
     }
 
@@ -47,7 +47,7 @@ struct RecordingHapticTests {
         #expect(recorder.didDeactivate)
         #expect(!controller.isRecording)
         #expect(!acknowledged)
-        #expect(fixture.service.pulse == nil)
+        #expect(fixture.native.events.isEmpty)
     }
 
     @Test func failedSessionReleaseDoesNotAcknowledgeStopOrLoseTranscription() async throws {
@@ -63,7 +63,7 @@ struct RecordingHapticTests {
         var acknowledged = false
         try await controller.stopRecording { acknowledged = true }
         #expect(!acknowledged)
-        #expect(fixture.service.pulse == nil)
+        #expect(fixture.native.events.isEmpty)
         #expect(try await controller.transcribe().text == "retained")
     }
 
@@ -79,7 +79,7 @@ struct RecordingHapticTests {
         await #expect(throws: RefusingRecorder.Failure.self) { try await controller.startAsync() }
         #expect(recorder.wasSuppressedAtActivation)
         #expect(fixture.service.canPlay)
-        #expect(fixture.service.pulse == nil)
+        #expect(fixture.native.events.isEmpty)
         #expect(!controller.isRecording)
     }
 }

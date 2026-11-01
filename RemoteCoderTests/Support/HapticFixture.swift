@@ -7,6 +7,7 @@ final class HapticFixture {
     let defaults: UserDefaults
     var active = true
     var callActive = false
+    let native = RecordingNativeHapticPlayer()
     var players: [RecordingHapticPlayer] = []
     var streamingPlayers: [RecordingStreamingHapticPlayer] = []
     lazy var service = makeService()
@@ -19,7 +20,7 @@ final class HapticFixture {
     func makeService(supportsHaptics: Bool = true) -> HapticService {
         let service = HapticService(defaults: defaults, supportsHaptics: supportsHaptics,
                                     isActive: { [weak self] in self?.active == true },
-                                    makeInteractionPlayer: { [weak self] in
+                                    makeInteractionPlayer: { [weak self] _ in
                                         let player = RecordingHapticPlayer()
                                         self?.players.append(player)
                                         return player
@@ -28,6 +29,7 @@ final class HapticFixture {
                                         self?.streamingPlayers.append(player)
                                         return player
                                     })
+        service.attach(native)
         service.bindCallState { [weak self] in self?.callActive == true }
         return service
     }
@@ -63,3 +65,14 @@ final class RecordingStreamingHapticPlayer: HapticStreamingPlaying {
     func cancel() { cancelled = true }
 }
 
+
+@MainActor
+final class RecordingNativeHapticPlayer: HapticNativePlaying {
+    var events: [HapticRecipe] = []
+    var prepared: [HapticRecipe] = []
+    var releases = 0
+
+    func prepare(_ recipe: HapticRecipe) { prepared.append(recipe) }
+    func play(_ recipe: HapticRecipe) { events.append(recipe) }
+    func release() { releases += 1 }
+}

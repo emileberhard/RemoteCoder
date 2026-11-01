@@ -49,7 +49,7 @@ enum HapticEvent: String, CaseIterable, Sendable {
     }
 }
 
-/// SwiftUI and the prepared gesture player interpret the same recipe.
+/// Ordinary and prepared gesture feedback share the same native recipe.
 enum HapticRecipe: Equatable {
     enum Impact: Hashable {
         case light, medium, rigid, soft
@@ -70,17 +70,6 @@ struct HapticOccurrence: Hashable {
     let hostID: UUID
     let kind: Kind
     let id: String
-}
-
-struct HapticPulse: Equatable {
-    let id = UUID()
-    let event: HapticEvent
-    let strength: HapticStrength
-    let requestedAt: ContinuousClock.Instant
-
-    func isFresh(at now: ContinuousClock.Instant) -> Bool {
-        requestedAt.duration(to: now) < .milliseconds(200)
-    }
 }
 
 /// Status is preserved all the way to presentation; an unknown result is not success.

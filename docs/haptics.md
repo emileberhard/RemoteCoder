@@ -18,8 +18,8 @@ and menu tracking, not a dummy action to produce feedback. Parent/caller plain
 button styling cannot silently replace the wrapper's internal tactile style.
 
 Ordinary buttons use `.appButtonFeedback()` / `.appIconButtonFeedback()` or the
-existing semantic `ResponsiveButtonStyle`. UIKit-backed controls can share
-`.appPressFeedback(event, isPressed:)` without adding another gesture recognizer.
+existing semantic `ResponsiveButtonStyle`. Its `appPressFeedback` observes the rising
+press transition and calls the service directly; the measurement harness shares that modifier. UIKit-backed controls call `HapticService.play` from their existing contact callback, before preparing a held interaction. No additional recognizer is installed.
 
 Native glass buttons use `.buttonStyle(.appGlass)` and acknowledge activation
 while keeping system glass animation and tracking. When the action already owns
@@ -36,7 +36,7 @@ system feedback. Native switches keep their native treatment; the custom Fast
 mode toggle already owns its on/off recipes.
 
 `scripts/lint-haptics` rejects raw `Menu` outside `UI/DesignSystem/AppMenu.swift` and
-raw haptic generators/recipes or sensory modifiers outside `Core/Haptics`. It
+raw haptic generators/recipes outside their named platform owners. It
 runs with install-dev, local device installs, verify and the release gate. It is a
 source guard, not a Swift compiler plugin; intentional native-control exceptions
 must be implemented at the owning component rather than bypassed at call sites.
@@ -45,13 +45,9 @@ must be implemented at the owning component rather than bypassed at call sites.
 
 Use `HapticEvent.recipe(for:)` for semantic feedback and `StreamingHapticRecipe`
 for streaming words. The same
-`HapticRecipe` maps to SwiftUI sensory feedback for ordinary controls and UIKit
-for prepared gesture ticks. `HapticAccent` owns the two custom patterns. The newer
-`SensoryFeedback.press`, `release`, and typed `selection` members are callable from
-iOS code but their individual Apple documentation specifies **visionOS-only
-playback**. They are not iPhone replacements for impact/selection feedback.
-`start` and `stop` similarly play only on watchOS. Do not infer physical support
-from a symbol's availability annotation.
+`HapticRecipe` maps to view-attached UIKit generators for both ordinary events
+and prepared gesture ticks. `HapticAccent` owns the two gesture-only custom patterns.
+The ordinary dispatch path never starts a custom engine.
 
 The iPhone catalog maps button/icon compression to light impacts, toggle states
 to rigid/soft impacts, and slider boundaries to distinct rigid impacts. Ordinary
@@ -105,20 +101,35 @@ completion. Copy feedback follows the clipboard write on every explicit copy,
 including repeated copies while the checkmark is already visible.
 
 `HapticService` owns the app preference, hardware/foreground/audio policy and
-bounded occurrence deduplication. A tiny `HapticOutput` under the app root observes
-semantic pulses; the transcript and control trees do not observe that stream.
-This output survives an accepted action dismissing a sheet or replacing a card.
-Pulses capture their strength, expire after 200 ms, and are discarded, never
-queued for a later foreground or post-recording replay. Changing strength or
-turning feedback off invalidates any pending pulse. This is a stale-event cutoff, not a hardware latency
-claim. No file loading, custom-engine start, network request, background task or
-keep-warm timer occurs on this dispatch path.
+bounded occurrence deduplication. Accepted events submit synchronously in the
+same callback, including repeated events in one callback. There is no observable
+pulse, SwiftUI output, event queue or deferred replay. The root `HapticAttachment`
+registers one `ViewHapticPlayer` with the exact window containing its anchor;
+there is no global window lookup. It survives an accepted action dismissing a
+sheet or replacing a card. Replacement/removal is fenced by player identity, so
+an old anchor cannot detach a replacement. Missing output drops events.
 
-`drawer-gesture-end`, `feedback-intent` and `feedback-api-request` signposts
-separate recognizer callback, eligibility and feedback API submission. For
-SwiftUI controls the request marks the sensory-feedback closure returning its
-recipe; for prepared gestures it marks the synchronous player call. These
-timestamps do not measure finger-up delivery or actuator onset.
+The service owns the native pool and lends it to gesture players. At most four
+impact styles, one selection generator and one notification generator are retained.
+All use `init(view:)` or `init(style:view:)`. Scene exit, capture, calls, opt-out,
+strength changes, attachment replacement and removal cancel playback and remove
+the generators from their view. The attached pool remains reusable after suppression.
+Gesture finish/cancel releases its accents without removing shared native generators.
+The drawer retains its small, gesture-owned selection player on its recognizer view.
+
+Gesture begin prepares its anticipated recipes. Impact/selection playback prepares
+the generator for a subsequent event, as before. Mounting, foregrounding and
+suppression exit do not speculate or repeatedly prepare hardware. A cold first
+contact submits immediately; preparation in the same callback would not reduce
+actuator latency. No file loading, custom-engine start, network request,
+background task or keep-warm timer occurs on ordinary dispatch.
+
+`drawer-gesture-end`, `feedback-intent` and `feedback-api-request` signposts separate
+recognizer callback, eligibility and feedback API submission. Request markers now
+sit immediately before the UIKit or Core Haptics call. Older SwiftUI request markers
+identified the sensory-feedback closure returning its recipe, not the system's
+subsequent generator call. These timestamps do not measure finger delivery or
+actuator onset.
 
 Async model actions capture `feedbackForCurrentConversation()` before suspending.
 That callback requires the same host model, conversation, presentation, visibility
@@ -164,8 +175,7 @@ gesture, finishing accent or accepted app feedback within 200 ms drops that
 message's pending marks. Reopening a gate never replays them; genuinely new
 starts can use the remaining opening budget. Reduce Motion, energy conservation
 and hidden transcript presentation settle the reveal and therefore produce no
-word ticks or preparation. Streaming bypasses semantic-pulse observation and the
-bounded completion/question occurrence set.
+word ticks or preparation. Streaming bypasses the bounded completion/question occurrence set.
 
 `HapticService` owns a separate `PreparedStreamingHapticPlayer`; gesture players
 retain their own lifetime. Visible streaming state, the existing central row
@@ -259,10 +269,9 @@ haptics is used.
 
 `HapticService` owns at most one active gesture and one finite finishing accent,
 qualified by the originating control UUID. A new owner cancels the previous one;
-a late completion/cancel for another owner cannot touch the new player. Native
-impact/selection generators are allocated/prepared at contact, reused through
-that gesture, and re-prepared after ticks. Requests go directly to the prepared
-player rather than through a single SwiftUI latest-value pulse. No tick backlog
+a late completion/cancel for another owner cannot touch the new player. The shared native
+pool prepares anticipated impact/selection recipes at contact and re-prepares
+after ticks. Requests go directly to its prepared generators. No tick backlog
 is accumulated and the final detent/release pair is not blindly layered.
 
 Strong also prepares a haptics-only Core Haptics engine and two cached players.
@@ -344,7 +353,7 @@ just ios-simulator-test RemoteCoderTests/HapticServiceTests \
   RemoteCoderTests/ReasoningPickerTests RemoteCoderTests/ReasoningControlLifecycleTests
 ```
 
-They cover profile persistence/opt-out, recipe construction, stale pulses,
+Core `HapticServiceTests` cover profile persistence/opt-out, recipe construction, synchronous ordered dispatch, suppression and attachment identity. Hosted tests cover view attachment/release,
 prepared-owner replacement/cancellation, same-callback delivery, native binding
 transactions and user-only writes, detent hysteresis and final-position/release
 ownership. Fake players record API intent without driving the hardware.
@@ -367,15 +376,18 @@ validated improvements. Simulator success cannot establish physical feel,
 microphone interference, power use or actuator latency. Signposts identify
 requests only and never contain copied text, prompts or audio.
 
-# Dispatch architecture decision
+## Dispatch architecture decision
 
 ### Decision
 
 HapticService remains the only policy and dispatch owner. Every accepted semantic event calls a prepared player synchronously on the main actor. SwiftUI button isPressed remains the source of press transitions, but its callback calls the service directly. Remove pulse, HapticPulse, sensory-feedback recipe conversion and HapticOutput.
 
-A small iOS view attachment registers a player factory with the service while its scene is active and its UIView is in a window. The service owns one ordinary native player and the existing exact-owner interaction/finishing players. Attachment identity fences teardown, so a disappearing old scene cannot remove its replacement. Players use view-attached UIKit generators and explicitly detach those interactions when released. The native pool is bounded to four impact styles, selection and notification. No key-window search, dispatch queue, event backlog or keep-warm timer.
-
-Preparation is an explicit operation: attachment/foreground prepares the native pool; input contact and gesture begin prepare anticipated feedback; accepted playback prepares for a subsequent event. Cold first-contact feedback still submits immediately; preparing in that same callback does not promise a warm actuator. Native ordinary playback never starts a Core Haptics engine. Gesture preparation retains Strong custom accents and native fallback; streaming retains its separate existing engine and cadence.
+One window-attached `ViewHapticPlayer` owns the bounded native generator pool.
+The existing gesture player borrows it and owns only its Strong accents. The
+existing drawer selection player and streaming engine retain their distinct lifetimes.
+Attachment identity fences replacement and teardown. UIKit stays outside Core.
+Preparation occurs at gesture begin and after impact/selection playback; no
+speculative mount/foreground/suppression preparation or keep-warm timer is added.
 
 ### Goals and constraints
 
@@ -383,12 +395,16 @@ Preserve every recipe, eligibility gate, capture exception, call suppression, oc
 
 ### Alternatives and trade-offs
 
-Keeping root sensory feedback leaves the measured second SwiftUI hop and coalesces same-callback events. Moving sensory feedback into every view spreads policy and loses completion feedback with dismissed views. Per-control generator pools multiply ownership and resource cleanup. A scene-attached service pool reuses the existing player seam and needs only one bounded native owner, plus the existing independent gesture and streaming lifetimes. The root attachment is infrastructure, with no observation of event state.
+Keeping root sensory feedback leaves the measured second SwiftUI hop and coalesces same-callback events. Moving sensory feedback into every view spreads policy and loses completion feedback with dismissed views. Per-control generator pools multiply ownership and resource cleanup. Reusing the gesture player as ordinary output would add native/accents configuration and duplicate pools. A shared native player protocol isolates the platform boundary; the gesture player delegates its native recipes to it. The root attachment is infrastructure, with no observation of event state.
 
-Immediate asynchronous outcomes cannot always be anticipated. Repeated preparation without input would waste power and is explicitly excluded. A detached/background scene drops its events rather than guessing a window or replaying later. If multi-scene hardware with haptics requires simultaneous independent output, the single active attachment must become scene-qualified at the caller boundary; do not infer a scene from global windows.
+Immediate asynchronous outcomes cannot always be anticipated. A missing attachment
+drops events instead of replaying later. View-backed generators attach to the
+actual containing window, avoiding dependence on a zero-size anchor's visibility.
+The decision would need revisiting if a future multi-scene haptic-capable device
+required caller-qualified simultaneous outputs; the app currently disables multiple scenes.
 
-### Evidence and validation
+### Design challenge and validation
 
 Apple UIFeedbackGenerator.prepare() requires lead time and recommends preparing again after playback when more feedback is expected. init(view:) and UIImpactFeedbackGenerator.init(style:view:) attach to a real view. The Pragmatic Programmer topics 26 and 28 inform explicit resource ownership and hiding platform dispatch behind the service boundary.
 
-Before implementation: independent Opus xhigh design challenge. Before handoff: targeted hosted service/ownership/control tests and app compilation, haptic/glass/platform lints, independent pre-merge reviews, and clean test-iPhone before/after feedback-intent to feedback-api-request signposts for button, semantic event and drawer using the drawer owner’s journey driver. No merge or release in this task.
+The independent Opus xhigh challenge was completed before implementation. Its findings removed speculative preparation, shared the native pool with gesture playback, fenced attachment by object identity, and moved native contact feedback before accent setup. Its proposed AppPressFeedback deletion is declined: the production ButtonStyle and synthetic press-state measurement probe need the same rising-edge boundary. It contains only a direct service call. Before handoff: targeted hosted service/ownership/control tests and app compilation, haptic/glass/platform lints, independent pre-merge reviews, and clean test-iPhone before/after feedback-intent to feedback-api-request signposts for button, semantic event and drawer using the drawer owner’s journey driver. No merge or release in this task.

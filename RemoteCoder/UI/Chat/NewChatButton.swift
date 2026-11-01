@@ -27,12 +27,16 @@ struct NewChatButton: View {
                 TapHoldButton(label: "New chat", value: nil, hint: "Hold to start in the home folder.",
                               identifier: "new-chat",
                               accessibilityActions: [.init(name: "New Chat in Home", perform: startInHome)],
-                              onPress: { isPressed = $0 }, onContactEnded: {}, onTap: onNewChat, onHold: holdChanged)
+                              onPress: pressChanged, onContactEnded: {}, onTap: onNewChat, onHold: holdChanged)
                     .accessibilityShowsLargeContentViewer {
                         Label("New chat", systemImage: "square.and.pencil")
                     }
             }
-            .appPressFeedback(.iconPress, isPressed: isPressed)
+    }
+
+    private func pressChanged(_ pressed: Bool) {
+        isPressed = pressed
+        if pressed, isEnabled, scenePhase == .active { HapticService.shared.play(.iconPress) }
     }
 
     private func holdChanged(_ phase: TapHoldPhase, _: CGPoint, _: CGRect) {

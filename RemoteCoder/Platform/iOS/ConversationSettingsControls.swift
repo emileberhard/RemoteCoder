@@ -130,7 +130,8 @@ struct ConversationSettingsControls<Status: View>: View {
                     value: reasoning.label,
                     onPress: { pressed in
                         isReasoningPressed = pressed
-                        if pressed {
+                        if pressed, isEnabled, scenePhase == .active {
+                            haptics.play(.sliderGrab)
                             cancelGaugeFeedback()
                             haptics.beginInteraction(owner: ownerID)
                         }
@@ -142,7 +143,6 @@ struct ConversationSettingsControls<Status: View>: View {
             }
             .scaleEffect(isReasoningPressed && !reduceMotion ? 0.94 : 1)
             .animation(reduceMotion ? nil : AppControlMotion.press(isReasoningPressed), value: isReasoningPressed)
-            .appPressFeedback(.sliderGrab, isPressed: isReasoningPressed)
             .composerControlHitRegion()
             .disabled(availableEfforts.isEmpty)
     }

@@ -1,4 +1,11 @@
 @MainActor
+protocol HapticNativePlaying: AnyObject {
+    func prepare(_ recipe: HapticRecipe)
+    func play(_ recipe: HapticRecipe)
+    func release()
+}
+
+@MainActor
 protocol HapticInteractionPlaying: AnyObject {
     var hasActiveAccent: Bool { get }
     func prepare(strength: HapticStrength, canPlay: @escaping @MainActor () -> Bool)

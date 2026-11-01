@@ -97,9 +97,8 @@ private struct AppPressFeedback: ViewModifier {
     @Environment(\.isEnabled) private var isEnabled
 
     func body(content: Content) -> some View {
-        content.sensoryFeedback(trigger: isPressed) { old, pressed in
-            guard pressed, !old, isEnabled, let event else { return nil }
-            return HapticService.shared.feedbackForInteraction(event)
+        content.onChange(of: isPressed) { _, pressed in
+            if pressed, isEnabled, let event { HapticService.shared.play(event) }
         }
     }
 }
