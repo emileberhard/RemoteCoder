@@ -427,6 +427,10 @@ process. `DrawerSwitchJourney` spans the complete sequence.
 
 Sidebar, drag and row-selection commands share one task. A replacement cancels
 and awaits the previous command's cleanup; drawer removal cancels the task.
+An aborted journey cancels tracking and resets motion through the drawer owner
+before completing, including any queued open-state change. Row-selection spans
+close on every terminal path. `scenario-stop` also cancels and releases an active
+measurement window before reporting cleanup.
 The harness holds the current attached drawer weakly. A sibling probe can extend
 `PerfHarness.receiveCommand` and run on this same task through `runJourney`.
 Each haptic probe must schedule its trigger on a separate main run-loop turn;
@@ -494,7 +498,8 @@ their realization during motion or an offscreen-rendering improvement.
 
 A separate six-run, same-binary alternating control suppressed only the two
 settings-control geometry publications while retaining their global-frame
-callbacks. Enabled/suppressed median main CPU was 1307/1233 ms, with paired
+callbacks. That temporary control was removed after the comparison; geometry
+callback counters remain. Enabled/suppressed median main CPU was 1307/1233 ms, with paired
 changes of -17/-74/-81 ms. Hitches and render costs remained mixed. Opening
 trigger-to-spring activation medians were 64.925/67.244 ms cold-long,
 54.594/54.183 ms warm-short and 36.819/35.775 ms warm-long. The production

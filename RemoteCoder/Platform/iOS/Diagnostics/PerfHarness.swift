@@ -169,6 +169,8 @@ final class PerfHarness {
             let previousJourney = journeyTask
             previousWindow?.cancel()
             previousJourney?.cancel()
+            window?.cancel()
+            window = nil
             windowTask = Task {
                 await previousWindow?.value
                 await previousJourney?.value
@@ -265,6 +267,7 @@ final class PerfHarness {
         previous?.cancel()
         journeyTask = Task {
             await previous?.value
+            let drawer = self.drawer
             do {
                 try Task.checkCancellation()
                 var result = try await operation()
@@ -273,7 +276,8 @@ final class PerfHarness {
                 result["input"] = "production-callbacks"
                 writeResult(result)
             } catch {
-                if name == "select-row" { cancelRowSelection() }
+                drawer?.cancel()
+                drawer?.reset()
                 writeResult(["cmd": name, "id": id, "error": String(describing: error)])
             }
         }
@@ -291,8 +295,6 @@ final class PerfHarness {
                 throw JourneyFailure.unavailableDrawer
             }
             let initial = view.motion.progress
-            var dragging = true
-            defer { if dragging { view.cancel() } }
             view.begin(view)
             let clock = ContinuousClock()
             let start = clock.now
@@ -313,7 +315,6 @@ final class PerfHarness {
             }
             HapticService.shared.signposter.emitEvent("drawer-gesture-end")
             view.end(CGFloat(velocity))
-            dragging = false
             let deadline = clock.now + .seconds(3)
             while !view.motion.isAtRest {
                 guard clock.now < deadline else { throw JourneyFailure.timedOut }
@@ -349,6 +350,7 @@ final class PerfHarness {
         }
         guard !isOpen(address) else { throw JourneyFailure.invalidSelection }
         let cached = workspace?.model(for: address.hostID)?.recentPresentation(threadID: address.threadID) != nil
+        defer { cancelRowSelection() }
         let outcome = commands.select(address)
         guard outcome == .changed else { throw JourneyFailure.invalidSelection }
         let deadline = ContinuousClock.now + .seconds(30)

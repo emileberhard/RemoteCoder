@@ -65,7 +65,7 @@ PERF_DIR = "Library/Caches/perf"
 SWITCHES = {
     "reveal", "readingFrames", "geometryProjections", "visibility",
     "scrollTargets", "scrollPosition", "geometryGroup", "latestEdge",
-    "contextMenu", "textSelection", "tooltips", "resourceSampler", "settingsGeometryWrites",
+    "contextMenu", "textSelection", "tooltips", "resourceSampler",
 }
 TRACE_INSTRUMENTS = ("Hitches", "GPU", "Display", "Points of Interest")
 TRACE_WARMUP = 2

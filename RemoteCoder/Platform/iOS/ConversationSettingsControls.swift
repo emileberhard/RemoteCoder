@@ -43,7 +43,6 @@ struct ConversationSettingsControls<Status: View>: View {
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame in
                 #if RC_PERF_HARNESS
                 PerfBuild.count("settings.rowGeometry")
-                guard !PerfBuild.isDisabled("settingsGeometryWrites") else { return }
                 #endif
                 // Layout can move when a settings warning or error appears.
                 // Only a live gesture has coordinates to invalidate; a committed gauge
@@ -132,7 +131,6 @@ struct ConversationSettingsControls<Status: View>: View {
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame in
                 #if RC_PERF_HARNESS
                 PerfBuild.count("settings.gaugeGeometry")
-                guard !PerfBuild.isDisabled("settingsGeometryWrites") else { return }
                 #endif
                 frames.gauge = frame
             }

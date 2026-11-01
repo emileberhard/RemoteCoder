@@ -63,7 +63,7 @@ struct ConversationDrawer<Content: View, Sidebar: View>: View {
             #if RC_PERF_HARNESS
             .background {
                 PerformanceReplayDrawerPublisher(motion: motion, begin: beginDragging,
-                    track: motion.track, end: endDragging, cancel: cancelDragging)
+                    track: motion.track, end: endDragging, cancel: cancelDragging, reset: resetMotion)
             }
             #endif
         }
@@ -130,6 +130,14 @@ struct ConversationDrawer<Content: View, Sidebar: View>: View {
         HapticService.shared.cancelInteraction(owner: hapticOwner)
         endDragging(velocity: 0)
     }
+
+    #if RC_PERF_HARNESS
+    private func resetMotion() {
+        HapticService.shared.cancelInteraction(owner: hapticOwner)
+        committedOpen = isOpen
+        motion.move(open: isOpen, animated: false)
+    }
+    #endif
 }
 
 @MainActor
