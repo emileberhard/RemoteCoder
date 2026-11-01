@@ -324,6 +324,12 @@ impl Link {
                     | crate::rpc::dispatch::RequestLifetime::Status
             )
         );
+        let hello = if method == "cluster/hello" {
+            params.clone()
+        } else {
+            let identity = self.identity.read().await;
+            json!({"protocol":PROTOCOL,"host":identity.host_id,"incarnation":identity.incarnation})
+        };
         let mut any_transmitted = false;
         for attempt in 0..2 {
             let previous = cached.take().filter(Connection::is_alive);
@@ -332,7 +338,7 @@ impl Link {
                 let fresh = previous.is_none();
                 let mut connection = match previous {
                     Some(connection) => connection,
-                    None => self.connect(&record, &slot, deadline).await?,
+                    None => self.connect(&record, &slot, deadline, &hello).await?,
                 };
                 let capability = if method.starts_with("sessions/") {
                     "sessions.v1"
@@ -470,8 +476,8 @@ impl Link {
         record: &MemberRecord,
         slot: &Arc<Mutex<Option<Connection>>>,
         deadline: tokio::time::Instant,
+        hello: &Value,
     ) -> std::result::Result<Connection, LinkError> {
-        let identity = self.identity.read().await.clone();
         let token = record.credential.as_ref().ok_or_else(|| {
             LinkError::local(ErrorClass::Refused, "member Join has not been accepted")
         })?;
@@ -524,7 +530,7 @@ impl Link {
                         _ => {}
                     }
                 }
-                socket.send(Message::Text(json!({"jsonrpc":"2.0","id":0,"method":"cluster/hello","params":{"protocol":PROTOCOL,"host":identity.host_id,"incarnation":identity.incarnation}}).to_string())).await.map_err(|error|LinkError::transport(error,false))?;
+                socket.send(Message::Text(json!({"jsonrpc":"2.0","id":0,"method":"cluster/hello","params":hello}).to_string())).await.map_err(|error|LinkError::transport(error,false))?;
                 let hello: HelloReceipt = serde_json::from_value(response(&mut socket,0).await?).map_err(|error|LinkError::local(ErrorClass::Refused,error))?;
                 if hello.host != record.host { return Err(LinkError::local(ErrorClass::Refused,"member identity changed")); }
                 if hello.protocol != PROTOCOL {return Err(LinkError {cause:Failure::Protocol,class:ErrorClass::Unsupported,transmitted:false,message:"member cluster protocol is unsupported".into()});}
