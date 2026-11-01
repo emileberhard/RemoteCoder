@@ -192,6 +192,7 @@ mod tests {
             .unwrap();
         gateway.jobs.reconcile_native(&job).await.unwrap();
         let current = gateway.jobs.read(&id).await.unwrap();
+        assert_eq!(current.job.execution, job.execution);
         assert!(matches!(
             current.job.execution,
             ExecutionState::Unknown { .. }
