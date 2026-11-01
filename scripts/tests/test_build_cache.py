@@ -410,6 +410,133 @@ class CacheAdmissionTests(unittest.TestCase):
             self.assertFalse((entry.path / "Build/Intermediates.noindex").exists())
             self.assertTrue((entry.path / "Build/Products/RemoteCoder.app/binary").exists())
 
+    def test_contended_maintenance_and_one_slow_tree_do_not_starve_other_worktrees(self):
+        from contextlib import contextmanager
+
+        import build_cache
+        from build_support import file_lease
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            entries = [
+                self.entry(root, "derived-cache", time.time() - 3 * 3600, tree=str(index))
+                for index in range(131)
+            ]
+            clock = [0]
+            allocate = build_cache._allocated_bytes
+
+            @contextmanager
+            def contended_lease(path):
+                with file_lease(path):
+                    clock[0] += 25
+                    yield
+
+            def one_slow_tree(path, deadline, device):
+                if path == entries[0].path:
+                    clock[0] = max(clock[0], deadline)
+                    raise TimeoutError("One compiler tree exhausted its inventory slice")
+                return allocate(path, deadline, device)
+
+            with (
+                file_lease(entries[-1].leases[0]),
+                patch("build_cache.file_lease", side_effect=contended_lease),
+                patch("build_cache.time.monotonic", side_effect=lambda: clock[0]),
+                patch("build_cache._allocated_bytes", side_effect=one_slow_tree),
+                patch("build_cache._open_file_snapshot", return_value=([], None)) as snapshot,
+                patch("build_cache._open_files", return_value=False),
+            ):
+                result = build_cache.compilation_admission(
+                    root, self.policy(), entries, set(), preview=False
+                )
+            self.assertEqual(len(result["evicted"]), 129)
+            self.assertEqual(snapshot.call_count, 1)
+            self.assertIn("leased", [item["reason"] for item in result["protected"]])
+            self.assertIsNone(result["allocatedBytes"])
+            self.assertIsNone(result["inventory"][0]["allocatedBytes"])
+            self.assertEqual(result["inventory"][0]["allocationCoverage"], "deadline")
+            for index, entry in enumerate(entries):
+                self.assertEqual(
+                    (entry.path / "Build/Intermediates.noindex/object.o").exists(),
+                    index in (0, 130),
+                )
+                self.assertEqual(
+                    (entry.path / "Build/Products/RemoteCoder.app/binary").read_text(),
+                    "product",
+                )
+
+    def test_native_inventory_timeout_retains_completed_children_without_a_root_total(self):
+        import subprocess
+
+        import build_cache
+        from build_cache import cache_inventory, compilation_admission
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            entry = self.entry(root, "derived-old", time.time() - 3 * 3600)
+            deeper = self.entry(root, "derived-deeper", time.time() - 3 * 3600, tree="nested/deeper")
+            native_run = subprocess.run
+
+            def interrupted_scan(*args, **kwargs):
+                measured = native_run(*args, **kwargs)
+                children = b"\n".join(measured.stdout.splitlines()[:-1]) + b"\n"
+                raise subprocess.TimeoutExpired(args[0], 120, output=children)
+
+            with patch("build_cache.subprocess.run", side_effect=interrupted_scan):
+                inventory = cache_inventory(root)
+            self.assertIsNone(inventory.allocated_bytes)
+            self.assertIn("timed out", inventory.error)
+            self.assertGreater(inventory.directories[entry.path], 0)
+            self.assertNotIn(deeper.path, inventory.directories)
+            allocate = build_cache._allocated_bytes
+
+            def payload_allocation(path, *args):
+                if path == entry.path:
+                    raise AssertionError("Native directory inventory was repeated")
+                return allocate(path, *args)
+
+            with (
+                patch("build_cache._open_files", return_value=False),
+                patch("build_cache._allocated_bytes", side_effect=payload_allocation),
+            ):
+                result = compilation_admission(
+                    root, self.policy(), [entry, deeper], set(), preview=True,
+                    directory_bytes=inventory.directories,
+                )
+            self.assertEqual(len(result["candidates"]), 2)
+            self.assertTrue(result["inventoryComplete"])
+            self.assertTrue((entry.path / "Build/Intermediates.noindex/object.o").exists())
+
+    def test_candidate_leases_are_released_after_deadline_probe_failure_and_exception(self):
+        from contextlib import nullcontext
+
+        import build_cache
+
+        for failure in ("deadline", "probe-error", "exception"):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary).resolve()
+                entries = [self.entry(root, "derived-cache", time.time() - 3 * 3600, tree=str(index)) for index in range(2)]
+                clock = [0]
+                check_open = build_cache._open_files
+
+                def slow_probe(path, snapshot):
+                    clock[0] = 21
+                    return check_open(path, snapshot)
+
+                with (
+                    patch("build_cache.time.monotonic", side_effect=lambda: clock[0]),
+                    patch("build_cache._open_file_snapshot", side_effect=OSError("probe failed"))
+                    if failure == "exception"
+                    else patch("build_cache._open_file_snapshot", return_value=([], "probe-error" if failure == "probe-error" else None)),
+                    patch("build_cache._open_files", side_effect=slow_probe) if failure == "deadline" else nullcontext(),
+                    self.assertRaisesRegex(OSError, "probe failed") if failure == "exception" else nullcontext(),
+                ):
+                    result = build_cache.compilation_admission(root, self.policy(), entries, set(), preview=False)
+                    self.assertEqual(result["evicted"], [])
+                for entry in entries:
+                    with build_cache.try_lease(entry.leases[0]) as lease:
+                        self.assertIsNotNone(lease)
+                    self.assertTrue((entry.path / "Build/Intermediates.noindex/object.o").exists())
+
     def test_reclamation_deadline_preserves_payloads_and_reports_skipped_checks(self):
         from build_cache import compilation_admission
 
@@ -421,7 +548,7 @@ class CacheAdmissionTests(unittest.TestCase):
             ]
             clock = [0]
 
-            def slow_open_probe(path):
+            def slow_open_probe(path, snapshot):
                 clock[0] = 21
                 return False
 
@@ -859,6 +986,7 @@ class CacheAdmissionTests(unittest.TestCase):
             )
             with (
                 patch("build_cache._open_files", return_value=False),
+                patch("build_cache._open_file_snapshot", return_value=([], None)),
                 patch(
                     "build_cache.subprocess.run",
                     side_effect=AssertionError("remote probe during pressure eviction"),

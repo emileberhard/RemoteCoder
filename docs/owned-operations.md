@@ -587,20 +587,30 @@ per-directory `inventory` separates allocation coverage from completion
 coverage: owned missing/active/invalid records, historical reconstruction and
 source retirement proof. A deadline or an unperformed check is not evidence of
 missing historical records. Unknown sizes remain null. Folder allocation can
-overcount APFS clones; total-root allocation uses bounded native `du -skx`,
+overcount APFS clones; total-root allocation uses bounded native `du -kx -d 4`,
 counts hard links once and does not traverse foreign mounts. Whole-root scans
 run only in maintenance/preview, outside the shared maintenance lock, with a
-120-second timeout. Build admission keeps its bounded compiler-entry estimate.
+120-second timeout. That one native depth inventory also supplies compiler
+directory allocations, avoiding another recursive scan of every worktree.
+These directory totals attribute hard links to the first subtree visited.
+A timeout retains completed child totals but never supplies a whole-root total;
+a failed scan with filesystem errors supplies no totals. Entries absent from
+the native depth inventory use the same bounded per-entry measurement as build
+admission. That estimate shares its remaining inventory time
+among the remaining directories so one slow tree cannot starve all later trees.
 Reclamation conservatively credits no bytes from multiply-linked files; the
-post-maintenance root measurement determines the actual remaining cap. Shared
-Codex targets use one bounded system-wide open-file snapshot per acquired owner
-lease, then match each payload prefix. Their build locks are stamped on entry
-and exit, including no-op package reuse. Reclaimed physical space is a separate
+post-maintenance root measurement determines the actual remaining cap. All
+compiler entries share one bounded system-wide open-file snapshot per admission
+pass, after acquiring their available owner leases, and match path prefixes
+rather than walking the cache again with
+`lsof +D`. Shared Codex targets match each payload prefix. Their build locks are
+stamped on entry and exit, including no-op package reuse. Reclaimed physical space is a separate
 before/after observation. Protected or unknown overflow prints a warning and
 never blocks a build. The existing 15 GiB free-space floor remains the only disk
 rejection threshold. Inventory and reclamation each have a separate 20-second
-budget, so inventory cannot consume reclamation's turn. A skipped reclamation
-check reports `reclamation-deadline`; incomplete inventory preserves unknown
+budget, starting after maintenance-lock acquisition, so waiting for another
+owner cannot consume inventory's turn and inventory cannot consume reclamation's
+turn. A skipped reclamation check reports `reclamation-deadline`; incomplete inventory preserves unknown
 values. Operators can schedule `cache-maintain` independently of builds.
 The private maintainer schedule invokes it before repository synchronization, so
 a failed sync does not suppress reclamation.

@@ -26,6 +26,7 @@ from bench_lab import reject_unsafe_location
 from build_artifacts import tree_digest
 from build_cache import (
     cache_allocated_bytes,
+    cache_inventory,
     cargo_seed_key,
     compilation_admission,
     compilation_directories,
@@ -1016,18 +1017,14 @@ def main() -> None:
         preview = args.kind == "cache-preview"
         try:
             root.mkdir(parents=True, exist_ok=True)
-            root_error = None
-            try:
-                root_bytes = cache_allocated_bytes(root)
-            except (OSError, ValueError, subprocess.SubprocessError) as error:
-                root_bytes = None
-                root_error = str(error)
+            inventory = cache_inventory(root)
+            root_bytes = inventory.allocated_bytes
             entries = compilation_directories(root, [], Path.home() / "Library/Developer/Xcode/DerivedData")
             if root_bytes is None or root_bytes > policy.compilation_budget_bytes or shutil.disk_usage(root).free < policy.eviction_target_free_bytes:
                 entries += shared_compilation_directories(root)
-            manifest = compilation_admission(root, policy, entries, set(), preview=preview, root_bytes=root_bytes)
-            if root_error:
-                manifest["rootAllocationError"] = root_error
+            manifest = compilation_admission(root, policy, entries, set(), preview=preview, root_bytes=root_bytes, directory_bytes=inventory.directories)
+            if inventory.error:
+                manifest["rootAllocationError"] = inventory.error
             manifest["evidenceRetention"] = prune_caches(root, policy, "", "", preview=preview)
         except (OSError, ValueError, subprocess.SubprocessError) as error:
             if not preview:

@@ -330,20 +330,49 @@ def _reclaimable_bytes(path: Path, deadline: float, device: int) -> int:
         return _tree_bytes(directory, deadline, device, exclude_linked=True)
 
 
-def cache_allocated_bytes(root: Path) -> int:
+@dataclass(frozen=True)
+class CacheInventory:
+    allocated_bytes: int | None
+    directories: dict[Path, int]
+    error: str | None
+
+
+def cache_inventory(root: Path) -> CacheInventory:
     if not _real_directory(root):
         raise ValueError(f"Unsafe cache root: {root}")
-    measured = subprocess.run(
-        ["du", "-skx", str(root)], capture_output=True, text=True,
-        timeout=120, check=True,
-    )
-    fields = measured.stdout.split(None, 1)
-    if not fields:
-        raise ValueError("du returned no cache allocation")
-    count = int(fields[0])
-    if count < 0:
-        raise ValueError("Cache allocation cannot be negative")
-    return count * 1024
+    error = None
+    try:
+        measured = subprocess.run(
+            ["du", "-kx", "-d", "4", str(root)], capture_output=True,
+            timeout=120, check=True,
+        )
+        output = measured.stdout
+    except subprocess.TimeoutExpired as failure:
+        if failure.stderr:
+            return CacheInventory(None, {}, str(failure))
+        output = failure.stdout or b""
+        error = str(failure)
+    except subprocess.CalledProcessError as failure:
+        return CacheInventory(None, {}, str(failure))
+    directories = {}
+    for line in output.splitlines():
+        count, separator, name = line.partition(b"\t")
+        if not separator or not count.isdigit():
+            continue
+        path = Path(os.fsdecode(name))
+        if path.is_absolute() and path.is_relative_to(root):
+            directories[path] = int(count) * 1024
+    total = directories.get(root) if error is None else None
+    if total is None and error is None:
+        error = "du returned no cache allocation"
+    return CacheInventory(total, directories, error)
+
+
+def cache_allocated_bytes(root: Path) -> int:
+    inventory = cache_inventory(root)
+    if inventory.allocated_bytes is None:
+        raise ValueError(inventory.error)
+    return inventory.allocated_bytes
 
 
 def _tree_bytes(directory: int, deadline: float, device: int, *, exclude_linked: bool) -> int:
@@ -667,17 +696,12 @@ def _retired_worktree(
         return False
 
 
-def _open_files(path: Path) -> bool:
-    try:
-        result = subprocess.run(
-            ["lsof", "-nP", "-t", "+D", str(path)],
-            capture_output=True,
-            timeout=5,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return True
-    return result.returncode != 1 or bool(result.stdout) or bool(result.stderr)
+def _open_files(path: Path, snapshot: tuple[list[str], str | None]) -> bool:
+    opened, error = snapshot
+    prefix = str(path).casefold()
+    return error is not None or any(
+        name == prefix or name.startswith(prefix + "/") for name in opened
+    )
 
 
 def _open_file_snapshot() -> tuple[list[str], str | None]:
@@ -881,6 +905,7 @@ def compilation_admission(
     *,
     preview: bool,
     root_bytes: int | None = None,
+    directory_bytes: dict[Path, int] | None = None,
 ) -> dict:
     current = {canonical_path(path) for path in current}
     started = time.monotonic()
@@ -899,7 +924,6 @@ def compilation_admission(
         "protected": [],
         "preview": preview or not policy.eviction_enabled,
     }
-    deadline = time.monotonic() + 20
     proofs = {}
     devices = {}
 
@@ -918,7 +942,8 @@ def compilation_admission(
                 proofs[key] = retired, "proven" if retired else "not-proven"
         return proofs[key]
 
-    with file_lease(root / "leases/maintenance.lock"):
+    with file_lease(root / "leases/maintenance.lock"), ExitStack() as ownership:
+        deadline = time.monotonic() + 20
         result["freeBytesBefore"] = shutil.disk_usage(root).free
         if (
             not preview
@@ -967,7 +992,7 @@ def compilation_admission(
             return result
         legacy = _legacy_compilation_records(root, deadline)
         ordered = []
-        for entry in entries:
+        for index, entry in enumerate(entries):
             if not entry.path.is_relative_to(root):
                 result["inventory"].append(
                     {
@@ -993,12 +1018,15 @@ def compilation_admission(
                 continue
             try:
                 devices[entry] = _owner_device(root, entry)
-                size = (
-                    _allocated_bytes(entry.path, deadline, devices[entry])
-                    if _real_directory(entry.path)
-                    else None
-                )
-                allocation = "complete" if size is not None else "unsafe-or-missing"
+                if not _real_directory(entry.path):
+                    size, allocation = None, "unsafe-or-missing"
+                elif directory_bytes is not None and entry.path in directory_bytes:
+                    size, allocation = directory_bytes[entry.path], "complete"
+                else:
+                    now = time.monotonic()
+                    allocation_deadline = now + max(0, deadline - now) / (len(entries) - index)
+                    size = _allocated_bytes(entry.path, allocation_deadline, devices[entry])
+                    allocation = "complete"
             except TimeoutError:
                 size = None
                 allocation = "deadline"
@@ -1050,6 +1078,18 @@ def compilation_admission(
                 }
             )
             ordered.append((entry, size, completion))
+        owned_leases = {}
+        for entry, size, completion in ordered:
+            if (
+                size is None or completion is None
+                or canonical_path(entry.path) in current
+                or time.time() - completion["lastUsed"] < policy.compiler_protection_seconds
+            ):
+                continue
+            for lease in entry.leases:
+                if lease not in owned_leases:
+                    owned_leases[lease] = ownership.enter_context(try_lease(lease))
+        opened = _open_file_snapshot() if any(fd is not None for fd in owned_leases.values()) else ([], None)
         removed = set()
         pressure = (
             result["allocatedBytes"] > policy.compilation_budget_bytes
@@ -1081,31 +1121,20 @@ def compilation_admission(
             for worktree, group in worktree_entries.items()
             if worktree not in unknown_worktrees
             and not any(c.get("abandoned") for _, c in group)
+            and time.time() - max(c["lastUsed"] for _, c in group)
+            > policy.retired_worktree_seconds
             and all(
                 merged(entry, completion)[0]
                 for entry, completion in group
                 if completion["lastUsed"] == max(c["lastUsed"] for _, c in group)
             )
         }
-        last_use = {
-            worktree: max(
-                completion["lastUsed"]
-                for entry, _, completion in ordered
-                if entry.worktree == worktree and completion is not None
-            )
-            for worktree in newest
-        }
-        retired = {
-            worktree
-            for worktree in retired
-            if time.time() - last_use[worktree] > policy.retired_worktree_seconds
-        }
         for worktree in tuple(retired):
             representative = next(
                 entry for entry, _, _ in ordered if entry.worktree == worktree
             )
             source = representative.source or representative.path.parents[1]
-            if time.monotonic() >= deadline or _open_files(source):
+            if time.monotonic() >= deadline or _open_files(source, opened):
                 retired.remove(worktree)
         retained = {
             path
@@ -1140,149 +1169,146 @@ def compilation_admission(
                 if size is None
                 else None
             )
-            with ExitStack() as ownership:
-                if reason is None and (
-                    not entry.leases
-                    or any(
-                        ownership.enter_context(try_lease(lease)) is None
-                        for lease in entry.leases
+            if reason is None and (
+                not entry.leases
+                or any(
+                    owned_leases.get(lease) is None
+                    for lease in entry.leases
+                )
+            ):
+                reason = "leased"
+            if reason is None and time.monotonic() >= deadline:
+                reason = "reclamation-deadline"
+            if reason is None and (
+                not _real_directory(entry.path)
+                or (not entry.worktree.startswith("shared:") and _open_files(entry.path, opened))
+            ):
+                reason = "open-or-unknown-files"
+            if reason is None and entry.worktree in retired:
+                group = worktree_entries[entry.worktree]
+                last = max(c["lastUsed"] for _, c in group)
+                if not all(
+                    _retired_worktree(root, e, c)
+                    for e, c in group
+                    if c["lastUsed"] == last
+                ):
+                    reason = "changed-retirement-evidence"
+            if (
+                reason is None
+                and completion.get("historical")
+                and (
+                    _historical_completion(root, entry)[0] != completion
+                    or not _retired_worktree(root, entry, completion)
+                )
+            ):
+                reason = "changed-historical-evidence"
+            if (
+                reason is None
+                and not completion.get("historical")
+                and not completion.get("abandoned")
+                and _completion(root, entry, legacy)[0] != completion
+            ):
+                reason = "changed-completion"
+            if (
+                reason is None
+                and completion.get("abandoned")
+                and _idle_compiler_use(root, entry) != completion["lastUsed"]
+            ):
+                reason = "changed-abandonment-evidence"
+            if reason is not None:
+                result["protected"].append(
+                    {
+                        "path": str(entry.path),
+                        "allocatedBytes": size,
+                        "reason": reason,
+                    }
+                )
+                continue
+            removed_source = entry.worktree in removed and _removed_mirror_source(
+                root, entry, check_remote=not pressure
+            )
+            opened_paths, open_error = opened
+            for payload in _compiler_payloads(entry):
+                if not payload.exists() and not payload.is_symlink():
+                    continue
+                try:
+                    if not _real_directory(payload):
+                        raise ValueError(f"Unsafe payload: {payload}")
+                    prefix = str(payload).casefold()
+                    state = open_error or (
+                        "open-files" if any(path == prefix or path.startswith(prefix + "/") for path in opened_paths) else None
                     )
-                ):
-                    reason = "leased"
-                if reason is None and time.monotonic() >= deadline:
-                    reason = "reclamation-deadline"
-                if reason is None and (
-                    not _real_directory(entry.path)
-                    or (not entry.worktree.startswith("shared:") and _open_files(entry.path))
-                ):
-                    reason = "open-or-unknown-files"
-                if reason is None and entry.worktree in retired:
-                    group = worktree_entries[entry.worktree]
-                    last = max(c["lastUsed"] for _, c in group)
-                    if not all(
-                        _retired_worktree(root, e, c)
-                        for e, c in group
-                        if c["lastUsed"] == last
-                    ):
-                        reason = "changed-retirement-evidence"
-                if (
-                    reason is None
-                    and completion.get("historical")
-                    and (
-                        _historical_completion(root, entry)[0] != completion
-                        or not _retired_worktree(root, entry, completion)
+                    if state:
+                        result["protected"].append({"path": str(payload), "allocatedBytes": None, "reason": state})
+                        continue
+                    payload_bytes = _allocated_bytes(
+                        payload, deadline, devices[entry]
                     )
-                ):
-                    reason = "changed-historical-evidence"
-                if (
-                    reason is None
-                    and not completion.get("historical")
-                    and not completion.get("abandoned")
-                    and _completion(root, entry, legacy)[0] != completion
-                ):
-                    reason = "changed-completion"
-                if (
-                    reason is None
-                    and completion.get("abandoned")
-                    and _idle_compiler_use(root, entry) != completion["lastUsed"]
-                ):
-                    reason = "changed-abandonment-evidence"
-                if reason is not None:
+                    reclaimable_bytes = _reclaimable_bytes(payload, deadline, devices[entry])
+                    if _protected_payload(payload, deadline, devices[entry]):
+                        raise ValueError(
+                            f"Protected product or evidence in payload: {payload}"
+                        )
+                except TimeoutError:
                     result["protected"].append(
                         {
-                            "path": str(entry.path),
-                            "allocatedBytes": size,
-                            "reason": reason,
+                            "path": str(payload),
+                            "allocatedBytes": None,
+                            "reason": "reclamation-deadline",
                         }
                     )
                     continue
-                removed_source = entry.worktree in removed and _removed_mirror_source(
-                    root, entry, check_remote=not pressure
-                )
-                opened_paths, open_error = (
-                    _open_file_snapshot() if entry.worktree.startswith("shared:") else ([], None)
-                )
-                for payload in _compiler_payloads(entry):
-                    if not payload.exists() and not payload.is_symlink():
-                        continue
+                except (OSError, ValueError):
+                    result["protected"].append(
+                        {
+                            "path": str(payload),
+                            "allocatedBytes": None,
+                            "reason": "unsafe-or-incomplete-payload",
+                        }
+                    )
+                    continue
+                if (
+                    not removed_source
+                    and projected <= policy.compilation_budget_bytes
+                    and (
+                        result["freeBytesBefore"]
+                        + result["allocatedBytes"]
+                        - projected
+                        if result["preview"]
+                        else shutil.disk_usage(root).free
+                    )
+                    >= policy.eviction_target_free_bytes
+                ):
+                    continue
+                candidate = {
+                    "path": str(payload),
+                    "allocatedBytes": payload_bytes,
+                    "worktree": entry.worktree,
+                    "lastUsed": completion["lastUsed"],
+                    "estimatedReclaimedBytes": reclaimable_bytes,
+                }
+                result["candidates"].append(candidate)
+                if result["preview"]:
+                    projected -= reclaimable_bytes
+                else:
                     try:
-                        if not _real_directory(payload):
-                            raise ValueError(f"Unsafe payload: {payload}")
-                        prefix = str(payload).casefold()
-                        state = open_error or (
-                            "open-files" if any(path == prefix or path.startswith(prefix + "/") for path in opened_paths) else None
-                        )
-                        if state:
-                            result["protected"].append({"path": str(payload), "allocatedBytes": None, "reason": state})
-                            continue
-                        payload_bytes = _allocated_bytes(
-                            payload, deadline, devices[entry]
-                        )
-                        reclaimable_bytes = _reclaimable_bytes(payload, deadline, devices[entry])
-                        if _protected_payload(payload, deadline, devices[entry]):
-                            raise ValueError(
-                                f"Protected product or evidence in payload: {payload}"
-                            )
-                    except TimeoutError:
-                        result["protected"].append(
+                        _evict_payload(entry, payload, devices[entry])
+                    except (OSError, ValueError, TimeoutError) as error:
+                        result.setdefault("evictionFailures", []).append(
                             {
                                 "path": str(payload),
-                                "allocatedBytes": None,
-                                "reason": "reclamation-deadline",
+                                "error": str(error),
+                                "partialRemovalPossible": True,
                             }
                         )
-                        continue
-                    except (OSError, ValueError):
-                        result["protected"].append(
-                            {
-                                "path": str(payload),
-                                "allocatedBytes": None,
-                                "reason": "unsafe-or-incomplete-payload",
-                            }
-                        )
-                        continue
-                    if (
-                        not removed_source
-                        and projected <= policy.compilation_budget_bytes
-                        and (
-                            result["freeBytesBefore"]
-                            + result["allocatedBytes"]
-                            - projected
-                            if result["preview"]
-                            else shutil.disk_usage(root).free
-                        )
-                        >= policy.eviction_target_free_bytes
-                    ):
-                        continue
-                    candidate = {
-                        "path": str(payload),
-                        "allocatedBytes": payload_bytes,
-                        "worktree": entry.worktree,
-                        "lastUsed": completion["lastUsed"],
-                        "estimatedReclaimedBytes": reclaimable_bytes,
-                    }
-                    result["candidates"].append(candidate)
-                    if result["preview"]:
-                        projected -= reclaimable_bytes
+                        result["inventoryComplete"] = False
                     else:
-                        try:
-                            _evict_payload(entry, payload, devices[entry])
-                        except (OSError, ValueError, TimeoutError) as error:
-                            result.setdefault("evictionFailures", []).append(
-                                {
-                                    "path": str(payload),
-                                    "error": str(error),
-                                    "partialRemovalPossible": True,
-                                }
+                        projected -= reclaimable_bytes
+                        result["evicted"].append(candidate)
+                        if entry.kind == "cargo" and payload.name == "deps":
+                            (entry.path.parent / "cargo-seed-key").unlink(
+                                missing_ok=True
                             )
-                            result["inventoryComplete"] = False
-                        else:
-                            projected -= reclaimable_bytes
-                            result["evicted"].append(candidate)
-                            if entry.kind == "cargo" and payload.name == "deps":
-                                (entry.path.parent / "cargo-seed-key").unlink(
-                                    missing_ok=True
-                                )
         result["knownAllocatedBytes"] = result["allocatedBytes"]
         result["projectedBytes"] = projected if result["inventoryComplete"] else None
         if not result["inventoryComplete"]:
@@ -1379,38 +1405,35 @@ def _prune_removed_mirrors(
     if not _real_directory(mirrors):
         return result
     deadline = time.monotonic() + 20
-    for mirror in mirrors.iterdir():
-        if mirror.name == current or not _real_directory(mirror):
-            continue
-        payloads = [
-            path
-            for group in ("ios", "gateway")
-            if _real_directory(mirror / group)
-            for path in (mirror / group).iterdir()
-            if path.name in {"repo", "cargo"}
-            or path.name.startswith(("derived-", "swift-"))
-        ]
-        if not payloads:
-            continue
-        try:
-            if (
-                time.time() - last_used(mirror, root, "worktrees")
-                < policy.evidence_protection_seconds
-            ):
+    with ExitStack() as ownership:
+        candidates = []
+        for mirror in mirrors.iterdir():
+            if mirror.name == current or not _real_directory(mirror):
                 continue
-        except OSError:
-            continue
-        entry = CompilationDirectory(
-            mirror, "mirror:" + mirror.name, (), None, "protected"
-        )
-        if time.monotonic() >= deadline or not _removed_mirror_source(
-            root, entry, check_remote=True
-        ):
-            continue
-        with ExitStack() as ownership:
+            payloads = [
+                path
+                for group in ("ios", "gateway")
+                if _real_directory(mirror / group)
+                for path in (mirror / group).iterdir()
+                if path.name in {"repo", "cargo"}
+                or path.name.startswith(("derived-", "swift-"))
+            ]
+            if not payloads:
+                continue
+            try:
+                if time.time() - last_used(mirror, root, "worktrees") < policy.evidence_protection_seconds:
+                    continue
+            except OSError:
+                continue
+            entry = CompilationDirectory(mirror, "mirror:" + mirror.name, (), None, "protected")
+            if time.monotonic() >= deadline or not _removed_mirror_source(root, entry, check_remote=True):
+                continue
             locks = (lease_path(root, "worktrees", mirror.name), *_legacy_locks(mirror))
             if any(ownership.enter_context(try_lease(lock)) is None for lock in locks):
                 continue
+            candidates.append((mirror, entry, payloads))
+        opened = _open_file_snapshot() if candidates else ([], None)
+        for mirror, entry, payloads in candidates:
             try:
                 used = last_used(mirror, root, "worktrees")
                 if time.time() - used < policy.evidence_protection_seconds:
@@ -1423,24 +1446,16 @@ def _prune_removed_mirrors(
                 ):
                     continue
                 for payload in payloads:
-                    if not _real_directory(payload) or _open_files(payload):
+                    if not _real_directory(payload) or _open_files(payload, opened):
                         continue
                     payload_bytes = _allocated_bytes(payload, deadline, device)
-                    candidate = {
-                        "path": str(payload),
-                        "allocatedBytes": payload_bytes,
-                        "lastUsed": used,
-                    }
+                    candidate = {"path": str(payload), "allocatedBytes": payload_bytes, "lastUsed": used}
                     result["mirrorCandidates"].append(candidate)
                     if policy.eviction_enabled and not preview:
-                        _remove_cache_directory(
-                            payload, device, preserve_evidence=False
-                        )
+                        _remove_cache_directory(payload, device, preserve_evidence=False)
                         result["mirrors"].append(candidate)
             except (OSError, ValueError, TimeoutError) as error:
-                result.setdefault("evictionFailures", []).append(
-                    {"path": str(mirror), "error": str(error)}
-                )
+                result.setdefault("evictionFailures", []).append({"path": str(mirror), "error": str(error)})
     return result
 
 
