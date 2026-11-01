@@ -49,7 +49,8 @@ export function startModel() {
                 .map(item => (item.content ?? []).map(part => part.text ?? "").join("\n"));
             const latest = texts.at(-1) ?? "";
             const answered = input.slice(lastUser + 1).some(item => item.type === "function_call_output");
-            const [, kind, name] = latest.match(marker) ?? [];
+            const payload = latest.match(/<body><!\[CDATA\[([\s\S]*?)\]\]><\/body>/)?.[1] ?? latest;
+            const [, kind, name] = payload.match(marker) ?? [];
             requests.push({ kind: kind ?? "other", name: name ?? null, answered });
             const id = `resp_${randomUUID()}`;
             const done = { type: "response.completed", response: { id, usage: { input_tokens: 1,
