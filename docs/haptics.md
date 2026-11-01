@@ -91,6 +91,9 @@ the same tick. Cancelled drags, returns to the initial side, endpoint releases,
 touch-down, movement, settle, drawer-button and scrim taps, and programmatic
 open/close are silent. Accepted conversation or draft selection retains its
 selection feedback without another closing tick.
+The drag prepares one view-attached selection generator at its start. Release
+submits the tick synchronously through the prepared interaction owner; it never
+publishes a SwiftUI pulse or starts the Strong profile's custom-accent engine.
 Dynamic composer recovery buttons reserve their actual bounds from empty-space
 focus, just like the always-visible controls. Keyboard focus, typing, scrolling,
 tool events, upload percentages and usage updates stay silent.
@@ -110,6 +113,12 @@ queued for a later foreground or post-recording replay. Changing strength or
 turning feedback off invalidates any pending pulse. This is a stale-event cutoff, not a hardware latency
 claim. No file loading, custom-engine start, network request, background task or
 keep-warm timer occurs on this dispatch path.
+
+`drawer-gesture-end`, `feedback-intent` and `feedback-api-request` signposts
+separate recognizer callback, eligibility and feedback API submission. For
+SwiftUI controls the request marks the sensory-feedback closure returning its
+recipe; for prepared gestures it marks the synchronous player call. These
+timestamps do not measure finger-up delivery or actuator onset.
 
 Async model actions capture `feedbackForCurrentConversation()` before suspending.
 That callback requires the same host model, conversation, presentation, visibility

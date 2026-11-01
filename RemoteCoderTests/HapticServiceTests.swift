@@ -2,10 +2,29 @@ import CoreHaptics
 import Foundation
 import SwiftUI
 import Testing
+import UIKit
 @testable import RemoteCoder
 
 @MainActor
 struct HapticServiceTests {
+    @Test func selectionInteractionsUseOnlyTheirViewAttachedGeneratorAndReleaseIt() throws {
+        let fixture = HapticFixture()
+        defer { fixture.cleanUp() }
+        let owner = UUID()
+        let view = UIView()
+        fixture.service.beginSelectionInteraction(owner: owner, in: view)
+        #expect(fixture.players.isEmpty)
+        let generator = try #require(view.interactions.compactMap { $0 as? UISelectionFeedbackGenerator }.first)
+        #expect(generator.view === view)
+        fixture.service.playInteraction(.selection, owner: owner)
+        #expect(fixture.service.pulse == nil)
+        fixture.service.finishInteraction(owner: owner)
+        #expect(generator.view == nil)
+        #expect(view.interactions.compactMap { $0 as? UISelectionFeedbackGenerator }.isEmpty)
+        fixture.service.playInteraction(.selection, owner: owner)
+        #expect(fixture.service.pulse == nil)
+    }
+
     @Test func streamingTicksCoalesceAcrossHostsWithoutLosingJitteredFramesOrSemanticOccurrences() throws {
         let fixture = HapticFixture()
         defer { fixture.cleanUp() }

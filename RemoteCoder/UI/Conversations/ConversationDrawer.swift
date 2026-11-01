@@ -1,6 +1,7 @@
 import QuartzCore
 import SwiftUI
 import UIKit
+import os
 
 struct ConversationDrawer<Content: View, Sidebar: View>: View {
     @Binding private var isOpen: Bool
@@ -10,7 +11,8 @@ struct ConversationDrawer<Content: View, Sidebar: View>: View {
 
     @State private var motion: DrawerMotion
     @State private var committedOpen: Bool
-    @State private var dragHaptics = DrawerDragHaptics()
+    @State private var dragInitiallyOpen = false
+    @State private var hapticOwner = UUID()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.layoutDirection) private var layoutDirection
@@ -62,9 +64,12 @@ struct ConversationDrawer<Content: View, Sidebar: View>: View {
         .background { ThemedSheetBackground() }
         .onChange(of: isOpen) { _, open in
             guard open != committedOpen else { return }
-            dragHaptics.cancel()
+            HapticService.shared.cancelInteraction(owner: hapticOwner)
             committedOpen = open
             motion.move(open: open, animated: !reduceMotion)
+        }
+        .onDisappear {
+            HapticService.shared.cancelInteraction(owner: hapticOwner)
         }
     }
 
@@ -91,8 +96,9 @@ struct ConversationDrawer<Content: View, Sidebar: View>: View {
         (distance * displayScale).rounded() / displayScale
     }
 
-    private func beginDragging() {
-        dragHaptics.begin(open: committedOpen)
+    private func beginDragging(in view: UIView) {
+        HapticService.shared.beginSelectionInteraction(owner: hapticOwner, in: view)
+        dragInitiallyOpen = committedOpen
         motion.beginTracking()
         guard !committedOpen else { return }
         committedOpen = true
@@ -103,18 +109,19 @@ struct ConversationDrawer<Content: View, Sidebar: View>: View {
     private func endDragging(velocity: CGFloat) {
         let progress = motion.progress
         guard let open = motion.release(velocity: velocity) else {
-            dragHaptics.cancel()
+            HapticService.shared.cancelInteraction(owner: hapticOwner)
             return
         }
-        if let event = dragHaptics.release(open: open, progress: progress) {
-            HapticService.shared.play(event)
+        if let event = DrawerDragHaptics.event(initialOpen: dragInitiallyOpen, open: open, progress: progress) {
+            HapticService.shared.playInteraction(event, owner: hapticOwner)
         }
+        HapticService.shared.finishInteraction(owner: hapticOwner)
         committedOpen = open
         isOpen = open
     }
 
     private func cancelDragging() {
-        dragHaptics.cancel()
+        HapticService.shared.cancelInteraction(owner: hapticOwner)
         endDragging(velocity: 0)
     }
 }
@@ -230,7 +237,7 @@ private final class DrawerFrameTarget: NSObject {
 
 private struct DrawerPanGesture: UIGestureRecognizerRepresentable {
     let canMove: (CGFloat) -> Bool
-    let onBegan: () -> Void
+    let onBegan: (UIView) -> Void
     let onChanged: (CGFloat) -> Void
     let onEnded: (CGFloat) -> Void
     let onCancelled: () -> Void
@@ -252,11 +259,13 @@ private struct DrawerPanGesture: UIGestureRecognizerRepresentable {
     func handleUIGestureRecognizerAction(_ recognizer: UIPanGestureRecognizer, context: Context) {
         switch recognizer.state {
         case .began:
-            onBegan()
+            guard let view = recognizer.view else { return }
+            onBegan(view)
             if let translation = context.converter.localTranslation { onChanged(translation.x) }
         case .changed:
             if let translation = context.converter.localTranslation { onChanged(translation.x) }
         case .ended:
+            HapticService.shared.signposter.emitEvent("drawer-gesture-end")
             onEnded(context.converter.localVelocity?.x ?? 0)
         case .cancelled:
             onCancelled()

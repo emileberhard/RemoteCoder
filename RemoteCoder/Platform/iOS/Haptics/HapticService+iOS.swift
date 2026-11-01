@@ -12,9 +12,15 @@ extension HapticService {
         makeStreamingPlayer: { PreparedStreamingHapticPlayer() }
     )
 
+    func beginSelectionInteraction(owner: UUID, in view: UIView) {
+        beginInteraction(owner: owner) { PreparedSelectionPlayer(view: view) }
+    }
+
     /// Touch feedback stays on the control's SwiftUI transaction, without a second state hop.
     func feedbackForInteraction(_ event: HapticEvent) -> SensoryFeedback? {
-        accept(event) ? event.recipe(for: strength).feedback : nil
+        guard accept(event) else { return nil }
+        signposter.emitEvent("feedback-api-request", "\(event.rawValue, privacy: .public) control-press")
+        return event.recipe(for: strength).feedback
     }
 
     func feedback(for pulse: HapticPulse?) -> SensoryFeedback? {

@@ -109,10 +109,14 @@ final class HapticService {
     }
 
     func beginInteraction(owner: UUID) {
+        beginInteraction(owner: owner, makePlayer: makeInteractionPlayer)
+    }
+
+    func beginInteraction(owner: UUID, makePlayer: () -> any HapticInteractionPlaying) {
         guard canPlay else { return }
         guard interaction?.owner != owner else { return }
         cancelInteractions()
-        let player = makeInteractionPlayer()
+        let player = makePlayer()
         interaction = (owner, player)
         player.prepare(strength: strength) { [weak self] in self?.canPlay == true }
     }
