@@ -23,7 +23,11 @@ pub(super) async fn codex_sessions(
     cache: Arc<Mutex<TranscriptCache>>,
 ) -> Result<Vec<SessionActivity>> {
     let managed_pid = managed_pid.context("managed Codex identity unavailable")?;
-    let mut command = Command::new("/usr/sbin/lsof");
+    let mut command = Command::new(if cfg!(target_os = "linux") {
+        "/usr/bin/lsof"
+    } else {
+        "/usr/sbin/lsof"
+    });
     command.args([
         "-nP",
         "-a",

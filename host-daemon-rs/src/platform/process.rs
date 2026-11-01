@@ -11,6 +11,10 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 
+#[cfg(target_os = "linux")]
+#[path = "process_linux.rs"]
+pub(crate) mod linux;
+
 /// A live process's kernel identity and current executable.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ProcessIdentity {
@@ -36,7 +40,23 @@ pub(crate) fn unix_peer_identity(
     Ok((pid, identity))
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
+pub(crate) fn unix_peer_identity(
+    stream: &tokio::net::UnixStream,
+) -> Result<(i32, ProcessIdentity)> {
+    use anyhow::{Context, ensure};
+    let peer = nix::sys::socket::getsockopt(stream, nix::sys::socket::sockopt::PeerCredentials)
+        .context("Unix socket peer credentials are unavailable")?;
+    ensure!(
+        peer.uid() == nix::unistd::geteuid().as_raw(),
+        "Unix socket peer belongs to another user"
+    );
+    let pid = peer.pid();
+    let identity = identify(pid)?.context("Unix socket peer process exited")?;
+    Ok((pid, identity))
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 pub(crate) fn unix_peer_identity(_: &tokio::net::UnixStream) -> Result<(i32, ProcessIdentity)> {
     anyhow::bail!("verified Unix socket peer identity is unavailable on this platform")
 }
@@ -55,14 +75,14 @@ pub(crate) fn ancestry(process: ProcessInstance) -> impl Iterator<Item = Result<
     })
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct ProcessLink {
     started_micros: u64,
     parent_pid: i32,
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn walk_ancestry(
     process: ProcessInstance,
     mut read: impl FnMut(i32) -> Result<Option<ProcessLink>>,
@@ -137,7 +157,12 @@ fn walk_ancestry(
     })
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
+pub(crate) fn ancestry(process: ProcessInstance) -> impl Iterator<Item = Result<ProcessInstance>> {
+    walk_ancestry(process, linux::process_link)
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 pub(crate) fn ancestry(_: ProcessInstance) -> impl Iterator<Item = Result<ProcessInstance>> {
     std::iter::once(Err(anyhow::anyhow!(
         "verified caller process ancestry is unavailable on this platform"
@@ -165,7 +190,12 @@ pub(crate) fn identify(pid: i32) -> Result<Option<ProcessIdentity>> {
     )
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
+pub(crate) fn identify(pid: i32) -> Result<Option<ProcessIdentity>> {
+    linux::identify(pid)
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 pub(crate) fn identify(pid: i32) -> Result<Option<ProcessIdentity>> {
     anyhow::bail!("process identity is unavailable on this platform (pid {pid})")
 }
@@ -253,9 +283,10 @@ fn absent_or_error<T>(pid: i32, what: &str) -> Result<Option<T>> {
     Err(anyhow::Error::new(error).context(format!("could not read the {what} of pid {pid}")))
 }
 
-#[cfg(all(test, target_os = "macos"))]
+#[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
 mod tests {
     use super::*;
+    #[cfg(target_os = "macos")]
     use crate::platform::macos::application::request_quit;
 
     #[test]
@@ -400,6 +431,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "macos")]
     fn a_quit_request_to_a_process_that_is_not_an_app_fails_without_signalling() {
         // Exercises the whole descriptor/event/send ABI against a pid that
         // cannot exist, so nothing on the host receives the event.

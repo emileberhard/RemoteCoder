@@ -31,16 +31,20 @@ fn main() {
     let bundle = manifest_dir.join("RemoteCoderGateway.template");
     let plist = bundle.join("Contents/Info.plist");
     println!("cargo::rerun-if-changed={}", plist.display());
-    let plist_json = std::process::Command::new("plutil")
-        .args(["-convert", "json", "-o", "-"])
-        .arg(&plist)
-        .output()
-        .expect("gateway bundle metadata");
-    assert!(
-        plist_json.status.success(),
-        "invalid gateway bundle metadata"
-    );
-    let metadata: Value = serde_json::from_slice(&plist_json.stdout).expect("gateway bundle JSON");
+    let metadata: Value = if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+        let plist_json = std::process::Command::new("plutil")
+            .args(["-convert", "json", "-o", "-"])
+            .arg(&plist)
+            .output()
+            .expect("gateway bundle metadata");
+        assert!(
+            plist_json.status.success(),
+            "invalid gateway bundle metadata"
+        );
+        serde_json::from_slice(&plist_json.stdout).expect("gateway bundle JSON")
+    } else {
+        serde_json::json!({"CFBundleExecutable": std::env::var("CARGO_PKG_NAME").expect("Cargo package name")})
+    };
     println!(
         "cargo::rustc-env=RC_GATEWAY_BUNDLE_NAME={}",
         bundle

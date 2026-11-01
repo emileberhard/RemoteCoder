@@ -711,19 +711,11 @@ async fn process_identity_matches(pid: i32, identity: &ProcessIdentity) -> Resul
     else {
         return Ok(false);
     };
-    let actual_boot = tokio::fs::read_to_string("/proc/sys/kernel/random/boot_id").await?;
-    if actual_boot.trim() != boot_id {
-        return Ok(false);
-    }
-    let stat = tokio::fs::read_to_string(format!("/proc/{pid}/stat")).await?;
-    let Some((_, fields)) = stat.rsplit_once(") ") else {
-        return Ok(false);
-    };
-    Ok(fields
-        .split_whitespace()
-        .nth(19)
-        .and_then(|value| value.parse::<u64>().ok())
-        == Some(*start_ticks))
+    Ok(
+        crate::platform::process::linux::kernel_identity(pid)?.is_some_and(
+            |(actual_boot, actual_ticks)| actual_boot == *boot_id && actual_ticks == *start_ticks,
+        ),
+    )
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
