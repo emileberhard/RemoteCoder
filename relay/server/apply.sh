@@ -35,10 +35,18 @@ systemctl restart remote-coder-relay-hosts
 install -m 0644 "$src/sshd.conf" /etc/ssh/sshd_config.d/remote-coder-relay.conf
 rm -f /etc/ssh/sshd_config.d/00-hostup-auth.conf /etc/ssh/sshd_config.d/50-cloud-init.conf
 sshd -t
-sshd_config="$(sshd -T)"
-grep -qx 'passwordauthentication no' <<<"$sshd_config"
-grep -qx 'kbdinteractiveauthentication no' <<<"$sshd_config"
-grep -qx 'permitrootlogin without-password' <<<"$sshd_config"
+check_sshd() {
+    local sshd_config
+    sshd_config="$(sshd -T "$@")"
+    grep -qx 'pubkeyauthentication yes' <<<"$sshd_config"
+    grep -qx 'passwordauthentication no' <<<"$sshd_config"
+    grep -qx 'kbdinteractiveauthentication no' <<<"$sshd_config"
+    grep -qx 'permitrootlogin without-password' <<<"$sshd_config"
+}
+check_sshd
+for user in root relay-tunnel; do
+    check_sshd -C "user=$user,host=localhost,addr=127.0.0.1"
+done
 
 install -m 0644 "$src/unattended-upgrades.conf" /etc/apt/apt.conf.d/52remote-coder-relay
 systemctl unmask --quiet apt-daily.timer apt-daily.service apt-daily-upgrade.timer apt-daily-upgrade.service unattended-upgrades.service
