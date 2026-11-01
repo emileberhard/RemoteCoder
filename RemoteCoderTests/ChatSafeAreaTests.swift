@@ -112,14 +112,18 @@ struct ChatSafeAreaTests {
         let chat = fixture.workspace.attachWindow(opening: nil)
         defer { fixture.workspace.detachWindow(chat) }
         let context = ChatLayoutContext(window: chat)
+        #expect(ChatLayoutContext(window: nil).description.contains("thread=unknown"))
         var records: [String] = []
         let recorder = ChatLayoutRecorder(log: { records.append($0) })
         recorder.start(context: context)
         defer { recorder.stop() }
         let safe = window.bounds.inset(by: window.safeAreaInsets)
-        let header = ChatLayoutGeometry(frame: CGRect(x: 0, y: safe.minY, width: safe.width, height: 44), insets: .init())
+        let rootInsets = EdgeInsets(top: window.safeAreaInsets.top, leading: window.safeAreaInsets.left,
+            bottom: window.safeAreaInsets.bottom, trailing: window.safeAreaInsets.right)
+        recorder.geometry("root", .init(frame: CGRect(origin: .zero, size: safe.size), insets: rootInsets), context: context)
+        let header = ChatLayoutGeometry(frame: CGRect(x: 0, y: 0, width: safe.width, height: 44), insets: .init())
         recorder.geometry("header", header, context: context)
-        recorder.geometry("composer", .init(frame: CGRect(x: 0, y: safe.maxY - 60, width: safe.width, height: 60), insets: .init()), context: nil)
+        recorder.geometry("composer", .init(frame: CGRect(x: 0, y: safe.height - 60, width: safe.width, height: 60), insets: .init()), context: nil)
         try #require(await waitUntil { records.contains { $0.contains("event=geometry[") } })
         let before = try #require(records.last)
         #expect(before.contains("headerOutsideSafeArea=false composerOutsideSafeArea=false"))
@@ -134,13 +138,52 @@ struct ChatSafeAreaTests {
         recorder.contextChanged(context)
         try await Task.sleep(for: .milliseconds(250))
         #expect(records.count == unchanged)
-        recorder.geometry("header", .init(frame: CGRect(x: 0, y: 0, width: safe.width, height: 44), insets: .init()), context: nil)
+        recorder.geometry("root", .init(frame: window.bounds, insets: .init()), context: nil)
         recorder.geometry("composer", .init(frame: CGRect(x: 0, y: window.bounds.maxY - 60, width: safe.width, height: 60), insets: .init()), context: nil)
         try #require(await waitUntil { records.contains { $0.contains("headerOutsideSafeArea=true composerOutsideSafeArea=true") } })
         let collapsed = try #require(records.last)
         #expect(collapsed.contains("safe=\(window.safeAreaInsets.top),"))
         #expect(collapsed.contains("orientation=\(scene.effectiveGeometry.interfaceOrientation.rawValue)"))
         #expect(records.count == unchanged + 1)
+    }
+
+    @Test
+    func movingChatDoesNotPublishGeometryChanges() async throws {
+        let scene = try #require(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let hosted = HostedWindow(scene: scene)
+        var records: [String] = []
+        let recorder = ChatLayoutRecorder(log: { records.append($0) })
+        let context = ChatLayoutContext(window: nil)
+        recorder.start(context: context)
+        defer { recorder.stop() }
+        let controller = UIHostingController(rootView: GeometryProbe(offset: .zero, recorder: recorder))
+        hosted.show(controller)
+        defer { hosted.close() }
+        try #require(await waitUntil { records.contains { $0.contains("event=geometry[") } })
+        let initial = records.count
+        for x in stride(from: 20, through: 300, by: 20) {
+            controller.rootView = GeometryProbe(offset: CGSize(width: CGFloat(x), height: CGFloat(x)), recorder: recorder)
+            controller.view.layoutIfNeeded()
+            await Task.yield()
+        }
+        try await Task.sleep(for: .milliseconds(250))
+        #expect(records.count == initial)
+    }
+
+    private struct GeometryProbe: View {
+        let offset: CGSize
+        let recorder: ChatLayoutRecorder
+
+        var body: some View {
+            VStack {
+                Color.clear.frame(height: 44).chatLayoutDiagnostics("header")
+                Spacer()
+                Color.clear.frame(height: 60).chatLayoutDiagnostics("composer")
+            }
+            .coordinateSpace(.named(ChatLayoutObservation.coordinateSpace))
+            .offset(offset)
+            .environment(\.chatLayoutRecorder, recorder)
+        }
     }
 
     private func rotate(_ scene: UIWindowScene, to orientation: UIInterfaceOrientation) async throws {

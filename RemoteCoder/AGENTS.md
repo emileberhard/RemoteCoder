@@ -899,9 +899,10 @@ entrypoint linked above.
   identified by host and conversation.
 - `ChatLayoutObservation` owns passive iOS safe-area diagnostics at this root,
   independently of haptics and native presentation anchors. Geometry and lifecycle
-  events feed its `ChatLayoutRecorder`; it never mutates views or polls. New sheet
-  and cover content uses `chatPresentationDiagnostics` to retain the precursor
-  in uploaded `ChatLayout` notice records. See `docs/host-observability.md`.
+  events feed its `ChatLayoutRecorder`; it never mutates views or polls. Existing
+  presentation hooks provide best-effort precursor coverage. Remove this recorder
+  and its hooks once the safe-area collapse is diagnosed and fixed. See
+  `docs/host-observability.md`.
 - **Header.** `ChatHeader` is the one header, shared by the chat toolbar
   (`ChatScreenToolbar`) and Voice Mode; each supplies its leading and trailing
   controls.

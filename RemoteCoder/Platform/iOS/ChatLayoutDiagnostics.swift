@@ -8,11 +8,13 @@ struct ChatLayoutContext: Equatable {
     @MainActor
     init(window: ChatWindowModel?) {
         let screen = window?.selectedScreen
-        description = "chatWindow=\(window?.id.uuidString ?? "unattached") host=\(screen?.hostID.uuidString ?? "none") target=\(screen?.executionTarget.id ?? "none") thread=\(screen?.activeSessionID ?? "new-chat") conversation=\(screen?.currentConversationID.uuidString ?? "none") transcript=\(screen?.transcriptIdentity ?? "none")"
+        let thread = screen.map { $0.activeSessionID ?? "new-chat" } ?? "unknown"
+        description = "chatWindow=\(window?.id.uuidString ?? "unattached") host=\(screen?.hostID.uuidString ?? "none") target=\(screen?.executionTarget.id ?? "none") thread=\(thread) conversation=\(screen?.currentConversationID.uuidString ?? "none") transcript=\(screen?.transcriptIdentity ?? "none")"
     }
 }
 
 struct ChatLayoutObservation: ViewModifier {
+    static let coordinateSpace = "chat-layout-diagnostics"
     let context: ChatLayoutContext
     @State private var recorder = ChatLayoutRecorder(log: AppLogger(category: "ChatLayout").notice)
     @Environment(\.scenePhase) private var scenePhase
@@ -21,15 +23,14 @@ struct ChatLayoutObservation: ViewModifier {
         content
             .environment(\.chatLayoutRecorder, recorder)
             .onGeometryChange(for: ChatLayoutGeometry.self) {
-                ChatLayoutGeometry(frame: $0.frame(in: .global), insets: $0.safeAreaInsets)
+                ChatLayoutGeometry(frame: CGRect(origin: .zero, size: $0.size), insets: $0.safeAreaInsets)
             } action: { recorder.geometry("root", $0, context: context) }
             .onChange(of: context, initial: true) { _, value in recorder.contextChanged(value) }
             .onChange(of: scenePhase, initial: true) { _, phase in recorder.phaseChanged(phase) }
             .onAppear { recorder.start(context: context) }
             .onDisappear { recorder.stop() }
             .onReceive(Publishers.MergeMany([
-                UIResponder.keyboardWillShowNotification, UIResponder.keyboardDidShowNotification,
-                UIResponder.keyboardWillHideNotification, UIResponder.keyboardDidHideNotification
+                UIResponder.keyboardDidShowNotification, UIResponder.keyboardDidHideNotification
             ].map { NotificationCenter.default.publisher(for: $0) })) { recorder.keyboardChanged($0) }
             .onReceive(NotificationCenter.default.publisher(for: UIScene.didActivateNotification)) { _ in
                 recorder.sceneChanged()
@@ -53,7 +54,7 @@ private struct ChatSurfaceObservation: ViewModifier {
 
     func body(content: Content) -> some View {
         content.onGeometryChange(for: ChatLayoutGeometry.self) {
-            ChatLayoutGeometry(frame: $0.frame(in: .global), insets: $0.safeAreaInsets)
+            ChatLayoutGeometry(frame: $0.frame(in: .named(ChatLayoutObservation.coordinateSpace)), insets: $0.safeAreaInsets)
         } action: { recorder?.geometry(surface, $0, context: nil) }
     }
 }
@@ -81,6 +82,7 @@ final class ChatLayoutRecorder {
     private var geometryObservers: [String: NSKeyValueObservation] = [:]
     private var pendingGeometry: Set<String> = []
     private var geometryTask: Task<Void, Never>?
+    private var geometryDeadline: ContinuousClock.Instant?
 
     init(log: @escaping (String) -> Void) {
         self.log = log
@@ -97,6 +99,7 @@ final class ChatLayoutRecorder {
         visible = false
         geometryTask?.cancel()
         geometryTask = nil
+        geometryDeadline = nil
         pendingGeometry.removeAll()
         record("root-disappeared")
         geometryObservers.removeAll()
@@ -154,28 +157,33 @@ final class ChatLayoutRecorder {
         geometryObservers = geometryObservers.filter { ids.contains($0.key) }
         for scene in scenes where geometryObservers[scene.session.persistentIdentifier] == nil {
             geometryObservers[scene.session.persistentIdentifier] = scene.observe(\.effectiveGeometry) { [weak self] _, _ in
-                Task { @MainActor [weak self] in self?.scheduleGeometry("scene") }
+                MainActor.assumeIsolated { self?.scheduleGeometry("scene") }
             }
         }
     }
 
     private func scheduleGeometry(_ surface: String) {
         pendingGeometry.insert(surface)
-        geometryTask?.cancel()
+        geometryDeadline = ContinuousClock.now.advanced(by: .milliseconds(200))
+        guard geometryTask == nil else { return }
         geometryTask = Task { [weak self] in
-            do { try await Task.sleep(for: .milliseconds(200)) } catch { return }
-            guard let self else { return }
-            let changed = pendingGeometry.sorted().joined(separator: ",")
-            pendingGeometry.removeAll()
-            geometryTask = nil
-            record("geometry[\(changed)]")
+            while let deadline = self?.geometryDeadline {
+                do { try await Task.sleep(until: deadline, clock: .continuous) } catch { return }
+                guard !Task.isCancelled, let self, let latest = geometryDeadline else { return }
+                guard latest <= ContinuousClock.now else { continue }
+                let changed = pendingGeometry.sorted().joined(separator: ",")
+                pendingGeometry.removeAll()
+                geometryTask = nil
+                geometryDeadline = nil
+                record("geometry[\(changed)]")
+            }
         }
     }
 
     private func record(_ event: String) {
         let now = Date.now
         let geometry = surfaces.sorted { $0.key < $1.key }.map {
-            "\($0.key)={ageMs=\(Int(now.timeIntervalSince($0.value.time) * 1_000)),frame=\(Self.rect($0.value.value.frame)),insets=\(Self.insets($0.value.value.insets))}"
+            "\($0.key)={ageMs=\(Int(now.timeIntervalSince($0.value.time) * 1_000)),localFrame=\(Self.rect($0.value.value.frame)),insets=\(Self.insets($0.value.value.insets))}"
         }.joined(separator: " ")
         let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
         let native = scenes.sorted { $0.session.persistentIdentifier < $1.session.persistentIdentifier }.prefix(4).map { scene in
@@ -190,11 +198,17 @@ final class ChatLayoutRecorder {
     private func violations(in window: UIWindow) -> String {
         guard window.isKeyWindow else { return "" }
         let safe = window.bounds.inset(by: window.safeAreaInsets)
-        let header = surfaces["header"].map { String($0.value.frame.minY < safe.minY - 1) } ?? "unknown"
-        let composer = surfaces["composer"].map {
-            String($0.value.frame.maxY > safe.maxY + ComposerMetrics.restingSafeAreaOverlap + 1)
-        } ?? "unknown"
-        return "headerOutsideSafeArea=\(header) composerOutsideSafeArea=\(composer)"
+        let headerFrame = windowFrame("header", in: window)
+        let composerFrame = windowFrame("composer", in: window)
+        let header = headerFrame.map { String($0.minY < safe.minY - 1) } ?? "unknown"
+        let composer = composerFrame.map { String($0.maxY > safe.maxY + ComposerMetrics.restingSafeAreaOverlap + 1) } ?? "unknown"
+        return "headerOutsideSafeArea=\(header) composerOutsideSafeArea=\(composer) derivedHeaderWindowFrame=\(headerFrame.map(Self.rect) ?? "unknown") derivedComposerWindowFrame=\(composerFrame.map(Self.rect) ?? "unknown")"
+    }
+
+    private func windowFrame(_ surface: String, in window: UIWindow) -> CGRect? {
+        guard let root = surfaces["root"]?.value, let frame = surfaces[surface]?.value.frame,
+              let view = window.rootViewController?.viewIfLoaded, view.window === window else { return nil }
+        return view.convert(frame.offsetBy(dx: root.insets.leading, dy: root.insets.top), to: window)
     }
 
     private func controllers(_ root: UIViewController?, window: UIWindow) -> String {

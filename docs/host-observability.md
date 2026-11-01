@@ -521,19 +521,30 @@ presentation changes. Root, header and composer geometry changes coalesce for
 change notifications. There is no timer while geometry is unchanged, native
 attachment, view mutation or dependency on the haptic attachment.
 
+These are temporary incident diagnostics: remove the recorder and its existing
+best-effort presentation hooks once the safe-area collapse is diagnosed and fixed.
+New presentations have no instrumentation requirement.
+
 Each record contains the host, thread (or `new-chat`), conversation and chat-window
-identities; SwiftUI global frames and safe-area insets; and the scene's native
+identities; SwiftUI sizes, local frames and safe-area insets; and the scene's native
 windows and controller hierarchy, with object identities, orientation, bounds,
 insets, additional insets and presentation/attachment state. The native walk is
 bounded to four scenes, eight windows per scene and sixteen controllers per
-window. `headerOutsideSafeArea` and `composerOutsideSafeArea` compare the observed
-frames to the key window's safe rectangle, allowing the composer's existing
+window. Header and composer frames use a named coordinate space inside the moving
+chat subtree, so drawer offsets do not trigger observations. Root geometry tracks
+size and insets. Only when recording, the recorder projects these local frames
+through the native root view and observed root insets into window coordinates.
+The derived frames omit the intentional drawer offset. `headerOutsideSafeArea`
+and `composerOutsideSafeArea` compare those projections to the key window's safe
+rectangle, allowing the composer's existing
 resting overlap. Unknown frames stay `unknown`. Each surface has an `ageMs` for
 its last SwiftUI geometry observation; `geometryPending` marks coalescing in
 progress. Presentation transforms and intermediate layout can produce temporary
 violations, so compare subsequent settled/native snapshots. Keyboard screen
 coordinates are labelled separately. Presentation appearance/disappearance records identify the actual
 sheet or cover; Quick Look records its completed presentation and dismissal.
+Keyboard records use did-show/did-hide only. One owned deadline task coalesces
+each geometry burst; changes push its deadline without replacing the task.
 
 Read these alongside `ChatScreen`, `HostFiles`, `VoiceMode` and `AppLifecycle`
 around the reported time, rather than filtering for violations alone:
