@@ -466,3 +466,47 @@ sampling; at 1 ms, differences below about 2 ms are not persuasive. Put hitches
 and available update durations beside these estimates. Warm switches are the
 common case after the drawer has been visible for its 1 s prefetch dwell. The
 synthetic drag includes preparation and delivery of the real selection haptic.
+
+### Drawer experiment results
+
+Decision recorded at `2026-11-01T19:47:00+01:00`, Europe/Stockholm
+(Stockholm/Copenhagen). The representative offline journey on the cabled iPhone
+14 Plus includes button opening, drag opening and closing, and cold-long,
+warm-short and warm-long row selections. The following exploratory captures use
+the same fixture, driver, compiler and haptic implementation, with eight motion
+spans, no observed accessibility automation and nominal energy state.
+
+| Arm | Main CPU (ms) | Hitches (ms) | Render-server CPU (ms) | GPU channel time (ms) |
+| --- | ---: | ---: | ---: | ---: |
+| Baseline | 1362 | 185.7 | 1351 | 1457.1 |
+| Progress observation in leaf modifiers | 1306 | 126.2 | 1399 | 1743.5 |
+| Leaf modifiers with built-in rounded clip | 1300 | 143.1 | 1382 | 1561.6 |
+| Leaf modifiers with original clip and `geometryGroup()` | 1265 | 232.5 | 1412 | 1668.6 |
+
+None establishes an overall improvement. Leaf observation reduced sampled app
+work and hitches in its capture but increased render CPU and GPU channel time.
+The built-in clip did not establish an advantage, and grouped geometry increased
+hitches. All three changes were removed; the original progress observation,
+clip and geometry remain. Resting public layer readback showed continuous
+corner radius 32, clipping enabled and no mask on the identified full-window
+surface for both clips. The readback was capped at 512 layers and does not prove
+their realization during motion or an offscreen-rendering improvement.
+
+A separate six-run, same-binary alternating control suppressed only the two
+settings-control geometry publications while retaining their global-frame
+callbacks. Enabled/suppressed median main CPU was 1307/1233 ms, with paired
+changes of -17/-74/-81 ms. Hitches and render costs remained mixed. Opening
+trigger-to-spring activation medians were 64.925/67.244 ms cold-long,
+54.594/54.183 ms warm-short and 36.819/35.775 ms warm-long. The production
+correction therefore keeps those frames in a private, non-observed reference
+owned by the control's `State`, retaining current first-tap geometry and existing
+picker cancellation ordering. It is a small app-CPU correction; its ordinary
+production-path captures remain a separate confirmation.
+
+These CPU estimates have 1 ms sampling granularity. Render CPU sums parallel
+threads, GPU channel time is the exported channel measurement, and power was
+unavailable. The 60 Hz phone cannot prove 120 Hz delivery. Trigger-to-spring
+activation is a latency lower bound; the first presented motion frame remains
+unknown. The opening delay remains the primary unresolved target. Private
+source identities, traces, summaries, attribution and screenshots are retained
+outside the repository; rebuildable app/dSYM retention is bounded separately.
