@@ -197,7 +197,9 @@ the private [operations entrypoint](https://github.com/emileberhard/RemoteCoder-
 
 A release is one annotated stable `X.Y.Z` tag (each part 0–999, no leading zeros),
 on pushed `main` and higher than every stable tag. The tag is every artifact's
-marketing version. Tags are immutable; fixes use the next patch.
+marketing version. Tags are immutable; fixes use the next patch. The tag
+annotation is published verbatim as the What to Test, App Store and GitHub
+release notes, so write user-facing notes there, never just the version.
 
 Every Debug project build and Core package build fails on compiler warnings,
 locally and in CI; Release archives retain their existing warning behavior. Fix
