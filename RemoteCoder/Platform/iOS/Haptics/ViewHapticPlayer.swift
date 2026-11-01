@@ -11,6 +11,8 @@ final class ViewHapticPlayer: HapticNativePlaying {
 
     init(view: UIView) { self.view = view }
 
+    func isAttached(to view: UIView) -> Bool { self.view === view }
+
     func prepare(_ recipe: HapticRecipe) {
         switch recipe {
         case let .impact(style, _): impact(for: style)?.prepare()
@@ -19,21 +21,22 @@ final class ViewHapticPlayer: HapticNativePlaying {
         }
     }
 
-    func play(_ recipe: HapticRecipe) {
+    func play(_ event: HapticEvent, strength: HapticStrength) {
+        let recipe = event.recipe(for: strength)
         switch recipe {
         case let .impact(style, intensity):
             guard let impact = impact(for: style) else { return }
-            signposter.emitEvent("feedback-api-request", "impact")
+            signposter.emitEvent("feedback-api-request", "\(event.rawValue, privacy: .public)")
             impact.impactOccurred(intensity: intensity)
             impact.prepare()
         case .selection:
             guard let selection = selectionGenerator() else { return }
-            signposter.emitEvent("feedback-api-request", "selection")
+            signposter.emitEvent("feedback-api-request", "\(event.rawValue, privacy: .public)")
             selection.selectionChanged()
             selection.prepare()
         case .success, .warning, .error:
             guard let notification = notificationGenerator() else { return }
-            signposter.emitEvent("feedback-api-request", "notification")
+            signposter.emitEvent("feedback-api-request", "\(event.rawValue, privacy: .public)")
             notification.notificationOccurred(recipe == .success ? .success : recipe == .warning ? .warning : .error)
         }
     }

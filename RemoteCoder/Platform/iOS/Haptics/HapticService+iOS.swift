@@ -21,12 +21,28 @@ extension HapticService {
     }
 }
 
-struct HapticAttachment: UIViewRepresentable {
+struct HapticAttachment: View {
     var service: HapticService = .shared
+    let voiceCall: VoiceCall
+    @Environment(\.scenePhase) private var scenePhase
 
-    func makeUIView(context: Context) -> AttachmentView { AttachmentView(service: service) }
-    func updateUIView(_ view: AttachmentView, context: Context) {}
-    static func dismantleUIView(_ view: AttachmentView, coordinator: ()) { view.detach() }
+    var body: some View {
+        WindowAttachment(service: service)
+            .frame(width: 0, height: 0)
+            .onChange(of: scenePhase) { if scenePhase != .active { service.cancelPlayback() } }
+            .onChange(of: voiceCall.isActive) { _, active in
+                if active { service.cancelPlayback() }
+            }
+            .onDisappear { service.cancelPlayback() }
+    }
+
+    private struct WindowAttachment: UIViewRepresentable {
+        let service: HapticService
+
+        func makeUIView(context: Context) -> AttachmentView { AttachmentView(service: service) }
+        func updateUIView(_ view: AttachmentView, context: Context) {}
+        static func dismantleUIView(_ view: AttachmentView, coordinator: ()) { view.detach() }
+    }
 
     final class AttachmentView: UIView {
         private let service: HapticService
@@ -43,8 +59,7 @@ struct HapticAttachment: UIViewRepresentable {
 
         override func didMoveToWindow() {
             super.didMoveToWindow()
-            detach()
-            guard let window else { return }
+            guard let window, player?.isAttached(to: window) != true else { return }
             let player = ViewHapticPlayer(view: window)
             self.player = player
             service.attach(player)

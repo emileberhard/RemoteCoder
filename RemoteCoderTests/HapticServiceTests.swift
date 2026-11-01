@@ -24,7 +24,7 @@ struct HapticServiceTests {
         #expect(view.interactions.isEmpty)
     }
 
-    @Test func attachmentUsesItsWindowAndOldRemovalCannotDetachNewOutput() throws {
+    @Test func attachmentSurvivesTemporaryPresenterRemovalUntilDismantled() throws {
         let fixture = HapticFixture()
         defer { fixture.cleanUp() }
         let scene = try #require(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
@@ -33,13 +33,21 @@ struct HapticServiceTests {
         window.addSubview(first)
         fixture.service.play(.copied)
         #expect(window.interactions.compactMap { $0 as? UIImpactFeedbackGenerator }.count == 1)
+        first.removeFromSuperview()
+        fixture.service.play(.selection)
+        #expect(window.interactions.compactMap { $0 as? UIFeedbackGenerator }.count == 2)
+        window.addSubview(first)
+        #expect(window.interactions.compactMap { $0 as? UIFeedbackGenerator }.count == 2)
         let second = HapticAttachment.AttachmentView(service: fixture.service)
         window.addSubview(second)
         #expect(window.interactions.compactMap { $0 as? UIFeedbackGenerator }.isEmpty)
+        first.detach()
         first.removeFromSuperview()
         fixture.service.play(.selection)
         #expect(window.interactions.compactMap { $0 as? UISelectionFeedbackGenerator }.count == 1)
         second.removeFromSuperview()
+        #expect(window.interactions.compactMap { $0 as? UISelectionFeedbackGenerator }.count == 1)
+        second.detach()
         #expect(window.interactions.compactMap { $0 as? UIFeedbackGenerator }.isEmpty)
         fixture.service.play(.selection)
         #expect(window.interactions.compactMap { $0 as? UIFeedbackGenerator }.isEmpty)

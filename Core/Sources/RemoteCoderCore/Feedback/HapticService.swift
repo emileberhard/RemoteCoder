@@ -96,7 +96,7 @@ final class HapticService {
     func play(_ event: HapticEvent, occurrence: HapticOccurrence? = nil) {
         if let occurrence, !consume(occurrence) { return }
         guard accept(event) else { return }
-        native?.play(event.recipe(for: strength))
+        native?.play(event, strength: strength)
     }
 
     func consume(_ occurrence: HapticOccurrence) -> Bool {

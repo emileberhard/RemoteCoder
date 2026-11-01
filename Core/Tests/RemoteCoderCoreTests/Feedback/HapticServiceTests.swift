@@ -365,10 +365,9 @@ private final class RecordingStreamingHapticPlayer: HapticStreamingPlaying {
 @MainActor
 private final class RecordingNativeHapticPlayer: HapticNativePlaying {
     var events: [HapticRecipe] = []
-    var prepared: [HapticRecipe] = []
     var releases = 0
 
-    func prepare(_ recipe: HapticRecipe) { prepared.append(recipe) }
-    func play(_ recipe: HapticRecipe) { events.append(recipe) }
+    func prepare(_ recipe: HapticRecipe) {}
+    func play(_ event: HapticEvent, strength: HapticStrength) { events.append(event.recipe(for: strength)) }
     func release() { releases += 1 }
 }

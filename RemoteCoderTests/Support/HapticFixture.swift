@@ -9,7 +9,6 @@ final class HapticFixture {
     var callActive = false
     let native = RecordingNativeHapticPlayer()
     var players: [RecordingHapticPlayer] = []
-    var streamingPlayers: [RecordingStreamingHapticPlayer] = []
     lazy var service = makeService()
 
     init() {
@@ -24,11 +23,7 @@ final class HapticFixture {
                                         let player = RecordingHapticPlayer()
                                         self?.players.append(player)
                                         return player
-                                    }, makeStreamingPlayer: { [weak self] in
-                                        let player = RecordingStreamingHapticPlayer()
-                                        self?.streamingPlayers.append(player)
-                                        return player
-                                    })
+                                    }, makeStreamingPlayer: { SilentStreamingHapticPlayer() })
         service.attach(native)
         service.bindCallState { [weak self] in self?.callActive == true }
         return service
@@ -55,24 +50,17 @@ final class RecordingHapticPlayer: HapticInteractionPlaying {
 }
 
 @MainActor
-final class RecordingStreamingHapticPlayer: HapticStreamingPlaying {
-    var punches: [Float] = []
-    var cancelled = false
-    var isEligible: @MainActor () -> Bool = { false }
-
-    func prepare(canPlay: @escaping @MainActor () -> Bool) { isEligible = canPlay }
-    func play(punch: Float) { punches.append(punch) }
-    func cancel() { cancelled = true }
+final class SilentStreamingHapticPlayer: HapticStreamingPlaying {
+    func prepare(canPlay: @escaping @MainActor () -> Bool) {}
+    func play(punch: Float) {}
+    func cancel() {}
 }
-
 
 @MainActor
 final class RecordingNativeHapticPlayer: HapticNativePlaying {
     var events: [HapticRecipe] = []
-    var prepared: [HapticRecipe] = []
-    var releases = 0
 
-    func prepare(_ recipe: HapticRecipe) { prepared.append(recipe) }
-    func play(_ recipe: HapticRecipe) { events.append(recipe) }
-    func release() { releases += 1 }
+    func prepare(_ recipe: HapticRecipe) {}
+    func play(_ event: HapticEvent, strength: HapticStrength) { events.append(event.recipe(for: strength)) }
+    func release() {}
 }

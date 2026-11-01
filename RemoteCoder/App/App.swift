@@ -156,7 +156,7 @@ private struct WindowRoot: View {
         .environment(\.appEnergyPolicy, app.energy.policy)
         .environment(\.siteIcons, app.workspace.siteIcons)
         .modifier(SceneLifecycle(app: app))
-        .background { HapticAttachment().frame(width: 0, height: 0) }
+        .background { HapticAttachment(voiceCall: app.voiceCalls.call) }
         .onAppear {
             guard supportsMultipleWindows else { return }
             app.workspace.events.attach(openWindow: { openWindow(value: $0) })
@@ -171,15 +171,10 @@ private struct SceneLifecycle: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .onChange(of: app.voiceCalls.call.isActive) { _, active in
-                if active { HapticService.shared.cancelPlayback() }
-            }
             .onChange(of: scenePhase, initial: true) { _, phase in
-                if phase != .active { HapticService.shared.cancelPlayback() }
                 Task { await app.apply(phase, scene: sceneID) }
             }
             .onDisappear {
-                HapticService.shared.cancelPlayback()
                 Task { await app.detach(scene: sceneID) }
             }
     }

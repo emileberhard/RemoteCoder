@@ -105,14 +105,15 @@ bounded occurrence deduplication. Accepted events submit synchronously in the
 same callback, including repeated events in one callback. There is no observable
 pulse, SwiftUI output, event queue or deferred replay. The root `HapticAttachment`
 registers one `ViewHapticPlayer` with the exact window containing its anchor;
-there is no global window lookup. It survives an accepted action dismissing a
-sheet or replacing a card. Replacement/removal is fenced by player identity, so
+there is no global window lookup. Temporary presenter removal/re-addition retains
+the same window pool until SwiftUI dismantles the anchor. It survives an accepted action dismissing a
+sheet or replacing a card. Replacement/dismantle is fenced by player identity, so
 an old anchor cannot detach a replacement. Missing output drops events.
 
 The service owns the native pool and lends it to gesture players. At most four
 impact styles, one selection generator and one notification generator are retained.
 All use `init(view:)` or `init(style:view:)`. Scene exit, capture, calls, opt-out,
-strength changes, attachment replacement and removal cancel playback and remove
+strength changes, attachment replacement and dismantle cancel playback and remove
 the generators from their view. The attached pool remains reusable after suppression.
 Gesture finish/cancel releases its accents without removing shared native generators.
 The drawer retains its small, gesture-owned selection player on its recognizer view.
@@ -379,33 +380,47 @@ requests only and never contain copied text, prompts or audio.
 
 ## Dispatch architecture decision
 
-### Decision
+HapticService is the policy and dispatch owner. Every accepted semantic event
+submits synchronously to a view-attached native generator. SwiftUI button
+isPressed remains its earliest public press signal; native contact callbacks
+submit before gesture accent setup.
 
-HapticService remains the only policy and dispatch owner. Every accepted semantic event calls a prepared player synchronously on the main actor. SwiftUI button isPressed remains the source of press transitions, but its callback calls the service directly. Remove pulse, HapticPulse, sensory-feedback recipe conversion and HapticOutput.
+### Ownership and constraints
 
 One window-attached `ViewHapticPlayer` owns the bounded native generator pool.
-The existing gesture player borrows it and owns only its Strong accents. The
-existing drawer selection player and streaming engine retain their distinct lifetimes.
-Attachment identity fences replacement and teardown. UIKit stays outside Core.
-Preparation occurs at gesture begin and after impact/selection playback; no
-speculative mount/foreground/suppression preparation or keep-warm timer is added.
+The gesture player borrows it and owns only its Strong accents. The drawer
+selection player and streaming engine retain their distinct lifetimes. Object
+identity fences replacement and dismantle. UIKit stays outside Core.
+Preparation occurs at gesture begin and after impact/selection playback.
 
-### Goals and constraints
-
-Preserve every recipe, eligibility gate, capture exception, call suppression, occurrence deduplication, interaction ownership and streaming cadence. Preserve event ordering and repeated local actions. Semantic completion must survive the initiating control disappearing. Keep UIKit out of Core, macOS silent, and the drawer/switch owners untouched. Dispatch has no asynchronous boundary. Generator submission is measurable; physical actuator onset and perceived feel remain separate acceptance.
+Recipes, eligibility, capture exception, call suppression, occurrence deduplication,
+interaction ownership and streaming cadence stay with their existing owners.
+Completion feedback survives the initiating control disappearing. macOS stays
+silent. Dispatch has no asynchronous boundary, event backlog or keep-warm timer.
 
 ### Alternatives and trade-offs
 
-Keeping root sensory feedback adds a second SwiftUI hop and coalesces same-callback events. Moving sensory feedback into every view spreads policy and loses completion feedback with dismissed views. Per-control generator pools multiply ownership and resource cleanup. Reusing the gesture player as ordinary output would add native/accents configuration and duplicate pools. A shared native player protocol isolates the platform boundary; the gesture player delegates its native recipes to it. The root attachment is infrastructure, with no observation of event state.
+Root sensory feedback adds a second SwiftUI hop and coalesces same-callback events.
+Per-view outputs spread policy and lose completion feedback with dismissed views.
+Reusing the gesture player as ordinary output would require native/accents
+configuration and duplicate generator pools. A shared native player protocol
+isolates the platform boundary while allowing the gesture player to delegate.
+The production ButtonStyle and synthetic press-state probe share appPressFeedback;
+it contains only a rising-edge service call.
 
-Immediate asynchronous outcomes cannot always be anticipated. A missing attachment
-drops events instead of replaying later. View-backed generators attach to the
-actual containing window, avoiding dependence on a zero-size anchor's visibility.
-The decision would need revisiting if a future multi-scene haptic-capable device
-required caller-qualified simultaneous outputs; the app currently disables multiple scenes.
+Asynchronous outcomes cannot always be anticipated. A missing attachment drops
+events instead of replaying later. Generators attach to the containing window;
+their lifetime follows SwiftUI ownership rather than temporary presenter removal.
+This decision needs revisiting if a future haptic-capable multi-scene device
+requires caller-qualified simultaneous outputs. The app disables multiple scenes.
 
-### Design challenge and validation
+### Evidence
 
-Apple UIFeedbackGenerator.prepare() requires lead time and recommends preparing again after playback when more feedback is expected. init(view:) and UIImpactFeedbackGenerator.init(style:view:) attach to a real view. The Pragmatic Programmer topics 26 and 28 inform explicit resource ownership and hiding platform dispatch behind the service boundary.
-
-The independent Opus xhigh challenge was completed before implementation. Its findings removed speculative preparation, shared the native pool with gesture playback, fenced attachment by object identity, and moved native contact feedback before accent setup. Its proposed AppPressFeedback deletion is declined: the production ButtonStyle and synthetic press-state measurement probe need the same rising-edge boundary. It contains only a direct service call. Before handoff: targeted hosted service/ownership/control tests and app compilation, haptic/glass/platform lints, independent pre-merge reviews, and clean test-iPhone before/after feedback-intent to feedback-api-request signposts for button, semantic event and drawer using the drawer owner’s journey driver. No merge or release in this task.
+[Apple prepare()](https://developer.apple.com/documentation/uikit/uifeedbackgenerator/prepare())
+requires lead time and recommends preparing again after playback when more feedback
+is expected. [init(view:)](https://developer.apple.com/documentation/uikit/uifeedbackgenerator/init(view:))
+and [init(style:view:)](https://developer.apple.com/documentation/uikit/uiimpactfeedbackgenerator/init(style:view:))
+attach to a real view. The Pragmatic Programmer topics 26 and 28 inform explicit
+resource ownership and hiding platform dispatch behind the service boundary.
+Generator submission is measurable in software; physical onset and perceived
+feel remain separate device acceptance.
