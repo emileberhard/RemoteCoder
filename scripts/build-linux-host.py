@@ -163,7 +163,9 @@ def unpack(archive, temporary):
                 raise ValueError("unsafe or duplicate Linux archive path")
             if (
                 not (entry.isfile() or entry.isdir() or entry.issym())
-                or entry.mode & ~0o755
+                or entry.mode & ~0o777
+                or not entry.issym()
+                and entry.mode & 0o022
             ):
                 raise ValueError("unsupported Linux archive entry")
             total += entry.size

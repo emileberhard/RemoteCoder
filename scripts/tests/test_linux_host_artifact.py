@@ -94,6 +94,7 @@ class LinuxArchiveTests(unittest.TestCase):
                 stream.addfile(binary, io.BytesIO(b"payload"))
                 link = tarfile.TarInfo("remote-coder-host/codex")
                 link.type = tarfile.SYMTYPE
+                link.mode = 0o777
                 link.linkname = "bin/codex"
                 stream.addfile(link)
             extracted = module.unpack(archive, root / "extract")
