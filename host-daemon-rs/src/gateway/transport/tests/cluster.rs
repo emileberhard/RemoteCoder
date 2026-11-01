@@ -204,6 +204,7 @@ async fn cluster_self_dispatch_preserves_captured_read_only_caller() {
         #[cfg(target_os = "linux")]
         let identity = {
             let mut identity = identity;
+            identity.as_object_mut().unwrap().remove("startedAtUnixMicros");
             identity["linuxBirth"] = serde_json::to_value(process.linux_birth).unwrap();
             identity
         };
