@@ -2,7 +2,7 @@
 
 RemoteCoder uses the public Apache-2.0 [Codex fork](https://github.com/emileberhard/codex). A stock upstream binary does not implement all of RemoteCoder's history, authentication and restart contracts. The exact source is each target’s `sourceCommit` under `runtimeTargets` in [compatibility.json](compatibility.json); a newer fork `main` is not automatically the matched runtime.
 
-The supported bootstrap is a source build on an Apple Silicon Mac. Install the Xcode version in `.xcode-version`, Rust/rustup, Python, uv and just. Run the following from the RemoteCoder checkout:
+The macOS bootstrap is a source build on an Apple Silicon Mac. Install the Xcode version in `.xcode-version`, Rust/rustup, Python, uv and just. Run the following from the RemoteCoder checkout:
 
 ```sh
 git clone https://github.com/emileberhard/codex.git ../remotecoder-codex
@@ -34,7 +34,17 @@ Each target approval also records `runtimePackageSHA256`, covering package resou
 
 The supported targets are `aarch64-apple-darwin` and `x86_64-unknown-linux-musl`. Gateway builds select the approval from their target OS and architecture; the Linux GNU gateway uses the musl Codex package. There is no cross-target fallback.
 
-`protocolSourceCommit` owns the common wire and database contract. A target-only source patch must descend from that commit; approval requires `--source-dir` and permits only the reviewed process-identity platform implementation to differ. Protocol or migration changes move the common pin and all targets together. Run Linux package approval on Linux, because approval executes the package against the adoption schema pins. `codex-runtime-approval export --target <target>` emits a flat record for on-host verification; installed immutable records retain their existing format.
+On Linux, install distribution-managed bubblewrap 0.12.0 or newer and use the
+fork package builder's `--system-bwrap` mode with its pinned native musl/V8
+toolchain. The package records `linuxSandbox: "system"` and contains no bundled
+bubblewrap. Codex uses its supported PATH lookup and capability probe; a missing
+or unsuitable system executable fails sandbox creation. Keep `/usr/bin` on the
+service PATH. The distribution owns bubblewrap security updates, independently
+of the immutable Codex package. The Linux host bundle is built and safely
+verified by `scripts/build-linux-host.py`; service installation, private HTTPS
+ingress and acceptance belong to the operator.
+
+`protocolSourceCommit` owns the common wire and database contract. A target-only source patch must descend from that commit; approval requires `--source-dir` and permits only explicitly listed process-identity or Linux packaging paths to differ. Protocol or migration changes move the common pin and all targets together. Run Linux package approval on Linux, because approval executes the package against the adoption schema pins. `codex-runtime-approval export --target <target>` emits a flat record for on-host verification; installed immutable records retain their existing format.
 
 For a common source move, run `scripts/codex-runtime-approval evaluate --package <package> --output <receipt>` natively for every target, then `scripts/codex-runtime-approval apply-set --receipt <mac-receipt> --receipt <linux-receipt> --protocol-source-commit <commit> --source-dir <fork-checkout>`. The atomic update rejects missing targets, mixed versions, changed adoption pins or different database migrations before writing any approval.
 

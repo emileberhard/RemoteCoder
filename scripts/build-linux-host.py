@@ -54,6 +54,19 @@ def verify_claude_provenance(path, claude):
         )
 
 
+def verify_codex_sandbox(package):
+    manifest = json.loads((package / "codex-package.json").read_text())
+    fallback = package / "codex-resources/bwrap"
+    if (
+        manifest.get("linuxSandbox") != "system"
+        or fallback.exists()
+        or fallback.is_symlink()
+    ):
+        raise ValueError(
+            "Linux Codex package must require system bubblewrap without a bundled fallback"
+        )
+
+
 def inventory(root):
     records = {}
     for path in sorted(root.rglob("*")):
@@ -99,6 +112,7 @@ def verify_tree(root, version, commit):
         raise ValueError("Linux artifact file inventory differs")
     if tree_digest(root / "runtime/codex") != codex["runtimePackageSHA256"]:
         raise ValueError("Linux Codex package tree differs from approval")
+    verify_codex_sandbox(root / "runtime/codex")
     if sha256(root / "runtime/claude/claude") != claude["linuxX64"]["sha256"]:
         raise ValueError("Linux Claude executable differs from approval")
     approval = (
@@ -194,6 +208,7 @@ def build(args):
     codex, claude = pins()
     if tree_digest(args.codex_package) != codex["runtimePackageSHA256"]:
         raise ValueError("Linux Codex seed differs from approval")
+    verify_codex_sandbox(args.codex_package)
     if sha256(args.claude) != claude["linuxX64"]["sha256"]:
         raise ValueError("Linux Claude seed differs from approval")
     verify_claude_provenance(args.claude_provenance, claude)

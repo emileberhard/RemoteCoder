@@ -586,7 +586,9 @@ Logs (`~/Library/Logs/remote-coder/`): `codex-gateway.out.log`,
 ## Linux supervision
 
 The native Linux host uses the full approved `x86_64-unknown-linux-musl` Codex
-package and a GNU x86_64 gateway. Build and test on Linux; the macOS app bundle,
+package and a GNU x86_64 gateway. Its `linuxSandbox: "system"` package requires
+distribution-managed bubblewrap 0.12.0 or newer on PATH and forbids a bundled
+fallback. Build and test on Linux; the macOS app bundle,
 launchd installer, Desktop attachment, TCC permissions and local Apple computer
 use are macOS facilities. Linux sessions use the same chat, history, ownership
 and cluster protocol. Provider readiness keeps unavailable providers explicit.

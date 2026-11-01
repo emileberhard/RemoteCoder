@@ -20,7 +20,15 @@ Unmaintained, unsoundness and yanked-package warnings are reported separately by
 
 ## Linux introduction and common source update
 
-The 2026-11-01 review covers fork source `1f412796c9b46d46fd218d43fd47ea3455c46c55`, both package targets and the default features of the shipped CLI/code-mode-host. Linux additionally ships the fork's bubblewrap wrapper. Voice-host, optional DNSSEC and other workspace-only features are outside these artifacts. The raw audit remains **9 vulnerability records, 10 unmaintained warnings and 15 unsoundness warnings**. These are reachability assessments, not a claim of a clean audit or proof about different feature sets.
+The 2026-11-01 review covers common fork source `1f412796c9b46d46fd218d43fd47ea3455c46c55`, both package targets and the default features of the shipped CLI/code-mode-host. The Linux packaging descendant `f8d9f770971005e9a809460da4cf557fcbbcce03` changes only package assembly and its tests. Voice-host, optional DNSSEC and other workspace-only features are outside these artifacts. The raw audit remains **9 vulnerability records, 10 unmaintained warnings and 15 unsoundness warnings**. These are reachability assessments, not a claim of a clean audit or proof about different feature sets.
+
+The vendored bubblewrap 0.11.2 is affected by
+[CVE-2026-87766](https://github.com/containers/bubblewrap/security/advisories/GHSA-pxhw-h44j-8pfx).
+Linux packages therefore select the supported system-bubblewrap path, declare
+that dependency and omit the bundled executable entirely. Deployment requires
+Debian's root-owned bubblewrap 0.12.0 or newer; Debian security updates own its
+future fixes. Neither the Mac package nor the Linux package ships this
+vulnerable native component. RustSec alone does not cover native dependencies.
 
 | Advisory | Assessed production path and action | Recheck when |
 | --- | --- | --- |

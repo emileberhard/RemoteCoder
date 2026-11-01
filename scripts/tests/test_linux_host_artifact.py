@@ -1,5 +1,6 @@
 import importlib.util
 import io
+import json
 import sys
 import tarfile
 import tempfile
@@ -8,12 +9,29 @@ from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SCRIPTS))
-spec = importlib.util.spec_from_file_location("linux_host", SCRIPTS / "build-linux-host.py")
+spec = importlib.util.spec_from_file_location(
+    "linux_host", SCRIPTS / "build-linux-host.py"
+)
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 
 
 class LinuxArchiveTests(unittest.TestCase):
+    def test_system_bubblewrap_dependency_and_absent_fallback_are_required(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            resources = root / "codex-resources"
+            resources.mkdir()
+            manifest = root / "codex-package.json"
+            manifest.write_text("{}")
+            with self.assertRaises(ValueError):
+                module.verify_codex_sandbox(root)
+            manifest.write_text(json.dumps({"linuxSandbox": "system"}))
+            module.verify_codex_sandbox(root)
+            (resources / "bwrap").symlink_to("missing")
+            with self.assertRaises(ValueError):
+                module.verify_codex_sandbox(root)
+
     def test_unsafe_entries_are_refused_without_writing_their_payload(self):
         for name, kind, target in [
             ("../escaped", tarfile.REGTYPE, ""),
@@ -30,7 +48,9 @@ class LinuxArchiveTests(unittest.TestCase):
                     entry.type = kind
                     entry.linkname = target
                     entry.size = 7 if kind == tarfile.REGTYPE else 0
-                    stream.addfile(entry, io.BytesIO(b"payload") if entry.size else None)
+                    stream.addfile(
+                        entry, io.BytesIO(b"payload") if entry.size else None
+                    )
                 destination = root / "extract"
                 destination.mkdir()
                 with self.assertRaises((ValueError, tarfile.TarError)):

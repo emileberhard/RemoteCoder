@@ -9,7 +9,7 @@ RemoteCoder's license applies to its own code. The components below retain their
 | iOS app | WebRTC 156.0.0 | BSD-3-Clause; [WebRTC](LICENSES/WebRTC.txt), [native third-party notices](LICENSES/WebRTC-third-party.md) and [Swift package wrapper](LICENSES/WebRTC-package.txt) |
 | iOS app, when enabled | Google Maps and Navigation SDKs 11.2.0 | [Google terms and bundled notices](LICENSES/Google-SDKs.md); Google licenses also remain available in Settings |
 | iOS and Mac apps | Mermaid 12.0.0 and its bundled dependencies | MIT, Apache-2.0, BSD, ISC and EPL-2.0; [native bundle notices](LICENSES/mermaid-native.md) and [EPL-2.0 text](LICENSES/EPL-2.0.txt) |
-| Linux gateway/runtime | Linux Rust dependency closures and native libraries | [Gateway](LICENSES/gateway-linux-rust.md), [Codex CLI](LICENSES/codex-linux-rust.md), [code-mode host](LICENSES/codex-linux-code-mode-host-rust.md), [bubblewrap wrapper](LICENSES/codex-linux-bwrap-rust.md), [native components](LICENSES/linux-native.md) |
+| Linux gateway/runtime | Linux Rust dependency closures and native libraries | [Gateway](LICENSES/gateway-linux-rust.md), [Codex CLI](LICENSES/codex-linux-rust.md), [code-mode host](LICENSES/codex-linux-code-mode-host-rust.md), [native components](LICENSES/linux-native.md) |
 | Gateway | Rust dependencies | [Versioned inventory, source and license texts](LICENSES/gateway-rust.md) |
 | Codex runtime | Modified OpenAI Codex and codex-code-mode-host | Apache-2.0; [OpenAI license](LICENSES/Codex-Apache-2.0.txt), [OpenAI/Ratatui NOTICE](LICENSES/Codex-NOTICE.txt), [CLI Rust dependencies](LICENSES/codex-rust.md) and [code-mode-host Rust dependencies](LICENSES/codex-code-mode-host-rust.md) |
 | Codex runtime | ripgrep 15.2.0 | MIT; [license and attribution](LICENSES/ripgrep.txt) |

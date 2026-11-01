@@ -1,7 +1,7 @@
 # RemoteCoder Agent Context
 
 RemoteCoder is an iOS 27 and macOS 27 SwiftUI app (Swift 6.4 strict
-concurrency, Xcode 27) for running coding agents on Macs you control. The app speaks JSON-RPC over an
+concurrency, Xcode 27) for running coding agents on macOS and x86_64 Linux hosts you control. The app speaks JSON-RPC over an
 authenticated WebSocket to a Rust gateway (`host-daemon-rs/`) on each host. The
 gateway proxies one managed, version-matched `codex app-server` and also runs
 turns through the `claude` CLI, translating them into the same app-server v2

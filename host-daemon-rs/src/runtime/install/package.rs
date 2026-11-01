@@ -57,7 +57,14 @@ pub(crate) struct PackageManifest {
     pub(crate) entrypoint: String,
     pub(crate) resources_dir: String,
     pub(crate) path_dir: String,
+    pub(crate) linux_sandbox: Option<LinuxSandbox>,
     pub(crate) binaries: HashMap<String, PackageBinary>,
+}
+
+#[derive(Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum LinuxSandbox {
+    System,
 }
 
 #[derive(Deserialize)]
@@ -85,6 +92,15 @@ pub(in crate::runtime) fn validate_runtime_package(package_dir: &Path) -> Result
         || manifest.path_dir != "codex-path"
     {
         bail!("Codex package version, source commit, or target is not approved");
+    }
+    if (REQUIRED_CODEX_TARGET == "x86_64-unknown-linux-musl")
+        != (manifest.linux_sandbox == Some(LinuxSandbox::System))
+    {
+        bail!("Linux Codex packages must require system bubblewrap");
+    }
+    let fallback = package_dir.join("codex-resources/bwrap");
+    if manifest.linux_sandbox.is_some() && std::fs::symlink_metadata(fallback).is_ok() {
+        bail!("Linux Codex packages must not bundle bubblewrap");
     }
     for (name, approved) in [
         ("bin/codex", REQUIRED_CODEX_SHA256),

@@ -59,6 +59,7 @@ class PackageManifest(BaseModel):
     entrypoint: Literal["bin/codex"]
     resources_dir: Literal["codex-resources"] = Field(alias="resourcesDir")
     path_dir: Literal["codex-path"] = Field(alias="pathDir")
+    linux_sandbox: Literal["system"] | None = Field(default=None, alias="linuxSandbox")
     source_commit: GitCommit = Field(alias="sourceCommit")
     binaries: dict[str, Binary]
 
@@ -211,6 +212,12 @@ def package_approval(package: Path) -> Approval:
         raise ApprovalError(
             f"invalid package manifest {manifest_path}: {error}"
         ) from error
+    linux = manifest.target == "x86_64-unknown-linux-musl"
+    if linux != (manifest.linux_sandbox == "system"):
+        raise ApprovalError("Linux packages must explicitly require system bubblewrap")
+    fallback = package / "codex-resources/bwrap"
+    if linux and (fallback.exists() or fallback.is_symlink()):
+        raise ApprovalError("Linux packages must not bundle a bubblewrap fallback")
 
     expected_paths = {"bin/codex", "bin/codex-code-mode-host"}
     if set(manifest.binaries) != expected_paths:
@@ -494,6 +501,15 @@ def verify_source(protocol: str, approval: Approval, source: Path | None) -> Non
         text=True,
     ).splitlines()
     allowed = {"codex-rs/utils/pty/src/process_identity.rs"}
+    if approval.target == "x86_64-unknown-linux-musl":
+        allowed |= {
+            "REMOTECODER_MODIFICATIONS.md",
+            "scripts/codex_package/cargo.py",
+            "scripts/codex_package/cli.py",
+            "scripts/codex_package/layout.py",
+            "scripts/codex_package/test_cargo.py",
+            "scripts/codex_package/test_layout.py",
+        }
     if not changed or set(changed) - allowed:
         raise ApprovalError(
             "target source changes shared protocol/state or an unreviewed platform path"
