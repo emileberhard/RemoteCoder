@@ -57,9 +57,11 @@ holds the detailed history, recovery, voice and persistence contracts.
   about 118 commits a second while a reply streamed. The UIKit effect runs on
   the render-box animation thread; with the other 1 October changes the same
   window fell to 70 commits a second. The composer's spinner runs in the
-  render server with no app commits. The timeline's `ThinkingDots` do too: on
-  iOS they are discrete Core Animation keyframes on three layers, and the Mac
-  arm draws them still. A running `TimelineView`, even a periodic one, keeps
+  render server with no app commits. The timeline's live label uses the shared
+  `shimmer(isActive:)` modifier: SwiftUI owns text layout and accessibility,
+  while the iOS arm moves one native gradient under the same content's alpha
+  mask. The Mac arm stays static. Decoration policy and central row visibility
+  gate the effect; removal stops it immediately. A running `TimelineView`, even a periodic one, keeps
   the display link re-evaluating the view graph; the earlier SwiftUI dots cost
   about 2 s of main-thread time per 41 s streamed reply (October 2026,
   perf-sim), and the UIKit symbol effect's first use took a 160–350 ms frame.
@@ -68,6 +70,10 @@ holds the detailed history, recovery, voice and persistence contracts.
   occlusion state into `visualsVisible`. Hiding the app occludes the window,
   but with Stage Manager on, a covered window stays visible as a live
   thumbnail and keeps animating.
+- Thinking UI previews and performance comparisons use controlled notification
+  fixtures, with a visually verified live row before measurement. Do not call
+  a model to obtain an unpredictable reasoning duration. Synthetic live items
+  omit recorded ordinals and timestamps so they follow the loaded history.
 - The Mac interface zoom is `InterfaceZoom`: View → Actual Size (⌘0), Zoom In
   (⌘+ and ⌘= through `AppKeyMonitor`, preserving the active layout’s Shift
   translation) and Zoom Out (⌘−), 80–200 %, persisted

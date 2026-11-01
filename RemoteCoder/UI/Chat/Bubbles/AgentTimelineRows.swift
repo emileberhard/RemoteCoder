@@ -33,14 +33,10 @@ struct AgentTimelineHeader: View {
         .animation(reduceMotion ? nil : .smooth, value: timeline.isExpanded)
     }
 
-    @ViewBuilder
     private var collapsedLabel: some View {
-        if timeline.isLive {
-            ThinkingStatusLabel()
-        } else {
-            Text(summaryText)
-                .scaledFont(.callout)
-        }
+        Text(timeline.isLive ? "Thinking" : summaryText)
+            .scaledFont(.callout)
+            .shimmer(isActive: timeline.isLive)
     }
 
     private var summaryText: String {
@@ -69,24 +65,6 @@ struct AgentTimelineHeader: View {
             return "\(minutes)m \(seconds)s"
         }
         return "\(seconds)s"
-    }
-}
-
-private struct ThinkingStatusLabel: View {
-    @Environment(\.scenePhase) private var scenePhase
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.appEnergyPolicy) private var energyPolicy
-    @Environment(\.visualsVisible) private var visualsVisible
-    @Environment(\.transcriptRowVisibility) private var rowVisibility
-
-    var body: some View {
-        HStack(spacing: 1) {
-            Text("Thinking")
-            ThinkingDots(tint: .secondary, isAnimating: energyPolicy.animatesDecorations(
-                sceneActive: scenePhase == .active, visible: rowVisibility?.isVisible == true && visualsVisible,
-                reduceMotion: reduceMotion))
-        }
-        .scaledFont(.callout)
     }
 }
 
@@ -128,7 +106,10 @@ struct TimelineEventRow: View {
                         timestamp: event.timestamp,
                         isProse: event.kind.isNarrative
                     )
-                    .transition(.opacity)
+                    .transition(.asymmetric(
+                        insertion: .opacity.animation(reduceMotion ? nil : .spring(response: 0.5, dampingFraction: 0.85)),
+                        removal: .identity
+                    ))
                 }
             } else {
                 summary
@@ -150,6 +131,7 @@ struct TimelineEventRow: View {
                 if canExpand {
                     DisclosureChevron(isExpanded: isExpanded)
                         .foregroundStyle(.tertiary)
+                        .animation(reduceMotion ? nil : .spring(response: 0.2, dampingFraction: 0.85), value: isExpanded)
                 }
             }
 
@@ -173,9 +155,7 @@ struct TimelineEventRow: View {
     private static let fullSubtitleLength = 200
 
     private func toggle() {
-        withAnimation(reduceMotion ? nil : .smooth(duration: 0.3)) {
-            isExpanded.toggle()
-        }
+        isExpanded.toggle()
     }
 }
 
