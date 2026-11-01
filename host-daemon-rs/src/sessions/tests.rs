@@ -641,7 +641,8 @@ async fn sessions_mirror_preserves_sidecars_and_refuses_over_budget() {
             &target,
             "fixture",
             call.clone(),
-            tokio_util::sync::CancellationToken::new()
+            tokio_util::sync::CancellationToken::new(),
+            Arc::default()
         )
         .await
         .unwrap()["complete"],
@@ -670,7 +671,8 @@ async fn sessions_mirror_preserves_sidecars_and_refuses_over_budget() {
             &target,
             "fixture",
             call.clone(),
-            tokio_util::sync::CancellationToken::new()
+            tokio_util::sync::CancellationToken::new(),
+            Arc::default()
         )
         .await
         .unwrap()["complete"],
@@ -694,6 +696,7 @@ async fn sessions_mirror_preserves_sidecars_and_refuses_over_budget() {
         "fixture",
         call,
         tokio_util::sync::CancellationToken::new(),
+        Arc::default(),
     )
     .await
     .unwrap();
@@ -2273,6 +2276,7 @@ async fn sync_mirror(target: &Store, call: mirror::Call) -> Result<Value> {
         "fixture",
         call,
         tokio_util::sync::CancellationToken::new(),
+        Arc::default(),
     )
     .await
 }
@@ -2339,8 +2343,8 @@ async fn sessions_mirror_idle_uses_only_feed_and_defers_full_tree_reconciliation
 }
 
 #[tokio::test]
-async fn sessions_mirror_delta_replays_failed_transfers_and_preserves_unknown_roots() -> Result<()>
-{
+async fn sessions_mirror_skips_failed_transfers_until_full_reconciliation_and_preserves_unknown_roots()
+-> Result<()> {
     let f = fixture();
     scan(&f);
     let directory = tempfile::tempdir()?;
@@ -2360,8 +2364,10 @@ async fn sessions_mirror_delta_replays_failed_transfers_and_preserves_unknown_ro
     );
     scan(&f);
     fail.store(true, std::sync::atomic::Ordering::Release);
-    assert!(sync_mirror(&target, call.clone()).await.is_err());
-    assert_eq!(mirror_cursor(&target), cursor);
+    let skipped = sync_mirror(&target, call.clone()).await?;
+    assert_eq!(skipped["complete"], false);
+    assert_ne!(mirror_cursor(&target), cursor);
+    let cursor = mirror_cursor(&target);
     fail.store(false, std::sync::atomic::Ordering::Release);
     let unavailable = f.origins[0].path().with_file_name("unavailable");
     std::fs::rename(f.origins[0].path(), &unavailable)?;
@@ -2389,6 +2395,16 @@ async fn sessions_mirror_delta_replays_failed_transfers_and_preserves_unknown_ro
             .iter()
             .any(|m| m == "sessions/mirror/list")
     );
+    assert!(
+        search(&target, "deltauniquetext")["hits"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    target
+        .writer()?
+        .execute("UPDATE mirror_state SET reconciled_at=0", [])?;
+    assert_eq!(sync_mirror(&target, call.clone()).await?["full"], true);
     assert_eq!(
         search(&target, "deltauniquetext")["hits"]
             .as_array()
@@ -2452,5 +2468,115 @@ async fn sessions_mirror_replays_changes_that_race_the_initial_listing() -> Resu
             .len(),
         1
     );
+    Ok(())
+}
+
+#[test]
+fn sessions_mirror_contains_paths_by_components() {
+    let origin = Origin {
+        host: "fixture".into(),
+        provider: "codex".into(),
+        provider_home: "/Users/emil/.codex".into(),
+        local_home: "/mirror/codex".into(),
+    };
+    assert_eq!(
+        origin
+            .local(Path::new("///Users/emil/.codex/sessions/rollout.jsonl"))
+            .unwrap(),
+        PathBuf::from("/mirror/codex/sessions/rollout.jsonl")
+    );
+    assert!(
+        origin
+            .local(Path::new("/Users/emil/.codex/../secret"))
+            .is_err()
+    );
+    assert!(
+        origin
+            .local(Path::new("/Users/emil/.openclaw/media/browser/image.jpg"))
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn sessions_mirror_skips_outside_entries_without_reclaiming() -> Result<()> {
+    let f = fixture();
+    scan(&f);
+    let directory = tempfile::tempdir()?;
+    let target = Store::open(directory.path().join("state/catalog.sqlite3"))?;
+    let peer = mirror_peer(&f, Arc::default(), Arc::new(AtomicBool::new(false)));
+    sync_mirror(&target, peer.clone()).await?;
+    let orphan = target
+        .path
+        .parent()
+        .unwrap()
+        .join("mirror")
+        .join(blake3::hash(b"fixture").to_hex().as_str())
+        .join("retained");
+    std::fs::write(&orphan, b"keep")?;
+    target
+        .writer()?
+        .execute("UPDATE mirror_state SET reconciled_at=0", [])?;
+    let call: mirror::Call = Arc::new(move |method, params| {
+        let peer = peer.clone();
+        async move {
+            let mut page = peer(method, params).await?;
+            if method == "sessions/mirror/list" {
+                let entries = page["files"].as_array_mut().unwrap();
+                let mut outside = entries[0].clone();
+                outside["path"] = json!("/Users/emil/.openclaw/media/browser/image.jpg");
+                entries.insert(0, outside);
+                let path = entries[1]["path"].as_str().unwrap();
+                entries[1]["path"] = json!(format!("//{path}"));
+            }
+            Ok(page)
+        }
+        .boxed()
+    });
+    let page = sync_mirror(&target, call).await?;
+    assert_eq!(page["complete"], false);
+    assert!(orphan.is_file());
+    assert_eq!(
+        query::inventory(&target.reader()?, None, 1000)?
+            .sessions
+            .len(),
+        4
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn sessions_mirror_appends_verified_growth_and_replaces_a_changed_prefix() -> Result<()> {
+    use std::os::unix::fs::MetadataExt;
+    let f = fixture();
+    scan(&f);
+    let directory = tempfile::tempdir()?;
+    let target = Store::open(directory.path().join("state/catalog.sqlite3"))?;
+    let peer = mirror_peer(&f, Arc::default(), Arc::new(AtomicBool::new(false)));
+    sync_mirror(&target, peer.clone()).await?;
+    let path: String = target.reader()?.query_row(
+        "SELECT local_path FROM mirror_file WHERE origin_host='fixture' AND path=?1",
+        [f.codex.to_string_lossy()],
+        |row| row.get(0),
+    )?;
+    let inode = std::fs::metadata(&path)?.ino();
+    writeln!(
+        OpenOptions::new().append(true).open(&f.codex)?,
+        "{}",
+        json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"appendedmirrorneedle"}]}})
+    )?;
+    scan(&f);
+    sync_mirror(&target, peer.clone()).await?;
+    assert_eq!(std::fs::metadata(&path)?.ino(), inode);
+    assert_eq!(std::fs::read(&path)?, std::fs::read(&f.codex)?);
+    write(
+        &f.codex,
+        &[
+            codex_meta("codex-root", None),
+            json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"replacedmirrorneedle"}]}}),
+        ],
+    );
+    scan(&f);
+    sync_mirror(&target, peer).await?;
+    assert_eq!(std::fs::read(&path)?, std::fs::read(&f.codex)?);
     Ok(())
 }

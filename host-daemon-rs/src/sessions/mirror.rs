@@ -8,8 +8,7 @@ use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::os::unix::fs::MetadataExt;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 const CHUNK: usize = 1 << 20;
 
@@ -49,10 +48,6 @@ pub(crate) struct Entry {
     pub size: u64,
     pub present: bool,
     pub dependency: bool,
-}
-
-fn physical(metadata: &std::fs::Metadata) -> String {
-    format!("{}:{}", metadata.dev(), metadata.ino())
 }
 
 pub(super) const LIST_SQL: &str = r#"WITH RECURSIVE paths(path) AS (
@@ -152,7 +147,7 @@ fn describe(
         provider,
         provider_home: home.into(),
         path: path.into(),
-        identity: metadata.as_ref().map(physical).unwrap_or_default(),
+        identity: metadata.as_ref().map(ingest::identity).unwrap_or_default(),
         revision: metadata.as_ref().map(ingest::identity).unwrap_or_default(),
         size: metadata.as_ref().map_or(0, |m| m.len()),
         present: present && metadata.is_some(),
@@ -196,16 +191,16 @@ pub(crate) fn delta(
     }
     let mut files = Vec::new();
     for path in paths {
-        let origin = origins
-            .iter()
-            .find(|origin| {
-                origin.host == host && Path::new(&path).starts_with(&origin.provider_home)
-            })
-            .context("unsupported: changed evidence is outside the configured provider origins")?;
         let known: Option<(String,String,String,bool,bool)> = tx.query_row("SELECT provider,provider_home,local_path,present,0 FROM source WHERE origin_host=?1 AND path=?2 UNION ALL SELECT s.provider,s.provider_home,d.local_path,d.present,1 FROM dependency d JOIN source s USING(source_id) WHERE d.origin_host=?1 AND d.path=?2 LIMIT 1",params![host,path],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).optional()?;
         let (provider, home, local, present, dependency) = match known {
             Some(known) => known,
             None => {
+                let origin = origins.iter().find(|origin| {
+                    origin.host == host && Path::new(&path).starts_with(&origin.provider_home)
+                });
+                let Some(origin) = origin else {
+                    continue;
+                };
                 let local = origin.local(Path::new(&path))?;
                 (
                     origin.provider.clone(),
@@ -261,7 +256,8 @@ pub(crate) fn fetch(store: &Store, host: &str, request: Fetch) -> Result<Value> 
     let mut file = File::open(local)?;
     let before = file.metadata()?;
     ensure!(
-        physical(&before) == request.identity && ingest::identity(&before) == request.revision,
+        ingest::identity(&before) == request.identity
+            && ingest::identity(&before) == request.revision,
         "conflict: source revision changed; relist and restart this file"
     );
     ensure!(
@@ -308,17 +304,44 @@ fn mirror_origin(root: &Path, host: &str, provider: String, provider_home: PathB
     }
 }
 
+#[derive(Default)]
+pub(crate) struct Failures(std::sync::Mutex<BTreeMap<(String, PathBuf), String>>);
+
+impl Failures {
+    fn observe(&self, host: &str, path: &Path, error: Option<&anyhow::Error>) {
+        let mut failures = self.0.lock().expect("Mirror failure observations poisoned");
+        let key = (host.to_owned(), path.to_owned());
+        match error {
+            Some(error) => {
+                let message = format!("{error:#}");
+                if failures.get(&key) != Some(&message) {
+                    tracing::warn!(host,path=%path.display(),error=%message,"Session mirror entry skipped");
+                    if failures.len() < 100_000 || failures.contains_key(&key) {
+                        failures.insert(key, message);
+                    }
+                }
+            }
+            None => {
+                if failures.remove(&key).is_some() {
+                    tracing::info!(host,path=%path.display(),"Session mirror entry recovered");
+                }
+            }
+        }
+    }
+}
+
 pub(crate) async fn sync(
     store: &Store,
     host: &str,
     call: Call,
     stop: tokio_util::sync::CancellationToken,
+    failures: std::sync::Arc<Failures>,
 ) -> Result<Value> {
     let store = store.clone();
     let host = host.to_owned();
     tokio::task::spawn_blocking(move || {
         let runtime = tokio::runtime::Handle::current();
-        runtime.block_on(sync_owned(&store, &host, call, stop))
+        runtime.block_on(sync_owned(&store, &host, call, stop, failures))
     })
     .await?
 }
@@ -328,6 +351,7 @@ async fn sync_owned(
     host: &str,
     call: Call,
     stop: tokio_util::sync::CancellationToken,
+    failures: std::sync::Arc<Failures>,
 ) -> Result<Value> {
     let root = store.path.parent().context("Mirror root")?.join("mirror");
     if !root.is_dir() {
@@ -420,23 +444,14 @@ async fn sync_owned(
                 entry.origin_host == host,
                 "Mirror origin does not match the authenticated member"
             );
-            let relative = entry
-                .path
-                .strip_prefix(&entry.provider_home)
-                .context("Mirror source is outside provider home")?;
-            ensure!(
-                relative
-                    .components()
-                    .all(|c| matches!(c, Component::Normal(_))),
-                "Invalid mirror evidence path"
-            );
+            let result:Result<()> = async {
             let origin = mirror_origin(
                 &root,
                 host,
                 entry.provider.clone(),
                 entry.provider_home.clone(),
             );
-            let home = origin.local_home.clone();
+            let target = origin.local(&entry.path)?;
             ensure!(
                 origins.len() < 1024
                     || origins
@@ -447,7 +462,6 @@ async fn sync_owned(
                 (origin.provider.clone(), origin.provider_home.clone()),
                 origin,
             );
-            let target = home.join(relative);
             if full && entry.present {
                 ensure!(
                     retained.len() < 100_000,
@@ -468,7 +482,7 @@ async fn sync_owned(
                     "DELETE FROM mirror_file WHERE origin_host=?1 AND path=?2",
                     params![host, entry.path.to_string_lossy()],
                 )?;
-                continue;
+                return Ok(());
             }
             let temporary = target.with_extension(format!(
                 "{}.partial",
@@ -490,7 +504,7 @@ async fn sync_owned(
                 .optional()?;
             if cached.as_deref() == Some(&entry.revision) && target.exists() {
                 total_files += 1;
-                continue;
+                return Ok(());
             }
             if temporary.exists() {
                 storage.mutate(&[&temporary], 0, || Ok(std::fs::remove_file(&temporary)?))?;
@@ -507,7 +521,6 @@ async fn sync_owned(
                 std::io::copy(&mut File::open(&target)?, &mut hash)?;
                 prefix = Some(hash.finalize().to_hex().to_string());
             }
-            drop(storage.lease(entry.size)?);
             let first = Fetch {
                 path: entry.path.to_string_lossy().into_owned(),
                 identity: entry.identity.clone(),
@@ -517,7 +530,7 @@ async fn sync_owned(
                 prefix_hash: prefix,
             };
             let mut response = call("sessions/mirror/fetch", serde_json::to_value(&first)?).await;
-            if response.is_err() && offset > 0 {
+            if offset > 0 && response.as_ref().err().is_some_and(|error| super::error_data(error)["class"]=="conflict") {
                 offset = 0;
                 response = call(
                     "sessions/mirror/fetch",
@@ -529,19 +542,15 @@ async fn sync_owned(
                 )
                 .await;
             }
-            storage.mutate(&[&temporary], offset, || {
-                if offset > 0 {
-                    std::fs::copy(&target, &temporary)?;
-                } else {
-                    OpenOptions::new()
-                        .write(true)
-                        .create_new(true)
-                        .mode(0o600)
-                        .open(&temporary)?;
-                }
-                Ok(())
-            })?;
-            let mut output = OpenOptions::new().append(true).open(&temporary)?;
+            drop(storage.lease(entry.size.saturating_sub(offset))?);
+            let staging = if offset > 0 { target.clone() } else { temporary.clone() };
+            if offset == 0 {
+                storage.mutate(&[&staging], 0, || {
+                    OpenOptions::new().write(true).create_new(true).mode(0o600).open(&staging)?;
+                    Ok(())
+                })?;
+            }
+            let mut output = OpenOptions::new().append(true).open(&staging)?;
             loop {
                 ensure!(!stop.is_cancelled(), "Mirror stopped");
                 let value = response?;
@@ -554,7 +563,7 @@ async fn sync_owned(
                     bytes.len() <= CHUNK && offset + bytes.len() as u64 <= entry.size,
                     "Mirror response exceeds admitted file size"
                 );
-                storage.mutate(&[&temporary], bytes.len() as u64, || {
+                storage.mutate(&[&staging], bytes.len() as u64, || {
                     Ok(output.write_all(&bytes)?)
                 })?;
                 offset += bytes.len() as u64;
@@ -580,9 +589,9 @@ async fn sync_owned(
             }
             output.sync_all()?;
             drop(output);
-            storage.mutate(&[&temporary, &target], 0, || {
-                Ok(std::fs::rename(&temporary, &target)?)
-            })?;
+            if staging != target {
+                storage.mutate(&[&staging, &target], 0, || Ok(std::fs::rename(&staging, &target)?))?;
+            }
             store.writer()?.execute("INSERT INTO mirror_file VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(origin_host,path) DO UPDATE SET identity=excluded.identity,size=excluded.size,received=excluded.received,local_path=excluded.local_path",params![host,entry.path.to_string_lossy(),entry.revision,i64::try_from(entry.size)?,i64::try_from(offset)?,target.to_string_lossy()])?;
             ensure!(
                 changed.len() < 100_000 || changed.contains(&target),
@@ -590,6 +599,12 @@ async fn sync_owned(
             );
             changed.insert(target);
             total_files += 1;
+            Ok(())
+            }.await;
+            failures.observe(host, &entry.path, result.as_ref().err());
+            if result.is_err() {
+                complete = false;
+            }
         }
         cursor = page["cursor"].as_str().map(str::to_owned);
         if full && cursor.is_none() || !full && page["hasMore"] != true {

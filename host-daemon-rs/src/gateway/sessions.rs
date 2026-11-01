@@ -4,6 +4,7 @@ use crate::rpc::{RpcError, RpcResult};
 use crate::sessions::{Origin, cluster, mirror, query, store::Store, worker::Worker};
 use anyhow::{Context, Result};
 use futures_util::FutureExt;
+use rusqlite::OptionalExtension;
 use serde_json::{Value, json};
 use std::sync::Arc;
 use tokio::sync::{Mutex, Semaphore};
@@ -14,6 +15,7 @@ pub(super) struct Runtime {
     worker: Arc<Worker>,
     readers: Arc<Semaphore>,
     mirror_lock: Mutex<()>,
+    mirror_failures: Arc<mirror::Failures>,
     mirror_stop: tokio_util::sync::CancellationToken,
     mirror_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
@@ -58,6 +60,7 @@ impl Gateway {
                         worker,
                         readers: Arc::new(Semaphore::new(16)),
                         mirror_lock: Mutex::new(()),
+                        mirror_failures: Arc::default(),
                         mirror_stop: tokio_util::sync::CancellationToken::new(),
                         mirror_task: Mutex::new(None),
                     }))
@@ -131,11 +134,32 @@ impl Gateway {
                 let member = member.clone();
                 async move { link.call(&member, method, params).await.map_err(Into::into) }.boxed()
             });
-            match mirror::sync(&runtime.store, &host, callback, runtime.mirror_stop.clone()).await {
+            match mirror::sync(
+                &runtime.store,
+                &host,
+                callback,
+                runtime.mirror_stop.clone(),
+                runtime.mirror_failures.clone(),
+            )
+            .await
+            {
                 Ok(value) => outcomes.push(json!({"host":host,"result":value})),
                 Err(error) => {
                     let message = format!("{error:#}");
-                    runtime.store.writer()?.execute("INSERT INTO coverage(origin_host,mode,stale_reason) VALUES(?1,'mirror',?2) ON CONFLICT(origin_host) DO UPDATE SET stale_reason=excluded.stale_reason",rusqlite::params![host,message])?;
+                    let prior: Option<String> = runtime
+                        .store
+                        .reader()?
+                        .query_row(
+                            "SELECT stale_reason FROM coverage WHERE origin_host=?1",
+                            [&host],
+                            |row| row.get(0),
+                        )
+                        .optional()?
+                        .flatten();
+                    if prior.as_ref() != Some(&message) {
+                        tracing::warn!(host,%error,"Session mirror member is stale");
+                        runtime.store.writer()?.execute("INSERT INTO coverage(origin_host,mode,stale_reason) VALUES(?1,'mirror',?2) ON CONFLICT(origin_host) DO UPDATE SET stale_reason=excluded.stale_reason WHERE coverage.stale_reason IS NOT excluded.stale_reason",rusqlite::params![host,message])?;
+                    }
                     outcomes.push(json!({"host":host,"error":message}));
                 }
             }
