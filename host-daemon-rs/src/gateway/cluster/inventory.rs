@@ -70,6 +70,7 @@ impl Gateway {
         let mut warnings = Vec::new();
         let mut pages=pages.into_iter().filter_map(|(host,result)| match result {
             Err(error)=> {warnings.push(format!("{host}: {error}"));coverage.push(json!({"hostId":host,"state":error.coverage_state()}));None}
+            Ok(page) if page["agents"].as_array().is_some_and(Vec::is_empty) && page["nextCursor"].as_str().is_some_and(|next| cursor.positions.get(&host).and_then(|position|position.as_deref())==Some(next)) => {warnings.push(format!("{host}: inventory cursor did not advance"));coverage.push(json!({"hostId":host,"state":"unavailable"}));None}
             Ok(page)=> {warnings.extend(page["warnings"].as_array().into_iter().flatten().take(32).map(|warning|format!("{host}: {warning}")));coverage.push(json!({"hostId":host,"state":if page["complete"]==false {"stale"} else {"ok"}}));Some((host,page["agents"].as_array().cloned().unwrap_or_default().into_iter().collect::<std::collections::VecDeque<_>>(),page["nextCursor"].as_str().map(str::to_owned)))}
         }).collect::<Vec<_>>();
         warnings.truncate(256);
@@ -225,7 +226,16 @@ impl Gateway {
                             thread_id: session.thread_id.clone(),
                         }
                     } else {
-                        self.agent_conversation(&session.thread_id)?
+                        match self.agent_conversation(&session.thread_id) {
+                            Ok(conversation) => conversation,
+                            Err(error) => {
+                                complete = false;
+                                if warnings.len() < 32 {
+                                    warnings.push(format!("{}: {error}", session.session_key));
+                                }
+                                continue;
+                            }
+                        }
                     };
                 identities.insert(session.thread_id.clone(), conversation);
             }
@@ -720,9 +730,10 @@ mod tests {
         let sessions = directory.path().join("codex/sessions/2026/11/01");
         std::fs::create_dir_all(&sessions).unwrap();
         std::fs::write(sessions.join("old.jsonl"), "{\"type\":\"event_msg\"}\n").unwrap();
-        let metadata =
-            json!({"type":"session_meta","payload":{"id":"native-valid-needle","source":"cli"}});
+        let metadata = json!({"type":"session_meta","payload":{"id":crate::ids::new_session_uuid(),"source":"cli"}});
         std::fs::write(sessions.join("valid.jsonl"), format!("{metadata}\n")).unwrap();
+        let invalid = json!({"type":"session_meta","payload":{"id":"unrecognized-provider-identity","source":"cli"}});
+        std::fs::write(sessions.join("invalid.jsonl"), format!("{invalid}\n")).unwrap();
         let gateway = crate::test_support::TestGateway::with_native_runtime(directory.path());
         let page = gateway
             .cluster_rpc(
@@ -735,7 +746,7 @@ mod tests {
         assert!(page["nextCursor"].is_null(), "{page}");
         assert_eq!(page["agents"].as_array().unwrap().len(), 1, "{page}");
         assert_eq!(page["coverage"][0]["state"], "stale");
-        assert_eq!(page["warnings"].as_array().unwrap().len(), 1);
+        assert_eq!(page["warnings"].as_array().unwrap().len(), 2);
         let error = gateway.resolve_local_agent("needle").await.unwrap_err();
         assert!(error.to_string().contains("rejected sources"), "{error:#}");
         gateway.stop_sessions().await;

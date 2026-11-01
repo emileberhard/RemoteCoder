@@ -166,7 +166,7 @@ pub(crate) fn inventory(
     } else {
         None
     };
-    let warnings = db.prepare("SELECT substr(path,1,256),substr(failure,1,256) FROM source INDEXED BY source_failures WHERE failure IS NOT NULL LIMIT 32")?
+    let warnings = db.prepare("SELECT substr(path,1,256),substr(failure,1,256) FROM source INDEXED BY source_failures WHERE failure IS NOT NULL AND NOT EXISTS(SELECT 1 FROM session WHERE session.source_id=source.source_id) LIMIT 32")?
         .query_map([], |row| Ok(format!("{}: {}", row.get::<_,String>(0)?, row.get::<_,String>(1)?)))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(SessionPage {
@@ -203,7 +203,7 @@ pub(crate) fn match_thread_suffix(
         !suffix.is_empty() && suffix.len() <= 512,
         "Thread suffix must be 1..=512 UTF-8 bytes"
     );
-    let incomplete: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM source INDEXED BY source_failures WHERE failure IS NOT NULL AND origin_host=?1)", [host], |row| row.get(0))?;
+    let incomplete: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM source INDEXED BY source_failures WHERE failure IS NOT NULL AND origin_host=?1 AND NOT EXISTS(SELECT 1 FROM session WHERE session.source_id=source.source_id))", [host], |row| row.get(0))?;
     ensure!(
         !incomplete,
         "unavailable: native inventory has rejected sources; use an exact managed identity"

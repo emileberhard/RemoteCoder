@@ -2083,7 +2083,7 @@ async fn sessions_cluster_retries_failed_members_instead_of_exhausting_them() {
     )
     .await
     .unwrap();
-    assert_eq!(first["coverage"][1]["state"], "unreachable");
+    assert_eq!(first["coverage"][1]["state"], "unavailable");
     let second = cluster::search(
         "local",
         json!({"hits":[],"cursor":null}),
@@ -2578,5 +2578,21 @@ async fn sessions_mirror_appends_verified_growth_and_replaces_a_changed_prefix()
     scan(&f);
     sync_mirror(&target, peer).await?;
     assert_eq!(std::fs::read(&path)?, std::fs::read(&f.codex)?);
+    Ok(())
+}
+
+#[test]
+fn sessions_inventory_header_coverage_does_not_require_parsed_bodies() -> Result<()> {
+    let f = fixture();
+    scan(&f);
+    f.store.writer()?.execute("UPDATE source SET failure='partial_record' WHERE source_id IN (SELECT source_id FROM session)",[])?;
+    let db = f.store.reader()?;
+    let page = query::inventory(&db, None, 1000)?;
+    assert!(page.complete);
+    assert!(page.warnings.is_empty());
+    assert_eq!(
+        query::match_thread_suffix(&db, "fixture", "codex-root")?.len(),
+        1
+    );
     Ok(())
 }
