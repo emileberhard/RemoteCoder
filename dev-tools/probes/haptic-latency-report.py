@@ -7,6 +7,7 @@ import math
 import re
 import statistics
 import sys
+import xml.etree.ElementTree as ET
 from collections import Counter
 from pathlib import Path
 
@@ -55,6 +56,9 @@ with pt.exclusive_host():
     with pt.guarded_export(['--input', str(args.trace), '--toc'], 'haptic toc') as export:
         toc = export.stdout.read()
         args.output.with_suffix('.toc.xml').write_bytes(toc)
+        devices = {device.get('uuid') for device in ET.fromstring(toc).findall('./run/info/target/device[@platform="iOS"]')}
+        if devices != {args.device}:
+            raise ValueError(f'trace iOS device UUIDs {devices} do not match {args.device}')
     points = []
     raw_points = []
     seen = set()
