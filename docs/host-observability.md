@@ -555,6 +555,8 @@ Read these alongside `ChatScreen`, `HostFiles`, `VoiceMode` and `AppLifecycle`
 around the reported time, rather than filtering for violations alone:
 
 ```sh
+zgrep -h 'ChatLayout' ~/Library/Logs/remote-coder/app-logs/<device>/*.jsonl.gz
+
 gunzip -c ~/Library/Logs/remote-coder/app-logs/<device>/*.jsonl.gz |
   jq -r 'select(.category == "ChatLayout" or .category == "ChatScreen" or .category == "HostFiles") | [.ts, .category, .message] | @tsv' |
   sort -u
