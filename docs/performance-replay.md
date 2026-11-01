@@ -393,3 +393,43 @@ sampling process footprint; paired empty controls provide an observed
 incremental process footprint, not an exclusive journey allocation or upper bound.
 It does not run app sessions or include Network buffers. Keep this diagnostic
 control separate from the canonical measured journey.
+
+## Drawer and conversation-switch callback driver
+
+The iOS `RC_PERF_HARNESS` build extends the existing command-file and Darwin
+notification transport with two commands. Shipped builds exclude the driver.
+Every command carries `id`; its terminal result is appended to `results.jsonl`.
+
+| Command | Required fields | Completion |
+| --- | --- | --- |
+| `sidebar` | `open`: Boolean | Published sidebar state and drawer spring have settled. |
+| `drawer-drag` | `travel`: −1…1 drawer widths, `seconds`: 0.05…5, `velocity`: −20…20 widths/second | Production begin/track/end callbacks have run and the spring has settled. |
+| `select-row` | `host`: exact UUID, `thread`: exact thread ID | The production row action has selected a different transcript, its first-content callback has fired, and the drawer has closed and settled. |
+
+`drawer-drag` requires an attached compact drawer at rest. Its normalized travel
+bypasses UIKit recognition, arbitration and coordinate conversion; positive opens
+and negative closes in either layout direction. It samples at absolute deadlines
+120 times per second without setting the display rate. The receipt records sample
+count, maximum scheduling lateness and initial/final progress. Input cadence is
+synthetic and is not evidence of touch delivery or actuator latency.
+
+Sidebar, drag and row-selection commands share one task. A replacement cancels
+and awaits the previous command's cleanup; drawer removal cancels the task.
+The harness holds the current attached drawer weakly. A sibling probe can extend
+`PerfHarness.receiveCommand` and run on this same task through `runJourney`.
+Each haptic probe must schedule its trigger on a separate main run-loop turn;
+the transport does not synthesize native button presses.
+
+`DrawerMotion` spans tracking and settling, and `DrawerSpring` isolates settling.
+`ConversationSwitch` starts at the production row action and ends at the target's
+first-content callback. Existing `HistorySelectionToFirstContent` begins when the
+target resume starts. These intervals share the trace clock and reveal overlap
+between transcript presentation work and the close spring. First content is a
+view-lifecycle proxy, not a composited-pixel timestamp; it can precede uncovering.
+
+Compare a long Markdown/code conversation both cold and after an observed
+`RecentConversationCache` hit, plus a short conversation. The 60 Hz test iPhone
+cannot establish 120 Hz delivery: attribute main-thread and commit work against
+an 8.33 ms budget, then verify ProMotion on the test iPad only when its observed
+compact layout actually presents this drawer. Keep energy state equal between
+runs. Confirm a chosen improvement with hand input and a device preview.

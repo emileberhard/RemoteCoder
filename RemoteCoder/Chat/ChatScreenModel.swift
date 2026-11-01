@@ -1199,6 +1199,11 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
     func markTranscriptFirstAppear() {
         guard !messages.isEmpty else { return }
         historyOpenSignpost.contentVisible()
+        #if RC_PERF_HARNESS
+        #if os(iOS)
+        if let openThreadID { PerfHarness.shared.transcriptAppeared(host: hostID, thread: openThreadID) }
+        #endif
+        #endif
     }
 
     func toggleTimeline(jobID: String) {

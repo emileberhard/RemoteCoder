@@ -352,7 +352,7 @@ private struct ChatScreen: View {
         #endif
         #if RC_PERF_HARNESS
         .background {
-            PerformanceReplaySidebarPublisher(window: window, isOpen: isHistoryOpen, toggle: toggleHistory)
+            PerformanceReplaySidebarPublisher(window: window, isOpen: isHistoryOpen, toggle: toggleHistory, select: selectConversation)
         }
         #endif
         .onChange(of: usesPersistentSidebar, initial: true) { _, persistent in isHistoryOpen = persistent }
@@ -796,7 +796,17 @@ private struct ChatScreen: View {
 
     @discardableResult
     private func selectConversation(_ address: ConversationAddress) -> ChatWorkspaceModel.ConversationSwitchOutcome {
+        #if RC_PERF_HARNESS
+        #if os(iOS)
+        PerfHarness.shared.willSelectRow(address)
+        #endif
+        #endif
         let outcome = workspace.switchConversation(to: address)
+        #if RC_PERF_HARNESS
+        #if os(iOS)
+        if outcome != .changed { PerfHarness.shared.cancelRowSelection() }
+        #endif
+        #endif
         logger.notice(
             "history select view=\(viewID) address=\(address.id) outcome=\(String(describing: outcome)) presented=\(screen.executionTarget.id)|\(screen.activeSessionID ?? "none") \(workspace.windowDiagnostics(window))"
         )
