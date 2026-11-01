@@ -46,9 +46,19 @@ impl LanListener {
         .await
         .context("LAN TLS identity task failed")??;
         let listener = match &settings.binding {
-            crate::config::LanBinding::DualStack => bind_dual_stack(settings.port)?,
+            crate::config::LanBinding::DualStack => {
+                bind_dual_stack(settings.port).with_context(|| {
+                    format!(
+                        "could not bind dual-stack TLS listener on port {}",
+                        settings.port
+                    )
+                })?
+            }
             crate::config::LanBinding::Address { address, .. } => {
-                TcpListener::bind(SocketAddr::new(*address, settings.port)).await?
+                let socket = SocketAddr::new(*address, settings.port);
+                TcpListener::bind(socket)
+                    .await
+                    .with_context(|| format!("could not bind TLS listener at {socket}"))?
             }
         };
         Ok(Self {

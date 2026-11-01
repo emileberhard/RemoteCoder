@@ -350,6 +350,9 @@ impl Gateway {
                 .and_then(std::path::Path::parent)
                 .context("Codex socket has no home directory")?
                 .to_path_buf();
+            #[cfg(target_os = "linux")]
+            let managed_pid = self.codex.verified_instance().await.ok();
+            #[cfg(not(target_os = "linux"))]
             let managed_pid = self.codex.info().await.ok().map(|info| info.pid);
             self.external_activity
                 .snapshot(&self.claude_settings, codex_home, managed_pid)

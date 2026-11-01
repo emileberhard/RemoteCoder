@@ -55,7 +55,7 @@ fn stat(pid: i32) -> Result<Option<Stat>> {
         .map(Option::flatten)
 }
 
-fn start_micros(stat: Stat) -> Result<u64> {
+pub(crate) fn display_start_micros(start_ticks: u64) -> Result<u64> {
     let text = read(Path::new("/proc/stat"))?.context("kernel boot time is unavailable")?;
     let seconds = text
         .lines()
@@ -75,7 +75,7 @@ fn start_micros(stat: Stat) -> Result<u64> {
     seconds
         .checked_mul(1_000_000)
         .and_then(|boot| {
-            stat.start_ticks
+            start_ticks
                 .checked_mul(1_000_000)
                 .map(|start| (boot, start))
         })
@@ -116,7 +116,7 @@ pub(super) fn identify(pid: i32) -> Result<Option<ProcessIdentity>> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error).context("reading process executable"),
     };
-    let started_micros = start_micros(before)?;
+    let started_micros = display_start_micros(before.start_ticks)?;
     let linux_birth = birth(before)?;
     Ok((stat(pid)? == Some(before)).then_some(ProcessIdentity {
         started_micros,
@@ -126,6 +126,10 @@ pub(super) fn identify(pid: i32) -> Result<Option<ProcessIdentity>> {
 }
 
 fn birth(stat: Stat) -> Result<LinuxBirth> {
+    birth_from_ticks(stat.start_ticks)
+}
+
+pub(crate) fn birth_from_ticks(start_ticks: u64) -> Result<LinuxBirth> {
     static BOOT_ID: OnceLock<[u8; 36]> = OnceLock::new();
     let boot_id = if let Some(boot_id) = BOOT_ID.get() {
         *boot_id
@@ -138,7 +142,7 @@ fn birth(stat: Stat) -> Result<LinuxBirth> {
     };
     Ok(LinuxBirth {
         boot_id,
-        start_ticks: stat.start_ticks,
+        start_ticks,
     })
 }
 

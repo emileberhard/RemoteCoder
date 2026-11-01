@@ -88,6 +88,7 @@ impl PartialEq for ProcessIdentity {
 impl Eq for ProcessIdentity {}
 
 impl ProcessIdentity {
+    #[cfg(any(not(target_os = "linux"), test))]
     pub fn instance(&self, pid: i32) -> ProcessInstance {
         ProcessInstance {
             pid,

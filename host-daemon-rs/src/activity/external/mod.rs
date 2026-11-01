@@ -1,6 +1,10 @@
 mod claude;
 mod codex;
 mod stop;
+#[cfg(target_os = "linux")]
+pub(crate) type ManagedCodex = crate::platform::process::ProcessInstance;
+#[cfg(not(target_os = "linux"))]
+pub(crate) type ManagedCodex = i32;
 #[cfg(test)]
 mod tests;
 mod transcript {
@@ -39,6 +43,7 @@ mod transcript {
     struct CachedTranscript {
         revision: FileRevision,
         boundary: Option<Boundary>,
+        sampled: std::time::Instant,
     }
 
     impl TranscriptCache {
@@ -50,7 +55,7 @@ mod transcript {
             self.seen.insert(path.to_path_buf());
             let revision = FileRevision::from(std::fs::metadata(path)?);
             if let Some(cached) = self.entries.get(path)
-                && cached.revision == revision
+                && cached.revision.can_reuse(&revision, cached.sampled)
             {
                 return Ok(cached.boundary);
             }
@@ -60,8 +65,14 @@ mod transcript {
                 FileRevision::from(std::fs::metadata(path)?) == revision,
                 "session changed during activity read"
             );
-            self.entries
-                .insert(path.to_path_buf(), CachedTranscript { revision, boundary });
+            self.entries.insert(
+                path.to_path_buf(),
+                CachedTranscript {
+                    revision,
+                    boundary,
+                    sampled: std::time::Instant::now(),
+                },
+            );
             Ok(boundary)
         }
 
@@ -73,6 +84,36 @@ mod transcript {
         pub(crate) fn finish(&mut self) {
             self.entries.retain(|path, _| self.seen.contains(path));
         }
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn coarse_metadata_cannot_retain_an_activity_boundary_forever() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let mut cache = TranscriptCache::default();
+        let project = |line: &[u8]| {
+            Ok(Some(Boundary {
+                state: if line == b"idle\n" {
+                    ActivityState::Idle
+                } else {
+                    ActivityState::Working
+                },
+                timestamp: Some(1),
+            }))
+        };
+        std::fs::write(file.path(), b"idle\n").unwrap();
+        assert_eq!(
+            cache.boundary(file.path(), project).unwrap().unwrap().state,
+            ActivityState::Idle
+        );
+        std::fs::write(file.path(), b"work\n").unwrap();
+        let cached = cache.entries.get_mut(file.path()).unwrap();
+        cached.revision = FileRevision::from(std::fs::metadata(file.path()).unwrap());
+        cached.sampled = std::time::Instant::now() - std::time::Duration::from_secs(2);
+        assert_eq!(
+            cache.boundary(file.path(), project).unwrap().unwrap().state,
+            ActivityState::Working
+        );
     }
 
     // A bounded complete-record tail: large attachments and torn final writes must
@@ -218,7 +259,7 @@ impl ExternalActivity {
         &self,
         settings: &ClaudeSettings,
         codex_home: PathBuf,
-        managed_pid: Option<i32>,
+        managed_pid: Option<ManagedCodex>,
     ) -> Snapshot {
         self.read(settings, codex_home, managed_pid).await
     }
@@ -231,7 +272,7 @@ impl ExternalActivity {
         &self,
         settings: &ClaudeSettings,
         codex_home: PathBuf,
-        managed_pid: Option<i32>,
+        managed_pid: Option<ManagedCodex>,
     ) -> Snapshot {
         let mut cache = self.cache.lock().await;
         if let Some((at, snapshot)) = cache.as_ref()

@@ -191,6 +191,37 @@ impl CodexAppServer {
         package::prepare(codex_home, approved)
     }
 
+    #[cfg(target_os = "linux")]
+    pub(crate) async fn verified_instance(
+        &self,
+    ) -> Result<crate::platform::process::ProcessInstance> {
+        #[cfg(test)]
+        if let Some(pid) = self.expected_pid_override {
+            return crate::platform::process::identify_instance(pid)?
+                .context("test Codex process exited");
+        }
+        let (_, record) = self
+            .live_pid_record()
+            .await?
+            .context("managed Codex identity unavailable")?;
+        let ProcessIdentity::Linux {
+            boot_id,
+            start_ticks,
+        } = record.process_identity
+        else {
+            anyhow::bail!("managed Codex record has no Linux birth proof");
+        };
+        Ok(crate::platform::process::ProcessInstance {
+            pid: i32::try_from(record.pid)?,
+            started_micros: None,
+            linux_birth: crate::platform::process::LinuxBirth {
+                boot_id: crate::platform::process::boot_id::parse(&boot_id)
+                    .context("invalid Codex boot UUID")?,
+                start_ticks,
+            },
+        })
+    }
+
     pub(crate) async fn info(&self) -> Result<CodexAppServerInfo> {
         let expected_pid = self.verified_lifecycle_pid().await?;
         if let Some(info) = self.info.read().await.clone()

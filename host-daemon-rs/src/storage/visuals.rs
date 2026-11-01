@@ -338,6 +338,7 @@ fn publish_bytes(paths: &HostPaths, bytes: &[u8]) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "macos")]
     use super::super::visual_images::test_images;
     use super::*;
 
@@ -515,6 +516,7 @@ mod tests {
         assert!(directory.join(format!("{hash}.html")).exists());
     }
 
+    #[cfg(target_os = "macos")]
     fn visual(path: &Path) -> PublishVisual {
         PublishVisual {
             source: Source::Path(path.to_owned()),
@@ -522,6 +524,7 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "macos")]
     fn stored(paths: &HostPaths) -> Vec<PathBuf> {
         std::fs::read_dir(paths.state("visuals"))
             .map(|entries| {
@@ -537,6 +540,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(target_os = "macos")]
     async fn local_images_are_embedded_once_and_the_visual_outlives_them() {
         let _serial = test_images::SERIAL.lock().await;
         let home = tempfile::tempdir().unwrap();
@@ -589,6 +593,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(target_os = "macos")]
     async fn inline_html_embeds_absolute_local_images_and_names_relative_ones() {
         let _serial = test_images::SERIAL.lock().await;
         let home = tempfile::tempdir().unwrap();
@@ -619,6 +624,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(target_os = "macos")]
     async fn failures_name_every_image_category_and_store_nothing() {
         let _serial = test_images::SERIAL.lock().await;
         let home = tempfile::tempdir().unwrap();

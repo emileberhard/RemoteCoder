@@ -32,6 +32,7 @@ struct CacheKey {
 
 struct CacheEntry {
     key: CacheKey,
+    sampled: std::time::Instant,
     projection: Arc<Projection>,
     bytes: usize,
     used: u64,
@@ -120,10 +121,9 @@ impl ProjectionCache {
         let mut state = self.state();
         state.clock += 1;
         let clock = state.clock;
-        let entry = state
-            .entries
-            .get_mut(path)
-            .filter(|entry| entry.key == *key)?;
+        let entry = state.entries.get_mut(path).filter(|entry| {
+            entry.key == *key && entry.key.session.can_reuse(&key.session, entry.sampled)
+        })?;
         entry.used = clock;
         Some(Arc::clone(&entry.projection))
     }
@@ -157,6 +157,7 @@ impl ProjectionCache {
             path.to_path_buf(),
             CacheEntry {
                 key,
+                sampled: std::time::Instant::now(),
                 projection,
                 bytes,
                 used,
