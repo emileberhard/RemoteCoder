@@ -139,17 +139,11 @@ async fn run(
         && matches!(
             &args.command,
             Some(config::Command::Runtime { command })
-                if matches!(command,
-                    config::RuntimeCommand::Install { .. }
-                    | config::RuntimeCommand::InstallGateway { .. }
-                    | config::RuntimeCommand::InstallCallWorker { .. }
-                    | config::RuntimeCommand::ConfigureCallDelivery
-                    | config::RuntimeCommand::PrepareGatewayStage { .. }
-                    | config::RuntimeCommand::ClearGatewayStage { .. }
-                    | config::RuntimeCommand::Uninstall
-                    | config::RuntimeCommand::Rollback
-                    | config::RuntimeCommand::Commit
-                    | config::RuntimeCommand::Reconcile)
+                if !matches!(command,
+                    config::RuntimeCommand::Restart
+                    | config::RuntimeCommand::PrepareHandoff
+                    | config::RuntimeCommand::PrepareShutdown
+                    | config::RuntimeCommand::RetryFailed { .. })
         )
     {
         anyhow::bail!(
