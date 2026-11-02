@@ -418,10 +418,28 @@ def _cache_maintenance(root: Path, policy: CachePolicy, *, preview: bool) -> dic
             if inventory.error:
                 manifest["rootAllocationError"] = inventory.error
             manifest["evidenceRetention"] = _prune_caches(root, policy, "", "", maintenance=maintenance, preview=preview)
+            manifest["snapshotRetention"] = _retire_snapshots(root, preview=preview or not policy.eviction_enabled)
+            manifest["retentionClasses"] = [
+                {"class": name, "allocatedBytes": inventory.directories.get(root / name), "retention": retention}
+                for name, retention in (
+                    ("worktrees", "compiler 2h; two clean package seeds per resolution; source/evidence 48h minimum"),
+                    ("runs", "3 days; 48h minimum; active/unknown completion retained"),
+                    ("releases", "newest three plus published and every version used within 48h"),
+                    ("rollback", "7 days; installed/referenced/open/unknown snapshots retained"),
+                    ("deploy", "7 days; active installer/referenced/open/unknown snapshots retained"),
+                    ("codex-runtime", "eight keyed packages; live collectors and runtime seed pinned"),
+                    ("release", "compiler 2h; receipts/symbols protected by owning retention"),
+                )
+            ]
             if preview:
                 return manifest
             try:
-                remaining = cache_allocated_bytes(root)
+                after = cache_inventory(root)
+                remaining = after.allocated_bytes
+                if remaining is None:
+                    raise ValueError(after.error or "Cache allocation unavailable")
+                for item in manifest["retentionClasses"]:
+                    item["remainingBytes"] = after.directories.get(root / item["class"])
                 reason = (
                     "Total cap unmet after bounded reclamation; inspect RemoteCoder-Build/maintenance.json for protected data or failures"
                     if remaining > policy.compilation_budget_bytes
@@ -938,7 +956,7 @@ def _evict_payload(entry: CompilationDirectory, path: Path, device: int):
     products = entry.path / "Build/Products"
     owned = _compiler_payloads(entry)
     if entry.kind == "xcode":
-        owned.append(products)
+        owned.extend((products, entry.path / "SourcePackages"))
     if path not in owned or not path.is_relative_to(entry.path):
         raise ValueError(f"Unowned compilation payload: {path}")
     with _directory_descriptor(entry.path) as directory:
@@ -1004,16 +1022,199 @@ def _products_rebuildable(entry: CompilationDirectory, completion: dict, deadlin
         return False
     repository = entry.source or Path(__file__).resolve().parents[1]
     try:
-        return subprocess.run(
-            ["git", "cat-file", "-e", commit + "^{commit}"],
-            cwd=repository,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=min(2, max(0.001, deadline - time.monotonic())),
-            check=False,
-        ).returncode == 0
+        return (
+            subprocess.run(
+                ["git", "cat-file", "-e", commit + "^{commit}"],
+                cwd=repository,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=min(2, max(0.001, deadline - time.monotonic())),
+                check=False,
+            ).returncode
+            == 0
+        )
     except (OSError, subprocess.SubprocessError):
         return False
+
+
+def _package_resolution(entry: CompilationDirectory, deadline: float) -> bytes | None:
+    if entry.kind != "xcode":
+        return None
+    packages = entry.path / "SourcePackages"
+    resolution = (
+        entry.path.parent
+        / "repo/RemoteCoder.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved"
+    )
+    try:
+        if (
+            not _real_directory(packages)
+            or resolution.is_symlink()
+            or not {path.name for path in packages.iterdir()}
+            <= {"artifacts", "checkouts", "repositories", "workspace-state.json"}
+        ):
+            return None
+        data = resolution.read_bytes()
+        pins = json.loads(data)["pins"]
+        expected = {
+            pin["identity"].casefold(): pin["state"]["revision"] for pin in pins
+        }
+        checkouts = packages / "checkouts"
+        if not expected or not _real_directory(checkouts):
+            return None
+        paths = list(checkouts.iterdir())
+        if {path.name.casefold() for path in paths} != set(expected):
+            return None
+        for path in paths:
+            if not _real_directory(path) or time.monotonic() >= deadline:
+                return None
+            command = [
+                "git",
+                "--no-optional-locks",
+                "-C",
+                str(path),
+                "-c",
+                "core.fsmonitor=false",
+            ]
+            for arguments, output in (
+                (["rev-parse", "HEAD"], expected[path.name.casefold()].encode()),
+                (
+                    ["status", "--porcelain=v1", "--untracked-files=all", "--ignored"],
+                    b"",
+                ),
+            ):
+                result = subprocess.run(
+                    command + arguments,
+                    capture_output=True,
+                    timeout=min(2, max(0.001, deadline - time.monotonic())),
+                    check=True,
+                )
+                if result.stdout.strip() != output:
+                    return None
+        return data
+    except (
+        OSError,
+        ValueError,
+        KeyError,
+        TypeError,
+        AttributeError,
+        subprocess.SubprocessError,
+    ):
+        return None
+
+
+def _snapshot_expired(
+    directory: int, cutoff: float, device: int, deadline: float
+) -> bool:
+    if os.fstat(directory).st_dev != device or os.fstat(directory).st_mtime > cutoff:
+        return False
+    for name in os.listdir(directory):
+        if time.monotonic() >= deadline:
+            raise TimeoutError("Snapshot age inventory timed out")
+        info = os.stat(name, dir_fd=directory, follow_symlinks=False)
+        if info.st_dev != device or info.st_mtime > cutoff:
+            return False
+        if stat.S_ISDIR(info.st_mode):
+            child = _opened_child(directory, name, info)
+            try:
+                if not _snapshot_expired(child, cutoff, device, deadline):
+                    return False
+            finally:
+                os.close(child)
+    return True
+
+
+def _retire_snapshots(root: Path, *, preview: bool) -> dict:
+    result = {"retentionDays": 7, "candidates": [], "removed": [], "protected": []}
+    home = root.parents[2]
+    try:
+        pointers = [
+            home / "localbin/remote-coder-gateway" / name
+            for name in ("current", "previous", "remote-coder-codex-gateway")
+        ]
+        pointers += [
+            home / ".codex/packages/standalone/current",
+            Path("/Applications/ChatGPT.app"),
+            Path(__file__),
+        ]
+        pins = [path.resolve() for path in pointers]
+        job = subprocess.run(
+            [
+                "launchctl",
+                "print",
+                f"gui/{os.getuid()}/com.remote-coder.shared-codex-install",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+        idle = (
+            job.returncode == 0
+            and any(
+                line.strip() == "state = not running"
+                for line in job.stdout.splitlines()
+            )
+        ) or (job.returncode != 0 and "Could not find service" in job.stderr)
+        opened = _open_file_snapshot()
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
+        return {**result, "deferred": str(error)}
+    cutoff = time.time() - 7 * 86400
+    deadline = time.monotonic() + 20
+    for category in ("rollback", "deploy"):
+        directory = root / category
+        if not _real_directory(directory):
+            continue
+        for path in directory.iterdir():
+            try:
+                if not _real_directory(path):
+                    raise ValueError("unknown snapshot path")
+                children = {item.name for item in path.iterdir()}
+                known = (
+                    children == {"source", "package", "gateway"}
+                    if category == "deploy"
+                    else bool(children)
+                    and children
+                    <= {
+                        "codex-package",
+                        "ChatGPT.app",
+                        "ChatGPT-host.app",
+                        "RemoteCoderGateway.app",
+                        "remote-coder-codex-gateway",
+                        "compatibility.json",
+                        "receipt.json",
+                    }
+                )
+                if not known or (category == "deploy" and not idle):
+                    raise ValueError("unknown layout or active/unknown installer")
+                if (
+                    any(pin == path or pin.is_relative_to(path) for pin in pins)
+                    or (category == "deploy" and str(path) in job.stdout)
+                    or _open_files(path, opened)
+                ):
+                    raise ValueError("referenced or open snapshot")
+                with try_lease(lease_path(root, category, path.name)) as lease:
+                    if lease is None:
+                        raise ValueError("leased snapshot")
+                    with _directory_descriptor(path) as descriptor:
+                        device = os.fstat(descriptor).st_dev
+                        if device != root.stat().st_dev or not _snapshot_expired(
+                            descriptor, cutoff, device, deadline
+                        ):
+                            raise ValueError("recent, changed or unknown snapshot")
+                        expected = os.fstat(descriptor)
+                    current = path.stat(follow_symlinks=False)
+                    if (current.st_dev, current.st_ino) != (
+                        expected.st_dev,
+                        expected.st_ino,
+                    ):
+                        raise ValueError("replaced snapshot")
+                    result["candidates"].append(str(path))
+                    if not preview:
+                        _remove_cache_directory(path, device, lambda _: False)
+                        result["removed"].append(str(path))
+            except (OSError, ValueError, TimeoutError) as error:
+                result["protected"].append({"path": str(path), "reason": str(error)})
+    return result
 
 
 def _compilation_admission(
@@ -1220,6 +1421,30 @@ def _compilation_admission(
             result["allocatedBytes"] > policy.compilation_budget_bytes
             or result["freeBytesBefore"] < policy.eviction_target_free_bytes
         )
+        package_resolutions = {}
+        if pressure:
+            package_deadline = time.monotonic() + 20
+            for entry, _, completion in sorted(
+                ordered,
+                key=lambda item: item[2]["lastUsed"] if item[2] else 0,
+                reverse=True,
+            ):
+                if (
+                    (entry.path / "SourcePackages").exists()
+                    and completion is not None
+                    and entry.leases
+                    and all(
+                        owned_leases.get(lease) is not None for lease in entry.leases
+                    )
+                    and not _open_files(entry.path, opened)
+                ):
+                    resolution = _package_resolution(entry, package_deadline)
+                    if resolution is not None:
+                        package_resolutions[entry.path] = resolution
+        package_seeds = {}
+        for path, resolution in package_resolutions.items():
+            package_seeds.setdefault(resolution, []).append(path)
+        retained_packages = {path for paths in package_seeds.values() for path in paths[:policy.retained_completed_directories]}
         representatives = {entry.worktree: entry for entry, _, _ in ordered}
         for worktree, entry in representatives.items():
             if time.monotonic() < deadline and _removed_mirror_source(
@@ -1356,6 +1581,8 @@ def _compilation_admission(
             products = entry.path / "Build/Products"
             if pressure and _products_rebuildable(entry, completion, deadline):
                 payloads.append(products)
+            if entry.path in package_resolutions and entry.path not in retained_packages and _package_resolution(entry, deadline) == package_resolutions[entry.path]:
+                payloads.append(entry.path / "SourcePackages")
             for payload in payloads:
                 if not payload.exists() and not payload.is_symlink():
                     continue

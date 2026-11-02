@@ -577,7 +577,7 @@ record proves an unmodified commit still available in the owning repository.
 The same leases and open-file checks apply. Missing or modified source proof
 keeps Products protected; receipts, logs and source identity retain their
 48-hour evidence policy. Installed, current and previous release artifacts,
-runtime package seeds and downloads remain outside compiler eviction. Total accounting includes shared
+runtime package seeds remain outside compiler eviction. Under pressure, idle SourcePackages downloads may retire after the same two-hour window, retaining the two newest clean seeds per exact resolution. Every pinned checkout must match its revision with no tracked, untracked or ignored changes; missing metadata or unavailable checks preserve the tree. The compiler owner leases and open-file checks apply through removal. Total accounting includes shared
 Codex targets, experiments, sources, runs, releases, packages, evidence and pinned
 entries. The two shared Codex compiler targets use their existing build locks
 and open-file checks; idle Cargo payloads can be reclaimed under pressure.
@@ -634,7 +634,7 @@ turn. A skipped reclamation check reports `reclamation-deadline`; incomplete inv
 values. Expired-mirror retention also starts a fresh reclamation budget after
 candidate discovery and its shared open-file snapshot. Owned lease descriptors
 are excluded from retirement activity checks. Operators can schedule
-`cache-maintain` independently of builds.
+`cache-maintain` independently of builds. That owner also retires operational rollback and detached deploy snapshots after seven days without any descendant modification. Installed/current/previous references, active or unknown installers, leases, open files, symlinks and unknown layouts preserve a snapshot. Receipts remain protected for this full seven-day snapshot lifetime. The maintenance receipt reports allocation and retention separately for each known top-level class; unknown classes remain counted and protected.
 The optional `hostCompilationBudgetGiB` map in the operator cache policy overrides
 the shared compilation budget for an exact hostname, excluding its DNS suffix.
 Unlisted hosts retain the shared budget; all budgets include protected data.

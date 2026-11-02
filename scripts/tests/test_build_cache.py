@@ -19,6 +19,135 @@ from git_fixtures import init_repository, point_origin_main_at_head
 
 
 class CacheAdmissionTests(unittest.TestCase):
+    def test_package_retention_keeps_two_clean_seeds_and_preserves_dirty_unknown_and_leased_trees(
+        self,
+    ):
+        import json
+        import shutil
+        import subprocess
+        from build_cache import compilation_admission
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            origin = root / "dependency"
+            init_repository(origin)
+            (origin / "source").write_text("dependency")
+            subprocess.run(
+                ["git", "add", "."], cwd=origin, check=True, capture_output=True
+            )
+            subprocess.run(
+                ["git", "commit", "-m", "dependency"],
+                cwd=origin,
+                check=True,
+                capture_output=True,
+            )
+            revision = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=origin, text=True
+            ).strip()
+            old = time.time() - 86400
+            entries = [
+                self.entry(root, "derived", old + i, tree=str(i)) for i in range(6)
+            ]
+            for entry in entries:
+                checkout = entry.path / "SourcePackages/checkouts/dependency"
+                shutil.copytree(origin, checkout)
+                resolution = (
+                    entry.path.parent
+                    / "repo/RemoteCoder.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved"
+                )
+                resolution.parent.mkdir(parents=True)
+                resolution.write_text(
+                    json.dumps(
+                        {
+                            "pins": [
+                                {
+                                    "identity": "dependency",
+                                    "state": {"revision": revision},
+                                }
+                            ]
+                        }
+                    )
+                )
+            (entries[3].path / "SourcePackages/checkouts/dependency/source").write_text(
+                "personal edit"
+            )
+            (
+                entries[4].path.parent
+                / "repo/RemoteCoder.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved"
+            ).unlink()
+            held = entries[5].leases[0]
+            held.parent.mkdir(parents=True, exist_ok=True)
+            with (
+                held.open("a") as lease,
+                patch("build_cache._open_file_snapshot", return_value=([], None)),
+            ):
+                fcntl.flock(lease, fcntl.LOCK_EX)
+                result = compilation_admission(
+                    root, self.policy(), entries, set(), preview=False
+                )
+            self.assertFalse((entries[0].path / "SourcePackages").exists())
+            for entry in entries[1:]:
+                self.assertTrue((entry.path / "SourcePackages").exists())
+            self.assertEqual(
+                (
+                    entries[3].path / "SourcePackages/checkouts/dependency/source"
+                ).read_text(),
+                "personal edit",
+            )
+            self.assertTrue(
+                any(
+                    item["path"].endswith("SourcePackages")
+                    for item in result["evicted"]
+                )
+            )
+
+    def test_snapshot_retirement_preserves_references_activity_recent_children_and_unknown_layouts(
+        self,
+    ):
+        import subprocess
+        from build_cache import _retire_snapshots
+
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary).resolve()
+            root = home / "Library/Caches/RemoteCoder-Build"
+            root.mkdir(parents=True)
+            old = time.time() - 8 * 86400
+            paths = {}
+            for name in ("expired", "pinned", "opened", "recent", "unknown"):
+                path = root / "rollback" / name
+                path.mkdir(parents=True)
+                (path / "remote-coder-codex-gateway").write_text("binary")
+                os.utime(path / "remote-coder-codex-gateway", (old, old))
+                os.utime(path, (old, old))
+                paths[name] = path
+            (paths["recent"] / "remote-coder-codex-gateway").touch()
+            (paths["unknown"] / "personal").write_text("unclassified")
+            pointer = home / "localbin/remote-coder-gateway/current"
+            pointer.parent.mkdir(parents=True)
+            pointer.symlink_to(paths["pinned"], target_is_directory=True)
+            job = subprocess.CompletedProcess([], 0, "state = not running\n", "")
+            with (
+                patch("build_cache.subprocess.run", return_value=job),
+                patch(
+                    "build_cache._open_file_snapshot",
+                    return_value=(
+                        [
+                            str(
+                                paths["opened"] / "remote-coder-codex-gateway"
+                            ).casefold()
+                        ],
+                        None,
+                    ),
+                ),
+            ):
+                preview = _retire_snapshots(root, preview=True)
+                self.assertEqual(preview["candidates"], [str(paths["expired"])])
+                self.assertTrue(paths["expired"].exists())
+                result = _retire_snapshots(root, preview=False)
+            self.assertEqual(result["removed"], [str(paths["expired"])])
+            for name in ("pinned", "opened", "recent", "unknown"):
+                self.assertTrue(paths[name].exists())
+
     def test_public_cache_defaults_are_bounded_and_allow_rebuildable_eviction(self):
         from build_cache import load_policy
 
