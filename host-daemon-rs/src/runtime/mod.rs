@@ -39,6 +39,7 @@ mod launchd;
 pub(crate) mod recovery;
 mod rpc;
 pub(crate) mod shutdown_receipt;
+mod supervisor;
 pub(crate) mod transaction;
 pub(crate) use self::bootstrap::bootstrap;
 pub(crate) use self::bootstrap::finish_orphaned_recovery;
@@ -51,6 +52,9 @@ pub(crate) async fn run(
     args: Args,
     sources: &ConfigSources,
 ) -> Result<()> {
+    if matches!(command, RuntimeCommand::Serve) {
+        return supervisor::run(sources).await;
+    }
     let env_file = args.env_file.clone();
     if matches!(command, RuntimeCommand::Uninstall) {
         return UninstallTransaction::new(env_file.as_deref(), sources)?
@@ -111,6 +115,9 @@ pub(crate) async fn run(
     }
 
     match command {
+        RuntimeCommand::Serve => {
+            unreachable!("runtime supervisor returned before transaction setup")
+        }
         RuntimeCommand::Install {
             package_dir,
             check_only,

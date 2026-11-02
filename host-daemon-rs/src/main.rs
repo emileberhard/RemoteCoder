@@ -140,7 +140,8 @@ async fn run(
             &args.command,
             Some(config::Command::Runtime { command })
                 if !matches!(command,
-                    config::RuntimeCommand::Restart
+                    config::RuntimeCommand::Serve
+                    | config::RuntimeCommand::Restart
                     | config::RuntimeCommand::PrepareHandoff
                     | config::RuntimeCommand::PrepareShutdown
                     | config::RuntimeCommand::RetryFailed { .. })
@@ -379,7 +380,6 @@ async fn run(
     if !recovery_only {
         runtime::retire_codex_accounts(&settings).await?;
     }
-    runtime::bootstrap(&settings, recovery_only).await?;
     let codex = Arc::new(if recovery_only {
         CodexAppServer::for_runtime(
             settings.codex_path.clone(),
@@ -391,6 +391,7 @@ async fn run(
             settings.codex_child_env.clone(),
         )
     });
+    runtime::bootstrap(&codex, recovery_only).await?;
     let journal = Journal::open_in(
         settings.host_paths.logs("journal"),
         DEFAULT_LOG_RETENTION_DAYS,

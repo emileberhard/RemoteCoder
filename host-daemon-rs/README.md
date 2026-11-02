@@ -717,3 +717,11 @@ The configured route precedes retained Join routes. All routes share one
 eight-second call deadline, divided among the remaining route attempts; resolved
 addresses within each route retain staggered connection racing. The existing
 membership credential and certificate pin authenticate every route.
+
+`runtime serve` supervises the approved managed Codex app-server, subscription
+renewal and persisted restart recovery without any gateway API, agent socket,
+cluster driver or Claude provider. It takes the normal Codex and optional router
+settings, with a separate HOME and CODEX_HOME for a delegated identity. It rejects
+gateway bind, port, LAN/TLS, bearer, cluster-route and agent-socket configuration.
+Only the private managed app-server Unix socket remains available. Stop it through
+SIGTERM to capture work through the existing held-turn handoff.

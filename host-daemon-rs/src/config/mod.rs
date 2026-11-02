@@ -79,6 +79,10 @@ pub(crate) enum Command {
 
 #[derive(Clone, Debug, Subcommand)]
 pub(crate) enum RuntimeCommand {
+    #[command(
+        about = "Supervise the managed Codex runtime without a gateway API or Claude provider."
+    )]
+    Serve,
     /// Install a reviewed Codex package through the same recovery transaction.
     Install {
         package_dir: PathBuf,

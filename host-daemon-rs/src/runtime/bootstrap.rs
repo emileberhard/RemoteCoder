@@ -1,5 +1,4 @@
 use super::{LEASE_WAIT_TIMEOUT, write_grant};
-use crate::config::Settings;
 use crate::providers::codex::daemon::CodexAppServer;
 use crate::runtime::recovery::{RecoveryJournal, RecoveryPhase, RecoveryStore, RecoveryTaskStatus};
 use crate::runtime::rpc::RpcClient;
@@ -10,20 +9,9 @@ use std::os::unix::fs::PermissionsExt;
 use std::time::Duration;
 use tracing::warn;
 
-pub(crate) async fn bootstrap(settings: &Settings, recovery_only: bool) -> Result<()> {
-    let app_server = if recovery_only {
-        CodexAppServer::for_runtime(
-            settings.codex_path.clone(),
-            settings.codex_child_env.clone(),
-        )?
-    } else {
-        CodexAppServer::new(
-            settings.codex_path.clone(),
-            settings.codex_child_env.clone(),
-        )
-    };
+pub(crate) async fn bootstrap(app_server: &CodexAppServer, recovery_only: bool) -> Result<()> {
     let store = RecoveryStore::new(RecoveryStore::default_path()?);
-    let _lease = acquire_bootstrap_lease(&app_server, &store, recovery_only).await?;
+    let _lease = acquire_bootstrap_lease(app_server, &store, recovery_only).await?;
     if _lease.is_none() {
         app_server.verify_ready().await?;
         app_server.verify_package_provenance().await?;
@@ -32,11 +20,11 @@ pub(crate) async fn bootstrap(settings: &Settings, recovery_only: bool) -> Resul
     app_server.prepare_selected_package()?;
     match store.load()? {
         Some(journal) if journal.phase != RecoveryPhase::Completed => {
-            RecoveryTransaction::new(&app_server, &store)
+            RecoveryTransaction::new(app_server, &store)
                 .prepare_incomplete_recovery(&journal)
                 .await?;
         }
-        _ => ensure_normal_daemon(&app_server).await?,
+        _ => ensure_normal_daemon(app_server).await?,
     }
     app_server.verify_ready().await?;
     app_server.verify_package_provenance().await?;
