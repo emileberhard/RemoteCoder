@@ -134,7 +134,7 @@ impl ChangeReader {
         let admission = Admission {
             _permit: Arc::new(self.admission.clone().acquire_owned().await?),
         };
-        tokio::time::timeout(READ_TIMEOUT, work(admission))
+        tokio::time::timeout(READ_TIMEOUT, work(admission.clone()))
             .await
             .map_err(|_| {
                 anyhow!(
@@ -594,6 +594,34 @@ impl Drop for ProcessGroup {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures_util::FutureExt;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[tokio::test]
+    async fn a_read_beyond_the_limit_waits_for_a_slot() {
+        let reader = ChangeReader::default();
+        let (finish, finished) = tokio::sync::oneshot::channel::<()>();
+        let started = AtomicBool::new(false);
+        let mut first = std::pin::pin!(reader.admit(|_| async move {
+            finished.await.ok();
+            Ok::<_, anyhow::Error>(())
+        }));
+        let mut second = std::pin::pin!(reader.admit(|_| std::future::pending::<Result<()>>()));
+        let mut third = std::pin::pin!(reader.admit(|_| async {
+            started.store(true, Ordering::SeqCst);
+            Ok::<_, anyhow::Error>(())
+        }));
+
+        assert!(first.as_mut().now_or_never().is_none());
+        assert!(second.as_mut().now_or_never().is_none());
+        assert!(third.as_mut().now_or_never().is_none());
+        assert!(!started.load(Ordering::SeqCst));
+
+        finish.send(()).unwrap();
+        assert!(first.as_mut().now_or_never().is_some());
+        assert!(third.as_mut().now_or_never().is_some());
+        assert!(started.load(Ordering::SeqCst));
+    }
 
     struct Repository {
         _directory: tempfile::TempDir,

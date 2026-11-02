@@ -83,25 +83,33 @@ enum ActivityKind {
 }
 
 trait Collect: Default + Send {
-    fn collect(&mut self, at_ms: Option<i64>, item: &Value) -> usize;
+    fn collect(&mut self, at_ms: Option<i64>, item: &Value, budget: &AtomicUsize) -> bool;
 }
 
 impl Collect for Vec<Activity> {
-    fn collect(&mut self, at_ms: Option<i64>, item: &Value) -> usize {
+    fn collect(&mut self, at_ms: Option<i64>, item: &Value, budget: &AtomicUsize) -> bool {
         let Some(kind) = activity_kind(item) else {
-            return 0;
+            return true;
         };
         let bytes = match &kind {
             ActivityKind::Edits(edits) => edits.iter().map(Edit::recorded_bytes).sum(),
             ActivityKind::Command { .. } => 0,
         };
+        if budget
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |left| {
+                left.checked_sub(bytes)
+            })
+            .is_err()
+        {
+            return false;
+        }
         self.push(Activity { at_ms, kind });
-        bytes
+        true
     }
 }
 
 impl Collect for Observations {
-    fn collect(&mut self, at_ms: Option<i64>, item: &Value) -> usize {
+    fn collect(&mut self, at_ms: Option<i64>, item: &Value, _: &AtomicUsize) -> bool {
         match activity_kind(item) {
             Some(ActivityKind::Edits(edits)) => {
                 for edit in edits {
@@ -124,7 +132,7 @@ impl Collect for Observations {
             }
             Some(ActivityKind::Command { cwd: None }) | None => {}
         }
-        0
+        true
     }
 }
 
@@ -334,13 +342,7 @@ impl Gateway {
                 .await?;
             for entry in page["data"].as_array().context("Missing item list")? {
                 let at_ms = entry["startedAtMs"].as_i64();
-                let recorded = reader.collected.collect(at_ms, &entry["item"]);
-                if budget
-                    .try_update(Ordering::Relaxed, Ordering::Relaxed, |left| {
-                        left.checked_sub(recorded)
-                    })
-                    .is_err()
-                {
+                if !reader.collected.collect(at_ms, &entry["item"], budget) {
                     reader.pages = 0;
                     return Ok(());
                 }
@@ -524,8 +526,9 @@ mod tests {
         let command =
             json!({"type":"commandExecution","status":"completed","cwd":"/repo","command":"ls"});
         let mut observations = Observations::default();
+        let empty = AtomicUsize::new(0);
         for (item, at) in [(edit, 10), (command, 20)] {
-            assert_eq!(observations.collect(Some(at), &item), 0);
+            assert!(observations.collect(Some(at), &item, &empty));
         }
         let mut expected = Observations::default();
         expected.record(PathBuf::from("/repo/src"), Evidence::Edited, Some(10));
@@ -642,6 +645,24 @@ mod tests {
             !window.complete,
             "an edit without a time may belong to the turn"
         );
+    }
+
+    #[test]
+    fn edits_beyond_the_budget_are_not_kept() {
+        let edit = |path: &str| {
+            json!({"type":"fileChange","status":"completed","changes":[
+                {"path":path,"kind":{"type":"add"},"diff":"0123456789"}
+            ]})
+        };
+        let budget = AtomicUsize::new(25);
+        let mut activity = Vec::<Activity>::new();
+
+        assert!(activity.collect(Some(1), &edit("/a"), &budget));
+        assert!(activity.collect(Some(2), &edit("/b"), &budget));
+        assert!(!activity.collect(Some(3), &edit("/c"), &budget));
+
+        assert_eq!(activity.len(), 2);
+        assert_eq!(budget.load(Ordering::Relaxed), 1);
     }
 
     #[test]

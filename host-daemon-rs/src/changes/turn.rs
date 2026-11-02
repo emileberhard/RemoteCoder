@@ -25,7 +25,9 @@ impl Edit {
         self.path.len()
             + match &self.change {
                 Some(Change::Add(content) | Change::Delete(content)) => content.len(),
-                Some(Change::Update { hunks, .. }) => hunks.len(),
+                Some(Change::Update { hunks, moved_to }) => {
+                    hunks.len() + moved_to.as_ref().map_or(0, String::len)
+                }
                 None => 0,
             }
     }
