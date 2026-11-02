@@ -317,7 +317,7 @@ private struct ChangeReviewNotices: View {
                 }
             }
             if review.unlistedFiles > 0 {
-                Text(review.unlistedFiles == 1 ? "1 more file isn’t shown." : "\(review.unlistedFiles) more files aren’t shown.")
+                Text(unlistedNotice)
             } else if !review.isComplete {
                 if case .turn = review.scope {
                     Text("Some history couldn’t be read, so edits may be missing.")
@@ -331,6 +331,15 @@ private struct ChangeReviewNotices: View {
         .foregroundStyle(.secondary)
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(16)
+    }
+
+    private var unlistedNotice: String {
+        switch (review.files.isEmpty, review.unlistedFiles) {
+        case (true, 1): "1 file isn’t shown."
+        case (true, let count): "\(count) files aren’t shown."
+        case (false, 1): "1 more file isn’t shown."
+        case (false, let count): "\(count) more files aren’t shown."
+        }
     }
 
     private var detail: String {
