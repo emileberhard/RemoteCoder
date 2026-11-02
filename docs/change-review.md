@@ -34,8 +34,9 @@ folder of repositories such as `~/stretch`, or a main checkout while agents
 edit worktrees. `changes/checkouts` (`{threadId?, directory}`) finds the
 candidates without running Git:
 
-- It reads the conversation's newest ten history pages and five pages of each
-  of its 16 most recently active same-host child agents. Each completed
+- It reads the conversation's newest ten history pages and, at the same time,
+  five pages of each of its 16 most recently active same-host child agents,
+  four agents at a time, keeping only folder paths. Each completed
   `fileChange` path's folder (and move target) is `edited` evidence and each
   command's `cwd` is `command` evidence.
 - A folder's checkout is the nearest ancestor holding `.git` (directory or
@@ -44,13 +45,17 @@ candidates without running Git:
 - `workedIn` lists up to 16 checkouts, most recently observed first. A
   working folder inside a checkout adds `workingFolder` evidence; a working
   folder that is not a checkout lists its direct child checkouts the agents did
-  not work in as `inFolder` (up to 64).
+  not work in as `inFolder` (up to 64, from its first 4,096 entries).
 - `complete` is false when history or an agent could not be read, the agent
   list was incomplete, or a list was cut at its limit.
 
 The app reads the first `workedIn` checkout with `edited` evidence, else the
 first one, else the working folder, and shows every candidate in the
-comparison menu. A chosen checkout stays selected while the review lives.
+comparison menu. Opening or refreshing the review finds the checkouts again,
+so the default follows the latest edits; switching comparisons reuses the
+last answer. A chosen checkout stays selected while the review lives. When
+discovery fails, the menu says so and the review reads the chosen checkout or
+the working folder.
 
 ## Last turn
 
@@ -58,15 +63,22 @@ comparison menu. A chosen checkout stays selected while the review lives.
 works outside Git and across checkouts. It finds the newest of the last 20
 turns whose window contains a completed `fileChange`: the conversation's own
 items of that turn, or a same-host child agent's items between the turn's start
-and the next turn's start (or now). Codex records each edit's hunks; Claude
-`Edit` and `Write` results carry a `structuredPatch` or the created content,
-which the translator renders into the same `diff` field.
+and the next turn's start (or now). Codex records each edit's hunks, with any
+`Moved to:` note removed; Claude `Edit` and `Write` results carry a
+`structuredPatch` or the created content, which the translator renders into
+the same `diff` field. A record without content, such as `NotebookEdit`, has
+a null `diff`; its file is counted in `unlistedFiles`, never shown as
+unchanged.
 
 - Turns are read newest first with ten item pages shared between them. Each
   child agent active since the examined turn started is read back only as far
   as that turn's start, five pages at most per agent and four agents at a time,
-  so a latest turn with edits costs about one page per active child.
-  `complete` is false when a window up to the answer could not be read in full.
+  so a latest turn with edits costs about one page per active child. The turn
+  list and the agent list are read at once. The edits kept while reading are
+  capped at 32 MiB. A turn without a start time ends the walk, since child
+  agents' edits can't be placed around it. `complete` is false when a window
+  up to the answer could not be read in full, a child edit has no time, the
+  cap was reached or the walk ended early.
 
 - Each file is shown relative to its checkout, or to its folder outside one,
   as one Git-format patch. Several edits to a file without a move become one
@@ -80,7 +92,8 @@ which the translator renders into the same `diff` field.
   could not be read, such as Claude subagents, agents on other hosts or agents
   beyond the 16 most recent. `latest` is false when later turns made no edits.
 - The read shares `PatchSplitter`'s budgets and the change reader's admission
-  and timeout; `noRecentEdits` answers when no recent turn edited a file.
+  and timeout, and patches stream into the splitter one file at a time;
+  `noRecentEdits` answers when no recent turn edited a file.
 
 ## Ownership and boundaries
 
@@ -91,8 +104,10 @@ which the translator renders into the same `diff` field.
   split index, shared-index expiry and fsmonitor off, and
   `GIT_OPTIONAL_LOCKS=0` keeps the read from contending with the user's Git.
   Untracked nested repositories are left out; an untracked file that
-  disappears while it is added makes the read list them once more. Two reads
-  run at once per gateway; each has 30 seconds.
+  disappears while it is added makes the read list them once more. Two
+  `changes/*` requests run at once per gateway; each has 30 seconds, and
+  blocking filesystem work keeps its slot until it finishes, even after its
+  request is gone.
 - What the read still shares with the user's own `git status`: configured
   clean filters run, so Git LFS can add objects to its `.git/lfs` cache;
   reading a split index refreshes the shared index's modification time; and a
@@ -106,7 +121,9 @@ which the translator renders into the same `diff` field.
   `diff --combined` and `* Unmerged path` lines and counts added and removed
   lines after a section's first `@@` by the same prefix-column rule Core uses.
   Content lines always carry their prefix columns, so neither rule can misread
-  file content. The gateway does not otherwise parse patches.
+  file content. The only other patch reading in the gateway is Last Turn's
+  net diff, which parses recorded hunks to reverse them onto a file's current
+  content.
 - Budgets: 256 KiB of patch per file, 4 MiB of patch text before later hunks
   are omitted, a 6 MiB hard cap including headers, 2,000 files and 256 MiB of
   Git output. A file over a hunk budget keeps its header and line counts and
@@ -136,7 +153,8 @@ which the translator renders into the same `diff` field.
   written comments closes and is kept, so reviewing that conversation again
   restores them, until another review replaces it. Adding comments checks the
   destination again.
-- A comment is anchored to its comparison (a Git source, or the turn by id),
+- A comment is anchored to its comparison (a Git source, or the turn by id
+  and start time, which names it in the prompt),
   its checkout or folder, path, side and line number. Comments whose line is
   not shown, after a refresh, in another comparison or in a file past the line
   limit, stay listed and editable in every state. The prompt groups comments by
@@ -162,8 +180,11 @@ stays a thin host boundary.
   branch names or dirty filtering, so it stays cheap enough to repeat on every
   refresh.
 - The gateway sends per-file patch text instead of a structured diff. One
-  parser in Core avoids two diff models and keeps the wire stable; the gateway
-  still bounds sizes and counts lines for files it omits.
+  display parser in Core avoids two diff models and keeps the wire stable; the
+  gateway still bounds sizes and counts lines for files it omits. Last Turn's
+  net diff adds a deliberate second hunk parser in the gateway, limited to
+  reversing recorded hunks. Without it a file edited several times would show
+  each edit separately.
 - The private index and object directory keep reads free of side effects;
   the gateway tests compare the whole `.git` directory before and after a read,
   with split index and immediate shared-index expiry. Intent-to-add still
