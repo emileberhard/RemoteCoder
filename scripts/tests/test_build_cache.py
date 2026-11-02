@@ -154,6 +154,64 @@ class CacheAdmissionTests(unittest.TestCase):
                 )
                 self.assertEqual((entry.path / "receipt.json").read_text(), "evidence")
 
+    def test_pressure_reclaims_only_products_with_available_unmodified_source(self):
+        import json
+        from dataclasses import replace
+
+        from build_cache import compilation_admission, compilation_record, record_compilation
+
+        for case in ("rebuildable", "modified", "missing-commit", "evidence"):
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as temporary:
+                repository = Path(temporary).resolve() / "repository"
+                commit = init_repository(repository)
+                root = repository / "cache"
+                entry = replace(self.entry(root, "derived", time.time() - 10800), source=repository)
+                record_compilation(root, [entry.path], "finished", False, {
+                    "sourceCommit": "0" * 40 if case == "missing-commit" else commit,
+                    "sourceModified": case == "modified",
+                })
+                record = compilation_record(root, entry.path)
+                completion = json.loads(record.read_text())
+                completion["completedAt"] = completion["lastUsed"] = time.time() - 10800
+                record.write_text(json.dumps(completion))
+                products = entry.path / "Build/Products"
+                if case == "evidence":
+                    (products / "receipt.json").write_text("retained proof")
+                (entry.path / "source.json").write_text("source identity")
+                with patch("build_cache._open_file_snapshot", return_value=([], None)):
+                    result = compilation_admission(root, self.policy(), [entry], set(), preview=False)
+                self.assertEqual(products.exists(), case != "rebuildable")
+                self.assertEqual((entry.path / "source.json").read_text(), "source identity")
+                self.assertEqual(
+                    any(Path(candidate["path"]) == products for candidate in result["evicted"]),
+                    case == "rebuildable",
+                )
+                if case == "evidence":
+                    self.assertEqual((products / "receipt.json").read_text(), "retained proof")
+
+    def test_rebuildable_products_remain_without_cache_pressure(self):
+        import json
+        from dataclasses import replace
+
+        from build_cache import compilation_admission, compilation_record, record_compilation
+
+        with tempfile.TemporaryDirectory() as temporary:
+            repository = Path(temporary).resolve() / "repository"
+            commit = init_repository(repository)
+            root = repository / "cache"
+            entry = replace(self.entry(root, "derived", time.time() - 10800), source=repository)
+            record_compilation(root, [entry.path], "finished", False, {
+                "sourceCommit": commit, "sourceModified": False,
+            })
+            record = compilation_record(root, entry.path)
+            completion = json.loads(record.read_text())
+            completion["completedAt"] = completion["lastUsed"] = time.time() - 10800
+            record.write_text(json.dumps(completion))
+            with patch("build_cache._open_file_snapshot", return_value=([], None)):
+                result = compilation_admission(root, self.policy(budget=1 << 30), [entry], set(), preview=False)
+            self.assertEqual(result["evicted"], [])
+            self.assertTrue((entry.path / "Build/Products/RemoteCoder.app/binary").exists())
+
     def test_total_cap_counts_pinned_and_unclassified_subowners(self):
         from build_cache import cache_allocated_bytes, compilation_admission
 
