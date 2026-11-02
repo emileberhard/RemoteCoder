@@ -942,6 +942,8 @@ entrypoint linked above.
     in Home" accessibility action, starts one in the host's remote home folder.
     The Mac `TapHoldButton` is a plain click, so there only the accessibility
     action remains.
+  - Review changes (`review-changes`), shown when a folder is chosen, opens the
+    change review sheet for that host and folder ([Change review](../docs/change-review.md)).
   - "Speak replies" lives in Settings → Chat.
   - Picking a different working directory immediately starts a fresh
     conversation, so a session never spans repositories. On an unsent draft
@@ -955,7 +957,8 @@ entrypoint linked above.
     whose click opens the directory picker and whose menu lists every host's
     favorites; Stop, always present and enabled only for a stoppable turn
     (the composer's `TurnStops` path); New Chat, whose click keeps the folder
-    and whose menu offers New Chat in Home and one entry per host; and the inspector toggle.
+    and whose menu offers New Chat in Home and one entry per host; Changes, which
+    opens or hides the inspector's change review; and the inspector toggle.
   - It is a customizable `toolbar(id:)` with stable item ids, grouped with
     `ToolbarSpacer`, on system toolbar glass. `AppMenu(trigger: .toolbarItem)`
     leaves a toolbar menu in the system style. The connection edge glow appears
@@ -965,7 +968,9 @@ entrypoint linked above.
   trailing inspector, applied outside the split view. The inspector also shows
   the host, folder, model, reasoning and context usage; an unread value reads
   Unknown. Its open state is per window (`@SceneStorage`), and `ChatWindowActions`
-  publishes it to the View menu (⌥⌘I). The subagents pill opens it.
+  publishes it to the View menu (⌥⌘I). The subagents pill opens it. Review
+  Changes (⇧⌘D) switches the inspector to the folder's change review, wider than
+  the details; the inspector toggle reopens the details.
 - User and assistant bubbles render Markdown blocks. Block gaps, heading
   margins and list spacing read `interfaceScale` in the rendering views; zoom
   changes layout without reparsing Markdown or changing block versions.

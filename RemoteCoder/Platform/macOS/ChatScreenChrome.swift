@@ -12,6 +12,8 @@ struct ChatScreenChrome: ViewModifier {
     let onNewChatOnHost: (UUID) -> Void
     let isInspectorOpen: Bool
     let toggleInspector: () -> Void
+    let isReviewingChanges: Bool
+    let reviewChanges: () -> Void
 
     func body(content: Content) -> some View {
         content
@@ -25,6 +27,7 @@ struct ChatScreenChrome: ViewModifier {
                 ToolbarItem(id: "stop", placement: .primaryAction) { stopButton }
                 ToolbarItem(id: "new-chat", placement: .primaryAction) { newChatMenu }
                 ToolbarSpacer(.fixed, placement: .primaryAction)
+                ToolbarItem(id: "changes", placement: .primaryAction) { changesButton }
                 ToolbarItem(id: "inspector", placement: .primaryAction) { inspectorButton }
             }
     }
@@ -115,6 +118,15 @@ struct ChatScreenChrome: ViewModifier {
         }
         .help("Start a new chat in this folder")
         .accessibilityIdentifier("new-chat")
+    }
+
+    private var changesButton: some View {
+        let showing = isInspectorOpen && isReviewingChanges
+        return Button("Changes", systemImage: "plus.forwardslash.minus", action: reviewChanges)
+            .disabled(screen.workingDirectory == nil)
+            .help(showing ? "Hide the changes" : "Review the folder’s Git changes")
+            .accessibilityLabel(showing ? "Hide Changes" : "Review Changes")
+            .accessibilityIdentifier("toolbar-review-changes")
     }
 
     private var inspectorButton: some View {

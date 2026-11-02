@@ -1368,7 +1368,21 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
     private func attach(_ claim: SharedItemsInbox.Claim, to draft: ComposerDraft) {
         guard target.acceptsWork else { return }
         importFiles(claim.files.map { file in .inOwnDirectory { file } }, for: draft)
-        switch ComposerPastedText(claim.text.joined(separator: "\n")) {
+        insertPastedText(claim.text.joined(separator: "\n"), into: draft)
+    }
+
+    var acceptsReviewComments: Bool {
+        target.acceptsWork && acceptsConversationInput && currentDraft != nil
+    }
+
+    func insertReviewComments(_ text: String) -> Bool {
+        guard acceptsReviewComments, let draft = currentDraft else { return false }
+        insertPastedText(text, into: draft)
+        return true
+    }
+
+    private func insertPastedText(_ raw: String, into draft: ComposerDraft) {
+        switch ComposerPastedText(raw) {
         case .attachment(let text): drafts.setAttachments(draft.attachments + [.text(text)], in: draft)
         case .inline(let text): drafts.document(for: draft).edit(.insert(.init(runs: [.text(text)])))
         case nil: break

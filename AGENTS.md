@@ -517,6 +517,7 @@ Open the focused source before changing that part of the system:
   [`docs/haptics.md`](docs/haptics.md),
   [`docs/thinking-presentation.md`](docs/thinking-presentation.md),
   [`docs/directory-quick-switch.md`](docs/directory-quick-switch.md),
+  [`docs/change-review.md`](docs/change-review.md),
   [`docs/reasoning-picker-motion.md`](docs/reasoning-picker-motion.md),
   [`docs/mermaid-rendering.md`](docs/mermaid-rendering.md),
   [`docs/html-visuals.md`](docs/html-visuals.md),
