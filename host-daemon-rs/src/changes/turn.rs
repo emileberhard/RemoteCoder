@@ -3,6 +3,7 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
+use futures_util::StreamExt;
 use serde::Serialize;
 use serde_json::Value;
 use tokio::process::Command;
@@ -13,6 +14,7 @@ use super::{Admission, BUDGETS, collect};
 
 const MAXIMUM_RECONSTRUCTED_BYTES: u64 = 8 * 1024 * 1024;
 const MAXIMUM_NET_DIFF_BYTES: usize = 32 * 1024 * 1024;
+const CONCURRENT_NET_DIFFS: usize = 4;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Edit {
@@ -122,13 +124,17 @@ pub(crate) async fn turn_files(edits: Vec<Edit>, admission: &Admission) -> Resul
             response_bytes: BUDGETS.response_bytes.saturating_sub(used_bytes),
             files: BUDGETS.files.saturating_sub(turn.files.len()),
         });
-        for file in &files {
-            let Some(changes) = &file.changes else {
-                turn.unlisted_files += 1;
-                continue;
-            };
-            for patch in patches_of(&root, file, changes).await {
-                splitter.push(patch.as_bytes());
+        let mut patched = futures_util::stream::iter(files)
+            .map(|file| patches_of(&root, file))
+            .buffered(CONCURRENT_NET_DIFFS);
+        while let Some(patches) = patched.next().await {
+            match patches {
+                Some(patches) => {
+                    for patch in patches {
+                        splitter.push(patch.as_bytes());
+                    }
+                }
+                None => turn.unlisted_files += 1,
             }
         }
         let split = splitter.finish();
@@ -193,7 +199,8 @@ fn locate(roots: &mut Roots, path: &Path) -> (String, String) {
     (folder.to_string_lossy().into_owned(), name)
 }
 
-async fn patches_of(root: &str, file: &TouchedFile, changes: &[Change]) -> Vec<String> {
+async fn patches_of(root: &str, file: TouchedFile) -> Option<Vec<String>> {
+    let changes = file.changes.as_deref()?;
     let recorded = || -> Vec<String> {
         changes
             .iter()
@@ -210,18 +217,20 @@ async fn patches_of(root: &str, file: &TouchedFile, changes: &[Change]) -> Vec<S
         )
     });
     if changes.len() == 1 || moved {
-        return recorded();
+        return Some(recorded());
     }
     let Some((before, after)) = reconstruct(Path::new(&file.path), changes).await else {
-        return recorded();
+        return Some(recorded());
     };
     if before == after {
-        return Vec::new();
+        return Some(Vec::new());
     }
-    match net_patch(&file.relative, before.as_deref(), after.as_deref()).await {
-        Some(patch) => vec![patch],
-        None => recorded(),
-    }
+    Some(
+        match net_patch(&file.relative, before.as_deref(), after.as_deref()).await {
+            Some(patch) => vec![patch],
+            None => recorded(),
+        },
+    )
 }
 
 fn recorded_patch(root: &str, relative: &str, change: &Change) -> String {

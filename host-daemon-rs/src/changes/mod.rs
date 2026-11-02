@@ -131,17 +131,19 @@ impl ChangeReader {
         &self,
         work: impl FnOnce(Admission) -> F,
     ) -> Result<T> {
-        let admission = Admission {
-            _permit: Arc::new(self.admission.clone().acquire_owned().await?),
-        };
-        tokio::time::timeout(READ_TIMEOUT, work(admission.clone()))
-            .await
-            .map_err(|_| {
-                anyhow!(
-                    "Reading changes took longer than {} seconds",
-                    READ_TIMEOUT.as_secs()
-                )
-            })?
+        tokio::time::timeout(READ_TIMEOUT, async {
+            let admission = Admission {
+                _permit: Arc::new(self.admission.clone().acquire_owned().await?),
+            };
+            work(admission.clone()).await
+        })
+        .await
+        .map_err(|_| {
+            anyhow!(
+                "Reading changes took longer than {} seconds",
+                READ_TIMEOUT.as_secs()
+            )
+        })?
     }
 }
 

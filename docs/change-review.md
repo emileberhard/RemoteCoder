@@ -92,8 +92,8 @@ unchanged.
   could not be read, such as Claude subagents, agents on other hosts or agents
   beyond the 16 most recent. `latest` is false when later turns made no edits.
 - The read shares `PatchSplitter`'s budgets and the change reader's admission
-  and timeout, and patches stream into the splitter one file at a time;
-  `noRecentEdits` answers when no recent turn edited a file.
+  and timeout. Net diffs run four at a time and stream into the splitter in
+  file order; `noRecentEdits` answers when no recent turn edited a file.
 
 ## Ownership and boundaries
 
@@ -105,9 +105,9 @@ unchanged.
   `GIT_OPTIONAL_LOCKS=0` keeps the read from contending with the user's Git.
   Untracked nested repositories are left out; an untracked file that
   disappears while it is added makes the read list them once more. Two
-  `changes/*` requests run at once per gateway; each has 30 seconds, and
-  blocking filesystem work keeps its slot until it finishes, even after its
-  request is gone.
+  `changes/*` requests run at once per gateway; each has 30 seconds including
+  its wait for a slot, and blocking filesystem work keeps its slot until it
+  finishes, even after its request is gone.
 - What the read still shares with the user's own `git status`: configured
   clean filters run, so Git LFS can add objects to its `.git/lfs` cache;
   reading a split index refreshes the shared index's modification time; and a
