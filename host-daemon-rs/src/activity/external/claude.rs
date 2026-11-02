@@ -93,7 +93,6 @@ fn registry_revisions(dir: &Path) -> Option<Vec<(OsString, FileRevision)>> {
     Some(revisions)
 }
 
-
 pub(super) async fn claude_sessions(
     settings: &ClaudeSettings,
     cache: Arc<Mutex<TranscriptCache>>,

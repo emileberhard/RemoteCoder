@@ -313,8 +313,7 @@ impl ExternalActivity {
 }
 
 fn process_exists(pid: i32) -> bool {
-    nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None)
-        != Err(nix::errno::Errno::ESRCH)
+    nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None) != Err(nix::errno::Errno::ESRCH)
 }
 
 const MAXIMUM_STDOUT_BYTES: usize = 16 * 1024 * 1024;
