@@ -26,6 +26,16 @@
       "consumers": ["Core/Tests/RemoteCoderCoreTests/Conversations/InlinePastedTextTests.swift", "host-daemon-rs/src/providers/claude/history.rs", "host-daemon-rs/src/gateway/tests.rs"]
     },
     {
+      "path": "changes/checkouts.json",
+      "contract": "changes/checkouts lists the checkouts a conversation and its agents worked in, newest first with their evidence, other checkouts directly in a plain working folder, and whether the list is complete.",
+      "consumers": ["host-daemon-rs/src/changes/checkouts.rs"]
+    },
+    {
+      "path": "changes/turn-ready.json",
+      "contract": "changes/turn returns the latest turn with edits and one Git-format patch per file with the folder or checkout it is relative to, plus command and omitted-agent counts.",
+      "consumers": ["host-daemon-rs/src/gateway/conversation_changes.rs"]
+    },
+    {
       "path": "checkpoints/inline-literal-text-v2.json",
       "contract": "Typed v1/v2 markers remain literal text around an ordered paste; current checkpoints retain chip identity and old decoders receive readable expanded text.",
       "consumers": ["Core/Tests/RemoteCoderCoreTests/Conversations/AttachmentCheckpointCompatibilityTests.swift"]

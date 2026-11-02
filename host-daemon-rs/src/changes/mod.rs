@@ -1,4 +1,6 @@
+pub(crate) mod checkouts;
 mod patch;
+pub(crate) mod turn;
 
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
@@ -101,18 +103,20 @@ impl Default for ChangeReader {
 
 impl ChangeReader {
     pub(crate) async fn read(&self, request: ReadRequest) -> Result<ChangeRead> {
+        self.admit(read(Path::new(&request.directory), request.source))
+            .await
+    }
+
+    pub(crate) async fn admit<T>(&self, work: impl Future<Output = Result<T>>) -> Result<T> {
         let _permit = self.admission.acquire().await?;
-        tokio::time::timeout(
-            READ_TIMEOUT,
-            read(Path::new(&request.directory), request.source),
-        )
-        .await
-        .map_err(|_| {
-            anyhow!(
-                "Reading changes took longer than {} seconds",
-                READ_TIMEOUT.as_secs()
-            )
-        })?
+        tokio::time::timeout(READ_TIMEOUT, work)
+            .await
+            .map_err(|_| {
+                anyhow!(
+                    "Reading changes took longer than {} seconds",
+                    READ_TIMEOUT.as_secs()
+                )
+            })?
     }
 }
 

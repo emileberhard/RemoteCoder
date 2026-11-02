@@ -420,7 +420,7 @@ impl AgentService<'_> {
         Ok(NativeInventory { agents, coverage })
     }
 
-    async fn list_agents(&self, root: &str) -> Result<Value> {
+    pub(in crate::gateway) async fn list_agents(&self, root: &str) -> Result<Value> {
         crate::questions::validate_id(root)?;
 
         let deadline = tokio::time::Instant::now() + Duration::from_secs(2);

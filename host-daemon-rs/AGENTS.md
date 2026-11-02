@@ -693,6 +693,12 @@ blocks startup or provider journal retirement.
   repository: untracked files go through a private index copy and object
   directory, and each Git process group dies with its request. Sources,
   budgets and the reply shape are in [Change review](../docs/change-review.md).
+- `changes/checkouts` (`{threadId?, directory}`) and `changes/turn`
+  (`{threadId}`) read the conversation's and its same-host agents' history
+  through `cluster_history_page` (`src/gateway/conversation_changes.rs`), never
+  Git state they could change. Checkouts resolve by the nearest `.git`; the
+  last turn's patches come from recorded edits (`src/changes/turn.rs`) and share
+  the change reader's admission, timeout and patch budgets.
 - History is the app-server v2 `thread/items/list` and `thread/turns/list` on
   both providers; there is no gateway-specific history read. Codex answers
   them itself. For `claude_` threads the gateway serves the same wire shape,
