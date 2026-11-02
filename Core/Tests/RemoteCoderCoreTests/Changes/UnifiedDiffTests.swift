@@ -181,13 +181,14 @@ struct UnifiedDiffTests {
             ReviewNote(anchor: anchor(.git(.uncommitted), "b.swift", 3, .deletion, "old()"), text: "Keep this call."),
             ReviewNote(anchor: anchor(.git(.uncommitted), "c.swift", 1, .context, "x"), text: "  "),
             ReviewNote(anchor: anchor(.git(.staged), "d.js", 1, .addition, String(repeating: "x", count: 300)), text: "Minified."),
-            ReviewNote(anchor: anchor(.turn("t1"), "e.md", 2, .addition, "Hello"), text: "Typo."),
-            ReviewNote(anchor: anchor(.turn("t1"), root: "/notes", "f.md", 1, .deletion, "Old"), text: "Keep it."),
+            ReviewNote(anchor: anchor(.turn(id: "t1", startedAt: .distantPast), "e.md", 2, .addition, "Hello"), text: "Typo."),
+            ReviewNote(anchor: anchor(.turn(id: "t1", startedAt: .distantPast), root: "/notes", "f.md", 1, .deletion, "Old"),
+                       text: "Keep it."),
         ]
         let scope: (ReviewNote.Anchor) -> String = { anchor in
             switch anchor.comparison {
             case .git(let source): "the \(source.rawValue) changes in \(anchor.root)"
-            case .turn(let id): "turn \(id) in \(anchor.root)"
+            case .turn(let id, _): "turn \(id) in \(anchor.root)"
             }
         }
 

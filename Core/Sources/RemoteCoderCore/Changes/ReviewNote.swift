@@ -2,7 +2,7 @@ import Foundation
 
 enum ReviewComparison: Hashable, Sendable {
     case git(ChangeSource)
-    case turn(String)
+    case turn(id: String, startedAt: Date)
 }
 
 struct ReviewNote: Equatable, Sendable {

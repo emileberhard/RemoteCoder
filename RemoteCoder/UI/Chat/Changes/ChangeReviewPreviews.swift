@@ -150,7 +150,8 @@ private enum ChangeReviewFixture {
 
     @MainActor
     static func model(_ state: ChangeReviewModel.State, mode: ChangeReviewModel.Mode = .git(.uncommitted),
-                      checkouts: CheckoutDiscovery? = nil, root: String? = nil, notes: [ReviewNote] = []) -> ChangeReviewModel? {
+                      checkouts: ChangeReviewModel.Checkouts = .unknown, root: String? = nil,
+                      notes: [ReviewNote] = []) -> ChangeReviewModel? {
         let host = GatewayHostConfiguration(id: UUID(), name: "Preview", hostname: "127.0.0.1", port: 1,
                                             authToken: "preview", transport: .trustedNetwork)
         guard let client = try? GatewayClient(host: host, routes: nil) else { return nil }
@@ -178,8 +179,9 @@ private struct ChangeReviewPreview: View {
     @State private var model: ChangeReviewModel?
     @State private var theme = AppThemeStore()
 
-    init(_ state: ChangeReviewModel.State, mode: ChangeReviewModel.Mode = .git(.uncommitted), checkouts: CheckoutDiscovery? = nil,
-         root: String? = nil, notes: [ReviewNote] = [], collapsing paths: Set<String> = []) {
+    init(_ state: ChangeReviewModel.State, mode: ChangeReviewModel.Mode = .git(.uncommitted),
+         checkouts: ChangeReviewModel.Checkouts = .unknown, root: String? = nil, notes: [ReviewNote] = [],
+         collapsing paths: Set<String> = []) {
         let model = ChangeReviewFixture.model(state, mode: mode, checkouts: checkouts, root: root, notes: notes)
         if let model, case .ready(let review) = state {
             for file in review.files where paths.contains(file.path) { model.toggleCollapsed(file) }
@@ -243,11 +245,22 @@ private struct ChangeReviewPreview: View {
 }
 
 #Preview("J · Worktree checkout") {
-    ChangeReviewPreview(.ready(ChangeReviewFixture.worktreeReview), checkouts: ChangeReviewFixture.checkouts,
+    ChangeReviewPreview(.ready(ChangeReviewFixture.worktreeReview), checkouts: .found(ChangeReviewFixture.checkouts),
                         root: ChangeReviewFixture.worktree)
 }
 
 #Preview("K · No recent edits") {
     ChangeReviewPreview(.noRecentEdits(isComplete: true), mode: .lastTurn)
+}
+
+#Preview("L · No net changes") {
+    ChangeReviewPreview(.ready(ChangeReviewPreparation.review(of: TurnChanges(
+        turn: TurnChanges.Turn(id: "turn-2", startedAtMs: 1_793_631_000_000, running: false, latest: true),
+        files: [], unlistedFiles: 0, commands: 3, omittedAgents: 1, complete: false, capturedAtMs: 1_793_631_600_000), revision: 1)),
+                        mode: .lastTurn)
+}
+
+#Preview("M · Checkouts unavailable") {
+    ChangeReviewPreview(.unavailable(.notRepository), checkouts: .failed)
 }
 #endif

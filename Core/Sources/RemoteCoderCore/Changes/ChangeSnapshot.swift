@@ -97,6 +97,10 @@ struct TurnChanges: Decodable, Sendable {
         let startedAtMs: Int64
         let running: Bool
         let latest: Bool
+
+        var startedAt: Date {
+            Date(timeIntervalSince1970: TimeInterval(startedAtMs) / 1_000)
+        }
     }
 
     struct File: Sendable {

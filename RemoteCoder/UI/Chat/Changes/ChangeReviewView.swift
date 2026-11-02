@@ -29,8 +29,12 @@ private struct ChangeReviewContent: View {
             }
         case .ready(let review) where review.files.isEmpty && review.unlistedFiles == 0:
             ChangeReviewMessage(model: model, review: review, remoteHomePath: remoteHomePath) {
-                ContentUnavailableView(model.mode.emptyTitle, systemImage: "checkmark.circle",
-                                       description: Text(model.mode.emptyDescription))
+                VStack(spacing: 0) {
+                    ContentUnavailableView(model.mode.emptyTitle, systemImage: "checkmark.circle",
+                                           description: Text(model.mode.emptyDescription))
+                        .frame(maxHeight: .infinity)
+                    ChangeReviewNotices(review: review, remoteHomePath: remoteHomePath)
+                }
             }
         case .ready(let review):
             ScrollView {
@@ -157,8 +161,15 @@ private struct ChangeReviewHeader: View {
                     }
                 }
                 .pickerStyle(.inline)
-                if case .git = model.mode, let checkouts = model.checkouts {
-                    CheckoutPicker(model: model, checkouts: checkouts, remoteHomePath: remoteHomePath)
+                if case .git = model.mode {
+                    switch model.checkouts {
+                    case .found(let checkouts):
+                        CheckoutPicker(model: model, checkouts: checkouts, remoteHomePath: remoteHomePath)
+                    case .failed:
+                        Text("Couldn’t find the checkouts agents worked in.")
+                    case .unknown:
+                        EmptyView()
+                    }
                 }
                 if let review, !review.files.isEmpty {
                     Divider()
@@ -172,10 +183,17 @@ private struct ChangeReviewHeader: View {
             } label: {
                 HStack(spacing: 4) {
                     Text(model.mode.title).fontWeight(.semibold)
-                    if case .git = model.mode, let root = model.root {
-                        Text((root as NSString).lastPathComponent)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
+                    if case .git = model.mode {
+                        if let root = model.root {
+                            Text((root as NSString).lastPathComponent)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                        if case .failed = model.checkouts {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.orange)
+                                .accessibilityLabel("Couldn’t find checkouts")
+                        }
                     }
                     Image(systemName: "chevron.up.chevron.down")
                         .scaledFont(TypeMetrics.symbol(11, weight: .semibold))
@@ -275,34 +293,44 @@ private struct ChangeReviewFooter: View {
             if !outside.isEmpty {
                 ReviewNotesOutsideComparison(model: model, drafts: outside)
             }
-            VStack(alignment: .leading, spacing: 6) {
-                if case .turn(let turn, let commands, let omittedAgents) = review.scope {
-                    if !turn.latest {
-                        Text("Later turns made no edits.")
-                    }
-                    if commands > 0 {
-                        Text(commands == 1 ? "Also ran 1 command; files it changed aren’t listed."
-                                           : "Also ran \(commands) commands; files they changed aren’t listed.")
-                    }
-                    if omittedAgents > 0 {
-                        Text(omittedAgents == 1 ? "Edits by 1 agent aren’t included." : "Edits by \(omittedAgents) agents aren’t included.")
-                    }
-                }
-                if review.unlistedFiles > 0 {
-                    Text(review.unlistedFiles == 1 ? "1 more file isn’t shown." : "\(review.unlistedFiles) more files aren’t shown.")
-                } else if !review.isComplete {
-                    if case .turn = review.scope {
-                        Text("Some history couldn’t be read, so edits may be missing.")
-                    } else {
-                        Text("This comparison is too large to read completely.")
-                    }
-                }
-                Text(detail).foregroundStyle(.tertiary)
-            }
-            .scaledFont(.footnote)
-            .foregroundStyle(.secondary)
-            .padding(16)
+            ChangeReviewNotices(review: review, remoteHomePath: remoteHomePath)
         }
+    }
+}
+
+private struct ChangeReviewNotices: View {
+    let review: ChangeReview
+    let remoteHomePath: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if case .turn(let turn, let commands, let omittedAgents) = review.scope {
+                if !turn.latest {
+                    Text("Later turns made no edits.")
+                }
+                if commands > 0 {
+                    Text(commands == 1 ? "Also ran 1 command; files it changed aren’t listed."
+                                       : "Also ran \(commands) commands; files they changed aren’t listed.")
+                }
+                if omittedAgents > 0 {
+                    Text(omittedAgents == 1 ? "Edits by 1 agent aren’t included." : "Edits by \(omittedAgents) agents aren’t included.")
+                }
+            }
+            if review.unlistedFiles > 0 {
+                Text(review.unlistedFiles == 1 ? "1 more file isn’t shown." : "\(review.unlistedFiles) more files aren’t shown.")
+            } else if !review.isComplete {
+                if case .turn = review.scope {
+                    Text("Some history couldn’t be read, so edits may be missing.")
+                } else {
+                    Text("This comparison is too large to read completely.")
+                }
+            }
+            Text(detail).foregroundStyle(.tertiary)
+        }
+        .scaledFont(.footnote)
+        .foregroundStyle(.secondary)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
     }
 
     private var detail: String {
@@ -314,9 +342,7 @@ private struct ChangeReviewFooter: View {
             let against = source == .branch ? base.map { " against \($0)" } ?? "" : ""
             return "\(branch)\(against) · \(root) · \(time)"
         case .turn(let turn, _, _):
-            let started = Date(timeIntervalSince1970: TimeInterval(turn.startedAtMs) / 1_000)
-            let start = Calendar.current.isDateInToday(started) ? started.formatted(date: .omitted, time: .shortened)
-                                                                : started.formatted(date: .abbreviated, time: .shortened)
+            let start = ChangeReviewModel.formattedStart(turn.startedAt)
             return turn.running ? "Turn started \(start), still running · \(time)" : "Turn started \(start) · \(time)"
         }
     }

@@ -8,7 +8,7 @@ struct ChangeReview: Sendable {
         var comparison: ReviewComparison {
             switch self {
             case .git(let source, _, _, _): .git(source)
-            case .turn(let turn, _, _): .turn(turn.id)
+            case .turn(let turn, _, _): .turn(id: turn.id, startedAt: turn.startedAt)
             }
         }
     }
