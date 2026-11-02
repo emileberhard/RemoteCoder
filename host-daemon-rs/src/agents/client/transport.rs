@@ -397,8 +397,7 @@ mod tests {
         .unwrap();
         let legacy = crate::agents::jobs::routes::legacy_socket(&id);
         std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
-        let stale = UnixListener::bind(&legacy).unwrap();
-        drop(stale);
+        std::fs::write(&legacy, b"not a socket").unwrap();
         let canonical = directory.path().join("canonical");
         let target = UnixListener::bind(&canonical).unwrap();
         for path in [&legacy, &directory.path().join("not-a-job-socket")] {

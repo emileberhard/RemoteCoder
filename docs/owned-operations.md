@@ -630,6 +630,9 @@ values. Expired-mirror retention also starts a fresh reclamation budget after
 candidate discovery and its shared open-file snapshot. Owned lease descriptors
 are excluded from retirement activity checks. Operators can schedule
 `cache-maintain` independently of builds.
+The optional `hostCompilationBudgetGiB` map in the operator cache policy overrides
+the shared compilation budget for an exact hostname, excluding its DNS suffix.
+Unlisted hosts retain the shared budget; all budgets include protected data.
 The private maintainer schedule invokes it before repository synchronization, so
 a failed sync does not suppress reclamation.
 `RemoteCoder-Build/maintenance.json` is one replaced receipt; scheduled stdout
