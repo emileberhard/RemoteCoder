@@ -5,6 +5,7 @@ use serde::Serialize;
 
 const MAXIMUM_WORKED_IN: usize = 16;
 const MAXIMUM_IN_FOLDER: usize = 64;
+const MAXIMUM_FOLDER_ENTRIES: usize = 4096;
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "camelCase")]
@@ -38,6 +39,14 @@ impl Observations {
         kinds.insert(evidence);
         *latest = (*latest).max(at_ms);
     }
+
+    pub(crate) fn absorb(&mut self, other: Observations) {
+        for (directory, (kinds, latest)) in other.0 {
+            let (known, observed) = self.0.entry(directory).or_default();
+            known.extend(kinds);
+            *observed = (*observed).max(latest);
+        }
+    }
 }
 
 #[derive(Default)]
@@ -69,7 +78,7 @@ impl Roots {
 
 pub(crate) fn discover(
     observations: Observations,
-    working_folder: Option<&Path>,
+    working_folder: &Path,
     mut complete: bool,
 ) -> Discovery {
     let mut roots = Roots::default();
@@ -85,8 +94,8 @@ pub(crate) fn discover(
         }
     }
     let mut in_folder = Vec::new();
-    if let Some(folder) = working_folder.filter(|folder| folder.is_dir()) {
-        match roots.of(folder) {
+    if working_folder.is_dir() {
+        match roots.of(working_folder) {
             Some(root) => {
                 found
                     .entry(root)
@@ -94,9 +103,9 @@ pub(crate) fn discover(
                     .0
                     .insert(Evidence::WorkingFolder);
             }
-            None => match child_checkouts(folder, &found) {
-                Some(children) => {
-                    complete &= children.len() <= MAXIMUM_IN_FOLDER;
+            None => match child_checkouts(working_folder, &found) {
+                Some((children, listed_all)) => {
+                    complete &= listed_all && children.len() <= MAXIMUM_IN_FOLDER;
                     in_folder = children;
                     in_folder.truncate(MAXIMUM_IN_FOLDER);
                 }
@@ -127,9 +136,11 @@ pub(crate) fn discover(
 fn child_checkouts(
     folder: &Path,
     worked_in: &HashMap<PathBuf, (BTreeSet<Evidence>, Option<i64>)>,
-) -> Option<Vec<String>> {
-    let mut roots: Vec<String> = std::fs::read_dir(folder)
-        .ok()?
+) -> Option<(Vec<String>, bool)> {
+    let mut entries = std::fs::read_dir(folder).ok()?;
+    let mut roots: Vec<String> = entries
+        .by_ref()
+        .take(MAXIMUM_FOLDER_ENTRIES)
         .filter_map(Result::ok)
         .map(|entry| entry.path())
         .filter(|path| std::fs::symlink_metadata(path.join(".git")).is_ok())
@@ -138,7 +149,7 @@ fn child_checkouts(
         .map(|root| root.to_string_lossy().into_owned())
         .collect();
     roots.sort();
-    Some(roots)
+    Some((roots, entries.next().is_none()))
 }
 
 #[cfg(test)]
@@ -170,7 +181,7 @@ mod tests {
         observations.record(home.join("gone/src"), Evidence::Edited, Some(40));
         observations.record(home.clone(), Evidence::Command, Some(50));
 
-        let discovery = discover(observations, Some(&home), true);
+        let discovery = discover(observations, &home, true);
 
         assert_eq!(
             discovery.worked_in,
@@ -201,7 +212,7 @@ mod tests {
         let mut observations = Observations::default();
         observations.record(home.join("care"), Evidence::Edited, None);
 
-        let discovery = discover(observations, Some(&home), true);
+        let discovery = discover(observations, &home, true);
 
         assert_eq!(discovery.worked_in.len(), 1);
         assert_eq!(
@@ -240,7 +251,7 @@ mod tests {
         repository(&root);
         std::fs::create_dir_all(root.join("app")).unwrap();
 
-        let discovery = discover(Observations::default(), Some(&root.join("app")), true);
+        let discovery = discover(Observations::default(), &root.join("app"), true);
 
         assert_eq!(discovery.worked_in.len(), 1);
         assert_eq!(

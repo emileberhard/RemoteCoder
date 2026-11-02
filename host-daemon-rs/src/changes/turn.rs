@@ -9,7 +9,7 @@ use tokio::process::Command;
 
 use super::checkouts::Roots;
 use super::patch::{Budgets, ChangedFile, PatchSplitter};
-use super::{BUDGETS, collect};
+use super::{Admission, BUDGETS, collect};
 
 const MAXIMUM_RECONSTRUCTED_BYTES: u64 = 8 * 1024 * 1024;
 const MAXIMUM_NET_DIFF_BYTES: usize = 32 * 1024 * 1024;
@@ -17,7 +17,18 @@ const MAXIMUM_NET_DIFF_BYTES: usize = 32 * 1024 * 1024;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Edit {
     pub path: String,
-    pub change: Change,
+    pub change: Option<Change>,
+}
+
+impl Edit {
+    pub(crate) fn recorded_bytes(&self) -> usize {
+        self.path.len()
+            + match &self.change {
+                Some(Change::Add(content) | Change::Delete(content)) => content.len(),
+                Some(Change::Update { hunks, .. }) => hunks.len(),
+                None => 0,
+            }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,18 +67,29 @@ pub(crate) fn recorded_edits(item: &Value) -> Vec<Edit> {
             let path = change["path"]
                 .as_str()
                 .filter(|path| path.starts_with('/'))?;
-            let diff = change["diff"].as_str().unwrap_or_default().to_owned();
+            let diff = change["diff"].as_str().map(str::to_owned);
             let kind = &change["kind"];
             let change = match kind["type"].as_str()? {
-                "add" => Change::Add(diff),
-                "delete" => Change::Delete(diff),
-                "update" => Change::Update {
-                    hunks: diff,
-                    moved_to: kind["movePath"]
+                "add" => diff.map(Change::Add),
+                "delete" => diff.map(Change::Delete),
+                "update" => {
+                    let moved_to = kind["movePath"]
                         .as_str()
-                        .or_else(|| kind["move_path"].as_str())
-                        .map(str::to_owned),
-                },
+                        .or_else(|| kind["move_path"].as_str());
+                    diff.map(|mut hunks| {
+                        if let Some(target) = moved_to
+                            && let Some(kept) = hunks
+                                .strip_suffix(&format!("\n\nMoved to: {target}"))
+                                .map(str::len)
+                        {
+                            hunks.truncate(kept);
+                        }
+                        Change::Update {
+                            hunks,
+                            moved_to: moved_to.map(str::to_owned),
+                        }
+                    })
+                }
                 _ => return None,
             };
             Some(Edit {
@@ -81,20 +103,43 @@ pub(crate) fn recorded_edits(item: &Value) -> Vec<Edit> {
 struct TouchedFile {
     path: String,
     relative: String,
-    changes: Vec<Change>,
+    changes: Option<Vec<Change>>,
 }
 
-pub(crate) async fn turn_files(edits: Vec<Edit>) -> Result<TurnFiles> {
-    let groups = tokio::task::spawn_blocking(move || grouped(edits)).await?;
-    let mut patched = Vec::with_capacity(groups.len());
+pub(crate) async fn turn_files(edits: Vec<Edit>, admission: &Admission) -> Result<TurnFiles> {
+    let groups = admission.blocking(move || grouped(edits)).await?;
+    let mut turn = TurnFiles {
+        files: Vec::new(),
+        unlisted_files: 0,
+    };
+    let mut used_bytes = 0;
     for (root, files) in groups {
-        let mut patches = Vec::new();
+        let mut splitter = PatchSplitter::new(Budgets {
+            file_patch_bytes: BUDGETS.file_patch_bytes,
+            hunk_bytes: BUDGETS.hunk_bytes.saturating_sub(used_bytes),
+            response_bytes: BUDGETS.response_bytes.saturating_sub(used_bytes),
+            files: BUDGETS.files.saturating_sub(turn.files.len()),
+        });
         for file in &files {
-            patches.extend(patches_of(&root, file).await);
+            let Some(changes) = &file.changes else {
+                turn.unlisted_files += 1;
+                continue;
+            };
+            for patch in patches_of(&root, file, changes).await {
+                splitter.push(patch.as_bytes());
+            }
         }
-        patched.push((root, patches));
+        let split = splitter.finish();
+        turn.unlisted_files += split.unlisted_files;
+        for file in split.files {
+            used_bytes += file.patch.len();
+            turn.files.push(TurnFile {
+                root: root.clone(),
+                file,
+            });
+        }
     }
-    Ok(split(patched))
+    Ok(turn)
 }
 
 fn grouped(edits: Vec<Edit>) -> Vec<(String, Vec<TouchedFile>)> {
@@ -103,7 +148,11 @@ fn grouped(edits: Vec<Edit>) -> Vec<(String, Vec<TouchedFile>)> {
     let mut positions: HashMap<String, (usize, usize)> = HashMap::new();
     for Edit { path, change } in edits {
         if let Some(&(group, file)) = positions.get(&path) {
-            groups[group].1[file].changes.push(change);
+            let touched = &mut groups[group].1[file];
+            match (&mut touched.changes, change) {
+                (Some(changes), Some(change)) => changes.push(change),
+                _ => touched.changes = None,
+            }
             continue;
         }
         let (root, relative) = locate(&mut roots, Path::new(&path));
@@ -118,40 +167,10 @@ fn grouped(edits: Vec<Edit>) -> Vec<(String, Vec<TouchedFile>)> {
         groups[group].1.push(TouchedFile {
             path,
             relative,
-            changes: vec![change],
+            changes: change.map(|change| vec![change]),
         });
     }
     groups
-}
-
-fn split(groups: Vec<(String, Vec<String>)>) -> TurnFiles {
-    let mut files = Vec::new();
-    let mut unlisted_files = 0;
-    let mut used_bytes = 0;
-    for (root, patches) in groups {
-        let mut splitter = PatchSplitter::new(Budgets {
-            file_patch_bytes: BUDGETS.file_patch_bytes,
-            hunk_bytes: BUDGETS.hunk_bytes.saturating_sub(used_bytes),
-            response_bytes: BUDGETS.response_bytes.saturating_sub(used_bytes),
-            files: BUDGETS.files.saturating_sub(files.len()),
-        });
-        for patch in &patches {
-            splitter.push(patch.as_bytes());
-        }
-        let split = splitter.finish();
-        unlisted_files += split.unlisted_files;
-        for file in split.files {
-            used_bytes += file.patch.len();
-            files.push(TurnFile {
-                root: root.clone(),
-                file,
-            });
-        }
-    }
-    TurnFiles {
-        files,
-        unlisted_files,
-    }
 }
 
 fn locate(roots: &mut Roots, path: &Path) -> (String, String) {
@@ -172,14 +191,14 @@ fn locate(roots: &mut Roots, path: &Path) -> (String, String) {
     (folder.to_string_lossy().into_owned(), name)
 }
 
-async fn patches_of(root: &str, file: &TouchedFile) -> Vec<String> {
+async fn patches_of(root: &str, file: &TouchedFile, changes: &[Change]) -> Vec<String> {
     let recorded = || -> Vec<String> {
-        file.changes
+        changes
             .iter()
             .map(|change| recorded_patch(root, &file.relative, change))
             .collect()
     };
-    let moved = file.changes.iter().any(|change| {
+    let moved = changes.iter().any(|change| {
         matches!(
             change,
             Change::Update {
@@ -188,10 +207,10 @@ async fn patches_of(root: &str, file: &TouchedFile) -> Vec<String> {
             }
         )
     });
-    if file.changes.len() == 1 || moved {
+    if changes.len() == 1 || moved {
         return recorded();
     }
-    let Some((before, after)) = reconstruct(Path::new(&file.path), &file.changes).await else {
+    let Some((before, after)) = reconstruct(Path::new(&file.path), changes).await else {
         return recorded();
     };
     if before == after {
@@ -459,20 +478,29 @@ async fn net_patch(relative: &str, before: Option<&str>, after: Option<&str>) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::changes::ChangeReader;
     use serde_json::json;
 
-    fn update(hunks: &str) -> Change {
-        Change::Update {
+    fn update(hunks: &str) -> Option<Change> {
+        Some(Change::Update {
             hunks: hunks.into(),
             moved_to: None,
-        }
+        })
+    }
+
+    async fn files_of(edits: Vec<Edit>) -> TurnFiles {
+        ChangeReader::default()
+            .admit(|admission| async move { turn_files(edits, &admission).await })
+            .await
+            .unwrap()
     }
 
     #[test]
     fn reads_both_providers_move_spellings_and_skips_unapplied_edits() {
         let item = json!({"type":"fileChange","status":"completed","changes":[
-            {"path":"/r/a.rs","kind":{"type":"update","move_path":"/r/b.rs"},"diff":"@@ -1 +1 @@\n-a\n+b\n"},
+            {"path":"/r/a.rs","kind":{"type":"update","move_path":"/r/b.rs"},"diff":"@@ -1 +1 @@\n-a\n+b\n\n\nMoved to: /r/b.rs"},
             {"path":"/r/c.rs","kind":{"type":"update","movePath":null},"diff":""},
+            {"path":"/r/notebook.ipynb","kind":{"type":"update","movePath":null},"diff":null},
             {"path":"relative.rs","kind":{"type":"add"},"diff":"x\n"}
         ]});
         assert_eq!(
@@ -480,14 +508,18 @@ mod tests {
             vec![
                 Edit {
                     path: "/r/a.rs".into(),
-                    change: Change::Update {
+                    change: Some(Change::Update {
                         hunks: "@@ -1 +1 @@\n-a\n+b\n".into(),
                         moved_to: Some("/r/b.rs".into())
-                    }
+                    })
                 },
                 Edit {
                     path: "/r/c.rs".into(),
                     change: update("")
+                },
+                Edit {
+                    path: "/r/notebook.ipynb".into(),
+                    change: None
                 },
             ]
         );
@@ -549,13 +581,20 @@ mod tests {
             },
             Edit {
                 path: "/nonexistent-folder/notes.md".into(),
-                change: Change::Add("# Notes".into()),
+                change: Some(Change::Add("# Notes".into())),
+            },
+            Edit {
+                path: "/nonexistent-folder/notebook.ipynb".into(),
+                change: None,
             },
         ];
 
-        let turn = turn_files(edits).await.unwrap();
+        let turn = files_of(edits).await;
 
-        assert_eq!(turn.unlisted_files, 0);
+        assert_eq!(
+            turn.unlisted_files, 1,
+            "the notebook edit recorded no content"
+        );
         assert_eq!(turn.files.len(), 2);
         assert_eq!(turn.files[0].root, root.to_string_lossy());
         assert_eq!(
@@ -582,7 +621,7 @@ mod tests {
         let first = update("@@ -1 +1 @@\n-x\n+y\n");
         let second = update("@@ -1 +1 @@\n-y\n+z\n");
 
-        let turn = turn_files(vec![
+        let turn = files_of(vec![
             Edit {
                 path: path.clone(),
                 change: first,
@@ -592,8 +631,7 @@ mod tests {
                 change: second,
             },
         ])
-        .await
-        .unwrap();
+        .await;
 
         assert_eq!(turn.files.len(), 2);
         assert!(turn.files[0].file.patch.ends_with("-x\n+y\n"));

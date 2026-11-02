@@ -4,6 +4,7 @@ pub(crate) mod turn;
 
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -12,7 +13,7 @@ use nix::unistd::Pid;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
-use tokio::sync::Semaphore;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use patch::{Budgets, ChangedFile, PatchSplitter};
 
@@ -90,26 +91,50 @@ pub(crate) struct Snapshot {
 }
 
 pub(crate) struct ChangeReader {
-    admission: Semaphore,
+    admission: Arc<Semaphore>,
+}
+
+#[derive(Clone)]
+pub(crate) struct Admission {
+    _permit: Arc<OwnedSemaphorePermit>,
+}
+
+impl Admission {
+    pub(crate) async fn blocking<T: Send + 'static>(
+        &self,
+        work: impl FnOnce() -> T + Send + 'static,
+    ) -> Result<T> {
+        let held = self.clone();
+        Ok(tokio::task::spawn_blocking(move || {
+            let _held = held;
+            work()
+        })
+        .await?)
+    }
 }
 
 impl Default for ChangeReader {
     fn default() -> Self {
         Self {
-            admission: Semaphore::new(CONCURRENT_READS),
+            admission: Arc::new(Semaphore::new(CONCURRENT_READS)),
         }
     }
 }
 
 impl ChangeReader {
     pub(crate) async fn read(&self, request: ReadRequest) -> Result<ChangeRead> {
-        self.admit(read(Path::new(&request.directory), request.source))
+        self.admit(|_| read(Path::new(&request.directory), request.source))
             .await
     }
 
-    pub(crate) async fn admit<T>(&self, work: impl Future<Output = Result<T>>) -> Result<T> {
-        let _permit = self.admission.acquire().await?;
-        tokio::time::timeout(READ_TIMEOUT, work)
+    pub(crate) async fn admit<T, F: Future<Output = Result<T>>>(
+        &self,
+        work: impl FnOnce(Admission) -> F,
+    ) -> Result<T> {
+        let admission = Admission {
+            _permit: Arc::new(self.admission.clone().acquire_owned().await?),
+        };
+        tokio::time::timeout(READ_TIMEOUT, work(admission))
             .await
             .map_err(|_| {
                 anyhow!(
