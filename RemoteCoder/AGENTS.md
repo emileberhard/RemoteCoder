@@ -681,11 +681,15 @@ entrypoint linked above.
 - A delivery failure stays on its own row: the label carries the submission's
   `deliveryError`, including a failed Send Now or Remove from Queue on a queued
   row. The transcript has no separate error rows; restore drops the local
-  error notices older builds wrote. A "Not sent" row offers Remove
-  (`ConversationState.removeNotSent`), which deletes the submission and its
-  `local-` turn. When a submission fails or becomes unconfirmed, its item
-  records the latest observed position (`Item.placedAfter`), so the row keeps
-  its place after the turn it followed when history reloads around it.
+  error notices older builds wrote; a queue start that fails without a local
+  row raises a conversation alert. A "Not sent" row offers Remove
+  (`ConversationState.removeNotSent`), which deletes the submission, its
+  `local-` turn and its write-ahead record
+  (`ConversationCheckpointStore.discardSubmission`). A send's item records the
+  latest observed position when admitted, and a queued row when it fails or
+  becomes unconfirmed (`Item.placedAfter`), so the row keeps its place after
+  the turn it followed when history reloads around it; a row back in the queue
+  releases it. Histories without positions keep the earlier ordering.
 - Action-group durations use their own observed boundaries; a user message
   bounds them when the agent received it (`completedAtMs`), not when it was
   sent. Missing timestamps stay unknown.
