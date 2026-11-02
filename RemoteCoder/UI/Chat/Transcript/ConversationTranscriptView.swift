@@ -64,12 +64,12 @@ struct ConversationTranscriptView: View {
         }
     }
 
-    private var queuedActions: QueuedMessageActions {
+    private var deliveryActions: MessageDeliveryActions {
         var sendNow: ((ChatMessage) -> Void)?
         if !screen.canSteerCurrentConversation {
             sendNow = { [screen] message in screen.sendQueuedMessageNow(message) }
         }
-        return QueuedMessageActions(sendNow: sendNow, remove: { [screen] message in screen.removeQueuedMessage(message) })
+        return MessageDeliveryActions(sendNow: sendNow, remove: { [screen] message in screen.removeQueuedMessage(message) })
     }
 
     private var transcript: some View {
@@ -87,7 +87,7 @@ struct ConversationTranscriptView: View {
                     await screen.forkConversation(from: message)
                 }
             },
-            queuedActions: queuedActions,
+            deliveryActions: deliveryActions,
             onToggleTimeline: { jobID in
                 #if os(iOS)
                 onDismissComposerFocus()

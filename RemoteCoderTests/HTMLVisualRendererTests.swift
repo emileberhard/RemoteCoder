@@ -1817,7 +1817,7 @@ private struct CompactVisualTranscriptView: View {
             readingPosition: fixture.readingPosition, rowPresentations: fixture.rowPresentations,
             readingScope: fixture.readingScope, retainedSurfaces: nil, renderedMessages: fixture.renderedMessages,
             forkableMessageIDs: [], scrollToRow: fixture.request, onFork: { _ in },
-            queuedActions: QueuedMessageActions(sendNow: nil, remove: { _ in }),
+            deliveryActions: MessageDeliveryActions(sendNow: nil, remove: { _ in }),
             onToggleTimeline: { _ in }, questionCard: { _ in EmptyView() }, onBackgroundTap: {},
             historyEdgeStatus: [:], canPrefetchOlderHistory: false, canLoadHistory: true, onLoadHistory: { _ in nil }, onShowLatest: {},
             onFirstContent: {}, bottomBar: Optional<EmptyView>.none)

@@ -4,12 +4,12 @@ struct ChatBubbleMenu: View {
     let message: ChatMessage
     let rendered: RenderedMessage?
     let onFork: ((ChatMessage) -> Void)?
-    let queuedActions: QueuedMessageActions?
+    let deliveryActions: MessageDeliveryActions?
     let onSelectText: ((String) -> Void)?
 
     var body: some View {
-        if let queuedActions {
-            if let sendNow = queuedActions.sendNow {
+        if let deliveryActions {
+            if let sendNow = deliveryActions.sendNow {
                 Button {
                     sendNow(message)
                 } label: {
@@ -17,7 +17,7 @@ struct ChatBubbleMenu: View {
                 }
             }
             Button(role: .destructive) {
-                queuedActions.remove(message)
+                deliveryActions.remove(message)
             } label: {
                 Label("Remove from Queue", systemImage: "trash")
             }

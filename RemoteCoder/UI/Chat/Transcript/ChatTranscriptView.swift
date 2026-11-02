@@ -12,7 +12,7 @@ struct ChatTranscriptView<QuestionContent: View, BottomBar: View>: View {
 
     init(items: [ChatStreamItem], readingPosition: TranscriptReadingPosition, rowPresentations: TranscriptRowPresentations, readingScope: UUID, retainedSurfaces: TranscriptSurfaceRetention.Scope?, renderedMessages: RenderedMessageStore,
          forkableMessageIDs: Set<UUID>, scrollToRow: TranscriptRowRequest?, onFork: @escaping (ChatMessage) -> Void,
-         queuedActions: QueuedMessageActions, onToggleTimeline: @escaping (String) -> Void,
+         deliveryActions: MessageDeliveryActions, onToggleTimeline: @escaping (String) -> Void,
          questionCard: @escaping (QuestionPrompt) -> QuestionContent, onRefreshCompaction: (() -> Void)? = nil,
          onBackgroundTap: @escaping () -> Void, historyEdgeStatus: [HistoryEdge.Kind: HistoryEdge.Status],
          canPrefetchOlderHistory: Bool, canLoadHistory: Bool,
@@ -24,7 +24,7 @@ struct ChatTranscriptView<QuestionContent: View, BottomBar: View>: View {
             TranscriptContentView(items: items, readingPosition: readingPosition, rowPresentations: rowPresentations,
                 readingScope: readingScope, retainedSurfaces: retainedSurfaces, renderedMessages: renderedMessages,
                 forkableMessageIDs: forkableMessageIDs, scrollToRow: scrollToRow, onFork: onFork,
-                queuedActions: queuedActions, onToggleTimeline: onToggleTimeline, questionCard: questionCard,
+                deliveryActions: deliveryActions, onToggleTimeline: onToggleTimeline, questionCard: questionCard,
                 onRefreshCompaction: onRefreshCompaction, onBackgroundTap: onBackgroundTap,
                 historyEdgeStatus: historyEdgeStatus, canPrefetchOlderHistory: canPrefetchOlderHistory,
                 canLoadHistory: canLoadHistory, onLoadHistory: onLoadHistory, onShowLatest: onShowLatest, onFirstContent: onFirstContent,
@@ -96,7 +96,7 @@ private struct TranscriptContentView<QuestionContent: View, BottomBar: View>: Vi
     /// A one-shot send/question request; each request owns its anchor and token.
     let scrollToRow: TranscriptRowRequest?
     let onFork: (ChatMessage) -> Void
-    let queuedActions: QueuedMessageActions
+    let deliveryActions: MessageDeliveryActions
     let onToggleTimeline: (String) -> Void
     let questionCard: (QuestionPrompt) -> QuestionContent
     var onRefreshCompaction: (() -> Void)? = nil
@@ -150,7 +150,7 @@ private struct TranscriptContentView<QuestionContent: View, BottomBar: View>: Vi
 
     init(items: [ChatStreamItem], readingPosition: TranscriptReadingPosition, rowPresentations: TranscriptRowPresentations, readingScope: UUID, retainedSurfaces: TranscriptSurfaceRetention.Scope?, renderedMessages: RenderedMessageStore,
          forkableMessageIDs: Set<UUID>, scrollToRow: TranscriptRowRequest?, onFork: @escaping (ChatMessage) -> Void,
-         queuedActions: QueuedMessageActions, onToggleTimeline: @escaping (String) -> Void,
+         deliveryActions: MessageDeliveryActions, onToggleTimeline: @escaping (String) -> Void,
          questionCard: @escaping (QuestionPrompt) -> QuestionContent, onRefreshCompaction: (() -> Void)? = nil,
          onBackgroundTap: @escaping () -> Void, historyEdgeStatus: [HistoryEdge.Kind: HistoryEdge.Status],
          canPrefetchOlderHistory: Bool, canLoadHistory: Bool,
@@ -165,7 +165,7 @@ private struct TranscriptContentView<QuestionContent: View, BottomBar: View>: Vi
         self.forkableMessageIDs = forkableMessageIDs
         self.scrollToRow = scrollToRow
         self.onFork = onFork
-        self.queuedActions = queuedActions
+        self.deliveryActions = deliveryActions
         self.onToggleTimeline = onToggleTimeline
         self.questionCard = questionCard
         self.onRefreshCompaction = onRefreshCompaction
@@ -329,7 +329,7 @@ private struct TranscriptContentView<QuestionContent: View, BottomBar: View>: Vi
                 follow.revealRow()
                 native.scrollTo(id: rowID, anchor: nil, animated: false, completion: {})
                 onToggleTimeline(jobID)
-            }, onFork: onFork, queuedActions: queuedActions, refreshCompaction: onRefreshCompaction)
+            }, onFork: onFork, deliveryActions: deliveryActions, refreshCompaction: onRefreshCompaction)
         AppKitTranscriptScrollView(presentation: nativePresentation, retention: retainedSurfaces, readingPosition: readingPosition, rowPresentations: rowPresentations, readingScope: readingScope,
             rows: rows.map(rowInputs), renderedMessages: renderedMessages, reservedBottom: reservedBottom,
             isFollowingLatest: { follow.isFollowingLatest },
@@ -827,7 +827,7 @@ private struct TranscriptContentView<QuestionContent: View, BottomBar: View>: Vi
         switch row.kind {
         case .content(.message(let message)):
             TranscriptRowInputs(row: row, isForkable: forkableMessageIDs.contains(message.id), edgeStatus: nil,
-                                canSendQueuedMessage: message.delivery == .queued && queuedActions.sendNow != nil)
+                                canSendQueuedMessage: message.delivery == .queued && deliveryActions.sendNow != nil)
         case .content(.historyEdge(let edge)):
             TranscriptRowInputs(row: row, isForkable: false, edgeStatus: historyEdgeStatus[edge.kind], canSendQueuedMessage: false)
         default:
@@ -932,18 +932,18 @@ private struct TranscriptContentView<QuestionContent: View, BottomBar: View>: Vi
     private func messageRow(_ message: ChatMessage) -> some View {
         #if os(macOS)
         let fork: (ChatMessage) -> Void = { [actions = nativePresentation.actions] in actions.fork($0) }
-        let queued = nativePresentation.actions.queuedActions
+        let queued = nativePresentation.actions.deliveryActions
         let attachment: (MessageAttachment) -> Void = { [actions = nativePresentation.actions] in actions.openAttachment($0) }
         #else
         let fork = onFork
-        let queued = queuedActions
+        let queued = deliveryActions
         let attachment: (MessageAttachment) -> Void = { [selection = $openingAttachment] in selection.wrappedValue = $0 }
         #endif
         return ChatBubble(
             message: message,
             renderedMessages: renderedMessages,
             onFork: forkableMessageIDs.contains(message.id) ? fork : nil,
-            queuedActions: message.delivery == .queued ? queued : nil,
+            deliveryActions: message.delivery == .queued ? queued : nil,
             onSelectText: textSelectionAction(for: message),
             onOpenAttachment: attachment
         )

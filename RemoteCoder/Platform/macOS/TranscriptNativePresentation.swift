@@ -42,17 +42,17 @@ final class TranscriptNativeActions {
     private var onLoadHistory: ((HistoryEdge) -> Void)?
     private var onToggleTimeline: ((String, String) -> Void)?
     private var onFork: ((ChatMessage) -> Void)?
-    private var queued: QueuedMessageActions?
+    private var queued: MessageDeliveryActions?
     private var onRefreshCompaction: (() -> Void)?
 
     func bind(openAttachment: @escaping (MessageAttachment) -> Void, loadHistory: @escaping (HistoryEdge) -> Void,
               toggleTimeline: @escaping (String, String) -> Void, onFork: @escaping (ChatMessage) -> Void,
-              queuedActions: QueuedMessageActions, refreshCompaction: (() -> Void)?) {
+              deliveryActions: MessageDeliveryActions, refreshCompaction: (() -> Void)?) {
         onOpenAttachment = openAttachment
         onLoadHistory = loadHistory
         onToggleTimeline = toggleTimeline
         self.onFork = onFork
-        queued = queuedActions
+        queued = deliveryActions
         onRefreshCompaction = refreshCompaction
     }
 
@@ -71,8 +71,8 @@ final class TranscriptNativeActions {
     func fork(_ message: ChatMessage) { onFork?(message) }
     func refreshCompaction() { onRefreshCompaction?() }
 
-    var queuedActions: QueuedMessageActions {
-        QueuedMessageActions(sendNow: queued?.sendNow == nil ? nil : { [weak self] in self?.queued?.sendNow?($0) },
+    var deliveryActions: MessageDeliveryActions {
+        MessageDeliveryActions(sendNow: queued?.sendNow == nil ? nil : { [weak self] in self?.queued?.sendNow?($0) },
                              remove: { [weak self] in self?.queued?.remove($0) })
     }
 }

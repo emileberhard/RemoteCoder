@@ -11,29 +11,29 @@ struct ChatBubble: View {
     /// Previous presentation remains visible until its replacement is ready.
     let renderedMessages: RenderedMessageStore
     let onFork: ((ChatMessage) -> Void)?
-    let queuedActions: QueuedMessageActions?
+    let deliveryActions: MessageDeliveryActions?
     var onSelectText: ((String) -> Void)? = nil
     var onOpenAttachment: ((MessageAttachment) -> Void)? = nil
     static let messageVerticalInset: CGFloat = 8
     private static let sendingRevealDelay: Duration = .milliseconds(500)
 
     init(message: ChatMessage, renderedMessages: RenderedMessageStore,
-         onFork: ((ChatMessage) -> Void)?, queuedActions: QueuedMessageActions?,
+         onFork: ((ChatMessage) -> Void)?, deliveryActions: MessageDeliveryActions?,
          onSelectText: ((String) -> Void)? = nil, onOpenAttachment: ((MessageAttachment) -> Void)? = nil) {
         self.message = message
         self.renderedMessages = renderedMessages
         self.onFork = onFork
-        self.queuedActions = queuedActions
+        self.deliveryActions = deliveryActions
         self.onSelectText = onSelectText
         self.onOpenAttachment = onOpenAttachment
         _menuOwner = State(initialValue: ChatBubbleMenuOwner(message: message, renderedMessages: renderedMessages,
-            onFork: onFork, queuedActions: queuedActions, onSelectText: onSelectText))
+            onFork: onFork, deliveryActions: deliveryActions, onSelectText: onSelectText))
     }
 
     var body: some View {
         let _ = PerfBuild.count("bubble.body")
         let _ = menuOwner.update(message: message, renderedMessages: renderedMessages,
-            onFork: onFork, queuedActions: queuedActions, onSelectText: onSelectText)
+            onFork: onFork, deliveryActions: deliveryActions, onSelectText: onSelectText)
         #if os(macOS)
         let _ = surfaceActivity?.recordBody()
         #endif
@@ -251,24 +251,24 @@ final class ChatBubbleMenuOwner {
     private(set) var message: ChatMessage
     @ObservationIgnored private(set) var renderedMessages: RenderedMessageStore
     @ObservationIgnored private(set) var onFork: ((ChatMessage) -> Void)?
-    @ObservationIgnored private(set) var queuedActions: QueuedMessageActions?
+    @ObservationIgnored private(set) var deliveryActions: MessageDeliveryActions?
     @ObservationIgnored private(set) var onSelectText: ((String) -> Void)?
 
     init(message: ChatMessage, renderedMessages: RenderedMessageStore, onFork: ((ChatMessage) -> Void)?,
-         queuedActions: QueuedMessageActions?, onSelectText: ((String) -> Void)?) {
+         deliveryActions: MessageDeliveryActions?, onSelectText: ((String) -> Void)?) {
         self.message = message
         self.renderedMessages = renderedMessages
         self.onFork = onFork
-        self.queuedActions = queuedActions
+        self.deliveryActions = deliveryActions
         self.onSelectText = onSelectText
     }
 
     func update(message: ChatMessage, renderedMessages: RenderedMessageStore, onFork: ((ChatMessage) -> Void)?,
-                queuedActions: QueuedMessageActions?, onSelectText: ((String) -> Void)?) {
+                deliveryActions: MessageDeliveryActions?, onSelectText: ((String) -> Void)?) {
         self.message = message
         self.renderedMessages = renderedMessages
         self.onFork = onFork
-        self.queuedActions = queuedActions
+        self.deliveryActions = deliveryActions
         self.onSelectText = onSelectText
     }
 }
@@ -292,7 +292,7 @@ private struct ChatBubbleOwnedMenu: View {
 
     var body: some View {
         ChatBubbleMenu(message: owner.message, rendered: owner.renderedMessages[owner.message.id], onFork: owner.onFork,
-            queuedActions: owner.queuedActions, onSelectText: owner.onSelectText)
+            deliveryActions: owner.deliveryActions, onSelectText: owner.onSelectText)
     }
 }
 
@@ -305,7 +305,7 @@ private struct ChatBubbleOwnedPreview: View {
     }
 }
 
-struct QueuedMessageActions {
+struct MessageDeliveryActions {
     let sendNow: ((ChatMessage) -> Void)?
     let remove: (ChatMessage) -> Void
 }
