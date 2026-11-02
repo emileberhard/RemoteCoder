@@ -29,8 +29,8 @@ try {
     await request("/credentials/enroll", phone, enrollment("forbidden"), 403);
     const mac = (await request("/credentials/enroll", shared, enrollment("mac"))).token;
     const tablet = (await request("/credentials/enroll", shared, enrollment("tablet"))).token;
-    assert.notEqual(mac, tablet);
-    assert.equal(mac, (await request("/credentials/enroll", shared, enrollment("mac"))).token);
+    assert(mac !== tablet, "Enrollment reused another device identity");
+    assert(mac === (await request("/credentials/enroll", shared, enrollment("mac"))).token, "Enrollment retry changed its result");
     const operator = gateway.token;
     gateway.token = mac;
     const client = await gateway.connect();
