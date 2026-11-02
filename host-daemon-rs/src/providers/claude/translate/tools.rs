@@ -318,7 +318,7 @@ fn file_change_item(
         json!({ "type": "update", "movePath": Value::Null })
     };
 
-    let diff = recorded_diff(created, outcome).unwrap_or_default();
+    let diff = recorded_diff(created, outcome);
 
     json!({
         "type": "fileChange",
@@ -342,14 +342,11 @@ fn recorded_diff(created: bool, outcome: &ToolOutcome) -> Option<String> {
     let mut diff = String::new();
     for hunk in result.get("structuredPatch")?.as_array()? {
         let range = |start: &str, count: &str| -> Option<String> {
-            let count = hunk.get(count)?.as_u64()?;
-            let start = hunk.get(start)?.as_u64()?;
-            let start = if count == 0 {
-                start.saturating_sub(1)
-            } else {
-                start
-            };
-            Some(format!("{start},{count}"))
+            Some(format!(
+                "{},{}",
+                hunk.get(start)?.as_u64()?,
+                hunk.get(count)?.as_u64()?
+            ))
         };
         let old = range("oldStart", "oldLines")?;
         let new = range("newStart", "newLines")?;
@@ -606,7 +603,7 @@ mod tests {
             "/",
             finished(json!({
                 "type":"update","filePath":"/a.rs","content":"","originalFile":"x\n",
-                "structuredPatch":[{"oldStart":1,"oldLines":1,"newStart":1,"newLines":0,"lines":["-x"]}]
+                "structuredPatch":[{"oldStart":1,"oldLines":1,"newStart":0,"newLines":0,"lines":["-x"]}]
             })),
         );
         assert_eq!(
@@ -624,6 +621,14 @@ mod tests {
         );
         assert_eq!(created["changes"][0]["kind"]["type"], json!("add"));
         assert_eq!(created["changes"][0]["diff"], json!("new\n"));
+        let notebook = tool_item(
+            "toolu_n",
+            "NotebookEdit",
+            &json!({"notebook_path":"/c.ipynb"}),
+            "/",
+            finished(json!({"cell_id":"a","new_source":"x"})),
+        );
+        assert_eq!(notebook["changes"][0]["diff"], Value::Null);
     }
 
     #[test]
