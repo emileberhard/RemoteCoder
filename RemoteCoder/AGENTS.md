@@ -975,7 +975,9 @@ entrypoint linked above.
   something to show, sharing `StatusPill`'s glass capsule. The changes pill
   shows `ChangeSummaryModel`'s file and line totals and opens change review:
   the sheet on iOS, the inspector on the Mac
-  ([Change review](../docs/change-review.md#changes-pill)).
+  ([Change review](../docs/change-review.md#changes-pill)). Request summary
+  reads through `ChatScreenModel.refreshChangeSummary()`, which admits them only
+  while the screen is on screen; the transcript reads only `hasChanges`.
 - User and assistant bubbles render Markdown blocks. Block gaps, heading
   margins and list spacing read `interfaceScale` in the rendering views; zoom
   changes layout without reparsing Markdown or changing block versions.

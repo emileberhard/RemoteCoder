@@ -209,9 +209,14 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         target.activeSessionChanged(to: normalized)
     }
 
+    func refreshChangeSummary() {
+        guard isOnScreen else { return }
+        changeSummary?.refresh()
+    }
+
     private func followChangeSummary() {
         guard changeSummary?.summarizes(conversation: activeSessionID, directory: workingDirectory) != true else { return }
-        _ = changeSummary?.stop()
+        changeSummary?.stop()
         changeSummary = activeSessionID.flatMap { conversation in
             workingDirectory.map { ChangeSummaryModel(conversation: conversation, directory: $0, client: target.gatewayClient) }
         }

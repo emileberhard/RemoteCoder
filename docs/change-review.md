@@ -63,7 +63,7 @@ the working folder.
 
 The changes pill sits beside the subagents pill above the composer, as in
 ChatGPT for iOS, and appears only while the conversation's checkout has
-unstaged changes. It shows the file count and, when every file's counts are
+uncommitted changes. It shows the file count and, when every file's counts are
 known, the added and removed lines. `ChangeSummaryModel` owns those totals for
 the screen's conversation and folder: it reads `changes/checkouts`, then
 `changes/read` with the review's default comparison
@@ -72,11 +72,18 @@ opens, and keeps only the totals (`ChangeTotals`, which the review's summary
 shares). A New Chat without a conversation has no pill.
 
 - It reads when the conversation appears, when a file change or turn of the
-  shown conversation completes, and when the app becomes active. One read runs
-  at a time; requests during it start one more read two seconds after it
-  ends, so a turn that edits many files costs a read every few seconds at most.
-- A failed read keeps the last totals and logs; a folder that is not a
+  shown conversation or one of its listed agents completes, when the app
+  becomes active and when the gateway connects, and only while the screen is
+  on screen in an active scene. Backgrounding cancels a running read. One read
+  runs at a time and each is followed by two quiet seconds; requests in between
+  start a single further read, so a turn that edits many files costs a read
+  every few seconds at most.
+- A failed read, including failed checkout discovery, keeps the last totals and
+  logs rather than counting another checkout; a folder that is not a
   repository, or has no changes, hides the pill.
+- iOS has no other entry to the review, so it is unreachable while the
+  checkout has no uncommitted changes, for example after an agent commits its
+  work. The Mac keeps the toolbar's Changes button and ⇧⌘D.
 - Opening the review reads again, so the review can list a newer state than
   the pill counted.
 
@@ -199,11 +206,11 @@ stays a thin host boundary.
   shell commands, other agents and the user. Last Turn complements it with the
   agents' own records, which work outside Git and across checkouts but miss
   command edits, so it says how many commands ran instead of guessing.
-- Unstaged is the default comparison and the pill's count, as in ChatGPT for
-  iOS 1.2026.286: on a connected host its capsule counts the index-to-working-
-  tree diff, hides at zero files and opens its review on Unstaged. ChatGPT
-  stages from its review, so its count covers what is not staged yet;
-  Uncommitted stays in the menu for staged changes.
+- The pill follows ChatGPT for iOS 1.2026.286, whose capsule on a connected
+  host hides at zero files and resets its review to the comparison it counts
+  on every opening. ChatGPT counts Unstaged because it stages from its review.
+  RemoteCoder has no staging, so the pill counts Uncommitted, which keeps work
+  an agent staged but did not commit visible.
 - Checkout discovery reads history and the filesystem only: no Git process,
   branch names or dirty filtering, so it stays cheap enough to repeat on every
   refresh.

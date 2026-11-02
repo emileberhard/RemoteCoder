@@ -624,7 +624,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
         reconcileObservation()
         for screen in presentingScreens {
             screen.dictation.refreshRecoverable()
-            screen.changeSummary?.refresh()
+            screen.refreshChangeSummary()
         }
         await perform(effects)
         if lifecycle.foreground == .deferred {
@@ -706,8 +706,10 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
     }
 
     private func refreshChangeSummaries(showing threadID: String) {
-        for screen in presentingScreens where screen.activeSessionID == threadID {
-            screen.changeSummary?.refresh()
+        let address = ConversationAddress(hostID: hostID, threadID: threadID)
+        for screen in presentingScreens where screen.activeSessionID == threadID
+            || screen.conversationAgents?.agents.contains(where: { $0.address(localHostID: hostID) == address }) == true {
+            screen.refreshChangeSummary()
         }
     }
 
@@ -810,6 +812,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
         for screen in screens {
             screen.historyEdges.cancelReads()
             screen.historyOpenSignpost.abandon(.cancelled)
+            screen.changeSummary?.stop()
         }
         logger.notice("scenePhase background before branch: \(self.liveActivityDebugSummary())")
         await perform(effects)
@@ -1469,6 +1472,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
             return
         }
         guard !wasConnected else { return }
+        for screen in presentingScreens { screen.refreshChangeSummary() }
         if hasConnectedGateway { onGatewayReconnect?() }
         hasConnectedGateway = true
         hostServices.automations.connectivityChanged(true)

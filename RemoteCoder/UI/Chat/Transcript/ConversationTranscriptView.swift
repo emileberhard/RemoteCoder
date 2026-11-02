@@ -57,8 +57,8 @@ struct ConversationTranscriptView: View {
         .onAppear {
             screen.markTranscriptFirstAppear()
         }
-        .task(id: screen.changeSummary.map { ObjectIdentifier($0) }) {
-            screen.changeSummary?.refresh()
+        .task(id: screen.changeSummary?.id) {
+            screen.refreshChangeSummary()
         }
         #if os(iOS)
         .onChange(of: transcriptIdentity) { _, _ in
@@ -114,7 +114,7 @@ struct ConversationTranscriptView: View {
     }
 
     private var statusPills: ConversationStatusPills? {
-        let changes = screen.changeSummary.flatMap { $0.hasChanges ? $0.totals : nil }
+        let changes = screen.changeSummary.flatMap { $0.hasChanges ? $0 : nil }
         let agents = screen.conversationAgents.flatMap { ($0.summary?.total ?? 0) > 0 ? $0 : nil }
         guard changes != nil || agents != nil else { return nil }
         return ConversationStatusPills(changes: changes, agents: agents, onReviewChanges: onReviewChanges, onShowAgents: onShowAgents)

@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct ConversationStatusPills: View {
-    let changes: ChangeTotals?
+    let changes: ChangeSummaryModel?
     let agents: ConversationAgentsModel?
     let onReviewChanges: () -> Void
     let onShowAgents: (ConversationAgentsModel) -> Void
@@ -9,8 +9,8 @@ struct ConversationStatusPills: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            if let changes {
-                ChangesPill(totals: changes, action: onReviewChanges)
+            if let totals = changes?.totals {
+                ChangesPill(totals: totals, action: onReviewChanges)
                     .transition(pillTransition)
             }
             if let agents {
@@ -18,7 +18,7 @@ struct ConversationStatusPills: View {
                     .transition(pillTransition)
             }
         }
-        .animation(.smooth, value: changes)
+        .animation(.smooth, value: changes?.totals)
         .animation(.smooth, value: agents != nil)
     }
 

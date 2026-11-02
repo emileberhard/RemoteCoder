@@ -11,7 +11,7 @@ final class ChangeReviewModel {
         static let all: [Mode] = [.lastTurn] + ChangeSource.allCases.map(Mode.git)
     }
 
-    nonisolated static let defaultSource = ChangeSource.unstaged
+    nonisolated static let defaultSource = ChangeSource.uncommitted
 
     enum State {
         case loading
@@ -91,6 +91,7 @@ final class ChangeReviewModel {
         if mode != initial || chosenRoot != nil {
             mode = initial
             chosenRoot = nil
+            root = nil
             state = .loading
         }
         refresh()
