@@ -168,7 +168,8 @@ struct ConversationQueueTests: ConversationHistoryFixtures {
         let message = ChatMessage(role: .user, text: "Later")
         state.submitToQueue(message, input: message.text)
         state.queued(message.id, submission: queued(message, as: "q1"))
-        state.queueActionFailed(message.id, reason: "Open in another client")
+        let recorded = state.queueActionFailed(message.id, reason: "Open in another client")
+        #expect(recorded)
 
         let row = try #require(ConversationProjection.project(state).messages.last)
         #expect(row.delivery == .queued)
