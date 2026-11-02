@@ -807,12 +807,12 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
         drafts.requestFlush()
         let effects = lifecycle.handle(.appPhase(.background))
         ownedTasks.cancel(.routeMove)
+        for screen in screens { screen.changeSummary?.stop() }
         await gateway.suspendLivenessChecks()
         reconcileObservation()
         for screen in screens {
             screen.historyEdges.cancelReads()
             screen.historyOpenSignpost.abandon(.cancelled)
-            screen.changeSummary?.stop()
         }
         logger.notice("scenePhase background before branch: \(self.liveActivityDebugSummary())")
         await perform(effects)
