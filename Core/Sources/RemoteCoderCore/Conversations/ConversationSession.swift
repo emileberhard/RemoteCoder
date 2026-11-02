@@ -353,10 +353,8 @@ actor ConversationSession {
         await persistLocalChanges()
     }
 
-    func queueRemoved(_ messageID: UUID) async throws {
-        if let successor { try await successor.queueRemoved(messageID); return }
-        guard state.queuedSubmissionID(for: messageID) != nil else { return }
-        try await checkpoints.discardSubmission(messageID, conversationID: conversationID, generation: checkpointGeneration)
+    func queueRemoved(_ messageID: UUID) async {
+        if let successor { await successor.queueRemoved(messageID); return }
         state.queueRemoved(messageID)
         await persistLocalChanges()
     }

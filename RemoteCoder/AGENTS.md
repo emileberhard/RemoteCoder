@@ -686,6 +686,8 @@ entrypoint linked above.
   (`ConversationSession.removeNotSent`): it deletes the write-ahead record
   first (`ConversationCheckpointStore.discardSubmission`), then the submission
   and its `local-` turn; a failed deletion keeps the row and raises an alert.
+  Remove from Queue relies on the queue confirmation's checkpoint having
+  absorbed the record.
   A send's item records the latest observed position when admitted
   (`Item.placedAfter`), so a failed or unconfirmed send keeps its place after
   the turn it followed when history reloads around it. Queued rows carry no
