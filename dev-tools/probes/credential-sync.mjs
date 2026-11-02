@@ -5,7 +5,7 @@ import { IsolatedGateway } from "./isolated-gateway.mjs";
 
 const binary = resolve(process.argv[2]);
 const gateway = await IsolatedGateway.create(binary);
-let passed = false;
+let failure;
 try {
     await gateway.writeGatewayEnv([]);
     await gateway.start();
@@ -49,12 +49,16 @@ try {
     await request("/credentials/enroll", shared, enrollment("escape"), 403);
     const persisted = await readFile(gateway.path(".remote-coder/installation-credentials.json"), "utf8");
     for (const secret of [phone, shared, mac, tablet]) assert(!persisted.includes(secret));
-    passed = true;
-    console.log(JSON.stringify({ passed, devices: 3, isolated: true, restart: true, revocation: true, secretsPersisted: false }));
+} catch (error) {
+    failure = error;
 } finally {
-    await gateway.stop().catch(async () => { await gateway.forceStop(); });
-    await gateway.stopNativeDaemon(gateway.nativeDefault);
+    try { await gateway.stop(); } catch (error) { failure ??= error; await gateway.forceStop(); }
+    try { assert.equal(await gateway.stopNativeDaemon(gateway.nativeDefault), 0); } catch (error) { failure ??= error; }
     await gateway.router?.stop(true);
-    if (passed) await gateway.removeRoot();
-    else console.error(`Credential probe retained private evidence at ${gateway.root}`);
+    if (!failure) await gateway.removeRoot();
 }
+if (failure) {
+    console.error(`Credential probe retained private evidence at ${gateway.root}`);
+    throw failure;
+}
+console.log(JSON.stringify({ passed: true, devices: 3, isolated: true, restart: true, revocation: true, secretsPersisted: false }));
