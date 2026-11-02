@@ -684,7 +684,7 @@ class CacheAdmissionTests(unittest.TestCase):
                     "product",
                 )
 
-    def test_native_inventory_timeout_retains_completed_children_without_a_root_total(self):
+    def test_native_inventory_timeout_reclaims_safe_payloads_without_claiming_a_root_total(self):
         import subprocess
 
         import build_cache
@@ -714,17 +714,26 @@ class CacheAdmissionTests(unittest.TestCase):
                     raise AssertionError("Native directory inventory was repeated")
                 return allocate(path, *args)
 
+            with patch("build_cache._open_files", return_value=False):
+                ordinary = compilation_admission(root, self.policy(budget=1024**3), [entry, deeper], set(), preview=False)
+            self.assertEqual(ordinary["evicted"], [])
             with (
                 patch("build_cache._open_files", return_value=False),
                 patch("build_cache._allocated_bytes", side_effect=payload_allocation),
             ):
                 result = compilation_admission(
-                    root, self.policy(), [entry, deeper], set(), preview=True,
+                    root, self.policy(budget=1024**3), [entry, deeper], set(), preview=False,
                     directory_bytes=inventory.directories,
                 )
             self.assertEqual(len(result["candidates"]), 2)
-            self.assertTrue(result["inventoryComplete"])
-            self.assertTrue((entry.path / "Build/Intermediates.noindex/object.o").exists())
+            self.assertEqual(len(result["evicted"]), 2)
+            self.assertFalse(result["inventoryComplete"])
+            self.assertFalse(result["rootInventoryComplete"])
+            for field in ("allocatedBytes", "projectedBytes", "remainingBytes", "unsatisfiedBudgetBytes"):
+                self.assertIsNone(result[field], field)
+            for item in (entry, deeper):
+                self.assertFalse((item.path / "Build/Intermediates.noindex/object.o").exists())
+                self.assertEqual((item.path / "Build/Products/RemoteCoder.app/binary").read_text(), "product")
 
     def test_candidate_leases_are_released_after_deadline_probe_failure_and_exception(self):
         from contextlib import nullcontext

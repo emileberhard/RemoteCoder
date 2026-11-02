@@ -1239,11 +1239,12 @@ def _compilation_admission(
     directory_bytes: dict[Path, int] | None = None,
 ) -> dict:
     current = {canonical_path(path) for path in current}
+    root_inventory_incomplete = root_bytes is None and directory_bytes is not None
     started = time.monotonic()
     result = {
         "capturedAt": datetime.now().astimezone().isoformat(),
         "budgetBytes": policy.compilation_budget_bytes,
-        "budgetScope": str(root) if root_bytes is not None else "compiler-estimate",
+        "budgetScope": str(root) if root_bytes is not None or root_inventory_incomplete else "compiler-estimate",
         "allocatedBytes": root_bytes if root_bytes is not None else 0,
         "rootAllocatedBytes": root_bytes,
         "rootInventoryComplete": root_bytes is not None,
@@ -1428,7 +1429,8 @@ def _compilation_admission(
         opened = ([name for name in opened[0] if name not in lease_names], opened[1])
         removed = set()
         pressure = (
-            result["allocatedBytes"] > policy.compilation_budget_bytes
+            root_inventory_incomplete
+            or result["allocatedBytes"] > policy.compilation_budget_bytes
             or result["freeBytesBefore"] < policy.eviction_target_free_bytes
         )
         package_resolutions = {}
@@ -1519,6 +1521,7 @@ def _compilation_admission(
                 if completion is None
                 else "retained-newest"
                 if entry.path in retained
+                and not root_inventory_incomplete
                 and projected <= policy.compilation_budget_bytes
                 and result["freeBytesBefore"] >= policy.eviction_target_free_bytes
                 else "recent"
@@ -1633,6 +1636,7 @@ def _compilation_admission(
                     continue
                 if (
                     not removed_source
+                    and not root_inventory_incomplete
                     and projected <= policy.compilation_budget_bytes
                     and (
                         result["freeBytesBefore"]
@@ -1674,6 +1678,8 @@ def _compilation_admission(
                                 missing_ok=True
                             )
         result["knownAllocatedBytes"] = result["allocatedBytes"]
+        if root_inventory_incomplete:
+            result["inventoryComplete"] = False
         result["projectedBytes"] = projected if result["inventoryComplete"] else None
         if not result["inventoryComplete"]:
             result["allocatedBytes"] = None
@@ -1694,7 +1700,7 @@ def _compilation_admission(
             else None
         )
         if result["unsatisfiedBudgetBytes"] or not result["inventoryComplete"]:
-            scope = "RemoteCoder-Build total cap" if root_bytes is not None else "Compiler allocation estimate"
+            scope = "RemoteCoder-Build total cap" if root_bytes is not None or root_inventory_incomplete else "Compiler allocation estimate"
             result["warning"] = (
                 scope + " is unsatisfied or incomplete; protected data was preserved. Admission continues subject to the free-space floor."
             )
