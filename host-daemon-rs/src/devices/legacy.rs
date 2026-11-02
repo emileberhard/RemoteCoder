@@ -6,7 +6,7 @@ use tracing::{info, warn};
 
 use super::model::{NavigationStartInputs, Token};
 use super::{AlertTarget, Destination, LocationTarget, Origin};
-use crate::config::HostPaths;
+use crate::config::{ConfigSources, HostPaths};
 use crate::ids::is_session_uuid;
 use crate::push::PushEnvironment;
 use crate::storage::private_state;
@@ -26,12 +26,17 @@ pub(super) struct Sources {
 }
 
 impl Sources {
-    pub(super) fn from_environment(paths: &HostPaths, bundle_id: &str) -> Self {
-        let alert_token = token_file("RC_APNS_TOKEN_FILE", paths, "apns_device_token");
+    pub(super) fn from_configuration(
+        paths: &HostPaths,
+        bundle_id: &str,
+        sources: &ConfigSources,
+    ) -> Self {
+        let alert_token = token_file(sources, "RC_APNS_TOKEN_FILE", paths, "apns_device_token");
         Self {
             calls_store: paths.state("agent-calls.json"),
             navigation_device: paths.state("navigation-device.json"),
             live_activity_token: token_file(
+                sources,
                 "RC_LIVE_ACTIVITY_TOKEN_FILE",
                 paths,
                 "active_tasks_live_activity_token",
@@ -39,7 +44,7 @@ impl Sources {
             environment: alert_token.with_file_name("apns_environment"),
             identity: alert_token.with_file_name("apns_notification_identity.json"),
             alert_token,
-            default_environment: default_environment(bundle_id),
+            default_environment: default_environment(sources, bundle_id),
         }
     }
 
@@ -159,21 +164,20 @@ pub(super) fn remove_if_equal(path: &Path, attempted: &Token) {
     }
 }
 
-fn token_file(variable: &str, paths: &HostPaths, default: &str) -> PathBuf {
-    match std::env::var(variable)
-        .ok()
-        .map(|value| value.trim().to_owned())
-    {
+fn token_file(
+    sources: &ConfigSources,
+    variable: &str,
+    paths: &HostPaths,
+    default: &str,
+) -> PathBuf {
+    match sources.optional_string(variable) {
         Some(value) if !value.is_empty() => expand_tilde(PathBuf::from(value), paths.home()),
         _ => paths.state(default),
     }
 }
 
-fn default_environment(bundle_id: &str) -> Option<PushEnvironment> {
-    let explicit = std::env::var("RC_PUSH_BROKER_ENV")
-        .ok()
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty());
+fn default_environment(sources: &ConfigSources, bundle_id: &str) -> Option<PushEnvironment> {
+    let explicit = sources.optional_string("RC_PUSH_BROKER_ENV");
     match explicit.as_deref() {
         Some(value) => parse_push_environment(value),
         None if bundle_id.ends_with(".dev") || bundle_id.ends_with(".exp") => {

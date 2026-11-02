@@ -718,6 +718,8 @@ impl ConfigSources {
                 !key.starts_with("RC_CODEX_GATEWAY_")
                     && !key.starts_with("RC_CLAUDE_")
                     && !key.starts_with("RC_PUSH_BROKER_")
+                    && !key.starts_with("RC_APNS_")
+                    && key.as_str() != "RC_LIVE_ACTIVITY_TOKEN_FILE"
             })
             .filter(|(key, value)| !key.trim().is_empty() && !value.trim().is_empty())
             .map(|(key, value)| (key.to_string(), value.to_string()))
@@ -1074,9 +1076,9 @@ mod tests {
                 ("RC_PUSH_BROKER_TOKEN".into(), "fixture-token".into()),
             ]),
         };
-        let crate::push::PushConfiguration::Configured { url, token } =
-            crate::push::PushConfiguration::load(&sources).unwrap()
-        else {
+        let configuration = crate::push::PushConfiguration::load(&sources).unwrap();
+        assert!(!format!("{configuration:?}").contains("fixture-token"));
+        let crate::push::PushConfiguration::Configured { url, token } = configuration else {
             panic!("file configuration must configure the push broker");
         };
         assert_eq!(

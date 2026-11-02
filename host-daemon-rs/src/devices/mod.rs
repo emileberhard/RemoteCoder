@@ -9,7 +9,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result, ensure};
 use tracing::{info, warn};
 
-use crate::config::HostPaths;
+use crate::config::{ConfigSources, HostPaths};
 use crate::push::PushEnvironment;
 use crate::storage::private_state::{self, ReadError};
 use crate::time::unix_millis;
@@ -88,15 +88,16 @@ pub(crate) struct DeviceRegistry {
 }
 
 impl DeviceRegistry {
-    pub(crate) fn open(paths: &HostPaths) -> Result<Self> {
-        let bundle_id = std::env::var("RC_APNS_BUNDLE_ID")
-            .unwrap_or_else(|_| DEFAULT_BUNDLE_ID.to_owned())
+    pub(crate) fn open(paths: &HostPaths, sources: &ConfigSources) -> Result<Self> {
+        let bundle_id = sources
+            .raw("RC_APNS_BUNDLE_ID")
+            .unwrap_or_else(|| DEFAULT_BUNDLE_ID.to_owned())
             .trim()
             .to_owned();
         ensure!(!bundle_id.is_empty(), "RC_APNS_BUNDLE_ID must not be empty");
         Ok(Self {
-            legacy: Some(Arc::new(legacy::Sources::from_environment(
-                paths, &bundle_id,
+            legacy: Some(Arc::new(legacy::Sources::from_configuration(
+                paths, &bundle_id, sources,
             ))),
             path: paths.state("devices.json"),
             bundle_id,

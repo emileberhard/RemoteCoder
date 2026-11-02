@@ -135,6 +135,27 @@ async fn run(
         platform::macos::scheduling::SchedulingCheck,
     >,
 ) -> Result<()> {
+    if cfg!(target_os = "linux")
+        && matches!(
+            &args.command,
+            Some(config::Command::Runtime { command })
+                if matches!(command,
+                    config::RuntimeCommand::Install { .. }
+                    | config::RuntimeCommand::InstallGateway { .. }
+                    | config::RuntimeCommand::InstallCallWorker { .. }
+                    | config::RuntimeCommand::ConfigureCallDelivery
+                    | config::RuntimeCommand::PrepareGatewayStage { .. }
+                    | config::RuntimeCommand::ClearGatewayStage { .. }
+                    | config::RuntimeCommand::Uninstall
+                    | config::RuntimeCommand::Rollback
+                    | config::RuntimeCommand::Commit
+                    | config::RuntimeCommand::Reconcile)
+        )
+    {
+        anyhow::bail!(
+            "This runtime installation operation is macOS-only; use the Linux host deployment owner"
+        );
+    }
     if matches!(args.command, Some(config::Command::CheckConfig)) {
         let sources = ConfigSources::load(args.env_file.as_deref())?;
         let settings = Settings::load(&sources)?;
@@ -387,7 +408,7 @@ async fn run(
         journal.clone(),
         startup_scheduling,
     );
-    let devices = Arc::new(DeviceRegistry::open(&settings.host_paths)?);
+    let devices = Arc::new(DeviceRegistry::open(&settings.host_paths, &sources)?);
     let apns = Arc::new(PushService::new(
         settings.push.clone(),
         journal.clone(),

@@ -1283,12 +1283,13 @@ blocks startup or provider journal retirement.
   override inherited login-shell values; `RC_CLAUDE_*` settings are also
   gateway-owned and take env-file precedence. Command-line flags beat both. This
   stops stale shell exports from replacing host configuration.
-- The daemon reads the `RC_PUSH_BROKER_*` keys from its inherited process
-  environment (`std::env::var`). In `--env-file` they only reach the Codex
-  child, so a debug gateway given a redirected `RC_PUSH_BROKER_URL` there still
-  pushes to the real broker and device. Set
-  `RC_CODEX_GATEWAY_PUSH_BROKER_ENABLED=false` instead, or export the override in
-  the shell that launches it.
+- `RC_PUSH_BROKER_*`, `RC_APNS_*` and `RC_LIVE_ACTIVITY_TOKEN_FILE` use the
+  same env-file precedence and remain gateway-owned. They are excluded from the
+  Codex child projection. Isolated acceptance disables push with
+  `RC_CODEX_GATEWAY_PUSH_BROKER_ENABLED=false`.
+- Linux runtime installation, pair configuration and rollback CLI operations
+  refuse before mutation. The Linux deployment owner selects the native bundle;
+  the public Pair owner retains its macOS binary/configuration transaction.
 
 ## Claude provider
 

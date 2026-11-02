@@ -31,11 +31,25 @@ const NO_ALERT_DEVICE: &str = "no alert device registered";
 const NO_LIVE_ACTIVITY_DEVICE: &str = "no live activity device registered";
 const REGISTRY_UNREADABLE: &str = "device registry unreadable";
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub(crate) enum PushConfiguration {
     Disabled,
     MissingToken,
     Configured { url: String, token: String },
+}
+
+impl std::fmt::Debug for PushConfiguration {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Disabled => formatter.write_str("Disabled"),
+            Self::MissingToken => formatter.write_str("MissingToken"),
+            Self::Configured { url, .. } => formatter
+                .debug_struct("Configured")
+                .field("url", url)
+                .field("token", &"[REDACTED]")
+                .finish(),
+        }
+    }
 }
 
 impl PushConfiguration {
