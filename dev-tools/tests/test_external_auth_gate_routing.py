@@ -17,13 +17,7 @@ def auth_gate_fixture(tmp_path):
     (repo / "scripts").mkdir(parents=True)
     (repo / "docs/codex").mkdir(parents=True)
     (repo / "dev-tools").mkdir()
-    for name in (
-        "build_support.py",
-        "process_group.py",
-        "job_power.py",
-        "codex-runtime-approval",
-        "build_artifacts.py",
-    ):
+    for name in ("build_support.py", "process_group.py", "job_power.py"):
         shutil.copy2(root / "scripts" / name, repo / "scripts" / name)
     for name in (
         "pyproject.toml",
@@ -36,22 +30,7 @@ def auth_gate_fixture(tmp_path):
         shutil.copy2(root / "dev-tools" / name, repo / "dev-tools" / name)
     (repo / "scripts/build-host").write_text("laptop\n")
     (repo / "docs/codex/compatibility.json").write_text(
-        json.dumps(
-            {
-                "codexCliVersion": "0.159.2",
-                "protocolSourceCommit": "1" * 40,
-                "runtimeTargets": {
-                    "aarch64-apple-darwin": {
-                        "sourceCommit": "1" * 40,
-                        "runtimeHashes": {
-                            "bin/codex": "2" * 64,
-                            "bin/codex-code-mode-host": "3" * 64,
-                        },
-                        "runtimePackageSHA256": "4" * 64,
-                    },
-                },
-            }
-        )
+        json.dumps({"codexCliVersion": "0.159.2"})
     )
     log = tmp_path / "commands.jsonl"
     bin_dir = tmp_path / "bin"
@@ -63,7 +42,11 @@ name = Path(sys.argv[0]).name
 args = sys.argv[1:]
 with open(os.environ["GATE_TEST_LOG"], "a") as stream:
     stream.write(json.dumps([name, args]) + "\\n")
-if name == "ssh":
+if name == "codex-runtime-approval":
+    assert args == ["export", "--target", "aarch64-apple-darwin"]
+    print(json.dumps({{"version":"0.159.2", "target":"aarch64-apple-darwin",
+        "sourceCommit":"1" * 40, "runtimeHashes":{{"bin/codex":"2" * 64, "bin/codex-code-mode-host":"3" * 64}}}}))
+elif name == "ssh":
     if "-G" in args:
         print("hostname 127.0.0.1")
     else:
@@ -101,6 +84,9 @@ elif name == "rsync" and "scripts/build_support.py" in args:
     gateway = repo / "dev-tools/rc-gateway"
     gateway.write_text(stub)
     gateway.chmod(0o755)
+    approval = repo / "scripts/codex-runtime-approval"
+    approval.write_text(stub)
+    approval.chmod(0o755)
     script = (root / "scripts/shared-codex-host").read_text().replace("/bin/zsh", str(bin_dir / "zsh"))
     (repo / "scripts/shared-codex-host").write_text(script)
     environment = {
