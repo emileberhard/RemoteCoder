@@ -318,12 +318,48 @@ fn file_change_item(
         json!({ "type": "update", "movePath": Value::Null })
     };
 
+    let diff = recorded_diff(created, outcome).unwrap_or_default();
+
     json!({
         "type": "fileChange",
         "id": tool_use_id,
-        "changes": [{ "path": path, "kind": kind, "diff": "" }],
+        "changes": [{ "path": path, "kind": kind, "diff": diff }],
         "status": outcome.status(),
     })
+}
+
+fn recorded_diff(created: bool, outcome: &ToolOutcome) -> Option<String> {
+    let ToolOutcome::Finished {
+        tool_use_result: Some(result),
+        ..
+    } = outcome
+    else {
+        return None;
+    };
+    if created {
+        return result.get("content")?.as_str().map(str::to_owned);
+    }
+    let mut diff = String::new();
+    for hunk in result.get("structuredPatch")?.as_array()? {
+        let range = |start: &str, count: &str| -> Option<String> {
+            let count = hunk.get(count)?.as_u64()?;
+            let start = hunk.get(start)?.as_u64()?;
+            let start = if count == 0 {
+                start.saturating_sub(1)
+            } else {
+                start
+            };
+            Some(format!("{start},{count}"))
+        };
+        let old = range("oldStart", "oldLines")?;
+        let new = range("newStart", "newLines")?;
+        diff.push_str(&format!("@@ -{old} +{new} @@\n"));
+        for line in hunk.get("lines")?.as_array()? {
+            diff.push_str(line.as_str()?);
+            diff.push('\n');
+        }
+    }
+    Some(diff)
 }
 
 fn web_search_item(tool_use_id: &str, input: &Value) -> Value {
@@ -538,6 +574,56 @@ mod tests {
         assert_eq!(item["type"], json!("fileChange"));
         assert_eq!(item["changes"][0]["path"], json!("/b.txt"));
         assert_eq!(item["changes"][0]["kind"]["type"], json!("add"));
+    }
+
+    #[test]
+    fn file_changes_carry_the_recorded_diff() {
+        let finished = |result: Value| ToolOutcome::Finished {
+            is_error: false,
+            result_text: None,
+            tool_use_result: Some(result),
+            images: Vec::new(),
+            duration_ms: None,
+        };
+        let edit = tool_item(
+            "toolu_e",
+            "Edit",
+            &json!({"file_path":"/a.rs"}),
+            "/",
+            finished(json!({
+                "filePath":"/a.rs","originalFile":"x\n",
+                "structuredPatch":[{"oldStart":1,"oldLines":1,"newStart":1,"newLines":1,"lines":["-x","+y"]}]
+            })),
+        );
+        assert_eq!(
+            edit["changes"][0]["diff"],
+            json!("@@ -1,1 +1,1 @@\n-x\n+y\n")
+        );
+        let emptied = tool_item(
+            "toolu_u",
+            "Write",
+            &json!({"file_path":"/a.rs"}),
+            "/",
+            finished(json!({
+                "type":"update","filePath":"/a.rs","content":"","originalFile":"x\n",
+                "structuredPatch":[{"oldStart":1,"oldLines":1,"newStart":1,"newLines":0,"lines":["-x"]}]
+            })),
+        );
+        assert_eq!(
+            emptied["changes"][0]["diff"],
+            json!("@@ -1,1 +0,0 @@\n-x\n")
+        );
+        let created = tool_item(
+            "toolu_w",
+            "Write",
+            &json!({"file_path":"/b.rs"}),
+            "/",
+            finished(json!({
+                "type":"create","filePath":"/b.rs","content":"new\n","originalFile":null,"structuredPatch":[]
+            })),
+        );
+        assert_eq!(created["changes"][0]["kind"]["type"], json!("add"));
+        assert_eq!(created["changes"][0]["diff"], json!("new\n"));
     }
 
     #[test]
