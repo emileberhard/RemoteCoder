@@ -1073,6 +1073,18 @@ def _package_resolution(derived: Path, deadline: float) -> bytes | None:
                 "-c",
                 "core.fsmonitor=false",
             ]
+            flags = subprocess.run(
+                command + ["ls-files", "--cached", "-v", "-z"],
+                capture_output=True,
+                timeout=min(2, max(0.001, deadline - time.monotonic())),
+                check=True,
+            ).stdout
+            if any(
+                not entry.startswith(b"H ")
+                for entry in flags.split(b"\0")
+                if entry
+            ):
+                return None
             for arguments, output in (
                 (["rev-parse", "HEAD"], expected[path.name.casefold()].encode()),
                 (

@@ -32,6 +32,7 @@ class CacheAdmissionTests(unittest.TestCase):
             origin = root / "dependency"
             init_repository(origin)
             (origin / "source").write_text("dependency")
+            (origin / "source\nS name").write_text("tracked unusual filename")
             subprocess.run(
                 ["git", "add", "."], cwd=origin, check=True, capture_output=True
             )
@@ -46,7 +47,7 @@ class CacheAdmissionTests(unittest.TestCase):
             ).strip()
             old = time.time() - 86400
             entries = [
-                self.entry(root, "derived", old + i, tree=str(i)) for i in range(6)
+                self.entry(root, "derived", old + i, tree=str(i)) for i in range(8)
             ]
             for entry in entries:
                 checkout = entry.path / "SourcePackages/checkouts/dependency"
@@ -75,6 +76,11 @@ class CacheAdmissionTests(unittest.TestCase):
                 entries[4].path.parent
                 / "repo/RemoteCoder.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved"
             ).unlink()
+            for entry, flag in zip(entries[6:], ("--assume-unchanged", "--skip-worktree")):
+                checkout = entry.path / "SourcePackages/checkouts/dependency"
+                subprocess.run(["git", "-C", str(checkout), "update-index", flag, "source"], check=True)
+                (checkout / "source").write_text("hidden personal edit")
+                self.assertEqual(subprocess.check_output(["git", "-C", str(checkout), "status", "--porcelain"]), b"")
             held = entries[5].leases[0]
             held.parent.mkdir(parents=True, exist_ok=True)
             with (
@@ -94,6 +100,8 @@ class CacheAdmissionTests(unittest.TestCase):
                 ).read_text(),
                 "personal edit",
             )
+            for entry in entries[6:]:
+                self.assertEqual((entry.path / "SourcePackages/checkouts/dependency/source").read_text(), "hidden personal edit")
             self.assertTrue(
                 any(
                     item["path"].endswith("SourcePackages")
@@ -1966,6 +1974,19 @@ class DependencySeedTests(unittest.TestCase):
             with (sibling / "build.lock").open("a") as lock:
                 fcntl.flock(lock, fcntl.LOCK_EX)
                 self.assertIsNone(seed_source_packages(root, "new", source, derived))
+            for flags in (("--assume-unchanged",), ("--skip-worktree",), ("--assume-unchanged", "--skip-worktree")):
+                with self.subTest(flags=flags):
+                    for flag in flags:
+                        subprocess.run(["git", "-C", str(checkout), "update-index", flag, "source"], check=True)
+                    (checkout / "source").write_text("hidden personal edit")
+                    self.assertEqual(subprocess.check_output(["git", "-C", str(checkout), "status", "--porcelain"]), b"")
+                    index = (checkout / ".git/index").read_bytes()
+                    self.assertIsNone(seed_source_packages(root, "new", source, derived))
+                    self.assertEqual((checkout / ".git/index").read_bytes(), index)
+                    self.assertFalse(derived.exists())
+                    for flag in ("--no-assume-unchanged", "--no-skip-worktree"):
+                        subprocess.run(["git", "-C", str(checkout), "update-index", flag, "source"], check=True)
+                    (checkout / "source").write_text("original")
             result = seed_source_packages(root, "new", source, derived)
             self.assertEqual(result["sourceWorktree"], "warm")
             clone = derived / "SourcePackages/checkouts/dependency/source"
