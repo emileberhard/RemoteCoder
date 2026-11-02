@@ -213,8 +213,15 @@ active host in its device-only item. Merging is a union by host ID. The newer
 edit wins, and a host missing on one device is added there, never removed
 elsewhere; only a tombstone newer than a host's last edit removes it. Hosts saved
 before sync merge with no edit time, so any explicit edit or deletion beats them.
-A merge keeps a known operator token for the same endpoint when the winning
-entry has none, and discovering a credential is not an edit. No credential
+A merge keeps a known enrollment credential for the same endpoint when neither
+replica has a newer credential revision, and discovering a credential is not an
+edit. Explicit endpoint or credential replacements advance a separate
+`enrollmentUpdatedAt` revision. An installation-token replacement clears the
+old capability and names its exact source installation until that source
+publishes the replacement capability. Credential revisions merge independently
+of display-name edits, including while the new capability is absent; stale
+replicas and development seeds cannot restore a cleared capability. Ordinary
+enrollment completion changes only the device snapshot. No credential
 follows an endpoint change: a device that receives a new endpoint uses only the
 synced enrollment credential for it, or shows “Missing authorization token”. A
 device receiving an `rcs1.` credential shows “Waiting for device enrollment”
@@ -271,7 +278,13 @@ management. An installation obtains its capability from `/credentials/share`;
 the gateway derives it with HKDF-SHA256 from its operator secret and the exact
 installation's ID and credential digest. It never discloses the operator secret.
 Enrollment has an installation ID and an idempotent result; revoked IDs cannot
-silently reenroll or change their issuer. Each delegated installation stores
+silently reenroll or change their issuer. The client derives the attempt ID
+with HMAC-SHA256 over its persisted device installation ID, host ID and exact
+endpoint, keyed by its captured enrollment authority. The same protected
+snapshot reconstructs the same ID across retries and app restarts. A changed
+authority or endpoint produces a distinct ID, so a successfully registered
+but discarded response cannot strand the new authority on an old record.
+Retries under the same revoked authority never generate a fresh identity. Each delegated installation stores
 its parent ID. Revoking a parent invalidates its capabilities and every
 descendant, including existing WebSocket and speech leases. Revoking a child
 leaves its siblings and parent valid. Lineage validation is bounded by the

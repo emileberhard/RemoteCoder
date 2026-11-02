@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Observation
 
@@ -181,13 +182,15 @@ final class HostStore {
                 var enrolled = captured
                 if !captured.usesInstallationCredential {
                     let token = try await client.enroll(host: captured,
-                        installationID: installationID + "-" + captured.id.uuidString.lowercased())
+                        installationID: Self.enrollmentID(for: captured, installationID: installationID))
                     try Task.checkCancellation()
                     guard !identityMigrationHostIDs.contains(captured.id), canReplaceHost(captured.id),
                           let current = configurations.first(where: { $0.id == captured.id && $0.hasSameConnection(as: captured) }) else { continue }
                     enrolled = current
                     enrolled.authToken = token
-                    guard upsert(enrolled) else { continue }
+                    enrolled.incomingCallHostID = nil
+                    let updated = configurations.map { $0.id == enrolled.id ? enrolled : $0 }
+                    guard commit(updated, activeHostID: activeHostID, directory: directory) else { continue }
                 }
                 guard sharedDirectory != nil, directory.needsEnrollmentCredential(for: enrolled) else { continue }
                 let shared = try await client.sharingCredential(host: enrolled)
@@ -201,6 +204,15 @@ final class HostStore {
             catch { errorMessage = error.localizedDescription }
         }
         await synchronize()
+    }
+
+    private static func enrollmentID(for host: GatewayHostConfiguration, installationID: String) throws -> String {
+        let context = try JSONEncoder().encode(["RemoteCoder enrollment identity v1", installationID,
+            host.id.uuidString, host.hostname, String(host.port), host.transport.rawValue])
+        let code = HMAC<SHA256>.authenticationCode(for: context, using: SymmetricKey(data: Data(host.authToken.utf8)))
+        let suffix = Data(code).base64EncodedString().replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
+        return installationID + "-" + suffix
     }
 
     @discardableResult
@@ -226,11 +238,15 @@ final class HostStore {
             replacement.gatewayID = updated[index].gatewayID
             replacement.legacyIDs = updated[index].legacyIDs
             replacement.incomingCallHostID = updated[index].hasSameConnection(as: host) ? updated[index].incomingCallHostID : nil
+            if updated[index].hasSameConnection(as: host) {
+                directory.record(replacement, at: .now)
+            } else {
+                directory.recordCredentialReplacement(replacement, at: .now)
+            }
             updated[index] = replacement
-            directory.record(replacement, at: .now)
         } else {
             updated.append(host)
-            directory.record(host, at: .now)
+            directory.recordCredentialReplacement(host, at: .now)
         }
         return commit(updated, activeHostID: activeHostID ?? host.id, directory: directory)
     }

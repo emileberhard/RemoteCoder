@@ -93,6 +93,11 @@ struct GatewayHostConfiguration: Identifiable, Codable, Equatable, Sendable {
     var usesInstallationCredential: Bool { authToken.hasPrefix("rc1.") }
     var usesSharedEnrollmentCredential: Bool { authToken.hasPrefix("rcs1.") }
 
+    var installationCredentialID: String? {
+        guard usesInstallationCredential else { return nil }
+        return authToken.split(separator: ".").dropFirst().first.map(String.init)
+    }
+
     var enrollmentCredential: String? {
         usesInstallationCredential || authToken.isEmpty ? nil : authToken
     }
