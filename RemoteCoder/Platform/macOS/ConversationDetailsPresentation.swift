@@ -6,17 +6,28 @@ struct ConversationDetailsPresentation: ViewModifier {
     let screen: ChatScreenModel
     @Binding var presentedAgents: ConversationAgentsModel?
     @Binding var isInspectorPresented: Bool
+    let changeReview: ChangeReviewModel?
+    @Binding var isReviewingChanges: Bool
+    let onAddReviewComments: (String) -> Bool
     let onParentRequestSent: () -> Void
 
     func show(_: ConversationAgentsModel) {
+        isReviewingChanges = false
         isInspectorPresented = true
     }
 
     func body(content: Content) -> some View {
         content
             .inspector(isPresented: $isInspectorPresented) {
-                ConversationInspector(workspace: workspace, screen: screen, onParentRequestSent: onParentRequestSent)
-                    .inspectorColumnWidth(min: 240, ideal: 300, max: 420)
+                if isReviewingChanges, let changeReview {
+                    ChangeReviewView(model: changeReview, remoteHomePath: screen.target.remoteHomePath,
+                                     canAddComments: screen.acceptsReviewComments, onAddComments: onAddReviewComments)
+                        .inspectorColumnWidth(min: 360, ideal: 560, max: 1_000)
+                        .onDisappear { changeReview.stop() }
+                } else {
+                    ConversationInspector(workspace: workspace, screen: screen, onParentRequestSent: onParentRequestSent)
+                        .inspectorColumnWidth(min: 240, ideal: 300, max: 420)
+                }
             }
     }
 }

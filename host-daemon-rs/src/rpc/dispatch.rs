@@ -116,6 +116,7 @@ pub(crate) enum OwnedRoute {
     Favorites,
     Preferences,
     Projects,
+    Changes,
     Settings,
     Interrupt,
     ActiveTurns,
@@ -608,6 +609,7 @@ const METHOD_SPECS: &[MethodSpec] = &[
         Some(RequestLifetime::Query),
         0
     ),
+    spec!("changes/read", Changes, Some(RequestLifetime::Query), 0),
     spec!(
         "conversation/settings/update",
         Settings,

@@ -11,6 +11,8 @@ struct ChatScreenChrome: ViewModifier {
     let onNewChatOnHost: (UUID) -> Void
     let isInspectorOpen: Bool
     let toggleInspector: () -> Void
+    let isReviewingChanges: Bool
+    let reviewChanges: () -> Void
 
     func body(content: Content) -> some View {
         content
@@ -22,7 +24,8 @@ struct ChatScreenChrome: ViewModifier {
                     onReturnToParent: onReturnToParent,
                     onOpenConversations: onOpenConversations,
                     onChooseFolder: onChooseFolder,
-                    onNewChatInHome: onNewChatInHome
+                    onNewChatInHome: onNewChatInHome,
+                    onReviewChanges: reviewChanges
                 )
                 .chatLayoutDiagnostics("header")
             }

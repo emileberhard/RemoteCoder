@@ -5,6 +5,7 @@ mod auth;
 mod automations;
 mod build_identity;
 mod call_worker;
+mod changes;
 mod cluster;
 mod config;
 mod conversation_marks;

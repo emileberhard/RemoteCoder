@@ -11,6 +11,7 @@ struct ChatWindowCommandState: Equatable, Sendable {
     let conversation: ConversationAddress?
     let isSidebarOpen: Bool
     let isInspectorOpen: Bool
+    let isReviewingChanges: Bool
     let isPinned: Bool
     let models: [ModelOption]
     let selectedModelID: String?
@@ -85,7 +86,7 @@ private struct ChatWindowFocusPublication: View, Equatable {
 enum ChatCommand: CaseIterable, Hashable, Sendable {
     case newChat, newChatInHomeFolder, newWindow, fork, chooseFolder
     case findInConversation, findNext, findPrevious
-    case commandPalette, toggleSidebar, toggleInspector, refresh
+    case commandPalette, toggleSidebar, toggleInspector, reviewChanges, refresh
     case send, stop, focusComposer, attachFile, toggleFastMode
     case togglePin, rename, copyReference, showAgents, settle, markUnread
     case unreadOnly, markAllRead, collapseAllSections, expandAllSections
@@ -101,6 +102,7 @@ enum ChatCommand: CaseIterable, Hashable, Sendable {
         case .commandPalette: KeyboardShortcut("k")
         case .toggleSidebar: KeyboardShortcut("s", modifiers: [.command, .control])
         case .toggleInspector: KeyboardShortcut("i", modifiers: [.command, .option])
+        case .reviewChanges: KeyboardShortcut("d", modifiers: [.command, .shift])
         case .refresh: KeyboardShortcut("r")
         case .send: KeyboardShortcut(.return)
         case .stop: KeyboardShortcut(".")
@@ -134,6 +136,7 @@ enum ChatCommand: CaseIterable, Hashable, Sendable {
         case .commandPalette: "command"
         case .toggleSidebar: "sidebar.leading"
         case .toggleInspector: "sidebar.trailing"
+        case .reviewChanges: "plus.forwardslash.minus"
         case .refresh: "arrow.clockwise"
         case .send: "arrow.up"
         case .stop: "stop"
@@ -168,6 +171,7 @@ enum ChatCommand: CaseIterable, Hashable, Sendable {
         case .commandPalette: "Command Palette…"
         case .toggleSidebar: actions?.isSidebarOpen == true ? "Hide Sidebar" : "Show Sidebar"
         case .toggleInspector: actions?.isInspectorOpen == true ? "Hide Inspector" : "Show Inspector"
+        case .reviewChanges: actions.map { $0.isInspectorOpen && $0.isReviewingChanges } == true ? "Hide Changes" : "Review Changes"
         case .refresh: "Refresh"
         case .send: "Send"
         case .stop: "Stop"
@@ -225,11 +229,13 @@ struct ChatWindowActionsPublisher: View {
     let drawerLayout: ConversationDrawerLayout?
     let isSidebarOpen: Bool
     let isInspectorOpen: Bool
+    let isReviewingChanges: Bool
     let newChat: () -> Void
     let newChatInHomeFolder: () -> Void
     let newChatOnHost: (UUID) -> Void
     let toggleSidebar: () -> Void
     let toggleInspector: () -> Void
+    let reviewChanges: () -> Void
     let focusComposer: () -> Void
     let chooseFolder: () -> Void
     let returnToParent: (() -> Void)?
@@ -261,11 +267,13 @@ struct ChatWindowActionsPublisher: View {
             drawerLayout: drawerLayout,
             isSidebarOpen: isSidebarOpen,
             isInspectorOpen: isInspectorOpen,
+            isReviewingChanges: isReviewingChanges,
             newChat: newChat,
             newChatInHomeFolder: newChatInHomeFolder,
             newChatOnHost: newChatOnHost,
             toggleSidebar: toggleSidebar,
             toggleInspector: toggleInspector,
+            reviewChanges: reviewChanges,
             focusComposer: focusComposer,
             chooseFolder: chooseFolder,
             returnToParent: returnToParent,
@@ -290,11 +298,13 @@ fileprivate struct ChatWindowActionContext {
     let drawerLayout: ConversationDrawerLayout?
     let isSidebarOpen: Bool
     let isInspectorOpen: Bool
+    let isReviewingChanges: Bool
     let newChat: () -> Void
     let newChatInHomeFolder: () -> Void
     let newChatOnHost: (UUID) -> Void
     let toggleSidebar: () -> Void
     let toggleInspector: () -> Void
+    let reviewChanges: () -> Void
     let focusComposer: () -> Void
     let chooseFolder: () -> Void
     let returnToParent: (() -> Void)?
@@ -324,6 +334,7 @@ fileprivate struct ChatWindowActionContext {
         if !acceptsComposerAttachments { enabled.remove(.attachFile) }
         if fastModel == nil { enabled.remove(.toggleFastMode) }
         if (screen.conversationAgents?.summary?.total ?? 0) == 0 { enabled.remove(.showAgents) }
+        if screen.workingDirectory == nil { enabled.remove(.reviewChanges) }
         if returnToParent == nil || workspace.agentNavigation.map({ workspace.isShowingConversation(at: $0.child, on: screen) }) != true {
             enabled.remove(.returnToParent)
         }
@@ -335,6 +346,7 @@ fileprivate struct ChatWindowActionContext {
             conversation: conversation,
             isSidebarOpen: isSidebarOpen,
             isInspectorOpen: isInspectorOpen,
+            isReviewingChanges: isReviewingChanges,
             isPinned: isPinned,
             models: showsModelPicker ? workspace.modelOptions(for: screen) : [],
             selectedModelID: screen.selectedModel?.id,
@@ -365,6 +377,7 @@ fileprivate struct ChatWindowActionContext {
         case .commandPalette: toggleCommandPaletteFromCurrentState()
         case .toggleSidebar: toggleSidebar()
         case .toggleInspector: toggleInspector()
+        case .reviewChanges: reviewChanges()
         case .refresh: Task { await workspace.refreshAllHosts() }
         case .send: Task { _ = await workspace.send(from: screen) }
         case .stop:

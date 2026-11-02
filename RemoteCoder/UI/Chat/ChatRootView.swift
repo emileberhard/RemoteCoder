@@ -250,6 +250,8 @@ private struct ChatScreen: View {
     #endif
     @State private var presentedAgents: ConversationAgentsModel?
     @SceneStorage("chat.isInspectorPresented") private var isInspectorPresented = false
+    @State private var changeReview: ChangeReviewModel?
+    @State private var isReviewingChanges = false
     @State private var returningToAgentParent = false
     @State private var agentNavigationError: String?
     #if os(iOS)
@@ -323,6 +325,8 @@ private struct ChatScreen: View {
         .onChange(of: screen.acceptsConversationInput) { _, acceptsInput in
             if !acceptsInput { composerPresentations.dismiss() }
         }
+        .onChange(of: screen.workingDirectory) { followChangeReview() }
+        .onChange(of: ObjectIdentifier(screen.target.gatewayClient)) { followChangeReview() }
         #if os(macOS)
         .background {
             ChatWindowActionsPublisher(
@@ -333,11 +337,13 @@ private struct ChatScreen: View {
                 drawerLayout: drawerLayout,
                 isSidebarOpen: isHistoryOpen,
                 isInspectorOpen: isInspectorPresented,
+                isReviewingChanges: isReviewingChanges,
                 newChat: { openNewChatWithKeyboard() },
                 newChatInHomeFolder: openNewChatInHomeFolder,
                 newChatOnHost: startNewChat(onHostID:),
                 toggleSidebar: toggleHistory,
                 toggleInspector: toggleInspector,
+                reviewChanges: reviewChanges,
                 focusComposer: { inputFocused = true },
                 chooseFolder: openDirectoryPickerFromHeader,
                 returnToParent: returningToAgentParent ? nil : { returningToAgentParent = true },
@@ -571,7 +577,9 @@ private struct ChatScreen: View {
                     onNewChatInHome: startNewChatInHome,
                     onNewChatOnHost: startNewChat(onHostID:),
                     isInspectorOpen: isInspectorPresented,
-                    toggleInspector: toggleInspector
+                    toggleInspector: toggleInspector,
+                    isReviewingChanges: isReviewingChanges,
+                    reviewChanges: reviewChanges
                 ))
                 .background { chatBackground }
             .modifier(HostFilePresentation(opener: screen.target.fileOpener, isBlocked: blocksFilePresentation, scope: nil))
@@ -633,6 +641,9 @@ private struct ChatScreen: View {
             screen: screen,
             presentedAgents: $presentedAgents,
             isInspectorPresented: $isInspectorPresented,
+            changeReview: changeReview,
+            isReviewingChanges: $isReviewingChanges,
+            onAddReviewComments: addReviewComments,
             onParentRequestSent: { inputFocused = true }
         )
     }
@@ -732,6 +743,7 @@ private struct ChatScreen: View {
 
     private var blocksComposerFocus: Bool {
         blocksFilePresentation || presentedAgents != nil || agentNavigationError != nil || pinRequest != nil
+            || isReviewingChangesSheet
             || commandPalette != nil || screen.target.voiceError != nil || composerPresentations.blocksFocus
     }
 
@@ -851,7 +863,74 @@ private struct ChatScreen: View {
     }
 
     private func toggleInspector() {
+        if !isInspectorPresented { isReviewingChanges = false }
         isInspectorPresented.toggle()
+    }
+
+    private func reviewChanges() {
+        #if os(macOS)
+        if isInspectorPresented && isReviewingChanges {
+            isInspectorPresented = false
+            return
+        }
+        #endif
+        guard let directory = screen.workingDirectory else { return }
+        dismissComposerFocus()
+        showChangeReview(of: directory)
+    }
+
+    private func showChangeReview(of directory: String) {
+        let client = screen.target.gatewayClient
+        if changeReview?.reviews(directory: directory, through: client) != true {
+            changeReview?.stop()
+            changeReview = ChangeReviewModel(directory: directory, client: client)
+        }
+        changeReview?.refresh()
+        isReviewingChanges = true
+        #if os(macOS)
+        isInspectorPresented = true
+        #endif
+    }
+
+    private func followChangeReview() {
+        guard let model = changeReview,
+              !model.reviews(directory: screen.workingDirectory, through: screen.target.gatewayClient) else { return }
+        model.stop()
+        if model.writtenNoteCount == 0 {
+            changeReview = nil
+            if isShowingChangeReview, let directory = screen.workingDirectory {
+                showChangeReview(of: directory)
+                return
+            }
+        }
+        isReviewingChanges = false
+    }
+
+    private var isShowingChangeReview: Bool {
+        #if os(macOS)
+        isReviewingChanges && isInspectorPresented
+        #else
+        isReviewingChanges
+        #endif
+    }
+
+    private func addReviewComments(_ comments: String) -> Bool {
+        guard changeReview?.reviews(directory: screen.workingDirectory, through: screen.target.gatewayClient) == true,
+              screen.insertReviewComments(comments) else { return false }
+        #if os(iOS)
+        isReviewingChanges = false
+        #endif
+        inputFocused = true
+        HapticService.shared.play(.commit)
+        return true
+    }
+
+    private var isReviewingChangesSheet: Bool {
+        #if os(iOS)
+        isReviewingChanges
+        #else
+        false
+        #endif
     }
 
     private func openUnsentDraft(_ address: UnsentDraftAddress) {

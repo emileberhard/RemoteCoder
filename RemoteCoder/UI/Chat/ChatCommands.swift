@@ -27,6 +27,7 @@ struct ChatCommands: Commands {
         CommandGroup(before: .sidebar) {
             command(.toggleSidebar)
             command(.toggleInspector)
+            command(.reviewChanges)
             Divider()
             drawerModePicker
             toggle(.unreadOnly)

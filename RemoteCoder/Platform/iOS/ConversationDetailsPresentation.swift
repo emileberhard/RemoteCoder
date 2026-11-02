@@ -5,6 +5,9 @@ struct ConversationDetailsPresentation: ViewModifier {
     let screen: ChatScreenModel
     @Binding var presentedAgents: ConversationAgentsModel?
     @Binding var isInspectorPresented: Bool
+    let changeReview: ChangeReviewModel?
+    @Binding var isReviewingChanges: Bool
+    let onAddReviewComments: (String) -> Bool
     let onParentRequestSent: () -> Void
 
     func show(_ agents: ConversationAgentsModel) {
@@ -26,5 +29,38 @@ struct ConversationDetailsPresentation: ViewModifier {
                 })
                 .chatPresentationDiagnostics("sheet-agents")
             }
+            .sheet(isPresented: $isReviewingChanges, onDismiss: { changeReview?.stop() }) {
+                if let changeReview {
+                    ChangeReviewSheet(model: changeReview, remoteHomePath: screen.target.remoteHomePath,
+                                      canAddComments: screen.acceptsReviewComments, onAddComments: onAddReviewComments)
+                        .chatPresentationDiagnostics("sheet-changes")
+                }
+            }
+    }
+}
+
+private struct ChangeReviewSheet: View {
+    let model: ChangeReviewModel
+    let remoteHomePath: String?
+    let canAddComments: Bool
+    let onAddComments: (String) -> Bool
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ChangeReviewView(model: model, remoteHomePath: remoteHomePath, canAddComments: canAddComments,
+                             onAddComments: onAddComments)
+                .navigationTitle("Changes")
+                .inlineNavigationTitle()
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Close", systemImage: "xmark") {
+                            HapticService.shared.play(.disclosure)
+                            dismiss()
+                        }
+                        .accessibilityIdentifier("change-review-close")
+                    }
+                }
+        }
     }
 }
