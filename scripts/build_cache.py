@@ -53,6 +53,12 @@ def load_policy() -> CachePolicy:
 
 def read_policy(source: Path) -> CachePolicy:
     values = json.loads(source.read_text())
+    host_budgets = values.pop("hostCompilationBudgetGiB", {})
+    if not isinstance(host_budgets, dict) or any(
+        not isinstance(host, str) or not host or type(budget) is not int or budget <= 0
+        for host, budget in host_budgets.items()
+    ):
+        raise ValueError(f"Invalid host compilation budgets: {source}")
     required = {
         "maxRuns",
         "runRetentionDays",
@@ -81,7 +87,7 @@ def read_policy(source: Path) -> CachePolicy:
         values["runRetentionDays"] * 86400,
         values["evidenceProtectionHours"] * 3600,
         values["compilerProtectionHours"] * 3600,
-        values["compilationBudgetGiB"] * 1024**3,
+        host_budgets.get(socket.gethostname().split(".")[0], values["compilationBudgetGiB"]) * 1024**3,
         values["retainedCompletedDirectories"],
         values["evictionTargetFreeGiB"] * 1024**3,
         values["evictionEnabled"],

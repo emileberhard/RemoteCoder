@@ -62,6 +62,29 @@ class CacheAdmissionTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "activation"):
                     load_policy()
 
+    def test_host_budget_override_keeps_other_hosts_on_the_shared_budget(self):
+        import json
+
+        from build_cache import read_policy
+
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "policy.json"
+            values = {
+                "maxRuns": 128, "runRetentionDays": 3, "evidenceProtectionHours": 48,
+                "compilerProtectionHours": 2, "compilationBudgetGiB": 80,
+                "retainedCompletedDirectories": 2, "evictionTargetFreeGiB": 20,
+                "evictionEnabled": True, "retiredWorktreeIdleHours": 24,
+                "hostCompilationBudgetGiB": {"small-host": 30},
+            }
+            source.write_text(json.dumps(values))
+            for host, expected in (("small-host.local", 30), ("other-host", 80)):
+                with patch("build_cache.socket.gethostname", return_value=host):
+                    self.assertEqual(read_policy(source).compilation_budget_bytes, expected * 1024**3)
+            values["hostCompilationBudgetGiB"]["small-host"] = True
+            source.write_text(json.dumps(values))
+            with self.assertRaisesRegex(ValueError, "host compilation budgets"):
+                read_policy(source)
+
     def policy(self, *, enabled=True, budget=1, retained=2, free_target=0):
         return CachePolicy(
             1, 259200, 172800, 7200, budget, retained, free_target, enabled, 86400
