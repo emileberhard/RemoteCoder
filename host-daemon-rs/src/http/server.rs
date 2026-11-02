@@ -24,7 +24,7 @@ use crate::http::lan::{LanEndpoint, LanListener, serve_lan};
 use crate::observability::app_logs::AppLogStore;
 use crate::observability::journal::Journal;
 
-use self::auth::enroll_credential;
+use self::auth::{enroll_credential, share_credential};
 use self::client::{app_logs, diagnostics, health, navigation_events, version, ws};
 use self::files::{append_upload, discard_upload, download_file, legacy_upload, upload_status};
 use self::mcp::{mcp_get, mcp_notification_hook, mcp_post};
@@ -226,6 +226,7 @@ fn router(state: HttpState) -> Router {
             "/credentials/enroll",
             post(enroll_credential).layer(DefaultBodyLimit::max(4096)),
         )
+        .route("/credentials/share", post(share_credential))
         .route(
             "/app-logs",
             post(app_logs).layer(DefaultBodyLimit::max(MAX_APP_LOG_SEGMENT_BYTES)),

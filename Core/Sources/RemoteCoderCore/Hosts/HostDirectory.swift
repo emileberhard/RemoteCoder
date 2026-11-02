@@ -8,6 +8,8 @@ struct HostDirectory: Codable, Equatable, Sendable {
         var port: Int
         var transport: GatewayTransport
         var enrollmentToken: String?
+        var enrollmentUpdatedAt: Date?
+        var enrollmentSourceID: String?
         var gatewayID: UUID?
         var legacyIDs: [UUID]?
         var modifiedAt: Date
@@ -34,13 +36,18 @@ struct HostDirectory: Codable, Equatable, Sendable {
                 host.id = current.id
                 host.legacyIDs = Array(Set((legacyIDs ?? []) + [id]).subtracting([current.id]))
             }
-            if current.usesInstallationCredential || enrollmentToken == nil { host.authToken = current.authToken }
+            if current.usesInstallationCredential || (enrollmentToken == nil && enrollmentUpdatedAt == nil) { host.authToken = current.authToken }
             if current.hasSameConnection(as: host) { host.incomingCallHostID = current.incomingCallHostID }
             return host
         }
 
         func hasSameEndpoint(as host: GatewayHostConfiguration) -> Bool {
             configuration(updating: nil).hasSameEndpoint(as: host)
+        }
+
+        func needsEnrollmentCredential(from host: GatewayHostConfiguration) -> Bool {
+            (id == host.id || legacyIDs?.contains(host.id) == true) && hasSameEndpoint(as: host)
+                && enrollmentToken == nil && (enrollmentSourceID == nil || enrollmentSourceID == host.installationCredentialID)
         }
     }
 
@@ -102,10 +109,23 @@ struct HostDirectory: Codable, Equatable, Sendable {
         }
         let previous = entries[index]
         var updated = Entry(host, enrollmentToken: host.enrollmentCredential, modifiedAt: previous.modifiedAt)
-        if updated.enrollmentToken == nil, previous.hasSameEndpoint(as: host) { updated.enrollmentToken = previous.enrollmentToken }
+        if previous.hasSameEndpoint(as: host) {
+            if updated.enrollmentToken == nil { updated.enrollmentToken = previous.enrollmentToken }
+            updated.enrollmentUpdatedAt = previous.enrollmentUpdatedAt
+            updated.enrollmentSourceID = previous.enrollmentSourceID
+        }
         guard updated != previous else { return }
         updated.modifiedAt = time
         entries[index] = updated
+    }
+
+    mutating func recordCredentialReplacement(_ host: GatewayHostConfiguration, at time: Date) {
+        record(host, at: time)
+        guard let index = entries.firstIndex(where: { $0.id == host.id || $0.legacyIDs?.contains(host.id) == true }) else { return }
+        entries[index].enrollmentToken = host.enrollmentCredential
+        entries[index].enrollmentSourceID = host.installationCredentialID
+        entries[index].enrollmentUpdatedAt = time
+        entries[index].modifiedAt = time
     }
 
     mutating func remove(_ id: UUID, at time: Date) {
@@ -114,10 +134,20 @@ struct HostDirectory: Codable, Equatable, Sendable {
     }
 
     mutating func fillEnrollmentCredentials(from seeds: [GatewayHostConfiguration]) {
-        for index in entries.indices where entries[index].enrollmentToken == nil {
+        for index in entries.indices where entries[index].enrollmentToken == nil && entries[index].enrollmentUpdatedAt == nil {
             let entry = entries[index]
             entries[index].enrollmentToken = seeds.first { $0.id == entry.id && entry.hasSameEndpoint(as: $0) }?
                 .enrollmentCredential
+        }
+    }
+
+    func needsEnrollmentCredential(for host: GatewayHostConfiguration) -> Bool {
+        entries.contains { $0.needsEnrollmentCredential(from: host) }
+    }
+
+    mutating func supplyEnrollmentCredential(_ token: String, for host: GatewayHostConfiguration) {
+        for index in entries.indices where entries[index].needsEnrollmentCredential(from: host) {
+            entries[index].enrollmentToken = token
         }
     }
 
@@ -130,10 +160,15 @@ struct HostDirectory: Codable, Equatable, Sendable {
         for entry in remote.entries + entries where seen.insert(entry.id).inserted {
             let mine = local[entry.id] ?? entry
             var winner = mine.modifiedAt > entry.modifiedAt ? mine : entry
-            if winner.enrollmentToken == nil {
-                let endpoint = winner.configuration(updating: nil)
-                winner.enrollmentToken = [mine, entry].first { $0.hasSameEndpoint(as: endpoint) && $0.enrollmentToken != nil }?
-                    .enrollmentToken
+            let endpoint = winner.configuration(updating: nil)
+            let authority = [mine, entry].filter { $0.hasSameEndpoint(as: endpoint) }.max {
+                ($0.enrollmentUpdatedAt ?? .distantPast, $0.enrollmentSourceID ?? "", $0.enrollmentToken == nil ? 0 : 1)
+                    < ($1.enrollmentUpdatedAt ?? .distantPast, $1.enrollmentSourceID ?? "", $1.enrollmentToken == nil ? 0 : 1)
+            }
+            if let authority {
+                winner.enrollmentToken = authority.enrollmentToken
+                winner.enrollmentUpdatedAt = authority.enrollmentUpdatedAt
+                winner.enrollmentSourceID = authority.enrollmentSourceID
             }
             guard deletedAt[winner.id].map({ $0 < winner.modifiedAt }) ?? true else { continue }
             merged.entries.append(winner)

@@ -31,7 +31,8 @@ struct ClusterCoverageStrip: View {
     }
 
     private func status(_ member: ClusterCoverage) -> String {
-        switch member.state {
+        if let detail = member.detail { return detail }
+        return switch member.state {
         case .ok: "OK"
         case .unreachable: member.since.map { "Unreachable since \($0.formatted(date: .abbreviated, time: .shortened))" } ?? "Unreachable"
         case .unsupported: "Too old"

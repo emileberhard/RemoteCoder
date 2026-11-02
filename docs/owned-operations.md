@@ -204,7 +204,8 @@ Hosts sync across the user's devices through one iCloud Keychain item
 (`host-directory-v1`, synchronizable, `AfterFirstUnlock`), stored in the app's
 default access group, which the iOS and Mac apps share through the
 configured app ID. `HostDirectory` holds each host's name,
-endpoint, the operator token when a device knows one, the time of its last
+endpoint, an enrollment credential (a known operator token or an enrollment-only
+`rcs1.` capability), the time of its last
 explicit edit, and deletion tombstones. It never holds an `rc1.` installation
 token: device tools, the speech allow-list and revocation identify one
 installation, so each device keeps its own token, incoming-call identity and
@@ -212,12 +213,24 @@ active host in its device-only item. Merging is a union by host ID. The newer
 edit wins, and a host missing on one device is added there, never removed
 elsewhere; only a tombstone newer than a host's last edit removes it. Hosts saved
 before sync merge with no edit time, so any explicit edit or deletion beats them.
-A merge keeps a known operator token for the same endpoint when the winning
-entry has none, and discovering a credential is not an edit. No credential
+A merge keeps a known enrollment credential for the same endpoint when neither
+replica has a newer credential revision, and discovering a credential is not an
+edit. Explicit endpoint or credential replacements advance a separate
+`enrollmentUpdatedAt` revision. An installation-token replacement clears the
+old capability and names its exact source installation until that source
+publishes the replacement capability. Credential revisions merge independently
+of display-name edits, including while the new capability is absent; stale
+replicas and development seeds cannot restore a cleared capability. Ordinary
+enrollment completion changes only the device snapshot. No credential
 follows an endpoint change: a device that receives a new endpoint uses only the
-synced operator token for it, or shows the host as invalid until a token is
-entered on any device. A device that receives a host without its own token uses
-the synced operator token and enrolls its own installation. A dev build's seed
+synced enrollment credential for it, or shows “Missing authorization token”. A
+device receiving an `rcs1.` credential shows “Waiting for device enrollment”
+until it enrolls its own installation; it never uses that credential for a
+normal gateway connection. A device with only an installation token obtains
+the enrollment capability through authenticated `POST /credentials/share`
+and fills the directory without changing the host's edit time. New host edits
+automatically request synchronization and enrollment. Activation retries
+failed or offline enrollment. A dev build's seed
 supplies the operator token for its matching seed host. The newest 256
 tombstones are kept; beyond that, a long-stale device can add a deleted host
 back, never remove one. `SharedHostDirectory` owns the item's I/O off the main
@@ -258,10 +271,28 @@ the gateway serves it only on the authorized, uncached `GET /relay`, and the
 app keeps it in the device-only Keychain.
 
 The operator credential continues to authorize local management clients. The app
-can exchange it once for a revocable installation token through operator-only
-`POST /credentials/enroll`. Enrollment has an installation ID and an idempotent
-result; revoked IDs cannot silently reenroll. Only token digests are persisted in
-`~/.remote-coder/installation-credentials.json`. The app verifies the captured
+can exchange it once for a revocable installation token through
+`POST /credentials/enroll`. That endpoint also accepts an `rcs1.` capability,
+which authorizes only enrollment, never chat, device tools, speech or cluster
+management. An installation obtains its capability from `/credentials/share`;
+the gateway derives it with HKDF-SHA256 from its operator secret and the exact
+installation's ID and credential digest. It never discloses the operator secret.
+Enrollment has an installation ID and an idempotent result; revoked IDs cannot
+silently reenroll or change their issuer. The client derives the attempt ID
+with HMAC-SHA256 over its persisted device installation ID, host ID and exact
+endpoint, keyed by its captured enrollment authority. The same protected
+snapshot reconstructs the same ID across retries and app restarts. A changed
+authority or endpoint produces a distinct ID, so a successfully registered
+but discarded response cannot strand the new authority on an old record.
+Retries under the same revoked authority never generate a fresh identity. Each delegated installation stores
+its parent ID. Revoking a parent invalidates its capabilities and every
+descendant, including existing WebSocket and speech leases. Revoking a child
+leaves its siblings and parent valid. Lineage validation is bounded by the
+existing 4,096-record cap and fails closed on absent parents or cycles.
+Only token digests and nonsecret lineage are persisted in
+`~/.remote-coder/installation-credentials.json`. Older gateways reject records
+with lineage, so after delegation a gateway rollback must retain this version's
+credential support or fix forward; never strip lineage or restore stale state. The app verifies the captured
 endpoint and call ownership again after enrollment before replacing its token.
 A revoked installation is denied new HTTP/WebSocket requests; an existing socket
 checks its lease every five seconds and then uses normal connection cleanup.

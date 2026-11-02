@@ -152,7 +152,14 @@ entrypoint linked above.
   contract in `docs/owned-operations.md`, *Credentials and transport*). A host
   absent on one device is added, never deleted elsewhere; only an explicit
   deletion's tombstone removes it. Installation tokens, incoming-call identity
-  and the active host stay per device.
+  and the active host stay per device. Enrollment-only `rcs1.` capabilities sync
+  in the directory so each receiving device can enroll; they never authorize
+  a normal connection. `HostStore` owns publication, enrollment and captured
+  endpoint fences; app-owned host observation requests the existing sync task.
+  Enrollment completion is device-only. Explicit credential replacements
+  advance the directory's independent credential revision and only their exact
+  source installation may fill a cleared capability. Retry IDs derive from
+  the persisted device, endpoint and authority, never from a new retry UUID.
 - **Synced preferences.** `SyncedPreferenceStore` (owned by the workspace)
   replicates the user defaults keys in `ChatWorkspaceModel.syncedPreferenceKeys`
   through every host's `preferences/*` (host-daemon-rs `AGENTS.md`). Each

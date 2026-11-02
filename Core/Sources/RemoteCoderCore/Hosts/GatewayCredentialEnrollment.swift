@@ -2,6 +2,7 @@ import Foundation
 
 protocol GatewayCredentialEnrolling: Sendable {
     func enroll(host: GatewayHostConfiguration, installationID: String) async throws -> String
+    func sharingCredential(host: GatewayHostConfiguration) async throws -> String
 }
 
 struct GatewayCredentialEnrollment: GatewayCredentialEnrolling {
@@ -18,6 +19,25 @@ struct GatewayCredentialEnrollment: GatewayCredentialEnrolling {
         guard response.statusCode == 200 else { throw Failure(status: response.statusCode) }
         let result = try JSONDecoder().decode(Enrolled.self, from: data)
         guard result.token.hasPrefix("rc1.\(installationID)."), result.token.count <= 256 else {
+            throw GatewayClient.ClientError.invalidMessage
+        }
+        return result.token
+    }
+
+    func sharingCredential(host: GatewayHostConfiguration) async throws -> String {
+        guard let base = host.gatewayHTTPBaseURL(), host.usesInstallationCredential else {
+            throw GatewayClient.ClientError.invalidURL
+        }
+        var request = URLRequest(url: base.appending(path: "credentials/share"))
+        request.httpMethod = "POST"
+        request.timeoutInterval = 20
+        request.setValue("Bearer \(host.authToken)", forHTTPHeaderField: "Authorization")
+        let (data, response) = try await AppStorageScope.networkSession.data(for: request)
+        guard let response = response as? HTTPURLResponse else { throw GatewayClient.ClientError.invalidMessage }
+        guard response.statusCode == 200 else { throw Failure(status: response.statusCode) }
+        let result = try JSONDecoder().decode(Enrolled.self, from: data)
+        let installationID = host.authToken.split(separator: ".").dropFirst().first
+        guard let installationID, result.token.hasPrefix("rcs1.\(installationID)."), result.token.count <= 256 else {
             throw GatewayClient.ClientError.invalidMessage
         }
         return result.token

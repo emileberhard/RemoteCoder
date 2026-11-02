@@ -61,7 +61,14 @@ struct GatewayHostConfiguration: Identifiable, Codable, Equatable, Sendable {
         "\(hostname):\(port)"
     }
 
-    var isValid: Bool { gatewayWebSocketURL() != nil && !authToken.isEmpty }
+    var isValid: Bool { gatewayWebSocketURL() != nil && !authToken.isEmpty && !usesSharedEnrollmentCredential }
+
+    var credentialStatus: String {
+        if gatewayWebSocketURL() == nil { return "Invalid address" }
+        if authToken.isEmpty { return "Missing authorization token" }
+        if usesSharedEnrollmentCredential { return "Waiting for device enrollment" }
+        return "Ready"
+    }
 
     /// Names the host in connection errors.
     ///
@@ -84,6 +91,12 @@ struct GatewayHostConfiguration: Identifiable, Codable, Equatable, Sendable {
     }
 
     var usesInstallationCredential: Bool { authToken.hasPrefix("rc1.") }
+    var usesSharedEnrollmentCredential: Bool { authToken.hasPrefix("rcs1.") }
+
+    var installationCredentialID: String? {
+        guard usesInstallationCredential else { return nil }
+        return authToken.split(separator: ".").dropFirst().first.map(String.init)
+    }
 
     var enrollmentCredential: String? {
         usesInstallationCredential || authToken.isEmpty ? nil : authToken
@@ -187,7 +200,7 @@ struct ValidatedGatewayHost: Identifiable, Equatable, Sendable {
     init?(_ configuration: GatewayHostConfiguration) {
         guard let webSocketURL = configuration.gatewayWebSocketURL(),
               let httpBaseURL = configuration.gatewayHTTPBaseURL(),
-              !configuration.authToken.isEmpty else { return nil }
+              configuration.isValid else { return nil }
         self.configuration = configuration
         self.webSocketURL = webSocketURL
         self.httpBaseURL = httpBaseURL

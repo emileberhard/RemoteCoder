@@ -18,6 +18,7 @@ final class RemoteCoderAppModel {
     private let logger = AppLogger(category: "ChatWorkspace")
     private var hasStarted = false
     private var bootstrapTask: Task<Void, Never>?
+    private var hostChangesTask: Task<Void, Never>?
     private var hostSynchronizationTask: Task<Void, Never>?
     private var hostSynchronizationRequested = false
     private var diagnosticsHostTask: Task<Void, Never>?
@@ -135,6 +136,14 @@ final class RemoteCoderAppModel {
                 await workspace.registerDeviceOnAllHosts()
             }
         }
+        hostChangesTask = Task { [weak self, workspace] in
+            for await _ in Observations({ @MainActor in
+                workspace.settings.hosts.map(\.configuration) + workspace.settings.invalidHosts
+            }) {
+                guard let self, !Task.isCancelled else { return }
+                synchronizeHosts()
+            }
+        }
         diagnosticsHostTask = Task { [weak self, workspace] in
             for await host in Observations({ @MainActor in workspace.settings.activeHost }) {
                 guard let self, !Task.isCancelled else { return }
@@ -173,6 +182,8 @@ final class RemoteCoderAppModel {
         workspace.dictationLibrary?.cancelPublication()
         bootstrapTask?.cancel()
         bootstrapTask = nil
+        hostChangesTask?.cancel()
+        hostChangesTask = nil
         hostSynchronizationTask?.cancel()
         hostSynchronizationTask = nil
         diagnosticsHostTask?.cancel()

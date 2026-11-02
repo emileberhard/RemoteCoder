@@ -425,8 +425,11 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
             return .init(hostId: host.id, name: host.displayName, state: since == nil ? .unknown : .ok)
         }
         var seen = Set(coverage.map(\.id))
+        for host in settings.invalidHosts where seen.insert(host.id).inserted {
+            coverage.append(.init(hostId: host.id, name: host.displayName, state: .unavailable, detail: host.credentialStatus))
+        }
         for member in cluster.membersByID.values where seen.insert(member.id).inserted {
-            coverage.append(.init(hostId: member.id, name: member.name, state: .unknown))
+            coverage.append(ClusterCoverage(member: member))
         }
         return coverage
     }

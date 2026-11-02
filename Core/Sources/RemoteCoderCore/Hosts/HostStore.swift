@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Observation
 
@@ -174,21 +175,44 @@ final class HostStore {
         canReplaceHost: @MainActor (UUID) -> Bool) async {
         let installationID = defaults.string(forKey: Self.installationIDKey) ?? UUID().uuidString.lowercased()
         defaults.set(installationID, forKey: Self.installationIDKey)
-        for captured in hosts where !captured.configuration.usesInstallationCredential {
+        for captured in configurations where captured.gatewayHTTPBaseURL() != nil && !captured.authToken.isEmpty {
             guard !identityMigrationHostIDs.contains(captured.id), canReplaceHost(captured.id) else { continue }
             do {
                 try Task.checkCancellation()
-                let token = try await client.enroll(host: captured.configuration,
-                    installationID: installationID + "-" + captured.id.uuidString.lowercased())
+                var enrolled = captured
+                if !captured.usesInstallationCredential {
+                    let token = try await client.enroll(host: captured,
+                        installationID: Self.enrollmentID(for: captured, installationID: installationID))
+                    try Task.checkCancellation()
+                    guard !identityMigrationHostIDs.contains(captured.id), canReplaceHost(captured.id),
+                          let current = configurations.first(where: { $0.id == captured.id && $0.hasSameConnection(as: captured) }) else { continue }
+                    enrolled = current
+                    enrolled.authToken = token
+                    enrolled.incomingCallHostID = nil
+                    let updated = configurations.map { $0.id == enrolled.id ? enrolled : $0 }
+                    guard commit(updated, activeHostID: activeHostID, directory: directory) else { continue }
+                }
+                guard sharedDirectory != nil, directory.needsEnrollmentCredential(for: enrolled) else { continue }
+                let shared = try await client.sharingCredential(host: enrolled)
                 try Task.checkCancellation()
-                guard !identityMigrationHostIDs.contains(captured.id), canReplaceHost(captured.id), let current = hosts.first(where: { $0.id == captured.id }),
-                      current.hasSameConnection(as: captured.configuration) else { continue }
-                var enrolled = current.configuration
-                enrolled.authToken = token
-                _ = upsert(enrolled)
+                guard !identityMigrationHostIDs.contains(enrolled.id), canReplaceHost(enrolled.id),
+                      configurations.contains(where: { $0.id == enrolled.id && $0.hasSameConnection(as: enrolled) }) else { continue }
+                var directory = directory
+                directory.supplyEnrollmentCredential(shared, for: enrolled)
+                _ = commit(configurations, activeHostID: activeHostID, directory: directory)
             } catch is CancellationError { return }
             catch { errorMessage = error.localizedDescription }
         }
+        await synchronize()
+    }
+
+    private static func enrollmentID(for host: GatewayHostConfiguration, installationID: String) throws -> String {
+        let context = try JSONEncoder().encode(["RemoteCoder enrollment identity v1", installationID,
+            host.id.uuidString, host.hostname, String(host.port), host.transport.rawValue])
+        let code = HMAC<SHA256>.authenticationCode(for: context, using: SymmetricKey(data: Data(host.authToken.utf8)))
+        let suffix = Data(code).base64EncodedString().replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
+        return installationID + "-" + suffix
     }
 
     @discardableResult
@@ -214,11 +238,15 @@ final class HostStore {
             replacement.gatewayID = updated[index].gatewayID
             replacement.legacyIDs = updated[index].legacyIDs
             replacement.incomingCallHostID = updated[index].hasSameConnection(as: host) ? updated[index].incomingCallHostID : nil
+            if updated[index].hasSameConnection(as: host) {
+                directory.record(replacement, at: .now)
+            } else {
+                directory.recordCredentialReplacement(replacement, at: .now)
+            }
             updated[index] = replacement
-            directory.record(replacement, at: .now)
         } else {
             updated.append(host)
-            directory.record(host, at: .now)
+            directory.recordCredentialReplacement(host, at: .now)
         }
         return commit(updated, activeHostID: activeHostID ?? host.id, directory: directory)
     }
