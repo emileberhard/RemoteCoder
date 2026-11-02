@@ -303,8 +303,7 @@ impl Root {
                     libc::O_RDWR
                         | libc::O_CREAT
                         | libc::O_NOFOLLOW
-                        | libc::O_CLOEXEC
-                        | super::lock_file::O_CLOFORK
+                        | super::lock_file::INHERITANCE_FLAGS
                         | libc::O_NONBLOCK,
                     0o600,
                 )

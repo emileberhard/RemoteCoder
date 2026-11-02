@@ -2,7 +2,10 @@ use std::fs::{File, OpenOptions};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 
-pub(crate) const O_CLOFORK: libc::c_int = 0x0800_0000;
+#[cfg(target_os = "macos")]
+pub(crate) const INHERITANCE_FLAGS: libc::c_int = libc::O_CLOEXEC | 0x0800_0000;
+#[cfg(not(target_os = "macos"))]
+pub(crate) const INHERITANCE_FLAGS: libc::c_int = libc::O_CLOEXEC;
 
 pub(crate) fn open(path: &Path) -> std::io::Result<File> {
     OpenOptions::new()
@@ -11,11 +14,11 @@ pub(crate) fn open(path: &Path) -> std::io::Result<File> {
         .create(true)
         .truncate(false)
         .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW | O_CLOFORK)
+        .custom_flags(libc::O_NOFOLLOW | INHERITANCE_FLAGS)
         .open(path)
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "macos"))]
 mod tests {
     use std::os::fd::AsRawFd;
     use std::os::unix::process::CommandExt;

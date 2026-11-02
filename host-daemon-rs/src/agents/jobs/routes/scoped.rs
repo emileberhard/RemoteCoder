@@ -12,7 +12,7 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::task::{JoinHandle, JoinSet};
 
 use crate::agents::jobs::model::MAX_JOB_BYTES;
-use crate::platform::process::{ProcessInstance, unix_peer_identity};
+use crate::platform::process::{ProcessInstance, unix_peer_instance};
 use crate::rpc::error::{RpcCode, RpcError, RpcResult};
 use crate::wire::agent_jobs::ScopedRequest;
 
@@ -128,10 +128,7 @@ async fn reclaim_stale_socket(path: &Path) -> Result<()> {
 }
 
 async fn serve(mut stream: UnixStream, handler: ScopedHandler) -> Result<()> {
-    let peer = unix_peer_identity(&stream).map(|(pid, identity)| ProcessInstance {
-        pid,
-        started_micros: identity.started_micros,
-    });
+    let peer = unix_peer_instance(&stream);
     let result = match peer {
         Ok(peer) => read_request(&mut stream)
             .await

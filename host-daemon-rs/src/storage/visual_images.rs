@@ -524,6 +524,7 @@ fn process_alive(pid: u32) -> bool {
 
 #[cfg(test)]
 pub(super) mod test_images {
+    #[cfg(target_os = "macos")]
     pub(in crate::storage) static SERIAL: tokio::sync::Mutex<()> =
         tokio::sync::Mutex::const_new(());
 
@@ -591,6 +592,7 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "macos")]
     async fn sips_size(bytes: &[u8]) -> (u64, u64) {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("image");
@@ -755,6 +757,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(target_os = "macos")]
     async fn real_images_convert_pass_through_or_fail_with_a_reason() {
         let _serial = test_images::SERIAL.lock().await;
         let home = tempfile::tempdir().unwrap();

@@ -110,7 +110,7 @@ mod tests {
 
     #[test]
     fn the_matched_texts_are_the_ones_the_pinned_fork_sends() {
-        let commit = env!("RC_REQUIRED_CODEX_SOURCE_COMMIT");
+        let commit = env!("RC_REQUIRED_CODEX_PROTOCOL_SOURCE_COMMIT");
         let fork = std::env::var_os("RC_CODEX_FORK_DIR")
             .map(std::path::PathBuf::from)
             .or_else(|| {

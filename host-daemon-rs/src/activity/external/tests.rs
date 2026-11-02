@@ -140,7 +140,14 @@ fn transcript_cache_rechecks_rewrites_and_drops_dead_owners() {
             file.path(),
             format!("{}\n", claude("assistant", Some(reason))),
         )
-        .unwrap()
+        .unwrap();
+        std::fs::File::open(file.path())
+            .unwrap()
+            .set_modified(
+                std::time::UNIX_EPOCH
+                    + std::time::Duration::from_secs(if reason == "end_turn" { 1 } else { 2 }),
+            )
+            .unwrap();
     };
     let classify = claude::boundary;
     let state = |boundary: Option<transcript::Boundary>, owner| {

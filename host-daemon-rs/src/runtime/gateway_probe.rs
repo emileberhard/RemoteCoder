@@ -433,7 +433,7 @@ mod tests {
         let normal = GatewayOwnerObservation {
             launchd_pid: Some(11),
             process: Some(mac_app::ProcessIdentity {
-                started_micros: 1,
+                birth: crate::platform::process::ProcessBirth::Darwin { started_micros: 1 },
                 executable: installed.clone(),
             }),
             listener_pids: BTreeSet::from([11]),
@@ -451,7 +451,7 @@ mod tests {
             let observation = GatewayOwnerObservation {
                 launchd_pid,
                 process: Some(mac_app::ProcessIdentity {
-                    started_micros: 1,
+                    birth: crate::platform::process::ProcessBirth::Darwin { started_micros: 1 },
                     executable,
                 }),
                 listener_pids: listeners,

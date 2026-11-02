@@ -1,43 +1,63 @@
+#[cfg(any(not(target_os = "linux"), test))]
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read};
-use std::path::{Path, PathBuf};
+#[cfg(any(not(target_os = "linux"), test))]
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use serde_json::Value;
+#[cfg(any(not(target_os = "linux"), test))]
 use tokio::process::Command;
 use tokio::sync::Mutex;
 
 use super::transcript::{Boundary, TranscriptCache};
-use super::{
-    ActivityState, SessionActivity, SessionOwner, bounded_output, ensure_inventory_within_limit,
-    valid_id,
-};
+use super::{ActivityState, SessionActivity, SessionOwner, valid_id};
 use crate::time::parse_rfc3339_seconds;
+
+#[cfg(target_os = "linux")]
+#[path = "codex_linux.rs"]
+mod linux;
+#[cfg(any(not(target_os = "linux"), test))]
+use super::bounded_output;
+#[cfg(not(target_os = "linux"))]
+use super::ensure_inventory_within_limit;
 
 pub(super) async fn codex_sessions(
     home: PathBuf,
-    managed_pid: Option<i32>,
+    managed_pid: Option<super::ManagedCodex>,
     cache: Arc<Mutex<TranscriptCache>>,
 ) -> Result<Vec<SessionActivity>> {
     let managed_pid = managed_pid.context("managed Codex identity unavailable")?;
-    let mut command = Command::new("/usr/sbin/lsof");
-    command.args([
-        "-nP",
-        "-a",
-        "-u",
-        &nix::unistd::getuid().as_raw().to_string(),
-        "-c",
-        "codex",
-        "-Fpcfatn",
-    ]);
-    let files = codex_writers(
-        std::str::from_utf8(&inventory_output(command).await?)?,
-        &home,
-        managed_pid,
-    );
+    #[cfg(target_os = "linux")]
+    let files = {
+        let home = home.clone();
+        tokio::task::spawn_blocking(move || linux::writers(&home, managed_pid))
+            .await
+            .context("Codex process inventory failed")??
+    };
+    #[cfg(not(target_os = "linux"))]
+    let files = {
+        let mut command = Command::new("/usr/sbin/lsof");
+        command.args([
+            "-nP",
+            "-a",
+            "-u",
+            &nix::unistd::getuid().as_raw().to_string(),
+            "-c",
+            "codex",
+            "-Fpcfatn",
+        ]);
+        codex_writers(
+            std::str::from_utf8(&inventory_output(command).await?)?,
+            &home,
+            managed_pid,
+        )
+    };
+    #[cfg(not(target_os = "linux"))]
     ensure_inventory_within_limit(files.values().map(Vec::len).sum())?;
     let mut cache = cache.lock_owned().await;
     if files.is_empty() {
@@ -45,18 +65,49 @@ pub(super) async fn codex_sessions(
         return Ok(Vec::new());
     }
     tokio::task::spawn_blocking(move || {
-        let mut starts = HashMap::new();
-        for pid in files.keys() {
-            if let Some(identity) = crate::platform::process::identify(*pid)? {
-                starts.insert(*pid, i64::try_from(identity.started_micros / 1_000_000)?);
-            }
-        }
         cache.seen.clear();
         let mut sessions = Vec::new();
-        for (pid, paths) in files {
-            let Some(start) = starts.get(&pid) else {
-                continue;
+        for (pid, writer) in files {
+            #[cfg(target_os = "linux")]
+            let (paths, proof) = (writer.paths, writer.identity);
+            #[cfg(not(target_os = "linux"))]
+            let paths = writer;
+            #[cfg(target_os = "linux")]
+            {
+                let Some(current) = crate::platform::process::identify_instance(pid)? else {
+                    continue;
+                };
+                anyhow::ensure!(
+                    current == proof,
+                    "Codex process {pid} changed after inventory"
+                );
+            }
+            #[cfg(target_os = "linux")]
+            let crate::platform::process::ProcessBirth::Linux { birth } = proof.birth else {
+                anyhow::bail!("Linux Codex writer lacks Linux birth proof");
             };
+            #[cfg(target_os = "linux")]
+            let start =
+                match crate::platform::process::linux::display_start_micros(birth.start_ticks) {
+                    Ok(micros) => Some(i64::try_from(micros / 1_000_000)?),
+                    Err(error) => {
+                        tracing::warn!(pid, %error, "Codex process display start time unavailable");
+                        None
+                    }
+                };
+            #[cfg(not(target_os = "linux"))]
+            let start = match crate::platform::process::identify(pid)? {
+                Some(identity) => {
+                    let crate::platform::process::ProcessBirth::Darwin { started_micros } =
+                        identity.birth
+                    else {
+                        anyhow::bail!("Codex process has an incompatible birth proof");
+                    };
+                    Some(i64::try_from(started_micros / 1_000_000)?)
+                }
+                None => continue,
+            };
+            let mut owned = Vec::new();
             for path in paths {
                 let mut first = String::new();
                 BufReader::new(File::open(&path)?.take(128 * 1024)).read_line(&mut first)?;
@@ -64,19 +115,33 @@ pub(super) async fn codex_sessions(
                 let Some(id) = header["payload"]["id"].as_str().filter(|id| valid_id(id)) else {
                     continue;
                 };
-                let state = cache
-                    .boundary(&path, boundary)
-                    .ok()
-                    .flatten()
-                    .and_then(|boundary| boundary.state_since(*start))
+                let state = start
+                    .and_then(|start| {
+                        cache
+                            .boundary(&path, boundary)
+                            .ok()
+                            .flatten()
+                            .and_then(|boundary| boundary.state_since(start))
+                    })
                     .unwrap_or(ActivityState::Unknown);
-                sessions.push(SessionActivity {
+                owned.push(SessionActivity {
                     thread_id: id.to_string(),
                     state,
                     owner: Some(SessionOwner::Client { pid }),
                     waiting_since: None,
                 });
             }
+            #[cfg(target_os = "linux")]
+            {
+                let Some(current) = crate::platform::process::identify_instance(pid)? else {
+                    continue;
+                };
+                anyhow::ensure!(
+                    current == proof,
+                    "Codex process {pid} changed while reading sessions"
+                );
+            }
+            sessions.extend(owned);
         }
         cache.finish();
         Ok(sessions)
@@ -85,6 +150,7 @@ pub(super) async fn codex_sessions(
     .context("Codex activity reader failed")?
 }
 
+#[cfg(any(not(target_os = "linux"), test))]
 async fn inventory_output(command: Command) -> Result<Vec<u8>> {
     let output = bounded_output(command).await?;
     anyhow::ensure!(
@@ -95,6 +161,7 @@ async fn inventory_output(command: Command) -> Result<Vec<u8>> {
     Ok(output.stdout)
 }
 
+#[cfg(any(not(target_os = "linux"), test))]
 pub(super) fn codex_writers(
     text: &str,
     home: &Path,

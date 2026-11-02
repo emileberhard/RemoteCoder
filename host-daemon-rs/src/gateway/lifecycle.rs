@@ -71,10 +71,15 @@ impl Gateway {
             task.abort();
             let _ = task.await;
         }
-        tokio::join!(
+        let (claude_capture, codex_capture) = tokio::join!(
             self.suspend_claude_for_restart(),
             self.suspend_codex_for_restart()
         );
+        if let Some(receipt) = &self.shutdown_receipt
+            && let Err(error) = receipt.finish(&codex_capture, &claude_capture).await
+        {
+            warn!(%error, "gateway shutdown receipt could not be persisted");
+        }
         let remaining = self.active_turn_count().await;
         info!(remaining, "gateway restart drain finished");
         self.close_all_clients(RESTARTING_CLOSE_CODE, RESTARTING_CLOSE_REASON);
@@ -94,7 +99,7 @@ impl Gateway {
         }
     }
 
-    async fn suspend_codex_for_restart(&self) {
+    async fn suspend_codex_for_restart(&self) -> Result<()> {
         let decision = self.codex_restart_decision().await;
         gateway_shutdown::suspend_codex(
             &self.codex,
@@ -102,7 +107,7 @@ impl Gateway {
             &self.journal,
             decision,
         )
-        .await;
+        .await
     }
 
     pub(super) async fn claude_suspended_turns(
@@ -112,11 +117,11 @@ impl Gateway {
         self.claude_restart.suspended_turns(thread_id).await
     }
 
-    async fn suspend_claude_for_restart(&self) {
+    async fn suspend_claude_for_restart(&self) -> Result<()> {
         let Some(agent) = self.claude_agent() else {
-            return;
+            return Ok(());
         };
-        self.claude_restart.capture_and_suspend(&agent).await;
+        self.claude_restart.capture_and_suspend(&agent).await
     }
 
     pub(super) async fn claude_recovery_complete(&self) -> Result<bool> {

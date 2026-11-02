@@ -594,9 +594,7 @@ async fn placeholder_runtime(
         input: InputWriter::spawn(stdin),
         pending_controls: HashMap::new(),
         process_group_id,
-        process_started_micros: crate::platform::process::identify(process_group_id)
-            .unwrap()
-            .map(|identity| identity.started_micros),
+        process_identity: crate::platform::process::identify_instance(process_group_id).unwrap(),
         reaped: tokio::sync::watch::channel(super::process::ReapState::Running).1,
         launch: super::jobs::LaunchPolicy::Conversation {
             scope: crate::agents::jobs::model::ToolScope::Full,

@@ -1,6 +1,7 @@
 # Host observability
 
-Everything the host records lives under `~/Library/Logs/remote-coder/`. The
+Host records live under `~/Library/Logs/remote-coder/` on macOS and
+`~/.local/state/remote-coder/logs/` on Linux. The
 point is retroactive debugging: a session from days ago must be reconstructable
 without a live listener attached. Verbosity is a feature; unboundedness is a
 bug, so every surface below rotates after 30 days unless its row says otherwise;
@@ -16,7 +17,7 @@ there is no flag that turns any of this off.
 | App logs | `app-logs/<device>/YYYYMMDD-<segment>.jsonl.gz` | The iOS OSLog stream, versioned MetricKit reports and [field telemetry](#field-telemetry), uploaded from the phone (7 days, 1 GiB in total) |
 | Voice sessions | `voice-sessions/<started>-<thread>.jsonl` | Per-call transcripts, delegation lifecycle, latencies, close summary (newest 100) |
 | Deployments | `deployments/*.log` | Install runs with their git commit (each app install keeps the newest 5 per-run entries of each kind plus each platform's newest installed symbols, within 4 GiB; release symbols keep their own 7-day, 5 GiB rule) |
-| launchd redirect | `codex-gateway.out.log` / `.err.log` | Startup banner and panics only |
+| launchd redirect (macOS) | `codex-gateway.out.log` / `.err.log` | Startup banner and panics only |
 | Relay tunnel | `relay-tunnel.log` | SSH errors from this Mac's relay tunnel ([relay route](relay-route.md#logs)) |
 
 Codex rollouts and Claude project JSONL remain the canonical conversation

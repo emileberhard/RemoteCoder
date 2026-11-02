@@ -194,7 +194,12 @@ async fn agent_client_detached_tmux_rejects_inherited_identity_before_delivery()
         let request: Value = serde_json::from_str(&text).unwrap();
         assert_eq!(request["method"], "agent/context/capture");
         assert!(request["params"]["pid"].as_u64().unwrap() > 0);
-        assert!(request["params"]["startedAtUnixMicros"].as_u64().unwrap() > 0);
+        assert!(
+            request["params"]["birth"]["startedMicros"]
+                .as_u64()
+                .unwrap()
+                > 0
+        );
         assert_eq!(request["params"].as_object().unwrap().len(), 2);
         socket.send(Message::Text(json!({"id":1,"error":{"code":-32003,"message":"Detached process has no verified caller; pass explicitly captured context","data":{"kind":"unprovenCaller"}}}).to_string())).await.unwrap();
         assert!(
@@ -510,7 +515,12 @@ async fn agent_client_format_only_uses_gateway_proof_and_owning_host() {
                     "agent/context/capture" => {
                         assert_eq!(request["params"].as_object().unwrap().len(), 2);
                         assert!(request["params"]["pid"].as_u64().unwrap() > 0);
-                        assert!(request["params"]["startedAtUnixMicros"].as_u64().unwrap() > 0);
+                        assert!(
+                            request["params"]["birth"]["startedMicros"]
+                                .as_u64()
+                                .unwrap()
+                                > 0
+                        );
                         formatting_context()["context"].clone()
                     }
                     "agent/context/read" => {

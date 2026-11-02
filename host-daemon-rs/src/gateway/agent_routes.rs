@@ -79,7 +79,7 @@ impl Gateway {
                 }
                 let provider = self.job_claude()?;
                 if provider
-                    .owned_process_session(proven.process.pid, proven.process.started_micros)
+                    .owned_process_session(proven.process)
                     .await
                     .is_some()
                 {
@@ -87,8 +87,7 @@ impl Gateway {
                 }
                 let owner = crate::providers::claude::native_parent::prove_owner(
                     &self.claude_settings.claude_home,
-                    proven.process.pid,
-                    proven.process.started_micros,
+                    proven.process,
                 )
                 .await?
                 .context("native parent process no longer owns its inbox")?;

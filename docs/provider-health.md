@@ -30,6 +30,8 @@ and tells the client which provider is broken and why.
   evidence refreshed in the background. A definitive sign-out advertises an
   eligible fallback, or remains unavailable when none exists.
 - Claude requires its executable, supervisor and cached authentication preflight.
+  On Linux the preflight also requires a successful, nonempty `--version` result;
+  a readable router key alone cannot mark an unlaunchable CLI ready.
   Disabled or definitively unavailable Claude advertises an eligible fallback.
   Unchecked readiness is unavailable with an unknown reason. A gateway sending
   no `providers` is older; absence means unknown, never ready.
@@ -122,6 +124,6 @@ starts, including voice shadow threads, never use text fallback admission.
   including transient CLI failures. New opted-in conversations can use Sol during
   that interval; admitted threads remain pinned.
 
-- Claude `ready` in router mode proves only that the router key file is
-  readable (`providers/claude/auth.rs`). A router-side Claude outage still
+- Claude `ready` in router mode proves local readiness and a readable router key
+  file (`providers/claude/auth.rs`). A router-side Claude outage still
   reports `ready`; its turns fail with the router's error.

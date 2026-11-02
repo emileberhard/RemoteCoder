@@ -84,6 +84,15 @@ scoped receipt reads require the exact sender conversation.
 
 ## Process model
 
+Linux managed Claude sessions support caller ownership and recovery. Terminal
+Claude native-parent inbox forwarding is unavailable on Linux. Linux caller
+capture uses the kernel peer credentials on the private Unix coordination
+socket, including when the tool runs in a child PID namespace. That local socket
+is selected from `RC_AGENT_JOB_SOCKET` or the caller's HOME; `--env-file` does not
+select a different scoped socket. Shutdown telemetry retains the preceding
+instance and at most one malformed receipt beside the current record; it never
+blocks startup or provider journal retirement.
+
 - One version-matched default `codex app-server` per host listens on the
   user-private `~/.codex/app-server-control/app-server-control.sock`. ChatGPT
   Desktop, RemoteCoder and external Codex agents share that process and native
@@ -103,7 +112,7 @@ scoped receipt reads require the exact sender conversation.
   `POST /credentials/enroll` is operator-only (`docs/owned-operations.md`).
   Token values never appear in logs or source.
 - With `RC_CODEX_GATEWAY_LAN_PORT` set, every route is also served over pinned
-  TLS 1.3 on every IPv6 and IPv4 address and published as `lanEndpoint` in the
+  TLS 1.3 and published as `lanEndpoint`. macOS retains its dual-stack wildcard default. An explicit `RC_CODEX_GATEWAY_LAN_BIND_ADDRESS` and `RC_CODEX_GATEWAY_LAN_HOST` select one address and advertised DNS name. Linux requires both, rejects wildcard TLS binds, requires loopback plaintext ingress, and fails startup if configured TLS cannot bind. Operator network policy restricts the selected address to the private interface and blocks container access. The endpoint is published in the
   authorized `/health`. The app's `GatewayRoutes` tries it first on Wi-Fi or Ethernet
   (`docs/system-architecture.md`, *LAN route*). With
   `~/.remote-coder/relay/relay.json` present, the authorized, uncached
@@ -981,8 +990,8 @@ scoped receipt reads require the exact sender conversation.
 
   ```text
   ~/.codex/packages/standalone/
-  ├── releases/<version>-aarch64-apple-darwin/
-  └── current -> releases/<version>-aarch64-apple-darwin
+  ├── releases/<version>-<approved-target>/
+  └── current -> releases/<version>-<approved-target>
   ```
 
   `current/codex` is the daemon-managed executable, and the package's
@@ -996,6 +1005,7 @@ scoped receipt reads require the exact sender conversation.
   both identities. Recovery-only startup may use that exact bound package,
   while ordinary gateway startup stays pinned. Before deployment, prove
   source → candidate → source stored-history compatibility in an isolated home.
+- Linux uses the tracked `systemd/remote-coder-gateway.service` as a lingering user unit. `KillMode=process` and `TimeoutStopSec=60` preserve ordered gateway capture: the gateway owns Claude process groups, and the native Codex lifecycle owns its daemon using kernel boot/start identity. Agent-created tmux sessions and servers stay session-owned across gateway restarts. A unit cgroup is not permission to kill those children. Desktop reconciliation is disabled by platform. Linux logs live under `~/.local/state/remote-coder/logs`; credentials remain owner-only files. Running with Docker access is root-equivalent and provides no agent isolation. Linux native Codex discovery uses bounded same-user `/proc` stat/executable/writable-FD evidence; `comm=codex` selects candidates, exact boot/start proof establishes ownership, and inherited descriptors do not establish another owner. Renamed standalone binaries are outside this inventory, as on macOS. Incomplete candidate coverage remains unavailable. Linux metadata-based transcript/history cache reuse expires after one second because immediate same-length writes can retain identical filesystem timestamps.
 - For a paired deployment, do not run the synchronous runtime command from a
   turn it will suspend. `just shared-codex-install <package-directory>
   <gateway-binary>` submits a one-shot, launchd-owned stack installer

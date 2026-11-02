@@ -36,7 +36,7 @@ impl DesktopMode {
     }
 
     fn for_host(profiles: &HostProfiles, host: &str) -> Self {
-        if lists(&profiles.hosts_without_chatgpt_desktop, host) {
+        if cfg!(target_os = "linux") || lists(&profiles.hosts_without_chatgpt_desktop, host) {
             DesktopMode::Disabled
         } else {
             DesktopMode::Shared
@@ -190,7 +190,11 @@ mod tests {
         );
         assert_eq!(
             DesktopMode::for_host(&profiles, "gateway-primary-2"),
-            DesktopMode::Shared
+            if cfg!(target_os = "linux") {
+                DesktopMode::Disabled
+            } else {
+                DesktopMode::Shared
+            }
         );
     }
 

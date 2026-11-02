@@ -14,6 +14,8 @@ installer_paths=(
 )
 external_auth_inputs=(
     docs/codex/compatibility.json
+    scripts/codex-runtime-approval
+    scripts/build_artifacts.py
     scripts/build_support.py
     scripts/process_group.py
     scripts/job_power.py
@@ -106,7 +108,9 @@ check_external_auth() (
     }
     trap cleanup_external_auth EXIT
     run_on "$execution_host" "umask 077; mkdir -p \"\$HOME/$stage\""
+    "$repo_root/scripts/codex-runtime-approval" export --target aarch64-apple-darwin > "$local_stage/approval.json"
     (cd "$repo_root" && rsync -aR "${external_auth_inputs[@]}" "$(destination "$execution_host" "$stage")/")
+    rsync -a "$local_stage/approval.json" "$(destination "$execution_host" "$stage")/"
     if ! same_host "$target" "$execution_host"; then
         run_on "$target" "umask 077; mkdir -p \"\$HOME/$stage\""
         (cd "$repo_root" && rsync -aR \
@@ -114,9 +118,12 @@ check_external_auth() (
             dev-tools/src/remotecoder_tools/external_auth_identity.py \
             "$(destination "$target" "$stage")/")
     fi
+    if ! same_host "$target" "$execution_host"; then
+        rsync -a "$local_stage/approval.json" "$(destination "$target" "$stage")/"
+    fi
     identity="$(run_on "$target" "python3 \"\$HOME/$stage/dev-tools/src/remotecoder_tools/external_auth_identity.py\" \
         --package \"\$HOME/.codex/packages/standalone/current\" \
-        --approval \"\$HOME/$stage/docs/codex/compatibility.json\" \
+        --approval \"\$HOME/$stage/approval.json\" \
         --requested-host '$target' --managed-pid '$managed_pid'")"
     printf '%s\n' "$identity" > "$local_stage/requested-identity.json"
     package_sha="$(jq -er '.packageSHA256 | select(test("^[0-9a-f]{64}$"))' <<<"$identity")"
@@ -147,7 +154,7 @@ cd \"\$stage\"
 python3 \"\$stage/scripts/build_support.py\" --background --lease \"\$stage/probe.lock\" -- \
   uv run --project \"\$stage/dev-tools\" --locked --quiet python -m remotecoder_tools.external_auth_probe \
   --package \"$probe_package\" \
-  --approval \"\$stage/docs/codex/compatibility.json\" \
+  --approval \"\$stage/approval.json\" \
   --requested-host-identity \"\$stage/requested-identity.json\" \
   --output \"\$HOME/$receipt\"
 mkdir -p \"\$(dirname \"\$HOME/$evidence\")\"

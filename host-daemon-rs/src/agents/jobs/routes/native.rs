@@ -9,7 +9,7 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
 use crate::agents::jobs::model::{
     ConversationIdentity, MAX_JOB_BYTES, MAX_PROMPT_BYTES, Provider, ProviderHome,
 };
-use crate::platform::process::{ProcessInstance, identify};
+use crate::platform::process::{ProcessInstance, identify_instance};
 use crate::providers::claude::conversation_index::delivery_uuid;
 
 const MAX_ROUTES: usize = 256;
@@ -152,7 +152,7 @@ impl NativeRoutes {
         owner: ProcessInstance,
     ) -> Result<(NativeRouteLease, mpsc::Receiver<NativeDeliveryRequest>)> {
         ensure!(
-            valid_conversation(&conversation) && owner.pid > 0 && owner.started_micros > 0,
+            valid_conversation(&conversation) && owner.pid > 0 && owner.birth.is_valid(),
             "Claude native route requires an exact process instance"
         );
         let mut state = self.state.lock().expect("native route registry poisoned");
@@ -210,9 +210,8 @@ impl NativeRoutes {
         let Some((epoch, owner, sender)) = route else {
             return unreachable("Claude native parent has no live registered holder");
         };
-        let alive = tokio::task::spawn_blocking(move || identify(owner.pid)).await;
-        if !matches!(alive, Ok(Ok(Some(identity))) if identity.started_micros == owner.started_micros)
-        {
+        let alive = tokio::task::spawn_blocking(move || identify_instance(owner.pid)).await;
+        if !matches!(alive, Ok(Ok(Some(identity))) if identity == owner) {
             return unreachable("Claude native parent process identity is no longer live");
         }
         if !self.current(conversation, epoch) {

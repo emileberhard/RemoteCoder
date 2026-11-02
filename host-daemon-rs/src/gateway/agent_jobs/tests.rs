@@ -109,12 +109,11 @@ async fn scoped_route_outlives_jobs_and_legacy_title_proves_current_process_and_
     assert!(path.exists());
     assert!(!legacy_socket(&first.job_id).exists());
     let pid = std::process::id() as i32;
-    let peer = ProcessInstance {
-        pid,
-        started_micros: crate::platform::process::identify(pid)
-            .unwrap()
-            .unwrap()
-            .started_micros,
+    let peer = crate::platform::process::identify_instance(pid)
+        .unwrap()
+        .unwrap();
+    let crate::platform::process::ProcessBirth::Darwin { started_micros } = peer.birth else {
+        panic!("Darwin proof expected");
     };
     let thread = Arc::new(Mutex::new(
         "6587aec5-99c2-5919-9221-89bdf86e59b6".to_owned(),
@@ -130,11 +129,8 @@ async fn scoped_route_outlives_jobs_and_legacy_title_proves_current_process_and_
             let result = match request["method"].as_str().unwrap() {
                 "daemon/toolContext" => {
                     assert_eq!(request["params"]["pid"], pid);
-                    assert_eq!(
-                        request["params"]["startedAtUnixMicros"],
-                        peer.started_micros
-                    );
-                    json!({"context":{"threadId":*provider_thread.lock().unwrap(),"turnId":"new-native-turn","toolCallId":"actual-tool","rootProcessIdentity":{"pid":pid,"startedAtUnixMicros":peer.started_micros}}})
+                    assert_eq!(request["params"]["startedAtUnixMicros"], started_micros);
+                    json!({"context":{"threadId":*provider_thread.lock().unwrap(),"turnId":"new-native-turn","toolCallId":"actual-tool","rootProcessIdentity":{"pid":pid,"startedAtUnixMicros":started_micros}}})
                 }
                 "thread/name/set" => {
                     renamed.lock().unwrap().push(request["params"].clone());
@@ -194,7 +190,9 @@ async fn scoped_route_outlives_jobs_and_legacy_title_proves_current_process_and_
         gateway
             .scoped_job_rpc(
                 ProcessInstance {
-                    started_micros: peer.started_micros + 1,
+                    birth: crate::platform::process::ProcessBirth::Darwin {
+                        started_micros: started_micros + 1
+                    },
                     ..peer
                 },
                 ScopedRequest::ReadSelf {}
@@ -207,7 +205,7 @@ async fn scoped_route_outlives_jobs_and_legacy_title_proves_current_process_and_
             .scoped_job_rpc(
                 ProcessInstance {
                     pid: 1,
-                    started_micros: 0
+                    birth: crate::platform::process::ProcessBirth::Darwin { started_micros: 0 }
                 },
                 ScopedRequest::ReadSelf {}
             )
@@ -343,17 +341,19 @@ async fn captured_native_claude_context_outlives_its_child_but_not_its_owner_or_
     let owner = crate::platform::process::identify(std::process::id() as i32)
         .unwrap()
         .unwrap();
+    let crate::platform::process::ProcessBirth::Darwin { started_micros } = owner.birth else {
+        panic!("Darwin proof expected");
+    };
     let home = &gateway.claude_settings.claude_home;
     let path = home
         .join("sessions")
         .join(format!("{}.json", std::process::id()));
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     let format = time::format_description::parse_owned::<3>("[weekday repr:short] [month repr:short] [day padding:space] [hour]:[minute]:[second] [year]").unwrap();
-    let started =
-        time::OffsetDateTime::from_unix_timestamp((owner.started_micros / 1_000_000) as i64)
-            .unwrap()
-            .format(&format)
-            .unwrap();
+    let started = time::OffsetDateTime::from_unix_timestamp((started_micros / 1_000_000) as i64)
+        .unwrap()
+        .format(&format)
+        .unwrap();
     let mut record = json!({"pid":std::process::id(),"sessionId":"11111111-2222-4333-8444-555555555555","cwd":directory.path(),"messagingSocketPath":socket,"pidDomain":"darwin","procStart":started});
     std::fs::write(&path, serde_json::to_vec(&record).unwrap()).unwrap();
     let mut child = tokio::process::Command::new("/bin/cat")
@@ -369,7 +369,7 @@ async fn captured_native_claude_context_outlives_its_child_but_not_its_owner_or_
     let captured = gateway
         .capture_job_context(CaptureParams {
             pid,
-            started_at_unix_micros: identity.started_micros,
+            birth: identity.birth,
         })
         .await
         .unwrap();
@@ -385,7 +385,7 @@ async fn captured_native_claude_context_outlives_its_child_but_not_its_owner_or_
         gateway
             .capture_job_context(CaptureParams {
                 pid,
-                started_at_unix_micros: identity.started_micros,
+                birth: identity.birth,
             })
             .await
             .is_err()

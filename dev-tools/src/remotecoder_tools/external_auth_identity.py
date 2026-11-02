@@ -3,6 +3,7 @@ import ctypes
 import hashlib
 import json
 import socket
+import sys
 from pathlib import Path
 
 
@@ -90,6 +91,8 @@ def verify_requested_identity(actual, requested):
 
 
 def managed_executable(pid):
+    if sys.platform == "linux":
+        return Path(f"/proc/{pid}/exe").resolve(strict=True)
     library = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
     library.proc_pidpath.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
     library.proc_pidpath.restype = ctypes.c_int

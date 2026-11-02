@@ -103,7 +103,7 @@ impl ClaudeRestartDriver {
         Ok(turns)
     }
 
-    pub(crate) async fn capture_and_suspend(&self, agent: &ClaudeSupervisor) {
+    pub(crate) async fn capture_and_suspend(&self, agent: &ClaudeSupervisor) -> Result<()> {
         let captured = agent.capture_for_restart().await;
         let thread_ids = captured
             .iter()
@@ -144,13 +144,14 @@ impl ClaudeRestartDriver {
             },
         ))
         .await;
+        let all_exited = outcomes.iter().all(|(_, exited)| *exited);
         for (thread_id, exited) in outcomes {
             self.journal.runtime(
                 "restart_suspend",
                 json!({ "provider": "claude", "threadId": thread_id, "exited": exited }),
             );
         }
-        if let Err(error) = persisted {
+        if let Err(error) = &persisted {
             let body = format!(
                 "The gateway restarted and could not save this interrupted Claude task for automatic resume: {error:#}"
             );
@@ -164,6 +165,9 @@ impl ClaudeRestartDriver {
             )
             .await;
         }
+        persisted?;
+        anyhow::ensure!(all_exited, "some captured Claude processes did not suspend");
+        Ok(())
     }
 
     async fn restart_alert(&self, thread_id: &str, body: &str) {
@@ -579,7 +583,7 @@ mod tests {
                 crate::agents::mcp::McpTokens::default(),
             );
             // A second restart carries the unacknowledged dispatch into a new journal.
-            driver.capture_and_suspend(&replacement).await;
+            driver.capture_and_suspend(&replacement).await.unwrap();
             let (_listening, ready) = watch::channel(true);
             driver.recover(Some(replacement.clone()), ready).await;
             let retained = replacement

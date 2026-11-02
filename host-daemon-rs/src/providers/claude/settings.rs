@@ -159,6 +159,10 @@ impl ClaudeSettings {
 }
 
 fn claude_settings_paths(claude_home: &Path, cwd: &Path) -> Vec<PathBuf> {
+    #[cfg(target_os = "linux")]
+    let managed_settings = "/etc/claude-code/managed-settings.json";
+    #[cfg(not(target_os = "linux"))]
+    let managed_settings = "/Library/Application Support/ClaudeCode/managed-settings.json";
     let project_root = cwd
         .ancestors()
         .find(|ancestor| ancestor.join(".git").exists())
@@ -169,7 +173,7 @@ fn claude_settings_paths(claude_home: &Path, cwd: &Path) -> Vec<PathBuf> {
         project_root.join(".claude/settings.json"),
         cwd.join(".claude/settings.local.json"),
         project_root.join(".claude/settings.local.json"),
-        PathBuf::from("/Library/Application Support/ClaudeCode/managed-settings.json"),
+        PathBuf::from(managed_settings),
     ] {
         if !paths.contains(&path) {
             paths.push(path);

@@ -120,6 +120,7 @@ const MAX_HEADER_CACHE_ENTRIES: usize = 4_096;
 
 struct CachedHeader {
     revision: FileRevision,
+    sampled: tokio::time::Instant,
     header: Option<Value>,
     bytes: usize,
 }
@@ -244,7 +245,7 @@ impl HistoryIndex {
         };
         let revision = FileRevision::from(file.metadata()?);
         if let Some(entry) = self.entries.shift_remove(path) {
-            if entry.revision == revision {
+            if entry.revision.can_reuse(&revision, entry.sampled) {
                 let header = entry.header.clone();
                 self.entries.insert(path.to_path_buf(), entry);
                 return Ok(header);
@@ -269,6 +270,7 @@ impl HistoryIndex {
                 path.to_path_buf(),
                 Some(Arc::new(CachedHeader {
                     revision,
+                    sampled: tokio::time::Instant::now(),
                     header: header.clone(),
                     bytes,
                 })),
@@ -711,8 +713,8 @@ mod tests {
             .unwrap();
     }
 
-    #[test]
-    fn bounds_review_repeated_full_scans_rebuild_only_uncached_headers_above_entry_and_byte_budgets()
+    #[tokio::test(start_paused = true)]
+    async fn bounds_review_repeated_full_scans_rebuild_only_uncached_headers_above_entry_and_byte_budgets()
      {
         let home = tempfile::tempdir().unwrap();
         for index in 0..MAX_HEADER_CACHE_ENTRIES + 1 {
@@ -1207,11 +1209,9 @@ mod tests {
             .await
             .unwrap();
         let modified = path.metadata().unwrap().modified().unwrap();
-        session(
-            home.path(),
-            "mutable",
-            &[message("user", "2026-09-04T10:00:00Z")],
-        );
+        let mut earlier = message("user", "2026-09-04T10:00:00Z");
+        earlier["requestId"] = json!("rewritten");
+        session(home.path(), "mutable", &[earlier]);
         File::open(&path).unwrap().set_modified(modified).unwrap();
         let corrected = index
             .read(home.path().to_path_buf(), "mutable".into())

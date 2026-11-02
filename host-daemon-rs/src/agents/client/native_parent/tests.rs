@@ -27,7 +27,7 @@ async fn register(socket: &mut Server, process: ProcessInstance, thread: &str, r
     assert_eq!(read(socket).await["method"], "initialized");
     assert_eq!(
         read(socket).await,
-        json!({"id":1,"method":"agent/context/capture","params":{"pid":process.pid,"startedAtUnixMicros":process.started_micros}})
+        json!({"id":1,"method":"agent/context/capture","params":{"pid":process.pid,"birth":process.birth}})
     );
     socket.send(Message::Text(json!({"id":1,"result":{"contextId":"captured-context","provider":"claude","threadId":thread,"turnId":null}}).to_string())).await.unwrap();
     assert_eq!(
@@ -46,6 +46,9 @@ async fn retained_holder_reconnects_without_replaying_a_forwarded_native_input()
     let native_socket = directory.path().join("native");
     let native_listener = UnixListener::bind(&native_socket).unwrap();
     let process = current_process().unwrap();
+    let crate::platform::process::ProcessBirth::Darwin { started_micros } = process.birth else {
+        panic!("Darwin proof expected");
+    };
     let session = "11111111-2222-4333-8444-555555555555";
     let conversation = ConversationIdentity {
         provider: Provider::Claude,
@@ -56,17 +59,16 @@ async fn retained_holder_reconnects_without_replaying_a_forwarded_native_input()
     };
     let owner = NativeSessionOwner {
         pid: process.pid,
-        started_micros: process.started_micros,
+        started_micros,
         session_uuid: session.into(),
         cwd: directory.path().into(),
         socket_path: native_socket.clone(),
     };
     let format = time::format_description::parse_owned::<3>("[weekday repr:short] [month repr:short] [day padding:space] [hour]:[minute]:[second] [year]").unwrap();
-    let started =
-        time::OffsetDateTime::from_unix_timestamp((process.started_micros / 1_000_000) as i64)
-            .unwrap()
-            .format(&format)
-            .unwrap();
+    let started = time::OffsetDateTime::from_unix_timestamp((started_micros / 1_000_000) as i64)
+        .unwrap()
+        .format(&format)
+        .unwrap();
     std::fs::create_dir(directory.path().join("sessions")).unwrap();
     std::fs::write(directory.path().join("sessions").join(format!("{}.json",process.pid)), serde_json::to_vec(&json!({"pid":process.pid,"sessionId":session,"cwd":directory.path(),"messagingSocketPath":native_socket,"pidDomain":"darwin","procStart":started})).unwrap()).unwrap();
     let (submitted, mut submissions) = tokio::sync::mpsc::channel(4);

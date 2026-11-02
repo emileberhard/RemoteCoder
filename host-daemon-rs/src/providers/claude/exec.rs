@@ -83,6 +83,9 @@ fn child_env_from(value_for: impl Fn(&str) -> Option<String>) -> HashMap<String,
     // to whatever a future CLI release defaults to.
     env.insert("MCP_PROTOCOL_NEGOTIATION".to_string(), "auto".to_string());
 
+    #[cfg(target_os = "linux")]
+    env.insert("DISABLE_UPDATES".to_string(), "1".to_string());
+
     debug_assert!(
         !env.keys().any(|key| is_credential_env_key(key)),
         "claude child environment must not carry credential variables"
@@ -241,6 +244,8 @@ mod tests {
             env.get("MCP_PROTOCOL_NEGOTIATION").map(String::as_str),
             Some("auto")
         );
+        #[cfg(target_os = "linux")]
+        assert_eq!(env.get("DISABLE_UPDATES").map(String::as_str), Some("1"));
     }
 
     #[test]

@@ -70,6 +70,12 @@ both hosts.
 | `calls/host` | `gateway/calls.rs`, `rpc/dispatch.rs` | `agent-calls/agent_calls/cli.py` still resolves the call host through it | `agent-calls` stops calling it (X10.5 or earlier, whichever removes the CLI use) |
 | Legacy token-file fallback while `devices.json` was never written: `apns_device_token`, `active_tasks_live_activity_token`, `apns_environment`, `apns_notification_identity.json`, `agent-calls.json` `device`, `navigation-device.json` | `devices::legacy::Sources`, `DeviceRegistry`, `Origin::Legacy` (`devices/`) | Push and call delivery before the phone's first `devices/register` | X10.5, together with the two handlers above that still write those files |
 
+## Gateway: native caller capture
+
+| Path | Owner | Reason | Removal condition |
+|---|---|---|---|
+| Darwin `agent/context/capture` accepts `{pid, startedAtUnixMicros}` alongside tagged `birth` | `CaptureParams` (`wire/agent_jobs.rs`) | Terminal Claude native-parent holders started before tagged birth reconnect with their original executable after a gateway upgrade | Keep through the first tagged-birth release; remove in the following release once all retained native-parent holders on both Macs have restarted with the tagged-birth client. Linux never accepts the Darwin shape. Ship the tagged client and gateway together: an older gateway rejects the new tagged client during a swap or after a gateway-only rollback, so rollback must restore the paired client too |
+
 ## Gateway: durable state and files from earlier builds
 
 Each removal needs a read-only check on both hosts first; a host restored from

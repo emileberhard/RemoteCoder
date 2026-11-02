@@ -16,14 +16,8 @@ struct NativeToolContext {
     thread_id: String,
     turn_id: String,
     tool_call_id: String,
-    root_process_identity: NativeProcessIdentity,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct NativeProcessIdentity {
-    pid: i32,
-    started_at_unix_micros: u64,
+    #[serde(deserialize_with = "ProcessInstance::deserialize_native")]
+    root_process_identity: ProcessInstance,
 }
 
 impl Gateway {
@@ -189,10 +183,7 @@ impl Gateway {
     ) -> Result<Option<ProvenCaller>> {
         let native = tokio::time::timeout(
             std::time::Duration::from_secs(3),
-            self.call_control(
-                "daemon/toolContext",
-                json!({"pid":process.pid,"startedAtUnixMicros":process.started_micros}),
-            ),
+            self.call_control("daemon/toolContext", process.native_value()),
         )
         .await
         .unwrap_or_else(|_| Err(anyhow::anyhow!("native caller identity lookup timed out")));
@@ -216,11 +207,10 @@ impl Gateway {
                 error.context(message)
             })?;
             found_process = true;
-            if native.as_ref().is_some_and(|context| {
-                candidate.pid == context.root_process_identity.pid
-                    && candidate.started_micros
-                        == context.root_process_identity.started_at_unix_micros
-            }) {
+            if native
+                .as_ref()
+                .is_some_and(|context| candidate == context.root_process_identity)
+            {
                 let context = native.as_ref().context("native caller owner disappeared")?;
                 ensure!(
                     !context.thread_id.is_empty()
@@ -242,9 +232,8 @@ impl Gateway {
                 }));
             }
             if let Some(supervisor) = self.claude_agent()
-                && let Some((thread_id, turn_id)) = supervisor
-                    .owned_process_session(candidate.pid, candidate.started_micros)
-                    .await
+                && let Some((thread_id, turn_id)) =
+                    supervisor.owned_process_session(candidate).await
             {
                 return Ok(Some(ProvenCaller {
                     conversation: ConversationIdentity {
@@ -257,12 +246,9 @@ impl Gateway {
                     tool_call_id: None,
                 }));
             }
-            if let Some(owner) = crate::providers::claude::native_parent::prove_owner(
-                &claude_home,
-                candidate.pid,
-                candidate.started_micros,
-            )
-            .await?
+            if let Some(owner) =
+                crate::providers::claude::native_parent::prove_owner(&claude_home, candidate)
+                    .await?
             {
                 return Ok(Some(ProvenCaller {
                     conversation: ConversationIdentity {
@@ -288,10 +274,15 @@ impl Gateway {
     }
 
     async fn capture_job_context(&self, request: CaptureParams) -> Result<CapturedContext> {
+        let pid = i32::try_from(request.pid)?;
         let process = ProcessInstance {
-            pid: i32::try_from(request.pid)?,
-            started_micros: request.started_at_unix_micros,
+            pid,
+            birth: request.birth,
         };
+        ensure!(
+            crate::platform::process::identify_instance(pid)? == Some(process),
+            "caller process identity is stale or incompatible"
+        );
         let proven = self.job_process_context(process).await?;
         Ok(self.jobs.contexts.capture(proven).await)
     }
@@ -315,7 +306,7 @@ impl Gateway {
                 if saved.conversation.provider == Provider::Claude {
                     let managed = match self.claude_agent() {
                         Some(provider) => provider
-                            .owned_process_session(saved.process.pid, saved.process.started_micros)
+                            .owned_process_session(saved.process)
                             .await
                             .map(|(thread, _)| thread),
                         None => None,
@@ -323,17 +314,15 @@ impl Gateway {
                     let current = match managed {
                         Some(thread) => {
                             ensure!(
-                                crate::platform::process::identify(saved.process.pid)?
-                                    .is_some_and(|process| process.started_micros
-                                        == saved.process.started_micros),
+                                crate::platform::process::identify_instance(saved.process.pid)?
+                                    .is_some_and(|process| process == saved.process),
                                 "captured Claude runtime owner is no longer live"
                             );
                             Some(thread)
                         }
                         None => crate::providers::claude::native_parent::prove_owner(
                             &self.claude_settings.claude_home,
-                            saved.process.pid,
-                            saved.process.started_micros,
+                            saved.process,
                         )
                         .await?
                         .map(|owner| {
@@ -425,7 +414,7 @@ impl Gateway {
             context_id: context.context_id.clone(),
         };
         let view = self.job_context_view(caller.clone()).await?;
-        if view.job_id.is_none() {
+        if view.job_id.is_none() && !matches!(&request, ScopedRequest::Capture {}) {
             return Err(RpcError::new(
                 RpcCode::InvalidRequest,
                 "scoped route has no registered calling job",
@@ -436,6 +425,7 @@ impl Gateway {
                 RpcCode::InvalidParams,
                 "nested scoped migration is not permitted",
             )),
+            ScopedRequest::Capture {} => Ok(json!(context)),
             ScopedRequest::ReadSelf {} => Ok(json!(view)),
             ScopedRequest::ReadMessage { delivery_id } => {
                 let record = self.jobs.store().await?.message(delivery_id).await?;
@@ -477,3 +467,7 @@ impl Gateway {
 
 #[cfg(all(test, target_os = "macos"))]
 mod tests;
+
+#[cfg(all(test, target_os = "linux"))]
+#[path = "agent_jobs/linux_tests.rs"]
+mod linux_tests;

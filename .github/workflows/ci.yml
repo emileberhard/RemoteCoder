@@ -23,6 +23,7 @@ jobs:
     outputs:
       gateway: ${{ steps.scope.outputs.gateway }}
       gateway-lint: ${{ steps.scope.outputs.gateway-lint }}
+      gateway-linux: ${{ steps.scope.outputs.gateway-linux }}
       swift: ${{ steps.scope.outputs.swift }}
       apps-ios: ${{ steps.scope.outputs.apps-ios }}
       apps-mac: ${{ steps.scope.outputs.apps-mac }}
@@ -43,7 +44,7 @@ jobs:
           }
           gateway=$(inputs "$APP_SOURCES")
           apps=$(inputs "$GATEWAY_SOURCES")
-          for lane in gateway:$gateway gateway-lint:$gateway swift:$(inputs '') apps-ios:$apps apps-mac:$apps; do
+          for lane in gateway:$gateway gateway-lint:$gateway gateway-linux:$gateway swift:$(inputs '') apps-ios:$apps apps-mac:$apps; do
             name=ci-lane-${lane%%:*}-${lane#*:}
             if gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=$name&per_page=100" \
                 --jq '[.artifacts[] | select((.expired | not) and .workflow_run.head_repository_id == .workflow_run.repository_id)] | length > 0' | grep -qx true; then
@@ -124,6 +125,29 @@ jobs:
       - run: rustup show
       - run: cargo fmt --manifest-path host-daemon-rs/Cargo.toml --check
       - run: cargo clippy --manifest-path host-daemon-rs/Cargo.toml --locked --all-targets --all-features -- -D warnings
+
+  gateway-linux:
+    needs: reuse
+    if: ${{ needs.reuse.outputs.gateway-linux != 'reused' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      CARGO_BUILD_JOBS: '4'
+      CARGO_INCREMENTAL: '0'
+      RUST_TEST_THREADS: '4'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install native test tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes lsof tmux zsh
+      - run: rustup show
+      - run: cargo fmt --manifest-path host-daemon-rs/Cargo.toml --check
+      - run: cargo clippy --manifest-path host-daemon-rs/Cargo.toml --locked --all-targets --all-features -- -D warnings
+      - run: cargo test --manifest-path host-daemon-rs/Cargo.toml --locked
 
   swift:
     needs: reuse
@@ -245,7 +269,7 @@ jobs:
         working-directory: web-client
 
   passed:
-    needs: [reuse, agent-calls, gateway, gateway-lint, swift, apps-ios, apps-mac, web]
+    needs: [reuse, agent-calls, gateway, gateway-lint, gateway-linux, swift, apps-ios, apps-mac, web]
     if: ${{ always() && !github.event.repository.private }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -268,6 +292,14 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ needs.reuse.outputs.gateway-lint }}
+          path: ${{ runner.temp }}/passed
+          retention-days: 14
+          overwrite: true
+      - if: always() && env.TRUSTED == 'true' && needs.gateway-linux.result == 'success' && startsWith(needs.reuse.outputs.gateway-linux, 'ci-lane-')
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: ${{ needs.reuse.outputs.gateway-linux }}
           path: ${{ runner.temp }}/passed
           retention-days: 14
           overwrite: true

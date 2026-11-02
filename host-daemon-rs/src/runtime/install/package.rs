@@ -1,6 +1,6 @@
 use crate::config::{
     HostPaths, REQUIRED_CODE_MODE_HOST_SHA256, REQUIRED_CODEX_SHA256, REQUIRED_CODEX_SOURCE_COMMIT,
-    REQUIRED_CODEX_VERSION,
+    REQUIRED_CODEX_TARGET, REQUIRED_CODEX_VERSION,
 };
 use crate::runtime::recovery::{RecoveryJournal, RecoveryPhase, RecoveryStore, RuntimeSwap};
 use crate::storage::private_state::{self, Creation};
@@ -30,7 +30,7 @@ impl RuntimePaths {
         let standalone = paths.home().join(".codex/packages/standalone");
         let releases = standalone.join("releases");
         Ok(Self {
-            release: releases.join(format!("{REQUIRED_CODEX_VERSION}-aarch64-apple-darwin")),
+            release: releases.join(format!("{REQUIRED_CODEX_VERSION}-{REQUIRED_CODEX_TARGET}")),
             staging: releases.join(".runtime-staging"),
             previous_release: releases.join(".runtime-previous-release"),
             current: standalone.join("current"),
@@ -57,7 +57,14 @@ pub(crate) struct PackageManifest {
     pub(crate) entrypoint: String,
     pub(crate) resources_dir: String,
     pub(crate) path_dir: String,
+    pub(crate) linux_sandbox: Option<LinuxSandbox>,
     pub(crate) binaries: HashMap<String, PackageBinary>,
+}
+
+#[derive(Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum LinuxSandbox {
+    System,
 }
 
 #[derive(Deserialize)]
@@ -78,13 +85,26 @@ pub(in crate::runtime) fn validate_runtime_package(package_dir: &Path) -> Result
     if manifest.layout_version != 1
         || manifest.version != REQUIRED_CODEX_VERSION
         || manifest.source_commit != REQUIRED_CODEX_SOURCE_COMMIT
-        || manifest.target != "aarch64-apple-darwin"
+        || manifest.target != REQUIRED_CODEX_TARGET
         || manifest.variant != "codex"
         || manifest.entrypoint != "bin/codex"
         || manifest.resources_dir != "codex-resources"
         || manifest.path_dir != "codex-path"
     {
         bail!("Codex package version, source commit, or target is not approved");
+    }
+    if (REQUIRED_CODEX_TARGET == "x86_64-unknown-linux-musl")
+        != (manifest.linux_sandbox == Some(LinuxSandbox::System))
+    {
+        bail!("Linux Codex packages must require system bubblewrap");
+    }
+    let fallback = package_dir.join("codex-resources/bwrap");
+    if manifest.linux_sandbox.is_some() {
+        match std::fs::symlink_metadata(fallback) {
+            Ok(_) => bail!("Linux Codex packages must not bundle bubblewrap"),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error).context("Cannot inspect Linux bubblewrap fallback"),
+        }
     }
     for (name, approved) in [
         ("bin/codex", REQUIRED_CODEX_SHA256),

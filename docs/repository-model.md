@@ -36,6 +36,10 @@ fork `main` is not automatically approved. Operator acceptance stays private.
    a bare executable without its matching code-mode host and manifest.
 3. Validate the package with `just codex-runtime-approve <package>` and run the
    affected protocol tests and an isolated stored-history compatibility probe.
+   A common protocol or database change requires native evaluations for every
+   approved target and one atomic `codex-runtime-approval apply-set` update.
+   Linux packages require the system bubblewrap profile; Debian owns its
+   security updates rather than a bundled fallback.
 4. Land the reviewed source and integration pins on their canonical branches.
    Maintainer deployment follows the private transaction, canary and acceptance
    workflow. A successful build does not prove deployment or acceptance.

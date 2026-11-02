@@ -503,7 +503,7 @@ pub(super) fn log_step(step: &str, result: Result<()>) {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::*;
     use std::io::{BufRead, Read};

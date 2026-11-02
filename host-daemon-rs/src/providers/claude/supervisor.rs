@@ -345,7 +345,7 @@ struct ClaudeRuntime {
     input: InputWriter,
     pending_controls: HashMap<String, oneshot::Sender<Result<Value, String>>>,
     process_group_id: i32,
-    process_started_micros: Option<u64>,
+    process_identity: Option<crate::platform::process::ProcessInstance>,
     reaped: tokio::sync::watch::Receiver<process::ReapState>,
     launch: jobs::LaunchPolicy,
     session_uuid: String,

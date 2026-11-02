@@ -3,6 +3,9 @@ use super::*;
 impl Gateway {
     pub(super) async fn cluster_load(&self) -> Result<HostLoad> {
         let active = self.jobs.store().await?.active_agent_count().await?;
+        #[cfg(target_os = "linux")]
+        let (cpu_percent, memory_pressure) = (None, None);
+        #[cfg(not(target_os = "linux"))]
         let (cpu_percent, memory_pressure) = tokio::task::spawn_blocking(|| {
             let cores = std::thread::available_parallelism()
                 .ok()

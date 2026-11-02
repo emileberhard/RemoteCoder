@@ -2,6 +2,7 @@ pub(crate) mod host_profile;
 
 use std::collections::HashMap;
 use std::fs;
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
 
@@ -16,6 +17,7 @@ use crate::providers::claude::settings::ClaudeSettings;
 const GATEWAY_LOG_FILTER_ENV_KEY: &str = "RC_CODEX_GATEWAY_LOG";
 const LAN_PORT_ENV_KEY: &str = "RC_CODEX_GATEWAY_LAN_PORT";
 pub(crate) const DEFAULT_LOG_RETENTION_DAYS: u64 = 30;
+pub(crate) const REQUIRED_CODEX_TARGET: &str = env!("RC_REQUIRED_CODEX_TARGET");
 pub(crate) const REQUIRED_CODEX_VERSION: &str = env!("RC_REQUIRED_CODEX_VERSION");
 pub(crate) const REQUIRED_CODEX_SOURCE_COMMIT: &str = env!("RC_REQUIRED_CODEX_SOURCE_COMMIT");
 pub(crate) const REQUIRED_CODEX_SHA256: &str = env!("RC_REQUIRED_CODEX_SHA256");
@@ -159,7 +161,7 @@ pub(crate) struct Settings {
     pub host_paths: HostPaths,
     pub bind_host: String,
     pub port: u16,
-    pub lan_port: Option<u16>,
+    pub lan: Option<LanSettings>,
     pub cluster_routes: HashMap<String, String>,
     pub codex_path: PathBuf,
     pub codex_code_mode_host_path: PathBuf,
@@ -172,6 +174,18 @@ pub(crate) struct Settings {
     pub router: Option<crate::providers::router::RouterConfig>,
     pub external_providers: Vec<crate::providers::codex::external::ExternalProvider>,
     pub speech_clients: crate::voice::speech::SpeechClients,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct LanSettings {
+    pub port: u16,
+    pub binding: LanBinding,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum LanBinding {
+    DualStack,
+    Address { address: IpAddr, host: String },
 }
 
 #[derive(Debug, Clone)]
@@ -210,7 +224,11 @@ impl HostPaths {
     }
 
     fn logs_dir(&self) -> PathBuf {
-        self.home.join("Library/Logs/remote-coder")
+        if cfg!(target_os = "linux") {
+            self.home.join(".local/state/remote-coder/logs")
+        } else {
+            self.home.join("Library/Logs/remote-coder")
+        }
     }
 }
 
@@ -234,7 +252,7 @@ impl Settings {
             port,
             auth_token,
         } = GatewayEndpoint::load(sources)?;
-        let lan_port = sources.lan_port(port)?;
+        let lan = sources.lan_settings(port)?;
         let push_broker_enabled = sources.optional_bool(
             "RC_CODEX_GATEWAY_PUSH_BROKER_ENABLED",
             sources.optional_string("RC_PUSH_BROKER_TOKEN").is_some(),
@@ -261,7 +279,7 @@ impl Settings {
             host_paths,
             bind_host,
             port,
-            lan_port,
+            lan,
             cluster_routes: crate::cluster::routes::parse(
                 sources.raw(crate::cluster::routes::ENV_KEY).as_deref(),
             )?,
@@ -316,8 +334,17 @@ pub(crate) struct GatewayEndpoint {
 
 impl GatewayEndpoint {
     pub(crate) fn load(sources: &ConfigSources) -> Result<Self> {
+        let bind_host = sources.required_string("RC_CODEX_GATEWAY_BIND_HOST")?;
+        if cfg!(target_os = "linux") {
+            anyhow::ensure!(
+                bind_host
+                    .parse::<IpAddr>()
+                    .is_ok_and(|address| address.is_loopback()),
+                "Linux plaintext gateway must bind a loopback IP address"
+            );
+        }
         Ok(Self {
-            bind_host: sources.required_string("RC_CODEX_GATEWAY_BIND_HOST")?,
+            bind_host,
             port: sources.required_port("RC_CODEX_GATEWAY_PORT")?,
             auth_token: gateway_token(sources)?,
         })
@@ -390,9 +417,14 @@ impl CodexSettings {
             resolve_executable_path(sources.required_path("RC_CODEX_GATEWAY_CODEX_PATH")?);
         let identity = crate::runtime::identity::PackageIdentity::read(&codex_path)?;
         let runtime = validate_codex_runtime_for_version(&codex_path, &identity.version)?;
-        let current = crate::config::HostPaths::from_env()?
-            .home()
-            .join(".codex/packages/standalone/current/codex");
+        let current =
+            crate::config::HostPaths::from_env()?
+                .home()
+                .join(if cfg!(target_os = "linux") {
+                    ".codex/packages/standalone/current/bin/codex"
+                } else {
+                    ".codex/packages/standalone/current/codex"
+                });
         identity.verify(&current)?;
         Ok(Self {
             codex_path,
@@ -619,6 +651,48 @@ impl ConfigSources {
         }
     }
 
+    fn lan_settings(&self, port: u16) -> Result<Option<LanSettings>> {
+        let address = self.optional_string("RC_CODEX_GATEWAY_LAN_BIND_ADDRESS");
+        let host = self.optional_string("RC_CODEX_GATEWAY_LAN_HOST");
+        let Some(port) = self.lan_port(port)? else {
+            anyhow::ensure!(
+                address.is_none() && host.is_none(),
+                "LAN binding requires a LAN port"
+            );
+            return Ok(None);
+        };
+        let binding = match (address, host) {
+            (Some(address), Some(host)) => {
+                let address = address
+                    .parse::<IpAddr>()
+                    .context("LAN bind address must be an IP address")?;
+                anyhow::ensure!(
+                    !address.is_unspecified(),
+                    "LAN bind address must name one interface address"
+                );
+                anyhow::ensure!(
+                    host.len() <= 253
+                        && host.split('.').all(|label| {
+                            !label.is_empty()
+                                && label.len() <= 63
+                                && !label.starts_with('-')
+                                && !label.ends_with('-')
+                                && label
+                                    .bytes()
+                                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+                        }),
+                    "LAN host must be a DNS name"
+                );
+                LanBinding::Address { address, host }
+            }
+            (None, None) if !cfg!(target_os = "linux") => LanBinding::DualStack,
+            _ => anyhow::bail!(
+                "LAN TLS requires RC_CODEX_GATEWAY_LAN_BIND_ADDRESS and RC_CODEX_GATEWAY_LAN_HOST"
+            ),
+        };
+        Ok(Some(LanSettings { port, binding }))
+    }
+
     fn lan_port(&self, port: u16) -> Result<Option<u16>> {
         let Some(value) = self.optional_string(LAN_PORT_ENV_KEY) else {
             return Ok(None);
@@ -787,6 +861,7 @@ mod tests {
         assert_eq!(gateway_token(&sources).unwrap(), token);
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn a_wildcard_bind_is_probed_over_loopback() {
         let endpoint = |host: &str| {
@@ -817,6 +892,29 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn plaintext_endpoints_require_a_loopback_address() {
+        for (host, allowed) in [
+            ("127.0.0.1", true),
+            ("::1", true),
+            ("0.0.0.0", false),
+            ("::", false),
+            ("100.64.0.9", false),
+            ("localhost", false),
+        ] {
+            let sources = ConfigSources::from_file_vars(HashMap::from([
+                ("RC_CODEX_GATEWAY_BIND_HOST".into(), host.into()),
+                ("RC_CODEX_GATEWAY_PORT".into(), "18787".into()),
+                (
+                    "RC_CODEX_GATEWAY_AUTH_TOKEN".into(),
+                    "0123456789abcdef".repeat(2),
+                ),
+            ]));
+            assert_eq!(GatewayEndpoint::load(&sources).is_ok(), allowed, "{host}");
+        }
+    }
+
     #[test]
     fn host_paths_require_a_real_home_and_keep_persisted_locations() {
         let directory = TempDir::new().expect("host home");
@@ -829,7 +927,11 @@ mod tests {
         );
         assert_eq!(
             paths.logs("journal"),
-            directory.path().join("Library/Logs/remote-coder/journal")
+            directory.path().join(if cfg!(target_os = "linux") {
+                ".local/state/remote-coder/logs/journal"
+            } else {
+                "Library/Logs/remote-coder/journal"
+            })
         );
         assert!(
             HostPaths::from_home(PathBuf::from("relative-home"))
@@ -996,6 +1098,45 @@ mod tests {
                 }
                 (actual, expected) => panic!("{value:?}: {actual:?} instead of {expected:?}"),
             }
+        }
+    }
+
+    #[test]
+    fn explicit_tls_binding_requires_a_concrete_address_and_dns_name() {
+        let configured = |address: &str, host: &str| {
+            ConfigSources::from_file_vars(HashMap::from([
+                (LAN_PORT_ENV_KEY.into(), "8788".into()),
+                ("RC_CODEX_GATEWAY_LAN_BIND_ADDRESS".into(), address.into()),
+                ("RC_CODEX_GATEWAY_LAN_HOST".into(), host.into()),
+            ]))
+        };
+        let lan = configured("100.81.1.2", "linux.example.ts.net")
+            .lan_settings(8787)
+            .unwrap()
+            .unwrap();
+        assert!(
+            matches!(lan.binding, LanBinding::Address { address, .. } if address == "100.81.1.2".parse::<IpAddr>().unwrap())
+        );
+        for (address, host) in [
+            ("0.0.0.0", "host.local"),
+            ("::", "host.local"),
+            ("host.local", "host.local"),
+            ("100.81.1.2", "*.local"),
+            ("100.81.1.2", "bad/host"),
+        ] {
+            assert!(configured(address, host).lan_settings(8787).is_err());
+        }
+        let implicit = ConfigSources::from_file_vars(HashMap::from([(
+            LAN_PORT_ENV_KEY.into(),
+            "8788".into(),
+        )]));
+        if cfg!(target_os = "linux") {
+            assert!(implicit.lan_settings(8787).is_err());
+        } else {
+            assert!(matches!(
+                implicit.lan_settings(8787).unwrap().unwrap().binding,
+                LanBinding::DualStack
+            ));
         }
     }
 

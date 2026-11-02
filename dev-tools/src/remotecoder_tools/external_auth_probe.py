@@ -2,9 +2,11 @@ import argparse
 import asyncio
 import base64
 import json
+import os
 import re
 import shutil
 import socket
+import sys
 import tempfile
 import threading
 import time
@@ -362,11 +364,16 @@ stream_max_retries = 0
             "NO_PROXY": "127.0.0.1,localhost",
         }
         self.env_keys = sorted(env)
+        if sys.platform == "linux":
+            require(
+                socket.if_nameindex() == [(1, "lo")],
+                "Linux auth probe requires a private network namespace with only loopback",
+            )
+            command = [str(self.binary)]
+        else:
+            command = ["/usr/bin/sandbox-exec", "-p", NETWORK_POLICY, str(self.binary)]
         self.process = await asyncio.create_subprocess_exec(
-            "/usr/bin/sandbox-exec",
-            "-p",
-            NETWORK_POLICY,
-            str(self.binary),
+            *command,
             "app-server",
             "--listen",
             "ws://127.0.0.1:0",

@@ -11,7 +11,7 @@ use super::transport::{self, Socket};
 use crate::agents::jobs::model::{ConversationIdentity, Provider, ProviderHome};
 use crate::agents::jobs::routes::NativeMessage;
 use crate::config::GatewayEndpoint;
-use crate::platform::process::{ProcessInstance, ancestry, identify};
+use crate::platform::process::{ProcessInstance, ancestry, identify_instance};
 use crate::providers::claude::native_parent::{
     NativeParentForwarder, NativeSessionOwner, prove_owner,
 };
@@ -109,7 +109,7 @@ async fn serve(
         "agent/context/capture",
         serde_json::to_value(CaptureParams {
             pid: process.pid.try_into()?,
-            started_at_unix_micros: process.started_micros,
+            birth: process.birth,
         })?,
     )
     .await;
@@ -267,11 +267,7 @@ async fn send_rpc(
 
 fn current_process() -> Result<ProcessInstance> {
     let pid = i32::try_from(std::process::id())?;
-    let identity = identify(pid)?.context("Native holder process identity is unavailable")?;
-    Ok(ProcessInstance {
-        pid,
-        started_micros: identity.started_micros,
-    })
+    identify_instance(pid)?.context("Native holder process identity is unavailable")
 }
 
 async fn native_ancestor(
@@ -280,7 +276,9 @@ async fn native_ancestor(
 ) -> Result<Option<NativeSessionOwner>> {
     for process in ancestry(process) {
         let process = process?;
-        if let Some(owner) = prove_owner(home, process.pid, process.started_micros).await? {
+        if let Some(owner) =
+            crate::providers::claude::native_parent::prove_owner(home, process).await?
+        {
             return Ok(Some(owner));
         }
     }
@@ -288,11 +286,19 @@ async fn native_ancestor(
 }
 
 async fn same_session(home: &Path, owner: &NativeSessionOwner) -> Result<bool> {
-    Ok(prove_owner(home, owner.pid, owner.started_micros)
-        .await?
-        .is_some_and(|current| {
-            current.session_uuid == owner.session_uuid && current.socket_path == owner.socket_path
-        }))
+    Ok(prove_owner(
+        home,
+        ProcessInstance {
+            pid: owner.pid,
+            birth: crate::platform::process::ProcessBirth::Darwin {
+                started_micros: owner.started_micros,
+            },
+        },
+    )
+    .await?
+    .is_some_and(|current| {
+        current.session_uuid == owner.session_uuid && current.socket_path == owner.socket_path
+    }))
 }
 
 async fn reconnect_delay(failures: &mut u32) {

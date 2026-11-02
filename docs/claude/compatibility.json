@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "version": "2.1.311",
+  "linuxX64": {
+    "sha256": "86dc1fcc69498159eaf15f446613e847010f9036bfbbdffd4c49350be8489ada",
+    "url": "https://downloads.claude.ai/claude-code-releases/2.1.311/linux-x64/claude",
+    "manifestSigningFingerprint": "31DDDE24DDFAB679F42D7BD2BAA929FF1A7ECACE"
+  }
+}

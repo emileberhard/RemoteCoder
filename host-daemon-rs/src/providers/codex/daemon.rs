@@ -191,6 +191,38 @@ impl CodexAppServer {
         package::prepare(codex_home, approved)
     }
 
+    #[cfg(target_os = "linux")]
+    pub(crate) async fn verified_instance(
+        &self,
+    ) -> Result<crate::platform::process::ProcessInstance> {
+        #[cfg(test)]
+        if let Some(pid) = self.expected_pid_override {
+            return crate::platform::process::identify_instance(pid)?
+                .context("test Codex process exited");
+        }
+        let (_, record) = self
+            .live_pid_record()
+            .await?
+            .context("managed Codex identity unavailable")?;
+        let ProcessIdentity::Linux {
+            boot_id,
+            start_ticks,
+        } = record.process_identity
+        else {
+            anyhow::bail!("managed Codex record has no Linux birth proof");
+        };
+        Ok(crate::platform::process::ProcessInstance {
+            pid: i32::try_from(record.pid)?,
+            birth: crate::platform::process::ProcessBirth::Linux {
+                birth: crate::platform::process::LinuxBirth {
+                    boot_id: crate::platform::process::boot_id::parse(&boot_id)
+                        .context("invalid Codex boot UUID")?,
+                    start_ticks,
+                },
+            },
+        })
+    }
+
     pub(crate) async fn info(&self) -> Result<CodexAppServerInfo> {
         let expected_pid = self.verified_lifecycle_pid().await?;
         if let Some(info) = self.info.read().await.clone()
@@ -711,19 +743,12 @@ async fn process_identity_matches(pid: i32, identity: &ProcessIdentity) -> Resul
     else {
         return Ok(false);
     };
-    let actual_boot = tokio::fs::read_to_string("/proc/sys/kernel/random/boot_id").await?;
-    if actual_boot.trim() != boot_id {
-        return Ok(false);
-    }
-    let stat = tokio::fs::read_to_string(format!("/proc/{pid}/stat")).await?;
-    let Some((_, fields)) = stat.rsplit_once(") ") else {
-        return Ok(false);
-    };
-    Ok(fields
-        .split_whitespace()
-        .nth(19)
-        .and_then(|value| value.parse::<u64>().ok())
-        == Some(*start_ticks))
+    Ok(
+        crate::platform::process::linux::kernel_identity(pid)?.is_some_and(|actual| {
+            crate::platform::process::boot_id::parse(boot_id) == Some(actual.boot_id)
+                && actual.start_ticks == *start_ticks
+        }),
+    )
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]

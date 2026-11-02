@@ -49,7 +49,7 @@ class PreparedRuntimePackageTests(unittest.TestCase):
         (self.release / "commit").write_text("a" * 40)
         compatibility = self.root / "docs/codex/compatibility.json"
         compatibility.parent.mkdir(parents=True)
-        compatibility.write_text(json.dumps({"runtimePackageSHA256": module.tree_digest(self.source)}))
+        compatibility.write_text(json.dumps({"runtimeTargets": {"aarch64-apple-darwin": {"runtimePackageSHA256": module.tree_digest(self.source)}}}))
         self.enterContext(patch.object(module, "ROOT", self.root))
         self.enterContext(patch.object(module, "RELEASES", self.releases))
         self.enterContext(patch.object(module, "cache_root", return_value=self.root / "cache"))

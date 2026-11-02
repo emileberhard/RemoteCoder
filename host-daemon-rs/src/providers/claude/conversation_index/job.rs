@@ -22,14 +22,64 @@ pub(crate) struct JobHandle {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct ProcessOwner {
     pub pid: i32,
+    #[cfg(not(target_os = "linux"))]
     pub started_micros: u64,
+    #[cfg(target_os = "linux")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_micros: Option<u64>,
+    #[cfg(target_os = "linux")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linux_birth: Option<crate::platform::process::LinuxBirth>,
     pub session_uuid: String,
 }
 
 impl ProcessOwner {
+    pub(crate) fn from_process(
+        process: crate::platform::process::ProcessInstance,
+        session_uuid: String,
+    ) -> Result<Self> {
+        ensure!(
+            process.birth.is_valid(),
+            "Claude process birth is incompatible"
+        );
+        Ok(Self {
+            pid: process.pid,
+            #[cfg(not(target_os = "linux"))]
+            started_micros: match process.birth {
+                crate::platform::process::ProcessBirth::Darwin { started_micros } => started_micros,
+                _ => anyhow::bail!("Claude process birth is incompatible"),
+            },
+            #[cfg(target_os = "linux")]
+            started_micros: None,
+            #[cfg(target_os = "linux")]
+            linux_birth: match process.birth {
+                crate::platform::process::ProcessBirth::Linux { birth } => Some(birth),
+                _ => anyhow::bail!("Claude process birth is incompatible"),
+            },
+            session_uuid,
+        })
+    }
+
     pub(crate) fn alive(&self) -> Result<bool> {
-        Ok(crate::platform::process::identify(self.pid)?
-            .is_some_and(|identity| identity.started_micros == self.started_micros))
+        let Some(identity) = crate::platform::process::identify_instance(self.pid)? else {
+            return Ok(false);
+        };
+        #[cfg(target_os = "linux")]
+        {
+            Ok(identity.birth
+                == crate::platform::process::ProcessBirth::Linux {
+                    birth: self
+                        .linux_birth
+                        .context("Claude job lacks Linux process birth proof")?,
+                })
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            Ok(identity.birth
+                == crate::platform::process::ProcessBirth::Darwin {
+                    started_micros: self.started_micros,
+                })
+        }
     }
 }
 
@@ -327,6 +377,36 @@ impl Store {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn retained_linux_owner_ignores_clock_changes_and_rejects_changed_birth() {
+        use super::ProcessOwner;
+        let pid = std::process::id() as i32;
+        let identity = crate::platform::process::identify(pid).unwrap().unwrap();
+        let crate::platform::process::ProcessBirth::Linux { birth } = identity.birth else {
+            panic!("Linux proof expected");
+        };
+        let mut owner = ProcessOwner {
+            pid,
+            started_micros: Some(60_000_000),
+            linux_birth: Some(birth),
+            session_uuid: "test".to_string(),
+        };
+        assert!(owner.alive().unwrap());
+        owner.linux_birth.as_mut().unwrap().start_ticks += 1;
+        assert!(!owner.alive().unwrap());
+        owner.linux_birth = Some(birth);
+        let birth = owner.linux_birth.as_mut().unwrap();
+        birth.boot_id[0] = if birth.boot_id[0] == b'0' { b'1' } else { b'0' };
+        assert!(!owner.alive().unwrap());
+        owner.linux_birth = None;
+        assert!(owner.alive().is_err());
+        let previous = serde_json::json!({"pid": pid, "startedMicros": 123, "sessionUuid": "test"});
+        let previous_owner: ProcessOwner = serde_json::from_value(previous.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&previous_owner).unwrap(), previous);
+        assert!(previous_owner.alive().is_err());
+    }
+
     use super::*;
     use serde_json::json;
 

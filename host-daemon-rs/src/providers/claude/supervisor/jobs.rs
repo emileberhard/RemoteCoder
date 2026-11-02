@@ -615,17 +615,14 @@ impl ClaudeSupervisor {
 
     pub(crate) async fn owned_process_session(
         &self,
-        pid: i32,
-        started_micros: u64,
+        process: crate::platform::process::ProcessInstance,
     ) -> Option<(String, Option<String>)> {
         self.runtimes
             .lock()
             .await
             .iter()
             .find_map(|(thread, runtime)| {
-                (runtime.process_group_id == pid
-                    && runtime.process_started_micros == Some(started_micros))
-                .then(|| {
+                (runtime.process_identity == Some(process)).then(|| {
                     (
                         thread.clone(),
                         runtime
@@ -882,13 +879,11 @@ impl ClaudeSupervisor {
         let Some(handle) = runtime.launch.job() else {
             return Ok(());
         };
-        let owner = ProcessOwner {
-            pid: runtime.process_group_id,
-            started_micros: runtime.process_started_micros.ok_or_else(|| {
-                TurnStartError::internal("Claude job has no exact kernel process identity")
-            })?,
-            session_uuid: runtime.session_uuid.clone(),
-        };
+        let process = runtime.process_identity.ok_or_else(|| {
+            TurnStartError::internal("Claude job has no exact kernel process identity")
+        })?;
+        let owner = ProcessOwner::from_process(process, runtime.session_uuid.clone())
+            .map_err(|error| TurnStartError::internal(error.to_string()))?;
         self.conversation_index
             .update_job(
                 &crate::providers::claude::claude_thread_id(&runtime.session_uuid),
@@ -1142,5 +1137,5 @@ fn binding(evidence: &JobEvidence) -> Option<ExecutionBinding> {
     })
 }
 
-#[cfg(all(test, target_os = "macos"))]
+#[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
 mod tests;

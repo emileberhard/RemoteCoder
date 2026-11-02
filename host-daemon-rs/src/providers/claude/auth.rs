@@ -82,6 +82,10 @@ impl ClaudeAuth {
         } else {
             None
         };
+        #[cfg(target_os = "linux")]
+        if error.is_none() && version.as_ref().is_none_or(String::is_empty) {
+            error = Some("Claude Code executable preflight failed".into());
+        }
         let snapshot = ClaudeAuthSnapshot {
             error,
             version,
@@ -180,6 +184,15 @@ pub(crate) fn validate_claude_path(path: &Path) -> Result<()> {
     if !path.is_file() {
         return Err(anyhow!("RC_CLAUDE_PATH is not a file: {}", path.display()));
     }
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        anyhow::ensure!(
+            path.metadata()?.permissions().mode() & 0o111 != 0,
+            "RC_CLAUDE_PATH is not executable: {}",
+            path.display()
+        );
+    }
     Ok(())
 }
 
@@ -216,7 +229,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn readiness_uses_router_key_without_a_local_subscription_or_cli() {
+    async fn router_readiness_does_not_require_a_local_subscription() {
         let fixture = ClaudeSettings::isolated_for_test();
         let settings = ClaudeSettings {
             enabled: true,
@@ -224,10 +237,10 @@ mod tests {
             ..fixture.settings.clone()
         };
         let snapshot = ClaudeAuth::new(settings.clone()).refresh().await;
-        assert!(snapshot.ok());
+        assert_eq!(snapshot.ok(), !cfg!(target_os = "linux"));
         assert!(snapshot.version.is_none());
         let health = health_json(&settings, Some(&snapshot), 0);
-        assert_eq!(health["ok"], true);
+        assert_eq!(health["ok"], !cfg!(target_os = "linux"));
         assert!(health.get("accountKey").is_none());
         std::fs::remove_file(settings.router.as_ref().unwrap().key_file()).unwrap();
         let snapshot = ClaudeAuth::new(settings).refresh().await;
@@ -238,5 +251,41 @@ mod tests {
                 .unwrap()
                 .contains("RC_CODEX_GATEWAY_ROUTER_KEY_FILE")
         );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn linux_router_readiness_requires_a_working_executable() {
+        use std::os::unix::fs::PermissionsExt;
+        let fixture = ClaudeSettings::isolated_for_test();
+        let executable = fixture.root_path().join("claude-cli");
+        let settings = ClaudeSettings {
+            enabled: true,
+            claude_path: executable.clone(),
+            ..fixture.settings.clone()
+        };
+        for (script, mode, ready) in [
+            (
+                "#!/bin/sh\nprintf '2.1.311 (Claude Code)\\n'\n",
+                0o700,
+                true,
+            ),
+            ("#!/bin/sh\nexit 1\n", 0o700, false),
+            ("#!/bin/sh\nexit 0\n", 0o700, false),
+            ("not an executable", 0o700, false),
+            (
+                "#!/bin/sh\nprintf '2.1.311 (Claude Code)\\n'\n",
+                0o600,
+                false,
+            ),
+        ] {
+            std::fs::write(&executable, script).unwrap();
+            std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(mode)).unwrap();
+            assert_eq!(validate_claude_path(&executable).is_ok(), mode == 0o700);
+            let snapshot = ClaudeAuth::new(settings.clone()).refresh().await;
+            assert_eq!(snapshot.ok(), ready);
+            assert_eq!(health_json(&settings, Some(&snapshot), 0)["ok"], ready);
+            assert_eq!(snapshot.error.is_none(), ready);
+        }
     }
 }

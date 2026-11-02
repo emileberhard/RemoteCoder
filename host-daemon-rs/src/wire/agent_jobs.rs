@@ -190,10 +190,45 @@ pub(crate) struct ListPage {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase", try_from = "CaptureWire")]
 pub(crate) struct CaptureParams {
     pub pid: u32,
-    pub started_at_unix_micros: u64,
+    pub birth: crate::platform::process::ProcessBirth,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged, deny_unknown_fields)]
+enum CaptureWire {
+    Current {
+        pid: u32,
+        birth: crate::platform::process::ProcessBirth,
+    },
+    Darwin {
+        pid: u32,
+        #[serde(rename = "startedAtUnixMicros")]
+        started_micros: u64,
+    },
+}
+
+impl TryFrom<CaptureWire> for CaptureParams {
+    type Error = &'static str;
+
+    fn try_from(wire: CaptureWire) -> Result<Self, Self::Error> {
+        let (pid, birth) = match wire {
+            CaptureWire::Current { pid, birth } => (pid, birth),
+            CaptureWire::Darwin {
+                pid,
+                started_micros,
+            } => (
+                pid,
+                crate::platform::process::ProcessBirth::Darwin { started_micros },
+            ),
+        };
+        if pid == 0 || !birth.is_valid() {
+            return Err("caller requires a compatible process birth proof");
+        }
+        Ok(Self { pid, birth })
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -236,6 +271,7 @@ pub(crate) struct SetTitleParams {
     deny_unknown_fields
 )]
 pub(crate) enum ScopedRequest {
+    Capture {},
     Legacy {
         socket: std::path::PathBuf,
         request: Box<ScopedRequest>,
@@ -255,4 +291,46 @@ pub(crate) enum ScopedRequest {
         mutation_id: String,
         title: String,
     },
+}
+
+#[cfg(test)]
+mod capture_tests {
+    use super::*;
+    use crate::platform::process::{LinuxBirth, ProcessBirth};
+    use serde_json::json;
+
+    #[test]
+    fn capture_birth_is_camel_case_and_has_exactly_one_form() {
+        let legacy = json!({"pid":42,"startedAtUnixMicros":123});
+        let current = json!({"pid":42,"birth":{"platform":"darwin","startedMicros":123}});
+        let linux = json!({"pid":42,"birth":{"platform":"linux","birth":{"bootId":"01234567-89ab-cdef-0123-456789abcdef","startTicks":123}}});
+        assert_eq!(
+            serde_json::to_value(CaptureParams {
+                pid: 42,
+                birth: ProcessBirth::Darwin {
+                    started_micros: 123
+                }
+            })
+            .unwrap(),
+            current
+        );
+        assert_eq!(
+            serde_json::from_value::<CaptureParams>(legacy.clone()).is_ok(),
+            cfg!(target_os = "macos")
+        );
+        assert_eq!(
+            serde_json::from_value::<CaptureParams>(current.clone()).is_ok(),
+            cfg!(target_os = "macos")
+        );
+        assert_eq!(
+            serde_json::from_value::<CaptureParams>(linux).is_ok(),
+            cfg!(target_os = "linux")
+        );
+        let mut contradictory = current;
+        contradictory["startedAtUnixMicros"] = 123.into();
+        assert!(serde_json::from_value::<CaptureParams>(contradictory).is_err());
+        let bad = json!({"pid":42,"birth":{"platform":"darwin","started_micros":123}});
+        assert!(serde_json::from_value::<CaptureParams>(bad).is_err());
+        assert!(serde_json::from_value::<CaptureParams>(json!({"pid":0,"birth":ProcessBirth::Linux {birth:LinuxBirth{boot_id:*b"01234567-89ab-cdef-0123-456789abcdef",start_ticks:123}}})).is_err());
+    }
 }
