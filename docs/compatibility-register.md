@@ -74,7 +74,7 @@ both hosts.
 
 | Path | Owner | Reason | Removal condition |
 |---|---|---|---|
-| Darwin `agent/context/capture` accepts `{pid, startedAtUnixMicros}` alongside tagged `birth` | `CaptureParams` (`wire/agent_jobs.rs`) | Terminal Claude native-parent holders started before tagged birth reconnect with their original executable after a gateway upgrade | Keep through the first tagged-birth release; remove in the following release once all retained native-parent holders on both Macs have restarted with the tagged-birth client. Linux never accepts the Darwin shape |
+| Darwin `agent/context/capture` accepts `{pid, startedAtUnixMicros}` alongside tagged `birth` | `CaptureParams` (`wire/agent_jobs.rs`) | Terminal Claude native-parent holders started before tagged birth reconnect with their original executable after a gateway upgrade | Keep through the first tagged-birth release; remove in the following release once all retained native-parent holders on both Macs have restarted with the tagged-birth client. Linux never accepts the Darwin shape. Ship the tagged client and gateway together: an older gateway rejects the new tagged client during a swap or after a gateway-only rollback, so rollback must restore the paired client too |
 
 ## Gateway: durable state and files from earlier builds
 
