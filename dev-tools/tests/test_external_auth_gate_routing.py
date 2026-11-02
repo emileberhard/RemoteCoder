@@ -17,7 +17,7 @@ def auth_gate_fixture(tmp_path):
     (repo / "scripts").mkdir(parents=True)
     (repo / "docs/codex").mkdir(parents=True)
     (repo / "dev-tools").mkdir()
-    for name in ("build_support.py", "process_group.py", "job_power.py"):
+    for name in ("build_support.py", "process_group.py", "job_power.py", "build_artifacts.py"):
         shutil.copy2(root / "scripts" / name, repo / "scripts" / name)
     for name in (
         "pyproject.toml",
