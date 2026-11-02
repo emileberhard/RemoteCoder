@@ -1,10 +1,19 @@
 import SwiftUI
 
 struct ChangeReview: Sendable {
-    let source: ChangeSource
-    let root: String
-    let branch: String?
-    let base: String?
+    enum Scope: Sendable {
+        case git(ChangeSource, root: String, branch: String?, base: String?)
+        case turn(TurnChanges.Turn, commands: Int, omittedAgents: Int)
+
+        var comparison: ReviewComparison {
+            switch self {
+            case .git(let source, _, _, _): .git(source)
+            case .turn(let turn, _, _): .turn(turn.id)
+            }
+        }
+    }
+
+    let scope: Scope
     let capturedAt: Date
     let files: [ReviewedFile]
     let unlistedFiles: Int
@@ -17,8 +26,8 @@ struct ChangeReview: Sendable {
     }
 
     func contains(_ anchor: ReviewNote.Anchor) -> Bool {
-        anchor.source == source && files.contains { file in
-            file.path == anchor.path && file.rows.contains { file.anchor(for: $0) == anchor }
+        anchor.comparison == scope.comparison && files.contains { file in
+            file.root == anchor.root && file.path == anchor.path && file.rows.contains { file.anchor(for: $0) == anchor }
         }
     }
 }
@@ -26,7 +35,9 @@ struct ChangeReview: Sendable {
 struct ReviewedFile: Identifiable, Sendable, Equatable {
     let id: String
     let revision: Int
-    let source: ChangeSource
+    let comparison: ReviewComparison
+    let root: String
+    let isFirstInRoot: Bool
     let path: String
     let status: FileDiff.Status
     let modeChange: FileDiff.ModeChange?
@@ -41,7 +52,7 @@ struct ReviewedFile: Identifiable, Sendable, Equatable {
 
     func anchor(for row: DiffRow) -> ReviewNote.Anchor? {
         guard case .line(let side) = row.kind, let line = side == .deletion ? row.oldNumber : row.newNumber else { return nil }
-        return ReviewNote.Anchor(source: source, path: path, line: line, side: side, excerpt: row.plain)
+        return ReviewNote.Anchor(comparison: comparison, root: root, path: path, line: line, side: side, excerpt: row.plain)
     }
 
     static func == (lhs: Self, rhs: Self) -> Bool { lhs.id == rhs.id && lhs.revision == rhs.revision }
@@ -77,35 +88,50 @@ enum ChangeReviewPreparation {
         review(of: snapshot, revision: revision)
     }
 
+    @concurrent static func prepare(_ changes: TurnChanges, revision: Int) async -> ChangeReview {
+        review(of: changes, revision: revision)
+    }
+
     static func review(of snapshot: ChangeSnapshot, revision: Int) -> ChangeReview {
+        review(scope: .git(snapshot.source, root: snapshot.root, branch: snapshot.branch, base: snapshot.base),
+               files: snapshot.files.map { (snapshot.root, $0) }, unlistedFiles: snapshot.unlistedFiles,
+               isComplete: snapshot.complete, capturedAtMs: snapshot.capturedAtMs, revision: revision)
+    }
+
+    static func review(of changes: TurnChanges, revision: Int) -> ChangeReview {
+        review(scope: .turn(changes.turn, commands: changes.commands, omittedAgents: changes.omittedAgents),
+               files: changes.files.map { ($0.root, $0.change) }, unlistedFiles: changes.unlistedFiles,
+               isComplete: changes.complete, capturedAtMs: changes.capturedAtMs, revision: revision)
+    }
+
+    private static func review(scope: ChangeReview.Scope, files: [(root: String, change: ChangeSnapshot.File)], unlistedFiles: Int,
+                               isComplete: Bool, capturedAtMs: Int64, revision: Int) -> ChangeReview {
         var occurrences: [String: Int] = [:]
         var remainingRows = maximumRows
-        var files: [ReviewedFile] = []
-        for file in snapshot.files {
+        var reviewed: [ReviewedFile] = []
+        for (root, file) in files {
             guard !Task.isCancelled else { break }
             let lines = file.patch.utf8.count(where: { $0 == UInt8(ascii: "\n") })
             let fits = lines <= remainingRows
             if fits { remainingRows -= lines }
             let diff = fits ? UnifiedDiff.parse(file) : UnifiedDiff.header(of: file)
-            let occurrence = occurrences[diff.path, default: 0]
-            occurrences[diff.path] = occurrence + 1
+            let location = (root as NSString).appendingPathComponent(diff.path)
+            let occurrence = occurrences[location, default: 0]
+            occurrences[location] = occurrence + 1
             let omission = fits ? diff.omission : diff.omission ?? ChangeSnapshot.Omission(reason: .responseBudget,
                                                                                              patchBytes: file.patch.utf8.count)
-            files.append(reviewedFile(diff, id: occurrence == 0 ? diff.path : "\(diff.path)#\(occurrence)", source: snapshot.source,
-                                      revision: revision, omission: omission))
+            reviewed.append(reviewedFile(diff, id: occurrence == 0 ? location : "\(location)#\(occurrence)", comparison: scope.comparison,
+                                         root: root, isFirstInRoot: reviewed.last?.root != root, revision: revision, omission: omission))
         }
-        let knowsEveryCount = snapshot.complete && snapshot.unlistedFiles == 0 && files.allSatisfy { $0.hasLineCounts || $0.isBinary }
+        let knowsEveryCount = isComplete && unlistedFiles == 0 && reviewed.allSatisfy { $0.hasLineCounts || $0.isBinary }
         return ChangeReview(
-            source: snapshot.source,
-            root: snapshot.root,
-            branch: snapshot.branch,
-            base: snapshot.base,
-            capturedAt: Date(timeIntervalSince1970: TimeInterval(snapshot.capturedAtMs) / 1_000),
-            files: files,
-            unlistedFiles: snapshot.unlistedFiles,
-            isComplete: snapshot.complete,
-            lineCounts: knowsEveryCount ? ChangeReview.LineCounts(additions: files.reduce(0) { $0 + $1.additions },
-                                                                  deletions: files.reduce(0) { $0 + $1.deletions }) : nil
+            scope: scope,
+            capturedAt: Date(timeIntervalSince1970: TimeInterval(capturedAtMs) / 1_000),
+            files: reviewed,
+            unlistedFiles: unlistedFiles,
+            isComplete: isComplete,
+            lineCounts: knowsEveryCount ? ChangeReview.LineCounts(additions: reviewed.reduce(0) { $0 + $1.additions },
+                                                                  deletions: reviewed.reduce(0) { $0 + $1.deletions }) : nil
         )
     }
 
@@ -120,8 +146,8 @@ enum ChangeReviewPreparation {
         }
     }
 
-    private static func reviewedFile(_ diff: FileDiff, id: String, source: ChangeSource, revision: Int,
-                                     omission: ChangeSnapshot.Omission?) -> ReviewedFile {
+    private static func reviewedFile(_ diff: FileDiff, id: String, comparison: ReviewComparison, root: String, isFirstInRoot: Bool,
+                                     revision: Int, omission: ChangeSnapshot.Omission?) -> ReviewedFile {
         let language = language(forPath: diff.path)
         var rows: [DiffRow] = []
         var previousEnd: Int?
@@ -145,7 +171,9 @@ enum ChangeReviewPreparation {
         return ReviewedFile(
             id: id,
             revision: revision,
-            source: source,
+            comparison: comparison,
+            root: root,
+            isFirstInRoot: isFirstInRoot,
             path: diff.path,
             status: diff.status,
             modeChange: diff.modeChange,

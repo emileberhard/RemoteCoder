@@ -326,6 +326,7 @@ private struct ChatScreen: View {
             if !acceptsInput { composerPresentations.dismiss() }
         }
         .onChange(of: screen.workingDirectory) { followChangeReview() }
+        .onChange(of: screen.activeSessionID) { followChangeReview() }
         .onChange(of: ObjectIdentifier(screen.target.gatewayClient)) { followChangeReview() }
         #if os(macOS)
         .background {
@@ -881,9 +882,9 @@ private struct ChatScreen: View {
 
     private func showChangeReview(of directory: String) {
         let client = screen.target.gatewayClient
-        if changeReview?.reviews(directory: directory, through: client) != true {
+        if changeReview?.reviews(conversation: screen.activeSessionID, directory: directory, through: client) != true {
             changeReview?.stop()
-            changeReview = ChangeReviewModel(directory: directory, client: client)
+            changeReview = ChangeReviewModel(conversation: screen.activeSessionID, directory: directory, client: client)
         }
         changeReview?.refresh()
         isReviewingChanges = true
@@ -893,8 +894,7 @@ private struct ChatScreen: View {
     }
 
     private func followChangeReview() {
-        guard let model = changeReview,
-              !model.reviews(directory: screen.workingDirectory, through: screen.target.gatewayClient) else { return }
+        guard let model = changeReview, !reviewsCurrentConversation(model) else { return }
         model.stop()
         if model.writtenNoteCount == 0 {
             changeReview = nil
@@ -906,6 +906,10 @@ private struct ChatScreen: View {
         isReviewingChanges = false
     }
 
+    private func reviewsCurrentConversation(_ model: ChangeReviewModel) -> Bool {
+        model.reviews(conversation: screen.activeSessionID, directory: screen.workingDirectory, through: screen.target.gatewayClient)
+    }
+
     private var isShowingChangeReview: Bool {
         #if os(macOS)
         isReviewingChanges && isInspectorPresented
@@ -915,8 +919,7 @@ private struct ChatScreen: View {
     }
 
     private func addReviewComments(_ comments: String) -> Bool {
-        guard changeReview?.reviews(directory: screen.workingDirectory, through: screen.target.gatewayClient) == true,
-              screen.insertReviewComments(comments) else { return false }
+        guard let changeReview, reviewsCurrentConversation(changeReview), screen.insertReviewComments(comments) else { return false }
         #if os(iOS)
         isReviewingChanges = false
         #endif

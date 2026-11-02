@@ -23,20 +23,23 @@ private struct ChangeReviewContent: View {
         case .loading:
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    ChangeReviewHeader(model: model, review: nil)
+                    ChangeReviewHeader(model: model, review: nil, remoteHomePath: remoteHomePath)
                     ChangeReviewPlaceholder()
                 }
             }
         case .ready(let review) where review.files.isEmpty && review.unlistedFiles == 0:
-            ChangeReviewMessage(model: model, review: review) {
-                ContentUnavailableView(model.source.emptyTitle, systemImage: "checkmark.circle",
-                                       description: Text(model.source.emptyDescription))
+            ChangeReviewMessage(model: model, review: review, remoteHomePath: remoteHomePath) {
+                ContentUnavailableView(model.mode.emptyTitle, systemImage: "checkmark.circle",
+                                       description: Text(model.mode.emptyDescription))
             }
         case .ready(let review):
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
-                    ChangeReviewHeader(model: model, review: review)
+                    ChangeReviewHeader(model: model, review: review, remoteHomePath: remoteHomePath)
                     ForEach(review.files) { file in
+                        if case .turn = review.scope, file.isFirstInRoot {
+                            ChangeReviewRootHeader(root: file.root, remoteHomePath: remoteHomePath)
+                        }
                         DiffFileSection(model: model, file: file)
                     }
                     ChangeReviewFooter(model: model, review: review, remoteHomePath: remoteHomePath)
@@ -44,12 +47,17 @@ private struct ChangeReviewContent: View {
             }
             .accessibilityIdentifier("change-review-files")
         case .unavailable(let reason):
-            ChangeReviewMessage(model: model, review: nil) {
+            ChangeReviewMessage(model: model, review: nil, remoteHomePath: remoteHomePath) {
                 ChangeReviewUnavailable(reason: reason, folder: WorkingDirectoryPathFormatter.displayPath(
-                    model.directory, remoteHomePath: remoteHomePath))
+                    model.root ?? model.directory, remoteHomePath: remoteHomePath))
+            }
+        case .noRecentEdits(let isComplete):
+            ChangeReviewMessage(model: model, review: nil, remoteHomePath: remoteHomePath) {
+                ContentUnavailableView("No Recent Edits", systemImage: "clock",
+                                       description: isComplete ? nil : Text("Some history couldn’t be read, so edits may be missing."))
             }
         case .failed(let message):
-            ChangeReviewMessage(model: model, review: nil) {
+            ChangeReviewMessage(model: model, review: nil, remoteHomePath: remoteHomePath) {
                 ContentUnavailableView {
                     Label("Couldn’t Read Changes", systemImage: "exclamationmark.triangle")
                 } description: {
@@ -66,19 +74,20 @@ private struct ChangeReviewContent: View {
 private struct ChangeReviewMessage<Message: View>: View {
     let model: ChangeReviewModel
     let review: ChangeReview?
+    let remoteHomePath: String?
     @ViewBuilder let message: Message
 
     var body: some View {
         let notes = model.notes(outside: review)
         if notes.isEmpty {
             VStack(spacing: 0) {
-                ChangeReviewHeader(model: model, review: review)
+                ChangeReviewHeader(model: model, review: review, remoteHomePath: remoteHomePath)
                 message.frame(maxHeight: .infinity)
             }
         } else {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    ChangeReviewHeader(model: model, review: review)
+                    ChangeReviewHeader(model: model, review: review, remoteHomePath: remoteHomePath)
                     message.padding(.vertical, 24)
                     ReviewNotesOutsideComparison(model: model, drafts: notes)
                 }
@@ -114,24 +123,43 @@ private struct ReviewNotesOutsideComparison: View {
     }
 
     private func location(of anchor: ReviewNote.Anchor) -> String {
-        let place = "\(anchor.path):\(anchor.line)"
-        return anchor.source == model.source ? place : "\(anchor.source.title) · \(place)"
+        "\(model.title(of: anchor.comparison)) · \((anchor.root as NSString).lastPathComponent) · \(anchor.path):\(anchor.line)"
+    }
+}
+
+private struct ChangeReviewRootHeader: View {
+    let root: String
+    let remoteHomePath: String?
+
+    var body: some View {
+        Label(WorkingDirectoryPathFormatter.displayPath(root, remoteHomePath: remoteHomePath), systemImage: "folder")
+            .scaledFont(.footnote.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .truncationMode(.head)
+            .padding(.horizontal, 16)
+            .padding(.top, 16)
+            .padding(.bottom, 6)
     }
 }
 
 private struct ChangeReviewHeader: View {
     @Bindable var model: ChangeReviewModel
     let review: ChangeReview?
+    let remoteHomePath: String?
 
     var body: some View {
         HStack(spacing: 10) {
             AppMenu {
-                Picker("Compare", selection: $model.selectedSource) {
-                    ForEach(ChangeSource.allCases, id: \.self) { source in
-                        Label(source.title, systemImage: source.systemImage).tag(source)
+                Picker("Compare", selection: $model.selectedMode) {
+                    ForEach(ChangeReviewModel.Mode.all, id: \.self) { mode in
+                        Label(mode.title, systemImage: mode.systemImage).tag(mode)
                     }
                 }
                 .pickerStyle(.inline)
+                if case .git = model.mode, let checkouts = model.checkouts {
+                    CheckoutPicker(model: model, checkouts: checkouts, remoteHomePath: remoteHomePath)
+                }
                 if let review, !review.files.isEmpty {
                     Divider()
                     Button("Collapse All Files", systemImage: "rectangle.compress.vertical") {
@@ -143,7 +171,12 @@ private struct ChangeReviewHeader: View {
                 }
             } label: {
                 HStack(spacing: 4) {
-                    Text(model.source.title).fontWeight(.semibold)
+                    Text(model.mode.title).fontWeight(.semibold)
+                    if case .git = model.mode, let root = model.root {
+                        Text((root as NSString).lastPathComponent)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
                     Image(systemName: "chevron.up.chevron.down")
                         .scaledFont(TypeMetrics.symbol(11, weight: .semibold))
                         .foregroundStyle(.secondary)
@@ -169,6 +202,47 @@ private struct ChangeReviewHeader: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
+    }
+}
+
+private struct CheckoutPicker: View {
+    @Bindable var model: ChangeReviewModel
+    let checkouts: CheckoutDiscovery
+    let remoteHomePath: String?
+
+    var body: some View {
+        if !checkouts.workedIn.isEmpty {
+            Section("Worked In") {
+                Picker("Worked In", selection: $model.selectedRoot) {
+                    ForEach(checkouts.workedIn, id: \.root) { checkout in
+                        Label(displayPath(checkout.root), systemImage: symbol(for: checkout.evidence)).tag(Optional(checkout.root))
+                    }
+                }
+                .pickerStyle(.inline)
+                .labelsHidden()
+            }
+        }
+        if !checkouts.inFolder.isEmpty {
+            Picker(selection: $model.selectedRoot) {
+                ForEach(checkouts.inFolder, id: \.self) { root in
+                    Text(displayPath(root)).tag(Optional(root))
+                }
+            } label: {
+                Label("In \((model.directory as NSString).lastPathComponent)", systemImage: "folder")
+            }
+            .pickerStyle(.menu)
+        }
+        if !checkouts.complete {
+            Text("Some checkouts may be missing.")
+        }
+    }
+
+    private func displayPath(_ root: String) -> String {
+        WorkingDirectoryPathFormatter.displayPath(root, remoteHomePath: remoteHomePath)
+    }
+
+    private func symbol(for evidence: Set<CheckoutDiscovery.Checkout.Evidence>) -> String {
+        if evidence.contains(.edited) { "pencil" } else if evidence.contains(.command) { "terminal" } else { "folder" }
     }
 }
 
@@ -202,10 +276,26 @@ private struct ChangeReviewFooter: View {
                 ReviewNotesOutsideComparison(model: model, drafts: outside)
             }
             VStack(alignment: .leading, spacing: 6) {
+                if case .turn(let turn, let commands, let omittedAgents) = review.scope {
+                    if !turn.latest {
+                        Text("Later turns made no edits.")
+                    }
+                    if commands > 0 {
+                        Text(commands == 1 ? "Also ran 1 command; files it changed aren’t listed."
+                                           : "Also ran \(commands) commands; files they changed aren’t listed.")
+                    }
+                    if omittedAgents > 0 {
+                        Text(omittedAgents == 1 ? "Edits by 1 agent aren’t included." : "Edits by \(omittedAgents) agents aren’t included.")
+                    }
+                }
                 if review.unlistedFiles > 0 {
                     Text(review.unlistedFiles == 1 ? "1 more file isn’t shown." : "\(review.unlistedFiles) more files aren’t shown.")
                 } else if !review.isComplete {
-                    Text("This comparison is too large to read completely.")
+                    if case .turn = review.scope {
+                        Text("Some history couldn’t be read, so edits may be missing.")
+                    } else {
+                        Text("This comparison is too large to read completely.")
+                    }
                 }
                 Text(detail).foregroundStyle(.tertiary)
             }
@@ -216,15 +306,18 @@ private struct ChangeReviewFooter: View {
     }
 
     private var detail: String {
-        let root = WorkingDirectoryPathFormatter.displayPath(review.root, remoteHomePath: remoteHomePath)
         let time = review.capturedAt.formatted(date: .omitted, time: .shortened)
-        let branch = review.branch ?? "Detached HEAD"
-        switch review.source {
-        case .branch:
-            let base = review.base.map { " against \($0)" } ?? ""
-            return "\(branch)\(base) · \(root) · \(time)"
-        case .uncommitted, .staged, .unstaged:
-            return "\(branch) · \(root) · \(time)"
+        switch review.scope {
+        case .git(let source, let root, let branch, let base):
+            let root = WorkingDirectoryPathFormatter.displayPath(root, remoteHomePath: remoteHomePath)
+            let branch = branch ?? "Detached HEAD"
+            let against = source == .branch ? base.map { " against \($0)" } ?? "" : ""
+            return "\(branch)\(against) · \(root) · \(time)"
+        case .turn(let turn, _, _):
+            let started = Date(timeIntervalSince1970: TimeInterval(turn.startedAtMs) / 1_000)
+            let start = Calendar.current.isDateInToday(started) ? started.formatted(date: .omitted, time: .shortened)
+                                                                : started.formatted(date: .abbreviated, time: .shortened)
+            return turn.running ? "Turn started \(start), still running · \(time)" : "Turn started \(start) · \(time)"
         }
     }
 }
@@ -319,6 +412,36 @@ private struct ChangeReviewPlaceholder: View {
         .shimmer(isActive: true)
         .padding(16)
         .accessibilityLabel("Loading changes")
+    }
+}
+
+extension ChangeReviewModel.Mode {
+    var title: String {
+        switch self {
+        case .lastTurn: "Last Turn"
+        case .git(let source): source.title
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .lastTurn: "clock.arrow.circlepath"
+        case .git(let source): source.systemImage
+        }
+    }
+
+    var emptyTitle: String {
+        switch self {
+        case .lastTurn: "No Net Changes"
+        case .git(let source): source.emptyTitle
+        }
+    }
+
+    var emptyDescription: String {
+        switch self {
+        case .lastTurn: "The last turn’s edits cancel each other out."
+        case .git(let source): source.emptyDescription
+        }
     }
 }
 
