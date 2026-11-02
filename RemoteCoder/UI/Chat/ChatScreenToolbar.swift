@@ -9,7 +9,6 @@ struct ChatScreenToolbar: View {
     let onOpenConversations: (() -> Void)?
     let onChooseFolder: () -> Void
     let onNewChatInHome: () -> Void
-    let onReviewChanges: () -> Void
 
     var body: some View {
         ChatHeader(
@@ -23,12 +22,6 @@ struct ChatScreenToolbar: View {
                 navigationButton
             }
         } trailing: {
-            if screen.workingDirectory != nil {
-                GlassCircleButton(systemImage: "plus.forwardslash.minus", symbolSize: 16, action: onReviewChanges)
-                    .glassEffectID("changes", in: navigationNamespace)
-                    .accessibilityLabel("Review Changes")
-                    .accessibilityIdentifier("review-changes")
-            }
             NewChatButton(onNewChat: screen.startNewConversation, onNewChatInHome: onNewChatInHome)
         }
         .padding(.horizontal, 16)

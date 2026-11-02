@@ -18,12 +18,7 @@ struct ChangeReview: Sendable {
     let files: [ReviewedFile]
     let unlistedFiles: Int
     let isComplete: Bool
-    let lineCounts: LineCounts?
-
-    struct LineCounts: Sendable {
-        let additions: Int
-        let deletions: Int
-    }
+    let totals: ChangeTotals
 
     func contains(_ anchor: ReviewNote.Anchor) -> Bool {
         anchor.comparison == scope.comparison && files.contains { file in
@@ -109,6 +104,7 @@ enum ChangeReviewPreparation {
         var occurrences: [String: Int] = [:]
         var remainingRows = maximumRows
         var reviewed: [ReviewedFile] = []
+        var counted: [ChangeTotals.Lines?] = []
         for (root, file) in files {
             guard !Task.isCancelled else { break }
             let lines = file.patch.utf8.count(where: { $0 == UInt8(ascii: "\n") })
@@ -122,16 +118,15 @@ enum ChangeReviewPreparation {
                                                                                              patchBytes: file.patch.utf8.count)
             reviewed.append(reviewedFile(diff, id: occurrence == 0 ? location : "\(location)#\(occurrence)", comparison: scope.comparison,
                                          root: root, isFirstInRoot: reviewed.last?.root != root, revision: revision, omission: omission))
+            counted.append(diff.countedLines)
         }
-        let knowsEveryCount = isComplete && unlistedFiles == 0 && reviewed.allSatisfy { $0.hasLineCounts || $0.isBinary }
         return ChangeReview(
             scope: scope,
             capturedAt: Date(timeIntervalSince1970: TimeInterval(capturedAtMs) / 1_000),
             files: reviewed,
             unlistedFiles: unlistedFiles,
             isComplete: isComplete,
-            lineCounts: knowsEveryCount ? ChangeReview.LineCounts(additions: reviewed.reduce(0) { $0 + $1.additions },
-                                                                  deletions: reviewed.reduce(0) { $0 + $1.deletions }) : nil
+            totals: ChangeTotals(counted: counted, unlistedFiles: unlistedFiles, isComplete: isComplete)
         )
     }
 

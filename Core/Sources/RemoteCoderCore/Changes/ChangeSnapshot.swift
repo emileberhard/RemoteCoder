@@ -69,6 +69,10 @@ struct CheckoutDiscovery: Decodable, Sendable {
     let workedIn: [Checkout]
     let inFolder: [String]
     let complete: Bool
+
+    var defaultRoot: String? {
+        (workedIn.first { $0.evidence.contains(.edited) } ?? workedIn.first)?.root
+    }
 }
 
 enum TurnChangesRead: Decodable, Sendable {

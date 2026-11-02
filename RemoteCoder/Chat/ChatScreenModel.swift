@@ -31,6 +31,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
     private(set) var loadingTranscriptID: String?
     private(set) var alert: ScreenAlert?
     private(set) var conversationAgents: ConversationAgentsModel?
+    private(set) var changeSummary: ChangeSummaryModel?
     private(set) var contextWindowUsage: ContextWindowUsage?
     private(set) var compaction: ConversationCompaction?
     @ObservationIgnored private var preparingRenderWindows: [UUID: Set<UUID>] = [:]
@@ -204,7 +205,21 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
             activeModelProvider = nil
         }
         activeSessionID = normalized
+        followChangeSummary()
         target.activeSessionChanged(to: normalized)
+    }
+
+    func refreshChangeSummary() {
+        guard isOnScreen else { return }
+        changeSummary?.refresh()
+    }
+
+    private func followChangeSummary() {
+        guard changeSummary?.summarizes(conversation: activeSessionID, directory: workingDirectory) != true else { return }
+        changeSummary?.stop()
+        changeSummary = activeSessionID.flatMap { conversation in
+            workingDirectory.map { ChangeSummaryModel(conversation: conversation, directory: $0, client: target.gatewayClient) }
+        }
     }
 
     func adoptModelProvider(_ modelProvider: String?, threadID: String) {
@@ -464,6 +479,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
     func retire() -> [Task<Void, Never>] {
         htmlVisualPreparation.cancelDemand()
         return ownedTasks.cancelAll() + headerNavigation.cancel() + historyEdges.cancelReads() + dictation.retire()
+            + [changeSummary?.stop()].compactMap(\.self)
     }
 
     func close() {
@@ -546,7 +562,9 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
 
     var fileUploads: [UUID: FileAttachmentImports.UploadState] { target.fileImports.uploads }
 
-    var workingDirectory: String?
+    var workingDirectory: String? {
+        didSet { if oldValue != workingDirectory { followChangeSummary() } }
+    }
 
     var historyEdgeStatus: [HistoryEdge.Kind: HistoryEdge.Status] { historyEdges.status }
 

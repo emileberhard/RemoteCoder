@@ -127,7 +127,7 @@ struct SubagentsPill: View {
     @Environment(\.surfaceVisibility) private var surfaceVisibility
 
     var body: some View {
-        Button(action: action) {
+        StatusPill(action: action) {
             HStack(spacing: 6) {
                 Image(systemName: "person.2.fill")
                 Text(recent == 0 ? "Subagents" : recent == 1 ? "1 subagent" : "\(recent) subagents")
@@ -135,15 +135,7 @@ struct SubagentsPill: View {
                     WorkingSymbol(systemName: "ellipsis", tint: .primary, isAnimating: animates)
                 }
             }
-            .scaledFont(.footnote.weight(.semibold))
-            .foregroundStyle(.primary)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 7)
-            .appGlass(.standard, in: .capsule)
-            .padding(.vertical, 8)
-            .contentShape(.rect)
         }
-        .buttonStyle(ResponsiveButtonStyle(feedback: .buttonPress, pressedScale: 0.97))
         .accessibilityHint("Shows subagents")
         .accessibilityIdentifier("open-agents")
     }

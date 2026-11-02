@@ -942,8 +942,6 @@ entrypoint linked above.
     in Home" accessibility action, starts one in the host's remote home folder.
     The Mac `TapHoldButton` is a plain click, so there only the accessibility
     action remains.
-  - Review changes (`review-changes`), shown when a folder is chosen, opens the
-    change review sheet for that host and folder ([Change review](../docs/change-review.md)).
   - "Speak replies" lives in Settings → Chat.
   - Picking a different working directory immediately starts a fresh
     conversation, so a session never spans repositories. On an unsent draft
@@ -971,6 +969,15 @@ entrypoint linked above.
   publishes it to the View menu (⌥⌘I). The subagents pill opens it. Review
   Changes (⇧⌘D) switches the inspector to the folder's change review, wider than
   the details; the inspector toggle reopens the details.
+- **Status pills.** `ConversationStatusPills` is the transcript's bottom bar
+  above the composer, on both platforms: the changes pill (`review-changes`)
+  before the subagents pill (`open-agents`), each shown only while it has
+  something to show, sharing `StatusPill`'s glass capsule. The changes pill
+  shows `ChangeSummaryModel`'s file and line totals and opens change review:
+  the sheet on iOS, the inspector on the Mac
+  ([Change review](../docs/change-review.md#changes-pill)). Request summary
+  reads through `ChatScreenModel.refreshChangeSummary()`, which admits them only
+  while the screen is on screen; the transcript reads only `hasChanges`.
 - User and assistant bubbles render Markdown blocks. Block gaps, heading
   margins and list spacing read `interfaceScale` in the rendering views; zoom
   changes layout without reparsing Markdown or changing block versions.
