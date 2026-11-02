@@ -70,11 +70,12 @@ final class ChangeReviewModel {
     }
 
     func select(root: String?) {
-        guard let root else { return }
+        guard let root, root != chosenRoot else { return }
         chosenRoot = root
-        guard root != self.root else { return }
-        self.root = root
-        state = .loading
+        if root != self.root {
+            self.root = root
+            state = .loading
+        }
         load()
     }
 
