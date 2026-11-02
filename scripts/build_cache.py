@@ -841,7 +841,7 @@ def purge_xcode_environments(root: Path, worktrees: list[Path]) -> dict:
                 for relative in ("Build/Intermediates.noindex/XCBuildData", "XCBuildData", "Logs/Build"):
                     path = entry.path / relative
                     if path.exists():
-                        _remove_cache_directory(path, device, preserve_evidence=True)
+                        _remove_cache_directory(path, device, _protected_name)
                         result["removed"].append(str(path))
     return result
 
@@ -883,13 +883,17 @@ def _opened_child(parent: int, name: str, expected) -> int:
         raise
 
 
-def _protected_contents(directory: int, deadline: float, device: int) -> bool:
+def _product_evidence_name(name: str) -> bool:
+    return _protected_name(name) and not name.endswith((".app", ".xctest", ".dSYM"))
+
+
+def _protected_contents(directory: int, deadline: float, device: int, preserve) -> bool:
     if os.fstat(directory).st_dev != device:
         raise ValueError("Foreign mount in compilation payload")
     for name in os.listdir(directory):
         if time.monotonic() >= deadline:
             raise TimeoutError("Payload protection inventory timed out")
-        if _protected_name(name):
+        if preserve(name):
             return True
         info = os.stat(name, dir_fd=directory, follow_symlinks=False)
         if info.st_dev != device:
@@ -897,16 +901,16 @@ def _protected_contents(directory: int, deadline: float, device: int) -> bool:
         if stat.S_ISDIR(info.st_mode):
             child = _opened_child(directory, name, info)
             try:
-                if _protected_contents(child, deadline, device):
+                if _protected_contents(child, deadline, device, preserve):
                     return True
             finally:
                 os.close(child)
     return False
 
 
-def _protected_payload(path: Path, deadline: float, device: int) -> bool:
+def _protected_payload(path: Path, deadline: float, device: int, preserve) -> bool:
     with _directory_descriptor(path) as directory:
-        return _protected_contents(directory, deadline, device)
+        return _protected_contents(directory, deadline, device, preserve)
 
 
 def _remove_contents(directory: int, device: int, preserve):
@@ -931,31 +935,36 @@ def _remove_contents(directory: int, device: int, preserve):
 
 
 def _evict_payload(entry: CompilationDirectory, path: Path, device: int):
-    if path not in _compiler_payloads(entry) or not path.is_relative_to(entry.path):
+    products = entry.path / "Build/Products"
+    owned = _compiler_payloads(entry)
+    if entry.kind == "xcode":
+        owned.append(products)
+    if path not in owned or not path.is_relative_to(entry.path):
         raise ValueError(f"Unowned compilation payload: {path}")
     with _directory_descriptor(entry.path) as directory:
         if os.fstat(directory).st_dev != device:
             raise ValueError(f"Foreign mount at compilation directory: {entry.path}")
 
-    _remove_cache_directory(path, device, preserve_evidence=True)
+    preserve = _product_evidence_name if path == products else _protected_name
+    _remove_cache_directory(path, device, preserve)
 
 
-def _remove_cache_directory(path: Path, device: int, *, preserve_evidence: bool):
+def _remove_cache_directory(path: Path, device: int, preserve):
     with _directory_descriptor(path.parent) as parent:
         info = os.stat(path.name, dir_fd=parent, follow_symlinks=False)
         if info.st_dev != device or not stat.S_ISDIR(info.st_mode):
             raise ValueError(f"Unsafe compilation payload: {path}")
         child = _opened_child(parent, path.name, info)
         try:
-            if preserve_evidence and _protected_contents(
-                child, time.monotonic() + 20, device
+            if _protected_contents(
+                child, time.monotonic() + 20, device, preserve
             ):
                 raise ValueError(f"Protected product or evidence in payload: {path}")
             after = os.stat(path.name, dir_fd=parent, follow_symlinks=False)
             if (after.st_dev, after.st_ino) != (info.st_dev, info.st_ino):
                 raise ValueError(f"Compilation payload changed before deletion: {path}")
             _remove_contents(
-                child, device, _protected_name if preserve_evidence else lambda _: False
+                child, device, preserve
             )
             after = os.stat(path.name, dir_fd=parent, follow_symlinks=False)
             if (after.st_dev, after.st_ino) != (info.st_dev, info.st_ino):
@@ -980,6 +989,31 @@ def compilation_admission(
             root, policy, entries, current, maintenance=maintenance, preview=preview,
             root_bytes=root_bytes, directory_bytes=directory_bytes,
         )
+
+
+def _products_rebuildable(entry: CompilationDirectory, completion: dict, deadline: float) -> bool:
+    commit = completion.get("sourceCommit")
+    if (
+        entry.kind != "xcode"
+        or completion.get("sourceModified") is not False
+        or not isinstance(commit, str)
+        or len(commit) != 40
+        or any(character not in "0123456789abcdef" for character in commit)
+        or time.monotonic() >= deadline
+    ):
+        return False
+    repository = entry.source or Path(__file__).resolve().parents[1]
+    try:
+        return subprocess.run(
+            ["git", "cat-file", "-e", commit + "^{commit}"],
+            cwd=repository,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=min(2, max(0.001, deadline - time.monotonic())),
+            check=False,
+        ).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
 
 
 def _compilation_admission(
@@ -1318,7 +1352,11 @@ def _compilation_admission(
             removed_source = entry.worktree in removed and _removed_mirror_source(
                 root, entry, check_remote=not pressure
             )
-            for payload in _compiler_payloads(entry):
+            payloads = _compiler_payloads(entry)
+            products = entry.path / "Build/Products"
+            if pressure and _products_rebuildable(entry, completion, deadline):
+                payloads.append(products)
+            for payload in payloads:
                 if not payload.exists() and not payload.is_symlink():
                     continue
                 try:
@@ -1332,7 +1370,8 @@ def _compilation_admission(
                         payload, deadline, devices[entry]
                     )
                     reclaimable_bytes = _reclaimable_bytes(payload, deadline, devices[entry])
-                    if _protected_payload(payload, deadline, devices[entry]):
+                    preserve = _product_evidence_name if payload == products else _protected_name
+                    if _protected_payload(payload, deadline, devices[entry], preserve):
                         raise ValueError(
                             f"Protected product or evidence in payload: {payload}"
                         )
@@ -1540,7 +1579,7 @@ def _prune_removed_mirrors(
                     candidate = {"path": str(payload), "allocatedBytes": payload_bytes, "lastUsed": used}
                     result["mirrorCandidates"].append(candidate)
                     if policy.eviction_enabled and not preview:
-                        _remove_cache_directory(payload, device, preserve_evidence=False)
+                        _remove_cache_directory(payload, device, lambda _: False)
                         result["mirrors"].append(candidate)
             except (OSError, ValueError, TimeoutError) as error:
                 result.setdefault("evictionFailures", []).append({"path": str(mirror), "error": str(error)})

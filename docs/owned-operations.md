@@ -571,8 +571,13 @@ files and rechecking the last-use evidence. This also retires interrupted
 builds. Abandonment and checkout-expiry proof require a source association;
 legacy unassociated mirrors retain their existing completion reconstruction and
 unknown-evidence protection. Unreadable, invalid, leased or incompletely
-inventoried caches remain protected. Products, dSYMs, downloads and evidence
-never become compilation eviction targets. Total accounting includes shared
+inventoried caches remain protected. Under pressure, completed Xcode Products
+also become candidates after the two-hour compiler window when their source
+record proves an unmodified commit still available in the owning repository.
+The same leases and open-file checks apply. Missing or modified source proof
+keeps Products protected; receipts, logs and source identity retain their
+48-hour evidence policy. Installed, current and previous release artifacts,
+runtime package seeds and downloads remain outside compiler eviction. Total accounting includes shared
 Codex targets, experiments, sources, runs, releases, packages, evidence and pinned
 entries. The two shared Codex compiler targets use their existing build locks
 and open-file checks; idle Cargo payloads can be reclaimed under pressure.
