@@ -773,12 +773,11 @@ volume is about 65 MiB a day), signposts for checkpoints and cache writes
 (`PersistenceMetrics` covers them), `trackLaunchTask` (bootstrap waits on
 gateways while cached content is already visible), kind-ordered host eviction
 (the 1 GiB cap does not bind at 7 days) and trusting MetricKit's build label.
-Follow-ups, tracked here while Linear is at its free cap: A/B the composer
-spinner through MetricKit's GPU time; mirror Mac dev-build dSYMs
-built on the MacBook to the Mini; background sampling during voice calls; per-purpose
-network counters and gateway connection correlation; an unknown initial phase in
-`ScenePhaseAggregate`, which starts as background, so a history read begun during
-a background launch stops holding its state through suspension.
+Follow-ups: [composer spinner GPU measurement (#445)](https://github.com/emileberhard/tracker/issues/445),
+[Mac development symbols (#446)](https://github.com/emileberhard/tracker/issues/446),
+[background voice-call sampling (#447)](https://github.com/emileberhard/tracker/issues/447),
+[network attribution (#448)](https://github.com/emileberhard/tracker/issues/448), and
+[the initial scene phase (#449)](https://github.com/emileberhard/tracker/issues/449).
 
 Decision summary (2026-10-26, retained checkpoint inventory). Replay preparation
 needs the phone's retained-state sizes without repeating the costly checkpoint
