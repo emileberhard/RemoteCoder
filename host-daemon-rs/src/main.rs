@@ -135,6 +135,19 @@ async fn run(
         platform::macos::scheduling::SchedulingCheck,
     >,
 ) -> Result<()> {
+    if cfg!(target_os = "linux")
+        && matches!(
+            &args.command,
+            Some(config::Command::Runtime { command })
+                if !matches!(command,
+                    config::RuntimeCommand::Restart
+                    | config::RuntimeCommand::PrepareHandoff
+                    | config::RuntimeCommand::PrepareShutdown
+                    | config::RuntimeCommand::RetryFailed { .. })
+        )
+    {
+        anyhow::bail!("This runtime operation is macOS-only; use the Linux host deployment owner");
+    }
     if matches!(args.command, Some(config::Command::CheckConfig)) {
         let sources = ConfigSources::load(args.env_file.as_deref())?;
         let settings = Settings::load(&sources)?;
@@ -347,7 +360,7 @@ async fn run(
         codex_version = %settings.codex_version,
         codex_code_mode_host_path = %settings.codex_code_mode_host_path.display(),
         codex_child_env_keys = settings.codex_child_env.len(),
-        push_broker_enabled = settings.push_broker_enabled,
+        push_broker_enabled = !matches!(&settings.push, push::PushConfiguration::Disabled),
         claude_path = %settings.claude.claude_path.display(),
         "loaded settings"
     );
@@ -387,9 +400,9 @@ async fn run(
         journal.clone(),
         startup_scheduling,
     );
-    let devices = Arc::new(DeviceRegistry::open(&settings.host_paths)?);
+    let devices = Arc::new(DeviceRegistry::open(&settings.host_paths, &sources)?);
     let apns = Arc::new(PushService::new(
-        settings.push_broker_enabled,
+        settings.push.clone(),
         journal.clone(),
         devices,
         Some(settings.host_paths.state("live-activity.json")),

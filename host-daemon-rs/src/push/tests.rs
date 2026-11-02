@@ -424,7 +424,7 @@ async fn reported_content_survives_a_restart() {
     let path = directory.path().join("live-activity.json");
     let service = |path: &std::path::Path| {
         PushService::new(
-            false,
+            crate::push::PushConfiguration::Disabled,
             Journal::disabled(),
             Arc::new(DeviceRegistry::temporary()),
             Some(path.to_owned()),
@@ -581,7 +581,7 @@ async fn review_regression_unreadable_aggregate_is_never_replaced_by_an_empty_ma
     let bytes = b"{unfinished";
     std::fs::write(&path, bytes).unwrap();
     let service = PushService::new(
-        false,
+        crate::push::PushConfiguration::Disabled,
         Journal::disabled(),
         Arc::new(DeviceRegistry::temporary()),
         Some(path.clone()),
@@ -599,7 +599,7 @@ async fn restored_scopes_wait_for_fresh_authoritative_projections() {
     let path = directory.path().join("live-activity.json");
     let make = || {
         PushService::new(
-            false,
+            crate::push::PushConfiguration::Disabled,
             Journal::disabled(),
             Arc::new(DeviceRegistry::temporary()),
             Some(path.clone()),
@@ -760,7 +760,7 @@ async fn review_followup_an_unverified_registry_cannot_certify_an_empty_host() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("live-activity.json");
     let mut service = PushService::new(
-        false,
+        crate::push::PushConfiguration::Disabled,
         Journal::disabled(),
         Arc::new(DeviceRegistry::temporary()),
         Some(path),

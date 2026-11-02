@@ -222,7 +222,7 @@ async fn both_first_party_unavailable_use_configured_copilot_with_native_codex_a
             directory.path().join("codex"),
         )),
         Arc::new(crate::push::PushService::new(
-            false,
+            crate::push::PushConfiguration::Disabled,
             journal.clone(),
             Arc::new(crate::devices::DeviceRegistry::temporary()),
             None,

@@ -1,7 +1,9 @@
+#[cfg(target_os = "macos")]
 use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 
 use serde_json::json;
+#[cfg(target_os = "macos")]
 use sha2::{Digest, Sha256};
 
 #[test]
@@ -153,6 +155,7 @@ fn failed_worker_sync_prevents_gateway_handoff_and_preserves_installed_selection
     assert!(!state.join("codex-restart-recovery.json").exists());
 }
 
+#[cfg(target_os = "macos")]
 #[test]
 fn install_worker_cli_emits_only_the_verified_contract_without_startup_banners() {
     let home = tempfile::tempdir().unwrap();
@@ -243,6 +246,7 @@ fn install_worker_cli_emits_only_the_verified_contract_without_startup_banners()
     assert!(!home.path().join("Library/Logs").exists());
 }
 
+#[cfg(target_os = "macos")]
 fn sha256_hex(bytes: impl AsRef<[u8]>) -> String {
     Sha256::digest(bytes)
         .iter()

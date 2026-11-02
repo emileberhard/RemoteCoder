@@ -163,7 +163,7 @@ impl Fixture {
                 directory.path().join("c"),
             )),
             Arc::new(crate::push::PushService::new(
-                false,
+                crate::push::PushConfiguration::Disabled,
                 journal.clone(),
                 Arc::new(crate::devices::DeviceRegistry::temporary()),
                 None,

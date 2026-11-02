@@ -360,3 +360,24 @@ async fn the_shared_fixture_registration_is_accepted() {
     assert_eq!(registry.alert_targets().await.unwrap().len(), 1);
     assert!(registry.location_target().await.unwrap().is_some());
 }
+
+#[test]
+fn device_settings_use_the_gateway_configuration_source() {
+    let directory = tempfile::tempdir().unwrap();
+    let paths = HostPaths::from_home(directory.path().to_owned()).unwrap();
+    let token = directory.path().join("fixture-token");
+    std::fs::write(&token, alert_token(77)).unwrap();
+    let sources = crate::config::ConfigSources::from_file_vars(std::collections::HashMap::from([
+        ("RC_APNS_BUNDLE_ID".into(), "fixture.bundle.dev".into()),
+        ("RC_PUSH_BROKER_ENV".into(), "production".into()),
+        ("RC_APNS_TOKEN_FILE".into(), token.to_str().unwrap().into()),
+    ]));
+    let registry = DeviceRegistry::open(&paths, &sources).unwrap();
+    assert_eq!(registry.bundle_id(), "fixture.bundle.dev");
+    let targets = registry.legacy.as_ref().unwrap().alert_targets();
+    assert_eq!(targets.len(), 1);
+    assert_eq!(
+        targets[0].destination.environment,
+        PushEnvironment::Production
+    );
+}
