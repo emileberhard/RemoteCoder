@@ -205,7 +205,7 @@ private struct ChangeReviewHeader: View {
             .accessibilityIdentifier("change-review-source")
 
             if let review, !review.files.isEmpty || review.unlistedFiles > 0 {
-                ChangeReviewSummary(fileCount: review.files.count + review.unlistedFiles, lineCounts: review.lineCounts)
+                ChangeReviewSummary(totals: review.totals)
             }
             Spacer(minLength: 0)
             if model.isRefreshing {
@@ -265,15 +265,14 @@ private struct CheckoutPicker: View {
 }
 
 private struct ChangeReviewSummary: View {
-    let fileCount: Int
-    let lineCounts: ChangeReview.LineCounts?
+    let totals: ChangeTotals
 
     var body: some View {
         HStack(spacing: 6) {
-            Text(fileCount == 1 ? "1 file" : "\(fileCount) files")
+            FileCount(files: totals.files)
                 .foregroundStyle(.secondary)
-            if let lineCounts {
-                DiffCounts(additions: lineCounts.additions, deletions: lineCounts.deletions)
+            if let lines = totals.lines {
+                DiffCounts(additions: lines.additions, deletions: lines.deletions)
             }
         }
         .scaledFont(.subheadline.monospacedDigit())
@@ -413,6 +412,14 @@ private struct ChangeReviewCommentBar: View {
             }
         }
         .animation(.smooth(duration: 0.25), value: count > 0)
+    }
+}
+
+struct FileCount: View {
+    let files: Int
+
+    var body: some View {
+        Text(files == 1 ? "1 file" : "\(files) files")
     }
 }
 
