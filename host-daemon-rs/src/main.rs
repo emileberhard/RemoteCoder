@@ -347,7 +347,7 @@ async fn run(
         codex_version = %settings.codex_version,
         codex_code_mode_host_path = %settings.codex_code_mode_host_path.display(),
         codex_child_env_keys = settings.codex_child_env.len(),
-        push_broker_enabled = settings.push_broker_enabled,
+        push_broker_enabled = !matches!(&settings.push, push::PushConfiguration::Disabled),
         claude_path = %settings.claude.claude_path.display(),
         "loaded settings"
     );
@@ -389,7 +389,7 @@ async fn run(
     );
     let devices = Arc::new(DeviceRegistry::open(&settings.host_paths)?);
     let apns = Arc::new(PushService::new(
-        settings.push_broker_enabled,
+        settings.push.clone(),
         journal.clone(),
         devices,
         Some(settings.host_paths.state("live-activity.json")),

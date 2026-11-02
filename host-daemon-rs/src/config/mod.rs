@@ -169,7 +169,7 @@ pub(crate) struct Settings {
     pub auth_token: String,
     pub user_name: Option<String>,
     pub codex_child_env: HashMap<String, String>,
-    pub push_broker_enabled: bool,
+    pub push: crate::push::PushConfiguration,
     pub claude: ClaudeSettings,
     pub router: Option<crate::providers::router::RouterConfig>,
     pub external_providers: Vec<crate::providers::codex::external::ExternalProvider>,
@@ -253,10 +253,7 @@ impl Settings {
             auth_token,
         } = GatewayEndpoint::load(sources)?;
         let lan = sources.lan_settings(port)?;
-        let push_broker_enabled = sources.optional_bool(
-            "RC_CODEX_GATEWAY_PUSH_BROKER_ENABLED",
-            sources.optional_string("RC_PUSH_BROKER_TOKEN").is_some(),
-        )?;
+        let push = crate::push::PushConfiguration::load(sources)?;
 
         let speech_clients = crate::voice::speech::SpeechClients::parse(
             sources
@@ -289,7 +286,7 @@ impl Settings {
             auth_token,
             user_name: user_name(sources)?,
             codex_child_env,
-            push_broker_enabled,
+            push,
             claude,
             speech_clients,
             router,
@@ -718,7 +715,9 @@ impl ConfigSources {
         self.file_vars
             .iter()
             .filter(|(key, _)| {
-                !key.starts_with("RC_CODEX_GATEWAY_") && !key.starts_with("RC_CLAUDE_")
+                !key.starts_with("RC_CODEX_GATEWAY_")
+                    && !key.starts_with("RC_CLAUDE_")
+                    && !key.starts_with("RC_PUSH_BROKER_")
             })
             .filter(|(key, value)| !key.trim().is_empty() && !value.trim().is_empty())
             .map(|(key, value)| (key.to_string(), value.to_string()))
@@ -1047,6 +1046,10 @@ mod tests {
         let vars = HashMap::from([
             ("RC_CODEX_GATEWAY_PORT".to_string(), "8787".to_string()),
             ("RC_CLAUDE_PATH".to_string(), "/usr/bin/claude".to_string()),
+            (
+                "RC_PUSH_BROKER_TOKEN".to_string(),
+                "broker-fixture".to_string(),
+            ),
             ("ANTHROPIC_API_KEY".to_string(), "sk-ant-x".to_string()),
         ]);
 
@@ -1054,10 +1057,31 @@ mod tests {
 
         assert!(!forwarded.contains_key("RC_CODEX_GATEWAY_PORT"));
         assert!(!forwarded.contains_key("RC_CLAUDE_PATH"));
+        assert!(!forwarded.contains_key("RC_PUSH_BROKER_TOKEN"));
         // Codex-side tooling may legitimately need this; only Claude must never see it.
         assert_eq!(
             forwarded.get("ANTHROPIC_API_KEY").map(String::as_str),
             Some("sk-ant-x")
+        );
+    }
+
+    #[test]
+    fn push_configuration_uses_the_gateway_env_file() {
+        let sources = ConfigSources {
+            file_vars: HashMap::from([
+                ("RC_CODEX_GATEWAY_PUSH_BROKER_ENABLED".into(), "true".into()),
+                ("RC_PUSH_BROKER_URL".into(), "https://broker.fixture".into()),
+                ("RC_PUSH_BROKER_TOKEN".into(), "fixture-token".into()),
+            ]),
+        };
+        let crate::push::PushConfiguration::Configured { url, token } =
+            crate::push::PushConfiguration::load(&sources).unwrap()
+        else {
+            panic!("file configuration must configure the push broker");
+        };
+        assert_eq!(
+            (url.as_str(), token.as_str()),
+            ("https://broker.fixture", "fixture-token")
         );
     }
 

@@ -31,6 +31,31 @@ const NO_ALERT_DEVICE: &str = "no alert device registered";
 const NO_LIVE_ACTIVITY_DEVICE: &str = "no live activity device registered";
 const REGISTRY_UNREADABLE: &str = "device registry unreadable";
 
+#[derive(Clone, Debug)]
+pub(crate) enum PushConfiguration {
+    Disabled,
+    MissingToken,
+    Configured { url: String, token: String },
+}
+
+impl PushConfiguration {
+    pub(crate) fn load(sources: &crate::config::ConfigSources) -> anyhow::Result<Self> {
+        let token = sources.optional_string("RC_PUSH_BROKER_TOKEN");
+        if !sources.optional_bool("RC_CODEX_GATEWAY_PUSH_BROKER_ENABLED", token.is_some())? {
+            return Ok(Self::Disabled);
+        }
+        let Some(token) = token else {
+            return Ok(Self::MissingToken);
+        };
+        Ok(Self::Configured {
+            url: sources
+                .optional_string("RC_PUSH_BROKER_URL")
+                .unwrap_or_else(|| "http://127.0.0.1:5012".to_owned()),
+            token,
+        })
+    }
+}
+
 struct Delivery<'a> {
     kind: TokenKind,
     journal: Option<&'static str>,
@@ -78,19 +103,21 @@ pub(crate) struct PushService {
 
 impl PushService {
     pub fn new(
-        enabled: bool,
+        configuration: PushConfiguration,
         journal: Journal,
         devices: Arc<DeviceRegistry>,
         live_activity_path: Option<PathBuf>,
     ) -> Self {
-        let broker = if enabled { load_broker() } else { None };
-        let unavailable_reason = match (enabled, broker.is_some()) {
-            (_, true) => None,
-            (false, _) => Some("broker disabled"),
-            (true, false) => Some("broker not configured"),
+        let disabled = matches!(&configuration, PushConfiguration::Disabled);
+        let (broker, unavailable_reason) = match configuration {
+            PushConfiguration::Disabled => (None, Some("broker disabled")),
+            PushConfiguration::MissingToken => (None, Some("broker not configured")),
+            PushConfiguration::Configured { url, token } => {
+                (Some(PushBroker::new(url, token)), None)
+            }
         };
 
-        if !enabled {
+        if disabled {
             info!("push broker explicitly disabled for this gateway");
         } else if let Some(broker) = broker.as_ref() {
             info!(
@@ -115,7 +142,12 @@ impl PushService {
 
     #[cfg(test)]
     pub(crate) fn fixture_disabled(journal: Journal) -> Self {
-        let mut service = Self::new(false, journal, Arc::new(DeviceRegistry::temporary()), None);
+        let mut service = Self::new(
+            PushConfiguration::Disabled,
+            journal,
+            Arc::new(DeviceRegistry::temporary()),
+            None,
+        );
         service.live_activity.get_mut().required_scopes =
             Some(std::collections::BTreeSet::from(["default".into()]));
         service
@@ -702,19 +734,6 @@ impl PushService {
             serde_json::json!({ "outcome": "skipped", "reason": reason }),
         );
     }
-}
-
-fn load_broker() -> Option<PushBroker> {
-    let token = std::env::var("RC_PUSH_BROKER_TOKEN")
-        .ok()
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())?;
-    let url = std::env::var("RC_PUSH_BROKER_URL")
-        .ok()
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "http://127.0.0.1:5012".to_owned());
-    Some(PushBroker::new(url, token))
 }
 
 fn is_permanently_invalid(error: &BrokerRequestError) -> bool {
