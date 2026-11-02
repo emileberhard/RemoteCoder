@@ -147,7 +147,7 @@ async fn run(
         )
     {
         anyhow::bail!(
-            "This runtime installation operation is macOS-only; use the Linux host deployment owner"
+            "This runtime operation is macOS-only; use the Linux host deployment owner"
         );
     }
     if matches!(args.command, Some(config::Command::CheckConfig)) {
