@@ -278,28 +278,34 @@ fn an_inventory_above_the_session_limit_is_unavailable_not_truncated() {
 }
 
 #[test]
-fn only_a_process_outside_the_gateway_owns_a_session_elsewhere() {
+fn only_a_live_process_outside_the_gateway_owns_a_session_elsewhere() {
     let session = |thread_id: &str, pid: Option<i32>| SessionActivity {
         thread_id: thread_id.into(),
         state: ActivityState::Idle,
         owner: pid.map(|pid| SessionOwner::Client { pid }),
         waiting_since: None,
     };
+    let mut exited = std::process::Command::new("true").spawn().unwrap();
+    let exited_pid = exited.id() as i32;
+    exited.wait().unwrap();
+    let live_pid = std::process::id() as i32;
+    let gateway_pid = 41;
     let claude = "claude_11111111-2222-4333-8444-555555555555";
     let mut snapshot = Snapshot {
         sessions: vec![
-            session(claude, Some(41)),
-            session(claude, Some(42)),
-            session("0199-codex", Some(43)),
+            session(claude, Some(gateway_pid)),
+            session(claude, Some(live_pid)),
+            session(claude, Some(exited_pid)),
+            session("0199-codex", Some(live_pid)),
             session("claude_background", None),
         ],
         claude_available: true,
         codex_available: false,
     };
 
-    snapshot.attribute_to_gateway(&HashSet::from([41]));
+    snapshot.attribute_owners(&HashSet::from([gateway_pid]));
 
-    assert_eq!(snapshot.client_owners(claude).unwrap(), vec![42]);
+    assert_eq!(snapshot.client_owners(claude).unwrap(), vec![live_pid]);
     assert_eq!(
         serde_json::to_value(&snapshot.sessions[0]).unwrap()["owner"],
         "gateway"
@@ -307,6 +313,10 @@ fn only_a_process_outside_the_gateway_owns_a_session_elsewhere() {
     assert_eq!(
         serde_json::to_value(&snapshot.sessions[1]).unwrap()["owner"],
         "client"
+    );
+    assert!(
+        snapshot.sessions[2].owner.is_none(),
+        "a reaped gateway child listed by a cached snapshot owns nothing"
     );
     assert!(
         snapshot

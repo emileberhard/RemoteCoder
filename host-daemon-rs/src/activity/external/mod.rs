@@ -214,12 +214,15 @@ pub(crate) struct Snapshot {
 }
 
 impl Snapshot {
-    pub(crate) fn attribute_to_gateway(&mut self, gateway_processes: &HashSet<i32>) {
+    pub(crate) fn attribute_owners(&mut self, gateway_processes: &HashSet<i32>) {
         for session in &mut self.sessions {
-            if let Some(SessionOwner::Client { pid }) = session.owner
-                && gateway_processes.contains(&pid)
-            {
+            let Some(SessionOwner::Client { pid }) = session.owner else {
+                continue;
+            };
+            if gateway_processes.contains(&pid) {
                 session.owner = Some(SessionOwner::Gateway);
+            } else if !process_exists(pid) {
+                session.owner = None;
             }
         }
     }
@@ -307,6 +310,11 @@ impl ExternalActivity {
         *cache = Some((Instant::now(), snapshot.clone()));
         snapshot
     }
+}
+
+fn process_exists(pid: i32) -> bool {
+    nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None)
+        != Err(nix::errno::Errno::ESRCH)
 }
 
 const MAXIMUM_STDOUT_BYTES: usize = 16 * 1024 * 1024;

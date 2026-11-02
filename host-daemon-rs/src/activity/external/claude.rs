@@ -4,14 +4,14 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use nix::errno::Errno;
 use serde::Deserialize;
 use serde_json::value::RawValue;
 use tokio::sync::Mutex;
 
 use super::transcript::{Boundary, TranscriptCache};
 use super::{
-    ActivityState, SessionActivity, SessionOwner, ensure_inventory_within_limit, output, valid_id,
+    ActivityState, SessionActivity, SessionOwner, ensure_inventory_within_limit, output,
+    process_exists, valid_id,
 };
 use crate::providers::claude::settings::ClaudeSettings;
 use crate::providers::claude::timeline::{
@@ -57,7 +57,7 @@ impl ClaudeInventory {
                 .sessions
                 .iter()
                 .filter_map(|session| session.pid)
-                .all(process_exists);
+                .all(|pid| i32::try_from(pid).is_ok_and(process_exists));
         current.then_some(listing.sessions.as_slice())
     }
 
@@ -93,12 +93,6 @@ fn registry_revisions(dir: &Path) -> Option<Vec<(OsString, FileRevision)>> {
     Some(revisions)
 }
 
-fn process_exists(pid: u32) -> bool {
-    let Ok(pid) = i32::try_from(pid) else {
-        return false;
-    };
-    nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None) != Err(Errno::ESRCH)
-}
 
 pub(super) async fn claude_sessions(
     settings: &ClaudeSettings,

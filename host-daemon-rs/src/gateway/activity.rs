@@ -358,9 +358,11 @@ impl Gateway {
                 .snapshot(&self.claude_settings, codex_home, managed_pid)
                 .await
         };
-        if let Some(agent) = self.claude_agent() {
-            snapshot.attribute_to_gateway(&agent.process_group_ids());
-        }
+        let gateway_processes = self
+            .claude_agent()
+            .map(|agent| agent.process_group_ids())
+            .unwrap_or_default();
+        snapshot.attribute_owners(&gateway_processes);
         Ok(snapshot)
     }
 
