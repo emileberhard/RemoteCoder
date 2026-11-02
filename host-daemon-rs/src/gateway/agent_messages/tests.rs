@@ -387,7 +387,22 @@ async fn concurrent_different_messages_cannot_continue_a_newer_invocation() {
         gateway.agent_jobs_rpc("agent/jobs/message", first),
         gateway.agent_jobs_rpc("agent/jobs/message", second)
     );
-    let responses = [first.unwrap(), second.unwrap()];
+    let mut responses = Vec::new();
+    for (response, delivery_id) in [(first, "racing-first"), (second, "racing-second")] {
+        match response {
+            Ok(response) => responses.push(response),
+            Err(error) => {
+                assert_eq!(error.code, RpcCode::Conflict);
+                assert!(error.message.contains("superseded"), "{error:?}");
+                responses.push(
+                    gateway
+                        .agent_jobs_rpc("agent/messages/read", json!({"deliveryId": delivery_id}))
+                        .await
+                        .unwrap(),
+                );
+            }
+        }
+    }
     assert_eq!(
         responses
             .iter()
