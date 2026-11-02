@@ -1,8 +1,9 @@
 # Change review
 
-Change review shows the Git changes in a conversation's working folder and
-turns line comments into one pasted block in the composer, so the user can
-review an agent's work and answer it without leaving the chat. On iPhone and
+Change review shows what changed in the checkouts a conversation worked in, or
+what its last turn with edits changed anywhere on the host, and turns line
+comments into one pasted block in the composer, so the user can review an
+agent's work and answer it without leaving the chat. On iPhone and
 iPad it is a sheet opened from the header's diff button; on the Mac it is the
 inspector's Changes mode (⇧⌘D, the toolbar's Changes button or the command
 palette).
@@ -25,6 +26,61 @@ is the short name for display. A read answers `ready` with a snapshot or
 `noBaseBranch`, `noMergeBase`). Only Git's "not found" exit status means
 absent; every other Git failure is an RPC error. The app shows each as its own
 state, never as an empty comparison.
+
+## Checkouts
+
+A conversation's folder is often not the repository its agents changed: a
+folder of repositories such as `~/stretch`, or a main checkout while agents
+edit worktrees. `changes/checkouts` (`{threadId?, directory}`) finds the
+candidates without running Git:
+
+- It reads the conversation's newest ten history pages and five pages of each
+  of its 16 most recently active same-host child agents. Each completed
+  `fileChange` path's folder (and move target) is `edited` evidence and each
+  command's `cwd` is `command` evidence.
+- A folder's checkout is the nearest ancestor holding `.git` (directory or
+  file), so worktrees and submodules stay separate. Folders that no longer
+  exist are skipped.
+- `workedIn` lists up to 16 checkouts, most recently observed first. A
+  working folder inside a checkout adds `workingFolder` evidence; a working
+  folder that is not a checkout lists its direct child checkouts the agents did
+  not work in as `inFolder` (up to 64).
+- `complete` is false when history or an agent could not be read, the agent
+  list was incomplete, or a list was cut at its limit.
+
+The app reads the first `workedIn` checkout with `edited` evidence, else the
+first one, else the working folder, and shows every candidate in the
+comparison menu. A chosen checkout stays selected while the review lives.
+
+## Last turn
+
+`changes/turn` (`{threadId}`) answers from the agents' own edit records, so it
+works outside Git and across checkouts. It finds the newest of the last 20
+turns whose window contains a completed `fileChange`: the conversation's own
+items of that turn, or a same-host child agent's items between the turn's start
+and the next turn's start (or now). Codex records each edit's hunks; Claude
+`Edit` and `Write` results carry a `structuredPatch` or the created content,
+which the translator renders into the same `diff` field.
+
+- Turns are read newest first with ten item pages shared between them. Each
+  child agent active since the examined turn started is read back only as far
+  as that turn's start, five pages at most per agent and four agents at a time,
+  so a latest turn with edits costs about one page per active child.
+  `complete` is false when a window up to the answer could not be read in full.
+
+- Each file is shown relative to its checkout, or to its folder outside one,
+  as one Git-format patch. Several edits to a file without a move become one
+  net diff: the gateway reverses the recorded hunks from the file's current
+  content (UTF-8, at most 8 MiB) and diffs the two states with
+  `git diff --no-index` on private temporary files. If the file no longer
+  matches its records, each edit is shown as recorded. A file whose edits
+  cancel out is left out.
+- Commands' changes are not listed; `commands` counts the commands that ran.
+  `omittedAgents` counts agents active since the turn started whose edits
+  could not be read, such as Claude subagents, agents on other hosts or agents
+  beyond the 16 most recent. `latest` is false when later turns made no edits.
+- The read shares `PatchSplitter`'s budgets and the change reader's admission
+  and timeout; `noRecentEdits` answers when no recent turn edited a file.
 
 ## Ownership and boundaries
 
@@ -71,18 +127,21 @@ state, never as an empty comparison.
   when a newer read supersedes it. The summary shows total line counts only
   when every file's counts are known. Lines longer than 2,000 characters are
   cut with a visible count of the rest.
-- `ChangeReviewModel` owns one review: its folder, gateway client, comparison,
-  load task, collapsed files and comments. A newer read supersedes an older one
-  by revision. The chat screen keeps the model while the conversation's folder
-  and gateway client stay the same, so closing and reopening the review keeps
-  unsent comments. When either changes, an open review without written
-  comments follows the conversation; one with written comments closes and is
-  kept, so reviewing its folder again restores them, until a review of another
-  folder replaces it. Adding comments checks the destination again.
-- A comment is anchored to its comparison, path, side and line number. Comments
-  whose line is not shown, after a refresh, in another comparison or in a file
-  past the line limit, stay listed and editable in every state. The prompt groups comments by
-  comparison and quotes at most 200 characters of each line. Adding comments
+- `ChangeReviewModel` owns one review: its conversation, folder, gateway
+  client, comparison, checkout, load task, collapsed files and comments. A
+  newer read supersedes an older one by revision. The chat screen keeps the
+  model while the conversation, its folder and gateway client stay the same,
+  so closing and reopening the review keeps unsent comments. When any changes,
+  an open review without written comments follows the conversation; one with
+  written comments closes and is kept, so reviewing that conversation again
+  restores them, until another review replaces it. Adding comments checks the
+  destination again.
+- A comment is anchored to its comparison (a Git source, or the turn by id),
+  its checkout or folder, path, side and line number. Comments whose line is
+  not shown, after a refresh, in another comparison or in a file past the line
+  limit, stay listed and editable in every state. The prompt groups comments by
+  comparison and checkout, names the checkout, and quotes at most 200
+  characters of each line. Adding comments
   goes through `ChatScreenModel.insertReviewComments`, which uses the
   composer's paste policy: a short block is inserted as text, a long one
   becomes a pasted-text attachment. The button is disabled where the
@@ -95,9 +154,13 @@ with a way to answer it. Constraints: the main actor only applies prepared
 state, everything that grows is bounded, unknown stays unknown, and the gateway
 stays a thin host boundary.
 
-- Simplest alternative considered: rendering the turn's own `fileChange`
-  items. They miss changes from shell commands, other agents and the user, and
-  older turns lose them; reading Git covers every source of change.
+- Git stays the default comparison because it covers every source of change:
+  shell commands, other agents and the user. Last Turn complements it with the
+  agents' own records, which work outside Git and across checkouts but miss
+  command edits, so it says how many commands ran instead of guessing.
+- Checkout discovery reads history and the filesystem only: no Git process,
+  branch names or dirty filtering, so it stays cheap enough to repeat on every
+  refresh.
 - The gateway sends per-file patch text instead of a structured diff. One
   parser in Core avoids two diff models and keeps the wire stable; the gateway
   still bounds sizes and counts lines for files it omits.
