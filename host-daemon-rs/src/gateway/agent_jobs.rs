@@ -16,15 +16,8 @@ struct NativeToolContext {
     thread_id: String,
     turn_id: String,
     tool_call_id: String,
-    root_process_identity: NativeProcessIdentity,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct NativeProcessIdentity {
-    pid: i32,
-    started_at_unix_micros: Option<u64>,
-    linux_birth: Option<crate::platform::process::LinuxBirth>,
+    #[serde(deserialize_with = "ProcessInstance::deserialize_native")]
+    root_process_identity: ProcessInstance,
 }
 
 impl Gateway {
@@ -190,16 +183,7 @@ impl Gateway {
     ) -> Result<Option<ProvenCaller>> {
         let native = tokio::time::timeout(
             std::time::Duration::from_secs(3),
-            self.call_control("daemon/toolContext", {
-                #[cfg(target_os = "linux")]
-                {
-                    json!({"pid":process.pid,"linuxBirth":process.linux_birth})
-                }
-                #[cfg(not(target_os = "linux"))]
-                {
-                    json!({"pid":process.pid,"startedAtUnixMicros":process.started_micros})
-                }
-            }),
+            self.call_control("daemon/toolContext", process.native_value()),
         )
         .await
         .unwrap_or_else(|_| Err(anyhow::anyhow!("native caller identity lookup timed out")));
@@ -223,25 +207,10 @@ impl Gateway {
                 error.context(message)
             })?;
             found_process = true;
-            if native.as_ref().is_some_and(|context| {
-                candidate.pid == context.root_process_identity.pid && {
-                    #[cfg(target_os = "linux")]
-                    {
-                        context
-                            .root_process_identity
-                            .started_at_unix_micros
-                            .is_none()
-                            && context.root_process_identity.linux_birth
-                                == Some(candidate.linux_birth)
-                    }
-                    #[cfg(not(target_os = "linux"))]
-                    {
-                        context.root_process_identity.linux_birth.is_none()
-                            && context.root_process_identity.started_at_unix_micros
-                                == Some(candidate.started_micros)
-                    }
-                }
-            }) {
+            if native
+                .as_ref()
+                .is_some_and(|context| candidate == context.root_process_identity)
+            {
                 let context = native.as_ref().context("native caller owner disappeared")?;
                 ensure!(
                     !context.thread_id.is_empty()
@@ -277,11 +246,9 @@ impl Gateway {
                     tool_call_id: None,
                 }));
             }
-            if let Some(owner) = crate::providers::claude::native_parent::prove_process_owner(
-                &claude_home,
-                candidate,
-            )
-            .await?
+            if let Some(owner) =
+                crate::providers::claude::native_parent::prove_owner(&claude_home, candidate)
+                    .await?
             {
                 return Ok(Some(ProvenCaller {
                     conversation: ConversationIdentity {
@@ -308,36 +275,14 @@ impl Gateway {
 
     async fn capture_job_context(&self, request: CaptureParams) -> Result<CapturedContext> {
         let pid = i32::try_from(request.pid)?;
-        #[cfg(target_os = "linux")]
-        let process = {
-            ensure!(
-                request.started_at_unix_micros.is_none(),
-                "Linux caller requires kernel birth proof"
-            );
-            let birth = request
-                .linux_birth
-                .context("Linux caller birth proof is missing")?;
-            let current = crate::platform::process::identify_instance(pid)?
-                .context("caller process exited")?;
-            ensure!(
-                current.linux_birth == birth,
-                "caller process identity is stale"
-            );
-            current
+        let process = ProcessInstance {
+            pid,
+            birth: request.birth,
         };
-        #[cfg(not(target_os = "linux"))]
-        let process = {
-            ensure!(
-                request.linux_birth.is_none(),
-                "incompatible caller birth proof"
-            );
-            ProcessInstance {
-                pid,
-                started_micros: request
-                    .started_at_unix_micros
-                    .context("caller start time is missing")?,
-            }
-        };
+        ensure!(
+            crate::platform::process::identify_instance(pid)? == Some(process),
+            "caller process identity is stale or incompatible"
+        );
         let proven = self.job_process_context(process).await?;
         Ok(self.jobs.contexts.capture(proven).await)
     }
@@ -375,7 +320,7 @@ impl Gateway {
                             );
                             Some(thread)
                         }
-                        None => crate::providers::claude::native_parent::prove_process_owner(
+                        None => crate::providers::claude::native_parent::prove_owner(
                             &self.claude_settings.claude_home,
                             saved.process,
                         )
@@ -469,7 +414,7 @@ impl Gateway {
             context_id: context.context_id.clone(),
         };
         let view = self.job_context_view(caller.clone()).await?;
-        if view.job_id.is_none() {
+        if view.job_id.is_none() && !matches!(&request, ScopedRequest::Capture {}) {
             return Err(RpcError::new(
                 RpcCode::InvalidRequest,
                 "scoped route has no registered calling job",
@@ -480,6 +425,7 @@ impl Gateway {
                 RpcCode::InvalidParams,
                 "nested scoped migration is not permitted",
             )),
+            ScopedRequest::Capture {} => Ok(json!(context)),
             ScopedRequest::ReadSelf {} => Ok(json!(view)),
             ScopedRequest::ReadMessage { delivery_id } => {
                 let record = self.jobs.store().await?.message(delivery_id).await?;

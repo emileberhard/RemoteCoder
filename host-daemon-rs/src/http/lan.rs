@@ -56,6 +56,11 @@ impl LanListener {
             }
             crate::config::LanBinding::Address { address, .. } => {
                 let socket = SocketAddr::new(*address, settings.port);
+                #[cfg(target_os = "linux")]
+                {
+                    bind_address(socket)?
+                }
+                #[cfg(not(target_os = "linux"))]
                 TcpListener::bind(socket)
                     .await
                     .with_context(|| format!("could not bind TLS listener at {socket}"))?
@@ -75,6 +80,24 @@ impl LanListener {
     pub(crate) fn endpoint(&self) -> &LanEndpoint {
         &self.endpoint
     }
+}
+
+#[cfg(target_os = "linux")]
+fn bind_address(address: SocketAddr) -> std::io::Result<TcpListener> {
+    let socket = if address.is_ipv4() {
+        TcpSocket::new_v4()?
+    } else {
+        TcpSocket::new_v6()?
+    };
+    let options = socket2::SockRef::from(&socket);
+    if address.is_ipv4() {
+        options.set_freebind_v4(true)?;
+    } else {
+        options.set_freebind_v6(true)?;
+    }
+    socket.set_reuseaddr(true)?;
+    socket.bind(address)?;
+    socket.listen(128)
 }
 
 fn bind_dual_stack(port: u16) -> std::io::Result<TcpListener> {
@@ -187,6 +210,16 @@ async fn serve_lan_connection(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn the_explicit_listener_can_bind_before_its_interface_has_an_address() {
+        for address in ["198.51.100.99:0", "[2001:db8::99]:0"] {
+            let address: SocketAddr = address.parse().unwrap();
+            let listener = bind_address(address).unwrap();
+            assert_eq!(listener.local_addr().unwrap().ip(), address.ip());
+        }
+    }
 
     #[tokio::test]
     async fn the_lan_listener_accepts_ipv6_and_ipv4_peers() {

@@ -85,7 +85,7 @@ impl Gateway {
                 {
                     return Ok(json!({"kind":"gatewayOwned"}));
                 }
-                let owner = crate::providers::claude::native_parent::prove_process_owner(
+                let owner = crate::providers::claude::native_parent::prove_owner(
                     &self.claude_settings.claude_home,
                     proven.process,
                 )

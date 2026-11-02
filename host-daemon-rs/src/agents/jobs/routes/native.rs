@@ -152,16 +152,7 @@ impl NativeRoutes {
         owner: ProcessInstance,
     ) -> Result<(NativeRouteLease, mpsc::Receiver<NativeDeliveryRequest>)> {
         ensure!(
-            valid_conversation(&conversation) && owner.pid > 0 && {
-                #[cfg(target_os = "linux")]
-                {
-                    true
-                }
-                #[cfg(not(target_os = "linux"))]
-                {
-                    owner.started_micros > 0
-                }
-            },
+            valid_conversation(&conversation) && owner.pid > 0 && owner.birth.is_valid(),
             "Claude native route requires an exact process instance"
         );
         let mut state = self.state.lock().expect("native route registry poisoned");

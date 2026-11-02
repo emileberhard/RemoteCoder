@@ -38,7 +38,6 @@ pub(crate) mod install;
 mod launchd;
 pub(crate) mod recovery;
 mod rpc;
-#[cfg(target_os = "linux")]
 pub(crate) mod shutdown_receipt;
 pub(crate) mod transaction;
 pub(crate) use self::bootstrap::bootstrap;

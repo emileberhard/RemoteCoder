@@ -199,20 +199,7 @@ async fn cluster_self_dispatch_preserves_captured_read_only_caller() {
     let caller_thread = conversation.thread_id.clone();
     let pid = std::process::id() as i32;
     let process = crate::platform::process::identify(pid).unwrap().unwrap();
-    let process_identity = {
-        let identity = json!({"pid":pid,"startedAtUnixMicros":process.started_micros});
-        #[cfg(target_os = "linux")]
-        let identity = {
-            let mut identity = identity;
-            identity
-                .as_object_mut()
-                .unwrap()
-                .remove("startedAtUnixMicros");
-            identity["linuxBirth"] = serde_json::to_value(process.linux_birth).unwrap();
-            identity
-        };
-        identity
-    };
+    let process_identity = process.instance(pid).native_value();
     let captured_identity = process_identity.clone();
     let mut control = crate::test_support::FakeControl::attach(&host, 16).await;
     let gateway = host.clone();

@@ -213,13 +213,12 @@ impl CodexAppServer {
         };
         Ok(crate::platform::process::ProcessInstance {
             pid: i32::try_from(record.pid)?,
-            started_micros: None,
-            linux_birth: crate::platform::process::LinuxBirth {
-                boot_id: boot_id
-                    .as_bytes()
-                    .try_into()
-                    .context("invalid Codex boot UUID")?,
-                start_ticks,
+            birth: crate::platform::process::ProcessBirth::Linux {
+                birth: crate::platform::process::LinuxBirth {
+                    boot_id: crate::platform::process::boot_id::parse(&boot_id)
+                        .context("invalid Codex boot UUID")?,
+                    start_ticks,
+                },
             },
         })
     }
@@ -745,9 +744,10 @@ async fn process_identity_matches(pid: i32, identity: &ProcessIdentity) -> Resul
         return Ok(false);
     };
     Ok(
-        crate::platform::process::linux::kernel_identity(pid)?.is_some_and(
-            |(actual_boot, actual_ticks)| actual_boot == *boot_id && actual_ticks == *start_ticks,
-        ),
+        crate::platform::process::linux::kernel_identity(pid)?.is_some_and(|actual| {
+            crate::platform::process::boot_id::parse(boot_id) == Some(actual.boot_id)
+                && actual.start_ticks == *start_ticks
+        }),
     )
 }
 

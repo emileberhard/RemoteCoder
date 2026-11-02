@@ -109,12 +109,11 @@ async fn scoped_route_outlives_jobs_and_legacy_title_proves_current_process_and_
     assert!(path.exists());
     assert!(!legacy_socket(&first.job_id).exists());
     let pid = std::process::id() as i32;
-    let peer = ProcessInstance {
-        pid,
-        started_micros: crate::platform::process::identify(pid)
-            .unwrap()
-            .unwrap()
-            .started_micros,
+    let peer = crate::platform::process::identify_instance(pid)
+        .unwrap()
+        .unwrap();
+    let crate::platform::process::ProcessBirth::Darwin { started_micros } = peer.birth else {
+        panic!("Darwin proof expected");
     };
     let thread = Arc::new(Mutex::new(
         "6587aec5-99c2-5919-9221-89bdf86e59b6".to_owned(),
@@ -130,11 +129,8 @@ async fn scoped_route_outlives_jobs_and_legacy_title_proves_current_process_and_
             let result = match request["method"].as_str().unwrap() {
                 "daemon/toolContext" => {
                     assert_eq!(request["params"]["pid"], pid);
-                    assert_eq!(
-                        request["params"]["startedAtUnixMicros"],
-                        peer.started_micros
-                    );
-                    json!({"context":{"threadId":*provider_thread.lock().unwrap(),"turnId":"new-native-turn","toolCallId":"actual-tool","rootProcessIdentity":{"pid":pid,"startedAtUnixMicros":peer.started_micros}}})
+                    assert_eq!(request["params"]["startedAtUnixMicros"], started_micros);
+                    json!({"context":{"threadId":*provider_thread.lock().unwrap(),"turnId":"new-native-turn","toolCallId":"actual-tool","rootProcessIdentity":{"pid":pid,"startedAtUnixMicros":started_micros}}})
                 }
                 "thread/name/set" => {
                     renamed.lock().unwrap().push(request["params"].clone());
@@ -194,7 +190,9 @@ async fn scoped_route_outlives_jobs_and_legacy_title_proves_current_process_and_
         gateway
             .scoped_job_rpc(
                 ProcessInstance {
-                    started_micros: peer.started_micros + 1,
+                    birth: crate::platform::process::ProcessBirth::Darwin {
+                        started_micros: started_micros + 1
+                    },
                     ..peer
                 },
                 ScopedRequest::ReadSelf {}
@@ -207,7 +205,7 @@ async fn scoped_route_outlives_jobs_and_legacy_title_proves_current_process_and_
             .scoped_job_rpc(
                 ProcessInstance {
                     pid: 1,
-                    started_micros: 0
+                    birth: crate::platform::process::ProcessBirth::Darwin { started_micros: 0 }
                 },
                 ScopedRequest::ReadSelf {}
             )
@@ -369,8 +367,7 @@ async fn captured_native_claude_context_outlives_its_child_but_not_its_owner_or_
     let captured = gateway
         .capture_job_context(CaptureParams {
             pid,
-            started_at_unix_micros: Some(identity.started_micros),
-            linux_birth: None,
+            birth: identity.birth,
         })
         .await
         .unwrap();
@@ -386,8 +383,7 @@ async fn captured_native_claude_context_outlives_its_child_but_not_its_owner_or_
         gateway
             .capture_job_context(CaptureParams {
                 pid,
-                started_at_unix_micros: Some(identity.started_micros),
-                linux_birth: None,
+                birth: identity.birth,
             })
             .await
             .is_err()

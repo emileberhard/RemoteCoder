@@ -228,9 +228,10 @@ async fn rpc<P: Serialize, R: DeserializeOwned>(
 }
 
 async fn scoped(request: ScopedRequest) -> Result<Value> {
-    let path = std::env::var_os(SCOPED_SOCKET_ENV).context("No scoped agent route is available")?;
     let root = HostPaths::from_env()?.state("agent-jobs/v1");
     let legacy_target = crate::agents::jobs::routes::scoped_socket(&root);
+    let path = std::env::var_os(SCOPED_SOCKET_ENV)
+        .unwrap_or_else(|| legacy_target.clone().into_os_string());
     response_value(transport::scoped(Path::new(&path), &legacy_target, &request).await?)
 }
 
@@ -264,21 +265,19 @@ fn endpoint(env_file: Option<&Path>) -> Result<Endpoint> {
     })
 }
 
+#[cfg(target_os = "linux")]
+async fn capture(_endpoint: &Endpoint) -> Result<CapturedContext> {
+    serde_json::from_value(scoped(ScopedRequest::Capture {}).await?)
+        .context("Cannot decode the kernel-proven caller context")
+}
+
+#[cfg(not(target_os = "linux"))]
 async fn capture(endpoint: &Endpoint) -> Result<CapturedContext> {
     let pid = std::process::id();
     let identity = crate::platform::process::identify_instance(i32::try_from(pid)?)?
         .context("The caller process no longer has a verifiable identity")?;
-    rpc(endpoint, "agent/context/capture", CaptureParams {
-        pid,
-        #[cfg(not(target_os = "linux"))]
-        started_at_unix_micros: Some(identity.started_micros),
-        #[cfg(target_os = "linux")]
-        started_at_unix_micros: None,
-        #[cfg(target_os = "linux")]
-        linux_birth: Some(identity.linux_birth),
-        #[cfg(not(target_os = "linux"))]
-        linux_birth: None,
-    }).await.context("Cannot prove the calling agent; capture context before detaching, pass --caller-context explicitly, or select --operator for deliberate standalone work")
+    rpc(endpoint, "agent/context/capture", CaptureParams { pid, birth: identity.birth })
+        .await.context("Cannot prove the calling agent; capture context before detaching, pass --caller-context explicitly, or select --operator for deliberate standalone work")
 }
 
 async fn caller(endpoint: &Endpoint, arguments: &CallerArgs) -> Result<Caller> {

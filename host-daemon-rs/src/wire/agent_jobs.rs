@@ -193,10 +193,7 @@ pub(crate) struct ListPage {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct CaptureParams {
     pub pid: u32,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub started_at_unix_micros: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub linux_birth: Option<crate::platform::process::LinuxBirth>,
+    pub birth: crate::platform::process::ProcessBirth,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -239,6 +236,7 @@ pub(crate) struct SetTitleParams {
     deny_unknown_fields
 )]
 pub(crate) enum ScopedRequest {
+    Capture {},
     Legacy {
         socket: std::path::PathBuf,
         request: Box<ScopedRequest>,

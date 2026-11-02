@@ -434,11 +434,7 @@ mod tests {
             launchd_pid: Some(11),
             process: Some(mac_app::ProcessIdentity {
                 started_micros: 1,
-                #[cfg(target_os = "linux")]
-                linux_birth: crate::platform::process::LinuxBirth {
-                    boot_id: *b"01234567-89ab-cdef-0123-456789abcdef",
-                    start_ticks: 1,
-                },
+                birth: crate::platform::process::ProcessBirth::Darwin { started_micros: 1 },
                 executable: installed.clone(),
             }),
             listener_pids: BTreeSet::from([11]),
@@ -457,11 +453,7 @@ mod tests {
                 launchd_pid,
                 process: Some(mac_app::ProcessIdentity {
                     started_micros: 1,
-                    #[cfg(target_os = "linux")]
-                    linux_birth: crate::platform::process::LinuxBirth {
-                        boot_id: *b"01234567-89ab-cdef-0123-456789abcdef",
-                        start_ticks: 1,
-                    },
+                    birth: crate::platform::process::ProcessBirth::Darwin { started_micros: 1 },
                     executable,
                 }),
                 listener_pids: listeners,

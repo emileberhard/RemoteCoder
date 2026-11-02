@@ -10,7 +10,7 @@ use tokio::net::UnixStream;
 use crate::agents::jobs::model::{ConversationIdentity, Provider, ProviderHome};
 use crate::agents::jobs::routes::{NativeDeliveryState, NativeMessage};
 use crate::ids::is_session_uuid;
-use crate::platform::process::{ProcessInstance, identify, unix_peer_identity};
+use crate::platform::process::{ProcessBirth, ProcessInstance, identify, unix_peer_identity};
 use crate::providers::claude::records::read_record;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -135,36 +135,17 @@ struct OwnerRecord {
     proc_start: String,
 }
 
-pub(crate) async fn prove_process_owner(
-    home: &Path,
-    process: ProcessInstance,
-) -> Result<Option<NativeSessionOwner>> {
-    #[cfg(target_os = "linux")]
-    {
-        let _ = (home, process);
-        Ok(None)
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        prove_owner(home, process.pid, process.started_micros).await
-    }
-}
-
-#[cfg(target_os = "linux")]
-pub(crate) async fn prove_owner(
-    _claude_home: &Path,
-    _pid: i32,
-    _started_micros: u64,
-) -> Result<Option<NativeSessionOwner>> {
-    Ok(None)
-}
-
-#[cfg(not(target_os = "linux"))]
 pub(crate) async fn prove_owner(
     claude_home: &Path,
-    pid: i32,
-    started_micros: u64,
+    process: ProcessInstance,
 ) -> Result<Option<NativeSessionOwner>> {
+    if !process.birth.is_valid() {
+        return Ok(None);
+    }
+    let ProcessBirth::Darwin { started_micros } = process.birth else {
+        return Ok(None);
+    };
+    let pid = process.pid;
     let home = claude_home.to_owned();
     let candidate =
         tokio::task::spawn_blocking(move || read_owner(&home, pid, started_micros)).await??;

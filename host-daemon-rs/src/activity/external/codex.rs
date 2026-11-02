@@ -83,15 +83,18 @@ pub(super) async fn codex_sessions(
                 );
             }
             #[cfg(target_os = "linux")]
-            let start = match crate::platform::process::linux::display_start_micros(
-                proof.linux_birth.start_ticks,
-            ) {
-                Ok(micros) => Some(i64::try_from(micros / 1_000_000)?),
-                Err(error) => {
-                    tracing::warn!(pid, %error, "Codex process display start time unavailable");
-                    None
-                }
+            let crate::platform::process::ProcessBirth::Linux { birth } = proof.birth else {
+                anyhow::bail!("Linux Codex writer lacks Linux birth proof");
             };
+            #[cfg(target_os = "linux")]
+            let start =
+                match crate::platform::process::linux::display_start_micros(birth.start_ticks) {
+                    Ok(micros) => Some(i64::try_from(micros / 1_000_000)?),
+                    Err(error) => {
+                        tracing::warn!(pid, %error, "Codex process display start time unavailable");
+                        None
+                    }
+                };
             #[cfg(not(target_os = "linux"))]
             let start = match crate::platform::process::identify(pid)? {
                 Some(identity) => Some(i64::try_from(identity.started_micros / 1_000_000)?),

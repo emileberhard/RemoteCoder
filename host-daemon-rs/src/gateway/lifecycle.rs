@@ -75,14 +75,11 @@ impl Gateway {
             self.suspend_claude_for_restart(),
             self.suspend_codex_for_restart()
         );
-        #[cfg(target_os = "linux")]
         if let Some(receipt) = &self.shutdown_receipt
             && let Err(error) = receipt.finish(&codex_capture, &claude_capture).await
         {
             warn!(%error, "gateway shutdown receipt could not be persisted");
         }
-        #[cfg(not(target_os = "linux"))]
-        let _ = (claude_capture, codex_capture);
         let remaining = self.active_turn_count().await;
         info!(remaining, "gateway restart drain finished");
         self.close_all_clients(RESTARTING_CLOSE_CODE, RESTARTING_CLOSE_REASON);

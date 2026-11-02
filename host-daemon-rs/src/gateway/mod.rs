@@ -312,7 +312,6 @@ pub(crate) struct Gateway {
     navigation: Arc<NavigationManager>,
     calls: calls::AgentCalls,
     recovery_store: Option<RecoveryStore>,
-    #[cfg(target_os = "linux")]
     shutdown_receipt: Option<crate::runtime::shutdown_receipt::ShutdownReceipt>,
     metadata: crate::conversations::ConversationMetadataStore,
     marks: crate::conversation_marks::ConversationMarksStore,
@@ -548,7 +547,6 @@ impl Gateway {
             next_client_id,
             turn_state_path,
             turn_state_write_lock: Arc::new(Mutex::new(())),
-            #[cfg(target_os = "linux")]
             shutdown_receipt: recovery_path.as_ref().map(|path| {
                 crate::runtime::shutdown_receipt::ShutdownReceipt::new(
                     path.with_file_name("gateway-shutdown.json"),
@@ -613,9 +611,8 @@ impl Gateway {
     }
 
     pub(crate) async fn start(self: &Arc<Self>) -> Result<()> {
-        #[cfg(target_os = "linux")]
         if let Some(receipt) = &self.shutdown_receipt {
-            receipt.begin().await?;
+            receipt.begin().await;
         }
         self.codex.verify_ready().await?;
         self.load_turn_state().await?;

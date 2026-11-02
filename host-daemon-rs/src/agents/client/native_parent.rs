@@ -109,14 +109,7 @@ async fn serve(
         "agent/context/capture",
         serde_json::to_value(CaptureParams {
             pid: process.pid.try_into()?,
-            #[cfg(not(target_os = "linux"))]
-            started_at_unix_micros: Some(process.started_micros),
-            #[cfg(target_os = "linux")]
-            started_at_unix_micros: None,
-            #[cfg(target_os = "linux")]
-            linux_birth: Some(process.linux_birth),
-            #[cfg(not(target_os = "linux"))]
-            linux_birth: None,
+            birth: process.birth,
         })?,
     )
     .await;
@@ -284,7 +277,7 @@ async fn native_ancestor(
     for process in ancestry(process) {
         let process = process?;
         if let Some(owner) =
-            crate::providers::claude::native_parent::prove_process_owner(home, process).await?
+            crate::providers::claude::native_parent::prove_owner(home, process).await?
         {
             return Ok(Some(owner));
         }
@@ -293,11 +286,19 @@ async fn native_ancestor(
 }
 
 async fn same_session(home: &Path, owner: &NativeSessionOwner) -> Result<bool> {
-    Ok(prove_owner(home, owner.pid, owner.started_micros)
-        .await?
-        .is_some_and(|current| {
-            current.session_uuid == owner.session_uuid && current.socket_path == owner.socket_path
-        }))
+    Ok(prove_owner(
+        home,
+        ProcessInstance {
+            pid: owner.pid,
+            birth: crate::platform::process::ProcessBirth::Darwin {
+                started_micros: owner.started_micros,
+            },
+        },
+    )
+    .await?
+    .is_some_and(|current| {
+        current.session_uuid == owner.session_uuid && current.socket_path == owner.socket_path
+    }))
 }
 
 async fn reconnect_delay(failures: &mut u32) {

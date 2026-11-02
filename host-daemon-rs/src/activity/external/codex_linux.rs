@@ -77,35 +77,18 @@ impl Budget {
 }
 
 fn candidate(pid: i32, stat: &[u8]) -> Result<Option<Candidate>> {
-    let close = stat
-        .windows(2)
-        .rposition(|pair| pair == b") ")
-        .context("invalid process stat")?;
-    let open = stat
-        .iter()
-        .position(|byte| *byte == b'(')
-        .context("invalid process command")?;
-    ensure!(
-        std::str::from_utf8(&stat[..open])?.trim().parse::<i32>()? == pid,
-        "process stat PID changed"
-    );
-    if &stat[open + 1..close] != b"codex" {
+    let Some(stat) = process::linux::parse_stat(pid, stat)? else {
         return Ok(None);
-    }
-    let fields = std::str::from_utf8(&stat[close + 2..])?
-        .split_whitespace()
-        .collect::<Vec<_>>();
-    ensure!(fields.len() >= 20, "process stat is incomplete");
-    if matches!(fields[0], "Z" | "X" | "x") {
+    };
+    if stat.command != b"codex" {
         return Ok(None);
     }
     Ok(Some(Candidate {
         identity: ProcessInstance {
             pid,
-            started_micros: None,
-            linux_birth: process::linux::birth_from_ticks(fields[19].parse()?)?,
+            birth: process::ProcessBirth::Linux { birth: stat.birth },
         },
-        parent: fields[1].parse()?,
+        parent: stat.parent,
         paths: Vec::new(),
     }))
 }
@@ -286,10 +269,9 @@ where
         if owner.identity == managed {
             continue;
         }
-        let inherited = candidates.get(&owner.parent).filter(|parent| {
-            parent.identity.linux_birth.boot_id == owner.identity.linux_birth.boot_id
-                && parent.identity.linux_birth.start_ticks <= owner.identity.linux_birth.start_ticks
-        });
+        let inherited = candidates
+            .get(&owner.parent)
+            .filter(|parent| parent.identity.birth.precedes(owner.identity.birth));
         let mut paths: HashSet<_> = owner.paths.iter().cloned().collect();
         if let Some(parent) = inherited {
             ensure!(
@@ -328,8 +310,9 @@ mod tests {
     fn identity(pid: i32) -> ProcessInstance {
         ProcessInstance {
             pid,
-            started_micros: None,
-            linux_birth: process::linux::birth_from_ticks(pid as u64).unwrap(),
+            birth: process::ProcessBirth::Linux {
+                birth: process::linux::birth_from_ticks(pid as u64).unwrap(),
+            },
         }
     }
 
@@ -434,7 +417,9 @@ mod tests {
             let mut owner = identity(pid);
             if pid == 123 {
                 reads.set(reads.get() + 1);
-                owner.linux_birth.start_ticks += reads.get();
+                if let process::ProcessBirth::Linux { birth } = &mut owner.birth {
+                    birth.start_ticks += reads.get();
+                }
             }
             Ok(Some(owner))
         };

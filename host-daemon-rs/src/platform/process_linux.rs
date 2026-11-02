@@ -4,12 +4,13 @@ use std::sync::OnceLock;
 
 use anyhow::{Context, Result, ensure};
 
-use super::{LinuxBirth, ProcessIdentity, ProcessInstance, ProcessLink};
+use super::{LinuxBirth, ProcessBirth, ProcessIdentity, ProcessInstance, ProcessLink};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct Stat {
-    parent: i32,
-    start_ticks: u64,
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Stat {
+    pub parent: i32,
+    pub command: Vec<u8>,
+    pub birth: LinuxBirth,
 }
 
 fn read(path: &Path) -> Result<Option<String>> {
@@ -27,32 +28,44 @@ fn read(path: &Path) -> Result<Option<String>> {
     Ok(Some(String::from_utf8(bytes)?))
 }
 
-fn parse_stat(pid: i32, text: &str) -> Result<Option<Stat>> {
-    let (prefix, fields) = text
-        .rsplit_once(") ")
+pub(crate) fn parse_stat(pid: i32, bytes: &[u8]) -> Result<Option<Stat>> {
+    let close = bytes
+        .windows(2)
+        .rposition(|pair| pair == b") ")
         .context("process stat has no command boundary")?;
-    let (actual, _) = prefix.split_once(" (").context("process stat has no pid")?;
+    let open = bytes
+        .iter()
+        .position(|byte| *byte == b'(')
+        .context("process stat has no command")?;
     ensure!(
-        actual.parse::<i32>()? == pid,
+        open < close && std::str::from_utf8(&bytes[..open])?.trim().parse::<i32>()? == pid,
         "process stat belongs to another pid"
     );
-    let fields = fields.split_whitespace().collect::<Vec<_>>();
+    let fields = std::str::from_utf8(&bytes[close + 2..])?
+        .split_whitespace()
+        .collect::<Vec<_>>();
     ensure!(fields.len() >= 20, "process stat is incomplete");
     if matches!(fields[0], "Z" | "X" | "x") {
         return Ok(None);
     }
     Ok(Some(Stat {
         parent: fields[1].parse()?,
-        start_ticks: fields[19].parse()?,
+        command: bytes[open + 1..close].to_vec(),
+        birth: birth_from_ticks(fields[19].parse()?)?,
     }))
 }
 
 fn stat(pid: i32) -> Result<Option<Stat>> {
     ensure!(pid > 0, "pid {pid} does not name an application process");
-    read(Path::new(&format!("/proc/{pid}/stat")))?
-        .map(|text| parse_stat(pid, &text))
-        .transpose()
-        .map(Option::flatten)
+    let file = match std::fs::File::open(format!("/proc/{pid}/stat")) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error).context("reading process stat"),
+    };
+    let mut bytes = Vec::new();
+    file.take(4097).read_to_end(&mut bytes)?;
+    ensure!(bytes.len() <= 4096, "process stat exceeds its bound");
+    parse_stat(pid, &bytes)
 }
 
 pub(crate) fn display_start_micros(start_ticks: u64) -> Result<u64> {
@@ -87,8 +100,7 @@ pub(super) fn process_link(pid: i32) -> Result<Option<ProcessLink>> {
     stat(pid)?
         .map(|value| {
             Ok(ProcessLink {
-                started_micros: None,
-                linux_birth: birth(value)?,
+                birth: ProcessBirth::Linux { birth: value.birth },
                 parent_pid: value.parent,
             })
         })
@@ -99,12 +111,13 @@ pub(super) fn identify_instance(pid: i32) -> Result<Option<ProcessInstance>> {
     let Some(before) = stat(pid)? else {
         return Ok(None);
     };
-    let linux_birth = birth(before)?;
-    Ok((stat(pid)? == Some(before)).then_some(ProcessInstance {
-        pid,
-        started_micros: None,
-        linux_birth,
-    }))
+    let birth = ProcessBirth::Linux {
+        birth: before.birth,
+    };
+    Ok(
+        (stat(pid)?.is_some_and(|after| after.birth == before.birth))
+            .then_some(ProcessInstance { pid, birth }),
+    )
 }
 
 pub(super) fn identify(pid: i32) -> Result<Option<ProcessIdentity>> {
@@ -116,17 +129,17 @@ pub(super) fn identify(pid: i32) -> Result<Option<ProcessIdentity>> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error).context("reading process executable"),
     };
-    let started_micros = display_start_micros(before.start_ticks)?;
-    let linux_birth = birth(before)?;
-    Ok((stat(pid)? == Some(before)).then_some(ProcessIdentity {
-        started_micros,
-        linux_birth,
-        executable,
-    }))
-}
-
-fn birth(stat: Stat) -> Result<LinuxBirth> {
-    birth_from_ticks(stat.start_ticks)
+    let started_micros = display_start_micros(before.birth.start_ticks)?;
+    let birth = ProcessBirth::Linux {
+        birth: before.birth,
+    };
+    Ok(
+        (stat(pid)?.is_some_and(|after| after.birth == before.birth)).then_some(ProcessIdentity {
+            started_micros,
+            birth,
+            executable,
+        }),
+    )
 }
 
 pub(crate) fn birth_from_ticks(start_ticks: u64) -> Result<LinuxBirth> {
@@ -146,13 +159,8 @@ pub(crate) fn birth_from_ticks(start_ticks: u64) -> Result<LinuxBirth> {
     })
 }
 
-pub(crate) fn kernel_identity(pid: i32) -> Result<Option<(String, u64)>> {
-    let Some(value) = stat(pid)? else {
-        return Ok(None);
-    };
-    let boot = read(Path::new("/proc/sys/kernel/random/boot_id"))?
-        .context("kernel boot identity is unavailable")?;
-    Ok(Some((boot.trim().to_owned(), value.start_ticks)))
+pub(crate) fn kernel_identity(pid: i32) -> Result<Option<LinuxBirth>> {
+    Ok(stat(pid)?.map(|value| value.birth))
 }
 
 #[cfg(test)]
@@ -163,18 +171,33 @@ mod tests {
     fn command_boundaries_do_not_change_the_process_birth_or_parent() {
         let fields = "S 40 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1234";
         assert_eq!(
-            parse_stat(42, &format!("42 (a ) tricky name) {fields}")).unwrap(),
+            parse_stat(42, format!("42 (a ) tricky name) {fields}").as_bytes()).unwrap(),
             Some(Stat {
                 parent: 40,
-                start_ticks: 1234
+                command: b"a ) tricky name".to_vec(),
+                birth: birth_from_ticks(1234).unwrap()
             })
         );
-        assert!(parse_stat(41, &format!("42 (name) {fields}")).is_err());
+        assert!(parse_stat(41, format!("42 (name) {fields}").as_bytes()).is_err());
         assert_eq!(
-            parse_stat(42, &format!("42 (name) {}", fields.replacen('S', "Z", 1))).unwrap(),
+            parse_stat(
+                42,
+                format!("42 (name) {}", fields.replacen('S', "Z", 1)).as_bytes()
+            )
+            .unwrap(),
             None
         );
-        assert!(parse_stat(42, "42 (name) S 40").is_err());
+        assert!(parse_stat(42, b"42 (name) S 40").is_err());
+    }
+
+    #[test]
+    fn non_utf8_commands_do_not_hide_a_live_process() {
+        let mut bytes = b"42 (".to_vec();
+        bytes.extend_from_slice(&[0xff, b')']);
+        bytes.extend_from_slice(b" S 40 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1234");
+        let stat = parse_stat(42, &bytes).unwrap().unwrap();
+        assert_eq!(stat.command, [0xff]);
+        assert_eq!(stat.birth, birth_from_ticks(1234).unwrap());
     }
 
     #[test]
@@ -187,20 +210,19 @@ mod tests {
         };
         let caller = ProcessInstance {
             pid: 40,
-            started_micros: Some(1_000_000),
-            linux_birth: birth(400),
+
+            birth: ProcessBirth::Linux { birth: birth(400) },
         };
-        let mut reads = 0;
         let proof = walk_ancestry(caller, |pid| {
-            reads += 1;
             let (ticks, parent) = match pid {
                 40 => (400, 30),
                 30 => (300, 1),
                 _ => unreachable!(),
             };
             Ok(Some(ProcessLink {
-                started_micros: Some(2_000_000 + reads),
-                linux_birth: birth(ticks),
+                birth: ProcessBirth::Linux {
+                    birth: birth(ticks),
+                },
                 parent_pid: parent,
             }))
         })
@@ -208,13 +230,12 @@ mod tests {
         .unwrap();
         assert_eq!(proof.iter().map(|p| p.pid).collect::<Vec<_>>(), [40, 30]);
         let changed_ticks = ProcessInstance {
-            linux_birth: birth(401),
+            birth: ProcessBirth::Linux { birth: birth(401) },
             ..caller
         };
         assert!(
             walk_ancestry(changed_ticks, |pid| Ok(Some(ProcessLink {
-                started_micros: None,
-                linux_birth: birth(400),
+                birth: ProcessBirth::Linux { birth: birth(400) },
                 parent_pid: pid - 1
             })))
             .next()
@@ -226,12 +247,13 @@ mod tests {
         assert!(
             walk_ancestry(
                 ProcessInstance {
-                    linux_birth: changed_boot,
+                    birth: ProcessBirth::Linux {
+                        birth: changed_boot
+                    },
                     ..caller
                 },
                 |_| Ok(Some(ProcessLink {
-                    started_micros: None,
-                    linux_birth: birth(400),
+                    birth: ProcessBirth::Linux { birth: birth(400) },
                     parent_pid: 1
                 }))
             )
@@ -247,7 +269,7 @@ mod tests {
         let identity = super::super::unix_peer_instance(&server).unwrap();
         assert_eq!(identity.pid as u32, std::process::id());
         assert_eq!(Some(identity), identify_instance(identity.pid).unwrap());
-        assert_eq!(identity.started_micros, None);
+        assert!(matches!(identity.birth, ProcessBirth::Linux { .. }));
         drop(client);
     }
 }

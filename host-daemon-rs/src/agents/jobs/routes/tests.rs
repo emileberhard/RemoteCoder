@@ -13,10 +13,7 @@ use tokio::net::{UnixListener, UnixStream};
 
 fn owner() -> ProcessInstance {
     let pid = std::process::id() as i32;
-    ProcessInstance {
-        pid,
-        started_micros: identify(pid).unwrap().unwrap().started_micros,
-    }
+    identify(pid).unwrap().unwrap().instance(pid)
 }
 
 fn conversation() -> ConversationIdentity {
@@ -34,23 +31,25 @@ fn recorded_owner(
     path: &std::path::Path,
 ) -> (ConversationIdentity, NativeSessionOwner) {
     let process = owner();
+    let crate::platform::process::ProcessBirth::Darwin { started_micros } = process.birth else {
+        panic!("Darwin proof expected");
+    };
     let mut conversation = conversation();
     conversation.provider_home = ProviderHome::Known {
         path: directory.into(),
     };
     let native = NativeSessionOwner {
         pid: process.pid,
-        started_micros: process.started_micros,
+        started_micros,
         session_uuid: "11111111-2222-4333-8444-555555555555".into(),
         cwd: directory.into(),
         socket_path: path.into(),
     };
     let format = time::format_description::parse_owned::<3>("[weekday repr:short] [month repr:short] [day padding:space] [hour]:[minute]:[second] [year]").unwrap();
-    let started =
-        time::OffsetDateTime::from_unix_timestamp((process.started_micros / 1_000_000) as i64)
-            .unwrap()
-            .format(&format)
-            .unwrap();
+    let started = time::OffsetDateTime::from_unix_timestamp((started_micros / 1_000_000) as i64)
+        .unwrap()
+        .format(&format)
+        .unwrap();
     std::fs::create_dir_all(directory.join("sessions")).unwrap();
     std::fs::write(directory.join("sessions").join(format!("{}.json", process.pid)), serde_json::to_vec(&json!({
         "pid":process.pid,"sessionId":native.session_uuid,"cwd":directory,"messagingSocketPath":path,"pidDomain":"darwin","procStart":started

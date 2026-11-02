@@ -84,6 +84,11 @@ scoped receipt reads require the exact sender conversation.
 
 ## Process model
 
+Linux managed Claude sessions support caller ownership and recovery. Terminal
+Claude native-parent inbox forwarding is unavailable on Linux. Linux caller
+capture uses the kernel peer credentials on the private Unix coordination
+socket, including when the tool runs in a child PID namespace.
+
 - One version-matched default `codex app-server` per host listens on the
   user-private `~/.codex/app-server-control/app-server-control.sock`. ChatGPT
   Desktop, RemoteCoder and external Codex agents share that process and native

@@ -1,9 +1,9 @@
-//! Exact-instance operations on a macOS application process.
+//! Exact-instance operations on a host application process.
 //!
 //! A pid alone does not name a process: it can be reused as soon as the
-//! original exits. Callers pair it with the kernel start time from
+//! original exits. Callers pair it with the kernel birth proof from
 //! [`identify`] and revalidate that identity immediately before acting.
-//! macOS has no way to signal or address a process by that identity, so a
+//! Signalling still addresses a PID, so a
 //! replacement in the instant between the check and the request remains
 //! possible; revalidation makes the window microseconds, not a whole stop.
 
@@ -23,7 +23,7 @@ pub(crate) struct LinuxBirth {
     pub start_ticks: u64,
 }
 
-pub(super) mod boot_id {
+pub(crate) mod boot_id {
     use serde::{Deserialize, Deserializer, Serializer};
 
     pub fn serialize<S: Serializer>(value: &[u8; 36], serializer: S) -> Result<S::Ok, S::Error> {
@@ -50,73 +50,120 @@ pub(super) mod boot_id {
     }
 }
 
-/// A live process's kernel identity and current executable.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "platform", rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) enum ProcessBirth {
+    Darwin { started_micros: u64 },
+    Linux { birth: LinuxBirth },
+}
+
+impl ProcessBirth {
+    pub(crate) fn is_valid(self) -> bool {
+        match self {
+            Self::Darwin { started_micros } => cfg!(target_os = "macos") && started_micros > 0,
+            Self::Linux { birth } => cfg!(target_os = "linux") && birth.start_ticks > 0,
+        }
+    }
+
+    pub(crate) fn precedes(self, child: Self) -> bool {
+        match (self, child) {
+            (
+                Self::Darwin {
+                    started_micros: parent,
+                },
+                Self::Darwin {
+                    started_micros: child,
+                },
+            ) => parent <= child,
+            (Self::Linux { birth: parent }, Self::Linux { birth: child }) => {
+                parent.boot_id == child.boot_id && parent.start_ticks <= child.start_ticks
+            }
+            _ => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct ProcessIdentity {
-    /// Kernel start time in microseconds since the epoch.
     pub started_micros: u64,
-    #[cfg(target_os = "linux")]
-    pub linux_birth: LinuxBirth,
+    pub birth: ProcessBirth,
     pub executable: PathBuf,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ProcessInstance {
     pub pid: i32,
-    #[cfg(not(target_os = "linux"))]
-    pub started_micros: u64,
-    #[cfg(target_os = "linux")]
-    pub started_micros: Option<u64>,
-    #[cfg(target_os = "linux")]
-    pub linux_birth: LinuxBirth,
+    pub birth: ProcessBirth,
 }
 
 impl PartialEq for ProcessIdentity {
     fn eq(&self, other: &Self) -> bool {
-        self.executable == other.executable && {
-            #[cfg(target_os = "linux")]
-            {
-                self.linux_birth == other.linux_birth
-            }
-            #[cfg(not(target_os = "linux"))]
-            {
-                self.started_micros == other.started_micros
-            }
-        }
+        self.executable == other.executable && self.birth == other.birth
     }
 }
 impl Eq for ProcessIdentity {}
 
+#[cfg(any(target_os = "macos", test))]
 impl ProcessIdentity {
-    #[cfg(any(not(target_os = "linux"), test))]
     pub fn instance(&self, pid: i32) -> ProcessInstance {
         ProcessInstance {
             pid,
-            #[cfg(not(target_os = "linux"))]
-            started_micros: self.started_micros,
-            #[cfg(target_os = "linux")]
-            started_micros: Some(self.started_micros),
-            #[cfg(target_os = "linux")]
-            linux_birth: self.linux_birth,
+            birth: self.birth,
         }
     }
 }
 
-impl PartialEq for ProcessInstance {
-    fn eq(&self, other: &Self) -> bool {
-        self.pid == other.pid && {
-            #[cfg(target_os = "linux")]
-            {
-                self.linux_birth == other.linux_birth
+impl ProcessInstance {
+    pub(crate) fn native_value(self) -> serde_json::Value {
+        match self.birth {
+            ProcessBirth::Darwin { started_micros } => {
+                serde_json::json!({"pid": self.pid, "startedAtUnixMicros": started_micros})
             }
-            #[cfg(not(target_os = "linux"))]
-            {
-                self.started_micros == other.started_micros
+            ProcessBirth::Linux { birth } => {
+                serde_json::json!({"pid": self.pid, "linuxBirth": birth})
             }
         }
     }
+
+    pub(crate) fn deserialize_native<'de, D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        use serde::Deserialize;
+        use serde::de::Error;
+        let value = serde_json::Value::deserialize(deserializer)?;
+        let pid = value["pid"]
+            .as_i64()
+            .and_then(|pid| i32::try_from(pid).ok())
+            .filter(|pid| *pid > 0)
+            .ok_or_else(|| D::Error::custom("invalid native process PID"))?;
+        let birth = match (
+            value
+                .get("startedAtUnixMicros")
+                .filter(|value| !value.is_null()),
+            value.get("linuxBirth").filter(|value| !value.is_null()),
+        ) {
+            (Some(started), None) => ProcessBirth::Darwin {
+                started_micros: started
+                    .as_u64()
+                    .ok_or_else(|| D::Error::custom("invalid Darwin process birth"))?,
+            },
+            (None, Some(birth)) => ProcessBirth::Linux {
+                birth: serde_json::from_value(birth.clone()).map_err(D::Error::custom)?,
+            },
+            _ => {
+                return Err(D::Error::custom(
+                    "native process requires exactly one birth proof",
+                ));
+            }
+        };
+        if !birth.is_valid() {
+            return Err(D::Error::custom(
+                "native process birth is incompatible with this host",
+            ));
+        }
+        Ok(Self { pid, birth })
+    }
 }
-impl Eq for ProcessInstance {}
 
 #[cfg(target_os = "macos")]
 pub(crate) fn unix_peer_identity(
@@ -183,7 +230,9 @@ pub(crate) fn ancestry(process: ProcessInstance) -> impl Iterator<Item = Result<
         process_info(pid)?
             .map(|info| {
                 Ok(ProcessLink {
-                    started_micros: info_start(&info)?,
+                    birth: ProcessBirth::Darwin {
+                        started_micros: info_start(&info)?,
+                    },
                     parent_pid: i32::try_from(info.pbi_ppid)?,
                 })
             })
@@ -194,13 +243,8 @@ pub(crate) fn ancestry(process: ProcessInstance) -> impl Iterator<Item = Result<
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 #[derive(Clone, Copy)]
 struct ProcessLink {
-    #[cfg(not(target_os = "linux"))]
-    started_micros: u64,
-    #[cfg(target_os = "linux")]
-    started_micros: Option<u64>,
+    birth: ProcessBirth,
     parent_pid: i32,
-    #[cfg(target_os = "linux")]
-    linux_birth: LinuxBirth,
 }
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -208,24 +252,14 @@ impl ProcessLink {
     fn instance(self, pid: i32) -> ProcessInstance {
         ProcessInstance {
             pid,
-            started_micros: self.started_micros,
-            #[cfg(target_os = "linux")]
-            linux_birth: self.linux_birth,
+            birth: self.birth,
         }
     }
     fn same(self, other: Self, pid: i32) -> bool {
         self.parent_pid == other.parent_pid && self.instance(pid) == other.instance(pid)
     }
     fn precedes(self, child: ProcessInstance) -> bool {
-        #[cfg(target_os = "linux")]
-        {
-            self.linux_birth.boot_id == child.linux_birth.boot_id
-                && self.linux_birth.start_ticks <= child.linux_birth.start_ticks
-        }
-        #[cfg(not(target_os = "linux"))]
-        {
-            self.started_micros <= child.started_micros
-        }
+        self.birth.precedes(child.birth)
     }
 }
 
@@ -326,6 +360,7 @@ pub(crate) fn identify(pid: i32) -> Result<Option<ProcessIdentity>> {
     Ok(
         (start_micros(pid)? == Some(started_micros)).then_some(ProcessIdentity {
             started_micros,
+            birth: ProcessBirth::Darwin { started_micros },
             executable,
         }),
     )
@@ -435,23 +470,33 @@ mod tests {
     fn claude_owner_stops_before_privileged_launchers_without_hiding_proof_errors() {
         let caller = ProcessInstance {
             pid: 40,
-            started_micros: 400,
+            birth: ProcessBirth::Darwin {
+                started_micros: 400,
+            },
         };
         let owner = ProcessInstance {
             pid: 30,
-            started_micros: 300,
+            birth: ProcessBirth::Darwin {
+                started_micros: 300,
+            },
         };
         let table = |pid| match pid {
             40 => Ok(Some(ProcessLink {
-                started_micros: 400,
+                birth: ProcessBirth::Darwin {
+                    started_micros: 400,
+                },
                 parent_pid: 35,
             })),
             35 => Ok(Some(ProcessLink {
-                started_micros: 350,
+                birth: ProcessBirth::Darwin {
+                    started_micros: 350,
+                },
                 parent_pid: 30,
             })),
             30 => Ok(Some(ProcessLink {
-                started_micros: 300,
+                birth: ProcessBirth::Darwin {
+                    started_micros: 300,
+                },
                 parent_pid: 20,
             })),
             20 => anyhow::bail!("could not read the start time of pid 20: Operation not permitted"),
@@ -471,7 +516,9 @@ mod tests {
         }
         let middle = ProcessInstance {
             pid: 35,
-            started_micros: 350,
+            birth: ProcessBirth::Darwin {
+                started_micros: 350,
+            },
         };
         assert_eq!(proof, [caller, middle, owner]);
         assert!(!reads.contains(&20));
@@ -499,7 +546,9 @@ mod tests {
         let chain = walk_ancestry(caller, |pid| {
             if pid == 20 {
                 Ok(Some(ProcessLink {
-                    started_micros: 200,
+                    birth: ProcessBirth::Darwin {
+                        started_micros: 200,
+                    },
                     parent_pid: 1,
                 }))
             } else {
@@ -516,7 +565,9 @@ mod tests {
                 owner,
                 ProcessInstance {
                     pid: 20,
-                    started_micros: 200
+                    birth: ProcessBirth::Darwin {
+                        started_micros: 200
+                    }
                 }
             ]
         );
@@ -554,13 +605,9 @@ mod tests {
         child.wait().unwrap();
         assert_eq!(proof.unwrap(), vec![child_instance, owner]);
         let mut stale = owner;
-        #[cfg(target_os = "linux")]
-        {
-            stale.linux_birth.start_ticks += 1;
-        }
-        #[cfg(target_os = "macos")]
-        {
-            stale.started_micros += 1;
+        match &mut stale.birth {
+            ProcessBirth::Linux { birth } => birth.start_ticks += 1,
+            ProcessBirth::Darwin { started_micros } => *started_micros += 1,
         }
         assert!(ancestry(stale).next().unwrap().is_err());
     }

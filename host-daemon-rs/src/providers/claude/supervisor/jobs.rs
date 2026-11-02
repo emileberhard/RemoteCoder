@@ -882,13 +882,8 @@ impl ClaudeSupervisor {
         let process = runtime.process_identity.ok_or_else(|| {
             TurnStartError::internal("Claude job has no exact kernel process identity")
         })?;
-        let owner = ProcessOwner {
-            pid: process.pid,
-            started_micros: process.started_micros,
-            #[cfg(target_os = "linux")]
-            linux_birth: Some(process.linux_birth),
-            session_uuid: runtime.session_uuid.clone(),
-        };
+        let owner = ProcessOwner::from_process(process, runtime.session_uuid.clone())
+            .map_err(|error| TurnStartError::internal(error.to_string()))?;
         self.conversation_index
             .update_job(
                 &crate::providers::claude::claude_thread_id(&runtime.session_uuid),
