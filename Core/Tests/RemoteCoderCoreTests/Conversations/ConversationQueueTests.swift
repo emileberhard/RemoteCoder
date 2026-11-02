@@ -141,8 +141,9 @@ struct ConversationQueueTests: ConversationHistoryFixtures {
         let message = ChatMessage(role: .user, text: "Later")
         state.submitToQueue(message, input: message.text)
         state.queued(message.id, submission: queued(message, as: "q1"))
-        state.queueRemoved(message.id)
+        let removed = state.queueRemoved(message.id)
 
+        #expect(removed)
         #expect(ConversationProjection.project(state).messages.map(\.text) == ["Start"])
         #expect(state.submissions.isEmpty)
         #expect(state.order == ["turn"])

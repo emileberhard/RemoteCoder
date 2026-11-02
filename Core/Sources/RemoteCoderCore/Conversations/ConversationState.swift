@@ -458,9 +458,10 @@ struct ConversationState: Sendable {
         markPersistedChange()
     }
 
-    mutating func queueRemoved(_ messageID: UUID) {
-        guard let pending = submissions[messageID], pending.queue != nil, pending.status == .queued else { return }
+    mutating func queueRemoved(_ messageID: UUID) -> Bool {
+        guard let pending = submissions[messageID], pending.queue != nil, pending.status == .queued else { return false }
         remove(pending)
+        return true
     }
 
     mutating func queueActionFailed(_ messageID: UUID, reason: String) -> Bool {

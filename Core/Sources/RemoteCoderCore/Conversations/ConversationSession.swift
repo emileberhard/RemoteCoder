@@ -355,7 +355,9 @@ actor ConversationSession {
 
     func queueRemoved(_ messageID: UUID) async {
         if let successor { await successor.queueRemoved(messageID); return }
-        state.queueRemoved(messageID)
+        guard state.queueRemoved(messageID) else { return }
+        do { try await checkpoints.discardSubmission(messageID, conversationID: conversationID, generation: checkpointGeneration) }
+        catch { logger.error("Queue removal kept its write-ahead record: \(error.localizedDescription)") }
         await persistLocalChanges()
     }
 
