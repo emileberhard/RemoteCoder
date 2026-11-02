@@ -174,21 +174,33 @@ final class HostStore {
         canReplaceHost: @MainActor (UUID) -> Bool) async {
         let installationID = defaults.string(forKey: Self.installationIDKey) ?? UUID().uuidString.lowercased()
         defaults.set(installationID, forKey: Self.installationIDKey)
-        for captured in hosts where !captured.configuration.usesInstallationCredential {
+        for captured in configurations where captured.gatewayHTTPBaseURL() != nil && !captured.authToken.isEmpty {
             guard !identityMigrationHostIDs.contains(captured.id), canReplaceHost(captured.id) else { continue }
             do {
                 try Task.checkCancellation()
-                let token = try await client.enroll(host: captured.configuration,
-                    installationID: installationID + "-" + captured.id.uuidString.lowercased())
+                var enrolled = captured
+                if !captured.usesInstallationCredential {
+                    let token = try await client.enroll(host: captured,
+                        installationID: installationID + "-" + captured.id.uuidString.lowercased())
+                    try Task.checkCancellation()
+                    guard !identityMigrationHostIDs.contains(captured.id), canReplaceHost(captured.id),
+                          let current = configurations.first(where: { $0.id == captured.id && $0.hasSameConnection(as: captured) }) else { continue }
+                    enrolled = current
+                    enrolled.authToken = token
+                    guard upsert(enrolled) else { continue }
+                }
+                guard sharedDirectory != nil, directory.needsEnrollmentCredential(for: enrolled) else { continue }
+                let shared = try await client.sharingCredential(host: enrolled)
                 try Task.checkCancellation()
-                guard !identityMigrationHostIDs.contains(captured.id), canReplaceHost(captured.id), let current = hosts.first(where: { $0.id == captured.id }),
-                      current.hasSameConnection(as: captured.configuration) else { continue }
-                var enrolled = current.configuration
-                enrolled.authToken = token
-                _ = upsert(enrolled)
+                guard !identityMigrationHostIDs.contains(enrolled.id), canReplaceHost(enrolled.id),
+                      configurations.contains(where: { $0.id == enrolled.id && $0.hasSameConnection(as: enrolled) }) else { continue }
+                var directory = directory
+                directory.supplyEnrollmentCredential(shared, for: enrolled)
+                _ = commit(configurations, activeHostID: activeHostID, directory: directory)
             } catch is CancellationError { return }
             catch { errorMessage = error.localizedDescription }
         }
+        await synchronize()
     }
 
     @discardableResult

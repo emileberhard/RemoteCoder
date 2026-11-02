@@ -57,6 +57,54 @@ struct HostSyncTests {
         #expect(macStore.syncFailure == nil)
     }
 
+    @Test func addingOnlyAnInstallationTokenEnrollsOtherDevicesWithoutSharingDeviceIdentity() async throws {
+        let shared = MemoryGatewayCredentials()
+        let phone = try Device()
+        let mac = try Device()
+        let tablet = try Device()
+        let phoneStore = await phone.open(sharing: shared)
+        #expect(phoneStore.upsert(host(miniID, "Mini", token: "rc1.phone.synthetic")))
+        await phoneStore.synchronize()
+        await phoneStore.enrollInstallationCredentials(using: SyntheticEnrollment()) { _ in true }
+        let directory = try JSONDecoder().decode(HostDirectory.self, from: #require(try shared.read()))
+        #expect(directory.entries.first?.enrollmentToken == "rcs1.phone.synthetic")
+        #expect(directory.entries.first?.modifiedAt != .distantPast)
+
+        let macStore = await mac.open(sharing: shared)
+        #expect(macStore.hosts.isEmpty)
+        #expect(macStore.invalidHosts.first?.credentialStatus == "Waiting for device enrollment")
+        await macStore.enrollInstallationCredentials(using: SyntheticEnrollment()) { _ in true }
+        let tabletStore = await tablet.open(sharing: shared)
+        await tabletStore.enrollInstallationCredentials(using: SyntheticEnrollment()) { _ in true }
+        let macToken = try #require(macStore.hosts.first?.authToken)
+        let tabletToken = try #require(tabletStore.hosts.first?.authToken)
+        #expect(macToken.hasPrefix("rc1."))
+        #expect(tabletToken.hasPrefix("rc1."))
+        #expect(macToken != tabletToken)
+        #expect(phoneStore.hosts.first?.authToken == "rc1.phone.synthetic")
+        #expect(try JSONDecoder().decode(HostDirectory.self, from: #require(try shared.read())) == directory)
+        #expect(macStore.errorMessage == nil)
+    }
+
+    @Test func aLateSharingCredentialCannotFollowAnEndpointEdit() async throws {
+        let shared = MemoryGatewayCredentials()
+        let phone = try Device()
+        let original = host(miniID, "Mini", token: "rc1.phone.synthetic")
+        try phone.savePreSyncHosts([original])
+        let store = await phone.open(sharing: shared)
+        let client = SharingGate()
+        let work = Task { await store.enrollInstallationCredentials(using: client) { _ in true } }
+        await client.waitForStart()
+        var moved = original
+        moved.hostname = "replacement.example"
+        #expect(store.upsert(moved))
+        await client.release()
+        await work.value
+        let directory = try JSONDecoder().decode(HostDirectory.self, from: #require(try shared.read()))
+        #expect(directory.entries.first?.hostname == "replacement.example")
+        #expect(directory.entries.first?.enrollmentToken == nil)
+    }
+
     @Test func anOperatorCredentialSyncsSoEachDeviceEnrollsItsOwnInstallation() async throws {
         let shared = MemoryGatewayCredentials()
         let phone = try Device()
@@ -226,7 +274,28 @@ struct HostSyncTests {
 }
 
 private struct SyntheticEnrollment: GatewayCredentialEnrolling {
+    func sharingCredential(host: GatewayHostConfiguration) async throws -> String { "rcs1.phone.synthetic" }
     func enroll(host: GatewayHostConfiguration, installationID: String) async throws -> String {
         "rc1.\(installationID).synthetic"
+    }
+}
+
+private actor SharingGate: GatewayCredentialEnrolling {
+    private let started: AsyncStream<Void>
+    private let signalStarted: AsyncStream<Void>.Continuation
+    private let released: AsyncStream<Void>
+    private let signalReleased: AsyncStream<Void>.Continuation
+
+    init() {
+        (started, signalStarted) = AsyncStream.makeStream(bufferingPolicy: .bufferingNewest(1))
+        (released, signalReleased) = AsyncStream.makeStream(bufferingPolicy: .bufferingNewest(1))
+    }
+    func waitForStart() async { for await _ in started { return } }
+    func release() { signalReleased.finish() }
+    func enroll(host: GatewayHostConfiguration, installationID: String) async throws -> String { throw CancellationError() }
+    func sharingCredential(host: GatewayHostConfiguration) async throws -> String {
+        signalStarted.yield(())
+        for await _ in released { break }
+        return "rcs1.phone.synthetic"
     }
 }

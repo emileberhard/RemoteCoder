@@ -115,7 +115,11 @@ blocks startup or provider journal retirement.
   starts the replacement through the official daemon commands.
 - API: `GET /health`, `GET /version` and `GET /ws`, authenticated by `Authorization: Bearer`
   with the operator token or a revocable installation credential.
-  `POST /credentials/enroll` is operator-only (`docs/owned-operations.md`).
+  `POST /credentials/enroll` accepts the operator or an enrollment-only `rcs1.`
+  capability. `/credentials/share` issues that capability only to an active
+  installation. The credential store owns atomic lineage registration and
+  descendant revocation; no shared capability authorizes ordinary HTTP,
+  WebSocket, speech or peer operations (`docs/owned-operations.md`).
   Token values never appear in logs or source.
 - With `RC_CODEX_GATEWAY_LAN_PORT` set, every route is also served over pinned
   TLS 1.3 and published as `lanEndpoint`. macOS retains its dual-stack wildcard default. An explicit `RC_CODEX_GATEWAY_LAN_BIND_ADDRESS` and `RC_CODEX_GATEWAY_LAN_HOST` select one address and advertised DNS name. Linux requires both, rejects wildcard TLS binds, requires loopback plaintext ingress, and fails startup if configured TLS cannot bind. Operator network policy restricts the selected address to the private interface and blocks container access. The endpoint is published in the

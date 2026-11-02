@@ -17,6 +17,15 @@ dev-tools` and warm a wrapper with `--help` before unattended use.
 `just tools-test` and `just gateway-check` run every `tests/test_*.py` through
 `just dev-tools-test-local`, so a new test file needs no wiring.
 
+## Credential sync probe
+
+`bun dev-tools/probes/credential-sync.mjs <candidate>` enrolls a source and two
+receiving installations against an isolated gateway. It checks capability
+scope, distinct device identities, idempotence, restart persistence, real
+WebSocket reads, cascading revocation and digest-only storage. No live host or
+Keychain state is modified. Success removes its private root; failure retains
+it as evidence.
+
 ## Query admission probe
 
 `just gateway-e2e-query-admission-isolated /absolute/gateway/binary` runs

@@ -4,6 +4,22 @@ import Testing
 
 @MainActor
 struct ClusterModelTests {
+    @Test(arguments: [
+        (ClusterReachability.State.reachable, ClusterCoverage.State.ok),
+        (.unreachable, .unreachable), (.unsupported, .unsupported), (.unknown, .unknown)
+    ])
+    func clusterOnlyCoverageUsesObservedReachability(reachability: ClusterReachability.State, expected: ClusterCoverage.State) {
+        let id = UUID()
+        let since = Date(timeIntervalSince1970: 123)
+        let member = ClusterMember(hostId: id, membership: UUID(), name: "Peer", state: .active,
+            version: nil, load: nil, reachability: .init(state: reachability, since: since, lastSeenAt: nil), protocol: 1)
+        let coverage = ClusterCoverage(member: member)
+        #expect(coverage.hostId == id)
+        #expect(coverage.name == "Peer")
+        #expect(coverage.state == expected)
+        #expect(coverage.since == since)
+    }
+
     @Test func overlappingRefreshesShareOneRead() async throws {
         let suite = "ClusterModelTests.\(UUID())"
         let defaults = try #require(UserDefaults(suiteName: suite))

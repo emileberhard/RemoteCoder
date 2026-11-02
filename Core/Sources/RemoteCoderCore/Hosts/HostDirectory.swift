@@ -121,6 +121,17 @@ struct HostDirectory: Codable, Equatable, Sendable {
         }
     }
 
+    func needsEnrollmentCredential(for host: GatewayHostConfiguration) -> Bool {
+        entries.contains { ($0.id == host.id || $0.legacyIDs?.contains(host.id) == true) && $0.hasSameEndpoint(as: host) && $0.enrollmentToken == nil }
+    }
+
+    mutating func supplyEnrollmentCredential(_ token: String, for host: GatewayHostConfiguration) {
+        for index in entries.indices where (entries[index].id == host.id || entries[index].legacyIDs?.contains(host.id) == true)
+            && entries[index].hasSameEndpoint(as: host) && entries[index].enrollmentToken == nil {
+            entries[index].enrollmentToken = token
+        }
+    }
+
     func merged(with remote: HostDirectory) -> HostDirectory {
         let deletions = Self.canonical(deletions + remote.deletions)
         let deletedAt = Dictionary(deletions.map { ($0.id, $0.deletedAt) }, uniquingKeysWith: max)

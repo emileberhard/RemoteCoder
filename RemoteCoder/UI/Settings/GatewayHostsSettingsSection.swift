@@ -222,6 +222,9 @@ struct GatewayHostsSettingsSection: View {
                         Text(host.connectionSummary)
                             .scaledFont(.subheadline)
                             .foregroundStyle(.secondary)
+                        Text(host.credentialStatus)
+                            .scaledFont(.caption)
+                            .foregroundStyle(.orange)
                     }
                     Spacer(minLength: 0)
                     Image(systemName: "exclamationmark.triangle.fill")
@@ -231,7 +234,7 @@ struct GatewayHostsSettingsSection: View {
                 .contentShape(.rect)
             }
             .buttonStyle(.plain)
-            .accessibilityValue("Invalid address or authorization token")
+            .accessibilityValue(host.credentialStatus)
 
             AppMenu(trigger: .icon) {
                 Button("Edit", systemImage: "pencil") { editor = .existing(host) }

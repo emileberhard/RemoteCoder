@@ -23,12 +23,6 @@ pub(super) fn header_value<'a>(headers: &'a HeaderMap, name: &str) -> &'a str {
         .unwrap_or("")
 }
 
-fn is_authorized(headers: &HeaderMap, expected_token: &str) -> bool {
-    bearer_token(headers).is_some_and(|token| {
-        crate::auth::installation_credentials::operator_matches(token, expected_token)
-    })
-}
-
 /// Extractors that decide who is calling from the request head. Handlers list
 /// one before any body extractor, so an unauthenticated caller is refused
 /// before its body is read.
@@ -46,24 +40,33 @@ impl FromRequestParts<HttpState> for Authorized {
     }
 }
 
-pub(in crate::http) struct Operator;
+pub(in crate::http) struct EnrollmentCredential(String);
 
 #[axum::async_trait]
-impl FromRequestParts<HttpState> for Operator {
+impl FromRequestParts<HttpState> for EnrollmentCredential {
     type Rejection = Response;
 
     async fn from_request_parts(
         parts: &mut Parts,
         state: &HttpState,
     ) -> Result<Self, Self::Rejection> {
-        if is_authorized(&parts.headers, &state.auth_token) {
-            return Ok(Self);
+        let token = bearer_token(&parts.headers).unwrap_or_default().to_owned();
+        match state
+            .installation_credentials
+            .can_enroll(token.clone(), state.auth_token.clone())
+            .await
+        {
+            Ok(true) => Ok(Self(token)),
+            Ok(false) => Err((
+                StatusCode::FORBIDDEN,
+                Json(json!({"error":"operator or shared enrollment credential required"})),
+            )
+                .into_response()),
+            Err(error) => {
+                warn!(%error, "enrollment authorization unavailable");
+                Err(AuthorizationFailure::Unavailable.into_response())
+            }
         }
-        Err((
-            StatusCode::FORBIDDEN,
-            Json(json!({"error":"operator credential required for enrollment"})),
-        )
-            .into_response())
     }
 }
 
@@ -124,14 +127,38 @@ pub(super) async fn authorize(
 
 pub(super) async fn enroll_credential(
     State(state): State<HttpState>,
-    _: Operator,
+    EnrollmentCredential(token): EnrollmentCredential,
     Json(request): Json<crate::auth::installation_credentials::Enrollment>,
 ) -> Response {
-    match state
-        .installation_credentials
-        .enroll(request, &state.auth_token)
-        .await
-    {
+    let result =
+        if crate::auth::installation_credentials::operator_matches(&token, &state.auth_token) {
+            state
+                .installation_credentials
+                .enroll(request, &state.auth_token)
+                .await
+        } else {
+            state
+                .installation_credentials
+                .enroll_shared(request, token, state.auth_token.clone())
+                .await
+        };
+    credential_response(result)
+}
+
+pub(super) async fn share_credential(
+    State(state): State<HttpState>,
+    Authorized(grant): Authorized,
+) -> Response {
+    credential_response(
+        state
+            .installation_credentials
+            .sharing_credential(grant, state.auth_token.clone())
+            .await,
+    )
+}
+
+fn credential_response(result: Result<String>) -> Response {
+    match result {
         Ok(token) => (
             [(header::CACHE_CONTROL, "no-store")],
             Json(json!({"token": token})),

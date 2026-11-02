@@ -96,6 +96,7 @@ struct ClusterCoverage: Decodable, Equatable, Sendable, Identifiable {
     let state: State
     var since: Date?
     var staleThrough: Date?
+    var detail: String? = nil
 
     var id: UUID { hostId }
     private enum CodingKeys: String, CodingKey { case hostId, name, state, since, staleThrough }
@@ -111,6 +112,18 @@ extension ClusterReachability {
 }
 
 extension ClusterCoverage {
+    init(member: ClusterMember) {
+        hostId = member.id
+        name = member.name
+        since = member.reachability.since
+        switch member.reachability.state {
+        case .reachable: state = .ok
+        case .unreachable: state = .unreachable
+        case .unsupported: state = .unsupported
+        case .unknown: state = .unknown
+        }
+    }
+
     init(from decoder: any Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         hostId = try values.decode(UUID.self, forKey: .hostId)

@@ -121,6 +121,8 @@ struct GatewayEnrollmentOwnershipTests {
 }
 
 private actor EnrollmentGate: GatewayCredentialEnrolling {
+    func sharingCredential(host: GatewayHostConfiguration) async throws -> String { throw CancellationError() }
+
     private var entered = false
     private var waiting: CheckedContinuation<Void, Never>?
     private let stream: AsyncStream<Void>
