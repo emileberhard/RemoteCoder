@@ -129,16 +129,12 @@ pub(super) fn identify(pid: i32) -> Result<Option<ProcessIdentity>> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error).context("reading process executable"),
     };
-    let started_micros = display_start_micros(before.birth.start_ticks)?;
     let birth = ProcessBirth::Linux {
         birth: before.birth,
     };
     Ok(
-        (stat(pid)?.is_some_and(|after| after.birth == before.birth)).then_some(ProcessIdentity {
-            started_micros,
-            birth,
-            executable,
-        }),
+        (stat(pid)?.is_some_and(|after| after.birth == before.birth))
+            .then_some(ProcessIdentity { birth, executable }),
     )
 }
 

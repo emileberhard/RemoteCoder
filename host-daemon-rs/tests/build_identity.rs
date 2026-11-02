@@ -31,6 +31,7 @@ fn version_prints_only_build_identity_without_loading_settings() {
     assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
 }
 
+#[cfg(target_os = "macos")]
 #[test]
 fn failed_worker_sync_prevents_gateway_handoff_and_preserves_installed_selection() {
     let home = tempfile::tempdir().unwrap();

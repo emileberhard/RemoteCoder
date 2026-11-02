@@ -97,7 +97,14 @@ pub(super) async fn codex_sessions(
                 };
             #[cfg(not(target_os = "linux"))]
             let start = match crate::platform::process::identify(pid)? {
-                Some(identity) => Some(i64::try_from(identity.started_micros / 1_000_000)?),
+                Some(identity) => {
+                    let crate::platform::process::ProcessBirth::Darwin { started_micros } =
+                        identity.birth
+                    else {
+                        anyhow::bail!("Codex process has an incompatible birth proof");
+                    };
+                    Some(i64::try_from(started_micros / 1_000_000)?)
+                }
                 None => continue,
             };
             let mut owned = Vec::new();

@@ -341,17 +341,19 @@ async fn captured_native_claude_context_outlives_its_child_but_not_its_owner_or_
     let owner = crate::platform::process::identify(std::process::id() as i32)
         .unwrap()
         .unwrap();
+    let crate::platform::process::ProcessBirth::Darwin { started_micros } = owner.birth else {
+        panic!("Darwin proof expected");
+    };
     let home = &gateway.claude_settings.claude_home;
     let path = home
         .join("sessions")
         .join(format!("{}.json", std::process::id()));
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     let format = time::format_description::parse_owned::<3>("[weekday repr:short] [month repr:short] [day padding:space] [hour]:[minute]:[second] [year]").unwrap();
-    let started =
-        time::OffsetDateTime::from_unix_timestamp((owner.started_micros / 1_000_000) as i64)
-            .unwrap()
-            .format(&format)
-            .unwrap();
+    let started = time::OffsetDateTime::from_unix_timestamp((started_micros / 1_000_000) as i64)
+        .unwrap()
+        .format(&format)
+        .unwrap();
     let mut record = json!({"pid":std::process::id(),"sessionId":"11111111-2222-4333-8444-555555555555","cwd":directory.path(),"messagingSocketPath":socket,"pidDomain":"darwin","procStart":started});
     std::fs::write(&path, serde_json::to_vec(&record).unwrap()).unwrap();
     let mut child = tokio::process::Command::new("/bin/cat")

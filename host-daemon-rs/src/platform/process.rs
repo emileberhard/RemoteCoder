@@ -51,7 +51,12 @@ pub(crate) mod boot_id {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(tag = "platform", rename_all = "camelCase", deny_unknown_fields)]
+#[serde(
+    tag = "platform",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
 pub(crate) enum ProcessBirth {
     Darwin { started_micros: u64 },
     Linux { birth: LinuxBirth },
@@ -83,9 +88,8 @@ impl ProcessBirth {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ProcessIdentity {
-    pub started_micros: u64,
     pub birth: ProcessBirth,
     pub executable: PathBuf,
 }
@@ -95,13 +99,6 @@ pub(crate) struct ProcessInstance {
     pub pid: i32,
     pub birth: ProcessBirth,
 }
-
-impl PartialEq for ProcessIdentity {
-    fn eq(&self, other: &Self) -> bool {
-        self.executable == other.executable && self.birth == other.birth
-    }
-}
-impl Eq for ProcessIdentity {}
 
 #[cfg(any(target_os = "macos", test))]
 impl ProcessIdentity {
@@ -359,7 +356,6 @@ pub(crate) fn identify(pid: i32) -> Result<Option<ProcessIdentity>> {
     // belongs to that process, not to a successor that reused the pid.
     Ok(
         (start_micros(pid)? == Some(started_micros)).then_some(ProcessIdentity {
-            started_micros,
             birth: ProcessBirth::Darwin { started_micros },
             executable,
         }),

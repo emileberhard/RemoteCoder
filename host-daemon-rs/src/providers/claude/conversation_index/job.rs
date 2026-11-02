@@ -388,7 +388,7 @@ mod tests {
         };
         let mut owner = ProcessOwner {
             pid,
-            started_micros: Some(identity.started_micros + 60_000_000),
+            started_micros: Some(60_000_000),
             linux_birth: Some(birth),
             session_uuid: "test".to_string(),
         };

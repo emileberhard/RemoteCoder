@@ -87,7 +87,11 @@ scoped receipt reads require the exact sender conversation.
 Linux managed Claude sessions support caller ownership and recovery. Terminal
 Claude native-parent inbox forwarding is unavailable on Linux. Linux caller
 capture uses the kernel peer credentials on the private Unix coordination
-socket, including when the tool runs in a child PID namespace.
+socket, including when the tool runs in a child PID namespace. That local socket
+is selected from `RC_AGENT_JOB_SOCKET` or the caller's HOME; `--env-file` does not
+select a different scoped socket. Shutdown telemetry retains the preceding
+instance and at most one malformed receipt beside the current record; it never
+blocks startup or provider journal retirement.
 
 - One version-matched default `codex app-server` per host listens on the
   user-private `~/.codex/app-server-control/app-server-control.sock`. ChatGPT

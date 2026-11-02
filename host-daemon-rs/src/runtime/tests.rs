@@ -842,7 +842,6 @@ async fn an_unreadable_identity_during_a_stop_never_succeeds_or_escalates() {
 
 fn identity(executable: &str, started_micros: u64) -> mac_app::ProcessIdentity {
     mac_app::ProcessIdentity {
-        started_micros,
         birth: crate::platform::process::ProcessBirth::Darwin { started_micros },
         executable: PathBuf::from(executable),
     }

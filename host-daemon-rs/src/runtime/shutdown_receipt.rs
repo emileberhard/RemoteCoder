@@ -56,17 +56,36 @@ impl ShutdownReceipt {
                 &path,
                 "shutdown receipt has no state directory",
                 |path| {
-                    private_state::read_bounded(path, 16384)
-                        .map_err(|error| anyhow::anyhow!("shutdown receipt is unreadable: {error:?}"))?
-                        .map(|bytes| serde_json::from_slice::<Value>(&bytes))
-                        .transpose().map_err(Into::into)
+                    let loaded = private_state::read_bounded(path, 16384)
+                        .map_err(|error| anyhow::anyhow!("shutdown receipt is unreadable: {error:?}"))
+                        .and_then(|bytes| bytes.map(|bytes| serde_json::from_slice::<Value>(&bytes)).transpose().map_err(Into::into))
+                        .and_then(|record| {
+                            if let Some(record) = &record {
+                                ensure!(record["schemaVersion"] == 1
+                                    && record["instanceId"].as_str().is_some_and(|id| !id.is_empty())
+                                    && record["pid"].as_u64().is_some_and(|pid| pid > 0)
+                                    && matches!(record["status"].as_str(), Some("running" | "captured" | "failed")),
+                                    "shutdown receipt has an invalid shape");
+                            }
+                            Ok(record)
+                        });
+                    match loaded {
+                        Ok(record) => Ok(record),
+                        Err(error) if status == "running" => {
+                            let quarantine = path.with_extension("invalid.json");
+                            std::fs::rename(path, &quarantine).context("malformed shutdown receipt could not be retained")?;
+                            tracing::warn!(%error, path=%quarantine.display(), "malformed shutdown receipt retained aside");
+                            Ok(None)
+                        }
+                        Err(error) => Err(error),
+                    }
                 },
                 |previous| {
                     if status != "running" {
                         ensure!(previous.as_ref().is_some_and(|value| value["instanceId"] == instance_id && value["status"] == "running"), "shutdown receipt belongs to a different gateway instance");
                     }
                     let predecessor = previous.as_ref().and_then(|record| {
-                        if status == "running" && record["status"] != "running" {
+                        if status == "running" {
                             let mut record = record.clone();
                             record.as_object_mut()?.remove("previous");
                             Some(record)
@@ -119,15 +138,32 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn malformed_evidence_is_preserved_without_failing_startup() {
+    async fn a_crashed_predecessor_is_retained_as_previous() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("gateway-shutdown.json");
-        for bytes in [b"{unfinished".to_vec(), vec![b'x'; 16385]] {
+        let crashed = ShutdownReceipt::new(path.clone());
+        crashed.begin().await;
+        let next = ShutdownReceipt::new(path.clone());
+        next.begin().await;
+        next.finish(&Ok(()), &Ok(())).await.unwrap();
+        let value: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(value["previous"]["instanceId"], crashed.instance_id);
+        assert_eq!(value["previous"]["status"], "running");
+    }
+
+    #[tokio::test]
+    async fn malformed_evidence_is_retained_aside_and_new_capture_can_finish() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("gateway-shutdown.json");
+        for bytes in [b"{unfinished".to_vec(), b"[]".to_vec(), vec![b'x'; 16385]] {
             std::fs::write(&path, &bytes).unwrap();
             let receipt = ShutdownReceipt::new(path.clone());
             receipt.begin().await;
-            assert_eq!(std::fs::read(&path).unwrap(), bytes);
-            assert!(receipt.finish(&Ok(()), &Ok(())).await.is_err());
+            assert_eq!(
+                std::fs::read(path.with_extension("invalid.json")).unwrap(),
+                bytes
+            );
+            receipt.finish(&Ok(()), &Ok(())).await.unwrap();
         }
     }
 }

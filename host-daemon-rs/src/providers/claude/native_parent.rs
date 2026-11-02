@@ -98,7 +98,10 @@ impl NativeParentForwarder {
         match unix_peer_identity(&stream) {
             Ok((pid, identity))
                 if pid == self.owner.pid
-                    && identity.started_micros == self.owner.started_micros => {}
+                    && identity.birth
+                        == (ProcessBirth::Darwin {
+                            started_micros: self.owner.started_micros,
+                        }) => {}
             _ => {
                 return unreachable(
                     "Claude native inbox no longer belongs to the proven session process".into(),
@@ -160,7 +163,7 @@ pub(crate) async fn prove_owner(
     .context("Claude's recorded native socket did not connect within 3 seconds")??;
     let (peer_pid, identity) = unix_peer_identity(&stream)?;
     ensure!(
-        peer_pid == pid && identity.started_micros == started_micros,
+        peer_pid == pid && identity.birth == (ProcessBirth::Darwin { started_micros }),
         "Claude's recorded native socket belongs to a different process instance"
     );
     drop(stream);
@@ -179,7 +182,7 @@ fn read_owner(home: &Path, pid: i32, started_micros: u64) -> Result<Option<Nativ
     let Some(identity) = identify(pid)? else {
         return Ok(None);
     };
-    if identity.started_micros != started_micros {
+    if identity.birth != (ProcessBirth::Darwin { started_micros }) {
         return Ok(None);
     }
     let path = home.join("sessions").join(format!("{pid}.json"));

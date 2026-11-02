@@ -150,12 +150,18 @@ pub(in crate::runtime) fn current_app(
     pid: i32,
     identify: &IdentifyProcess,
 ) -> Result<Option<DesktopApp>> {
-    Ok(identify(pid)?
+    identify(pid)?
         .filter(|identity| identity.executable == Path::new(CHATGPT_EXECUTABLE))
-        .map(|identity| DesktopApp {
-            pid,
-            started_micros: identity.started_micros,
-        }))
+        .map(|identity| {
+            let mac_app::ProcessBirth::Darwin { started_micros } = identity.birth else {
+                bail!("ChatGPT process has an incompatible birth proof");
+            };
+            Ok(DesktopApp {
+                pid,
+                started_micros,
+            })
+        })
+        .transpose()
 }
 
 /// Resolves listed pids to app instances. The command came from an earlier
