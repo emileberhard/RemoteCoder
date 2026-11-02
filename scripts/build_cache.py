@@ -1037,12 +1037,10 @@ def _products_rebuildable(entry: CompilationDirectory, completion: dict, deadlin
         return False
 
 
-def _package_resolution(entry: CompilationDirectory, deadline: float) -> bytes | None:
-    if entry.kind != "xcode":
-        return None
-    packages = entry.path / "SourcePackages"
+def _package_resolution(derived: Path, deadline: float) -> bytes | None:
+    packages = derived / "SourcePackages"
     resolution = (
-        entry.path.parent
+        derived.parent
         / "repo/RemoteCoder.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved"
     )
     try:
@@ -1430,7 +1428,8 @@ def _compilation_admission(
                 reverse=True,
             ):
                 if (
-                    (entry.path / "SourcePackages").exists()
+                    entry.kind == "xcode"
+                    and (entry.path / "SourcePackages").exists()
                     and completion is not None
                     and entry.leases
                     and all(
@@ -1438,7 +1437,7 @@ def _compilation_admission(
                     )
                     and not _open_files(entry.path, opened)
                 ):
-                    resolution = _package_resolution(entry, package_deadline)
+                    resolution = _package_resolution(entry.path, package_deadline)
                     if resolution is not None:
                         package_resolutions[entry.path] = resolution
         package_seeds = {}
@@ -1581,7 +1580,7 @@ def _compilation_admission(
             products = entry.path / "Build/Products"
             if pressure and _products_rebuildable(entry, completion, deadline):
                 payloads.append(products)
-            if entry.path in package_resolutions and entry.path not in retained_packages and _package_resolution(entry, deadline) == package_resolutions[entry.path]:
+            if entry.path in package_resolutions and entry.path not in retained_packages and _package_resolution(entry.path, deadline) == package_resolutions[entry.path]:
                 payloads.append(entry.path / "SourcePackages")
             for payload in payloads:
                 if not payload.exists() and not payload.is_symlink():
@@ -1928,7 +1927,7 @@ def _prune_caches(
 def seed_source_packages(
     root: Path, current: str, source: Path, derived: Path
 ) -> dict | None:
-    resolution = source / ".package.resolved"
+    resolution = source / "RemoteCoder.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved"
     target = derived / "SourcePackages"
     if target.exists() or not resolution.is_file():
         return None
@@ -1959,7 +1958,7 @@ def _seed_packages_locked(
                 continue
             if locks.enter_context(try_lease(sibling / "ios/build.lock")) is None:
                 continue
-            sibling_resolution = sibling / "ios/repo/.package.resolved"
+            sibling_resolution = sibling / "ios/repo/RemoteCoder.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved"
             if (
                 not sibling_resolution.is_file()
                 or sibling_resolution.read_bytes() != resolution.read_bytes()
@@ -1969,7 +1968,7 @@ def _seed_packages_locked(
                 (
                     p / "SourcePackages"
                     for p in (sibling / "ios").glob("derived-*")
-                    if (p / "SourcePackages/checkouts").is_dir()
+                    if _package_resolution(p, time.monotonic() + 5) == resolution.read_bytes()
                 ),
                 None,
             )

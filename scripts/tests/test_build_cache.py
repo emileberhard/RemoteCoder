@@ -1936,23 +1936,33 @@ class DependencySeedTests(unittest.TestCase):
     def test_package_clone_matches_resolution_respects_locks_and_mutates_independently(
         self,
     ):
+        import json
+        import subprocess
+
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
             sibling = root / "worktrees/warm/ios"
             packages = sibling / "derived-toolchain/SourcePackages"
             checkout = packages / "checkouts/dependency"
             checkout.mkdir(parents=True)
+            init_repository(checkout)
             (checkout / "source").write_text("original")
+            subprocess.run(["git", "add", "."], cwd=checkout, check=True, capture_output=True)
+            subprocess.run(["git", "commit", "-m", "source"], cwd=checkout, check=True, capture_output=True)
+            revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=checkout, text=True).strip()
             (packages / "workspace-state.json").write_text("old-path-state")
             (sibling / "repo").mkdir()
-            resolution = sibling / "repo/.package.resolved"
-            resolution.write_text("pinned")
+            resolution = sibling / "repo/RemoteCoder.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved"
+            resolution.parent.mkdir(parents=True)
+            resolution.write_text(json.dumps({"pins": [{"identity": "dependency", "state": {"revision": revision}}]}))
             source = root / "input"
             source.mkdir()
-            (source / ".package.resolved").write_text("different")
+            requested = source / "RemoteCoder.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved"
+            requested.parent.mkdir(parents=True)
+            requested.write_text("different")
             derived = root / "worktrees/new/ios/derived-toolchain"
             self.assertIsNone(seed_source_packages(root, "new", source, derived))
-            (source / ".package.resolved").write_text("pinned")
+            requested.write_bytes(resolution.read_bytes())
             with (sibling / "build.lock").open("a") as lock:
                 fcntl.flock(lock, fcntl.LOCK_EX)
                 self.assertIsNone(seed_source_packages(root, "new", source, derived))
