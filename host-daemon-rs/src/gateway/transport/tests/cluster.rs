@@ -200,7 +200,7 @@ async fn cluster_self_dispatch_preserves_captured_read_only_caller() {
     let pid = std::process::id() as i32;
     let process = crate::platform::process::identify(pid).unwrap().unwrap();
     let process_identity = process.instance(pid).native_value();
-    let captured_identity = process_identity.clone();
+    let captured_identity = json!({"pid":pid,"birth":process.birth});
     let mut control = crate::test_support::FakeControl::attach(&host, 16).await;
     let gateway = host.clone();
     let responder = tokio::spawn(async move {

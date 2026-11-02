@@ -378,7 +378,12 @@ mod tests {
         fs::write(&info, writable.replace("0100001", "0100000")).unwrap();
         assert!(scan_fixture(&proc_root, &home).unwrap().is_empty());
         fs::write(&info, writable).unwrap();
-        fs::write(proc_root.join("123/stat"), "123 (other) S 1").unwrap();
+        let stat = fs::read_to_string(proc_root.join("123/stat")).unwrap();
+        fs::write(
+            proc_root.join("123/stat"),
+            stat.replace("(codex)", "(other)"),
+        )
+        .unwrap();
         assert!(scan_fixture(&proc_root, &home).unwrap().is_empty());
     }
 
