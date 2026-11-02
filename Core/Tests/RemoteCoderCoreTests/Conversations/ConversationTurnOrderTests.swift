@@ -91,4 +91,18 @@ struct ConversationTurnOrderTests: ConversationHistoryFixtures {
 
         #expect(reloaded.order == ["t1", local, "t2", "t3"])
     }
+
+    @Test func anInterruptedSendKeepsItsPlaceWhenTheConversationContinuesElsewhere() throws {
+        var state = ConversationState(conversationID: UUID(), threadID: "thread")
+        try replay(&state, 0...9)
+        let message = ChatMessage(role: .user, text: "Interrupted")
+        state.submit(message)
+
+        var reopened = ConversationState(conversationID: state.conversationID, threadID: "thread")
+        reopened.restore(state.checkpoint.localRecords)
+        reopened.merge(tail(0...29))
+
+        #expect(reopened.order == ["t1", ConversationState.localTurnID(message.id), "t2", "t3"])
+        #expect(ConversationProjection.project(reopened).messages.first { $0.id == message.id }?.delivery == .unconfirmed)
+    }
 }

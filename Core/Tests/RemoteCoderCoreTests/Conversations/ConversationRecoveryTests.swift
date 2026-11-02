@@ -87,4 +87,28 @@ struct ConversationRecoveryTests {
         #expect(restored.order == [ConversationState.localTurnID(kept.id)])
         #expect(ConversationProjection.project(restored).messages.map(\.text) == ["Kept"])
     }
+
+    @Test func aRemovedMessageWhoseFailureWasNeverSavedStaysRemovedAfterReopening() async throws {
+        let directory = URL.temporaryDirectory.appending(path: UUID().uuidString)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let store = ConversationCheckpointStore(hostID: UUID(), directory: directory, primaryBudgetBytes: 512 * 1_024 * 1_024)
+        let id = UUID()
+        let session = await ConversationSession.make(conversationID: id, threadID: "thread", checkpoints: store)
+        let message = ChatMessage(role: .user, text: "Refused")
+        _ = try await session.submitDurably(message)
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: directory.path)
+        await session.submissionFailed(message.id, failure: .rejected("Open in another client"))
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
+
+        await session.removeNotSent(message.id)
+        try await session.flush()
+
+        let cold = ConversationCheckpointStore(hostID: UUID(), directory: directory, primaryBudgetBytes: 512 * 1_024 * 1_024)
+        let reopened = await ConversationSession.make(conversationID: id, threadID: "thread", checkpoints: cold)
+        try await reopened.restore()
+        #expect(await reopened.snapshot().messages.isEmpty)
+    }
 }

@@ -355,7 +355,8 @@ actor ConversationSession {
 
     func queueRemoved(_ messageID: UUID) async {
         if let successor { await successor.queueRemoved(messageID); return }
-        state.queueRemoved(messageID)
+        guard state.queueRemoved(messageID) else { return }
+        await discardSubmission(messageID)
         await persistLocalChanges()
     }
 
@@ -394,16 +395,23 @@ actor ConversationSession {
         await persistLocalChanges()
     }
 
-    func queueActionFailed(_ messageID: UUID, reason: String) async {
-        if let successor { await successor.queueActionFailed(messageID, reason: reason); return }
-        state.queueActionFailed(messageID, reason: reason)
+    func queueActionFailed(_ messageID: UUID, reason: String) async -> Bool {
+        if let successor { return await successor.queueActionFailed(messageID, reason: reason) }
+        guard state.queueActionFailed(messageID, reason: reason) else { return false }
         await persistLocalChanges()
+        return true
     }
 
     func removeNotSent(_ messageID: UUID) async {
         if let successor { await successor.removeNotSent(messageID); return }
-        state.removeNotSent(messageID)
+        guard state.removeNotSent(messageID) else { return }
+        await discardSubmission(messageID)
         await persistLocalChanges()
+    }
+
+    private func discardSubmission(_ messageID: UUID) async {
+        do { try await checkpoints.discardSubmission(messageID, conversationID: conversationID, generation: checkpointGeneration) }
+        catch { logger.error("Removed submission record failed to delete: \(error.localizedDescription)") }
     }
 
     func merge(_ observation: GatewayHistoryService.ConversationSnapshot, read: ConversationState.HistoryRead) async -> ConversationSnapshot {

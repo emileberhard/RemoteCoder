@@ -405,6 +405,7 @@ private final class StopFixture: TurnDispatchHost {
     }
     func isVisibleConversation(_ conversationID: UUID, sessionID: String?) -> Bool { false }
     func speakIfOwningAudio(_ text: String) {}
+    func presentFailure(_ message: String, conversationID: UUID) {}
     func turnsChanged(_ change: TurnRegistryChange) {}
     func synchronizeConversationActivity() {}
     func retireGatewayJob(threadID: String, turnID: String?, jobID: String) {}

@@ -605,6 +605,11 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
         speech.enqueue(text)
     }
 
+    func presentFailure(_ message: String, conversationID: UUID) {
+        guard acceptsWork else { return }
+        screens.first { $0.currentConversationID == conversationID }?.present(.conversation(message))
+    }
+
     func applyHostRename(_ name: String) {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         hostDisplayName = trimmed.isEmpty ? host.connectionSummary : trimmed

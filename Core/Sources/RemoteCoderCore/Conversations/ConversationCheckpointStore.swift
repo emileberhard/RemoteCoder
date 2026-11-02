@@ -599,6 +599,17 @@ actor ConversationCheckpointStore {
         }
     }
 
+    func discardSubmission(_ messageID: UUID, conversationID: UUID, generation: UInt64) async throws {
+        let generation = try beginOperation(conversationID, generation: generation)
+        defer { finishOperation(conversationID) }
+        try await index()
+        try validate(conversationID, generation: generation)
+        let file = submissionDirectory(conversationID).appending(path: "\(messageID).json")
+        guard FileManager.default.fileExists(atPath: file.path) else { return }
+        try removeSubmissionFile(file, id: conversationID)
+        try removeSubmissionDirectoryIfEmpty(conversationID)
+    }
+
     func saveSubmission(_ record: SubmissionRecord, conversationID: UUID, generation: UInt64) async throws {
         let generation = try beginOperation(conversationID, generation: generation)
         defer { finishOperation(conversationID) }
@@ -1191,13 +1202,20 @@ actor ConversationCheckpointStore {
             switch try Self.submissionCoverage(record, in: checkpoint) {
             case .missing: continue
             case .conflicting: try preserveSubmission(file, id: id)
-            case .absorbed:
-                let bytes = try Self.fileBytes(file)
-                try FileManager.default.removeItem(at: file)
-                records[id]?.bytes -= bytes
-                records[id]?.payloadBytes -= bytes
+            case .absorbed: try removeSubmissionFile(file, id: id)
             }
         }
+        try removeSubmissionDirectoryIfEmpty(id)
+    }
+
+    private func removeSubmissionFile(_ file: URL, id: UUID) throws {
+        let bytes = try Self.fileBytes(file)
+        try FileManager.default.removeItem(at: file)
+        records[id]?.bytes -= bytes
+        records[id]?.payloadBytes -= bytes
+    }
+
+    private func removeSubmissionDirectoryIfEmpty(_ id: UUID) throws {
         if try FileManager.default.contentsOfDirectory(at: submissionDirectory(id), includingPropertiesForKeys: nil).isEmpty {
             try FileManager.default.removeItem(at: submissionDirectory(id))
         }

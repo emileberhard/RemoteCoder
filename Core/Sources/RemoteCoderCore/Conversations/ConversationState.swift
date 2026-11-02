@@ -433,7 +433,8 @@ struct ConversationState: Sendable {
         let id = message.id.uuidString
         // The canonical content is what the agent receives; the local message keeps the display text.
         turn.items[id] = Item(value: .userMessage(id: id, content: [.text(text: input ?? message.text, textElements: [])], clientId: id),
-                              date: message.date, completed: false, detailed: true, isLocal: true, localMessage: message)
+                              placedAfter: latestPosition, date: message.date, completed: false, detailed: true, isLocal: true,
+                              localMessage: message)
         if !turn.order.contains(id) { turn.order.append(id) }
         turns[turnID] = turn
         markPersistedChange()
@@ -442,6 +443,7 @@ struct ConversationState: Sendable {
     mutating func submitToQueue(_ message: ChatMessage, input: String) {
         submit(message, input: input)
         submissions[message.id]?.queue = Submission.Queue()
+        releasePlacement(message.id)
     }
 
     mutating func queued(_ messageID: UUID, submission: CodexAppServerV2.QueuedSubmission) {
@@ -452,23 +454,28 @@ struct ConversationState: Sendable {
         pending.queue = Submission.Queue(submissionID: submission.id, establishedRead: startedQueueReads)
         pending.deliveryError = nil
         submissions[messageID] = pending
+        releasePlacement(messageID)
         markPersistedChange()
     }
 
-    mutating func queueRemoved(_ messageID: UUID) {
-        guard let pending = submissions[messageID], pending.queue != nil, pending.status == .queued else { return }
+    @discardableResult
+    mutating func queueRemoved(_ messageID: UUID) -> Bool {
+        guard let pending = submissions[messageID], pending.queue != nil, pending.status == .queued else { return false }
         remove(pending)
+        return true
     }
 
-    mutating func queueActionFailed(_ messageID: UUID, reason: String) {
-        guard submissions[messageID]?.status == .queued else { return }
+    mutating func queueActionFailed(_ messageID: UUID, reason: String) -> Bool {
+        guard submissions[messageID]?.status == .queued else { return false }
         submissions[messageID]?.deliveryError = reason
         markPersistedChange()
+        return true
     }
 
-    mutating func removeNotSent(_ messageID: UUID) {
-        guard let pending = submissions[messageID], pending.status == .failed else { return }
+    mutating func removeNotSent(_ messageID: UUID) -> Bool {
+        guard let pending = submissions[messageID], pending.status == .failed else { return false }
         remove(pending)
+        return true
     }
 
     private mutating func remove(_ pending: Submission) {
@@ -509,6 +516,7 @@ struct ConversationState: Sendable {
                 submissions[id]?.status = .queued
                 submissions[id]?.queue = Submission.Queue(submissionID: submissionID, establishedRead: read.order)
                 submissions[id]?.deliveryError = nil
+                releasePlacement(id)
                 changed = true
             } else if threadIsIdle, pending.status == .queued, let queue = pending.queue, queue.establishedRead < read.order {
                 submissions[id]?.status = .uncertain
@@ -588,8 +596,17 @@ struct ConversationState: Sendable {
         guard let turnID = submissions[messageID]?.turnID else { return }
         let id = messageID.uuidString
         guard turns[turnID]?.items[id]?.placedAfter == nil else { return }
-        let latest = turns.values.lazy.flatMap(\.items.values).compactMap(\.position).max()
+        let latest = latestPosition
         turns[turnID]?.items[id]?.placedAfter = latest
+    }
+
+    private mutating func releasePlacement(_ messageID: UUID) {
+        guard let turnID = submissions[messageID]?.turnID else { return }
+        turns[turnID]?.items[messageID.uuidString]?.placedAfter = nil
+    }
+
+    private var latestPosition: Int64? {
+        turns.values.lazy.flatMap(\.items.values).compactMap(\.position).max()
     }
 
     mutating func submissionNotDispatched(_ messageID: UUID) {

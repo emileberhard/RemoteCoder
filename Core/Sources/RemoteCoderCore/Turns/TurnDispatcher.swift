@@ -7,6 +7,7 @@ protocol TurnDispatchHost: AnyObject {
     func feedbackForCurrentConversation() -> (HapticEvent) -> Void
     func isVisibleConversation(_ conversationID: UUID, sessionID: String?) -> Bool
     func speakIfOwningAudio(_ text: String)
+    func presentFailure(_ message: String, conversationID: UUID)
     func turnsChanged(_ change: TurnRegistryChange)
     func synchronizeConversationActivity()
     func retireGatewayJob(threadID: String, turnID: String?, jobID: String)
@@ -364,7 +365,7 @@ final class TurnDispatcher {
             } catch {
                 feedback(.error)
                 logger.error("queued start failed thread=\(threadID) error=\(error.localizedDescription)")
-                if let selected { await session.queueActionFailed(selected, reason: error.localizedDescription) }
+                await reportQueueFailure(error, messageID: selected, session: session, conversationID: conversationID)
                 reconcileQueue(threadID: threadID)
             }
         }
@@ -386,10 +387,15 @@ final class TurnDispatcher {
                 reconcileQueue(threadID: threadID)
             } catch {
                 feedback(.error)
-                await session.queueActionFailed(messageID, reason: error.localizedDescription)
+                await reportQueueFailure(error, messageID: messageID, session: session, conversationID: conversationID)
                 reconcileQueue(threadID: threadID)
             }
         }
+    }
+
+    private func reportQueueFailure(_ error: Error, messageID: UUID?, session: ConversationSession, conversationID: UUID) async {
+        if let messageID, await session.queueActionFailed(messageID, reason: error.localizedDescription) { return }
+        host?.presentFailure(error.localizedDescription, conversationID: conversationID)
     }
 
     private func changeQueue(threadID: String, _ operation: @escaping @MainActor () async -> Void) {
