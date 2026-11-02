@@ -57,7 +57,7 @@ struct ConversationRecoveryTests {
         #expect(failed.delivery == .notSent)
         #expect(failed.deliveryError == "Open in another client")
 
-        await session.removeNotSent(message.id)
+        try await session.removeNotSent(message.id)
         try await session.flush()
         #expect(await session.snapshot().messages.isEmpty)
 
@@ -103,7 +103,7 @@ struct ConversationRecoveryTests {
         await session.submissionFailed(message.id, failure: .rejected("Open in another client"))
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
 
-        await session.removeNotSent(message.id)
+        try await session.removeNotSent(message.id)
         try await session.flush()
 
         let cold = ConversationCheckpointStore(hostID: UUID(), directory: directory, primaryBudgetBytes: 512 * 1_024 * 1_024)

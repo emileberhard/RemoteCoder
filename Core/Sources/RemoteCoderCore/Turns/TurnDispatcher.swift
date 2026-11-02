@@ -379,7 +379,7 @@ final class TurnDispatcher {
             guard let queuedSubmissionID = await session.queuedSubmissionID(for: messageID) else { return }
             do {
                 if try await gateway.deleteQueuedMessage(threadID: threadID, queuedSubmissionID: queuedSubmissionID) {
-                    await session.queueRemoved(messageID)
+                    try await session.queueRemoved(messageID)
                 } else {
                     reconcileQueue(threadID: threadID)
                 }

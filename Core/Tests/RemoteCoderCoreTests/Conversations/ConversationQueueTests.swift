@@ -181,10 +181,10 @@ struct ConversationQueueTests: ConversationHistoryFixtures {
         let message = ChatMessage(role: .user, text: "Later")
         state.submitToQueue(message, input: message.text)
         state.submissionFailed(message.id, failure: .uncertain("Timed out"))
-        state.queued(message.id, submission: queued(message, as: "q1"))
         state.apply(try completed("turn"))
         let other = ChatMessage(role: .user, text: "From another device")
         state.apply(try user(other, turnID: "turn-other", ordinal: 1))
+        state.queued(message.id, submission: queued(message, as: "q1"))
 
         #expect(state.order == ["turn", "turn-other", ConversationState.localTurnID(message.id)])
     }

@@ -677,7 +677,10 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
             target.dispatcher.removeQueued(messageID: message.id, conversationID: currentConversationID, threadID: threadID)
         case .notSent:
             guard let session = selectedConversation else { return }
-            Task { await session.removeNotSent(message.id) }
+            Task { [weak self] in
+                do { try await session.removeNotSent(message.id) }
+                catch { self?.present(.conversation(error.localizedDescription)) }
+            }
         default:
             return
         }

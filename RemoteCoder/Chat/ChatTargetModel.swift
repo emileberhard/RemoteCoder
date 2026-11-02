@@ -607,7 +607,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
 
     func presentFailure(_ message: String, conversationID: UUID) {
         guard acceptsWork else { return }
-        screens.first { $0.currentConversationID == conversationID }?.present(.conversation(message))
+        presentingScreens.first { $0.currentConversationID == conversationID }?.present(.conversation(message))
     }
 
     func applyHostRename(_ name: String) {
