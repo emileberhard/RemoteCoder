@@ -146,9 +146,7 @@ async fn run(
                     | config::RuntimeCommand::RetryFailed { .. })
         )
     {
-        anyhow::bail!(
-            "This runtime operation is macOS-only; use the Linux host deployment owner"
-        );
+        anyhow::bail!("This runtime operation is macOS-only; use the Linux host deployment owner");
     }
     if matches!(args.command, Some(config::Command::CheckConfig)) {
         let sources = ConfigSources::load(args.env_file.as_deref())?;
