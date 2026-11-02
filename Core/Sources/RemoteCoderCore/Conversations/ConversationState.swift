@@ -588,7 +588,8 @@ struct ConversationState: Sendable {
         guard let turnID = submissions[messageID]?.turnID else { return }
         let id = messageID.uuidString
         guard turns[turnID]?.items[id]?.placedAfter == nil else { return }
-        turns[turnID]?.items[id]?.placedAfter = turns.values.lazy.flatMap(\.items.values).compactMap(\.position).max()
+        let latest = turns.values.lazy.flatMap(\.items.values).compactMap(\.position).max()
+        turns[turnID]?.items[id]?.placedAfter = latest
     }
 
     mutating func submissionNotDispatched(_ messageID: UUID) {
