@@ -167,7 +167,12 @@ impl PushService {
         journal: Journal,
         path: Option<PathBuf>,
     ) -> Self {
-        let mut notifier = Self::new(false, journal, Arc::new(DeviceRegistry::temporary()), path);
+        let mut notifier = Self::new(
+            PushConfiguration::Disabled,
+            journal,
+            Arc::new(DeviceRegistry::temporary()),
+            path,
+        );
         notifier.broker = Some(PushBroker::new(url, "fixture-broker".into()));
         notifier.unavailable_reason = None;
         notifier

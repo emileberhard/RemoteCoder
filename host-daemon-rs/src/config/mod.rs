@@ -635,7 +635,7 @@ impl ConfigSources {
         Ok(PathBuf::from(value.trim()))
     }
 
-    fn optional_bool(&self, key: &str, default: bool) -> Result<bool> {
+    pub(crate) fn optional_bool(&self, key: &str, default: bool) -> Result<bool> {
         let Some(value) = self.raw(key) else {
             return Ok(default);
         };
