@@ -1,7 +1,10 @@
+pub(crate) mod checkouts;
 mod patch;
+pub(crate) mod turn;
 
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -10,7 +13,7 @@ use nix::unistd::Pid;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
-use tokio::sync::Semaphore;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use patch::{Budgets, ChangedFile, PatchSplitter};
 
@@ -88,24 +91,52 @@ pub(crate) struct Snapshot {
 }
 
 pub(crate) struct ChangeReader {
-    admission: Semaphore,
+    admission: Arc<Semaphore>,
+}
+
+#[derive(Clone)]
+pub(crate) struct Admission {
+    _permit: Arc<OwnedSemaphorePermit>,
+}
+
+impl Admission {
+    pub(crate) async fn blocking<T: Send + 'static>(
+        &self,
+        work: impl FnOnce() -> T + Send + 'static,
+    ) -> Result<T> {
+        let held = self.clone();
+        Ok(tokio::task::spawn_blocking(move || {
+            let _held = held;
+            work()
+        })
+        .await?)
+    }
 }
 
 impl Default for ChangeReader {
     fn default() -> Self {
         Self {
-            admission: Semaphore::new(CONCURRENT_READS),
+            admission: Arc::new(Semaphore::new(CONCURRENT_READS)),
         }
     }
 }
 
 impl ChangeReader {
     pub(crate) async fn read(&self, request: ReadRequest) -> Result<ChangeRead> {
-        let _permit = self.admission.acquire().await?;
-        tokio::time::timeout(
-            READ_TIMEOUT,
-            read(Path::new(&request.directory), request.source),
-        )
+        self.admit(|_| read(Path::new(&request.directory), request.source))
+            .await
+    }
+
+    pub(crate) async fn admit<T, F: Future<Output = Result<T>>>(
+        &self,
+        work: impl FnOnce(Admission) -> F,
+    ) -> Result<T> {
+        tokio::time::timeout(READ_TIMEOUT, async {
+            let admission = Admission {
+                _permit: Arc::new(self.admission.clone().acquire_owned().await?),
+            };
+            work(admission.clone()).await
+        })
         .await
         .map_err(|_| {
             anyhow!(
@@ -565,6 +596,34 @@ impl Drop for ProcessGroup {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures_util::FutureExt;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[tokio::test]
+    async fn a_read_beyond_the_limit_waits_for_a_slot() {
+        let reader = ChangeReader::default();
+        let (finish, finished) = tokio::sync::oneshot::channel::<()>();
+        let started = AtomicBool::new(false);
+        let mut first = std::pin::pin!(reader.admit(|_| async move {
+            finished.await.ok();
+            Ok::<_, anyhow::Error>(())
+        }));
+        let mut second = std::pin::pin!(reader.admit(|_| std::future::pending::<Result<()>>()));
+        let mut third = std::pin::pin!(reader.admit(|_| async {
+            started.store(true, Ordering::SeqCst);
+            Ok::<_, anyhow::Error>(())
+        }));
+
+        assert!(first.as_mut().now_or_never().is_none());
+        assert!(second.as_mut().now_or_never().is_none());
+        assert!(third.as_mut().now_or_never().is_none());
+        assert!(!started.load(Ordering::SeqCst));
+
+        finish.send(()).unwrap();
+        assert!(first.as_mut().now_or_never().is_some());
+        assert!(third.as_mut().now_or_never().is_some());
+        assert!(started.load(Ordering::SeqCst));
+    }
 
     struct Repository {
         _directory: tempfile::TempDir,

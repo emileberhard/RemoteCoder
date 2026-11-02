@@ -4,58 +4,121 @@ import Observation
 @MainActor
 @Observable
 final class ChangeReviewModel {
+    enum Mode: Hashable {
+        case lastTurn
+        case git(ChangeSource)
+
+        static let all: [Mode] = [.lastTurn] + ChangeSource.allCases.map(Mode.git)
+    }
+
     enum State {
         case loading
         case ready(ChangeReview)
         case unavailable(ChangeUnavailability)
+        case noRecentEdits(isComplete: Bool)
         case failed(String)
     }
 
+    enum Checkouts {
+        case unknown
+        case failed
+        case found(CheckoutDiscovery)
+    }
+
+    let conversation: String?
     let directory: String
-    private(set) var source: ChangeSource = .uncommitted
+    private(set) var mode: Mode = .git(.uncommitted)
     private(set) var state: State = .loading
+    private(set) var checkouts: Checkouts = .unknown
+    private(set) var root: String?
     private(set) var isRefreshing = false
     private(set) var collapsedFiles: [ReviewedFile.ID: Bool] = [:]
     private(set) var notes: [ReviewNote.Anchor: ReviewNoteDraft] = [:]
     var focusedNote: ReviewNote.Anchor?
     @ObservationIgnored private let client: GatewayClient
+    @ObservationIgnored private var chosenRoot: String?
+    @ObservationIgnored private var discoversCheckouts = true
     @ObservationIgnored private var loading: Task<Void, Never>?
     @ObservationIgnored private var revision = 0
     @ObservationIgnored private let logger = AppLogger(category: "ChangeReview")
 
-    init(directory: String, client: GatewayClient) {
+    init(conversation: String?, directory: String, client: GatewayClient) {
+        self.conversation = conversation
         self.directory = directory
         self.client = client
     }
 
-    func reviews(directory: String?, through client: GatewayClient) -> Bool {
-        self.directory == directory && self.client === client
+    func reviews(conversation: String?, directory: String?, through client: GatewayClient) -> Bool {
+        self.conversation == conversation && self.directory == directory && self.client === client
     }
 
-    var selectedSource: ChangeSource {
-        get { source }
+    var selectedMode: Mode {
+        get { mode }
         set { select(newValue) }
     }
 
-    func select(_ source: ChangeSource) {
-        guard source != self.source else { return }
-        self.source = source
+    var selectedRoot: String? {
+        get { root }
+        set { select(root: newValue) }
+    }
+
+    func select(_ mode: Mode) {
+        guard mode != self.mode else { return }
+        self.mode = mode
         state = .loading
-        refresh()
+        load()
+    }
+
+    func select(root: String?) {
+        guard let root, root != chosenRoot else { return }
+        chosenRoot = root
+        if root != self.root {
+            self.root = root
+            state = .loading
+        }
+        load()
     }
 
     func refresh() {
+        discoversCheckouts = true
+        load()
+    }
+
+    private func load() {
         loading?.cancel()
         revision += 1
         let revision = revision
-        let source = source
+        let mode = mode
+        let chosen = chosenRoot
+        let known = checkouts
+        let discovering = discoversCheckouts
         isRefreshing = true
-        loading = Task { [weak self, client, directory] in
+        loading = Task { [weak self, client, conversation, directory] in
             let result: State
+            var discovered: Checkouts?
+            var reviewed: String?
             do {
-                switch try await client.readChanges(directory: directory, source: source) {
-                case .ready(let snapshot): result = .ready(await ChangeReviewPreparation.prepare(snapshot, revision: revision))
-                case .unavailable(let reason): result = .unavailable(reason)
+                switch mode {
+                case .lastTurn:
+                    guard let conversation else {
+                        result = .noRecentEdits(isComplete: true)
+                        break
+                    }
+                    switch try await client.readTurnChanges(threadID: conversation) {
+                    case .ready(let changes): result = .ready(await ChangeReviewPreparation.prepare(changes, revision: revision))
+                    case .noRecentEdits(let complete): result = .noRecentEdits(isComplete: complete)
+                    }
+                case .git(let source):
+                    async let fresh: Checkouts? = discovering
+                        ? await Self.discoverCheckouts(client: client, conversation: conversation, directory: directory) : nil
+                    let target = if let chosen { chosen } else { Self.defaultRoot(in: discovering ? await fresh ?? .unknown : known) }
+                    reviewed = target
+                    async let read = client.readChanges(directory: target ?? directory, source: source)
+                    discovered = await fresh
+                    switch try await read {
+                    case .ready(let snapshot): result = .ready(await ChangeReviewPreparation.prepare(snapshot, revision: revision))
+                    case .unavailable(let reason): result = .unavailable(reason)
+                    }
                 }
             } catch is CancellationError {
                 return
@@ -63,10 +126,32 @@ final class ChangeReviewModel {
                 result = .failed(error.localizedDescription)
             }
             guard let self, self.revision == revision, !Task.isCancelled else { return }
-            if case .failed(let message) = result { self.logger.notice("Reading \(source.rawValue) changes failed: \(message)") }
+            if case .failed(let message) = result { self.logger.notice("Reading changes failed: \(message)") }
+            if case .git = mode {
+                self.root = reviewed
+                if let discovered {
+                    self.checkouts = discovered
+                    self.discoversCheckouts = false
+                }
+            }
             self.state = result
             self.isRefreshing = false
         }
+    }
+
+    private nonisolated static func discoverCheckouts(client: GatewayClient, conversation: String?,
+                                                      directory: String) async -> Checkouts {
+        do {
+            return .found(try await client.readCheckouts(threadID: conversation, directory: directory))
+        } catch {
+            AppLogger(category: "ChangeReview").notice("Finding checkouts failed: \(error.localizedDescription)")
+            return .failed
+        }
+    }
+
+    private nonisolated static func defaultRoot(in checkouts: Checkouts) -> String? {
+        guard case .found(let discovery) = checkouts else { return nil }
+        return (discovery.workedIn.first { $0.evidence.contains(.edited) } ?? discovery.workedIn.first)?.root
     }
 
     func stop() {
@@ -88,7 +173,7 @@ final class ChangeReviewModel {
     }
 
     func noteCount(in file: ReviewedFile) -> Int {
-        notes.keys.count(where: { $0.source == file.source && $0.path == file.path })
+        notes.keys.count(where: { $0.comparison == file.comparison && $0.root == file.root && $0.path == file.path })
     }
 
     func comment(on anchor: ReviewNote.Anchor) {
@@ -107,23 +192,36 @@ final class ChangeReviewModel {
 
     func notes(outside review: ChangeReview?) -> [ReviewNoteDraft] {
         notes.values.filter { draft in review?.contains(draft.anchor) != true }
-            .sorted { ($0.anchor.path, $0.anchor.line) < ($1.anchor.path, $1.anchor.line) }
+            .sorted { ($0.anchor.root, $0.anchor.path, $0.anchor.line) < ($1.anchor.root, $1.anchor.path, $1.anchor.line) }
     }
 
     func commentsPrompt() -> String? {
-        let sources = ChangeSource.allCases
         let order: [String: Int]
         if case .ready(let review) = state {
-            order = Dictionary(review.files.enumerated().map { ($1.path, $0) }, uniquingKeysWith: { first, _ in first })
+            order = Dictionary(review.files.enumerated().map { (Self.location($1.root, $1.path), $0) }, uniquingKeysWith: { first, _ in first })
         } else {
             order = [:]
         }
         let sorted = notes.values.map { ReviewNote(anchor: $0.anchor, text: $0.text) }.sorted {
-            let left = (sources.firstIndex(of: $0.anchor.source) ?? 0, order[$0.anchor.path] ?? .max, $0.anchor.path, $0.anchor.line)
-            let right = (sources.firstIndex(of: $1.anchor.source) ?? 0, order[$1.anchor.path] ?? .max, $1.anchor.path, $1.anchor.line)
+            let left = (Self.rank($0.anchor.comparison), Self.turnStart($0.anchor.comparison),
+                        order[Self.location($0.anchor.root, $0.anchor.path)] ?? .max, $0.anchor.root, $0.anchor.path, $0.anchor.line)
+            let right = (Self.rank($1.anchor.comparison), Self.turnStart($1.anchor.comparison),
+                         order[Self.location($1.anchor.root, $1.anchor.path)] ?? .max, $1.anchor.root, $1.anchor.path, $1.anchor.line)
             return left < right
         }
         return ReviewNote.prompt(sorted, scope: scope(of:))
+    }
+
+    func title(of comparison: ReviewComparison) -> String {
+        switch comparison {
+        case .git(let source): source.title
+        case .turn(_, let startedAt): "Turn at \(Self.formattedStart(startedAt))"
+        }
+    }
+
+    static func formattedStart(_ date: Date) -> String {
+        Calendar.current.isDateInToday(date) ? date.formatted(date: .omitted, time: .shortened)
+                                              : date.formatted(date: .abbreviated, time: .shortened)
     }
 
     func clearNotes() {
@@ -131,18 +229,35 @@ final class ChangeReviewModel {
         focusedNote = nil
     }
 
-    private func scope(of source: ChangeSource) -> String {
-        switch source {
-        case .uncommitted: "the uncommitted changes"
-        case .staged: "the staged changes"
-        case .unstaged: "the unstaged changes"
-        case .branch:
-            if case .ready(let review) = state, review.source == .branch, let base = review.base {
+    private func scope(of anchor: ReviewNote.Anchor) -> String {
+        let changes = switch anchor.comparison {
+        case .git(.uncommitted): "the uncommitted changes"
+        case .git(.staged): "the staged changes"
+        case .git(.unstaged): "the unstaged changes"
+        case .git(.branch):
+            if case .ready(let review) = state, case .git(.branch, let root, _, let base?) = review.scope, root == anchor.root {
                 "this branch's changes against \(base)"
             } else {
                 "this branch's changes"
             }
+        case .turn(_, let startedAt): "the edits of the turn that started at \(Self.formattedStart(startedAt))"
         }
+        return "\(changes) in \(anchor.root)"
+    }
+
+    private static func rank(_ comparison: ReviewComparison) -> Int {
+        switch comparison {
+        case .git(let source): ChangeSource.allCases.firstIndex(of: source) ?? 0
+        case .turn: ChangeSource.allCases.count
+        }
+    }
+
+    private static func turnStart(_ comparison: ReviewComparison) -> Date {
+        if case .turn(_, let startedAt) = comparison { startedAt } else { .distantPast }
+    }
+
+    private static func location(_ root: String, _ path: String) -> String {
+        (root as NSString).appendingPathComponent(path)
     }
 
     private static let collapsedLineCount = 400
@@ -166,9 +281,12 @@ final class ReviewNoteDraft: Identifiable {
 
 #if DEBUG
 extension ChangeReviewModel {
-    func showPreview(_ state: State, notes: [ReviewNote] = []) {
+    func showPreview(_ state: State, mode: Mode = .git(.uncommitted), checkouts: Checkouts = .unknown, root: String? = nil,
+                     notes: [ReviewNote] = []) {
         self.state = state
-        if case .ready(let review) = state { source = review.source }
+        self.mode = mode
+        self.checkouts = checkouts
+        self.root = root
         isRefreshing = false
         self.notes = Dictionary(uniqueKeysWithValues: notes.map { note in
             let draft = ReviewNoteDraft(anchor: note.anchor)

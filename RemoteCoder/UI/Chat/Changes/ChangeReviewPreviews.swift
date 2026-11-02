@@ -109,24 +109,67 @@ private enum ChangeReviewFixture {
             files: [file], unlistedFiles: 0, complete: true), revision: 1)
     }
 
+    static let worktree = "/Users/emil/stretch/care.ai.worktrees/codeact"
+
+    static var lastTurn: ChangeReview {
+        let notes = """
+        diff --git a/todo.md b/todo.md
+        --- a/todo.md
+        +++ b/todo.md
+        @@ -1,3 +1,3 @@
+         # Today
+        -- Review the CodeAct branch
+        +- [x] Review the CodeAct branch
+         - Ship 3.91
+
+        """
+        let entries: [(root: String, patch: (String, Int, Int, ChangeSnapshot.Omission?))] = [
+            (worktree, patches[0]), (worktree, patches[1]), ("/Users/emil/notes", (notes, 1, 1, nil)),
+        ]
+        let files = entries.map { entry in
+            TurnChanges.File(root: entry.root, change: ChangeSnapshot.File(patch: entry.patch.0, additions: entry.patch.1,
+                                                                           deletions: entry.patch.2, omitted: entry.patch.3,
+                                                                           replacedInvalidUtf8: false))
+        }
+        return ChangeReviewPreparation.review(of: TurnChanges(
+            turn: TurnChanges.Turn(id: "turn-1", startedAtMs: 1_793_631_000_000, running: false, latest: false),
+            files: files, unlistedFiles: 0, commands: 7, omittedAgents: 1, complete: true, capturedAtMs: 1_793_631_600_000), revision: 1)
+    }
+
+    static var worktreeReview: ChangeReview {
+        ChangeReviewPreparation.review(of: ChangeSnapshot(
+            source: .uncommitted, root: worktree, branch: "feat/codeact", base: nil, capturedAtMs: 1_793_631_600_000,
+            files: Array(snapshot.files.prefix(2)), unlistedFiles: 0, complete: true), revision: 1)
+    }
+
+    static var checkouts: CheckoutDiscovery {
+        CheckoutDiscovery(workedIn: [.init(root: worktree, evidence: [.edited, .command]),
+                                     .init(root: "/Users/emil/stretch/care.ai", evidence: [.command])],
+                          inFolder: ["/Users/emil/stretch/kartan"], complete: true)
+    }
+
     @MainActor
-    static func model(_ state: ChangeReviewModel.State, notes: [ReviewNote] = []) -> ChangeReviewModel? {
+    static func model(_ state: ChangeReviewModel.State, mode: ChangeReviewModel.Mode = .git(.uncommitted),
+                      checkouts: ChangeReviewModel.Checkouts = .unknown, root: String? = nil,
+                      notes: [ReviewNote] = []) -> ChangeReviewModel? {
         let host = GatewayHostConfiguration(id: UUID(), name: "Preview", hostname: "127.0.0.1", port: 1,
                                             authToken: "preview", transport: .trustedNetwork)
         guard let client = try? GatewayClient(host: host, routes: nil) else { return nil }
-        let model = ChangeReviewModel(directory: "/Users/emil/RemoteCoder", client: client)
-        model.showPreview(state, notes: notes)
+        let model = ChangeReviewModel(conversation: "preview", directory: "/Users/emil/stretch", client: client)
+        model.showPreview(state, mode: mode, checkouts: checkouts, root: root, notes: notes)
         return model
     }
 
     static var comment: ReviewNote {
-        ReviewNote(anchor: ReviewNote.Anchor(source: .uncommitted, path: "RemoteCoder/Chat/ChatScreenModel.swift", line: 1372,
-                                             side: .addition, excerpt: "    func insertReviewComments(_ text: String) -> Bool {"),
+        ReviewNote(anchor: ReviewNote.Anchor(comparison: .git(.uncommitted), root: "/Users/emil/RemoteCoder",
+                                             path: "RemoteCoder/Chat/ChatScreenModel.swift", line: 1372, side: .addition,
+                                             excerpt: "    func insertReviewComments(_ text: String) -> Bool {"),
                    text: "Return the outcome so the sheet only closes when the comments landed.")
     }
 
     static var stagedComment: ReviewNote {
-        ReviewNote(anchor: ReviewNote.Anchor(source: .staged, path: "docs/change-review.md", line: 3, side: .addition,
+        ReviewNote(anchor: ReviewNote.Anchor(comparison: .git(.staged), root: "/Users/emil/RemoteCoder", path: "docs/change-review.md",
+                                             line: 3, side: .addition,
                                              excerpt: "The gateway reads one Git comparison per request and the app"),
                    text: "Say what happens to untracked files.")
     }
@@ -136,8 +179,10 @@ private struct ChangeReviewPreview: View {
     @State private var model: ChangeReviewModel?
     @State private var theme = AppThemeStore()
 
-    init(_ state: ChangeReviewModel.State, notes: [ReviewNote] = [], collapsing paths: Set<String> = []) {
-        let model = ChangeReviewFixture.model(state, notes: notes)
+    init(_ state: ChangeReviewModel.State, mode: ChangeReviewModel.Mode = .git(.uncommitted),
+         checkouts: ChangeReviewModel.Checkouts = .unknown, root: String? = nil, notes: [ReviewNote] = [],
+         collapsing paths: Set<String> = []) {
+        let model = ChangeReviewFixture.model(state, mode: mode, checkouts: checkouts, root: root, notes: notes)
         if let model, case .ready(let review) = state {
             for file in review.files where paths.contains(file.path) { model.toggleCollapsed(file) }
         }
@@ -192,5 +237,30 @@ private struct ChangeReviewPreview: View {
 
 #Preview("H · Word emphasis") {
     ChangeReviewPreview(.ready(ChangeReviewFixture.emphasis))
+}
+
+#Preview("I · Last turn") {
+    ChangeReviewPreview(.ready(ChangeReviewFixture.lastTurn), mode: .lastTurn,
+                        collapsing: ["RemoteCoder/Chat/ChatScreenModel.swift"])
+}
+
+#Preview("J · Worktree checkout") {
+    ChangeReviewPreview(.ready(ChangeReviewFixture.worktreeReview), checkouts: .found(ChangeReviewFixture.checkouts),
+                        root: ChangeReviewFixture.worktree)
+}
+
+#Preview("K · No recent edits") {
+    ChangeReviewPreview(.noRecentEdits(isComplete: true), mode: .lastTurn)
+}
+
+#Preview("L · No net changes") {
+    ChangeReviewPreview(.ready(ChangeReviewPreparation.review(of: TurnChanges(
+        turn: TurnChanges.Turn(id: "turn-2", startedAtMs: 1_793_631_000_000, running: false, latest: true),
+        files: [], unlistedFiles: 0, commands: 3, omittedAgents: 1, complete: false, capturedAtMs: 1_793_631_600_000), revision: 1)),
+                        mode: .lastTurn)
+}
+
+#Preview("M · Checkouts unavailable") {
+    ChangeReviewPreview(.unavailable(.notRepository), checkouts: .failed)
 }
 #endif

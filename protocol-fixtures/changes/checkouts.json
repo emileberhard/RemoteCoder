@@ -1,0 +1,14 @@
+{
+  "workedIn": [
+    {
+      "root": "/Users/agent/stretch/care.ai.worktrees/codeact",
+      "evidence": ["edited", "command"]
+    },
+    {
+      "root": "/Users/agent/stretch/care.ai",
+      "evidence": ["command"]
+    }
+  ],
+  "inFolder": ["/Users/agent/stretch/kartan"],
+  "complete": true
+}

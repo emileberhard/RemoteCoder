@@ -1,8 +1,14 @@
 import Foundation
 
+enum ReviewComparison: Hashable, Sendable {
+    case git(ChangeSource)
+    case turn(id: String, startedAt: Date)
+}
+
 struct ReviewNote: Equatable, Sendable {
     struct Anchor: Hashable, Sendable {
-        let source: ChangeSource
+        let comparison: ReviewComparison
+        let root: String
         let path: String
         let line: Int
         let side: DiffLine.Kind
@@ -14,15 +20,15 @@ struct ReviewNote: Equatable, Sendable {
 
     static let quotedCharacters = 200
 
-    static func prompt(_ notes: [ReviewNote], scope: (ChangeSource) -> String) -> String? {
+    static func prompt(_ notes: [ReviewNote], scope: (Anchor) -> String) -> String? {
         var sections: [String] = []
-        var source: ChangeSource?
+        var group: (comparison: ReviewComparison, root: String)?
         for note in notes {
             let text = note.text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !text.isEmpty else { continue }
-            if note.anchor.source != source {
-                source = note.anchor.source
-                sections.append("Review comments on \(scope(note.anchor.source)):")
+            if group?.comparison != note.anchor.comparison || group?.root != note.anchor.root {
+                group = (note.anchor.comparison, note.anchor.root)
+                sections.append("Review comments on \(scope(note.anchor)):")
             }
             sections.append("\(location(of: note.anchor))\n> \(marker(of: note.anchor)) \(quote(note.anchor.excerpt))\n\(text)")
         }

@@ -193,6 +193,8 @@ fn method_specs_keep_owned_routing_and_request_budgets() {
             Some(RequestLifetime::Query),
         ),
         ("changes/read", Some(RequestLifetime::Query)),
+        ("changes/checkouts", Some(RequestLifetime::Query)),
+        ("changes/turn", Some(RequestLifetime::Query)),
         (
             "conversation/metadata/custom",
             Some(RequestLifetime::Command),
