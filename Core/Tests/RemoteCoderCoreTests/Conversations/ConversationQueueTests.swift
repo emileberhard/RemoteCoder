@@ -162,4 +162,16 @@ struct ConversationQueueTests: ConversationHistoryFixtures {
         #expect(messages.last?.wasSteered == false)
         #expect(state.order == ["turn", "turn-resumed"])
     }
+
+    @Test func aFailedQueueActionShowsWhyOnTheQueuedRow() throws {
+        var state = try runningState()
+        let message = ChatMessage(role: .user, text: "Later")
+        state.submitToQueue(message, input: message.text)
+        state.queued(message.id, submission: queued(message, as: "q1"))
+        state.queueActionFailed(message.id, reason: "Open in another client")
+
+        let row = try #require(ConversationProjection.project(state).messages.last)
+        #expect(row.delivery == .queued)
+        #expect(row.deliveryError == "Open in another client")
+    }
 }

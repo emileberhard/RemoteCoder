@@ -90,7 +90,8 @@ struct ConversationStateRetentionTests {
         let pending = ChatMessage(role: .user, text: "Pending")
         state.submit(pending)
         state.accepted(pending.id, turnID: "pending")
-        state.appendLocal(ChatMessage(role: .codex, text: "Local record"), turnID: "local")
+        let local = ChatMessage(role: .user, text: "Local record", canonicalTurnID: "local")
+        state.submit(local)
         for index in 0..<40 {
             let id = "recent-\(index)"
             try start(id, in: &state)
@@ -102,7 +103,7 @@ struct ConversationStateRetentionTests {
         }
         #expect(Set(state.turns.keys) == Set((8..<40).map { "recent-\($0)" } + ["loaded", "active", "pending", "local"]))
         #expect(state.turns["recent-39"]?.items.count == 1)
-        #expect(Set(state.submissions.keys) == [pending.id])
+        #expect(Set(state.submissions.keys) == [pending.id, local.id])
     }
 
     @Test func streamingGrowthDefersTheByteBoundToTheNextItem() throws {

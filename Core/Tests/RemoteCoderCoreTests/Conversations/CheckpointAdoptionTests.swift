@@ -72,13 +72,13 @@ struct CheckpointAdoptionTests: ConversationHistoryFixtures {
         var original = ConversationState(conversationID: id, threadID: "thread")
         let pending = ChatMessage(role: .user, text: "Pending source input")
         original.submit(pending)
-        original.appendLocal(ChatMessage(role: .codex, text: "Unique source answer"), turnID: "source")
+        original.submit(ChatMessage(role: .user, text: "Unique source answer", canonicalTurnID: "source"))
         original.questionDismissals = ["source": .init(threadId: "thread", itemId: "source", expectedRecordRevision: 1,
             expectedEpoch: "epoch", mutationId: UUID())]
         let firstImport = UUID()
         try await store.adopt(.invalidated(original.checkpoint), conversationID: id, threadID: "thread", importID: firstImport)
         var other = ConversationState(conversationID: id, threadID: "thread")
-        other.appendLocal(ChatMessage(role: .codex, text: "Later local answer"), turnID: "source")
+        other.submit(ChatMessage(role: .user, text: "Later local answer", canonicalTurnID: "source"))
         other.turns["source"]?.terminal = true
         other.questionDismissals = ["other": .init(threadId: "thread", itemId: "other", expectedRecordRevision: 2,
             expectedEpoch: "epoch", mutationId: UUID())]

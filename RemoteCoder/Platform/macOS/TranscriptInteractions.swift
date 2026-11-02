@@ -15,10 +15,12 @@ struct ChatBubbleMenu: View {
 
     var body: some View {
         if let deliveryActions {
-            if let sendNow = deliveryActions.sendNow {
+            if message.delivery == .queued, let sendNow = deliveryActions.sendNow {
                 Button("Send Now") { sendNow(message) }
             }
-            Button("Remove from Queue", role: .destructive) { deliveryActions.remove(message) }
+            Button(message.delivery == .queued ? "Remove from Queue" : "Remove", role: .destructive) {
+                deliveryActions.remove(message)
+            }
             Divider()
         }
         Button("Copy") { HapticService.shared.copy(rendered?.plainText ?? message.inlineContent?.plainText ?? message.text) }

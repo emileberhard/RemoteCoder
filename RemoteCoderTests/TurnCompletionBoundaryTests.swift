@@ -132,7 +132,10 @@ struct TurnCompletionBoundaryTests {
 
         await gateway.stop()
 
-        #expect(await waitUntil { chat.messages.contains { $0.text.hasPrefix("⛔️") } })
+        #expect(await waitUntil {
+            chat.messages.contains { $0.text == "Hi" && $0.delivery == .unconfirmed && $0.deliveryError != nil }
+        })
+        #expect(chat.messages.allSatisfy { $0.role == .user })
         #expect(await waitUntil { chat.currentReplyDelivery == .idle })
         #expect(chat.target.historyBusySessionIDs.isEmpty)
     }
@@ -149,7 +152,7 @@ struct TurnCompletionBoundaryTests {
         try? await Task.sleep(for: .milliseconds(1_500))
         #expect(chat.currentReplyDelivery == .acknowledged)
         #expect(chat.target.historyBusySessionIDs == [Self.thread])
-        #expect(!chat.messages.contains { $0.text.hasPrefix("⛔️") })
+        #expect(!chat.messages.contains { $0.deliveryError != nil })
     }
 
     private func openChat(_ fixture: WorkspaceFixture) async throws -> ChatScreenModel {

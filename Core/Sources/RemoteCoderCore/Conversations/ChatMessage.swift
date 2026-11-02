@@ -17,6 +17,7 @@ struct ChatMessage: Identifiable, Sendable, Equatable, Codable {
     /// first one was steered.
     var wasSteered: Bool
     var delivery: Delivery?
+    var deliveryError: String?
     var isStreaming: Bool
     var canonicalTurnID: String?
     var canonicalItemID: String?

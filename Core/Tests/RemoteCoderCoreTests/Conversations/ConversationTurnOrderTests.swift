@@ -72,4 +72,23 @@ struct ConversationTurnOrderTests: ConversationHistoryFixtures {
 
         #expect(state.order == ["t1", "t2", ConversationState.localTurnID(message.id)])
     }
+
+    @Test func aMessageThatWasNotSentKeepsItsPlaceWhenHistoryReloadsAroundIt() throws {
+        var state = ConversationState(conversationID: UUID(), threadID: "thread")
+        try replay(&state, 0...9)
+        let message = ChatMessage(role: .user, text: "Refused")
+        state.submit(message)
+        state.submissionFailed(message.id, failure: .rejected("Open in another client"))
+        try replay(&state, 10...29)
+        let local = ConversationState.localTurnID(message.id)
+        #expect(state.order == ["t1", local, "t2", "t3"])
+
+        let saved = try JSONDecoder().decode(ConversationState.Checkpoint.self,
+            from: JSONEncoder().encode(state.checkpoint.localRecords))
+        var reloaded = ConversationState(conversationID: state.conversationID, threadID: "thread")
+        reloaded.restore(saved)
+        reloaded.merge(tail(0...29))
+
+        #expect(reloaded.order == ["t1", local, "t2", "t3"])
+    }
 }

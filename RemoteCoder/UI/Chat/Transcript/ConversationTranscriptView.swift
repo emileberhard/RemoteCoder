@@ -69,7 +69,7 @@ struct ConversationTranscriptView: View {
         if !screen.canSteerCurrentConversation {
             sendNow = { [screen] message in screen.sendQueuedMessageNow(message) }
         }
-        return MessageDeliveryActions(sendNow: sendNow, remove: { [screen] message in screen.removeQueuedMessage(message) })
+        return MessageDeliveryActions(sendNow: sendNow, remove: { [screen] message in screen.removeMessage(message) })
     }
 
     private var transcript: some View {

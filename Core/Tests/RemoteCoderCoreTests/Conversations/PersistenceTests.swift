@@ -33,7 +33,7 @@ struct PersistenceTests {
         }
         let store = ConversationCheckpointStore(hostID: UUID(), directory: directory, primaryBudgetBytes: 512 * 1_024 * 1_024)
         var state = ConversationState(conversationID: UUID(), threadID: "thread")
-        state.appendLocal(ChatMessage(role: .codex, text: "Only on this device"), turnID: nil)
+        state.submit(ChatMessage(role: .user, text: "Only on this device"))
         try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: directory.path)
         await #expect(throws: (any Error).self) { try await store.save(state.checkpoint, conversationID: state.conversationID) }
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
@@ -52,7 +52,7 @@ struct PersistenceTests {
         #expect(try await store.load(state.conversationID)?.durableRevision == 0)
         var snapshots: [ConversationState.Checkpoint] = []
         for index in 0..<20 {
-            state.appendLocal(ChatMessage(role: .codex, text: "Record \(index)"), turnID: nil)
+            state.submit(ChatMessage(role: .user, text: "Record \(index)"))
             snapshots.append(state.checkpoint)
         }
         let id = state.conversationID
@@ -69,7 +69,7 @@ struct PersistenceTests {
         let store = ConversationCheckpointStore(hostID: UUID(), directory: directory, primaryBudgetBytes: 512 * 1_024 * 1_024)
         let id = UUID()
         let session = await ConversationSession.make(conversationID: id, threadID: "thread", checkpoints: store)
-        await session.appendLocal(ChatMessage(role: .codex,
+        _ = try await session.submit(ChatMessage(role: .user,
             text: String(repeating: "Retained transcript. ", count: 20_000)))
         func inventory(_ revision: UInt64) -> QuestionHostSnapshot {
             .init(threadId: "thread", epoch: "epoch", revision: revision,

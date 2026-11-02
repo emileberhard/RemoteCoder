@@ -670,9 +670,17 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
                                       settings: turnSettings(model: model))
     }
 
-    func removeQueuedMessage(_ message: ChatMessage) {
-        guard target.acceptsWork, message.delivery == .queued, let threadID = activeSessionID else { return }
-        target.dispatcher.removeQueued(messageID: message.id, conversationID: currentConversationID, threadID: threadID)
+    func removeMessage(_ message: ChatMessage) {
+        switch message.delivery {
+        case .queued:
+            guard target.acceptsWork, let threadID = activeSessionID else { return }
+            target.dispatcher.removeQueued(messageID: message.id, conversationID: currentConversationID, threadID: threadID)
+        case .notSent:
+            guard let session = selectedConversation else { return }
+            Task { await session.removeNotSent(message.id) }
+        default:
+            return
+        }
     }
 
     private func committed(_ userMessage: ChatMessage, in session: ConversationSession, conversationID: UUID,

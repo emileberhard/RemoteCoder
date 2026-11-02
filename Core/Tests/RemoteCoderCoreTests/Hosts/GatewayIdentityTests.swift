@@ -196,7 +196,7 @@ struct GatewayIdentityTests: ConversationHistoryFixtures {
         let conversationID = UUID()
         let originalCheckpoints = ConversationCheckpointStore(hostID: source.id, storage: temporary.storage, primaryBudgetBytes: 512 * 1_024 * 1_024)
         var state = ConversationState(conversationID: conversationID, threadID: "thread")
-        state.appendLocal(ChatMessage(role: .codex, text: "Saved answer"), turnID: "turn")
+        state.submit(ChatMessage(role: .user, text: "Saved answer", canonicalTurnID: "turn"))
         try await originalCheckpoints.save(state.checkpoint, conversationID: conversationID)
         defaults.set(["thread": "Pinned"], forKey: ConversationPinStore.storageKey(hostID: source.id))
         defaults.set(["host": source.id.uuidString, "thread": "thread"], forKey: "workspace.open-conversation.v1")
@@ -273,7 +273,7 @@ struct GatewayIdentityTests: ConversationHistoryFixtures {
             generation: await sourceStore.generation(for: originalID))
         let destination = ConversationCheckpointStore(hostID: gateway, storage: temporary.storage, primaryBudgetBytes: 512 * 1_024 * 1_024)
         var existing = ConversationState(conversationID: targetID, threadID: "thread")
-        existing.appendLocal(ChatMessage(role: .codex, text: "Unique canonical local record"), turnID: "local")
+        existing.submit(ChatMessage(role: .user, text: "Unique canonical local record", canonicalTurnID: "local"))
         existing.merge(history(items: [.agentMessage(id: "stale", text: "Previously cached history")], threadID: "thread"))
         try await destination.save(existing.checkpoint, conversationID: targetID)
         var canonical = legacy

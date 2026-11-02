@@ -35,6 +35,7 @@ enum ConversationProjection {
         fileprivate struct DeliveryInput: Equatable, Sendable {
             let status: ConversationState.Submission.Status
             let isQueued: Bool
+            let error: String?
         }
 
         fileprivate struct Entry: Sendable {
@@ -121,7 +122,8 @@ enum ConversationProjection {
     static func project(_ state: ConversationState, memo: inout Memo) -> ConversationSnapshot {
         let deliveries = state.submissions.compactMapValues { submission in
             submission.message.wasSteered || submission.queue != nil || sendDelivery(submission.status) != nil
-                ? Memo.DeliveryInput(status: submission.status, isQueued: submission.queue != nil) : nil
+                ? Memo.DeliveryInput(status: submission.status, isQueued: submission.queue != nil,
+                                     error: submission.deliveryError) : nil
         }
         let inputs = Memo.Inputs(conversationID: state.conversationID, threadID: state.threadID,
             expandedTimelineAnchors: state.expandedTimelineAnchors,
@@ -263,6 +265,7 @@ enum ConversationProjection {
             if var message = message(record, threadID: threadID, turnID: turnID, wasSteered: userCount > 0, userContents: &userContents) {
                 if message.wasSteered, record.isLocal {
                     message.delivery = steerDelivery(deliveries[message.id]?.status, turnIsActive: turn.isActive)
+                    message.deliveryError = deliveries[message.id]?.error
                     queuedSteers.append(message)
                     continue
                 }
@@ -270,10 +273,9 @@ enum ConversationProjection {
                 if message.role == .user {
                     userCount += 1
                     if message.wasSteered { message.delivery = .steered }
-                    else if record.isLocal, let input = deliveries[message.id], input.isQueued {
-                        message.delivery = queueDelivery(input.status)
-                    } else if record.isLocal, let input = deliveries[message.id] {
-                        message.delivery = sendDelivery(input.status)
+                    else if record.isLocal, let input = deliveries[message.id] {
+                        message.delivery = input.isQueued ? queueDelivery(input.status) : sendDelivery(input.status)
+                        message.deliveryError = input.error
                     }
                     if let receivedAtMs = record.completedAtMs {
                         boundaryDate = Date(timeIntervalSince1970: TimeInterval(receivedAtMs) / 1000)

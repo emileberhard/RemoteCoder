@@ -932,18 +932,18 @@ private struct TranscriptContentView<QuestionContent: View, BottomBar: View>: Vi
     private func messageRow(_ message: ChatMessage) -> some View {
         #if os(macOS)
         let fork: (ChatMessage) -> Void = { [actions = nativePresentation.actions] in actions.fork($0) }
-        let queued = nativePresentation.actions.deliveryActions
+        let delivery = nativePresentation.actions.deliveryActions
         let attachment: (MessageAttachment) -> Void = { [actions = nativePresentation.actions] in actions.openAttachment($0) }
         #else
         let fork = onFork
-        let queued = deliveryActions
+        let delivery = deliveryActions
         let attachment: (MessageAttachment) -> Void = { [selection = $openingAttachment] in selection.wrappedValue = $0 }
         #endif
         return ChatBubble(
             message: message,
             renderedMessages: renderedMessages,
             onFork: forkableMessageIDs.contains(message.id) ? fork : nil,
-            deliveryActions: message.delivery == .queued ? queued : nil,
+            deliveryActions: message.delivery == .queued || message.delivery == .notSent ? delivery : nil,
             onSelectText: textSelectionAction(for: message),
             onOpenAttachment: attachment
         )

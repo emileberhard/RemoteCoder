@@ -78,7 +78,7 @@ private extension ChatBubble {
     var messageContent: some View {
         VStack(alignment: .leading, spacing: 12) {
             if let delivery = message.delivery, delivery != .sending || revealsSending {
-                DeliveryLabel(delivery: delivery)
+                DeliveryLabel(delivery: delivery, error: message.deliveryError)
             }
             if let replies = message.questionReplies, !replies.isEmpty {
                 // A reply envelope shows each answer under the question it answers.
@@ -312,12 +312,19 @@ struct MessageDeliveryActions {
 
 private struct DeliveryLabel: View {
     let delivery: ChatMessage.Delivery
+    let error: String?
 
     var body: some View {
-        Label(title, systemImage: systemImage)
-            .scaledFont(.caption2)
-            .foregroundStyle(.secondary)
-            .accessibilityLabel(accessibilityLabel)
+        VStack(alignment: .leading, spacing: 2) {
+            Label(title, systemImage: systemImage)
+                .accessibilityLabel(accessibilityLabel)
+            if let error {
+                Text(error)
+            }
+        }
+        .scaledFont(.caption2)
+        .foregroundStyle(.secondary)
+        .accessibilityElement(children: .combine)
     }
 
     private var title: String {

@@ -394,9 +394,15 @@ actor ConversationSession {
         await persistLocalChanges()
     }
 
-    func appendLocal(_ message: ChatMessage, turnID: String? = nil) async {
-        if let successor { await successor.appendLocal(message, turnID: turnID); return }
-        state.appendLocal(message, turnID: turnID)
+    func queueActionFailed(_ messageID: UUID, reason: String) async {
+        if let successor { await successor.queueActionFailed(messageID, reason: reason); return }
+        state.queueActionFailed(messageID, reason: reason)
+        await persistLocalChanges()
+    }
+
+    func removeNotSent(_ messageID: UUID) async {
+        if let successor { await successor.removeNotSent(messageID); return }
+        state.removeNotSent(messageID)
         await persistLocalChanges()
     }
 

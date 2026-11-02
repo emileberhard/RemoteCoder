@@ -9,7 +9,7 @@ struct ChatBubbleMenu: View {
 
     var body: some View {
         if let deliveryActions {
-            if let sendNow = deliveryActions.sendNow {
+            if message.delivery == .queued, let sendNow = deliveryActions.sendNow {
                 Button {
                     sendNow(message)
                 } label: {
@@ -19,7 +19,7 @@ struct ChatBubbleMenu: View {
             Button(role: .destructive) {
                 deliveryActions.remove(message)
             } label: {
-                Label("Remove from Queue", systemImage: "trash")
+                Label(message.delivery == .queued ? "Remove from Queue" : "Remove", systemImage: "trash")
             }
         }
 

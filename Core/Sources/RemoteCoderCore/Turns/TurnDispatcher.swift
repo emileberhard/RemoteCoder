@@ -264,12 +264,7 @@ final class TurnDispatcher {
                     if !(error is CancellationError) { feedback(.error) }
                     let failure = Self.inputDeliveryFailure(error)
                     await session.submissionFailed(submission.userMessageID, failure: failure)
-                    if case .uncertain = failure {
-                        await host.reconcileInputDelivery(threadID: activeTurn.threadID)
-                        guard !isClosed, await session.deliveryIsUncertain(submission.userMessageID) else { return }
-                    }
-                    await appendLocalReply("⛔️ \(failure.userMessage)", conversationID: submission.conversationID,
-                                           sessionID: activeTurn.threadID)
+                    if case .uncertain = failure { await host.reconcileInputDelivery(threadID: activeTurn.threadID) }
                 }
             }
         }
@@ -290,7 +285,6 @@ final class TurnDispatcher {
                 feedback(.error)
                 let failure = Self.inputDeliveryFailure(error)
                 await session.submissionFailed(messageID, failure: failure)
-                await appendLocalReply("⛔️ \(failure.userMessage)", conversationID: conversationID, sessionID: threadID)
                 if case .uncertain = failure { reconcileQueue(threadID: threadID) }
             }
         }
@@ -329,6 +323,7 @@ final class TurnDispatcher {
         changeQueue(threadID: threadID) { [self] in
             defer { unlock(conversationID: conversationID, sessionID: threadID) }
             let session = await conversations.session(conversationID: conversationID, threadID: threadID)
+            var selected: UUID?
             do {
                 try Task.checkCancellation()
                 guard !isClosed else { return }
@@ -341,6 +336,7 @@ final class TurnDispatcher {
                     guard let first = try await gateway.queuedMessages(threadID: threadID).first else { return }
                     queued = first
                 }
+                selected = UUID(uuidString: queued.clientUserMessageId)
                 try Task.checkCancellation()
                 guard !isClosed else { return }
                 try await gateway.verifyDispatchAllowed(to: threadID)
@@ -362,14 +358,13 @@ final class TurnDispatcher {
                     ))
                     host.synchronizeConversationActivity()
                 }
-                if let messageID = UUID(uuidString: queued.clientUserMessageId) {
-                    await session.accepted(messageID, turnID: turnID)
-                }
+                if let selected { await session.accepted(selected, turnID: turnID) }
             } catch is CancellationError {
                 reconcileQueue(threadID: threadID)
             } catch {
                 feedback(.error)
-                await appendLocalReply("⛔️ \(error.localizedDescription)", conversationID: conversationID, sessionID: threadID)
+                logger.error("queued start failed thread=\(threadID) error=\(error.localizedDescription)")
+                if let selected { await session.queueActionFailed(selected, reason: error.localizedDescription) }
                 reconcileQueue(threadID: threadID)
             }
         }
@@ -391,7 +386,7 @@ final class TurnDispatcher {
                 reconcileQueue(threadID: threadID)
             } catch {
                 feedback(.error)
-                await appendLocalReply("⛔️ \(error.localizedDescription)", conversationID: conversationID, sessionID: threadID)
+                await session.queueActionFailed(messageID, reason: error.localizedDescription)
                 reconcileQueue(threadID: threadID)
             }
         }
@@ -509,8 +504,6 @@ final class TurnDispatcher {
                     await host.reconcileInputDelivery(threadID: threadID)
                     guard !isClosed, await session.deliveryIsUncertain(userMessageID) else { return }
                 }
-                await appendLocalReply("⛔️ \(failure.userMessage)", conversationID: conversationID,
-                                       sessionID: resolvedSessionID ?? sessionID)
                 if host.isVisibleConversation(conversationID, sessionID: resolvedSessionID ?? sessionID) {
                     host.speakIfOwningAudio("Error: \(failure.userMessage)")
                 }
@@ -524,11 +517,6 @@ final class TurnDispatcher {
 
     private func unlock(conversationID: UUID, sessionID: String?) {
         host?.turnsChanged(turns.unlock(conversationID: conversationID, threadID: sessionID))
-    }
-
-    private func appendLocalReply(_ text: String, conversationID: UUID, sessionID: String?) async {
-        let session = await conversations.session(conversationID: conversationID, threadID: sessionID)
-        await session.appendLocal(ChatMessage(role: .codex, text: text))
     }
 
     private static func inputDeliveryFailure(_ error: Error) -> ConversationState.SubmissionFailure {

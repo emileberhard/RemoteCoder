@@ -873,7 +873,7 @@ struct ConversationCheckpointStoreTests: ConversationHistoryFixtures {
         let store = ConversationCheckpointStore(hostID: host, directory: directory, primaryBudgetBytes: 40 * 1_024)
         let session = await ConversationSession.make(conversationID: id, threadID: "thread", checkpoints: store)
         try await session.restore()
-        await session.appendLocal(ChatMessage(role: .codex, text: "Checkpoint must remain writable"))
+        _ = try await session.submit(ChatMessage(role: .user, text: "Checkpoint must remain writable"))
         try await session.flush()
         let snapshot = await session.snapshot()
         for message in settled.prefix(2) {
@@ -1905,7 +1905,7 @@ struct ConversationCheckpointStoreTests: ConversationHistoryFixtures {
         try original.write(to: directory.appending(path: "\(id).sqlite"))
         let store = ConversationCheckpointStore(hostID: UUID(), directory: directory, primaryBudgetBytes: 512 * 1_024 * 1_024)
         var state = ConversationState(conversationID: id, threadID: "thread")
-        state.appendLocal(ChatMessage(role: .codex, text: "New local record"), turnID: nil)
+        state.submit(ChatMessage(role: .user, text: "New local record"))
         try await store.save(state.checkpoint, conversationID: id)
         #expect(try recoveredCheckpointFiles(id, directory: directory).contains { try Data(contentsOf: $0) == original })
         #expect(try await store.load(id)?.containsLocalRecords == true)

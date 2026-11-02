@@ -6,6 +6,7 @@ struct ConversationState: Sendable {
     struct Item: Codable, Sendable, Equatable {
         var value: CodexAppServerV2.ThreadItem
         var position: Int64?
+        var placedAfter: Int64?
         var date: Date?
         var completedAtMs: Int64?
         var completed: Bool
@@ -18,7 +19,13 @@ struct ConversationState: Sendable {
         var hasStreamingPrefix = false
 
         private enum CodingKeys: String, CodingKey {
-            case value, position, date, completedAtMs, completed, detailed, isLocal, localMessage, activity, observedLive, encodedBytes
+            case value, position, placedAfter, date, completedAtMs, completed, detailed, isLocal, localMessage, activity
+            case observedLive, encodedBytes
+        }
+
+        var isRetiredLocalNotice: Bool {
+            guard isLocal, case .agentMessage = value else { return false }
+            return true
         }
     }
 
@@ -337,7 +344,7 @@ struct ConversationState: Sendable {
         for (id, saved) in checkpoint.turns {
             var turn = turns[id] ?? Turn(id: id)
             turn.order = Self.mergeOrder(existing: turn.order, observed: saved.order)
-            for (itemID, savedItem) in saved.items where !reconciled.contains(itemID) {
+            for (itemID, savedItem) in saved.items where !reconciled.contains(itemID) && !savedItem.isRetiredLocalNotice {
                 if var item = turn.items[itemID] {
                     if item.localMessage == nil, let message = savedItem.localMessage {
                         item.localMessage = message
@@ -450,10 +457,25 @@ struct ConversationState: Sendable {
 
     mutating func queueRemoved(_ messageID: UUID) {
         guard let pending = submissions[messageID], pending.queue != nil, pending.status == .queued else { return }
-        submissions.removeValue(forKey: messageID)
-        let id = messageID.uuidString
-        turns[pending.turnID]?.items.removeValue(forKey: id)
-        turns[pending.turnID]?.order.removeAll { $0 == id }
+        remove(pending)
+    }
+
+    mutating func queueActionFailed(_ messageID: UUID, reason: String) {
+        guard submissions[messageID]?.status == .queued else { return }
+        submissions[messageID]?.deliveryError = reason
+        markPersistedChange()
+    }
+
+    mutating func removeNotSent(_ messageID: UUID) {
+        guard let pending = submissions[messageID], pending.status == .failed else { return }
+        remove(pending)
+    }
+
+    private mutating func remove(_ pending: Submission) {
+        let id = pending.message.id
+        submissions.removeValue(forKey: id)
+        turns[pending.turnID]?.items.removeValue(forKey: id.uuidString)
+        turns[pending.turnID]?.order.removeAll { $0 == id.uuidString }
         if Self.isLocalTurnID(pending.turnID), turns[pending.turnID]?.order.isEmpty == true {
             turns.removeValue(forKey: pending.turnID)
             order.removeAll { $0 == pending.turnID }
@@ -491,6 +513,7 @@ struct ConversationState: Sendable {
             } else if threadIsIdle, pending.status == .queued, let queue = pending.queue, queue.establishedRead < read.order {
                 submissions[id]?.status = .uncertain
                 submissions[id]?.deliveryError = "The queue no longer lists this message."
+                placeAfterLatestTurn(id)
                 changed = true
             }
         }
@@ -509,10 +532,12 @@ struct ConversationState: Sendable {
         if let previous = pending.message.canonicalTurnID, previous != turnID { pending.message.wasSteered = false }
         pending.message.canonicalTurnID = turnID
         pending.status = .accepted
+        pending.deliveryError = nil
         submissions[messageID] = pending
         var turn = ensureTurn(turnID)
         if var item {
             item.localMessage = pending.message
+            item.placedAfter = nil
             turn.items[id] = item
             if !turn.order.contains(id) {
                 let index = oldTurnID == turnID ? (oldIndex ?? turn.order.count) : (pending.message.wasSteered ? turn.order.count : 0)
@@ -555,15 +580,20 @@ struct ConversationState: Sendable {
             submissions[messageID]?.status = .uncertain
             submissions[messageID]?.deliveryError = reason
         }
+        placeAfterLatestTurn(messageID)
         markPersistedChange()
     }
 
-    mutating func submissionNotDispatched(_ messageID: UUID) {
-        guard let pending = submissions.removeValue(forKey: messageID) else { return }
+    private mutating func placeAfterLatestTurn(_ messageID: UUID) {
+        guard let turnID = submissions[messageID]?.turnID else { return }
         let id = messageID.uuidString
-        turns[pending.turnID]?.items.removeValue(forKey: id)
-        turns[pending.turnID]?.order.removeAll { $0 == id }
-        markPersistedChange()
+        guard turns[turnID]?.items[id]?.placedAfter == nil else { return }
+        turns[turnID]?.items[id]?.placedAfter = turns.values.lazy.flatMap(\.items.values).compactMap(\.position).max()
+    }
+
+    mutating func submissionNotDispatched(_ messageID: UUID) {
+        guard let pending = submissions[messageID] else { return }
+        remove(pending)
     }
 
     mutating func takeDiscardedSteers(of turnID: String) -> Submission? {
@@ -576,17 +606,6 @@ struct ConversationState: Sendable {
         for steer in steers { submissionNotDispatched(steer.message.id) }
         submit(message, input: steers.map(\.input).joined(separator: "\n"))
         return submissions[message.id]
-    }
-
-    mutating func appendLocal(_ message: ChatMessage, turnID: String?) {
-        let id = turnID.map(resolvedTurnID) ?? Self.localTurnID(message.id)
-        var turn = ensureTurn(id)
-        let itemID = message.id.uuidString
-        turn.items[itemID] = Item(value: .agentMessage(id: itemID, text: message.text), date: message.date,
-                                  completed: true, detailed: true, isLocal: true, localMessage: message)
-        if !turn.order.contains(itemID) { turn.order.append(itemID) }
-        turns[id] = turn
-        markPersistedChange()
     }
 
     mutating func activity(turnID: String, active: Bool) {
@@ -1022,20 +1041,27 @@ struct ConversationState: Sendable {
     }
 
     private mutating func orderTurnsByOrdinal() {
-        var placed: [(id: String, ordinal: Int64)] = []
+        var placed: [(id: String, placement: Placement)] = []
         var following: [String?: [String]] = [:]
-        var latest: (id: String, ordinal: Int64)?
+        var latest: (id: String, placement: Placement)?
         for id in order {
-            guard let ordinal = turns[id]?.items.values.lazy.compactMap(\.position).min() else {
+            guard let placement = turns[id].flatMap(Self.placement) else {
                 following[latest?.id, default: []].append(id)
                 continue
             }
-            placed.append((id, ordinal))
-            if ordinal >= latest?.ordinal ?? .min { latest = (id, ordinal) }
+            placed.append((id, placement))
+            if latest.map({ placement >= $0.placement }) ?? true { latest = (id, placement) }
         }
-        let ordered = (following[nil] ?? []) + placed.sorted { $0.ordinal < $1.ordinal }
+        let ordered = (following[nil] ?? []) + placed.sorted { $0.placement < $1.placement }
             .flatMap { [$0.id] + (following[$0.id] ?? []) }
         if ordered != order { order = ordered }
+    }
+
+    private typealias Placement = (ordinal: Int64, follows: Int)
+
+    private static func placement(of turn: Turn) -> Placement? {
+        if let ordinal = turn.items.values.lazy.compactMap(\.position).min() { return (ordinal, 0) }
+        return turn.items.values.lazy.compactMap(\.placedAfter).min().map { ($0, 1) }
     }
 
     private mutating func trim() {

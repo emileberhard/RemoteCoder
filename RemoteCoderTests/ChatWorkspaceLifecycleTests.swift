@@ -331,7 +331,7 @@ struct ChatWorkspaceLifecycleTests {
         let screen = try #require(fixture.workspace.screen(for: fixture.mini.id))
         try #require(await screen.prepareDraft())
         let session = await screen.target.conversations.session(threadID: "quit-checkpoint")
-        await session.appendLocal(ChatMessage(role: .codex, text: "Previous local record"))
+        _ = try await session.submit(ChatMessage(role: .user, text: "Previous local record"))
         try await session.flush()
         let directory = fixture.temporaryStorage.storage.directory(for: .device).appending(path: "conversations-v1/\(fixture.mini.id)")
         try await withCheckpointWriterLock(directory.appending(path: "\(session.conversationID).sqlite")) {
@@ -380,7 +380,7 @@ struct ChatWorkspaceLifecycleTests {
         defer { await fixture.cleanUp() }
         let screen = try #require(fixture.workspace.screen(for: fixture.book.id))
         let session = await screen.target.conversations.session(threadID: "retiring-checkpoint")
-        await session.appendLocal(ChatMessage(role: .codex, text: "Previous local record"))
+        _ = try await session.submit(ChatMessage(role: .user, text: "Previous local record"))
         try await session.flush()
         let directory = fixture.temporaryStorage.storage.directory(for: .device).appending(path: "conversations-v1/\(fixture.book.id)")
         try await withCheckpointWriterLock(directory.appending(path: "\(session.conversationID).sqlite")) {
@@ -531,7 +531,6 @@ struct ChatWorkspaceLifecycleTests {
         original.input = "too late"
         #expect(await original.send() == false)
         #expect(original.messages.count == messagesBefore)
-        #expect(original.messages.contains { $0.text.contains("⛔️") } == false)
         #expect(original.target.turns.jobs.isEmpty)
         #expect(await gateway.requests("turn/start").isEmpty)
         #expect(replacement.messages.isEmpty)
