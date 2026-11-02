@@ -645,7 +645,11 @@ run only in maintenance/preview, under that pass's maintenance lease, with a
 directory allocations, avoiding another recursive scan of every worktree.
 These directory totals attribute hard links to the first subtree visited.
 A timeout retains completed child totals but never supplies a whole-root total;
-a failed scan with filesystem errors supplies no totals. Entries absent from
+a failed scan with filesystem errors supplies no totals. Missing root allocation
+keeps maintenance under pressure: it reclaims eligible payloads under the same
+leases and retention rules instead of treating a smaller compiler sum as proof
+that the total cap is met. Normal build admission still uses its compiler
+estimate. Final root measurement alone determines whether maintenance met the cap. Entries absent from
 the native depth inventory use the same bounded per-entry measurement as build
 admission. That estimate shares its remaining inventory time
 among the remaining directories so one slow tree cannot starve all later trees.
