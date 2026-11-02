@@ -622,7 +622,8 @@ actor ConversationSession {
     }
 
     private var awaitingAuthoritativeHistory: Bool {
-        requiresAuthoritativeHistory && state.window == nil && state.order.isEmpty && !state.checkpoint.containsLocalRecords
+        requiresAuthoritativeHistory && savedPersistenceRevision == nil && state.window == nil && state.order.isEmpty
+            && !state.checkpoint.containsLocalRecords
     }
 
     private var needsPersistence: Bool {
