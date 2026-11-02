@@ -38,6 +38,20 @@ impl ClaudeTestSettings {
 }
 
 impl ClaudeSettings {
+    pub(crate) fn disabled(paths: &HostPaths) -> Self {
+        Self {
+            enabled: false,
+            claude_path: PathBuf::from("claude"),
+            claude_home: paths.home().join(".claude"),
+            config_dir: None,
+            router: None,
+            default_model: "claude-fable-5".to_owned(),
+            auth_preflight_interval_secs: 300,
+            mcp_endpoint: String::new(),
+            mcp_config_dir: paths.state("claude-mcp"),
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn isolated_for_test() -> ClaudeTestSettings {
         let root = tempfile::tempdir().expect("test Claude home");

@@ -641,14 +641,7 @@ impl Gateway {
 
         // Gateway-owned voice and observer work gets one control connection.
         // Each remote client opens its own independent app-server connection.
-        let control_task = {
-            let gw = Arc::clone(self);
-            let task_gw = Arc::clone(&gw);
-            tokio::spawn(task_gw.run_task_logged("codex_control_loop", async move {
-                gw.codex_control_loop().await
-            }))
-        };
-        *self.control_task.lock().await = Some(control_task);
+        self.start_control().await;
 
         self.start_activity_publisher().await;
         if let Err(error) = self.start_sessions().await {
@@ -696,6 +689,31 @@ impl Gateway {
         self.jobs.start_driver()?;
         crate::cluster::driver::start(self)?;
         Ok(())
+    }
+
+    pub(crate) async fn start_runtime(self: &Arc<Self>) -> Result<()> {
+        anyhow::ensure!(
+            !self.claude_settings.enabled,
+            "runtime supervisor cannot enable Claude"
+        );
+        if let Some(receipt) = &self.shutdown_receipt {
+            receipt.begin().await;
+        }
+        self.codex.verify_ready().await?;
+        self.load_turn_state().await?;
+        self.start_control().await;
+        Ok(())
+    }
+
+    async fn start_control(self: &Arc<Self>) {
+        let control_task = {
+            let gw = Arc::clone(self);
+            let task_gw = Arc::clone(&gw);
+            tokio::spawn(task_gw.run_task_logged("codex_control_loop", async move {
+                gw.codex_control_loop().await
+            }))
+        };
+        *self.control_task.lock().await = Some(control_task);
     }
 
     /// Drains agent notifications into the shared client funnel.

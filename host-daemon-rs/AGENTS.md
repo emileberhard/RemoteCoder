@@ -84,6 +84,12 @@ scoped receipt reads require the exact sender conversation.
 
 ## Process model
 
+`runtime serve` owns only the managed Codex control loop, external token renewal
+and exact restart recovery. It exposes no HTTP/TLS or agent coordination listener,
+starts no cluster/job driver, and disables Claude. Dedicated instances require
+separate HOME/CODEX_HOME and operator-owned Unix socket delegation and isolation.
+
+
 Linux managed Claude sessions support caller ownership and recovery. Terminal
 Claude native-parent inbox forwarding is unavailable on Linux. Linux caller
 capture uses the kernel peer credentials on the private Unix coordination

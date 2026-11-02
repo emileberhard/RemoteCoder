@@ -280,7 +280,7 @@ fn router(state: HttpState) -> Router {
         .merge(speech)
 }
 
-async fn shutdown_signal(state: HttpState) {
+pub(crate) async fn wait_for_shutdown_signal() {
     let ctrl_c = async {
         let _ = tokio::signal::ctrl_c().await;
     };
@@ -299,6 +299,10 @@ async fn shutdown_signal(state: HttpState) {
         _ = ctrl_c => {},
         _ = term => {},
     }
+}
+
+async fn shutdown_signal(state: HttpState) {
+    wait_for_shutdown_signal().await;
 
     state.drain_transfers();
 
