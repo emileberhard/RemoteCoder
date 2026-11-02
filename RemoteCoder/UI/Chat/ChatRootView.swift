@@ -621,7 +621,8 @@ private struct ChatScreen: View {
 
     private var chatTranscript: some View {
         ConversationTranscriptView(screen: screen, focus: $inputFocused,
-                                   onDismissComposerFocus: dismissComposerFocus, onShowAgents: showAgents)
+                                   onDismissComposerFocus: dismissComposerFocus, onShowAgents: showAgents,
+                                   onReviewChanges: reviewChanges)
             #if os(macOS)
             .safeAreaInset(edge: .top, spacing: 0) {
                 if find.isPresented { TranscriptFindBar(find: find, screen: screen) }
@@ -886,7 +887,7 @@ private struct ChatScreen: View {
             changeReview?.stop()
             changeReview = ChangeReviewModel(conversation: screen.activeSessionID, directory: directory, client: client)
         }
-        changeReview?.refresh()
+        changeReview?.reopen()
         isReviewingChanges = true
         #if os(macOS)
         isInspectorPresented = true

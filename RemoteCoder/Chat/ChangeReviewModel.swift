@@ -11,6 +11,8 @@ final class ChangeReviewModel {
         static let all: [Mode] = [.lastTurn] + ChangeSource.allCases.map(Mode.git)
     }
 
+    nonisolated static let defaultSource = ChangeSource.unstaged
+
     enum State {
         case loading
         case ready(ChangeReview)
@@ -27,7 +29,7 @@ final class ChangeReviewModel {
 
     let conversation: String?
     let directory: String
-    private(set) var mode: Mode = .git(.uncommitted)
+    private(set) var mode: Mode = .git(defaultSource)
     private(set) var state: State = .loading
     private(set) var checkouts: Checkouts = .unknown
     private(set) var root: String?
@@ -82,6 +84,16 @@ final class ChangeReviewModel {
     func refresh() {
         discoversCheckouts = true
         load()
+    }
+
+    func reopen() {
+        let initial = Mode.git(Self.defaultSource)
+        if mode != initial || chosenRoot != nil {
+            mode = initial
+            chosenRoot = nil
+            state = .loading
+        }
+        refresh()
     }
 
     private func load() {
@@ -151,7 +163,7 @@ final class ChangeReviewModel {
 
     private nonisolated static func defaultRoot(in checkouts: Checkouts) -> String? {
         guard case .found(let discovery) = checkouts else { return nil }
-        return (discovery.workedIn.first { $0.evidence.contains(.edited) } ?? discovery.workedIn.first)?.root
+        return discovery.defaultRoot
     }
 
     func stop() {
@@ -281,7 +293,7 @@ final class ReviewNoteDraft: Identifiable {
 
 #if DEBUG
 extension ChangeReviewModel {
-    func showPreview(_ state: State, mode: Mode = .git(.uncommitted), checkouts: Checkouts = .unknown, root: String? = nil,
+    func showPreview(_ state: State, mode: Mode = .git(defaultSource), checkouts: Checkouts = .unknown, root: String? = nil,
                      notes: [ReviewNote] = []) {
         self.state = state
         self.mode = mode

@@ -12,15 +12,18 @@ struct ConversationTranscriptView: View {
     let focus: ComposerFocus
     let onDismissComposerFocus: () -> Void
     let onShowAgents: (ConversationAgentsModel) -> Void
+    let onReviewChanges: () -> Void
     @State private var openURLAction: OpenURLAction
 
     init(screen: ChatScreenModel, focus: ComposerFocus,
          onDismissComposerFocus: @escaping () -> Void,
-         onShowAgents: @escaping (ConversationAgentsModel) -> Void) {
+         onShowAgents: @escaping (ConversationAgentsModel) -> Void,
+         onReviewChanges: @escaping () -> Void) {
         self.screen = screen
         self.focus = focus
         self.onDismissComposerFocus = onDismissComposerFocus
         self.onShowAgents = onShowAgents
+        self.onReviewChanges = onReviewChanges
         _openURLAction = State(initialValue: OpenURLAction { [weak screen] url in
             screen?.openFileURL(url, transition: nil, presentationScope: nil) ?? .discarded
         })
@@ -53,6 +56,9 @@ struct ConversationTranscriptView: View {
         .transcriptConversationAnimation(identity: transcriptIdentity)
         .onAppear {
             screen.markTranscriptFirstAppear()
+        }
+        .task(id: screen.changeSummary.map { ObjectIdentifier($0) }) {
+            screen.changeSummary?.refresh()
         }
         #if os(iOS)
         .onChange(of: transcriptIdentity) { _, _ in
@@ -103,14 +109,15 @@ struct ConversationTranscriptView: View {
             onLoadHistory: screen.historyEdges.load,
             onShowLatest: screen.historyEdges.showLatest,
             onFirstContent: screen.markTranscriptFirstAppear,
-            bottomBar: screen.conversationAgents.flatMap { agents in
-                agents.summary.flatMap { summary in
-                    summary.total == 0 ? nil : SubagentsPill(agents: agents, recent: summary.recent) {
-                        onShowAgents(agents)
-                    }
-                }
-            }
+            bottomBar: statusPills
         )
+    }
+
+    private var statusPills: ConversationStatusPills? {
+        let changes = screen.changeSummary.flatMap { $0.hasChanges ? $0.totals : nil }
+        let agents = screen.conversationAgents.flatMap { ($0.summary?.total ?? 0) > 0 ? $0 : nil }
+        guard changes != nil || agents != nil else { return nil }
+        return ConversationStatusPills(changes: changes, agents: agents, onReviewChanges: onReviewChanges, onShowAgents: onShowAgents)
     }
 
     private var transcriptIdentity: String {

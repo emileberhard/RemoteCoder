@@ -24,8 +24,7 @@ struct ChatScreenChrome: ViewModifier {
                     onReturnToParent: onReturnToParent,
                     onOpenConversations: onOpenConversations,
                     onChooseFolder: onChooseFolder,
-                    onNewChatInHome: onNewChatInHome,
-                    onReviewChanges: reviewChanges
+                    onNewChatInHome: onNewChatInHome
                 )
                 .chatLayoutDiagnostics("header")
             }

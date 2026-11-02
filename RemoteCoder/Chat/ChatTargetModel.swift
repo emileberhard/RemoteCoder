@@ -622,7 +622,10 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
         fileImports.resumeWaiting()
         await gateway.resumeLivenessChecks()
         reconcileObservation()
-        for screen in presentingScreens { screen.dictation.refreshRecoverable() }
+        for screen in presentingScreens {
+            screen.dictation.refreshRecoverable()
+            screen.changeSummary?.refresh()
+        }
         await perform(effects)
         if lifecycle.foreground == .deferred {
             logger.notice("scenePhase active deferred gateway refresh for hidden idle context")
@@ -700,6 +703,12 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
 
     private func screenShowing(_ threadID: String) -> ChatScreenModel? {
         presentingScreens.first { $0.activeSessionID == threadID } ?? screens.first { $0.activeSessionID == threadID }
+    }
+
+    private func refreshChangeSummaries(showing threadID: String) {
+        for screen in presentingScreens where screen.activeSessionID == threadID {
+            screen.changeSummary?.refresh()
+        }
     }
 
     private func isShown(_ threadID: String) -> Bool {
@@ -1704,6 +1713,10 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
             if haptics.consume(occurrence), !replay, isPresenting(threadID) { feedback(.warning) }
         }
 
+        if method == "item/completed", !replay, case .fileChange = event.item {
+            refreshChangeSummaries(showing: threadID)
+        }
+
         if method == "turn/completed" {
             var status: CodexAppServerV2.TurnStatus?
             if case .turnCompleted(let completion) = note.server { status = completion.status }
@@ -1782,6 +1795,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
         )
 
         synchronizeConversationActivity()
+        refreshChangeSummaries(showing: completed.threadID)
 
         if isShown(completed.threadID),
            transcriptRecovery.awaitsCompletion(ofNormalizedTurn: completed.normalizedTurnID, sessionID: completed.threadID) {

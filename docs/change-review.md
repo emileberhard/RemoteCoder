@@ -4,9 +4,9 @@ Change review shows what changed in the checkouts a conversation worked in, or
 what its last turn with edits changed anywhere on the host, and turns line
 comments into one pasted block in the composer, so the user can review an
 agent's work and answer it without leaving the chat. On iPhone and
-iPad it is a sheet opened from the header's diff button; on the Mac it is the
-inspector's Changes mode (⇧⌘D, the toolbar's Changes button or the command
-palette).
+iPad it is a sheet opened from the changes pill above the composer; on the Mac
+it is the inspector's Changes mode (the changes pill, ⇧⌘D, the toolbar's
+Changes button or the command palette).
 
 ## Comparisons
 
@@ -53,9 +53,32 @@ The app reads the first `workedIn` checkout with `edited` evidence, else the
 first one, else the working folder, and shows every candidate in the
 comparison menu. Opening or refreshing the review finds the checkouts again,
 so the default follows the latest edits; switching comparisons reuses the
-last answer. A chosen checkout stays selected while the review lives. When
+last answer. Each opening starts at the default comparison and checkout, the
+ones the changes pill counted, as ChatGPT's capsule does; until then a chosen
+comparison and checkout stay selected across refreshes. When
 discovery fails, the menu says so and the review reads the chosen checkout or
 the working folder.
+
+## Changes pill
+
+The changes pill sits beside the subagents pill above the composer, as in
+ChatGPT for iOS, and appears only while the conversation's checkout has
+unstaged changes. It shows the file count and, when every file's counts are
+known, the added and removed lines. `ChangeSummaryModel` owns those totals for
+the screen's conversation and folder: it reads `changes/checkouts`, then
+`changes/read` with the review's default comparison
+(`ChangeReviewModel.defaultSource`) in the same default checkout the review
+opens, and keeps only the totals (`ChangeTotals`, which the review's summary
+shares). A New Chat without a conversation has no pill.
+
+- It reads when the conversation appears, when a file change or turn of the
+  shown conversation completes, and when the app becomes active. One read runs
+  at a time; requests during it start one more read two seconds after it
+  ends, so a turn that edits many files costs a read every few seconds at most.
+- A failed read keeps the last totals and logs; a folder that is not a
+  repository, or has no changes, hides the pill.
+- Opening the review reads again, so the review can list a newer state than
+  the pill counted.
 
 ## Last turn
 
@@ -176,6 +199,11 @@ stays a thin host boundary.
   shell commands, other agents and the user. Last Turn complements it with the
   agents' own records, which work outside Git and across checkouts but miss
   command edits, so it says how many commands ran instead of guessing.
+- Unstaged is the default comparison and the pill's count, as in ChatGPT for
+  iOS 1.2026.286: on a connected host its capsule counts the index-to-working-
+  tree diff, hides at zero files and opens its review on Unstaged. ChatGPT
+  stages from its review, so its count covers what is not staged yet;
+  Uncommitted stays in the menu for staged changes.
 - Checkout discovery reads history and the filesystem only: no Git process,
   branch names or dirty filtering, so it stays cheap enough to repeat on every
   refresh.
