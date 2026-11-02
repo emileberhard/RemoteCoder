@@ -171,20 +171,28 @@ struct UnifiedDiffTests {
         }
     }
 
-    @Test func reviewNotesBecomeOnePromptAndSkipBlankNotes() {
+    @Test func reviewNotesBecomeOnePromptGroupedByComparisonAndRoot() {
+        func anchor(_ comparison: ReviewComparison, root: String = "/r", _ path: String, _ line: Int, _ side: DiffLine.Kind,
+                    _ excerpt: String) -> ReviewNote.Anchor {
+            .init(comparison: comparison, root: root, path: path, line: line, side: side, excerpt: excerpt)
+        }
         let notes = [
-            ReviewNote(anchor: .init(source: .uncommitted, path: "a.swift", line: 12, side: .addition, excerpt: "let x = 1"),
-                       text: " Use a constant. "),
-            ReviewNote(anchor: .init(source: .uncommitted, path: "b.swift", line: 3, side: .deletion, excerpt: "old()"),
-                       text: "Keep this call."),
-            ReviewNote(anchor: .init(source: .uncommitted, path: "c.swift", line: 1, side: .context, excerpt: "x"), text: "  "),
-            ReviewNote(anchor: .init(source: .staged, path: "d.js", line: 1, side: .addition,
-                                     excerpt: String(repeating: "x", count: 300)), text: "Minified."),
+            ReviewNote(anchor: anchor(.git(.uncommitted), "a.swift", 12, .addition, "let x = 1"), text: " Use a constant. "),
+            ReviewNote(anchor: anchor(.git(.uncommitted), "b.swift", 3, .deletion, "old()"), text: "Keep this call."),
+            ReviewNote(anchor: anchor(.git(.uncommitted), "c.swift", 1, .context, "x"), text: "  "),
+            ReviewNote(anchor: anchor(.git(.staged), "d.js", 1, .addition, String(repeating: "x", count: 300)), text: "Minified."),
+            ReviewNote(anchor: anchor(.turn("t1"), "e.md", 2, .addition, "Hello"), text: "Typo."),
+            ReviewNote(anchor: anchor(.turn("t1"), root: "/notes", "f.md", 1, .deletion, "Old"), text: "Keep it."),
         ]
-        let scope: (ChangeSource) -> String = { "the \($0.rawValue) changes" }
+        let scope: (ReviewNote.Anchor) -> String = { anchor in
+            switch anchor.comparison {
+            case .git(let source): "the \(source.rawValue) changes in \(anchor.root)"
+            case .turn(let id): "turn \(id) in \(anchor.root)"
+            }
+        }
 
         #expect(ReviewNote.prompt(notes, scope: scope) == """
-        Review comments on the uncommitted changes:
+        Review comments on the uncommitted changes in /r:
 
         a.swift:12
         > + let x = 1
@@ -194,11 +202,23 @@ struct UnifiedDiffTests {
         > - old()
         Keep this call.
 
-        Review comments on the staged changes:
+        Review comments on the staged changes in /r:
 
         d.js:1
         > + \(String(repeating: "x", count: 200))…
         Minified.
+
+        Review comments on turn t1 in /r:
+
+        e.md:2
+        > + Hello
+        Typo.
+
+        Review comments on turn t1 in /notes:
+
+        f.md:1 (removed line)
+        > - Old
+        Keep it.
         """)
         #expect(ReviewNote.prompt([notes[2]], scope: scope) == nil)
     }

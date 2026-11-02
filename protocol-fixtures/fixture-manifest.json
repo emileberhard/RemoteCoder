@@ -28,12 +28,12 @@
     {
       "path": "changes/checkouts.json",
       "contract": "changes/checkouts lists the checkouts a conversation and its agents worked in, newest first with their evidence, other checkouts directly in a plain working folder, and whether the list is complete.",
-      "consumers": ["host-daemon-rs/src/changes/checkouts.rs"]
+      "consumers": ["host-daemon-rs/src/changes/checkouts.rs", "Core/Tests/RemoteCoderCoreTests/Changes/ConversationChangesTests.swift"]
     },
     {
       "path": "changes/turn-ready.json",
       "contract": "changes/turn returns the latest turn with edits and one Git-format patch per file with the folder or checkout it is relative to, plus command and omitted-agent counts.",
-      "consumers": ["host-daemon-rs/src/gateway/conversation_changes.rs"]
+      "consumers": ["host-daemon-rs/src/gateway/conversation_changes.rs", "Core/Tests/RemoteCoderCoreTests/Changes/ConversationChangesTests.swift"]
     },
     {
       "path": "checkpoints/inline-literal-text-v2.json",
