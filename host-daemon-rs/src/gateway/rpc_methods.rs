@@ -111,6 +111,7 @@ impl Gateway {
             OwnedRoute::Favorites => self.favorites_rpc(method, params).await,
             OwnedRoute::Preferences => self.preferences_rpc(method, params).await,
             OwnedRoute::Projects => self.projects_rpc(params).await,
+            OwnedRoute::Changes => self.changes_rpc(params).await,
             OwnedRoute::Settings => self.update_conversation_settings(params).await,
             OwnedRoute::Interrupt => self.interrupt_codex_turn(params).await,
             OwnedRoute::Native => return Err(anyhow!("unclassified gateway request")),
@@ -366,6 +367,18 @@ impl Gateway {
         }
         let projects = self.projects.resolve(directories).await?;
         Ok(json!({ "projects": projects }))
+    }
+
+    async fn changes_rpc(&self, params: Value) -> RpcResult {
+        let request: crate::changes::ReadRequest = decode_params(params)?;
+        if !request.directory.starts_with('/') {
+            return Err(RpcError::new(
+                RpcCode::InvalidParams,
+                "directory must be an absolute path",
+            ));
+        }
+        Ok(serde_json::to_value(self.changes.read(request).await?)
+            .context("Could not encode the changes")?)
     }
 
     async fn devices_rpc(&self, method: &str, params: Value) -> RpcResult {

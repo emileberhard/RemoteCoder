@@ -535,6 +535,9 @@ gateway-e2e-delegated-jobs-isolated candidate package:
 gateway-e2e-query-admission-isolated $candidate:
     bun dev-tools/probes/query-admission.mjs "$candidate"
 
+gateway-e2e-change-review-isolated $candidate:
+    bun dev-tools/probes/change-review.mjs "$candidate"
+
 gateway-e2e-provider-fallback-isolated $candidate:
     bun dev-tools/probes/provider-fallback.mjs "$candidate"
 

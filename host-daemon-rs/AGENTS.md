@@ -688,6 +688,11 @@ blocks startup or provider journal retirement.
   results are cached per directory (2,048 entries, 10 minutes). A directory
   whose Git call times out or cannot run is left out of the reply and not
   cached, so the client keeps it unresolved and asks again later.
+- `changes/read` (`{directory, source}`) reads one Git comparison of a working
+  folder as bounded per-file patches (`src/changes/`). It never writes the
+  repository: untracked files go through a private index copy and object
+  directory, and each Git process group dies with its request. Sources,
+  budgets and the reply shape are in [Change review](../docs/change-review.md).
 - History is the app-server v2 `thread/items/list` and `thread/turns/list` on
   both providers; there is no gateway-specific history read. Codex answers
   them itself. For `claude_` threads the gateway serves the same wire shape,

@@ -42,6 +42,7 @@ x25519-dalek = { version = "3.0.0", features = ["getrandom", "static_secrets"] }
 html5ever = { version = "=0.40.1", default-features = false }
 cssparser = { version = "=0.38.0", default-features = false }
 lol_html = "=3.0.3"
+tempfile = "3.10.1"
 url = "2.5.8"
 unicode-segmentation = "=1.13.3"
 
@@ -50,7 +51,6 @@ sha2 = "0.11.1"
 serde_json = "1.0.133"
 
 [dev-dependencies]
-tempfile = "3.10.1"
 tokio = { version = "1.41.1", features = ["full", "test-util"] }
 
 [profile.release]
