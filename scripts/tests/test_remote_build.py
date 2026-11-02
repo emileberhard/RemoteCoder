@@ -524,6 +524,8 @@ class RemoteBuildTests(unittest.TestCase):
             self.assertEqual((root / "maintenance.json").read_text(), "previous maintenance")
 
     def test_maintenance_reports_total_cap_overflow_then_clears_and_preserves_unknown(self):
+        import build_cache
+
         policy = CachePolicy(512, 259200, 172800, 7200, 64 * 1024, 2, 0, True, 86400)
         with tempfile.TemporaryDirectory() as temporary:
             home = Path(temporary).resolve()
@@ -556,7 +558,7 @@ class RemoteBuildTests(unittest.TestCase):
                 self.assertEqual(status["owner"], "remotecoder-build")
                 self.assertTrue(status["observed_at"].endswith("+00:00"))
                 with (
-                    patch("build_cache.cache_allocated_bytes", side_effect=TimeoutError("du unavailable")),
+                    patch("build_cache.cache_inventory", side_effect=[build_cache.cache_inventory(root), TimeoutError("du unavailable")]),
                     self.assertRaises(SystemExit),
                 ):
                     module.main()
