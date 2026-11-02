@@ -260,6 +260,7 @@ def build(args):
         (root / "runtime/claude").mkdir(parents=True)
         (root / "systemd").mkdir()
         shutil.copy2(gateway, root / "bin" / gateway.name)
+        (root / "bin" / gateway.name).chmod(0o755)
         shutil.copytree(args.codex_package, root / "runtime/codex", symlinks=True)
         (root / "runtime/approvals").mkdir()
         approval = (
@@ -300,6 +301,7 @@ def build(args):
 
 
 def main():
+    os.umask(0o077)
     parser = argparse.ArgumentParser(
         description="Build and verify an immutable native Linux host bundle; callers own release admission."
     )
