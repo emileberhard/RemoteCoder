@@ -18,7 +18,8 @@ private struct StatusPillsFixture: View {
                     StatusPill(action: {}) {
                         HStack(spacing: 6) {
                             Image(systemName: "person.2.fill")
-                            Text("1 subagent")
+                            Text("4 subagents")
+                            Image(systemName: "ellipsis")
                         }
                     }
                 }
