@@ -29,6 +29,7 @@ final class ResponsivenessMetrics {
     struct HistoryOpenStart: Sendable {
         let instant: ContinuousClock.Instant
         let backgroundEntries: UInt64
+        let startedInBackground: Bool
     }
 
     struct Snapshot: Sendable, Equatable {
@@ -42,7 +43,7 @@ final class ResponsivenessMetrics {
     private let busyPeriods = MainRunLoopBusyPeriods()
 
     func install() {
-        busyPeriods.install(on: CFRunLoopGetMain())
+        busyPeriods.install()
     }
 
     func contextChanged(_ context: UsageContext) {
@@ -52,15 +53,15 @@ final class ResponsivenessMetrics {
     }
 
     func snapshot(at now: UInt64) -> Snapshot {
-        Snapshot(mainRunLoop: busyPeriods.counters(at: now), historyOpens: historyOpens)
+        Snapshot(mainRunLoop: busyPeriods.settle(at: now), historyOpens: historyOpens)
     }
 
     func historyOpenStarted(at instant: ContinuousClock.Instant) -> HistoryOpenStart {
-        HistoryOpenStart(instant: instant, backgroundEntries: backgroundEntries)
+        HistoryOpenStart(instant: instant, backgroundEntries: backgroundEntries, startedInBackground: scene == .background)
     }
 
     func historyOpenReachedContent(_ start: HistoryOpenStart, at instant: ContinuousClock.Instant) {
-        guard start.backgroundEntries == backgroundEntries else {
+        guard !start.startedInBackground, start.backgroundEntries == backgroundEntries else {
             historyOpenAbandoned()
             return
         }
@@ -111,35 +112,36 @@ final class MainRunLoopBusyPeriods {
     var label = "scene=unknown surface=unknown"
     private(set) var completed = Counters()
     private var busySince: UInt64?
+    private var settled: UInt64 = 0
+    private var counted = false
     private var lastNotice: UInt64?
     private var suppressedNotices = 0
-    private var observers: [CFRunLoopObserver] = []
+    private var installed = false
     private let logger = AppLogger(category: "Responsiveness")
 
-    func install(on runLoop: CFRunLoop) {
-        guard observers.isEmpty else { return }
+    @MainActor
+    func install() {
+        guard !installed else { return }
         var context = CFRunLoopObserverContext(version: 0, info: Unmanaged.passUnretained(self).toOpaque(),
-                                               retain: nil, release: nil, copyDescription: nil)
+                                               retain: Self.retainInfo, release: Self.releaseInfo,
+                                               copyDescription: nil)
         guard let wake = CFRunLoopObserverCreate(kCFAllocatorDefault, CFRunLoopActivity.afterWaiting.rawValue, true,
                                                  CFIndex.min, Self.wakeCallout, &context),
               let sleep = CFRunLoopObserverCreate(kCFAllocatorDefault, CFRunLoopActivity.beforeWaiting.rawValue, true,
                                                   CFIndex.max, Self.sleepCallout, &context) else { return }
-        for observer in [wake, sleep] { CFRunLoopAddObserver(runLoop, observer, .commonModes) }
-        observers = [wake, sleep]
+        for observer in [wake, sleep] { CFRunLoopAddObserver(CFRunLoopGetMain(), observer, .commonModes) }
+        installed = true
     }
 
-    func counters(at now: UInt64) -> Counters {
-        var counters = completed
-        if let busySince, now >= busySince {
-            let elapsed = now - busySince
-            counters.busyNanoseconds &+= elapsed
-            if elapsed >= Self.hangThreshold { counters.hangNanoseconds &+= elapsed }
-        }
-        return counters
+    func settle(at now: UInt64) -> Counters {
+        if let busySince, now >= busySince { advance(to: now - busySince) }
+        return completed
     }
 
     func wake(at now: UInt64) {
         busySince = now
+        settled = 0
+        counted = false
     }
 
     func sleep(at now: UInt64) {
@@ -147,14 +149,23 @@ final class MainRunLoopBusyPeriods {
         self.busySince = nil
         guard now >= busySince else { return }
         let elapsed = now - busySince
-        completed.busyNanoseconds &+= elapsed
-        completed.busyPeriods &+= 1
-        for (index, threshold) in Counters.thresholdsMilliseconds.enumerated() where elapsed >= threshold * 1_000_000 {
+        advance(to: elapsed)
+        if elapsed >= Self.hangThreshold { noteHang(milliseconds: elapsed / 1_000_000, at: now) }
+    }
+
+    private func advance(to elapsed: UInt64) {
+        guard elapsed >= settled else { return }
+        if !counted {
+            completed.busyPeriods &+= 1
+            counted = true
+        }
+        completed.busyNanoseconds &+= elapsed - settled
+        if elapsed >= Self.hangThreshold { completed.hangNanoseconds &+= elapsed - settled }
+        for (index, threshold) in Counters.thresholdsMilliseconds.enumerated()
+        where settled < threshold * 1_000_000 && elapsed >= threshold * 1_000_000 {
             completed.busyPeriodsAtLeast[index] &+= 1
         }
-        guard elapsed >= Self.hangThreshold else { return }
-        completed.hangNanoseconds &+= elapsed
-        noteHang(milliseconds: elapsed / 1_000_000, at: now)
+        settled = elapsed
     }
 
     private func noteHang(milliseconds: UInt64, at now: UInt64) {
@@ -166,6 +177,17 @@ final class MainRunLoopBusyPeriods {
         logger.notice("main run loop busy \(milliseconds) ms \(label)\(suppressed)")
         lastNotice = now
         suppressedNotices = 0
+    }
+
+    private static let retainInfo: @convention(c) (UnsafeRawPointer?) -> UnsafeRawPointer? = { info in
+        guard let info else { return nil }
+        _ = Unmanaged<MainRunLoopBusyPeriods>.fromOpaque(info).retain()
+        return info
+    }
+
+    private static let releaseInfo: @convention(c) (UnsafeRawPointer?) -> Void = { info in
+        guard let info else { return }
+        Unmanaged<MainRunLoopBusyPeriods>.fromOpaque(info).release()
     }
 
     private static let wakeCallout: CFRunLoopObserverCallBack = { _, _, info in

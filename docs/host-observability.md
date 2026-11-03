@@ -663,17 +663,18 @@ only, never WebKit's processes, and it cannot apportion battery to a feature.
   Apple's definition of a hang interval. A sample's `mainRunLoop` holds
   cumulative `busyNs`, `busyPeriods`, `hangNs` (busy time in periods of 250 ms
   or more) and `busyPeriodsAtLeastMs`, the count of periods reaching each of
-  17, 33, 50, 100, 250, 500, 1000 and 2000 ms. `busyNs` and `hangNs` include the
-  part of a period still running at the sample, so a long hang shows up in the
-  interval it happens in; its count and bins land when it ends. A busy period of
+  17, 33, 50, 100, 250, 500, 1000 and 2000 ms. A sample settles the part of a
+  period still running into its own interval, together with the period's count
+  and the bins it has reached, so a long period lands where it happens; `hangNs`
+  counts busy time settled once its period has reached 250 ms. A busy period of
   250 ms or more also logs one `Responsiveness` notice with its length, scene
   and surface, at most every 10 s, naming how many it suppressed. The observers
   add no timer, wakeup or display link. `historyOpens` comes from
   `HistoryOpenSignpost`: opens that reached visible content (`completed`, their
   `completedNs` and `completedWithinMs`, cumulative counts within 50 ms to 4 s)
-  and `abandoned` ones, including an open the app backgrounded during. Busy
-  minus main-thread CPU is time the main thread was runnable or blocked rather
-  than computing.
+  and `abandoned` ones, including any open that started in or spanned the
+  background. Busy minus main-thread CPU is time the main thread was runnable
+  or blocked rather than computing.
 - **Workload.** `workload.runningTurnNs` integrates over time the running
   turns the app tracks, summed over every loaded host's `TurnRegistry`, so an
   interval's average is its delta over the interval's length. It describes the

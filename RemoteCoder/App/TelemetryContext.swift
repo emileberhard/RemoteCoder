@@ -48,7 +48,7 @@ final class TelemetryContext {
     }
 
     private func runningTurns() -> Int {
-        workspace.models.reduce(0) { $0 + $1.turns.trackedTurnCount }
+        workspace.models.reduce(0) { $0 + ($1.gatewayConnectivity.route == nil ? 0 : $1.turns.trackedTurnCount) }
     }
 
     func sceneChanged() {

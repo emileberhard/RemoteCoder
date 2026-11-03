@@ -23,20 +23,39 @@ struct ResponsivenessMetricsTests {
         #expect(periods.completed.busyPeriodsAtLeast == [4, 3, 3, 3, 2, 1, 1, 1])
     }
 
-    @Test func aSampleInsideABusyPeriodCountsItsTimeSoFarAndStaysMonotonic() {
+    @Test func aSampleInsideABusyPeriodSettlesItsTimeCountAndBinsIntoThatInterval() {
         let periods = MainRunLoopBusyPeriods()
         periods.wake(at: 0)
 
-        let during = periods.counters(at: 800 * Self.millisecond)
-        periods.sleep(at: 900 * Self.millisecond)
-        let after = periods.counters(at: 1_000 * Self.millisecond)
+        let during = periods.settle(at: 800 * Self.millisecond)
+        periods.sleep(at: 1_200 * Self.millisecond)
+        let after = periods.settle(at: 1_300 * Self.millisecond)
 
         #expect(during.busyNanoseconds == 800 * Self.millisecond)
         #expect(during.hangNanoseconds == 800 * Self.millisecond)
-        #expect(during.busyPeriods == 0)
-        #expect(after.busyNanoseconds == 900 * Self.millisecond)
-        #expect(after.hangNanoseconds == 900 * Self.millisecond)
+        #expect(during.busyPeriods == 1)
+        #expect(during.busyPeriodsAtLeast == [1, 1, 1, 1, 1, 1, 0, 0])
+        #expect(after.busyNanoseconds == 1_200 * Self.millisecond)
+        #expect(after.hangNanoseconds == 1_200 * Self.millisecond)
         #expect(after.busyPeriods == 1)
+        #expect(after.busyPeriodsAtLeast == [1, 1, 1, 1, 1, 1, 1, 0])
+    }
+
+    @Test func hangTimeNeverExceedsTheBusyTimeOfTheIntervalItLandsIn() {
+        let periods = MainRunLoopBusyPeriods()
+        periods.wake(at: 0)
+
+        let first = periods.settle(at: 200 * Self.millisecond)
+        let second = periods.settle(at: 300 * Self.millisecond)
+        periods.sleep(at: 300 * Self.millisecond)
+        let third = periods.settle(at: 400 * Self.millisecond)
+
+        #expect(first.busyNanoseconds == 200 * Self.millisecond)
+        #expect(first.hangNanoseconds == 0)
+        #expect(second.busyNanoseconds - first.busyNanoseconds == 100 * Self.millisecond)
+        #expect(second.hangNanoseconds == 100 * Self.millisecond)
+        #expect(second.busyPeriodsAtLeast[4] == 1)
+        #expect(third == second)
     }
 
     @Test func aSleepWithoutItsWakeIsNotAPeriod() {
@@ -76,6 +95,21 @@ struct ResponsivenessMetricsTests {
         metrics.contextChanged(background)
         metrics.contextChanged(active)
         metrics.historyOpenReachedContent(open, at: start + .seconds(90))
+
+        #expect(metrics.historyOpens.completed == 0)
+        #expect(metrics.historyOpens.abandoned == 1)
+    }
+
+    @Test func anOpenThatStartsInTheBackgroundIsAbandoned() {
+        let metrics = ResponsivenessMetrics()
+        var background = UsageContext(scene: .background, surface: .chat, turnRunningVisible: false, voiceCall: false,
+                                      thermal: .nominal, lowPower: false)
+        let start = ContinuousClock.now
+        metrics.contextChanged(background)
+        let open = metrics.historyOpenStarted(at: start)
+        background.scene = .active
+        metrics.contextChanged(background)
+        metrics.historyOpenReachedContent(open, at: start + .seconds(30))
 
         #expect(metrics.historyOpens.completed == 0)
         #expect(metrics.historyOpens.abandoned == 1)
