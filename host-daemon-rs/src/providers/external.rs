@@ -1,4 +1,5 @@
 use crate::config::ConfigSources;
+use crate::providers::Provider;
 use crate::rpc::RpcError;
 use crate::rpc::error::RpcCode;
 use crate::storage::private_state;
@@ -29,7 +30,55 @@ pub(crate) struct ExternalProvider {
     #[serde(deserialize_with = "base_url")]
     base_url: reqwest::Url,
     key_file: PathBuf,
-    models: Vec<String>,
+    models: Vec<ExternalModel>,
+}
+
+impl ExternalProvider {
+    pub(crate) fn id(&self) -> &str {
+        &self.id
+    }
+
+    pub(crate) fn claude_base_url(&self) -> String {
+        self.base_url
+            .as_str()
+            .trim_end_matches('/')
+            .strip_suffix("/v1")
+            .unwrap_or(self.base_url.as_str().trim_end_matches('/'))
+            .to_owned()
+    }
+
+    pub(crate) fn key(&self) -> Result<String> {
+        crate::providers::router::read_key(&self.key_file)
+    }
+
+    pub(crate) fn harness(&self, id: &str) -> Option<Provider> {
+        self.models
+            .iter()
+            .find(|model| model.id() == id)
+            .map(ExternalModel::harness)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(untagged, deny_unknown_fields)]
+pub(crate) enum ExternalModel {
+    Codex(String),
+    Routed { id: String, harness: Provider },
+}
+
+impl ExternalModel {
+    fn id(&self) -> &str {
+        match self {
+            Self::Codex(id) | Self::Routed { id, .. } => id,
+        }
+    }
+
+    fn harness(&self) -> Provider {
+        match self {
+            Self::Codex(_) => Provider::Codex,
+            Self::Routed { harness, .. } => *harness,
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -106,7 +155,8 @@ fn validate(providers: &[ExternalProvider]) -> Result<()> {
             !provider.models.is_empty() && provider.models.len() <= MAX_MODELS,
             "external provider {id} must enable 1–{MAX_MODELS} models"
         );
-        for model in &provider.models {
+        for configured in &provider.models {
+            let model = configured.id();
             ensure!(
                 !model.is_empty()
                     && model.len() <= 256
@@ -114,7 +164,11 @@ fn validate(providers: &[ExternalProvider]) -> Result<()> {
                 "external provider {id} lists an invalid model id"
             );
             ensure!(
-                models.insert(model.as_str()),
+                !crate::providers::claude::exec::is_native_model(model),
+                "external model {model} conflicts with native Claude model names; use a provider-qualified model id"
+            );
+            ensure!(
+                models.insert(model),
                 "model {model} is enabled for more than one external provider"
             );
         }
@@ -122,6 +176,7 @@ fn validate(providers: &[ExternalProvider]) -> Result<()> {
     Ok(())
 }
 
+#[derive(Debug)]
 pub(crate) struct ExternalProviders {
     providers: Vec<ExternalProvider>,
     directory: PathBuf,
@@ -228,7 +283,12 @@ impl ExternalProviders {
     ) -> std::result::Result<bool, RpcError> {
         match self.providers.first().filter(|first| first.id == source) {
             Some(fallback) => {
-                let models = self.fallback_catalog(fallback).await?;
+                let models = self.catalog(fallback).await.ok_or_else(|| {
+                    RpcError::new(
+                        RpcCode::Unavailable,
+                        format!("{} model metadata is unavailable", fallback.name),
+                    )
+                })?;
                 Ok(self.map_onto_fallback(fields, &models, current_model))
             }
             None => Ok(false),
@@ -282,12 +342,26 @@ impl ExternalProviders {
         &self,
         provider: &ExternalProvider,
     ) -> std::result::Result<Arc<Vec<Value>>, RpcError> {
-        self.catalog(provider).await.ok_or_else(|| {
-            RpcError::new(
-                RpcCode::Unavailable,
-                format!("{} model metadata is unavailable", provider.name),
-            )
-        })
+        let models = self.catalog(provider).await.map(|models| {
+            models
+                .iter()
+                .filter(|row| {
+                    row["slug"]
+                        .as_str()
+                        .is_some_and(|id| provider.harness(id) == Some(Provider::Codex))
+                })
+                .cloned()
+                .collect::<Vec<_>>()
+        });
+        models
+            .filter(|models| !models.is_empty())
+            .map(Arc::new)
+            .ok_or_else(|| {
+                RpcError::new(
+                    RpcCode::Unavailable,
+                    format!("{} has no available Codex fallback model", provider.name),
+                )
+            })
     }
 
     fn label<'a>(&'a self, provider_id: &'a str) -> &'a str {
@@ -320,7 +394,17 @@ impl ExternalProviders {
         self.providers
             .iter()
             .filter_map(|provider| catalogs.get(&provider.id).map(|models| (provider, models)))
-            .flat_map(|(provider, models)| models.iter().map(|model| picker_row(provider, model)))
+            .flat_map(|(provider, models)| {
+                models
+                    .iter()
+                    .filter(|model| {
+                        model["slug"].as_str().is_some_and(|id| {
+                            provider.harness(id) != Some(Provider::Claude)
+                                || model["rc_messages"] == true
+                        })
+                    })
+                    .map(|model| picker_row(provider, model))
+            })
             .collect()
     }
 
@@ -384,11 +468,11 @@ impl ExternalProviders {
                     fields.insert("modelProvider".into(), json!(provider));
                 }
                 let configured = self.admit_thread(fields, &provider, true, true).await?;
-                if let Some(fallback) = self
-                    .providers
-                    .first()
-                    .filter(|fallback| fallback.id == provider)
-                {
+                if let Some(fallback) = self.providers.first().filter(|fallback| {
+                    fallback.id == provider
+                        && selected_models(fields)
+                            .all(|model| fallback.harness(model) == Some(Provider::Codex))
+                }) {
                     let models = self.fallback_catalog(fallback).await?;
                     adapt_fallback_effort(fields, &models, current_model);
                 }
@@ -517,9 +601,49 @@ impl ExternalProviders {
     }
 
     pub(crate) fn owner(&self, model: &str) -> Option<&ExternalProvider> {
-        self.providers
+        self.providers.iter().find(|provider| {
+            provider
+                .models
+                .iter()
+                .any(|configured| configured.id() == model)
+        })
+    }
+
+    pub(crate) async fn claude_model(
+        &self,
+        model: &str,
+        new: bool,
+        effort: Option<&str>,
+        fast: bool,
+    ) -> Result<Option<(&ExternalProvider, i64)>> {
+        let Some(provider) = self.owner(model) else {
+            return Ok(None);
+        };
+        ensure!(
+            !new || provider.harness(model) == Some(Provider::Claude),
+            "{model} is not configured for Claude"
+        );
+        ensure!(!fast, "{} has no Fast mode", provider.name);
+        let rows = self
+            .catalog(provider)
+            .await
+            .context("external model metadata is unavailable")?;
+        let row = rows
             .iter()
-            .find(|provider| provider.models.iter().any(|id| id == model))
+            .find(|row| row["slug"] == model && row["rc_messages"] == true)
+            .context("external model does not support streaming Messages tools")?;
+        if let Some(effort) = effort {
+            ensure!(
+                row["supported_reasoning_levels"]
+                    .as_array()
+                    .is_some_and(|levels| levels.iter().any(|level| level["effort"] == effort)),
+                "unsupported effort for {model}"
+            );
+        }
+        let context = row["context_window"]
+            .as_i64()
+            .context("external model context is unavailable")?;
+        Ok(Some((provider, context)))
     }
 
     async fn catalog(&self, provider: &ExternalProvider) -> Option<Arc<Vec<Value>>> {
@@ -657,7 +781,7 @@ fn read_catalog(path: &Path, provider: &ExternalProvider) -> Option<Vec<Value>> 
         .filter(|row| {
             row["slug"]
                 .as_str()
-                .is_some_and(|slug| provider.models.iter().any(|model| model == slug))
+                .is_some_and(|slug| provider.models.iter().any(|model| model.id() == slug))
         })
         .cloned()
         .collect::<Vec<_>>();
@@ -680,12 +804,19 @@ fn project(provider: &ExternalProvider, listing: &Value) -> Result<Vec<Value>> {
         .as_array()
         .context("model list has no data array")?;
     let mut models = Vec::new();
-    for (priority, id) in provider.models.iter().enumerate() {
-        let Some(entry) = entries.iter().find(|entry| entry["id"] == id.as_str()) else {
+    for (priority, configured) in provider.models.iter().enumerate() {
+        let id = configured.id();
+        let Some(entry) = entries.iter().find(|entry| entry["id"] == id) else {
             warn!(provider = %provider.id, model = %id, "enabled external model is not listed");
             continue;
         };
-        match native_model(id, entry, priority) {
+        match native_model(id, entry, priority).map(|mut model| {
+            model["rc_messages"] = json!(
+                strings(&entry["capabilities"]["endpoints"])
+                    .any(|endpoint| endpoint == "/v1/messages")
+            );
+            model
+        }) {
             Ok(model) => models.push(model),
             Err(error) => {
                 warn!(provider = %provider.id, model = %id, "external model metadata is unusable: {error:#}")
@@ -797,6 +928,7 @@ fn picker_row(provider: &ExternalProvider, model: &Value) -> Value {
         "isDefault": false,
         "modelProvider": provider.id,
         "modelProviderName": provider.name,
+        "agentProvider": provider.models.iter().find(|configured| model["slug"] == configured.id()).map(|configured| configured.harness().as_str()),
     })
 }
 

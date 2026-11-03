@@ -7,21 +7,21 @@ struct TargetModelCatalog {
     let defaults: UserDefaults
 
     var preferredProvider: AgentProvider? {
-        NewChatModelResolution.provider(preferredID: NewChatDefaults.preferredModelID(defaults: defaults), providers: Set(AgentProvider.allCases))
+        NewChatModelResolution.provider(preferredID: NewChatDefaults.preferredModelID(defaults: defaults), providers: Set(AgentProvider.allCases), catalog: service.catalog)
     }
 
     func options(for provider: AgentProvider) -> [ModelOption] {
-        switch provider {
-        case .claude: return ClaudeModelCatalog.models.filter { preferences.claudeModelVisibility.isVisible(id: $0.id) }
-        case .codex: return service.catalog?.visibleOptions(preferences.codexModelVisibility) ?? []
-        }
+        let gateway = service.catalog?.visibleOptions(preferences.codexModelVisibility).filter { $0.provider == provider } ?? []
+        return provider == .claude
+            ? ClaudeModelCatalog.models.filter { preferences.claudeModelVisibility.isVisible(id: $0.id) } + gateway
+            : gateway
     }
 
     func isVisible(_ model: ModelOption, using visibility: ModelVisibility) -> Bool {
-        switch model.provider {
-        case .claude: return visibility.isVisible(id: ClaudeModelCatalog.canonicalModelID(model.id))
-        case .codex: return service.catalog?.entry(for: model.id).map(visibility.isVisible) ?? false
+        if let entry = service.catalog?.entry(for: model.id), entry.option.provider == model.provider {
+            return visibility.isVisible(entry)
         }
+        return model.provider == .claude && visibility.isVisible(id: ClaudeModelCatalog.canonicalModelID(model.id))
     }
 
     func pickerOptions(including selection: ModelOption, threadModelProvider: ThreadModelProvider?) -> [ModelOption] {
@@ -47,7 +47,10 @@ struct TargetModelCatalog {
     }
 
     func newChatDefault(for provider: AgentProvider?, health: ProviderHealth?) -> NewChatModelLookup {
-        if provider == nil, let working = health?.workingProviders, working.count < AgentProvider.allCases.count,
+        let preferredID = NewChatDefaults.preferredModelID(defaults: defaults)
+        let preferredExternal = preferredID.flatMap { service.catalog?.entry(for: $0) }
+            .map { $0.option.modelProvider != nil && preferences.codexModelVisibility.isVisible($0) } ?? false
+        if provider == nil, !preferredExternal, let working = health?.workingProviders, working.count < AgentProvider.allCases.count,
            case .available(let model) = newChatDefault(among: working) {
             return .available(model)
         }
@@ -61,32 +64,38 @@ struct TargetModelCatalog {
             codex: service.catalog, codexVisibility: preferences.codexModelVisibility,
             claudeVisibility: preferences.claudeModelVisibility, providers: providers
         ) else {
-            let provider = NewChatModelResolution.provider(preferredID: preferredID, providers: providers)
+            let provider = NewChatModelResolution.provider(preferredID: preferredID, providers: providers, catalog: service.catalog)
             return provider == .codex && service.catalog == nil ? .listNotLoaded : .notOffered
         }
         return .available(model)
     }
 
+    func provider(forModelID id: String) -> AgentProvider {
+        service.catalog?.entry(for: id)?.option.provider ?? AgentProvider.provider(forModelID: id)
+    }
+
     func configured(id: String) -> NewChatModelLookup {
-        let provider = AgentProvider.provider(forModelID: id)
-        switch provider {
-        case .claude:
-            return ClaudeModelCatalog.model(for: id).map(NewChatModelLookup.available) ?? .notOffered
-        case .codex:
-            guard let catalog = service.catalog else { return .listNotLoaded }
-            return catalog.entry(for: id).map { .available($0.option) } ?? .notOffered
-        }
+        if let option = service.catalog?.entry(for: id)?.option { return .available(option) }
+        if let option = ClaudeModelCatalog.model(for: id) { return .available(option) }
+        return service.catalog == nil ? .listNotLoaded : .notOffered
     }
 
     func option(id: String, threadID: String, modelProvider: ThreadModelProvider?, effort: String?, fastMode: Bool) -> ModelOption? {
-        switch AgentProvider.provider(forThreadID: threadID) {
-        case .claude:
-            return ClaudeModelCatalog.model(for: id)
-        case .codex:
-            guard !id.isEmpty else { return nil }
-            return service.catalog?.entry(for: id)?.option
-                ?? .unlisted(id: id, modelProvider: modelProvider?.modelProvider,
-                             reportedEffort: effort.flatMap(ReasoningEffort.init(rawValue:)), reportedFastMode: fastMode)
+        guard !id.isEmpty else { return nil }
+        let provider = AgentProvider.provider(forThreadID: threadID)
+        if let option = service.catalog?.entry(for: id)?.option {
+            if option.provider == provider, modelProvider == nil || option.modelProvider?.id == modelProvider?.externalID {
+                return option
+            }
+            if let route = modelProvider?.externalID, option.modelProvider?.id == route {
+                return ModelOption(id: option.id, displayName: option.displayName, reasoningEfforts: option.reasoningEfforts,
+                    supportsFastMode: option.supportsFastMode, supportsDaybreakBlue: option.supportsDaybreakBlue,
+                    acceptsImages: option.acceptsImages, provider: provider, modelProvider: option.modelProvider, isListed: option.isListed)
+            }
         }
+        if provider == .claude, modelProvider?.externalID == nil,
+           let option = ClaudeModelCatalog.model(for: id) { return option }
+        return .unlisted(id: id, modelProvider: modelProvider?.modelProvider,
+                         reportedEffort: effort.flatMap(ReasoningEffort.init(rawValue:)), reportedFastMode: fastMode, provider: provider)
     }
 }

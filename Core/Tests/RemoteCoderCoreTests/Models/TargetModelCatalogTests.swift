@@ -59,6 +59,61 @@ struct TargetModelCatalogTests {
         #expect(native.modelProvider == nil)
     }
 
+    @Test func gatewayModelsKeepTheirHarnessAcrossDefaultsAndExistingThreads() async throws {
+        let defaults = try #require(UserDefaults(suiteName: "TargetModelCatalogTests.\(UUID())"))
+        var external = CodexModelFixtures.wireModel("relay/model-a", name: "Model A", efforts: ["low", "medium", "high"], inputModalities: ["text"])
+        external["modelProvider"] = "relay"
+        external["modelProviderName"] = "Relay"
+        external["agentProvider"] = "claude"
+        let models = try CodexModelFixtures.models(CodexModelFixtures.wireModels() + [external])
+        let service = CodexModelCatalogService(directory: .temporaryDirectory.appending(path: UUID().uuidString)) { _ in
+            CodexAppServerV2.ModelListResponse(data: models, nextCursor: nil)
+        }
+        await service.refresh()
+        let preferences = ModelPickerPreferences(defaults: defaults)
+        let catalog = TargetModelCatalog(service: service, preferences: preferences, defaults: defaults)
+        NewChatDefaults.recordModelSelection("relay/model-a", defaults: defaults)
+
+        let selected = try #require(catalog.newChatDefault(for: nil, health: nil).model)
+        #expect(selected.provider == .claude)
+        #expect(selected.modelProvider?.id == "relay")
+        #expect(selected.reasoningEfforts == [.low, .medium, .high])
+        #expect(!selected.acceptsImages)
+        #expect(catalog.configured(id: selected.id).model == selected)
+        let nativeClaudeUnavailable = ProviderHealth([.claude: .unavailable(reason: "Native sign-in needed")])
+        #expect(catalog.newChatDefault(for: nil, health: nativeClaudeUnavailable).model == selected)
+        #expect(!nativeClaudeUnavailable.isImpaired(selected))
+        #expect(catalog.options(for: .claude).contains(selected))
+        #expect(!catalog.options(for: .codex).contains(selected))
+        #expect(catalog.pickerOptions(including: selected, threadModelProvider: .external(id: "relay")) == [selected])
+
+        let existing = try #require(catalog.option(id: selected.id, threadID: "codex-existing", modelProvider: .external(id: "relay"), effort: "high", fastMode: true))
+        #expect(existing.provider == .codex)
+        #expect(existing.isListed)
+        #expect(existing.pickerTitle == "Model A · Relay")
+        #expect(existing.reasoningEfforts == [.low, .medium, .high])
+        #expect(!existing.supportsFastMode)
+        #expect(!existing.acceptsImages)
+        let wrongRoute = try #require(catalog.option(id: selected.id, threadID: "codex-existing", modelProvider: .external(id: "other"), effort: "high", fastMode: false))
+        #expect(!wrongRoute.isListed)
+        #expect(wrongRoute.modelProvider?.id == "other")
+        let native = try #require(catalog.option(id: CodexModelFixtures.solID, threadID: "claude_existing", modelProvider: .native, effort: nil, fastMode: false))
+        #expect(!native.isListed)
+        #expect(native.provider == .claude)
+        let restored = try #require(catalog.option(id: selected.id, threadID: "claude_existing", modelProvider: .external(id: "relay"), effort: nil, fastMode: false))
+        #expect(restored == selected)
+        let unknown = try #require(catalog.option(id: "relay/removed", threadID: "claude_existing", modelProvider: .external(id: "relay"), effort: "high", fastMode: false))
+        #expect(unknown.provider == .claude)
+        #expect(unknown.modelProvider?.id == "relay")
+        #expect(catalog.pickerOptions(including: unknown, threadModelProvider: .external(id: "relay")).map(\.id) == [selected.id, unknown.id])
+        #expect(try JSONDecoder().decode(CodexAppServerV2.Model.self, from: JSONEncoder().encode(models.last)).agentProvider == .claude)
+        #expect(models.first?.agentProvider == .codex)
+
+        preferences.setModelVisible(false, for: try #require(service.catalog?.entry(for: selected.id)))
+        #expect(!catalog.options(for: .claude).contains(selected))
+        #expect(catalog.newChatDefault(for: nil, health: nil).model?.id == ClaudeModelCatalog.fableModelID)
+    }
+
     @Test func hiddenClaudeModelsLeavePickersAndDefaultsButKeepTheirIdentity() throws {
         let defaults = try #require(UserDefaults(suiteName: "TargetModelCatalogTests.\(UUID())"))
         let preferences = ModelPickerPreferences(defaults: defaults)

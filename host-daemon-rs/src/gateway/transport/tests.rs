@@ -1011,9 +1011,7 @@ async fn writer_json(socket: &mut TestClientSocket) -> Value {
 
 #[tokio::test]
 async fn rpc_capacity_writer_refuses_an_oversized_response_and_keeps_the_next_response_alive() {
-    use crate::providers::claude::ClaudeSupervisor;
     use crate::providers::codex::daemon::MAX_WEBSOCKET_BYTES;
-    use crate::rpc::dispatch::ClaudeMethod;
     let mut home = crate::providers::claude::settings::ClaudeSettings::isolated_for_test();
     home.settings.enabled = true;
     let gateway = TestGateway::with_settings(
@@ -1024,22 +1022,14 @@ async fn rpc_capacity_writer_refuses_an_oversized_response_and_keeps_the_next_re
         home.settings.clone(),
         Arc::new(home),
     );
-    let (notifications, _rx) = mpsc::channel(1);
-    gateway.set_claude_agent(ClaudeSupervisor::new(
-        gateway.claude_settings.clone(),
-        notifications,
-        gateway.journal.clone(),
-        gateway.mcp_tokens.clone(),
-    ));
     let (tx, mut queued) = mpsc::channel(1);
     let producer = super::super::tests::test_client(30, tx);
     gateway
-        .handle_claude_rpc(
+        .respond(
             &producer,
-            ClaudeMethod::ThreadStart,
-            json!({"id":"bounded-id","params":{"cwd":"x".repeat(12 * 1024 * 1024)}})
-                .as_object()
-                .unwrap(),
+            json!("bounded-id"),
+            Ok(json!({"cwd":"x".repeat(MAX_WEBSOCKET_BYTES + 1)})),
+            Some("thread/start"),
         )
         .await
         .unwrap();

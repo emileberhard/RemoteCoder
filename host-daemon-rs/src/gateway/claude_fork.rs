@@ -57,6 +57,10 @@ impl Gateway {
         let note = super::fork_note::fork_note(&source_header["thread"]).map_err(failed)?;
         let session_uuid = agent.mint_session().await.map_err(failed)?;
         let thread_id = crate::providers::claude::claude_thread_id(&session_uuid);
+        agent
+            .copy_parent_selection(source_thread, &thread_id)
+            .await
+            .map_err(failed)?;
         let ForkPoint { length, turns } = point;
         let kept_turns = turns.len();
         agent

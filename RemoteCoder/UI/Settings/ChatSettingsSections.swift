@@ -147,10 +147,9 @@ struct ReasoningEffortSettingsSection: View {
     }
 
     private func models(for provider: AgentProvider) -> [ModelOption] {
-        switch provider {
-        case .claude: ClaudeModelCatalog.models
-        case .codex: workspace.codexModelCatalog.source?.service.catalog?.entries.map(\.option) ?? []
-        }
+        let gateway = workspace.codexModelCatalog.source?.service.catalog?.entries.map(\.option)
+            .filter { $0.provider == provider } ?? []
+        return provider == .claude ? ClaudeModelCatalog.models + gateway : gateway
     }
 }
 

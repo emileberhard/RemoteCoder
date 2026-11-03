@@ -190,8 +190,8 @@ struct UnsentDraftTests {
         let newer = summary("Plan the release", folder: nil, model: ClaudeModelCatalog.fableModelID, at: now - 60)
         let unknownTime = summary("Imported", folder: "/tmp", model: nil, at: nil)
         let inputs = [
-            UnsentDraftRow.TargetInput(target: mini, hostName: "Mini", remoteHomePath: "/Users/developer", drafts: [older, unknownTime]),
-            UnsentDraftRow.TargetInput(target: macBook, hostName: "MacBook", remoteHomePath: nil, drafts: [newer])
+            UnsentDraftRow.TargetInput(target: mini, hostName: "Mini", remoteHomePath: "/Users/developer", drafts: [older, unknownTime], modelProviders: [:]),
+            UnsentDraftRow.TargetInput(target: macBook, hostName: "MacBook", remoteHomePath: nil, drafts: [newer], modelProviders: [:])
         ]
         let selected = UnsentDraftAddress(target: mini, draftID: older.id)
 

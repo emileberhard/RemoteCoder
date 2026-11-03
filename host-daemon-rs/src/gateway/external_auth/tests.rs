@@ -57,10 +57,8 @@ fn token(account: &str, label: &str) -> Value {
         "generation":crate::ids::sha256_hex(access.as_bytes())})
 }
 
-fn copilot_fallback(
-    state: &std::path::Path,
-) -> Arc<crate::providers::codex::external::ExternalProviders> {
-    use crate::providers::codex::external::{ExternalProvider, ExternalProviders};
+fn copilot_fallback(state: &std::path::Path) -> Arc<crate::providers::external::ExternalProviders> {
+    use crate::providers::external::{ExternalProvider, ExternalProviders};
     use crate::storage::private_state;
     let provider: ExternalProvider = serde_json::from_value(json!({
         "id": "copilot", "name": "Copilot", "baseUrl": "http://127.0.0.1:9/v1",

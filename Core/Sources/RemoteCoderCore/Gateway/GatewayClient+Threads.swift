@@ -75,7 +75,7 @@ extension GatewayClient {
     /// Only a new thread needs them: afterwards the gateway routes by thread id.
     private func threadStartPayload(provider: AgentProvider, serviceName: String, params: JSONValue) -> JSONValue {
         guard case .object(var fields) = params else { return params }
-        if provider != .codex { fields["provider"] = .string(provider.rawValue) }
+        fields["provider"] = .string(provider.rawValue)
         if serviceName != "RemoteCoder Voice" { fields["acceptProviderFallback"] = .bool(true) }
         return .object(fields)
     }

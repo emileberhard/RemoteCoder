@@ -1,7 +1,7 @@
 use super::control::ControlGeneration;
 use super::{ClientCommand, ClientTx, Gateway, RESTARTING_CLOSE_CODE};
 use crate::observability::journal::Source;
-use crate::providers::codex::external::ExternalProviders;
+use crate::providers::external::ExternalProviders;
 use crate::rpc::RpcError;
 use crate::rpc::error::{CodexUnavailable, RETRY_AFTER_MS, RpcCode, RpcData};
 use serde::Serialize;

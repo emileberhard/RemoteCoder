@@ -115,7 +115,7 @@ struct ModelOption: Identifiable, Hashable, Sendable {
     }
 
     static func unlisted(id: String, modelProvider: CodexAppServerV2.ModelProvider?, reportedEffort: ReasoningEffort?,
-                         reportedFastMode: Bool) -> ModelOption {
+                         reportedFastMode: Bool, provider: AgentProvider = .codex) -> ModelOption {
         ModelOption(
             id: id,
             displayName: modelProvider == nil ? id : readableName(of: id),
@@ -123,7 +123,7 @@ struct ModelOption: Identifiable, Hashable, Sendable {
             supportsFastMode: reportedFastMode,
             supportsDaybreakBlue: false,
             acceptsImages: true,
-            provider: .codex,
+            provider: provider,
             modelProvider: modelProvider,
             isListed: false
         )

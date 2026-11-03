@@ -22,6 +22,24 @@ struct StopContinuationTests {
         #expect(admitted.fastModeState.changingModel(from: model, to: opus).selection == true)
     }
 
+    @Test func externalClaudeAdmissionRetainsItsHarnessAndCapabilities() throws {
+        let model = ModelOption(id: "relay/model-a", displayName: "Model A", reasoningEfforts: [.low, .high],
+            supportsFastMode: false, supportsDaybreakBlue: false, acceptsImages: false,
+            provider: .claude, modelProvider: .init(id: "relay", name: "Relay"), isListed: true)
+        let requested = TurnDispatcher.Settings(model: model, reasoning: .effort(.high),
+            serviceTier: .clear, fastModeState: .selection(false), workingDirectory: "/tmp", selectionRevision: 1)
+        let thread = try ThreadFixture.wire("claude_external", updatedAt: 1, fields: [
+            "model": "relay/model-a", "modelProvider": "relay", "reasoningEffort": "high"
+        ])
+        #expect(requested.admitted(to: thread).model == model)
+        var changed = thread
+        changed.model = "relay/model-b"
+        let admitted = requested.admitted(to: changed).model
+        #expect(admitted.provider == .claude)
+        #expect(admitted.modelProvider?.id == "relay")
+        #expect(!admitted.isListed)
+    }
+
     @Test func voiceThreadStartDoesNotOptIntoProviderFallback() async throws {
         let fixture = try await StopFixture.open()
         await fixture.socket.setStartedThread(try ThreadFixture.wire("voice", updatedAt: 1), model: nil, effort: nil)
@@ -29,6 +47,7 @@ struct StopContinuationTests {
             provider: .codex, serviceName: "RemoteCoder Voice", config: nil)
         let start = try await fixture.socket.request("thread/start")
         #expect(start.params?.objectValue?["acceptProviderFallback"] == nil)
+        #expect(start.params?.objectValue?["provider"] == .string("codex"))
         await fixture.close()
     }
 

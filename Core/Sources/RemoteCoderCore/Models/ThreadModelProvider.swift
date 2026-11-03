@@ -5,8 +5,10 @@ enum ThreadModelProvider: Sendable, Equatable {
     case external(id: String)
 
     init?(_ modelProvider: String?, threadID: String) {
-        guard AgentProvider.provider(forThreadID: threadID) == .codex, let modelProvider else { return nil }
-        self = modelProvider == "openai" ? .native : .external(id: modelProvider)
+        guard let modelProvider else { return nil }
+        let provider = AgentProvider.provider(forThreadID: threadID)
+        let isNative = provider == .codex ? modelProvider == "openai" : ["claude", "anthropic"].contains(modelProvider)
+        self = isNative ? .native : .external(id: modelProvider)
     }
 
     var externalID: String? {

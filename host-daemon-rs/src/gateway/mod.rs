@@ -21,7 +21,7 @@ use crate::providers::claude::auth::ClaudeAuth;
 use crate::providers::claude::restart_driver::ClaudeRestartDriver;
 use crate::providers::claude::settings::ClaudeSettings;
 use crate::providers::codex::daemon::CodexAppServer;
-use crate::providers::codex::external::ExternalProviders;
+use crate::providers::external::ExternalProviders;
 use crate::push::PushService;
 use crate::rpc::dispatch::ClientRequest;
 use crate::runtime::recovery::{RecoveryJournal, RecoveryStore};
@@ -414,7 +414,7 @@ impl Gateway {
         let GatewayConstruction {
             codex,
             user_name,
-            claude_settings,
+            mut claude_settings,
             journal,
             turn_state_path,
             recovery_path,
@@ -422,6 +422,7 @@ impl Gateway {
             external_auth,
             external_providers,
         } = configuration;
+        claude_settings.external_providers = external_providers.clone();
         let metadata_path = turn_state_path
             .as_ref()
             .map(|path| path.with_file_name("session-metadata-v2.json"));
