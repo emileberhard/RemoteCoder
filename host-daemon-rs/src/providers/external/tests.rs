@@ -609,6 +609,22 @@ fn configuration_rejects_ambiguous_providers() {
     let mut native = provider();
     native.id = "openai".into();
     assert!(validate(&[native]).is_err());
+
+    for model in ["sonnet", "CLAUDE-SONNET-4-6"] {
+        for harness in [Provider::Codex, Provider::Claude] {
+            let mut ambiguous = provider();
+            ambiguous.models = vec![ExternalModel::Routed {
+                id: model.into(),
+                harness,
+            }];
+            assert!(
+                validate(&[ambiguous])
+                    .unwrap_err()
+                    .to_string()
+                    .contains("conflicts with native Claude")
+            );
+        }
+    }
 }
 
 #[tokio::test]

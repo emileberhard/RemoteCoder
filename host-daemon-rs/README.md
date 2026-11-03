@@ -93,7 +93,7 @@ there is no silent switch to native login during a router outage. See
 ```
 
 Each id is lowercase and neither `openai` nor `claude`; a model id belongs to one
-provider. String entries use Codex; the object selects the harness for new
+provider and must not overlap a native Claude model name. String entries use Codex; the object selects the harness for new
 conversations. The gateway reads `GET {baseUrl}/models` with the key as a bearer and
 offers each listed model whose entry names the `/v1/responses` endpoint, a
 positive `capabilities.prompt_tokens` and true `streaming` and `tool_calls`. It derives the model metadata Codex needs

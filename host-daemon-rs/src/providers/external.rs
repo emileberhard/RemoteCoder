@@ -164,6 +164,10 @@ fn validate(providers: &[ExternalProvider]) -> Result<()> {
                 "external provider {id} lists an invalid model id"
             );
             ensure!(
+                !crate::providers::claude::exec::is_native_model(model),
+                "external model {model} conflicts with native Claude model names; use a provider-qualified model id"
+            );
+            ensure!(
                 models.insert(model),
                 "model {model} is enabled for more than one external provider"
             );
