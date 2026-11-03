@@ -4,7 +4,7 @@ import platform
 import subprocess
 from pathlib import Path
 
-from remotecoder_tools import host_logs
+from remotecoder_tools import app_telemetry_store, host_logs
 from remotecoder_tools.app_telemetry_releases import MIB, release_rows
 from remotecoder_tools.app_telemetry_summary import telemetry_runs
 
@@ -144,3 +144,18 @@ def test_an_os_without_a_log_root_fails_instead_of_guessing(tmp_path):
 
     assert result.returncode == host_logs.UNSUPPORTED_OS_EXIT
     assert "Plan9" in result.stderr
+
+
+def test_stores_come_from_every_cluster_gateway_except_this_host(tmp_path, monkeypatch):
+    (tmp_path / "gateway").mkdir()
+    (tmp_path / "gateway/routes.json").write_text(json.dumps({"routes": {
+        "a": "wss://this-mac.example.ts.net:8789/ws",
+        "b": "wss://linux-box.example.ts.net:8788/ws",
+        "c": "wss://other-mac.example.ts.net:8789/ws",
+    }}))
+    (tmp_path / "maintainer.json").write_text(json.dumps({"clusterRoutes": "gateway/routes.json"}))
+    monkeypatch.setenv("RC_MAINTAINER_CONFIG", str(tmp_path / "maintainer.json"))
+    monkeypatch.setattr(app_telemetry_store, "_matches_local_identity", lambda name: name.startswith("this-mac."))
+    monkeypatch.setattr(app_telemetry_store, "_tailnet_host_name", lambda name: name.split(".")[0])
+
+    assert app_telemetry_store.configured_hosts() == [app_telemetry_store.LOCAL, "linux-box", "other-mac"]

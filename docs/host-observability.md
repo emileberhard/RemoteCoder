@@ -497,9 +497,12 @@ every drain — otherwise uploading a segment generates the next one.
 
 **Reading it back.** The phone uploads to whichever gateway it can reach, so one
 device's history is split across hosts. `just app-telemetry stores` lists every
-device directory on this host and the configured gateway hosts (read over SSH);
+device directory on this host and on each other gateway in the cluster routes
+that the maintainer configuration's `clusterRoutes` names (read over SSH, each
+host's log root resolved from `protocol-fixtures/host-log-roots.json`);
+`--store` reads explicit hosts instead.
 `metrickit`, `states`, `compare`, `diagnostics`, `counts`, `persistence`, `timeline`,
-`activity` and `export-cost` take the exact `--device` and print JSON that names
+`activity`, `export-cost` and `releases` take the exact `--device` and print JSON that names
 the stores read and any that failed, when the host cap removed data or is
 unmet, and each segment it could not read (corrupt, or expanding beyond the
 app's 50 MiB queue cap).

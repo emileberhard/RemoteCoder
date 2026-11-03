@@ -15,6 +15,7 @@ from concurrent.futures import FIRST_COMPLETED, Future, ProcessPoolExecutor, wai
 from dataclasses import dataclass
 from pathlib import Path
 from typing import IO
+from urllib.parse import urlparse
 
 from .app_telemetry_summary import summarize_segment
 from .config import _matches_local_identity
@@ -94,12 +95,15 @@ def host_key(host: str) -> str:
 
 
 def configured_hosts() -> list[str]:
-    release = maintainer_config.load().get("releaseConfig", {})
-    hosts = [LOCAL]
-    for field in ("macMiniHostname", "macBookHostname"):
-        if isinstance(name := release.get(field), str) and name and not _matches_local_identity(name):
-            hosts.append(_tailnet_host_name(name))
-    return hosts
+    return [LOCAL, *(_tailnet_host_name(name) for name in _cluster_gateway_hosts() if not _matches_local_identity(name))]
+
+
+def _cluster_gateway_hosts() -> list[str]:
+    relative = maintainer_config.load().get("clusterRoutes")
+    if not relative:
+        return []
+    routes = json.loads((maintainer_config.path().parent / relative).read_text())["routes"]
+    return sorted({host for url in routes.values() if (host := urlparse(url).hostname)})
 
 
 def _tailnet_host_name(address: str) -> str:
