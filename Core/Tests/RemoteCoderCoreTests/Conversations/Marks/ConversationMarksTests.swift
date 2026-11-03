@@ -62,6 +62,29 @@ struct ConversationMarksTests {
         #expect(reloaded.effective.offersSettlement)
     }
 
+    @Test func changesViewsAreOfferedFromSchemaFourAndStandardClearsTheMark() throws {
+        let since = ChangesView.since(ChangesAnchor(turnID: "turn-2", boundary: .end))
+        let older = ConversationMarks(schemaVersion: 3, revision: 1, readBaseline: 0, threads: [:])
+        #expect(older.changesView(of: "t") == nil)
+        let current = ConversationMarks(schemaVersion: 4, revision: 1, readBaseline: 0, threads: [:])
+        #expect(current.changesView(of: "t") == .standard)
+        let chosen = current.applying(.setChangesView(threadID: "t", view: since))
+        #expect(chosen.changesView(of: "t") == since)
+        let cleared = chosen.applying(.setChangesView(threadID: "t", view: .standard))
+        #expect(cleared.changesView(of: "t") == .standard && cleared.threads["t"]?.changesView == nil)
+
+        let change = try JSONSerialization.jsonObject(with: JSONEncoder().encode(
+            ConversationMarkChange.setChangesView(threadID: "t", view: nil))) as? NSDictionary
+        #expect(change == ["op": "setChangesView", "threadId": "t"])
+
+        var replica = ConversationMarksReplica(acknowledged: current)
+        replica.record(.setChangesView(threadID: "t", view: since))
+        replica.replaceAcknowledged(older)
+        #expect(replica.pending.isEmpty)
+        let decoded = try JSONDecoder().decode(ConversationMarks.self, from: Data(#"{"schemaVersion":4,"revision":2,"readBaseline":0,"threads":{"t":{"revision":2,"changesView":{"kind":"lastTurn"}}}}"#.utf8))
+        #expect(decoded.changesView(of: "t") == .lastTurn)
+    }
+
     @Test func restoringStoredCommandsPreservesGlobalMarksOrderIdentityAndLimit() {
         let storedMark = ConversationMarksReplica.Pending(id: UUID(), change: .markAllRead(through: 300))
         let admitted = ConversationMarksReplica.Pending(id: UUID(), change: .pin(threadID: "t", name: "New"))

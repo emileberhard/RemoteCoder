@@ -11,6 +11,7 @@ struct ChatBubble: View {
     /// Previous presentation remains visible until its replacement is ready.
     let renderedMessages: RenderedMessageStore
     let onFork: ((ChatMessage) -> Void)?
+    let onCountChanges: ((ChatMessage) -> Void)?
     let deliveryActions: MessageDeliveryActions?
     var onSelectText: ((String) -> Void)? = nil
     var onOpenAttachment: ((MessageAttachment) -> Void)? = nil
@@ -18,22 +19,23 @@ struct ChatBubble: View {
     private static let sendingRevealDelay: Duration = .milliseconds(500)
 
     init(message: ChatMessage, renderedMessages: RenderedMessageStore,
-         onFork: ((ChatMessage) -> Void)?, deliveryActions: MessageDeliveryActions?,
+         onFork: ((ChatMessage) -> Void)?, onCountChanges: ((ChatMessage) -> Void)?, deliveryActions: MessageDeliveryActions?,
          onSelectText: ((String) -> Void)? = nil, onOpenAttachment: ((MessageAttachment) -> Void)? = nil) {
         self.message = message
         self.renderedMessages = renderedMessages
         self.onFork = onFork
+        self.onCountChanges = onCountChanges
         self.deliveryActions = deliveryActions
         self.onSelectText = onSelectText
         self.onOpenAttachment = onOpenAttachment
         _menuOwner = State(initialValue: ChatBubbleMenuOwner(message: message, renderedMessages: renderedMessages,
-            onFork: onFork, deliveryActions: deliveryActions, onSelectText: onSelectText))
+            onFork: onFork, onCountChanges: onCountChanges, deliveryActions: deliveryActions, onSelectText: onSelectText))
     }
 
     var body: some View {
         let _ = PerfBuild.count("bubble.body")
         let _ = menuOwner.update(message: message, renderedMessages: renderedMessages,
-            onFork: onFork, deliveryActions: deliveryActions, onSelectText: onSelectText)
+            onFork: onFork, onCountChanges: onCountChanges, deliveryActions: deliveryActions, onSelectText: onSelectText)
         #if os(macOS)
         let _ = surfaceActivity?.recordBody()
         #endif
@@ -251,23 +253,27 @@ final class ChatBubbleMenuOwner {
     private(set) var message: ChatMessage
     @ObservationIgnored private(set) var renderedMessages: RenderedMessageStore
     @ObservationIgnored private(set) var onFork: ((ChatMessage) -> Void)?
+    @ObservationIgnored private(set) var onCountChanges: ((ChatMessage) -> Void)?
     @ObservationIgnored private(set) var deliveryActions: MessageDeliveryActions?
     @ObservationIgnored private(set) var onSelectText: ((String) -> Void)?
 
     init(message: ChatMessage, renderedMessages: RenderedMessageStore, onFork: ((ChatMessage) -> Void)?,
-         deliveryActions: MessageDeliveryActions?, onSelectText: ((String) -> Void)?) {
+         onCountChanges: ((ChatMessage) -> Void)?, deliveryActions: MessageDeliveryActions?, onSelectText: ((String) -> Void)?) {
         self.message = message
         self.renderedMessages = renderedMessages
         self.onFork = onFork
+        self.onCountChanges = onCountChanges
         self.deliveryActions = deliveryActions
         self.onSelectText = onSelectText
     }
 
     func update(message: ChatMessage, renderedMessages: RenderedMessageStore, onFork: ((ChatMessage) -> Void)?,
-                deliveryActions: MessageDeliveryActions?, onSelectText: ((String) -> Void)?) {
+                onCountChanges: ((ChatMessage) -> Void)?, deliveryActions: MessageDeliveryActions?,
+                onSelectText: ((String) -> Void)?) {
         self.message = message
         self.renderedMessages = renderedMessages
         self.onFork = onFork
+        self.onCountChanges = onCountChanges
         self.deliveryActions = deliveryActions
         self.onSelectText = onSelectText
     }
@@ -292,7 +298,7 @@ private struct ChatBubbleOwnedMenu: View {
 
     var body: some View {
         ChatBubbleMenu(message: owner.message, rendered: owner.renderedMessages[owner.message.id], onFork: owner.onFork,
-            deliveryActions: owner.deliveryActions, onSelectText: owner.onSelectText)
+            onCountChanges: owner.onCountChanges, deliveryActions: owner.deliveryActions, onSelectText: owner.onSelectText)
     }
 }
 

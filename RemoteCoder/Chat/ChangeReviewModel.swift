@@ -4,29 +4,23 @@ import Observation
 @MainActor
 @Observable
 final class ChangeReviewModel {
-    enum Mode: Hashable {
-        case lastTurn
-        case git(ChangeSource)
-
-        static let all: [Mode] = [.lastTurn] + ChangeSource.allCases.map(Mode.git)
-    }
-
-    nonisolated static let defaultSource = ChangeSource.branch
-
     enum State {
         case loading
         case ready(ChangeReview)
         case unavailable(ChangeUnavailability)
         case noRecentEdits(isComplete: Bool)
+        case anchorMissing(isComplete: Bool)
         case failed(String)
     }
 
     let conversation: String?
     let directory: String
-    private(set) var mode: Mode = .git(defaultSource)
+    private(set) var view: ChangesView = .standard
     private(set) var state: State = .loading
     let summary: ChangeSummaryModel?
     private(set) var root: String?
+    private(set) var startPoints = ChangesStartPoints.none
+    private(set) var since: TurnChanges.Since?
     private(set) var isRefreshing = false
     private(set) var collapsedFiles: [ReviewedFile.ID: Bool] = [:]
     private(set) var notes: [ReviewNote.Anchor: ReviewNoteDraft] = [:]
@@ -47,9 +41,13 @@ final class ChangeReviewModel {
         self.conversation == conversation && self.directory == directory && self.client === client
     }
 
-    var selectedMode: Mode {
-        get { mode }
+    var selectedView: ChangesView {
+        get { view }
         set { select(newValue) }
+    }
+
+    var offersConversationViews: Bool {
+        conversation != nil && summary?.offersViews == true
     }
 
     var selectedRoot: String? {
@@ -57,11 +55,45 @@ final class ChangeReviewModel {
         set { select(root: newValue) }
     }
 
-    func select(_ mode: Mode) {
-        guard mode != self.mode else { return }
-        self.mode = mode
+    func select(_ view: ChangesView) {
+        if let summary, view != summary.view { summary.select(view) }
+        guard view != self.view else { return }
+        self.view = view
         state = .loading
         load()
+    }
+
+    func countFromNow() {
+        guard let conversation else { return }
+        loading?.cancel()
+        revision += 1
+        let revision = revision
+        isRefreshing = true
+        loading = Task { [weak self, client] in
+            let turnID: String?
+            do {
+                turnID = try await client.readNewestTurnID(threadID: conversation)
+            } catch is CancellationError {
+                return
+            } catch {
+                guard let self, self.revision == revision else { return }
+                self.logger.notice("Reading the newest turn failed: \(error.localizedDescription)")
+                self.isRefreshing = false
+                return
+            }
+            guard let self, self.revision == revision, !Task.isCancelled else { return }
+            self.isRefreshing = false
+            guard let turnID else { return }
+            self.select(.since(ChangesAnchor(turnID: turnID, boundary: .end)))
+        }
+    }
+
+    func title(of view: ChangesView) -> String {
+        if case .since(let anchor) = view {
+            if let since, since.anchor == anchor, let label = view.label(since: since) { return label }
+            if let content = summary?.content, content.view == view, let label = content.label { return label }
+        }
+        return view.label(since: nil) ?? ChangeSource.branch.title
     }
 
     func select(root: String?) {
@@ -73,15 +105,19 @@ final class ChangeReviewModel {
 
     func refresh() {
         summary?.refresh()
+        startPoints = summary?.startPoints() ?? .none
         load()
     }
 
     func reopen() {
         let primary = summary?.summary?.primary
-        let initial = Mode.git(primary?.source ?? Self.defaultSource)
+        let initial: ChangesView = switch offersConversationViews ? summary?.view : nil {
+        case nil, .git(.branch)?: .git(primary?.source ?? .branch)
+        case let stored?: stored
+        }
         let root = primary?.root ?? summary?.summary?.workedIn.first?.root
-        if mode != initial || self.root != root {
-            mode = initial
+        if view != initial || self.root != root {
+            view = initial
             self.root = root
             state = .loading
         }
@@ -92,24 +128,30 @@ final class ChangeReviewModel {
         loading?.cancel()
         revision += 1
         let revision = revision
-        let mode = mode
-        let chosen = root
+        let view = view
+        let chosen = root ?? summary?.summary.flatMap { $0.primary?.root ?? $0.workedIn.first?.root }
+        let resolvesRoot = chosen == nil && summary?.summary == nil
         isRefreshing = true
         loading = Task { [weak self, client, conversation, directory] in
             let result: State
+            var resolved = chosen
             do {
-                switch mode {
-                case .lastTurn:
+                switch view {
+                case .lastTurn, .since:
                     guard let conversation else {
                         result = .noRecentEdits(isComplete: true)
                         break
                     }
-                    switch try await client.readTurnChanges(threadID: conversation) {
+                    switch try await client.readTurnChanges(threadID: conversation, since: view.anchor) {
                     case .ready(let changes): result = .ready(await ChangeReviewPreparation.prepare(changes, revision: revision))
                     case .noRecentEdits(let complete): result = .noRecentEdits(isComplete: complete)
+                    case .anchorMissing(let complete): result = .anchorMissing(isComplete: complete)
                     }
                 case .git(let source):
-                    switch try await client.readChanges(directory: chosen ?? directory, source: source) {
+                    if resolvesRoot, let conversation {
+                        resolved = try await Self.primaryRoot(client: client, conversation: conversation, directory: directory)
+                    }
+                    switch try await client.readChanges(directory: resolved ?? directory, source: source) {
                     case .ready(let snapshot): result = .ready(await ChangeReviewPreparation.prepare(snapshot, revision: revision))
                     case .unavailable(let reason): result = .unavailable(reason)
                     }
@@ -120,10 +162,17 @@ final class ChangeReviewModel {
                 result = .failed(error.localizedDescription)
             }
             guard let self, self.revision == revision, !Task.isCancelled else { return }
+            if case .git = view, self.root == nil, let resolved { self.root = resolved }
             if case .failed(let message) = result { self.logger.notice("Reading changes failed: \(message)") }
+            if case .ready(let review) = result, case .conversation(.since(let since), _, _) = review.scope { self.since = since }
             self.state = result
             self.isRefreshing = false
         }
+    }
+
+    @concurrent private static func primaryRoot(client: GatewayClient, conversation: String, directory: String) async throws -> String? {
+        let summary = PreparedChangeSummary(try await client.readChangeSummary(threadID: conversation, directory: directory, source: nil))
+        return summary.primary?.root ?? summary.workedIn.first?.root
     }
 
     func stop() {
@@ -187,13 +236,9 @@ final class ChangeReviewModel {
     func title(of comparison: ReviewComparison) -> String {
         switch comparison {
         case .git(let source): source.title
-        case .turn(_, let startedAt): "Turn at \(Self.formattedStart(startedAt))"
+        case .turn(_, let startedAt): "Turn at \(ChangesView.formattedTime(startedAt))"
+        case .since(_, let at): at.map { "Since \(ChangesView.formattedTime($0))" } ?? "Since Start Point"
         }
-    }
-
-    static func formattedStart(_ date: Date) -> String {
-        Calendar.current.isDateInToday(date) ? date.formatted(date: .omitted, time: .shortened)
-                                              : date.formatted(date: .abbreviated, time: .shortened)
     }
 
     func clearNotes() {
@@ -212,7 +257,8 @@ final class ChangeReviewModel {
             } else {
                 "this branch's changes"
             }
-        case .turn(_, let startedAt): "the edits of the turn that started at \(Self.formattedStart(startedAt))"
+        case .turn(_, let startedAt): "the edits of the turn that started at \(ChangesView.formattedTime(startedAt))"
+        case .since(_, let at): at.map { "the edits made since \(ChangesView.formattedTime($0))" } ?? "the edits made since the start point"
         }
         return "\(changes) in \(anchor.root)"
     }
@@ -221,11 +267,16 @@ final class ChangeReviewModel {
         switch comparison {
         case .git(let source): ChangeSource.allCases.firstIndex(of: source) ?? 0
         case .turn: ChangeSource.allCases.count
+        case .since: ChangeSource.allCases.count + 1
         }
     }
 
     private static func turnStart(_ comparison: ReviewComparison) -> Date {
-        if case .turn(_, let startedAt) = comparison { startedAt } else { .distantPast }
+        switch comparison {
+        case .turn(_, let startedAt): startedAt
+        case .since(_, let at): at ?? .distantPast
+        case .git: .distantPast
+        }
     }
 
     private static func location(_ root: String, _ path: String) -> String {
@@ -253,10 +304,10 @@ final class ReviewNoteDraft: Identifiable {
 
 #if DEBUG
 extension ChangeReviewModel {
-    func showPreview(_ state: State, mode: Mode = .git(defaultSource), root: String? = nil,
+    func showPreview(_ state: State, view: ChangesView = .standard, root: String? = nil,
                      notes: [ReviewNote] = []) {
         self.state = state
-        self.mode = mode
+        self.view = view
         self.root = root
         isRefreshing = false
         self.notes = Dictionary(uniqueKeysWithValues: notes.map { note in

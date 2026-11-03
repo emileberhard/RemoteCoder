@@ -9,11 +9,35 @@ struct ConversationChangesTests {
             Issue.record("Expected ready turn changes")
             return
         }
-        #expect(changes.turn.id == "turn-1")
-        #expect(changes.turn.latest && !changes.turn.running)
+        guard case .turn(let turn) = changes.window else {
+            Issue.record("Expected one turn")
+            return
+        }
+        #expect(turn.id == "turn-1")
+        #expect(turn.latest && !turn.running)
         #expect(changes.files.map(\.root) == ["/nonexistent-fixture/care/src", "/nonexistent-fixture"])
         #expect(UnifiedDiff.parse(changes.files[1].change).status == .added)
         #expect(changes.commands == 3 && changes.omittedAgents == 1 && !changes.complete)
+    }
+
+    @Test func rangeChangesKeepTheirStartAndCountedTurns() throws {
+        let read = try JSONDecoder().decode(TurnChangesRead.self, from: ProtocolFixtures.data(at: "changes/range-ready.json"))
+        guard case .ready(let changes) = read, case .since(let since) = changes.window else {
+            Issue.record("Expected ready range changes")
+            return
+        }
+        #expect(since.anchor == ChangesAnchor(turnID: "turn-3", boundary: .end))
+        #expect(since.at == Date(timeIntervalSince1970: 1_793_636_561) && since.turns == 2)
+        #expect(changes.files.map(\.root) == ["/nonexistent-fixture/care/src", "/nonexistent-fixture"])
+        #expect(changes.totals == ChangeTotals(counted: [ChangeTotals.Lines(additions: 1, deletions: 1),
+                                                         ChangeTotals.Lines(additions: 1, deletions: 0)],
+                                               unlistedFiles: 0, isComplete: false))
+        let missing = try JSONDecoder().decode(TurnChangesRead.self, from: Data(#"{"status":"anchorMissing","complete":false}"#.utf8))
+        guard case .anchorMissing(let complete) = missing else {
+            Issue.record("Expected a missing start point")
+            return
+        }
+        #expect(!complete)
     }
 
     @Test func noRecentEditsKeepsItsCoverage() throws {

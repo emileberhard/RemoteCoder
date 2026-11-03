@@ -649,15 +649,13 @@ fn plan_state(
                 );
             }
         }
-        for name in [
-            "conversation-marks.v3.json",
-            "conversation-marks.v2.json",
-            "conversation-marks.json",
-        ] {
+        for name in std::iter::once(crate::conversation_marks::FILE_NAME)
+            .chain(crate::conversation_marks::PRIOR_FILE_NAMES)
+        {
             preserve_prior(root, &target, id, &target.join(name))?;
         }
         writes.push(StateWrite {
-            path: target.join("conversation-marks.v3.json"),
+            path: target.join(crate::conversation_marks::FILE_NAME),
             value: merge_marks(existing, incoming, threads, &host_threads)?,
         });
     }
@@ -687,7 +685,7 @@ fn plan_state(
 fn validate_state_write(write: &StateWrite) -> Result<()> {
     match write.path.file_name().and_then(|name| name.to_str()) {
         Some("active-codex-turns.json") => validate_ledger(&write.value),
-        Some("conversation-marks.v3.json") => {
+        Some(name) if name == crate::conversation_marks::FILE_NAME => {
             crate::conversation_marks::validate_migration_document(&write.value)
         }
         _ => Ok(()),
@@ -831,7 +829,7 @@ fn merge_marks(
             .map(|id| (id.clone(), Some("source".to_owned())))
             .collect(),
     )?;
-    target["schemaVersion"] = 3.into();
+    target["schemaVersion"] = crate::conversation_marks::SCHEMA_VERSION.into();
     if !pending.is_empty() {
         target["pendingNativeUnarchive"] = serde_json::to_value(pending)?;
     }

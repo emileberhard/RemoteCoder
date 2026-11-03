@@ -2971,16 +2971,17 @@ the turn seen. Rows also offer Mark as Read and Mark as Unread, a selection mode
 marks or settles many at once, and Mark All as Read moves the read baseline
 to the time it was chosen, even when the change reaches the gateway later.
 
-Pins, read state, purposes, settlement and done suggestions are conversation marks, owned by
-each gateway in `conversation-marks.v3.json` beside its turn state and shared by
+Pins, read state, purposes, settlement, done suggestions and changes views are conversation marks, owned by
+each gateway in `conversation-marks.v4.json` beside its turn state and shared by
 every device. `conversation/marks/read` returns the whole document;
 `conversation/marks/update` applies up to 500 changes and returns a revisioned
 delta, which the gateway also broadcasts as `conversation/marks/changed`. Both
 carry `schemaVersion`; a missing value means 1. The
 document's read baseline is set when it is first created, so existing history
-starts read. Schema 3 imports v2 on first load, or v1 through the
-settlement conversion when v2 is absent, leaving both older files untouched for
-rollback. `doneThrough` is gateway-written and is not an update operation.
+starts read. Schema 4 imports v3, else v2, on first load, or v1 through the
+settlement conversion when neither exists, leaving every older file untouched
+for rollback. The app offers changes views only from schema 4 and drops
+pending view changes when a gateway reports an older schema. `doneThrough` is gateway-written and is not an update operation.
 Each host's `ConversationList` keeps a
 `ConversationMarksReplica` in `conversation-marks.v2.json` in its storage
 directory: the last acknowledged document plus unsent changes (at most 2,000),

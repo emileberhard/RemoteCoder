@@ -259,6 +259,15 @@ final class ConversationList {
         recordMark(.unpin(threadID: threadID))
     }
 
+    func changesView(of threadID: String) -> ChangesView? {
+        marks.changesView(of: threadID)
+    }
+
+    func setChangesView(_ view: ChangesView, threadID: String) {
+        guard marks.offersChangesViews else { return }
+        recordMark(.setChangesView(threadID: threadID, view: view == .standard ? nil : view))
+    }
+
     func markSeen(threadID: String, completedAt: Int64) {
         recordMark(.markRead(threadID: threadID, through: completedAt))
     }

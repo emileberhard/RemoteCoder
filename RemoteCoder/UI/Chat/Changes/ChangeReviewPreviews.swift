@@ -1,7 +1,7 @@
 #if DEBUG
 import SwiftUI
 
-private enum ChangeReviewFixture {
+enum ChangeReviewFixture {
     static let patches: [(String, Int, Int, ChangeSnapshot.Omission?)] = [
         ("""
         diff --git a/RemoteCoder/Chat/ChatScreenModel.swift b/RemoteCoder/Chat/ChatScreenModel.swift
@@ -132,7 +132,7 @@ private enum ChangeReviewFixture {
                                                                            replacedInvalidUtf8: false))
         }
         return ChangeReviewPreparation.review(of: TurnChanges(
-            turn: TurnChanges.Turn(id: "turn-1", startedAtMs: 1_793_631_000_000, running: false, latest: false),
+            window: .turn(TurnChanges.Turn(id: "turn-1", startedAtMs: 1_793_631_000_000, running: false, latest: false)),
             files: files, unlistedFiles: 0, commands: 7, omittedAgents: 1, complete: true, capturedAtMs: 1_793_631_600_000), revision: 1)
     }
 
@@ -152,17 +152,35 @@ private enum ChangeReviewFixture {
     }
 
     @MainActor
-    static func model(_ state: ChangeReviewModel.State, mode: ChangeReviewModel.Mode = .git(.uncommitted),
+    static func model(_ state: ChangeReviewModel.State, view: ChangesView = .git(.uncommitted),
                       summary: PreparedChangeSummary? = nil, root: String? = nil,
                       notes: [ReviewNote] = []) -> ChangeReviewModel? {
+        guard let client = client() else { return nil }
+        let summaryModel = summaryModel(view: view, summary: summary, client: client)
+        let model = ChangeReviewModel(conversation: "preview", directory: "/Users/emil/stretch", client: client,
+                                      summary: summaryModel)
+        model.showPreview(state, view: view, root: root, notes: notes)
+        return model
+    }
+
+    static func client() -> GatewayClient? {
         let host = GatewayHostConfiguration(id: UUID(), name: "Preview", hostname: "127.0.0.1", port: 1,
                                             authToken: "preview", transport: .trustedNetwork)
-        guard let client = try? GatewayClient(host: host, routes: nil) else { return nil }
-        let summaryModel = ChangeSummaryModel(conversation: "preview", directory: "/Users/emil/stretch", client: client)
-        summaryModel.showPreview(summary)
-        let model = ChangeReviewModel(conversation: "preview", directory: "/Users/emil/stretch", client: client, summary: summaryModel)
-        model.showPreview(state, mode: mode, root: root, notes: notes)
-        return model
+        return try? GatewayClient(host: host, routes: nil)
+    }
+
+    @MainActor
+    static func summaryModel(view: ChangesView, summary: PreparedChangeSummary?, client: GatewayClient) -> ChangeSummaryModel {
+        let views = ConversationChangesViews(read: { view }, write: { _ in }, startPoints: {
+            ChangesStartPoints(prompts: [
+                .init(anchor: ChangesAnchor(turnID: "turn-2", boundary: .start), preview: "Ship the changes pill", date: .now),
+                .init(anchor: ChangesAnchor(turnID: "turn-1", boundary: .start), preview: "Review the CodeAct branch",
+                      date: .now.addingTimeInterval(-1_800)),
+            ])
+        })
+        let summaryModel = ChangeSummaryModel(conversation: "preview", directory: "/Users/emil/stretch", client: client, views: views)
+        summaryModel.showPreview(summary, view: view)
+        return summaryModel
     }
 
     static var comment: ReviewNote {
@@ -184,10 +202,10 @@ private struct ChangeReviewPreview: View {
     @State private var model: ChangeReviewModel?
     @State private var theme = AppThemeStore()
 
-    init(_ state: ChangeReviewModel.State, mode: ChangeReviewModel.Mode = .git(.uncommitted),
+    init(_ state: ChangeReviewModel.State, view: ChangesView = .git(.uncommitted),
          summary: PreparedChangeSummary? = nil, root: String? = nil, notes: [ReviewNote] = [],
          collapsing paths: Set<String> = []) {
-        let model = ChangeReviewFixture.model(state, mode: mode, summary: summary, root: root, notes: notes)
+        let model = ChangeReviewFixture.model(state, view: view, summary: summary, root: root, notes: notes)
         if let model, case .ready(let review) = state {
             for file in review.files where paths.contains(file.path) { model.toggleCollapsed(file) }
         }
@@ -245,7 +263,7 @@ private struct ChangeReviewPreview: View {
 }
 
 #Preview("I · Last turn") {
-    ChangeReviewPreview(.ready(ChangeReviewFixture.lastTurn), mode: .lastTurn,
+    ChangeReviewPreview(.ready(ChangeReviewFixture.lastTurn), view: .lastTurn,
                         collapsing: ["RemoteCoder/Chat/ChatScreenModel.swift"])
 }
 
@@ -255,14 +273,18 @@ private struct ChangeReviewPreview: View {
 }
 
 #Preview("K · No recent edits") {
-    ChangeReviewPreview(.noRecentEdits(isComplete: true), mode: .lastTurn)
+    ChangeReviewPreview(.noRecentEdits(isComplete: true), view: .lastTurn)
 }
 
 #Preview("L · No net changes") {
     ChangeReviewPreview(.ready(ChangeReviewPreparation.review(of: TurnChanges(
-        turn: TurnChanges.Turn(id: "turn-2", startedAtMs: 1_793_631_000_000, running: false, latest: true),
+        window: .turn(TurnChanges.Turn(id: "turn-2", startedAtMs: 1_793_631_000_000, running: false, latest: true)),
         files: [], unlistedFiles: 0, commands: 3, omittedAgents: 1, complete: false, capturedAtMs: 1_793_631_600_000), revision: 1)),
-                        mode: .lastTurn)
+                        view: .lastTurn)
+}
+
+#Preview("L2 · Start point not found") {
+    ChangeReviewPreview(.anchorMissing(isComplete: true), view: .since(ChangesAnchor(turnID: "turn-1", boundary: .end)))
 }
 
 #Preview("M · Checkouts not loaded") {

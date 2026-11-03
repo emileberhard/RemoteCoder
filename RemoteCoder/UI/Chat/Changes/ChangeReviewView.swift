@@ -30,8 +30,8 @@ private struct ChangeReviewContent: View {
         case .ready(let review) where review.files.isEmpty && review.unlistedFiles == 0:
             ChangeReviewMessage(model: model, review: review, remoteHomePath: remoteHomePath) {
                 VStack(spacing: 0) {
-                    ContentUnavailableView(model.mode.emptyTitle, systemImage: "checkmark.circle",
-                                           description: Text(model.mode.emptyDescription))
+                    ContentUnavailableView(model.view.emptyTitle, systemImage: "checkmark.circle",
+                                           description: Text(model.view.emptyDescription))
                         .frame(maxHeight: .infinity)
                     ChangeReviewNotices(review: review, remoteHomePath: remoteHomePath)
                 }
@@ -41,7 +41,7 @@ private struct ChangeReviewContent: View {
                 LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
                     ChangeReviewHeader(model: model, review: review, remoteHomePath: remoteHomePath)
                     ForEach(review.files) { file in
-                        if case .turn = review.scope, file.isFirstInRoot {
+                        if case .conversation = review.scope, file.isFirstInRoot {
                             ChangeReviewRootHeader(root: file.root, remoteHomePath: remoteHomePath)
                         }
                         DiffFileSection(model: model, file: file)
@@ -59,6 +59,18 @@ private struct ChangeReviewContent: View {
             ChangeReviewMessage(model: model, review: nil, remoteHomePath: remoteHomePath) {
                 ContentUnavailableView("No Recent Edits", systemImage: "clock",
                                        description: isComplete ? nil : Text("Some history couldn’t be read, so edits may be missing."))
+            }
+        case .anchorMissing(let isComplete):
+            ChangeReviewMessage(model: model, review: nil, remoteHomePath: remoteHomePath) {
+                ContentUnavailableView {
+                    Label("Start Point Not Found", systemImage: "flag.slash")
+                } description: {
+                    Text(isComplete ? "That turn is no longer in this conversation."
+                                    : "That turn is further back than the history this can read.")
+                } actions: {
+                    Button("Show Branch Changes") { model.select(.standard) }
+                        .appButtonFeedback()
+                }
             }
         case .failed(let message):
             ChangeReviewMessage(model: model, review: nil, remoteHomePath: remoteHomePath) {
@@ -155,13 +167,32 @@ private struct ChangeReviewHeader: View {
     var body: some View {
         HStack(spacing: 10) {
             AppMenu {
-                Picker("Compare", selection: $model.selectedMode) {
-                    ForEach(ChangeReviewModel.Mode.all, id: \.self) { mode in
-                        Label(mode.title, systemImage: mode.systemImage).tag(mode)
+                if model.conversation != nil {
+                    Section("Conversation") {
+                        Picker("Conversation", selection: $model.selectedView) {
+                            if case .since = model.view {
+                                Label(model.title(of: model.view), systemImage: ChangesView.sinceSymbol).tag(model.view)
+                            }
+                            Label(ChangesView.lastTurn.title, systemImage: ChangesView.lastTurn.systemImage)
+                                .tag(ChangesView.lastTurn)
+                        }
+                        .pickerStyle(.inline)
+                        .labelsHidden()
+                        if model.offersConversationViews {
+                            ChangesStartMenu(model: model)
+                        }
                     }
                 }
-                .pickerStyle(.inline)
-                if case .git = model.mode, let checkouts = model.summary?.summary {
+                Section("Git") {
+                    Picker("Git", selection: $model.selectedView) {
+                        ForEach(ChangeSource.allCases, id: \.self) { source in
+                            Label(source.title, systemImage: source.systemImage).tag(ChangesView.git(source))
+                        }
+                    }
+                    .pickerStyle(.inline)
+                    .labelsHidden()
+                }
+                if case .git = model.view, let checkouts = model.summary?.summary {
                     CheckoutPicker(model: model, checkouts: checkouts, remoteHomePath: remoteHomePath)
                 }
                 if let review, !review.files.isEmpty {
@@ -175,8 +206,8 @@ private struct ChangeReviewHeader: View {
                 }
             } label: {
                 HStack(spacing: 4) {
-                    Text(model.mode.title).fontWeight(.semibold)
-                    if case .git = model.mode {
+                    Text(model.title(of: model.view)).fontWeight(.semibold)
+                    if case .git = model.view {
                         if let root = model.root {
                             Text((root as NSString).lastPathComponent)
                                 .foregroundStyle(.secondary)
@@ -208,6 +239,26 @@ private struct ChangeReviewHeader: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
+    }
+}
+
+private struct ChangesStartMenu: View {
+    let model: ChangeReviewModel
+
+    var body: some View {
+        AppMenu(trigger: .submenu) {
+            Button("Now", action: model.countFromNow)
+            ForEach(model.startPoints.prompts) { prompt in
+                Button {
+                    model.select(.since(prompt.anchor))
+                } label: {
+                    Text(prompt.preview)
+                    Text(ChangesView.formattedTime(prompt.date))
+                }
+            }
+        } label: {
+            Label("Start From", systemImage: ChangesView.sinceSymbol)
+        }
     }
 }
 
@@ -266,16 +317,23 @@ private struct ChangeReviewSummary: View {
     let totals: ChangeTotals
 
     var body: some View {
-        HStack(spacing: 6) {
-            FileCount(files: totals.files)
-                .foregroundStyle(.secondary)
-            if let lines = totals.lines {
-                DiffCounts(additions: lines.additions, deletions: lines.deletions)
-            }
+        ViewThatFits(in: .horizontal) {
+            counts(compact: false)
+            counts(compact: true)
         }
         .scaledFont(.subheadline.monospacedDigit())
         .lineLimit(1)
         .accessibilityElement(children: .combine)
+    }
+
+    private func counts(compact: Bool) -> some View {
+        HStack(spacing: 6) {
+            FileCount(files: totals.files)
+                .foregroundStyle(.secondary)
+            if let lines = totals.lines {
+                DiffCounts(additions: lines.additions, deletions: lines.deletions, compact: compact)
+            }
+        }
     }
 }
 
@@ -301,8 +359,8 @@ private struct ChangeReviewNotices: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            if case .turn(let turn, let commands, let omittedAgents) = review.scope {
-                if !turn.latest {
+            if case .conversation(let window, let commands, let omittedAgents) = review.scope {
+                if case .turn(let turn) = window, !turn.latest {
                     Text("Later turns made no edits.")
                 }
                 if commands > 0 {
@@ -316,7 +374,7 @@ private struct ChangeReviewNotices: View {
             if review.unlistedFiles > 0 {
                 Text(unlistedNotice)
             } else if !review.isComplete {
-                if case .turn = review.scope {
+                if case .conversation = review.scope {
                     Text("Some history couldn’t be read, so edits may be missing.")
                 } else {
                     Text("This comparison is too large to read completely.")
@@ -347,9 +405,15 @@ private struct ChangeReviewNotices: View {
             let branch = branch ?? "Detached HEAD"
             let against = source == .branch ? base.map { " against \($0)" } ?? "" : ""
             return "\(branch)\(against) · \(root) · \(time)"
-        case .turn(let turn, _, _):
-            let start = ChangeReviewModel.formattedStart(turn.startedAt)
+        case .conversation(.turn(let turn), _, _):
+            let start = ChangesView.formattedTime(turn.startedAt)
             return turn.running ? "Turn started \(start), still running · \(time)" : "Turn started \(start) · \(time)"
+        case .conversation(.since(let since), _, _):
+            let turns = since.turns == 1 ? "1 turn" : "\(since.turns) turns"
+            guard let at = since.at else { return "Counting after the running turn · \(time)" }
+            let start = ChangesView.formattedTime(at)
+            return since.anchor.boundary == .end ? "After the reply at \(start) · \(turns) · \(time)"
+                                                 : "From the prompt at \(start) · \(turns) · \(time)"
         }
     }
 }
@@ -428,15 +492,20 @@ struct FileCount: View {
 struct DiffCounts: View {
     let additions: Int
     let deletions: Int
+    var compact = false
 
     var body: some View {
         HStack(spacing: 4) {
-            Text("+\(additions)").foregroundStyle(DiffPalette.added)
-            Text("−\(deletions)").foregroundStyle(DiffPalette.removed)
+            Text("+\(count(additions))").foregroundStyle(DiffPalette.added)
+            Text("−\(count(deletions))").foregroundStyle(DiffPalette.removed)
         }
         .monospacedDigit()
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(additions) added, \(deletions) removed")
+    }
+
+    private func count(_ lines: Int) -> String {
+        compact ? lines.formatted(.number.notation(.compactName)) : String(lines)
     }
 }
 
@@ -459,24 +528,24 @@ private struct ChangeReviewPlaceholder: View {
     }
 }
 
-extension ChangeReviewModel.Mode {
+extension ChangesView {
+    static let sinceSymbol = "flag"
+
     var title: String {
-        switch self {
-        case .lastTurn: "Last Turn"
-        case .git(let source): source.title
-        }
+        label(since: nil) ?? ChangeSource.branch.title
     }
 
     var systemImage: String {
         switch self {
         case .lastTurn: "clock.arrow.circlepath"
+        case .since: Self.sinceSymbol
         case .git(let source): source.systemImage
         }
     }
 
     var emptyTitle: String {
         switch self {
-        case .lastTurn: "No Net Changes"
+        case .lastTurn, .since: "No Net Changes"
         case .git(let source): source.emptyTitle
         }
     }
@@ -484,6 +553,7 @@ extension ChangeReviewModel.Mode {
     var emptyDescription: String {
         switch self {
         case .lastTurn: "The last turn’s edits cancel each other out."
+        case .since: "Nothing changed since this point, or the edits cancel each other out."
         case .git(let source): source.emptyDescription
         }
     }
@@ -503,15 +573,6 @@ extension ChangeSource {
         case .staged: "Nothing is staged."
         case .unstaged: "Everything is staged."
         case .branch: "This branch matches its base."
-        }
-    }
-
-    var title: String {
-        switch self {
-        case .uncommitted: "Uncommitted"
-        case .staged: "Staged"
-        case .unstaged: "Unstaged"
-        case .branch: "Branch"
         }
     }
 

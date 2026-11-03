@@ -218,8 +218,27 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         guard changeSummary?.summarizes(conversation: activeSessionID, directory: workingDirectory) != true else { return }
         changeSummary?.stop()
         changeSummary = activeSessionID.flatMap { conversation in
-            workingDirectory.map { ChangeSummaryModel(conversation: conversation, directory: $0, client: target.gatewayClient) }
+            workingDirectory.map {
+                ChangeSummaryModel(conversation: conversation, directory: $0, client: target.gatewayClient,
+                                   views: changesViews(of: conversation))
+            }
         }
+    }
+
+    private func changesViews(of conversation: String) -> ConversationChangesViews {
+        ConversationChangesViews(
+            read: { [weak target] in target?.conversationList.changesView(of: conversation) },
+            write: { [weak target] view in target?.conversationList.setChangesView(view, threadID: conversation) },
+            startPoints: { [weak self] in
+                guard let self, activeSessionID == conversation else { return .none }
+                return ChangesStartPoints(messages: messages)
+            }
+        )
+    }
+
+    func countChanges(from message: ChatMessage) {
+        guard forkableMessageIDs.contains(message.id), let turnID = message.canonicalTurnID else { return }
+        changeSummary?.select(.since(ChangesAnchor(turnID: turnID, boundary: .end)))
     }
 
     func adoptModelProvider(_ modelProvider: String?, threadID: String) {

@@ -387,7 +387,10 @@ fn adopting_a_lower_marks_baseline_preserves_implicit_claude_reads_once() {
         &json!({"schemaVersion":3,"revision":5,"readBaseline":100,"threads":{}}),
     );
     let source_before = std::fs::read(&source).unwrap();
+    let host_before = std::fs::read(&host).unwrap();
     run(fixture.home.path(), &fixture.target, &fixture.claude_home).unwrap();
+    assert_eq!(std::fs::read(&host).unwrap(), host_before);
+    let host = host.with_file_name(crate::conversation_marks::FILE_NAME);
     let persisted = std::fs::read(&host).unwrap();
     let marks: Value = serde_json::from_slice(&persisted).unwrap();
     assert_eq!(marks["readBaseline"], 100);
@@ -1154,7 +1157,7 @@ fn rollout_only_scopes_preserve_implicit_read_and_attention_thresholds_without_c
         let receipt = run(fixture.home.path(), &fixture.target, &fixture.claude_home).unwrap();
         let first = planned(
             receipt.profiles[ACCOUNT].writes.as_ref().unwrap(),
-            "conversation-marks.v3.json",
+            crate::conversation_marks::FILE_NAME,
         );
         assert!(first["threads"].get(FUTURE).is_none());
         let final_marks: Value = serde_json::from_slice(
@@ -1162,7 +1165,8 @@ fn rollout_only_scopes_preserve_implicit_read_and_attention_thresholds_without_c
                 fixture
                     .home
                     .path()
-                    .join(".remote-coder/conversation-marks.v3.json"),
+                    .join(".remote-coder")
+                    .join(crate::conversation_marks::FILE_NAME),
             )
             .unwrap(),
         )
@@ -1214,7 +1218,7 @@ fn large_marks(prefix: &str, count: usize) -> Value {
             )
         })
         .collect();
-    json!({"schemaVersion":3,"revision":1,"readBaseline":100,"threads":threads})
+    json!({"schemaVersion":crate::conversation_marks::SCHEMA_VERSION,"revision":1,"readBaseline":100,"threads":threads})
 }
 
 #[test]
@@ -1224,8 +1228,8 @@ fn merged_marks_refuse_capacity_before_any_staged_gateway_write() {
     let incoming = large_marks("source", 15000);
     crate::conversation_marks::validate_migration_document(&host).unwrap();
     crate::conversation_marks::validate_migration_document(&incoming).unwrap();
-    let host_marks = fixture.state(false, "conversation-marks.v3.json", &host);
-    let source_marks = fixture.state(true, "conversation-marks.v3.json", &incoming);
+    let host_marks = fixture.state(false, crate::conversation_marks::FILE_NAME, &host);
+    let source_marks = fixture.state(true, crate::conversation_marks::FILE_NAME, &incoming);
     let metadata_path = fixture.state(
         false,
         "session-metadata-v2.json",
@@ -1264,7 +1268,7 @@ fn replayed_marks_validate_capacity_and_schema_before_any_staged_gateway_write()
         let root = Root::open(fixture.home.path()).unwrap();
         let destination = fixture.state(
             false,
-            "conversation-marks.v3.json",
+            crate::conversation_marks::FILE_NAME,
             &large_marks("original", 1),
         );
         let metadata = fixture.state(false, "session-metadata-v2.json", &json!({"original":true}));

@@ -64,7 +64,7 @@ struct HTMLVisualFixture: View {
                             rowPresentations: fixture.rowPresentations, readingScope: fixture.readingScope,
                             retainedSurfaces: nil, renderedMessages: fixture.renderedMessages,
                             forkableMessageIDs: [], scrollToRow: fixture.request,
-                            onFork: { _ in }, deliveryActions: MessageDeliveryActions(sendNow: nil, remove: { _ in }),
+                            onFork: { _ in }, countChanges: nil, deliveryActions: MessageDeliveryActions(sendNow: nil, remove: { _ in }),
                             onToggleTimeline: { _ in }, questionCard: { _ in EmptyView() },
                             onBackgroundTap: {}, historyEdgeStatus: [:], canPrefetchOlderHistory: false, canLoadHistory: true,
                             onLoadHistory: { _ in nil }, onShowLatest: { fixture.show(35) },

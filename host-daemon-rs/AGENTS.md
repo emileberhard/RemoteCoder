@@ -590,13 +590,13 @@ blocks startup or provider journal retirement.
   revisioned per-slot state with explicit coverage
   (`docs/async-questions.md`).
 - Conversation marks (`src/conversation_marks.rs`) are the host's pins, read
-  state, purposes, settlements and done suggestions, in
-  `conversation-marks.v3.json` beside the turn state (schema version 3, at most 8 MiB, unknown fields rejected). One
+  state, purposes, settlements, done suggestions and changes views, in
+  `conversation-marks.v4.json` beside the turn state (schema version 4, at most 8 MiB, unknown fields rejected). One
   owner serializes every read-modify-write. `conversation/marks/read` returns
   `{schemaVersion, revision, readBaseline, threads, supportsRetiredScopeRead: true}`, creating the document
   with a read baseline of now; `conversation/marks/update` (`{changes}`, at
   most 500 of `markRead`, `markUnread`, `markAllRead`, `markRetiredScopeRead`, `pin`, `unpin`,
-  `setPurpose`, `settle`, `unsettle`) validates every change first
+  `setPurpose`, `settle`, `unsettle`, `setChangesView`) validates every change first
   (`-32602`), then returns `{delta}`, `null` when nothing changed, and
   broadcasts the same delta, which also carries `schemaVersion`, as
   `conversation/marks/changed`. Only a full read carries the retirement support
@@ -618,6 +618,12 @@ blocks startup or provider journal retirement.
   an empty entry is a tombstone that clears the thread and keeps its revision,
   so a late older delta cannot restore it. A `thread/deleted` notification
   clears the thread's marks.
+- A thread's `changesView` is the comparison its changes pill counts:
+  `{kind: "lastTurn"}`, `{kind: "git", source}` with a source other than
+  `branch`, or `{kind: "since", turnId, boundary}`. `setChangesView`
+  (`{threadId, view?}`) stores it; an absent view clears it back to Branch.
+  The gateway validates only its shape; `changes/turn` reports a start turn
+  that history no longer holds ([Change review](../docs/change-review.md#changes-views)).
 - Settlement: a thread's `settlement` is `{state: "settled" | "active",
   through}`. `settle` (`{threadId, through}`) records `settled`, clears the
   pin and the unread mark and raises `seenThrough` to `through` (the read
@@ -640,9 +646,10 @@ blocks startup or provider journal retirement.
   header completion time, matching the drawer's sources. Suggestions never
   change settlement, read state or pins.
 - Marks migration (`src/conversation_marks/migration.rs`): every marks context,
-  the host and each account state directory, imports schema 2
-  `conversation-marks.v2.json` on the first load without a v3 file, preserving
-  marks and pending native unarchives. With no v2 file it imports schema 1
+  the host and each account state directory, imports schema 3
+  `conversation-marks.v3.json`, else schema 2 `conversation-marks.v2.json`, on
+  the first load without a v4 file, preserving marks and pending native
+  unarchives. With neither file it imports schema 1
   `conversation-marks.json` through the existing settlement conversion. Neither
   older file is written, so a rollback still reads it. An `archivedAt` without a purpose
   becomes `settled` through it; one with a purpose is dropped, and so is one on
@@ -693,14 +700,15 @@ blocks startup or provider journal retirement.
   repository: untracked files go through a private index copy and object
   directory, and each Git process group dies with its request. Sources,
   budgets and the reply shape are in [Change review](../docs/change-review.md).
-- `changes/summary` (`{threadId, directory}`) shares checkout discovery and reads
+- `changes/summary` (`{threadId, directory, source?}`) shares checkout discovery and reads
   header-only Branch comparisons under one admission, using Uncommitted on a
-  base checkout or when Branch has no base/merge base. Its 20-second internal
+  base checkout or when Branch has no base/merge base; an explicit non-Branch
+  `source` reads that comparison in every checkout instead. Its 20-second internal
   deadline yields per-checkout failed outcomes; known checkouts still count.
   `src/changes/` owns branch start-point resolution from bounded reflog reads.
   The wire shape and comparison rules are in [Change review](../docs/change-review.md).
 - `changes/checkouts` (`{threadId?, directory}`) and `changes/turn`
-  (`{threadId}`) read the conversation's and its same-host agents' history
+  (`{threadId, since?}`) read the conversation's and its same-host agents' history
   through `cluster_history_page` (`src/gateway/conversation_changes.rs`), never
   Git state they could change. Checkouts resolve by the nearest `.git`; the
   last turn's patches come from recorded edits (`src/changes/turn.rs`) and share

@@ -3,12 +3,13 @@ import SwiftUI
 struct ChangeReview: Sendable {
     enum Scope: Sendable {
         case git(ChangeSource, root: String, branch: String?, base: String?)
-        case turn(TurnChanges.Turn, commands: Int, omittedAgents: Int)
+        case conversation(TurnChanges.Window, commands: Int, omittedAgents: Int)
 
         var comparison: ReviewComparison {
             switch self {
             case .git(let source, _, _, _): .git(source)
-            case .turn(let turn, _, _): .turn(id: turn.id, startedAt: turn.startedAt)
+            case .conversation(.turn(let turn), _, _): .turn(id: turn.id, startedAt: turn.startedAt)
+            case .conversation(.since(let since), _, _): .since(since.anchor, at: since.at)
             }
         }
     }
@@ -94,7 +95,7 @@ enum ChangeReviewPreparation {
     }
 
     static func review(of changes: TurnChanges, revision: Int) -> ChangeReview {
-        review(scope: .turn(changes.turn, commands: changes.commands, omittedAgents: changes.omittedAgents),
+        review(scope: .conversation(changes.window, commands: changes.commands, omittedAgents: changes.omittedAgents),
                files: changes.files.map { ($0.root, $0.change) }, unlistedFiles: changes.unlistedFiles,
                isComplete: changes.complete, capturedAtMs: changes.capturedAtMs, revision: revision)
     }

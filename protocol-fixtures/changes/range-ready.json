@@ -1,0 +1,30 @@
+{
+  "status": "ready",
+  "since": {
+    "turnId": "turn-3",
+    "boundary": "end",
+    "atMs": 1793636561000
+  },
+  "turns": 2,
+  "files": [
+    {
+      "root": "/nonexistent-fixture/care/src",
+      "patch": "diff --git a/app.rs b/app.rs\n--- a/app.rs\n+++ b/app.rs\n@@ -1,2 +1,2 @@\n let a = 1;\n-let b = 2;\n+let b = 3;\n",
+      "additions": 1,
+      "deletions": 1,
+      "replacedInvalidUtf8": false
+    },
+    {
+      "root": "/nonexistent-fixture",
+      "patch": "diff --git a/notes.md b/notes.md\nnew file mode 100644\n--- /dev/null\n+++ b/notes.md\n@@ -0,0 +1 @@\n+# Notes\n",
+      "additions": 1,
+      "deletions": 0,
+      "replacedInvalidUtf8": false
+    }
+  ],
+  "unlistedFiles": 0,
+  "commands": 3,
+  "omittedAgents": 1,
+  "complete": false,
+  "capturedAtMs": 1793636914000
+}

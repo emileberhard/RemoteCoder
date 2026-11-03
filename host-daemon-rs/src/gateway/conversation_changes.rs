@@ -11,11 +11,11 @@ use serde_json::{Value, json};
 
 use super::Gateway;
 use super::rpc_methods::decode_params;
-use crate::changes::Admission;
 use crate::changes::checkouts::{
     self, ChangeSummary, CheckoutSummary, Discovery, Evidence, Observations, SummaryOutcome,
 };
 use crate::changes::turn::{self, Change, Edit, TurnFile};
+use crate::changes::{Admission, Anchor, Boundary, Source};
 use crate::rpc::error::RpcCode;
 use crate::rpc::{RpcError, RpcResult};
 
@@ -23,6 +23,9 @@ const CONVERSATION_PAGES: usize = 10;
 const AGENT_PAGES: usize = 5;
 const PAGE_ITEMS: usize = 100;
 const RECENT_TURNS: usize = 20;
+const RANGE_TURNS_PER_PAGE: usize = 100;
+const RANGE_TURN_PAGES: usize = 5;
+const RANGE_PAGES: usize = 40;
 const MAXIMUM_AGENTS: usize = 16;
 const CONCURRENT_AGENT_READS: usize = 4;
 const MAXIMUM_RECORDED_EDIT_BYTES: usize = 32 * 1024 * 1024;
@@ -33,6 +36,8 @@ const SUMMARY_TIMEOUT: Duration = Duration::from_secs(20);
 struct SummaryRequest {
     thread_id: String,
     directory: String,
+    #[serde(default)]
+    source: Option<Source>,
 }
 
 #[derive(Deserialize)]
@@ -46,6 +51,8 @@ struct CheckoutsRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct TurnRequest {
     thread_id: String,
+    #[serde(default)]
+    since: Option<Anchor>,
 }
 
 #[derive(Serialize)]
@@ -67,6 +74,61 @@ enum TurnChanges {
     NoRecentEdits {
         complete: bool,
     },
+}
+
+#[derive(Serialize)]
+#[serde(
+    tag = "status",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+enum RangeChanges {
+    Ready {
+        since: RangeStart,
+        turns: usize,
+        files: Vec<TurnFile>,
+        unlisted_files: u64,
+        commands: usize,
+        omitted_agents: usize,
+        complete: bool,
+        captured_at_ms: i64,
+    },
+    AnchorMissing {
+        complete: bool,
+    },
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RangeStart {
+    turn_id: String,
+    boundary: Boundary,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    at_ms: Option<i64>,
+}
+
+struct ListedTurn {
+    id: String,
+    started_at_ms: Option<i64>,
+    completed_at_ms: Option<i64>,
+    running: bool,
+}
+
+impl ListedTurn {
+    fn parse(turn: &Value) -> Result<Self> {
+        Ok(Self {
+            id: turn["id"].as_str().context("A turn has no id")?.to_owned(),
+            started_at_ms: turn["startedAt"].as_i64().map(|seconds| seconds * 1000),
+            completed_at_ms: turn["completedAt"].as_i64().map(|seconds| seconds * 1000),
+            running: turn["status"] == "inProgress",
+        })
+    }
+}
+
+struct TurnsThrough {
+    turns: Vec<ListedTurn>,
+    found: bool,
+    exhausted: bool,
 }
 
 #[derive(Serialize)]
@@ -215,6 +277,12 @@ impl Gateway {
             "changes/summary" => {
                 let request: SummaryRequest = decode_params(params)?;
                 absolute(&request.directory)?;
+                if request.source == Some(Source::Branch) {
+                    return Err(RpcError::new(
+                        RpcCode::InvalidParams,
+                        "Omit source to summarize branch changes",
+                    ));
+                }
                 serde_json::to_value(
                     self.changes
                         .admit(|admission| self.change_summary(request, admission))
@@ -222,12 +290,26 @@ impl Gateway {
                 )
             }
             "changes/turn" => {
-                let TurnRequest { thread_id } = decode_params(params)?;
-                serde_json::to_value(
-                    self.changes
-                        .admit(|admission| self.turn_changes(&thread_id, admission))
-                        .await?,
-                )
+                let TurnRequest { thread_id, since } = decode_params(params)?;
+                match since {
+                    None => serde_json::to_value(
+                        self.changes
+                            .admit(|admission| self.turn_changes(&thread_id, admission))
+                            .await?,
+                    ),
+                    Some(anchor) => {
+                        anchor.validate().map_err(|error| {
+                            RpcError::new(RpcCode::InvalidParams, error.to_string())
+                        })?;
+                        serde_json::to_value(
+                            self.changes
+                                .admit(|admission| {
+                                    self.range_changes(&thread_id, anchor, admission)
+                                })
+                                .await?,
+                        )
+                    }
+                }
             }
             _ => {
                 return Err(RpcError::new(
@@ -245,6 +327,7 @@ impl Gateway {
         admission: Admission,
     ) -> Result<ChangeSummary> {
         let deadline = tokio::time::Instant::now() + SUMMARY_TIMEOUT;
+        let source = request.source;
         let discovery = tokio::time::timeout_at(
             deadline,
             self.checkouts(
@@ -257,7 +340,7 @@ impl Gateway {
         )
         .await
         .context("Checkout discovery exceeded the summary deadline")??;
-        Ok(summarize_checkouts(discovery, deadline).await)
+        Ok(summarize_checkouts(discovery, source, deadline).await)
     }
 
     async fn checkouts(
@@ -361,6 +444,126 @@ impl Gateway {
         Ok(TurnChanges::NoRecentEdits {
             complete: dated && (turns.is_empty() || (complete && omitted_agents == 0)),
         })
+    }
+
+    async fn range_changes(
+        &self,
+        thread: &str,
+        anchor: Anchor,
+        admission: Admission,
+    ) -> Result<RangeChanges> {
+        let (search, (mut children, listed)) = tokio::join!(
+            self.turns_through(thread, &anchor.turn_id),
+            self.conversation_agents::<Vec<Activity>>(thread)
+        );
+        let TurnsThrough {
+            turns,
+            found,
+            exhausted,
+        } = search?;
+        let Some(range) = found.then(|| range_of(&turns, anchor.boundary)).flatten() else {
+            return Ok(RangeChanges::AnchorMissing {
+                complete: exhausted,
+            });
+        };
+        let Range {
+            start,
+            counted,
+            start_ms,
+            at_ms,
+            after_running,
+        } = range;
+        let budget = AtomicUsize::new(MAXIMUM_RECORDED_EDIT_BYTES);
+        let (own, ()) = tokio::join!(self.read_turns(thread, counted, &budget), async {
+            if let Some(start_ms) = start_ms {
+                self.read_children(&mut children, Some(start_ms), &budget)
+                    .await;
+            }
+        });
+        let (own, own_complete) = own?;
+        let window = match start_ms {
+            Some(start_ms) => turn_window(start_ms, None, &own, &children),
+            None => TurnWindow {
+                complete: after_running,
+                ..turn_window(i64::MAX, None, &own, &[])
+            },
+        };
+        let files = turn::turn_files(window.edits, &admission).await?;
+        Ok(RangeChanges::Ready {
+            since: RangeStart {
+                turn_id: start.id.clone(),
+                boundary: anchor.boundary,
+                at_ms,
+            },
+            turns: counted.len(),
+            files: files.files,
+            unlisted_files: files.unlisted_files,
+            commands: window.commands,
+            omitted_agents: window.omitted_agents,
+            complete: listed && own_complete && window.complete,
+            captured_at_ms: crate::time::unix_millis(),
+        })
+    }
+
+    async fn turns_through(&self, thread: &str, anchor: &str) -> Result<TurnsThrough> {
+        let mut turns = Vec::new();
+        let mut cursor = None;
+        for _ in 0..RANGE_TURN_PAGES {
+            let mut params = json!({"threadId":thread,"limit":RANGE_TURNS_PER_PAGE,"sortDirection":"desc","itemsView":"notLoaded"});
+            if let Some(cursor) = cursor.take() {
+                params["cursor"] = Value::String(cursor);
+            }
+            let page = self
+                .cluster_history_page("thread/turns/list", params)
+                .await?;
+            for turn in page["data"].as_array().context("Missing turn list")? {
+                let turn = ListedTurn::parse(turn)?;
+                let found = turn.id == anchor;
+                turns.push(turn);
+                if found {
+                    return Ok(TurnsThrough {
+                        turns,
+                        found: true,
+                        exhausted: true,
+                    });
+                }
+            }
+            match page["nextCursor"].as_str() {
+                Some(next) => cursor = Some(next.to_owned()),
+                None => {
+                    return Ok(TurnsThrough {
+                        turns,
+                        found: false,
+                        exhausted: true,
+                    });
+                }
+            }
+        }
+        Ok(TurnsThrough {
+            turns,
+            found: false,
+            exhausted: false,
+        })
+    }
+
+    async fn read_turns(
+        &self,
+        thread: &str,
+        turns: &[ListedTurn],
+        budget: &AtomicUsize,
+    ) -> Result<(Vec<Activity>, bool)> {
+        let mut activity = Vec::new();
+        let mut pages = RANGE_PAGES;
+        for turn in turns {
+            let mut reader = HistoryReader::<Vec<Activity>>::new(thread, Some(&turn.id), pages);
+            self.read_back(&mut reader, None, budget).await?;
+            pages = reader.pages;
+            activity.extend(reader.collected);
+            if !reader.exhausted {
+                return Ok((activity, false));
+            }
+        }
+        Ok((activity, true))
     }
 
     async fn read_back<C: Collect>(
@@ -539,6 +742,37 @@ fn turn_window(
     window
 }
 
+struct Range<'a> {
+    start: &'a ListedTurn,
+    counted: &'a [ListedTurn],
+    start_ms: Option<i64>,
+    at_ms: Option<i64>,
+    after_running: bool,
+}
+
+fn range_of(newest_through_anchor: &[ListedTurn], boundary: Boundary) -> Option<Range<'_>> {
+    let (start, newer) = newest_through_anchor.split_last()?;
+    Some(match boundary {
+        Boundary::Start => Range {
+            start,
+            counted: newest_through_anchor,
+            start_ms: start.started_at_ms,
+            at_ms: start.started_at_ms,
+            after_running: false,
+        },
+        Boundary::End => Range {
+            start,
+            counted: newer,
+            start_ms: start
+                .completed_at_ms
+                .map(|completed| completed + 1000)
+                .or_else(|| newer.last().and_then(|next| next.started_at_ms)),
+            at_ms: start.completed_at_ms,
+            after_running: start.running,
+        },
+    })
+}
+
 fn active_since(last_active_seconds: Option<i64>, since_ms: i64) -> bool {
     last_active_seconds.is_none_or(|seconds| (seconds + 1) * 1000 > since_ms)
 }
@@ -573,6 +807,7 @@ fn activity_kind(item: &Value) -> Option<ActivityKind> {
 
 async fn summarize_checkouts(
     discovery: Discovery,
+    source: Option<Source>,
     deadline: tokio::time::Instant,
 ) -> ChangeSummary {
     let mut worked_in = Vec::with_capacity(discovery.worked_in.len());
@@ -582,7 +817,7 @@ async fn summarize_checkouts(
         } else {
             match tokio::time::timeout_at(
                 deadline,
-                crate::changes::summary(Path::new(&checkout.root)),
+                crate::changes::summary(Path::new(&checkout.root), source),
             )
             .await
             {
@@ -648,8 +883,12 @@ mod tests {
             in_folder: Vec::new(),
             complete: true,
         };
-        let summary =
-            summarize_checkouts(discovery(), tokio::time::Instant::now() + SUMMARY_TIMEOUT).await;
+        let summary = summarize_checkouts(
+            discovery(),
+            None,
+            tokio::time::Instant::now() + SUMMARY_TIMEOUT,
+        )
+        .await;
         assert!(
             matches!(&summary.worked_in[0].outcome, SummaryOutcome::Ready { snapshot } if snapshot.files.len() == 1)
         );
@@ -665,6 +904,7 @@ mod tests {
         ));
         let expired = summarize_checkouts(
             discovery(),
+            None,
             tokio::time::Instant::now() - Duration::from_secs(1),
         )
         .await;
@@ -681,11 +921,134 @@ mod tests {
         for params in [
             json!({"directory":"/repo"}),
             json!({"threadId":"t"}),
-            json!({"threadId":"t","directory":"/repo","source":"branch"}),
+            json!({"threadId":"t","directory":"/repo","since":"now"}),
+            json!({"threadId":"t","directory":"/repo","source":"everything"}),
         ] {
             assert!(decode_params::<SummaryRequest>(params).is_err());
         }
+        let staged: SummaryRequest =
+            decode_params(json!({"threadId":"t","directory":"/repo","source":"staged"})).unwrap();
+        assert_eq!(staged.source, Some(Source::Staged));
         assert!(absolute("relative").is_err());
+    }
+
+    #[test]
+    fn a_turn_request_takes_an_optional_turn_boundary() {
+        let request: TurnRequest = decode_params(json!({"threadId":"t"})).unwrap();
+        assert!(request.since.is_none());
+        let request: TurnRequest =
+            decode_params(json!({"threadId":"t","since":{"turnId":"turn-1","boundary":"end"}}))
+                .unwrap();
+        assert_eq!(
+            request.since,
+            Some(Anchor {
+                turn_id: "turn-1".into(),
+                boundary: Boundary::End
+            })
+        );
+        for params in [
+            json!({"threadId":"t","since":{"turnId":"turn-1","boundary":"middle"}}),
+            json!({"threadId":"t","since":{"turnId":"turn-1"}}),
+            json!({"threadId":"t","since":{"turnId":"turn-1","boundary":"start","at":1}}),
+        ] {
+            assert!(decode_params::<TurnRequest>(params).is_err());
+        }
+        for turn_id in ["", " turn", &"t".repeat(513)] {
+            let anchor = Anchor {
+                turn_id: turn_id.into(),
+                boundary: Boundary::Start,
+            };
+            assert!(anchor.validate().is_err());
+        }
+    }
+
+    #[test]
+    fn a_range_counts_the_anchor_turn_only_from_its_start() {
+        let turn = |id: &str, started, completed, running| ListedTurn {
+            id: id.into(),
+            started_at_ms: Some(started),
+            completed_at_ms: completed,
+            running,
+        };
+        let turns = [
+            turn("newest", 30_000, Some(35_000), false),
+            turn("middle", 20_000, Some(25_000), false),
+            turn("anchor", 10_000, Some(15_000), false),
+        ];
+        let ids = |range: &Range<'_>| {
+            range
+                .counted
+                .iter()
+                .map(|turn| turn.id.clone())
+                .collect::<Vec<_>>()
+        };
+
+        let start = range_of(&turns, Boundary::Start).unwrap();
+        assert_eq!(ids(&start), ["newest", "middle", "anchor"]);
+        assert_eq!((start.start_ms, start.at_ms), (Some(10_000), Some(10_000)));
+
+        let end = range_of(&turns, Boundary::End).unwrap();
+        assert_eq!(end.start.id, "anchor");
+        assert_eq!(ids(&end), ["newest", "middle"]);
+        assert_eq!((end.start_ms, end.at_ms), (Some(16_000), Some(15_000)));
+        assert!(!end.after_running);
+
+        let running = [turn("anchor", 10_000, None, true)];
+        let end = range_of(&running, Boundary::End).unwrap();
+        assert!(end.counted.is_empty() && end.after_running);
+        assert_eq!((end.start_ms, end.at_ms), (None, None));
+
+        let unfinished = [
+            turn("newest", 30_000, None, true),
+            turn("anchor", 10_000, None, false),
+        ];
+        let end = range_of(&unfinished, Boundary::End).unwrap();
+        assert_eq!(end.start_ms, Some(30_000));
+        assert!(range_of(&[], Boundary::Start).is_none());
+    }
+
+    #[tokio::test]
+    async fn range_changes_serialize_like_the_shared_fixture() {
+        let edits = vec![
+            Edit {
+                path: "/nonexistent-fixture/care/src/app.rs".into(),
+                change: Some(Change::Update {
+                    hunks: "@@ -1,2 +1,2 @@\n let a = 1;\n-let b = 2;\n+let b = 3;\n".into(),
+                    moved_to: None,
+                }),
+            },
+            Edit {
+                path: "/nonexistent-fixture/notes.md".into(),
+                change: Some(Change::Add("# Notes\n".into())),
+            },
+        ];
+        let files = crate::changes::ChangeReader::default()
+            .admit(|admission| async move { turn::turn_files(edits, &admission).await })
+            .await
+            .unwrap();
+        let ready = RangeChanges::Ready {
+            since: RangeStart {
+                turn_id: "turn-3".into(),
+                boundary: Boundary::End,
+                at_ms: Some(1_793_636_561_000),
+            },
+            turns: 2,
+            files: files.files,
+            unlisted_files: files.unlisted_files,
+            commands: 3,
+            omitted_agents: 1,
+            complete: false,
+            captured_at_ms: 1_793_636_914_000,
+        };
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../protocol-fixtures/changes/range-ready.json"
+        ))
+        .unwrap();
+        assert_eq!(serde_json::to_value(ready).unwrap(), fixture);
+        assert_eq!(
+            serde_json::to_value(RangeChanges::AnchorMissing { complete: true }).unwrap(),
+            json!({"status":"anchorMissing","complete":true})
+        );
     }
 
     #[test]
