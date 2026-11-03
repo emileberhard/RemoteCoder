@@ -3493,7 +3493,10 @@ async fn input_control_capacity_refusal_preserves_the_active_process_turn_and_se
     let result = agent
         .update_settings(
             thread,
-            &selection(&"\0".repeat(6 * 1024 * 1024), Some("high")),
+            &selection(
+                &format!("claude-{}", "\0".repeat(6 * 1024 * 1024)),
+                Some("high"),
+            ),
         )
         .await;
     let preserved = {
