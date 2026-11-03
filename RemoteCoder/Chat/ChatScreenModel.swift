@@ -214,10 +214,6 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         changeSummary?.refresh()
     }
 
-    func followChangesView() {
-        changeSummary?.followView()
-    }
-
     private func followChangeSummary() {
         guard changeSummary?.summarizes(conversation: activeSessionID, directory: workingDirectory) != true else { return }
         changeSummary?.stop()
@@ -235,7 +231,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
             write: { [weak target] view in target?.conversationList.setChangesView(view, threadID: conversation) },
             startPoints: { [weak self] in
                 guard let self, activeSessionID == conversation else { return .none }
-                return ChangesStartPoints(messages: messages, activeTurnID: target.turns.turn(forThread: conversation)?.turnID)
+                return ChangesStartPoints(messages: messages)
             }
         )
     }

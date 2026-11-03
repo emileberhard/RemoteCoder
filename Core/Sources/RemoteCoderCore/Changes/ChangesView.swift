@@ -60,18 +60,26 @@ extension ChangesView: Codable {
 }
 
 struct ChangesPillContent: Equatable, Sendable {
+    enum Count: Equatable, Sendable {
+        case known(ChangeTotals)
+        case unknown
+        case startMissing
+    }
+
     let view: ChangesView
     let label: String?
-    let totals: ChangeTotals?
+    let count: Count
 
-    init(view: ChangesView, since: TurnChanges.Since? = nil, totals: ChangeTotals?, now: Date = .now) {
+    init(view: ChangesView, since: TurnChanges.Since? = nil, count: Count, now: Date = .now) {
         self.view = view
         label = view.label(since: since, now: now)
-        self.totals = totals
+        self.count = count
     }
 
     var isVisible: Bool {
-        view != .standard || (totals?.files ?? 0) > 0
+        guard view == .standard else { return true }
+        if case .known(let totals) = count { return totals.files > 0 }
+        return false
     }
 }
 
@@ -121,17 +129,15 @@ struct ChangesStartPoints: Equatable, Sendable {
     static let limit = 6
     private static let previewCharacters = 80
 
-    let now: ChangesAnchor?
     let prompts: [Prompt]
 
-    static let none = ChangesStartPoints(now: nil, prompts: [])
+    static let none = ChangesStartPoints(prompts: [])
 
-    init(now: ChangesAnchor?, prompts: [Prompt]) {
-        self.now = now
+    init(prompts: [Prompt]) {
         self.prompts = prompts
     }
 
-    init(messages: [ChatMessage], activeTurnID: String?) {
+    init(messages: [ChatMessage]) {
         var prompts: [Prompt] = []
         var seen: Set<String> = []
         for message in messages.reversed() where message.role == .user && !message.wasSteered {
@@ -140,8 +146,7 @@ struct ChangesStartPoints: Equatable, Sendable {
             prompts.append(Prompt(anchor: ChangesAnchor(turnID: turnID, boundary: .start),
                                   preview: Self.preview(of: message.text), date: message.date))
         }
-        let newest = activeTurnID ?? messages.last(where: { $0.canonicalTurnID != nil })?.canonicalTurnID
-        self.init(now: newest.map { ChangesAnchor(turnID: $0, boundary: .end) }, prompts: prompts)
+        self.init(prompts: prompts)
     }
 
     private static func preview(of text: String) -> String {

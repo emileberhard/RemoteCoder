@@ -172,7 +172,7 @@ enum ChangeReviewFixture {
     @MainActor
     static func summaryModel(view: ChangesView, summary: PreparedChangeSummary?, client: GatewayClient) -> ChangeSummaryModel {
         let views = ConversationChangesViews(read: { view }, write: { _ in }, startPoints: {
-            ChangesStartPoints(now: ChangesAnchor(turnID: "turn-2", boundary: .end), prompts: [
+            ChangesStartPoints(prompts: [
                 .init(anchor: ChangesAnchor(turnID: "turn-2", boundary: .start), preview: "Ship the changes pill", date: .now),
                 .init(anchor: ChangesAnchor(turnID: "turn-1", boundary: .start), preview: "Review the CodeAct branch",
                       date: .now.addingTimeInterval(-1_800)),

@@ -56,16 +56,36 @@ final class ChangeReviewModel {
     }
 
     func select(_ view: ChangesView) {
+        if let summary, view != summary.view { summary.select(view) }
         guard view != self.view else { return }
         self.view = view
-        summary?.select(view)
         state = .loading
         load()
     }
 
     func countFromNow() {
-        guard let now = startPoints.now else { return }
-        select(.since(now))
+        guard let conversation else { return }
+        loading?.cancel()
+        revision += 1
+        let revision = revision
+        isRefreshing = true
+        loading = Task { [weak self, client] in
+            let turnID: String?
+            do {
+                turnID = try await client.readNewestTurnID(threadID: conversation)
+            } catch is CancellationError {
+                return
+            } catch {
+                guard let self, self.revision == revision else { return }
+                self.logger.notice("Reading the newest turn failed: \(error.localizedDescription)")
+                self.isRefreshing = false
+                return
+            }
+            guard let self, self.revision == revision, !Task.isCancelled else { return }
+            self.isRefreshing = false
+            guard let turnID else { return }
+            self.select(.since(ChangesAnchor(turnID: turnID, boundary: .end)))
+        }
     }
 
     func title(of view: ChangesView) -> String {
@@ -109,10 +129,12 @@ final class ChangeReviewModel {
         revision += 1
         let revision = revision
         let view = view
-        let chosen = root
+        let chosen = root ?? summary?.summary.flatMap { $0.primary?.root ?? $0.workedIn.first?.root }
+        let resolvesRoot = chosen == nil && summary?.summary == nil
         isRefreshing = true
         loading = Task { [weak self, client, conversation, directory] in
             let result: State
+            var resolved = chosen
             do {
                 switch view {
                 case .lastTurn, .since:
@@ -126,7 +148,10 @@ final class ChangeReviewModel {
                     case .anchorMissing(let complete): result = .anchorMissing(isComplete: complete)
                     }
                 case .git(let source):
-                    switch try await client.readChanges(directory: chosen ?? directory, source: source) {
+                    if resolvesRoot, let conversation {
+                        resolved = try await Self.primaryRoot(client: client, conversation: conversation, directory: directory)
+                    }
+                    switch try await client.readChanges(directory: resolved ?? directory, source: source) {
                     case .ready(let snapshot): result = .ready(await ChangeReviewPreparation.prepare(snapshot, revision: revision))
                     case .unavailable(let reason): result = .unavailable(reason)
                     }
@@ -137,11 +162,17 @@ final class ChangeReviewModel {
                 result = .failed(error.localizedDescription)
             }
             guard let self, self.revision == revision, !Task.isCancelled else { return }
+            if case .git = view, self.root == nil, let resolved { self.root = resolved }
             if case .failed(let message) = result { self.logger.notice("Reading changes failed: \(message)") }
             if case .ready(let review) = result, case .conversation(.since(let since), _, _) = review.scope { self.since = since }
             self.state = result
             self.isRefreshing = false
         }
+    }
+
+    @concurrent private static func primaryRoot(client: GatewayClient, conversation: String, directory: String) async throws -> String? {
+        let summary = PreparedChangeSummary(try await client.readChangeSummary(threadID: conversation, directory: directory, source: nil))
+        return summary.primary?.root ?? summary.workedIn.first?.root
     }
 
     func stop() {

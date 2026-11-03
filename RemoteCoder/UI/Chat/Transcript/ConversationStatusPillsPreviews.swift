@@ -31,19 +31,20 @@ private struct StatusPillsFixture: View {
 }
 
 private let samples = [
-    ChangesPillContent(view: .standard, totals: ChangeTotals(counted: [ChangeTotals.Lines(additions: 1, deletions: 0)],
-                                                             unlistedFiles: 0, isComplete: true)),
-    ChangesPillContent(view: .standard, totals: ChangeTotals(counted: Array(repeating: ChangeTotals.Lines(additions: 40, deletions: 5), count: 12),
-                                                             unlistedFiles: 0, isComplete: true)),
-    ChangesPillContent(view: .lastTurn, totals: ChangeTotals(counted: Array(repeating: ChangeTotals.Lines(additions: 900, deletions: 412), count: 40),
-                                                             unlistedFiles: 0, isComplete: true)),
+    ChangesPillContent(view: .standard, count: .known(ChangeTotals(counted: [ChangeTotals.Lines(additions: 1, deletions: 0)],
+                                                             unlistedFiles: 0, isComplete: true))),
+    ChangesPillContent(view: .standard, count: .known(ChangeTotals(counted: Array(repeating: ChangeTotals.Lines(additions: 40, deletions: 5), count: 12),
+                                                             unlistedFiles: 0, isComplete: true))),
+    ChangesPillContent(view: .lastTurn, count: .known(ChangeTotals(counted: Array(repeating: ChangeTotals.Lines(additions: 900, deletions: 412), count: 40),
+                                                             unlistedFiles: 0, isComplete: true))),
+    ChangesPillContent(view: .lastTurn, count: .unknown),
     ChangesPillContent(view: .since(ChangesAnchor(turnID: "turn-2", boundary: .end)),
                        since: TurnChanges.Since(anchor: ChangesAnchor(turnID: "turn-2", boundary: .end),
                                                 atMs: Int64(Date.now.timeIntervalSince1970 * 1_000), turns: 0),
-                       totals: ChangeTotals(counted: [ChangeTotals.Lines?](), unlistedFiles: 0, isComplete: true)),
-    ChangesPillContent(view: .git(.unstaged), totals: ChangeTotals(counted: [ChangeTotals.Lines(additions: 3, deletions: 1)],
-                                                                   unlistedFiles: 2, isComplete: true)),
-    ChangesPillContent(view: .since(ChangesAnchor(turnID: "gone", boundary: .end)), totals: nil),
+                       count: .known(ChangeTotals(counted: [ChangeTotals.Lines?](), unlistedFiles: 0, isComplete: true))),
+    ChangesPillContent(view: .git(.unstaged), count: .known(ChangeTotals(counted: [ChangeTotals.Lines(additions: 3, deletions: 1)],
+                                                                   unlistedFiles: 2, isComplete: true))),
+    ChangesPillContent(view: .since(ChangesAnchor(turnID: "gone", boundary: .end)), count: .startMissing),
 ]
 
 #Preview("Dark") {

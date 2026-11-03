@@ -107,12 +107,15 @@ struct ChangesPill: View {
             if let label = content.label {
                 Text(label).foregroundStyle(.secondary)
             }
-            if let totals = content.totals {
+            switch content.count {
+            case .known(let totals):
                 FileCount(files: totals.files)
                 if let lines = totals.lines {
                     DiffCounts(additions: lines.additions, deletions: lines.deletions, compact: compact)
                 }
-            } else {
+            case .unknown:
+                EmptyView()
+            case .startMissing:
                 Text("Start Not Found")
             }
         }

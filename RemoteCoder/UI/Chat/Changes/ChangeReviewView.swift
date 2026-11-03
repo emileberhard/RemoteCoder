@@ -246,23 +246,18 @@ private struct ChangesStartMenu: View {
     let model: ChangeReviewModel
 
     var body: some View {
-        let points = model.startPoints
-        if points.now != nil || !points.prompts.isEmpty {
-            AppMenu(trigger: .submenu) {
-                if points.now != nil {
-                    Button("Now", action: model.countFromNow)
+        AppMenu(trigger: .submenu) {
+            Button("Now", action: model.countFromNow)
+            ForEach(model.startPoints.prompts) { prompt in
+                Button {
+                    model.select(.since(prompt.anchor))
+                } label: {
+                    Text(prompt.preview)
+                    Text(ChangesView.formattedTime(prompt.date))
                 }
-                ForEach(points.prompts) { prompt in
-                    Button {
-                        model.select(.since(prompt.anchor))
-                    } label: {
-                        Text(prompt.preview)
-                        Text(ChangesView.formattedTime(prompt.date))
-                    }
-                }
-            } label: {
-                Label("Start From", systemImage: ChangesView.sinceSymbol)
             }
+        } label: {
+            Label("Start From", systemImage: ChangesView.sinceSymbol)
         }
     }
 }

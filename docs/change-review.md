@@ -95,15 +95,21 @@ from Here. A gateway with an older marks schema offers no views: the pill and
 review keep their Branch-first behavior and the conversation entries are hidden.
 
 - A start point is a turn boundary: the start of a turn (a prompt) or the end
-  of a turn (after its final reply). Start From Now and Count Changes from
-  Here use the end of the newest or chosen turn; the Start From submenu lists
-  the six most recent prompts that started a turn, by their first line and time.
+  of a turn (after its final reply). Count Changes from Here uses the end of
+  the chosen turn. Start From Now asks the gateway for the conversation's
+  newest turn (`thread/turns/list`, one turn) when chosen and uses its end, so
+  a transcript scrolled back or a stale inspector cannot pick an older turn.
+  The Start From submenu lists the six most recent loaded prompts that started
+  a turn, by their first line and time.
 - Count Changes from Here appears in a reply's Fork group, only on the final
   reply of a completed turn, and not on the current start point.
 - A non-Branch view names itself in the pill and keeps the pill visible at zero,
   so a fresh start point shows as Since 14:05 with no changes. Branch keeps the
-  hide-at-zero rule. When the start turn is no longer in the conversation's
-  history, the pill shows Start Not Found and the review offers Branch.
+  hide-at-zero rule. A Last Turn or Since read that could not cover the
+  conversation's history in full and found no edits shows the view's name
+  without a count, never zero. When the start turn is no longer in the
+  conversation's history, the pill shows Start Not Found and the review offers
+  Branch.
 
 ## Changes pill
 
@@ -122,8 +128,10 @@ It reads the stored view from the conversation list; Git views make one
 `changes/summary` call per refresh and Last Turn and Since make one
 `changes/turn` call. It publishes the pill's content, visibility, the current
 start turn and the prepared summary only when they change. The pill reads only
-its content; the transcript reads only visibility and the start turn. A marks
-change that alters the stored view restarts the read at once.
+its content; the transcript reads only visibility and the start turn. While it
+refreshes it observes the conversation's effective view (acknowledged marks
+plus pending changes), so any change to it, from this device, another device or
+an acknowledgement, restarts the read at once.
 
 - Refreshes happen on appear, non-replay file-change and command completions,
   turn completion, activation and reconnect, for the shown conversation and
@@ -133,10 +141,15 @@ change that alters the stored view restarts the read at once.
 - A request failure retains the last summary and logs the error. An old
   gateway's MethodNotFound clears the pill and logs once per model; later
   refreshes can discover an updated gateway.
-- The review shares the screen's summary and performs no separate discovery.
-  Each reopening starts on the stored view. For Branch it starts on the
-  primary's checkout and comparison; without a primary it opens Branch on the
-  first worked-in checkout, else the working folder. Selection stays fixed during refresh; refresh also requests a new
+- The review shares the screen's summary and performs no separate discovery,
+  except when it opens a Git comparison before the screen has any checkout
+  inventory, such as after a Last Turn or Since view: it then reads one summary
+  itself to start on the primary checkout instead of the working folder. Each
+  reopening starts on the stored view. For Branch it starts on the primary's
+  checkout and comparison; without a primary it opens Branch on the first
+  worked-in checkout, else the working folder. Choosing a comparison stores it
+  whenever it differs from the stored view, including Uncommitted when Branch
+  already falls back to it. Selection stays fixed during refresh; refresh also requests a new
   summary. The checkout menu shows each worked-in checkout's file count,
   No changes or Couldn't read, plus in-folder candidates and incomplete coverage.
 - Opening the review reads full patches again, so its state can be newer than

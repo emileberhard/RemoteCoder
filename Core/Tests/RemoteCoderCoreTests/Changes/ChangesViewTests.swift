@@ -17,14 +17,16 @@ struct ChangesViewTests {
         }
     }
 
-    @Test func onlyTheStandardViewHidesItsLabelAndItsZeroCount() {
+    @Test func onlyTheStandardViewHidesItsLabelAndItsZeroOrUnknownCount() {
         let none = ChangeTotals(counted: [ChangeTotals.Lines?](), unlistedFiles: 0, isComplete: true)
-        let branch = ChangesPillContent(view: .standard, totals: none)
+        let branch = ChangesPillContent(view: .standard, count: .known(none))
         #expect(branch.label == nil && !branch.isVisible)
-        let lastTurn = ChangesPillContent(view: .lastTurn, totals: none)
+        #expect(!ChangesPillContent(view: .standard, count: .unknown).isVisible)
+        let lastTurn = ChangesPillContent(view: .lastTurn, count: .known(none))
         #expect(lastTurn.label == "Last Turn" && lastTurn.isVisible)
-        #expect(ChangesPillContent(view: .git(.unstaged), totals: none).label == "Unstaged")
-        let missing = ChangesPillContent(view: .since(end), totals: nil)
+        #expect(ChangesPillContent(view: .lastTurn, count: .unknown).isVisible)
+        #expect(ChangesPillContent(view: .git(.unstaged), count: .known(none)).label == "Unstaged")
+        let missing = ChangesPillContent(view: .since(end), count: .startMissing)
         #expect(missing.label == "Since" && missing.isVisible)
     }
 
@@ -39,7 +41,7 @@ struct ChangesViewTests {
         #expect(ChangesView.since(prompt).label(since: nil, now: now) == "Since")
     }
 
-    @Test func startPointsListRecentPromptsAndCountNowFromTheNewestTurn() {
+    @Test func startPointsListRecentPromptsThatStartedATurn() {
         let messages = [
             ChatMessage(role: .user, text: "First\nwith detail", date: Date(timeIntervalSince1970: 10), canonicalTurnID: "t1"),
             ChatMessage(role: .codex, text: "Done", canonicalTurnID: "t1"),
@@ -47,14 +49,12 @@ struct ChangesViewTests {
             ChatMessage(role: .user, text: "Steer", wasSteered: true, canonicalTurnID: "t2"),
             ChatMessage(role: .user, text: "Pending"),
         ]
-        let points = ChangesStartPoints(messages: messages, activeTurnID: nil)
-        #expect(points.now == ChangesAnchor(turnID: "t2", boundary: .end))
+        let points = ChangesStartPoints(messages: messages)
         #expect(points.prompts.map(\.anchor.turnID) == ["t2", "t1"])
         #expect(points.prompts.map(\.preview) == ["Second", "First"])
         #expect(points.prompts.allSatisfy { $0.anchor.boundary == .start })
-        #expect(ChangesStartPoints(messages: messages, activeTurnID: "t3").now?.turnID == "t3")
-        #expect(ChangesStartPoints(messages: [], activeTurnID: nil) == .none)
+        #expect(ChangesStartPoints(messages: []) == .none)
         let many = (0..<10).map { ChatMessage(role: .user, text: "\($0)", canonicalTurnID: "t\($0)") }
-        #expect(ChangesStartPoints(messages: many, activeTurnID: nil).prompts.count == ChangesStartPoints.limit)
+        #expect(ChangesStartPoints(messages: many).prompts.count == ChangesStartPoints.limit)
     }
 }
