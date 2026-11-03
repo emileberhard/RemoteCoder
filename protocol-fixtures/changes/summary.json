@@ -1,0 +1,68 @@
+{
+  "workedIn": [
+    {
+      "root": "/Users/agent/configs",
+      "evidence": [
+        "command"
+      ],
+      "status": "ready",
+      "snapshot": {
+        "source": "uncommitted",
+        "root": "/Users/agent/configs",
+        "branch": "main",
+        "capturedAtMs": 1793636914000,
+        "files": [],
+        "unlistedFiles": 0,
+        "complete": true
+      }
+    },
+    {
+      "root": "/Users/agent/RemoteCoder-worktrees/x",
+      "evidence": [
+        "edited",
+        "command"
+      ],
+      "status": "ready",
+      "snapshot": {
+        "source": "branch",
+        "root": "/Users/agent/RemoteCoder-worktrees/x",
+        "branch": "feature",
+        "base": "origin/main",
+        "capturedAtMs": 1793636914000,
+        "files": [
+          {
+            "patch": "diff --git a/app.swift b/app.swift\n--- a/app.swift\n+++ b/app.swift\n",
+            "additions": 3,
+            "deletions": 1,
+            "omitted": {
+              "reason": "fileTooLarge",
+              "patchBytes": 25
+            },
+            "replacedInvalidUtf8": false
+          }
+        ],
+        "unlistedFiles": 0,
+        "complete": true
+      }
+    },
+    {
+      "root": "/Users/agent/gone",
+      "evidence": [
+        "edited"
+      ],
+      "status": "unavailable",
+      "reason": "missingDirectory"
+    },
+    {
+      "root": "/Users/agent/broken",
+      "evidence": [
+        "command"
+      ],
+      "status": "failed"
+    }
+  ],
+  "inFolder": [
+    "/Users/agent/stretch/kartan"
+  ],
+  "complete": false
+}

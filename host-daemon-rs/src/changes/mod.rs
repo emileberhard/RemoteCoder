@@ -28,6 +28,7 @@ const BUDGETS: Budgets = Budgets {
 const MAXIMUM_DIFF_OUTPUT_BYTES: usize = 256 * 1024 * 1024;
 const MAXIMUM_UNTRACKED_LIST_BYTES: usize = 16 * 1024 * 1024;
 const MAXIMUM_COMMAND_OUTPUT_BYTES: usize = 64 * 1024;
+const MAXIMUM_REFLOG_BYTES: usize = 1024 * 1024;
 const BASE_CANDIDATES: [&str; 4] = [
     "refs/remotes/origin/main",
     "refs/remotes/origin/master",
@@ -123,8 +124,14 @@ impl Default for ChangeReader {
 
 impl ChangeReader {
     pub(crate) async fn read(&self, request: ReadRequest) -> Result<ChangeRead> {
-        self.admit(|_| read(Path::new(&request.directory), request.source))
-            .await
+        self.admit(|_| {
+            read(
+                Path::new(&request.directory),
+                Comparison::Selected(request.source),
+                BUDGETS,
+            )
+        })
+        .await
     }
 
     pub(crate) async fn admit<T, F: Future<Output = Result<T>>>(
@@ -147,7 +154,26 @@ impl ChangeReader {
     }
 }
 
-async fn read(directory: &Path, source: Source) -> Result<ChangeRead> {
+#[derive(Clone, Copy)]
+enum Comparison {
+    Selected(Source),
+    Summary,
+}
+
+pub(crate) async fn summary(directory: &Path) -> Result<ChangeRead> {
+    read(
+        directory,
+        Comparison::Summary,
+        Budgets {
+            file_patch_bytes: 0,
+            hunk_bytes: 0,
+            ..BUDGETS
+        },
+    )
+    .await
+}
+
+async fn read(directory: &Path, comparison: Comparison, budgets: Budgets) -> Result<ChangeRead> {
     if !tokio::fs::metadata(directory)
         .await
         .is_ok_and(|metadata| metadata.is_dir())
@@ -163,8 +189,24 @@ async fn read(directory: &Path, source: Source) -> Result<ChangeRead> {
     };
     let (head, branch) = tokio::try_join!(
         optional_output(&root, &["rev-parse", "-q", "--verify", "HEAD^{commit}"]),
-        optional_output(&root, &["symbolic-ref", "-q", "--short", "HEAD"]),
+        optional_output(&root, &["symbolic-ref", "-q", "HEAD"]),
     )?;
+    let mut source = match comparison {
+        Comparison::Selected(source) => source,
+        Comparison::Summary => Source::Branch,
+    };
+    let branch_base = if source == Source::Branch {
+        branch_base(&root, branch.as_deref(), head.is_some()).await?
+    } else {
+        None
+    };
+    if matches!(comparison, Comparison::Summary)
+        && branch_base
+            .as_ref()
+            .is_none_or(|base| base.is_head || base.merge_base.is_none())
+    {
+        source = Source::Uncommitted;
+    }
     let (comparison, base) = match source {
         Source::Staged => ("--cached".to_string(), None),
         Source::Unstaged => (String::new(), None),
@@ -176,21 +218,17 @@ async fn read(directory: &Path, source: Source) -> Result<ChangeRead> {
             ),
         },
         Source::Branch => {
-            let Some(base) = default_base(&root).await? else {
+            let Some(base) = branch_base else {
                 return Ok(ChangeRead::Unavailable {
                     reason: Unavailability::NoBaseBranch,
                 });
             };
-            let merge_base = match head {
-                Some(_) => optional_output(&root, &["merge-base", "HEAD", &base]).await?,
-                None => None,
-            };
-            let Some(commit) = merge_base else {
+            let Some(commit) = base.merge_base else {
                 return Ok(ChangeRead::Unavailable {
                     reason: Unavailability::NoMergeBase,
                 });
             };
-            (commit, Some(short_name(&base)))
+            (commit, Some(base.display))
         }
     };
     let index = match source {
@@ -200,12 +238,12 @@ async fn read(directory: &Path, source: Source) -> Result<ChangeRead> {
         }
     };
     let captured_at_ms = crate::time::unix_millis();
-    let diff = diff(&root, &comparison, index.as_ref()).await?;
+    let diff = diff(&root, &comparison, index.as_ref(), budgets).await?;
     Ok(ChangeRead::Ready {
         snapshot: Snapshot {
             source,
             root: root.to_string_lossy().into_owned(),
-            branch,
+            branch: branch.map(|branch| short_name(&branch)),
             base,
             captured_at_ms,
             complete: diff.complete && diff.split.unlisted_files == 0,
@@ -253,6 +291,138 @@ async fn default_base(root: &Path) -> Result<Option<String>> {
         }
     }
     Ok(None)
+}
+
+struct BranchBase {
+    display: String,
+    merge_base: Option<String>,
+    is_head: bool,
+}
+
+async fn branch_base(
+    root: &Path,
+    branch: Option<&str>,
+    has_head: bool,
+) -> Result<Option<BranchBase>> {
+    let default = default_base(root).await?;
+    let start = match branch.filter(|_| has_head) {
+        Some(branch) => branch_start(root, branch).await?,
+        None => None,
+    };
+    let reference = if let Some((commit, name)) = start {
+        let resolved = optional_output(
+            root,
+            &[
+                "rev-parse",
+                "-q",
+                "--verify",
+                "--symbolic-full-name",
+                "--end-of-options",
+                &name,
+            ],
+        )
+        .await?;
+        match resolved.filter(|reference| {
+            reference.starts_with("refs/") && Some(reference.as_str()) != branch
+        }) {
+            Some(reference) => Some(reference),
+            None => {
+                let start_ahead = commits_ahead(root, &commit).await?;
+                let default_ahead = match &default {
+                    Some(reference) => commits_ahead(root, reference).await?,
+                    None => None,
+                };
+                if start_ahead.is_some() && (default_ahead.is_none() || start_ahead < default_ahead)
+                {
+                    Some(commit)
+                } else {
+                    default
+                }
+            }
+        }
+    } else {
+        default
+    };
+    let Some(reference) = reference else {
+        return Ok(None);
+    };
+    let is_head = branch.is_some_and(|branch| {
+        reference == branch
+            || branch.strip_prefix("refs/heads/").is_some_and(|name| {
+                reference
+                    .strip_prefix("refs/remotes/")
+                    .and_then(|remote| remote.split_once('/'))
+                    .is_some_and(|(_, remote_name)| remote_name == name)
+            })
+    });
+    let display = if reference.starts_with("refs/") {
+        short_name(&reference)
+    } else {
+        required_output(root, &["rev-parse", "--short", &reference]).await?
+    };
+    let merge_base = if has_head {
+        optional_output(root, &["merge-base", "HEAD", &reference]).await?
+    } else {
+        None
+    };
+    Ok(Some(BranchBase {
+        display,
+        merge_base,
+        is_head,
+    }))
+}
+
+async fn commits_ahead(root: &Path, reference: &str) -> Result<Option<u64>> {
+    let Some(base) = optional_output(root, &["merge-base", "HEAD", reference]).await? else {
+        return Ok(None);
+    };
+    let count = required_output(root, &["rev-list", "--count", &format!("{base}..HEAD")]).await?;
+    Ok(Some(
+        count
+            .parse()
+            .context("Git reported an invalid commit count")?,
+    ))
+}
+
+async fn branch_start(root: &Path, branch: &str) -> Result<Option<(String, String)>> {
+    let mut line = Vec::new();
+    let mut bytes = 0;
+    let mut found = None;
+    let finished = run(
+        git(root, &["reflog", "show", "--format=%H%x09%gs", branch]),
+        &[],
+        |chunk| {
+            for byte in chunk {
+                bytes += 1;
+                if bytes > MAXIMUM_REFLOG_BYTES {
+                    return false;
+                }
+                if *byte == b'\n' {
+                    if let Ok(text) = std::str::from_utf8(&line)
+                        && let Some((commit, subject)) = text.split_once('\t')
+                        && let Some(name) = subject
+                            .strip_prefix("branch: Created from ")
+                            .or_else(|| subject.strip_prefix("branch: Reset to "))
+                    {
+                        found = Some((commit.to_owned(), name.to_owned()));
+                        return false;
+                    }
+                    line.clear();
+                } else {
+                    line.push(*byte);
+                }
+            }
+            true
+        },
+    )
+    .await?;
+    if !finished.cut && !finished.status.success() {
+        bail!(
+            "Git could not read the branch start point: {}",
+            String::from_utf8_lossy(&finished.stderr).trim()
+        );
+    }
+    Ok(found)
 }
 
 fn short_name(reference: &str) -> String {
@@ -376,7 +546,12 @@ struct Diff {
     complete: bool,
 }
 
-async fn diff(root: &Path, comparison: &str, index: Option<&PrivateIndex>) -> Result<Diff> {
+async fn diff(
+    root: &Path,
+    comparison: &str,
+    index: Option<&PrivateIndex>,
+    budgets: Budgets,
+) -> Result<Diff> {
     let mut arguments = vec![
         "-c",
         "core.quotePath=false",
@@ -403,7 +578,7 @@ async fn diff(root: &Path, comparison: &str, index: Option<&PrivateIndex>) -> Re
         Some(index) => index.command(root, &arguments),
         None => git(root, &arguments),
     };
-    let mut splitter = PatchSplitter::new(BUDGETS);
+    let mut splitter = PatchSplitter::new(budgets);
     let mut read_bytes = 0;
     let finished = run(command, &[], |chunk| {
         read_bytes += chunk.len();
@@ -649,6 +824,7 @@ mod tests {
             let status = std::process::Command::new("git")
                 .arg("-C")
                 .arg(&self.root)
+                .args(["-c", "maintenance.auto=false"])
                 .args(arguments)
                 .env("GIT_CONFIG_GLOBAL", "/dev/null")
                 .env("GIT_CONFIG_NOSYSTEM", "1")
@@ -885,6 +1061,141 @@ mod tests {
             headers(&snapshot),
             ["diff --git a/a.txt b/a.txt", "diff --git a/b.txt b/b.txt"]
         );
+    }
+
+    #[tokio::test]
+    async fn a_branch_from_a_nondefault_remote_counts_only_its_work() {
+        let repository = Repository::new();
+        repository.write("main.txt", "main\n");
+        repository.commit_all("initial");
+        repository.git(&["update-ref", "refs/remotes/origin/main", "HEAD"]);
+        repository.git(&[
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/main",
+        ]);
+        repository.write("develop.txt", "develop\n");
+        repository.commit_all("develop work");
+        repository.git(&["update-ref", "refs/remotes/origin/develop-9.4", "HEAD"]);
+        repository.git(&["checkout", "-q", "-b", "feature", "origin/develop-9.4"]);
+        repository.write("feature.txt", "feature\n");
+        repository.commit_all("feature work");
+        let before = repository.git_directory();
+
+        let snapshot = snapshot(repository.read(Source::Branch).await);
+
+        assert_eq!(snapshot.base.as_deref(), Some("origin/develop-9.4"));
+        assert_eq!(
+            headers(&snapshot),
+            ["diff --git a/feature.txt b/feature.txt"]
+        );
+        assert!(
+            repository.git_directory() == before,
+            "the read wrote into .git"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_stacked_switch_branch_counts_only_its_own_work() {
+        let repository = Repository::new();
+        repository.write("main.txt", "main\n");
+        repository.commit_all("initial");
+        repository.git(&["switch", "-q", "-c", "feature"]);
+        repository.write("feature.txt", "feature\n");
+        repository.commit_all("feature work");
+        repository.git(&["switch", "-q", "-c", "stack"]);
+        repository.write("stack.txt", "stack\n");
+        repository.commit_all("stack work");
+
+        let snapshot = snapshot(repository.read(Source::Branch).await);
+
+        assert_eq!(headers(&snapshot), ["diff --git a/stack.txt b/stack.txt"]);
+        assert_ne!(snapshot.base.as_deref(), Some("main"));
+    }
+
+    #[tokio::test]
+    async fn a_switch_branch_rebased_on_new_main_excludes_upstream_commits() {
+        let repository = Repository::new();
+        repository.write("initial.txt", "initial\n");
+        repository.commit_all("initial");
+        repository.git(&["switch", "-q", "-c", "feature"]);
+        repository.write("feature.txt", "feature\n");
+        repository.commit_all("feature work");
+        repository.git(&["switch", "-q", "main"]);
+        repository.write("upstream.txt", "upstream\n");
+        repository.commit_all("upstream work");
+        repository.git(&["switch", "-q", "feature"]);
+        repository.git(&["rebase", "-q", "main"]);
+
+        let snapshot = snapshot(repository.read(Source::Branch).await);
+
+        assert_eq!(snapshot.base.as_deref(), Some("main"));
+        assert_eq!(
+            headers(&snapshot),
+            ["diff --git a/feature.txt b/feature.txt"]
+        );
+    }
+
+    #[tokio::test]
+    async fn checkout_b_uses_the_newest_start_point_and_ignores_commit_resets() {
+        let repository = Repository::new();
+        repository.write("initial.txt", "initial\n");
+        repository.commit_all("initial");
+        repository.git(&["checkout", "-q", "-b", "feature", "main"]);
+        repository.git(&["checkout", "-q", "main"]);
+        repository.write("develop.txt", "develop\n");
+        repository.commit_all("develop work");
+        repository.git(&["branch", "develop-9.4"]);
+        repository.git(&["checkout", "-q", "-B", "feature", "develop-9.4"]);
+        repository.write("feature.txt", "feature\n");
+        repository.commit_all("feature work");
+        repository.git(&["reset", "-q", "--soft", "HEAD~1"]);
+
+        let snapshot = snapshot(repository.read(Source::Branch).await);
+
+        assert_eq!(snapshot.base.as_deref(), Some("develop-9.4"));
+        assert_eq!(
+            headers(&snapshot),
+            ["diff --git a/feature.txt b/feature.txt"]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_cloned_main_uses_default_base_and_summary_excludes_its_commits() {
+        let repository = Repository::new();
+        repository.write("initial.txt", "initial\n");
+        repository.commit_all("initial");
+        let clone = repository.root.with_file_name("clone");
+        repository.git(&[
+            "clone",
+            "-q",
+            repository.root.to_str().unwrap(),
+            clone.to_str().unwrap(),
+        ]);
+        let repository = Repository {
+            _directory: repository._directory,
+            root: clone,
+        };
+        repository.git(&["config", "user.email", "tests@example.invalid"]);
+        repository.git(&["config", "user.name", "Tests"]);
+        repository.write("committed.txt", "committed\n");
+        repository.commit_all("shared main work");
+        repository.write("working.txt", "working\n");
+
+        let branch = snapshot(repository.read(Source::Branch).await);
+        assert_eq!(branch.base.as_deref(), Some("origin/main"));
+        assert_eq!(branch.files.len(), 2);
+        let summary = snapshot(summary(&repository.root).await.unwrap());
+        assert_eq!(summary.source, Source::Uncommitted);
+        assert_eq!(
+            headers(&summary),
+            ["diff --git a/working.txt b/working.txt"]
+        );
+        assert_eq!(
+            (summary.files[0].additions, summary.files[0].deletions),
+            (1, 0)
+        );
+        assert!(!summary.files[0].patch.contains("@@"));
     }
 
     #[tokio::test]

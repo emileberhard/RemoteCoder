@@ -693,6 +693,12 @@ blocks startup or provider journal retirement.
   repository: untracked files go through a private index copy and object
   directory, and each Git process group dies with its request. Sources,
   budgets and the reply shape are in [Change review](../docs/change-review.md).
+- `changes/summary` (`{threadId, directory}`) shares checkout discovery and reads
+  header-only Branch comparisons under one admission, using Uncommitted on a
+  base checkout or when Branch has no base/merge base. Its 20-second internal
+  deadline yields per-checkout failed outcomes; known checkouts still count.
+  `src/changes/` owns branch start-point resolution from bounded reflog reads.
+  The wire shape and comparison rules are in [Change review](../docs/change-review.md).
 - `changes/checkouts` (`{threadId?, directory}`) and `changes/turn`
   (`{threadId}`) read the conversation's and its same-host agents' history
   through `cluster_history_page` (`src/gateway/conversation_changes.rs`), never

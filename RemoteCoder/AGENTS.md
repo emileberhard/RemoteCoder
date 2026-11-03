@@ -973,7 +973,8 @@ entrypoint linked above.
   above the composer, on both platforms: the changes pill (`review-changes`)
   before the subagents pill (`open-agents`), each shown only while it has
   something to show, sharing `StatusPill`'s glass capsule. The changes pill
-  shows `ChangeSummaryModel`'s file and line totals and opens change review:
+  shows `ChangeSummaryModel`'s summed file and line totals across worked-in
+  checkouts, including committed branch work, and opens change review at its primary:
   the sheet on iOS, the inspector on the Mac
   ([Change review](../docs/change-review.md#changes-pill)). Request summary
   reads through `ChatScreenModel.refreshChangeSummary()`, which admits them only

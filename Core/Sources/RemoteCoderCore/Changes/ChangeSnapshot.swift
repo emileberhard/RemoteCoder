@@ -56,25 +56,6 @@ struct ChangeSnapshot: Decodable, Sendable {
     let complete: Bool
 }
 
-struct CheckoutDiscovery: Decodable, Sendable {
-    struct Checkout: Decodable, Sendable {
-        enum Evidence: String, Decodable, Sendable {
-            case edited, command, workingFolder
-        }
-
-        let root: String
-        let evidence: Set<Evidence>
-    }
-
-    let workedIn: [Checkout]
-    let inFolder: [String]
-    let complete: Bool
-
-    var defaultRoot: String? {
-        (workedIn.first { $0.evidence.contains(.edited) } ?? workedIn.first)?.root
-    }
-}
-
 enum TurnChangesRead: Decodable, Sendable {
     case ready(TurnChanges)
     case noRecentEdits(complete: Bool)

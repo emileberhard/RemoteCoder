@@ -25,11 +25,33 @@ struct ConversationChangesTests {
         #expect(!complete)
     }
 
-    @Test func checkoutsKeepTheirEvidence() throws {
-        let discovery = try JSONDecoder().decode(CheckoutDiscovery.self, from: ProtocolFixtures.data(at: "changes/checkouts.json"))
-        #expect(discovery.workedIn.map(\.root) == ["/Users/agent/stretch/care.ai.worktrees/codeact", "/Users/agent/stretch/care.ai"])
-        #expect(discovery.workedIn[0].evidence == [.edited, .command])
-        #expect(discovery.inFolder == ["/Users/agent/stretch/kartan"])
-        #expect(discovery.complete)
+    @Test func summaryKeepsCountsEvidenceFailuresAndPrimaryComparison() throws {
+        let summary = try JSONDecoder().decode(ChangeSummary.self, from: ProtocolFixtures.data(at: "changes/summary.json"))
+        let prepared = PreparedChangeSummary(summary)
+        #expect(prepared.workedIn.map(\.root) == ["/Users/agent/configs", "/Users/agent/RemoteCoder-worktrees/x",
+                                                "/Users/agent/gone", "/Users/agent/broken"])
+        #expect(prepared.workedIn[1].evidence == [.edited, .command])
+        #expect(prepared.workedIn.map { $0.totals?.files } == [0, 1, nil, nil])
+        #expect(prepared.workedIn[1].totals?.lines == ChangeTotals.Lines(additions: 3, deletions: 1))
+        #expect(prepared.totals.files == 1 && prepared.totals.lines == nil)
+        #expect(prepared.primary == PreparedChangeSummary.Primary(root: "/Users/agent/RemoteCoder-worktrees/x", source: .branch))
+        #expect(prepared.inFolder == ["/Users/agent/stretch/kartan"] && !prepared.complete)
+        guard case .unavailable(.missingDirectory) = summary.workedIn[2].outcome,
+              case .failed = summary.workedIn[3].outcome else {
+            Issue.record("Unavailable and failed outcomes must remain distinct")
+            return
+        }
+    }
+
+    @Test func primaryIsAbsentWithoutKnownChangesAndUsesUncommittedWhenReported() throws {
+        for (files, source) in [(0, "branch"), (2, "uncommitted")] {
+            let data = Data("""
+            {"workedIn":[{"root":"/repo","evidence":["workingFolder"],"status":"ready",
+            "snapshot":{"source":"\(source)","root":"/repo","files":[],"unlistedFiles":\(files),"complete":true,"capturedAtMs":0}}],
+            "inFolder":[],"complete":true}
+            """.utf8)
+            let prepared = PreparedChangeSummary(try JSONDecoder().decode(ChangeSummary.self, from: data))
+            #expect(prepared.primary == (files == 0 ? nil : .init(root: "/repo", source: .uncommitted)))
+        }
     }
 }
