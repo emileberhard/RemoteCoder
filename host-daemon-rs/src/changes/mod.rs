@@ -824,6 +824,7 @@ mod tests {
             let status = std::process::Command::new("git")
                 .arg("-C")
                 .arg(&self.root)
+                .args(["-c", "maintenance.auto=false"])
                 .args(arguments)
                 .env("GIT_CONFIG_GLOBAL", "/dev/null")
                 .env("GIT_CONFIG_NOSYSTEM", "1")
@@ -1088,7 +1089,10 @@ mod tests {
             headers(&snapshot),
             ["diff --git a/feature.txt b/feature.txt"]
         );
-        assert_eq!(repository.git_directory(), before);
+        assert!(
+            repository.git_directory() == before,
+            "the read wrote into .git"
+        );
     }
 
     #[tokio::test]
