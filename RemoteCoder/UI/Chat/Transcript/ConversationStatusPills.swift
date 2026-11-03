@@ -15,6 +15,7 @@ struct ConversationStatusPills: View {
             }
             if let agents {
                 SubagentsPill(agents: agents, recent: agents.summary?.recent ?? 0) { onShowAgents(agents) }
+                    .layoutPriority(1)
                     .transition(pillTransition)
             }
         }

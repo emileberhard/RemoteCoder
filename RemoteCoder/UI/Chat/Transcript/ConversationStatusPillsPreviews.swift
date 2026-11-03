@@ -22,6 +22,7 @@ private struct StatusPillsFixture: View {
                             Image(systemName: "ellipsis")
                         }
                     }
+                    .layoutPriority(1)
                 }
             }
         }
