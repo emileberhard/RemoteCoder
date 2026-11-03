@@ -60,7 +60,7 @@ export function parseAutomationDetail(value: unknown) {
     id,
     revision: revision(detail.revision),
     definition,
-    removed: detail.removed === true || detail.removed === 1,
+    archived: detail.archived === true || detail.archived === 1,
     managed: detail.managed === true,
     runs:
       detail.runs == null
@@ -104,7 +104,7 @@ export function AutomationsPanel({ transport, defaults }: PanelProps & { default
           "automations/list",
           {
             ...(filter !== "all" ? { state: filter } : {}),
-            includeRemoved: ["all", "removed"].includes(filter),
+            includeArchived: ["all", "archived"].includes(filter),
             ...(query ? { search: query } : {}),
             limit: 50,
             offset,
@@ -113,8 +113,6 @@ export function AutomationsPanel({ transport, defaults }: PanelProps & { default
         ),
       );
       return {
-        authority: optionalText(status.definition_authority),
-        coverage: optionalText(status.history_coverage),
         items: unique(
           array(page.items, 50).map((value) => {
             const item = object(value);
@@ -123,7 +121,7 @@ export function AutomationsPanel({ transport, defaults }: PanelProps & { default
               revision: revision(item.revision),
               name: optionalText(item.name),
               enabled: boolean(item.enabled),
-              removed: item.removed === true || item.removed === 1,
+              archived: item.archived === true || item.archived === 1,
               completed: item.completed === true,
               expired: item.expired === true,
               nextDue: optionalNumber(item.next_due),
@@ -174,7 +172,7 @@ export function AutomationsPanel({ transport, defaults }: PanelProps & { default
         >
           <option value="active">Active</option>
           <option value="paused">Paused</option>
-          <option value="removed">Removed</option>
+          <option value="archived">Archived</option>
           <option value="all">All</option>
         </select>
         <input
@@ -187,12 +185,6 @@ export function AutomationsPanel({ transport, defaults }: PanelProps & { default
         <button type="submit">Search</button>
       </form>
       <ReadStatus {...inventory} />
-      {inventory.value && (
-        <p className="panel-muted">
-          Definition authority: {inventory.value.authority ?? "Unknown"} · History:{" "}
-          {inventory.value.coverage ?? "Unknown"}
-        </p>
-      )}
       {inventory.value?.items.length === 0 && <p className="panel-muted">No automations match this view.</p>}
       <div className="panel-list">
         {inventory.value?.items.map((item) => (
@@ -207,8 +199,8 @@ export function AutomationsPanel({ transport, defaults }: PanelProps & { default
           >
             <strong>{item.name || item.id}</strong>
             <span>
-              {item.removed
-                ? "Removed"
+              {item.archived
+                ? "Archived"
                 : item.expired
                   ? "Expired"
                   : item.completed
@@ -277,7 +269,7 @@ function AutomationDetail({
   const [editing, setEditing] = useState(false);
   const [historyVisible, setHistoryVisible] = useState(false);
   const [runId, setRunId] = useState<string>();
-  const [confirmRemove, setConfirmRemove] = useState(false);
+  const [confirmArchive, setConfirmArchive] = useState(false);
   const [error, setError] = useState<string>();
   const [eventType, setEventType] = useState("");
   const [eventSource, setEventSource] = useState("");
@@ -315,7 +307,7 @@ function AutomationDetail({
       const admitted = record(result).run_id;
       if (typeof admitted === "string") setRunId(admitted);
       setError(undefined);
-      setConfirmRemove(false);
+      setConfirmArchive(false);
       refreshed();
     } catch (error) {
       setError(failure(error));
@@ -349,7 +341,7 @@ function AutomationDetail({
             <button
               type="button"
               onClick={() => setEditing(true)}
-              disabled={!writable || detail.value.removed}
+              disabled={!writable || detail.value.archived}
             >
               Edit
             </button>
@@ -357,7 +349,7 @@ function AutomationDetail({
               type="button"
               disabled={
                 !writable ||
-                detail.value.removed ||
+                detail.value.archived ||
                 (needsEvent && (!eventType.trim() || !eventSource.trim()))
               }
               onClick={() => void mutate("automations/run", {})}
@@ -367,9 +359,9 @@ function AutomationDetail({
             <button type="button" onClick={() => setHistoryVisible(!historyVisible)}>
               {historyVisible ? "Hide history" : "Revision history"}
             </button>
-            {!detail.value.removed && (
-              <button type="button" onClick={() => setConfirmRemove(true)} disabled={!writable}>
-                Remove…
+            {!detail.value.archived && (
+              <button type="button" onClick={() => setConfirmArchive(true)} disabled={!writable}>
+                Archive…
               </button>
             )}
           </div>
@@ -405,20 +397,20 @@ function AutomationDetail({
               </div>
             </details>
           )}
-          {confirmRemove && (
+          {confirmArchive && (
             <div className="panel-notice">
-              <p>Remove this automation? Its revision and run history will remain available.</p>
+              <p>Archive this automation? Its revision and run history will remain available.</p>
               <div className="panel-actions">
                 <button
                   type="button"
                   onClick={() =>
-                    void mutate("automations/remove", { expectedRevision: detail.value?.revision })
+                    void mutate("automations/archive", { expectedRevision: detail.value?.revision })
                   }
                   disabled={!writable}
                 >
-                  Remove automation
+                  Archive automation
                 </button>
-                <button type="button" onClick={() => setConfirmRemove(false)}>
+                <button type="button" onClick={() => setConfirmArchive(false)}>
                   Keep automation
                 </button>
               </div>
@@ -777,7 +769,7 @@ function AutomationHistory({
       const item = object(value);
       return {
         revision: revision(item.revision),
-        removed: boolean(item.removed),
+        archived: boolean(item.archived),
         change: string(item.change_kind),
         recordedAt: item.recorded_at,
       };
@@ -797,7 +789,7 @@ function AutomationHistory({
           >
             <strong>
               Revision {item.revision} · {item.change}
-              {item.removed ? " · Removed" : ""}
+              {item.archived ? " · Archived" : ""}
             </strong>
             <span>
               {typeof item.recordedAt === "number"
@@ -912,7 +904,6 @@ function AutomationRun({ transport, id }: { transport: PanelProps["transport"]; 
       output: optionalText(value.output),
       error: optionalText(value.error),
       coverage: value.output_coverage,
-      imported: value.imported === true,
     };
   });
   const mutation = useMutation(transport, `run:${id}`);
@@ -948,7 +939,7 @@ function AutomationRun({ transport, id }: { transport: PanelProps["transport"]; 
                 Next output page
               </button>
             )}
-            {!run.value.imported && ["queued", "running", "uncertain"].includes(run.value.state) && (
+            {["queued", "running", "uncertain"].includes(run.value.state) && (
               <button
                 type="button"
                 disabled={Boolean(mutation.pending)}

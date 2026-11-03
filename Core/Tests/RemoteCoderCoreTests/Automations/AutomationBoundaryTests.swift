@@ -22,30 +22,30 @@ struct AutomationBoundaryTests {
     }
 
     @Test func publicRequestUsesCamelCaseAndKeepsDefinitionSnakeCase() throws {
-        let request = AutomationRequest(id: "job", data: ["max_age": .string("1h"), "run": .object(["agent": .object(["gateway_host": .string("gateway-primary")])])],
+        let request = AutomationRequest(id: "job", data: ["expires_at": .string("2026-12-01T00:00:00Z"), "run": .object(["agent": .object(["gateway_host": .string("gateway-primary")])])],
                                         requestId: "original", expectedRevision: 0, targetRevision: 2)
         let value = try JSONDecoder().decode(JSONValue.self, from: JSONEncoder().encode(request))
         #expect(value.objectValue?["requestId"] == .string("original"))
         #expect(value.objectValue?["expectedRevision"] == .number(0))
         #expect(value.objectValue?["targetRevision"] == .number(2))
         #expect(value.objectValue?["expected_revision"] == nil)
-        #expect(value.objectValue?["data"]?.objectValue?["max_age"] == .string("1h"))
+        #expect(value.objectValue?["data"]?.objectValue?["expires_at"] == .string("2026-12-01T00:00:00Z"))
         #expect(value.objectValue?["data"]?.objectValue?["run"]?.objectValue?["agent"]?.objectValue?["gateway_host"] == .string("gateway-primary"))
         #expect(value.objectValue?["runId"] == nil)
     }
 
     @Test func completeSaveAndRestoreExpressOptionalDeletionWithoutDroppingUneditedFields() {
         let definition = AutomationDefinition(fields: ["id": .string("job"), "enabled": .bool(true),
-            "max_age": .string("1h"), "tags": .array([.string("preserved")]),
+            "expires_at": .string("2026-12-01T00:00:00Z"), "tags": .array([.string("preserved")]),
             "run": .object(["agent": .object(["prompt": .string("keep"), "session_id": .string("old-thread"),
                 "checkpoint": .object(["id": .string("old-checkpoint")]), "future_option": .bool(true)])])])
         var draft = AutomationDraft(definition: definition, expectedRevision: 7, sourceRevision: 3)
-        draft.set(nil, at: ["max_age"])
+        draft.set(nil, at: ["expires_at"])
         draft.set(nil, at: ["run", "agent", "session_id"])
         draft.set(nil, at: ["run", "agent", "checkpoint"])
         for request in [draft.saveRequest(requestID: "save"), draft.restoreRequest(requestID: "restore", enabled: false)] {
             #expect(request.replaceDefinition == true)
-            #expect(request.data?["max_age"] == nil)
+            #expect(request.data?["expires_at"] == nil)
             #expect(request.data?["run"]?.objectValue?["agent"]?.objectValue?["session_id"] == nil)
             #expect(request.data?["run"]?.objectValue?["agent"]?.objectValue?["checkpoint"] == nil)
             #expect(request.data?["run"]?.objectValue?["agent"]?.objectValue?["future_option"] == .bool(true))
@@ -73,13 +73,12 @@ struct AutomationBoundaryTests {
     }
 
     @Test func inventoryAndHistoricalRunCoverageDecodeActualServiceShape() throws {
-        let inventory = Data(#"{"ok":true,"data":{"items":[{"id":"old","name":"Archived name","revision":5,"enabled":false,"removed":true,"next_due":null,"last_run":{"id":"r","state":"uncertain","created":100,"finished":null,"error":null},"when":{"event":"event.v1"}}],"limit":50,"offset":0},"health":{"ok":true,"issues":[]}}"#.utf8)
+        let inventory = Data(#"{"ok":true,"data":{"items":[{"id":"old","name":"Archived name","revision":5,"enabled":false,"archived":true,"next_due":null,"last_run":{"id":"r","state":"uncertain","created":100,"finished":null,"error":null},"when":{"event":"event.v1"}}],"limit":50,"offset":0},"health":{"ok":true,"issues":[]}}"#.utf8)
         let value = try JSONDecoder().decode(AutomationEnvelope<AutomationList>.self, from: inventory).value()
-        #expect(value.items[0].isRemoved)
+        #expect(value.items[0].isArchived)
         #expect(value.items[0].lastRun?.isActive == true)
-        let historical = Data(#"{"ok":true,"data":{"id":"legacy","state":"succeeded","revision":6,"definition_history":"legacy_snapshot","output":"","output_coverage":{"available":false},"receipt":null}}"#.utf8)
+        let historical = Data(#"{"ok":true,"data":{"id":"r","state":"succeeded","revision":6,"output":"","output_coverage":{"available":false},"receipt":null}}"#.utf8)
         let run = try JSONDecoder().decode(AutomationEnvelope<AutomationRunDetail>.self, from: historical).value()
-        #expect(run.definitionHistory == "legacy_snapshot")
         #expect(run.revision == 6)
     }
 

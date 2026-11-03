@@ -779,7 +779,7 @@ const METHOD_SPECS: &[MethodSpec] = &[
         NEW_WORK
     ),
     spec!(
-        "automations/remove",
+        "automations/archive",
         Automations,
         Some(RequestLifetime::Command),
         NEW_WORK

@@ -35,12 +35,10 @@ struct AutomationRunView: View {
                     if let time = run.created { LabeledContent("Admitted", value: Date(timeIntervalSince1970: time).formatted()) }
                     if let time = run.started { LabeledContent("Started", value: Date(timeIntervalSince1970: time).formatted()) }
                     if let time = run.finished { LabeledContent("Finished", value: Date(timeIntervalSince1970: time).formatted()) }
-                    if run.definitionHistory == "saved_revision", let revision = run.revision {
-                        LabeledContent("Definition", value: "Saved revision \(revision)")
-                    } else if run.definitionHistory == "one_time" {
+                    if run.revision == 0 {
                         Text("One-time invocation").foregroundStyle(.secondary)
                     } else {
-                        Text("Legacy run: its snapshot or receipt predates saved definition history.").foregroundStyle(.secondary)
+                        LabeledContent("Definition", value: "Revision \(run.revision)")
                     }
                     if run.state == "uncertain" {
                         Text("Execution acknowledgement is uncertain. Inspect the recorded conversation and receipt before deciding what to do next.")
@@ -61,7 +59,7 @@ struct AutomationRunView: View {
                         Text("The exact execution host or account is unavailable. Add that host or account to open this conversation.")
                             .scaledFont(.footnote).foregroundStyle(.secondary)
                     }
-                    if run.isActive && run.imported != true {
+                    if run.isActive {
                         Button("Cancel run", role: .destructive) { confirmCancel = true }
                             .disabled(cancelling || pending != nil || !authority.isAvailable)
                     }

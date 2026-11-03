@@ -85,7 +85,7 @@ struct AutomationDraft: Equatable, Sendable {
 }
 
 enum AutomationInventoryFilter: String, CaseIterable, Identifiable, Hashable, Sendable {
-    case active, paused, removed, all
+    case active, paused, archived, all
     var id: String { rawValue }
     var label: String { rawValue.capitalized }
 }
@@ -117,6 +117,7 @@ enum AutomationPresentation {
             if let cron = fields["cron"]?.stringValue { return "\(cron) (\(timezone))" }
             if let event = fields["event"]?.stringValue { return "Event: \(event)" }
             if let conversation = fields["imessage"] { return "Messages: \(conversation.stringValue ?? "configured conversation")" }
+            if let edge = fields["edge"]?.stringValue { return edge == "start" ? "Condition starts" : "Condition ends" }
             return "Configured trigger"
         }.joined(separator: " · ")
     }

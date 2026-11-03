@@ -28,7 +28,7 @@ struct AutomationHistoryView: View {
                         if let time = revision.recordedAt.stringValue { Text(time).scaledFont(.caption).foregroundStyle(.secondary) }
                         if case .number(let time) = revision.recordedAt { Text(Date(timeIntervalSince1970: time).formatted()).scaledFont(.caption).foregroundStyle(.secondary) }
                         if let reason = revision.reason { Text(reason).scaledFont(.caption) }
-                        if revision.removed { Text("Removed").scaledFont(.caption) }
+                        if revision.archived { Text("Archived").scaledFont(.caption) }
                     }
                 }
             }

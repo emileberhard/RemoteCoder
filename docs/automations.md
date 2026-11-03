@@ -43,9 +43,8 @@ Stable request IDs make an acknowledgement-lost retry return the committed
 result rather than create another revision. Reusing an ID with different input
 is rejected.
 
-Older live heads become honest migration baselines at their existing revision
-numbers. The service does not invent the missing changes before those baselines.
-Legacy run snapshots and the configs Git history remain prior evidence.
+History starts at each definition's earliest saved revision; the service does
+not invent earlier changes.
 
 ## Gateway contract
 
@@ -110,7 +109,7 @@ message content or schedules. Automation run history remains another entry
 point to the exact recorded conversation.
 
 Automations is reachable through the existing app navigation. Inventory shows
-active/paused/removed state, expiry or completion, trigger, next due time where applicable, and last
+active/paused/archived state, expiry or completion, trigger, next due time where applicable, and last
 result. A failed run does not mean the automation is paused. Event triggers do
 not receive an invented next due time.
 
@@ -142,8 +141,7 @@ cancellation. Removing cancels queued work while retaining running/uncertain
 receipts.
 
 One-time invocations have their own snapshot and revision zero, without a saved
-definition history entry. Legacy receipts retain their coverage limits. Runtime
-session/continuation resolution stays in execution context and receipts, separate
+definition history entry. Runtime session/continuation resolution stays in execution context and receipts, separate
 from the admitted snapshot.
 
 The service retains its existing coalescing, queue/skip/steer, source checkpoints,
@@ -195,37 +193,23 @@ Receipts retain the original turn, resolved execution turn, normalized refusal
 reason, and any original refused/fallback identities. Recovery does not initiate
 a newly discovered refusal fallback.
 
-Install and verify the service's fail-closed recovery before activating the
-gateway release. This prevents the previous observer from settling planned
-deployment interruptions as final failures. A missing capability or failed read
-retains uncertainty and holds ordering during the bridge interval. Deploy and
-verify the gateway capability on both hosts, then exercise live restart recovery.
-The service never selects the old reconstruction path or redispatches the agent.
-
 ## Migration and operations
 
-The configs installer requires explicit ownership cutover for legacy unmarked
-state. Migration reconciles the last manifest-owned definitions once under the
-source lock, preserves database-only definitions and runtime state, and commits
-the authority marker with the final changes. Database-owned restarts and config
-sync do not reload templates or re-enable removed/paused definitions.
+SQLite on the scheduler host owns every live definition. Restarts and config
+sync do not reload templates or re-enable archived or paused definitions.
 
 Git versions service/job code and optional import templates. Applying a prompt
 file/template explicitly creates a definition revision; editing the file alone
-does not change the live definition after cutover. Definition restoration does
+does not change the live definition. Definition restoration does
 not roll back arbitrary tools, workspace files, job code, or conversation context.
 
 Use the configs automation CLI for exports, imports, online SQLite backups, and
 service operations. Snapshot exports are not complete database recovery images.
 A complete export gathers bounded pages against one history generation and
 rejects concurrent definition changes. Import uses exported head revisions and
-skips removed definitions and service-managed sources. The cutover installer
-takes a private online backup before stopping the old service. It restores the
-prior job only before ownership commits; after commitment it retains the new
-database-aware release and reloads normal launch arguments.
-A rollback after cutover must retain the current database and use an ownership-
-aware release. Recovering an older database requires reconciling actual gateway
-executions rather than replaying historical receipts.
+skips archived definitions and service-managed sources. Recovering an older
+database requires reconciling actual gateway executions rather than replaying
+historical receipts.
 
 See the configs automation README/skill for the canonical installer, backup,
 health, and recovery procedures. [System architecture](system-architecture.md)

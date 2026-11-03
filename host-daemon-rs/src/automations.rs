@@ -1,4 +1,4 @@
-//! Host-owned management of the Mini's existing private automation service.
+//! Host-owned management of the scheduler host's private automation service.
 //! Scheduling, validation, history and idempotent receipts belong to that service.
 use crate::config::{HostPaths, host_profile::AutomationAuthority};
 use crate::rpc::error::{ErrorKind, RpcCode, RpcData};
@@ -49,7 +49,7 @@ fn unavailable(message: &str) -> RpcError {
 fn transport_failure(request: &Value, message: &str) -> RpcError {
     if matches!(
         request["op"].as_str(),
-        Some("set" | "remove" | "restore" | "run")
+        Some("set" | "archive" | "restore" | "run")
     ) {
         RpcError::new(RpcCode::Unavailable, message).with_data(RpcData::Kind(
             ErrorKind::AutomationAcknowledgementUnknown {
@@ -77,7 +77,7 @@ fn prepare(method: &str, params: Value) -> Result<Value, RpcError> {
         "automations/show" => "show",
         "automations/history" => "history",
         "automations/set" => "set",
-        "automations/remove" => "remove",
+        "automations/archive" => "archive",
         "automations/restore" => "restore",
         "automations/run" => "run",
         _ => {
@@ -114,10 +114,10 @@ fn prepare(method: &str, params: Value) -> Result<Value, RpcError> {
     if params
         .state
         .as_deref()
-        .is_some_and(|state| !matches!(state, "active" | "paused" | "removed"))
+        .is_some_and(|state| !matches!(state, "active" | "paused" | "archived"))
     {
         return Err(invalid(
-            "state must be active, paused or removed; omit it for all",
+            "state must be active, paused or archived; omit it for all",
         ));
     }
     if params
@@ -136,10 +136,10 @@ fn prepare(method: &str, params: Value) -> Result<Value, RpcError> {
             "Automation pagination, revision or reason exceeds its bounds",
         ));
     }
-    if matches!(op, "set" | "remove" | "restore") && params.expected_revision.is_none() {
+    if matches!(op, "set" | "archive" | "restore") && params.expected_revision.is_none() {
         return Err(invalid("Definition changes require expectedRevision"));
     }
-    if matches!(op, "set" | "remove" | "restore" | "run") && params.request_id.is_none() {
+    if matches!(op, "set" | "archive" | "restore" | "run") && params.request_id.is_none() {
         return Err(invalid("Automation mutations require a stable requestId"));
     }
     let mut request = serde_json::to_value(params).map_err(|error| invalid(error.to_string()))?;
@@ -147,7 +147,7 @@ fn prepare(method: &str, params: Value) -> Result<Value, RpcError> {
         "status" => &[],
         "list" => &[
             "id",
-            "include_removed",
+            "include_archived",
             "state",
             "search",
             "limit",
@@ -172,7 +172,7 @@ fn prepare(method: &str, params: Value) -> Result<Value, RpcError> {
             "reason",
             "dry_run",
         ],
-        "remove" => &["id", "request_id", "expected_revision", "reason", "dry_run"],
+        "archive" => &["id", "request_id", "expected_revision", "reason", "dry_run"],
         "restore" => &[
             "id",
             "target_revision",

@@ -13,7 +13,7 @@ struct AutomationDetailView: View {
     @State private var readGeneration = UUID()
     @State private var editor: AutomationEditorSession?
     @State private var editorPresented = false
-    @State private var confirmRemove = false
+    @State private var confirmArchive = false
     @State private var runs: [AutomationRunSummary] = []
     @State private var runOffset = 0
     @State private var moreRuns = false
@@ -46,7 +46,7 @@ struct AutomationDetailView: View {
             if let detail {
                 Section {
                     LabeledContent("Revision", value: String(detail.revision))
-                    LabeledContent("State", value: detail.isRemoved ? "Removed" : detail.expired == true ? "Expired" : detail.completed == .bool(true) || detail.completed == .number(1) ? "Completed" : detail.definition.enabled ? "Active" : "Paused")
+                    LabeledContent("State", value: detail.isArchived ? "Archived" : detail.expired == true ? "Expired" : detail.completed == .bool(true) || detail.completed == .number(1) ? "Completed" : detail.definition.enabled ? "Active" : "Paused")
                     LabeledContent("Enabled", value: detail.definition.enabled ? "Yes" : "No")
                     if detail.managed == true { Text("Managed by the service. Change the owning Messages automation to configure this source.").scaledFont(.footnote).foregroundStyle(.secondary) }
                     Text(AutomationPresentation.triggerDescription(detail.definition.fields["when"]))
@@ -59,8 +59,8 @@ struct AutomationDetailView: View {
                     else if detail.managed != true { Button("Edit") {
                         editor = drafts.session(authorityID: authority.hostID, draft: AutomationDraft(definition: detail.definition, expectedRevision: detail.revision))
                         editorPresented = editor != nil
-                    }.disabled(detail.isRemoved || !authority.isAvailable) }
-                    if !detail.isRemoved && detail.managed != true {
+                    }.disabled(detail.isArchived || !authority.isAvailable) }
+                    if !detail.isArchived && detail.managed != true {
                         Button(detail.definition.enabled ? "Pause" : "Resume") {
                             var draft = AutomationDraft(definition: detail.definition, expectedRevision: detail.revision)
                             draft.set(.bool(!detail.definition.enabled), at: ["enabled"])
@@ -79,7 +79,7 @@ struct AutomationDetailView: View {
                         }
                         Button("Run now") { Task { await admitRun() } }.disabled(mutating || preparingAdmission || pending != nil || !authority.isAvailable || detail.definition.isSource)
                         Text("Run now admits a run. Follow its status below for the outcome.").scaledFont(.footnote).foregroundStyle(.secondary)
-                        Button("Remove", role: .destructive) { confirmRemove = true }
+                        Button("Archive", role: .destructive) { confirmArchive = true }
                             .disabled(mutating || pending != nil || !authority.isAvailable)
                     }
                     NavigationLink("Definition history") {
@@ -103,16 +103,6 @@ struct AutomationDetailView: View {
                     }
                     if runs.isEmpty { Text("No recorded runs").foregroundStyle(.secondary) }
                     if moreRuns { Button("Load earlier runs") { Task { await load(append: true) } }.disabled(refreshing) }
-                }
-                if let imported = detail.importedRuns, !imported.isEmpty {
-                    Section("Imported history") {
-                        Text("Older receipts may lack a saved definition revision.").scaledFont(.footnote).foregroundStyle(.secondary)
-                        ForEach(Array(imported.enumerated()), id: \.offset) { _, receipt in
-                            if let id = receipt.objectValue?["run_id"]?.stringValue {
-                                NavigationLink(id) { AutomationRunView(workspace: workspace, authority: authority, runID: id) }
-                            }
-                        }
-                    }
                 }
             }
             if refreshing { ProgressView() }
@@ -141,10 +131,10 @@ struct AutomationDetailView: View {
                 await load()
             }
         }
-        .confirmationDialog("Remove this automation?", isPresented: $confirmRemove, titleVisibility: .visible) {
-            Button("Remove", role: .destructive) {
+        .confirmationDialog("Archive this automation?", isPresented: $confirmArchive, titleVisibility: .visible) {
+            Button("Archive", role: .destructive) {
                 guard let detail else { return }
-                perform(AutomationMutation(operation: .remove, request: AutomationRequest(id: automationID, requestId: UUID().uuidString, expectedRevision: detail.revision)))
+                perform(AutomationMutation(operation: .archive, request: AutomationRequest(id: automationID, requestId: UUID().uuidString, expectedRevision: detail.revision)))
             }
         } message: { Text("Queued runs are cancelled. Running and uncertain runs remain visible and can be managed separately. Definition history is kept.") }
         .onChange(of: editorPresented) { _, presented in
@@ -182,9 +172,8 @@ struct AutomationDetailView: View {
                 var seen = Set<String>()
                 runs = Array((runs + page).filter { seen.insert($0.id).inserted }.suffix(500))
             } else { runs = page }
-            let importedCount = result.importedRuns?.count ?? 0
-            runOffset = offset + max(page.count, importedCount)
-            moreRuns = page.count == 50 || importedCount == 50; error = nil
+            runOffset = offset + page.count
+            moreRuns = page.count == 50; error = nil
         } catch is CancellationError { } catch { if readGeneration == token { self.error = error.localizedDescription } }
     }
     private func admitRun() async {

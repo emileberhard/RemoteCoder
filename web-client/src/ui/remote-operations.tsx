@@ -133,7 +133,7 @@ type Mutation = {
 const storageKey = "remotecoder.web.feature-mutations.v1";
 const admittedMethods = new Set([
   "automations/set",
-  "automations/remove",
+  "automations/archive",
   "automations/restore",
   "automations/run",
   "conversation/agents/action",
