@@ -187,7 +187,6 @@ run_xcodebuild_build() {
         # Pinned packages need no re-resolution or plugin/macro trust prompts,
         # and a device build never reads the index store.
         -disableAutomaticPackageResolution
-        -skipPackageUpdates
         -onlyUsePackageVersionsFromResolvedFile
         -skipPackagePluginValidation
         -skipMacroValidation
