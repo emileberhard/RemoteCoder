@@ -118,15 +118,39 @@ impl ThreadMarks {
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(tag = "op", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub(crate) enum Change {
-    MarkRead { thread_id: String, through: i64 },
-    MarkUnread { thread_id: String },
-    MarkAllRead { through: i64 },
-    MarkRetiredScopeRead { scope_id: String, through: i64 },
-    Pin { thread_id: String, name: String },
-    Unpin { thread_id: String },
-    SetPurpose { thread_id: String, purpose: Purpose },
-    Settle { thread_id: String, through: i64 },
-    Unsettle { thread_id: String, through: i64 },
+    MarkRead {
+        thread_id: String,
+        through: i64,
+    },
+    MarkUnread {
+        thread_id: String,
+    },
+    MarkAllRead {
+        through: i64,
+    },
+    MarkRetiredScopeRead {
+        scope_id: String,
+        through: i64,
+    },
+    Pin {
+        thread_id: String,
+        name: String,
+    },
+    Unpin {
+        thread_id: String,
+    },
+    SetPurpose {
+        thread_id: String,
+        purpose: Purpose,
+    },
+    Settle {
+        thread_id: String,
+        through: i64,
+    },
+    Unsettle {
+        thread_id: String,
+        through: i64,
+    },
     SetChangesView {
         thread_id: String,
         view: Option<ChangesView>,

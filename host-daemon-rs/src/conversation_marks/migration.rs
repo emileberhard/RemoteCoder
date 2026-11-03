@@ -55,7 +55,10 @@ struct RecordedThread {
 }
 
 pub(super) fn import(location: &Location) -> Result<Option<Document>> {
-    for (version, name) in [(3, "conversation-marks.v3.json"), (2, "conversation-marks.v2.json")] {
+    for (version, name) in [
+        (3, "conversation-marks.v3.json"),
+        (2, "conversation-marks.v2.json"),
+    ] {
         let Some(mut document) = super::read_json::<Document>(
             &location.directory.join(name),
             &format!("version {version} conversation marks"),

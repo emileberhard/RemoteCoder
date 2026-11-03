@@ -11,11 +11,11 @@ use serde_json::{Value, json};
 
 use super::Gateway;
 use super::rpc_methods::decode_params;
-use crate::changes::{Admission, Anchor, Boundary, Source};
 use crate::changes::checkouts::{
     self, ChangeSummary, CheckoutSummary, Discovery, Evidence, Observations, SummaryOutcome,
 };
 use crate::changes::turn::{self, Change, Edit, TurnFile};
+use crate::changes::{Admission, Anchor, Boundary, Source};
 use crate::rpc::error::RpcCode;
 use crate::rpc::{RpcError, RpcResult};
 
@@ -975,7 +975,13 @@ mod tests {
             turn("middle", 20_000, Some(25_000), false),
             turn("anchor", 10_000, Some(15_000), false),
         ];
-        let ids = |range: &Range<'_>| range.counted.iter().map(|turn| turn.id.clone()).collect::<Vec<_>>();
+        let ids = |range: &Range<'_>| {
+            range
+                .counted
+                .iter()
+                .map(|turn| turn.id.clone())
+                .collect::<Vec<_>>()
+        };
 
         let start = range_of(&turns, Boundary::Start).unwrap();
         assert_eq!(ids(&start), ["newest", "middle", "anchor"]);
