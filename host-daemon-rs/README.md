@@ -84,19 +84,24 @@ there is no silent switch to native login during a router outage. See
 ### Optional external model providers
 
 `RC_CODEX_GATEWAY_EXTERNAL_PROVIDERS_FILE` names a private JSON file (at most
-64 KiB) of OpenAI-compatible Responses endpoints that Codex conversations can
-run on besides ChatGPT:
+64 KiB) of external model endpoints:
 
 ```json
 {"providers": [{"id": "relay", "name": "Relay", "baseUrl": "http://127.0.0.1:8080/v1",
-  "keyFile": "/absolute/path/relay.key", "models": ["vendor/model-a"]}]}
+  "keyFile": "/absolute/path/relay.key", "models": ["vendor/model-a",
+    {"id": "vendor/model-b", "harness": "claude"}]}]}
 ```
 
 Each id is lowercase and neither `openai` nor `claude`; a model id belongs to one
-provider. The gateway reads `GET {baseUrl}/models` with the key as a bearer and
+provider. String entries use Codex; the object selects the harness for new
+conversations. The gateway reads `GET {baseUrl}/models` with the key as a bearer and
 offers each listed model whose entry names the `/v1/responses` endpoint, a
 positive `capabilities.prompt_tokens` and true `streaming` and `tool_calls`. It derives the model metadata Codex needs
 from that listing alone and keeps the last good catalog in its state directory.
+Claude entries also require `/v1/messages`, and their Fast mode is unavailable.
+Claude launches use the provider's key and base URL and pin helper models and the
+context limit to the selected model. Existing Claude threads retain their provider
+when the configured harness changes. A missing provider fails closed.
 A conversation stays on the provider it started on; choosing a model of another
 provider needs a new conversation. Hosted web search is withheld from these
 providers. ChatGPT Desktop has no definition for them and cannot resume such

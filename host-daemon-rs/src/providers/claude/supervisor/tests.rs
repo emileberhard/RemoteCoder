@@ -64,6 +64,74 @@ fn request(thread_id: &str, first_turn: bool) -> ClaudeTurnRequest {
     }
 }
 
+#[tokio::test]
+async fn cold_threads_keep_their_recorded_provider_and_imports_stay_native() {
+    let home = ClaudeSettings::isolated_for_test();
+    let directory = home.root_path().join("state/external-models");
+    crate::storage::private_state::ensure_private_directory(&directory).unwrap();
+    crate::storage::private_state::write_json(
+        &directory.join("relay.json"),
+        &json!({"models": [{
+            "slug":"vendor/model", "rc_messages":true, "context_window":200000,
+            "supported_reasoning_levels":[{"effort":"high"}]
+        }]}),
+    )
+    .unwrap();
+    let provider: crate::providers::external::ExternalProvider = serde_json::from_value(json!({
+        "id":"relay", "name":"Relay", "baseUrl":"http://127.0.0.1:9/v1",
+        "keyFile":home.root_path().join("key"), "models":[{"id":"vendor/model","harness":"claude"}]
+    }))
+    .unwrap();
+    let mut settings = home.settings.clone();
+    settings.external_providers = crate::providers::external::ExternalProviders::new(
+        vec![provider],
+        &home.root_path().join("state"),
+    )
+    .unwrap();
+    let (tx, _rx) = mpsc::channel(16);
+    let agent = ClaudeSupervisor::new(settings, tx, Journal::disabled(), McpTokens::default());
+    let external = selection("vendor/model", Some("high"));
+    let native = selection("sonnet", Some("high"));
+    assert!(
+        agent
+            .validate_route("claude_import", &external, false)
+            .await
+            .is_err()
+    );
+    assert!(
+        agent
+            .validate_route("claude_import", &native, false)
+            .await
+            .is_ok()
+    );
+    agent
+        .record_initial_selection("claude_external", "/tmp", &external)
+        .await
+        .unwrap();
+    assert!(
+        agent
+            .validate_route("claude_external", &external, false)
+            .await
+            .is_ok()
+    );
+    assert!(
+        agent
+            .update_settings("claude_external", &native)
+            .await
+            .is_err()
+    );
+    agent
+        .record_initial_selection("claude_native", "/tmp", &native)
+        .await
+        .unwrap();
+    assert!(
+        agent
+            .validate_route("claude_native", &external, false)
+            .await
+            .is_err()
+    );
+}
+
 #[test]
 fn persistent_runtime_uses_bidirectional_stream_json() {
     let args = claude_stream_args(&request("claude_a", true), None);
@@ -824,7 +892,10 @@ async fn a_blocked_settings_exchange_does_not_delay_an_independent_start() {
         let agent = Arc::clone(&agent);
         async move {
             agent
-                .update_settings("claude_a", &selection("different-model", Some("high")))
+                .update_settings(
+                    "claude_a",
+                    &selection("claude-different-model", Some("high")),
+                )
                 .await
         }
     });
@@ -944,7 +1015,13 @@ async fn deleted_recorded_cwd_resumes_the_exact_transcript_in_an_existing_record
     };
     agent.recover_stored_cwd(&mut turn, &full).await.unwrap();
     assert_eq!(Path::new(&turn.cwd), cwd);
-    let mut spawned = agent.spawn_runtime(&turn, &full).unwrap();
+    let mut spawned = agent
+        .spawn_runtime(
+            &turn,
+            &full,
+            &crate::providers::claude::exec::Route::Default,
+        )
+        .unwrap();
     let mut lines = BufReader::new(&mut spawned.stdout).lines();
     let observed = tokio::time::timeout(Duration::from_secs(5), async {
         let mut lines_seen = Vec::new();
@@ -988,7 +1065,14 @@ async fn deleted_recorded_cwd_resumes_the_exact_transcript_in_an_existing_record
         .recover_stored_cwd(&mut arbitrary, &full)
         .await
         .unwrap();
-    let error = agent.spawn_runtime(&arbitrary, &full).err().unwrap();
+    let error = agent
+        .spawn_runtime(
+            &arbitrary,
+            &full,
+            &crate::providers::claude::exec::Route::Default,
+        )
+        .err()
+        .unwrap();
     assert_eq!(error.code, RpcCode::InvalidParams);
     assert!(error.message.contains(&arbitrary.cwd));
     let restricted = super::jobs::LaunchPolicy::Conversation {
@@ -1002,7 +1086,15 @@ async fn deleted_recorded_cwd_resumes_the_exact_transcript_in_an_existing_record
         .await
         .unwrap();
     assert_eq!(Path::new(&turn.cwd), missing);
-    assert!(agent.spawn_runtime(&turn, &restricted).is_err());
+    assert!(
+        agent
+            .spawn_runtime(
+                &turn,
+                &restricted,
+                &crate::providers::claude::exec::Route::Default
+            )
+            .is_err()
+    );
     drop(spawned);
     turn.cwd = cwd.to_string_lossy().into_owned();
     let duplicate = crate::providers::claude::timeline::session_path_for_cwd(
@@ -1012,7 +1104,14 @@ async fn deleted_recorded_cwd_resumes_the_exact_transcript_in_an_existing_record
     );
     fs::create_dir_all(duplicate.parent().unwrap()).unwrap();
     fs::copy(&transcript, &duplicate).unwrap();
-    let error = agent.spawn_runtime(&turn, &full).err().unwrap();
+    let error = agent
+        .spawn_runtime(
+            &turn,
+            &full,
+            &crate::providers::claude::exec::Route::Default,
+        )
+        .err()
+        .unwrap();
     assert!(error.message.contains("duplicate Claude session UUID"));
 }
 
@@ -2120,7 +2219,7 @@ async fn a_start_held_in_its_settings_exchange_never_folds_after_restart_capture
         async move {
             agent
                 .start_turn(ClaudeTurnRequest {
-                    selection: selection("different-model", Some("high")),
+                    selection: selection("claude-different-model", Some("high")),
                     ..request("claude_a", false)
                 })
                 .await
@@ -2133,7 +2232,7 @@ async fn a_start_held_in_its_settings_exchange_never_folds_after_restart_capture
     next_control_reply(&agent, "claude_a")
         .await
         .send(Ok(json!({
-            "applied": {"model": "different-model", "effort": "high"},
+            "applied": {"model": "claude-different-model", "effort": "high"},
             "effective": {"fastMode": false}
         })))
         .unwrap();

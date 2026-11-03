@@ -8,7 +8,10 @@ fn provider() -> ExternalProvider {
         name: "Relay".into(),
         base_url: reqwest::Url::parse("http://127.0.0.1:9/v1").unwrap(),
         key_file: PathBuf::from("/private/relay.key"),
-        models: vec![MODEL.into(), "vendor/missing".into()],
+        models: vec![
+            ExternalModel::Codex(MODEL.into()),
+            ExternalModel::Codex("vendor/missing".into()),
+        ],
     }
 }
 
@@ -29,11 +32,105 @@ fn providers(state: &Path) -> Arc<ExternalProviders> {
     configured(state, vec![provider()])
 }
 
+#[tokio::test]
+async fn claude_admission_requires_messages_and_never_enters_codex_fallback() {
+    let state = tempfile::tempdir().unwrap();
+    let mut configured_provider = provider();
+    configured_provider.models = vec![ExternalModel::Routed {
+        id: MODEL.into(),
+        harness: Provider::Claude,
+    }];
+    assert!(project(&configured_provider, &listing()).is_err());
+    let mut supported = listing();
+    supported["data"][0]["capabilities"]["endpoints"] = json!(["/v1/responses", "/v1/messages"]);
+    let rows = project(&configured_provider, &supported).unwrap();
+    let directory = state.path().join(CATALOG_DIRECTORY);
+    private_state::ensure_private_directory(&directory).unwrap();
+    private_state::write_json(&directory.join("relay.json"), &json!({"models": rows})).unwrap();
+    let providers = ExternalProviders::new(vec![configured_provider], state.path())
+        .unwrap()
+        .unwrap();
+    assert_eq!(providers.model_rows()[0]["agentProvider"], "claude");
+    assert_eq!(
+        providers
+            .claude_model(MODEL, true, Some("high"), false)
+            .await
+            .unwrap()
+            .unwrap()
+            .1,
+        200000
+    );
+    assert!(
+        providers
+            .claude_model(MODEL, true, Some("xhigh"), false)
+            .await
+            .is_err()
+    );
+    assert!(
+        providers
+            .claude_model(MODEL, true, None, true)
+            .await
+            .is_err()
+    );
+    assert!(
+        providers
+            .start_on_fallback(&mut json!({"model":"gpt-6-sol"}))
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn external_command_uses_only_the_selected_provider_credentials() {
+    use std::os::unix::fs::PermissionsExt;
+    let home = crate::providers::claude::settings::ClaudeSettings::isolated_for_test();
+    let key = home.root_path().join("external-key");
+    std::fs::write(&key, "external-secret").unwrap();
+    std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let mut provider = provider();
+    provider.key_file = key.clone();
+    let route = crate::providers::claude::exec::Route::External {
+        provider,
+        model: MODEL.into(),
+        context: 200000,
+    };
+    let command =
+        crate::providers::claude::exec::command_on_route(&home.settings, &[], &route).unwrap();
+    let env = command
+        .as_std()
+        .get_envs()
+        .filter_map(|(key, value)| {
+            value.map(|value| {
+                (
+                    key.to_string_lossy().into_owned(),
+                    value.to_string_lossy().into_owned(),
+                )
+            })
+        })
+        .collect::<std::collections::HashMap<_, _>>();
+    assert_eq!(env["ANTHROPIC_BASE_URL"], "http://127.0.0.1:9");
+    assert_eq!(env["ANTHROPIC_AUTH_TOKEN"], "external-secret");
+    assert_eq!(env["MAX_CONTEXT_TOKENS"], "200000");
+    assert_eq!(env["ANTHROPIC_DEFAULT_SONNET_MODEL"], MODEL);
+    assert_eq!(env["CLAUDE_CODE_SUBAGENT_MODEL"], MODEL);
+    assert!(!format!("{command:?}").contains("external-secret"));
+    std::fs::write(key, "rotated-external-secret").unwrap();
+    let command =
+        crate::providers::claude::exec::command_on_route(&home.settings, &[], &route).unwrap();
+    assert!(
+        command
+            .as_std()
+            .get_envs()
+            .any(|(key, value)| key == "ANTHROPIC_AUTH_TOKEN"
+                && value.is_some_and(|value| value == "rotated-external-secret"))
+    );
+}
+
 fn providers_behind_a_fallback(state: &Path) -> Arc<ExternalProviders> {
     let fallback = ExternalProvider {
         id: "backup".into(),
         name: "Backup".into(),
-        models: vec!["backup/model-b".into()],
+        models: vec![ExternalModel::Codex("backup/model-b".into())],
         ..provider()
     };
     configured(state, vec![fallback, provider()])

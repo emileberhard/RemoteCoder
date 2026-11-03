@@ -198,6 +198,7 @@ impl ClaudeSupervisor {
         &self,
         request: &ClaudeTurnRequest,
         launch: &super::jobs::LaunchPolicy,
+        route: &claude_exec::Route,
     ) -> Result<SpawnedRuntime, TurnStartError> {
         let history = match self.session_launch_history(request) {
             Ok(history) => history,
@@ -237,7 +238,7 @@ impl ClaudeSupervisor {
                 ),
             });
         }
-        self.spawn_process(request, launch, history.as_deref())
+        self.spawn_process(request, launch, history.as_deref(), route)
             .map_err(|err| TurnStartError {
                 data: None,
                 code: RpcCode::Internal,
@@ -250,6 +251,7 @@ impl ClaudeSupervisor {
         request: &ClaudeTurnRequest,
         launch: &super::jobs::LaunchPolicy,
         history: Option<&Path>,
+        route: &claude_exec::Route,
     ) -> std::io::Result<SpawnedRuntime> {
         let wakes = if request.first_turn {
             WakeHold::default()
@@ -291,7 +293,7 @@ impl ClaudeSupervisor {
             }
         }
         launch.apply_args(&mut args);
-        let mut command = claude_exec::command(&self.settings, &args)?;
+        let mut command = claude_exec::command_on_route(&self.settings, &args, route)?;
         launch.apply_env(&mut command);
         command.env(SEND_USER_MESSAGE_ENV, "1");
         if !self.settings.mcp_endpoint.is_empty() {

@@ -68,6 +68,7 @@ enum TurnErrorData {
     Unresponsive,
     DeliveryUncertain,
     ParentUnreachable,
+    ProviderUnavailable,
 }
 
 #[derive(Debug)]
@@ -174,6 +175,7 @@ impl From<std::io::Error> for TurnStartError {
 
 impl From<TurnStartError> for crate::rpc::error::RpcError {
     fn from(error: TurnStartError) -> Self {
+        let reason = error.message.clone();
         let result = Self::new(error.code, error.message);
         match error.data {
             Some(TurnErrorData::Capacity(capacity)) => {
@@ -192,6 +194,15 @@ impl From<TurnStartError> for crate::rpc::error::RpcError {
             Some(TurnErrorData::ParentUnreachable) => {
                 result.with_data(crate::rpc::error::RpcData::Raw(
                     serde_json::json!({"kind":"parentUnreachable","notSubmitted":true}),
+                ))
+            }
+            Some(TurnErrorData::ProviderUnavailable) => {
+                result.with_data(crate::rpc::error::RpcData::Kind(
+                    crate::rpc::error::ErrorKind::ProviderUnavailable {
+                        provider: "claude",
+                        reason,
+                        retryable: false,
+                    },
                 ))
             }
             None => result,

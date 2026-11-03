@@ -797,6 +797,38 @@ impl Gateway {
     /// Pre-assigns a session id so thread creation is local and instant.
     async fn claude_thread_start(&self, params: &Value) -> RpcResult {
         let model = self.claude_rpc_model(params)?;
+        let selection = crate::providers::claude::ClaudeSelection {
+            model: model.to_owned(),
+            effort: params
+                .pointer("/config/model_reasoning_effort")
+                .and_then(Value::as_str)
+                .map(claude_effort_wire_value),
+            fast: params.get("serviceTier").and_then(Value::as_str) == Some("fast"),
+        };
+        let route =
+            crate::providers::claude::exec::resolve(&self.claude_settings, &selection, true)
+                .await
+                .map_err(|error| {
+                    RpcError::new(
+                        RpcCode::Unavailable,
+                        format!("Claude provider is unavailable: {error:#}"),
+                    )
+                    .with_data(crate::rpc::error::RpcData::Kind(
+                        crate::rpc::error::ErrorKind::ProviderUnavailable {
+                            provider: "claude",
+                            reason: error.to_string(),
+                            retryable: false,
+                        },
+                    ))
+                })?;
+        if let Some(provider) = params.get("modelProvider").and_then(Value::as_str)
+            && provider != route.provider_id()
+        {
+            return Err(RpcError::new(
+                RpcCode::InvalidParams,
+                "The selected model belongs to another provider",
+            ));
+        }
         let cwd = params
             .get("cwd")
             .and_then(Value::as_str)
@@ -822,12 +854,21 @@ impl Gateway {
             }
         };
         let thread_id = crate::providers::claude::claude_thread_id(&session_uuid);
+        agent
+            .record_initial_selection(&thread_id, &cwd, &selection)
+            .await
+            .map_err(|error| {
+                RpcError::new(
+                    RpcCode::Internal,
+                    format!("Could not record Claude selection: {error:#}"),
+                )
+            })?;
         let now = unix_seconds() as i64;
 
         let thread = serde_json::json!({
             "id": thread_id,
             "preview": "",
-            "modelProvider": "claude",
+            "modelProvider": route.provider_id(),
             "model": model,
             "reasoningEffort": params.pointer("/config/model_reasoning_effort").and_then(Value::as_str).map(claude_effort_wire_value),
             "createdAt": now,
@@ -846,7 +887,7 @@ impl Gateway {
         Ok(serde_json::json!({
             "thread": thread,
             "model": model,
-            "modelProvider": "claude",
+            "modelProvider": route.provider_id(),
             "cwd": cwd,
             "approvalPolicy": "never",
             "sandbox": { "type": "dangerFullAccess" },
@@ -898,6 +939,20 @@ impl Gateway {
             })
             .ok_or_else(|| RpcError::new(RpcCode::InvalidParams, "threadId is required"))?;
         if let Some(agent) = self.claude_agent() {
+            if let Some(model) = params.get("model").and_then(Value::as_str) {
+                let selection = crate::providers::claude::ClaudeSelection {
+                    model: model.to_owned(),
+                    effort: params
+                        .pointer("/config/model_reasoning_effort")
+                        .and_then(Value::as_str)
+                        .map(claude_effort_wire_value),
+                    fast: params.get("serviceTier").and_then(Value::as_str) == Some("fast"),
+                };
+                agent
+                    .validate_route(thread_id, &selection, false)
+                    .await
+                    .map_err(RpcError::from)?;
+            }
             agent
                 .runtime_settings_for_command(thread_id)
                 .await
@@ -957,10 +1012,20 @@ impl Gateway {
         if let Some(phase) = phase {
             phase.complete();
         }
+        let model_provider = thread["model"].as_str().and_then(|model| {
+            self.external_providers
+                .as_ref()
+                .and_then(|external| external.owner(model))
+                .map(|provider| provider.id())
+                .or_else(|| {
+                    crate::providers::claude::exec::is_native_model(model).then_some("claude")
+                })
+        });
+        thread["modelProvider"] = json!(model_provider);
         let mut response = serde_json::json!({
             "thread": thread,
             "model": thread["model"],
-            "modelProvider": "claude",
+            "modelProvider": model_provider,
             "cwd": thread_cwd(&thread),
             "approvalPolicy": "never",
             "sandbox": { "type": "dangerFullAccess" },
@@ -1142,7 +1207,20 @@ impl Gateway {
             .claude_history
             .list_threads(query)
             .await
-            .map_err(claude_history_error);
+            .map_err(claude_history_error)
+            .map(|mut result| {
+                if let Some(rows) = result["data"].as_array_mut() {
+                    for row in rows {
+                        if let Some(provider) = row["model"]
+                            .as_str()
+                            .and_then(|model| self.external_providers.as_ref()?.owner(model))
+                        {
+                            row["modelProvider"] = json!(provider.id());
+                        }
+                    }
+                }
+                result
+            });
         phase.complete();
         result
     }

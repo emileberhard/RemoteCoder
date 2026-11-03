@@ -413,7 +413,7 @@ async fn run(
         settings.router.as_ref().map(|router| {
             gateway::ExternalAuth::new(Arc::clone(&codex_router), router.codex_account().to_owned())
         }),
-        providers::codex::external::ExternalProviders::new(
+        providers::external::ExternalProviders::new(
             settings.external_providers.clone(),
             &settings.host_paths.state_directory(),
         )?,

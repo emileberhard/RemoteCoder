@@ -1,6 +1,6 @@
 use super::Gateway;
 use super::agent_gateway::native_error;
-use crate::providers::codex::external::ExternalProviders;
+use crate::providers::external::ExternalProviders;
 use crate::rpc::error::RpcCode;
 use crate::rpc::{RpcError, RpcResult};
 use anyhow::anyhow;

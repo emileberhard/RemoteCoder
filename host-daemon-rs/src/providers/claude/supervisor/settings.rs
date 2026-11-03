@@ -13,6 +13,7 @@ impl ClaudeSupervisor {
         selection: &ClaudeSelection,
     ) -> Result<Value, TurnStartError> {
         let _guard = self.lifecycles.lock(thread_id).await;
+        self.validate_route(thread_id, selection, false).await?;
         let result = if self.runtimes.lock().await.contains_key(thread_id) {
             self.apply_runtime_settings(thread_id, selection).await?
         } else {
@@ -20,6 +21,98 @@ impl ClaudeSupervisor {
         };
         self.remember_parent_settings(thread_id, selection).await;
         Ok(result)
+    }
+
+    pub(crate) async fn validate_route(
+        &self,
+        thread_id: &str,
+        selection: &ClaudeSelection,
+        first_turn: bool,
+    ) -> Result<crate::providers::claude::exec::Route, TurnStartError> {
+        let parent = self
+            .conversation_index
+            .parent(thread_id)
+            .await
+            .map_err(|error| TurnStartError {
+                data: None,
+                code: crate::rpc::error::RpcCode::Unavailable,
+                message: format!("Claude selection could not be read: {error:#}"),
+            })?;
+        let previous = parent.selection.map(|selection| selection.selection());
+        let current = self
+            .runtimes
+            .lock()
+            .await
+            .get(thread_id)
+            .and_then(|runtime| {
+                runtime
+                    .settings
+                    .as_ref()
+                    .map(|settings| settings.effective().clone())
+            });
+        let route = self
+            .resolve_selection(selection, first_turn && previous.is_none())
+            .await?;
+        for old in previous.iter().chain(current.iter()) {
+            let old_route = self.resolve_selection(old, false).await?;
+            if old_route.provider_id() != route.provider_id()
+                || (route.provider_id() != "claude" && old.model != selection.model)
+            {
+                return Err(TurnStartError { data: None, code: crate::rpc::error::RpcCode::InvalidParams,
+                    message: "This Claude conversation uses another provider; start a new conversation to change provider".into() });
+            }
+        }
+        if !first_turn && previous.is_none() && current.is_none() && route.provider_id() != "claude"
+        {
+            return Err(TurnStartError { data: None, code: crate::rpc::error::RpcCode::InvalidParams,
+                message: "This imported Claude conversation has no recorded provider; start a new conversation to use an external provider".into() });
+        }
+        Ok(route)
+    }
+
+    async fn resolve_selection(
+        &self,
+        selection: &ClaudeSelection,
+        new: bool,
+    ) -> Result<crate::providers::claude::exec::Route, TurnStartError> {
+        crate::providers::claude::exec::resolve(&self.settings, selection, new)
+            .await
+            .map_err(|error| TurnStartError {
+                data: Some(super::TurnErrorData::ProviderUnavailable),
+                code: crate::rpc::error::RpcCode::Unavailable,
+                message: format!("Claude provider is unavailable: {error:#}"),
+            })
+    }
+
+    pub(crate) async fn record_initial_selection(
+        &self,
+        thread_id: &str,
+        cwd: &str,
+        selection: &ClaudeSelection,
+    ) -> anyhow::Result<()> {
+        let selection = crate::providers::claude::conversation_index::ParentSelection {
+            cwd: cwd.to_owned(),
+            model: selection.model.clone(),
+            effort: selection.effort.clone(),
+            fast: selection.fast,
+        };
+        self.conversation_index
+            .update_parent(thread_id, move |parent| parent.selection = Some(selection))
+            .await
+    }
+
+    pub(crate) async fn copy_parent_selection(
+        &self,
+        source: &str,
+        target: &str,
+    ) -> anyhow::Result<()> {
+        let selection = self.conversation_index.parent(source).await?.selection;
+        if let Some(selection) = selection {
+            self.conversation_index
+                .update_parent(target, move |parent| parent.selection = Some(selection))
+                .await?;
+        }
+        Ok(())
     }
 
     pub(super) async fn apply_runtime_settings(
