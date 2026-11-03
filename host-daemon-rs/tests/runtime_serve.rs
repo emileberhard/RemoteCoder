@@ -8,8 +8,6 @@ fn runtime_serve_rejects_gateway_ingress_configuration_before_startup() {
         "RC_CODEX_GATEWAY_BIND_HOST",
         "RC_CODEX_GATEWAY_PORT",
         "RC_CODEX_GATEWAY_LAN_PORT",
-        "RC_CODEX_GATEWAY_LAN_BIND_ADDRESS",
-        "RC_CODEX_GATEWAY_LAN_HOST",
         "RC_CODEX_GATEWAY_AUTH_TOKEN",
         "RC_CODEX_GATEWAY_CLUSTER_ROUTES",
         "RC_AGENT_JOB_SOCKET",

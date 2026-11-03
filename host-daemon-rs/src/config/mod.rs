@@ -165,7 +165,7 @@ pub(crate) struct Settings {
     pub host_paths: HostPaths,
     pub bind_host: String,
     pub port: u16,
-    pub lan: Option<LanSettings>,
+    pub lan_port: Option<u16>,
     pub cluster_routes: HashMap<String, String>,
     pub codex_path: PathBuf,
     pub codex_code_mode_host_path: PathBuf,
@@ -178,18 +178,6 @@ pub(crate) struct Settings {
     pub router: Option<crate::providers::router::RouterConfig>,
     pub external_providers: Vec<crate::providers::codex::external::ExternalProvider>,
     pub speech_clients: crate::voice::speech::SpeechClients,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct LanSettings {
-    pub port: u16,
-    pub binding: LanBinding,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) enum LanBinding {
-    DualStack,
-    Address { address: IpAddr, host: String },
 }
 
 #[derive(Debug, Clone)]
@@ -256,7 +244,7 @@ impl Settings {
             port,
             auth_token,
         } = GatewayEndpoint::load(sources)?;
-        let lan = sources.lan_settings(port)?;
+        let lan_port = sources.lan_port(port)?;
         let push = crate::push::PushConfiguration::load(sources)?;
 
         let speech_clients = crate::voice::speech::SpeechClients::parse(
@@ -280,7 +268,7 @@ impl Settings {
             host_paths,
             bind_host,
             port,
-            lan,
+            lan_port,
             cluster_routes: crate::cluster::routes::parse(
                 sources.raw(crate::cluster::routes::ENV_KEY).as_deref(),
             )?,
@@ -650,48 +638,6 @@ impl ConfigSources {
                 "{key} must be a boolean (true/false, yes/no, on/off, or 1/0)"
             )),
         }
-    }
-
-    fn lan_settings(&self, port: u16) -> Result<Option<LanSettings>> {
-        let address = self.optional_string("RC_CODEX_GATEWAY_LAN_BIND_ADDRESS");
-        let host = self.optional_string("RC_CODEX_GATEWAY_LAN_HOST");
-        let Some(port) = self.lan_port(port)? else {
-            anyhow::ensure!(
-                address.is_none() && host.is_none(),
-                "LAN binding requires a LAN port"
-            );
-            return Ok(None);
-        };
-        let binding = match (address, host) {
-            (Some(address), Some(host)) => {
-                let address = address
-                    .parse::<IpAddr>()
-                    .context("LAN bind address must be an IP address")?;
-                anyhow::ensure!(
-                    !address.is_unspecified(),
-                    "LAN bind address must name one interface address"
-                );
-                anyhow::ensure!(
-                    host.len() <= 253
-                        && host.split('.').all(|label| {
-                            !label.is_empty()
-                                && label.len() <= 63
-                                && !label.starts_with('-')
-                                && !label.ends_with('-')
-                                && label
-                                    .bytes()
-                                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
-                        }),
-                    "LAN host must be a DNS name"
-                );
-                LanBinding::Address { address, host }
-            }
-            (None, None) if !cfg!(target_os = "linux") => LanBinding::DualStack,
-            _ => anyhow::bail!(
-                "LAN TLS requires RC_CODEX_GATEWAY_LAN_BIND_ADDRESS and RC_CODEX_GATEWAY_LAN_HOST"
-            ),
-        };
-        Ok(Some(LanSettings { port, binding }))
     }
 
     fn lan_port(&self, port: u16) -> Result<Option<u16>> {
@@ -1136,45 +1082,6 @@ mod tests {
                 }
                 (actual, expected) => panic!("{value:?}: {actual:?} instead of {expected:?}"),
             }
-        }
-    }
-
-    #[test]
-    fn explicit_tls_binding_requires_a_concrete_address_and_dns_name() {
-        let configured = |address: &str, host: &str| {
-            ConfigSources::from_file_vars(HashMap::from([
-                (LAN_PORT_ENV_KEY.into(), "8788".into()),
-                ("RC_CODEX_GATEWAY_LAN_BIND_ADDRESS".into(), address.into()),
-                ("RC_CODEX_GATEWAY_LAN_HOST".into(), host.into()),
-            ]))
-        };
-        let lan = configured("100.81.1.2", "linux.example.ts.net")
-            .lan_settings(8787)
-            .unwrap()
-            .unwrap();
-        assert!(
-            matches!(lan.binding, LanBinding::Address { address, .. } if address == "100.81.1.2".parse::<IpAddr>().unwrap())
-        );
-        for (address, host) in [
-            ("0.0.0.0", "host.local"),
-            ("::", "host.local"),
-            ("host.local", "host.local"),
-            ("100.81.1.2", "*.local"),
-            ("100.81.1.2", "bad/host"),
-        ] {
-            assert!(configured(address, host).lan_settings(8787).is_err());
-        }
-        let implicit = ConfigSources::from_file_vars(HashMap::from([(
-            LAN_PORT_ENV_KEY.into(),
-            "8788".into(),
-        )]));
-        if cfg!(target_os = "linux") {
-            assert!(implicit.lan_settings(8787).is_err());
-        } else {
-            assert!(matches!(
-                implicit.lan_settings(8787).unwrap().unwrap().binding,
-                LanBinding::DualStack
-            ));
         }
     }
 

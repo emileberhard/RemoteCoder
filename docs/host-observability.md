@@ -18,7 +18,7 @@ there is no flag that turns any of this off.
 | Voice sessions | `voice-sessions/<started>-<thread>.jsonl` | Per-call transcripts, delegation lifecycle, latencies, close summary (newest 100) |
 | Deployments | `deployments/*.log` | Install runs with their git commit (each app install keeps the newest 5 per-run entries of each kind plus each platform's newest installed symbols, within 4 GiB; release symbols keep their own 7-day, 5 GiB rule) |
 | launchd redirect (macOS) | `codex-gateway.out.log` / `.err.log` | Startup banner and panics only |
-| Relay tunnel | `relay-tunnel.log` | SSH errors from this Mac's relay tunnel ([relay route](relay-route.md#logs)) |
+| Relay tunnel (macOS) | `relay-tunnel.log` | SSH errors from this Mac's relay tunnel; Linux logs to the journal ([relay route](relay-route.md#logs)) |
 
 Codex rollouts and Claude project JSONL remain the canonical conversation
 content. Title-decision traces additionally preserve the bounded model view

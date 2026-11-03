@@ -125,14 +125,12 @@ conversations.
 ### LAN TLS listener
 
 Set `RC_CODEX_GATEWAY_LAN_PORT` (for example `8789`) to serve every gateway route
-over pinned TLS. macOS defaults to `[::]:<port>` with IPv4 support. Set
-`RC_CODEX_GATEWAY_LAN_BIND_ADDRESS` and `RC_CODEX_GATEWAY_LAN_HOST` together to
-select one concrete interface address and advertised DNS name. Linux requires
-both and rejects wildcard addresses; its plaintext listener must use a loopback
-IP. This supports a private HTTPS proxy for phone ingress and a separate pinned
-cluster listener. It is off when unset or empty; a
-non-numeric value, `0`, or the plaintext port fails startup. The plaintext
-listener is unchanged.
+over pinned TLS on `[::]:<port>` with IPv4 support, on macOS and Linux alike.
+The same listener carries the phone's LAN route, the relay route and cluster
+links. Which interfaces may reach it is host network policy, not gateway
+configuration. On Linux the plaintext listener must use a loopback IP. The TLS
+listener is off when unset or empty; a non-numeric value, `0`, or the plaintext
+port fails startup. The plaintext listener is unchanged.
 
 - Identity: an ECDSA P-256 key in `~/.remote-coder/lan-tls-key.der` (PKCS#8
   DER, mode 0600). The first start generates it and publishes it create-only,
@@ -140,8 +138,9 @@ listener is unchanged.
   grants group or other access, or is not a P-256 PKCS#8 key is refused, never
   replaced. Deleting the file and restarting rotates the key.
 - Certificate: self-signed and re-derived from that key at every start, with
-  SANs `<LocalHostName>.local` (from `scutil --get LocalHostName`) and
-  `localhost`, or the explicit advertised DNS name. The listener speaks TLS 1.3 only with ALPN `http/1.1` and no
+  SANs `<name>.local` and `localhost`, where `<name>` is `scutil --get
+  LocalHostName` on macOS and the host name's first label on Linux, the names
+  Bonjour and systemd-resolved's mDNS publish. The listener speaks TLS 1.3 only with ALPN `http/1.1` and no
   client certificates; WebSocket upgrades work as on the plaintext listener.
 - Pin: `spkiSha256` is the standard base64 SHA-256 of the certificate's DER
   SubjectPublicKeyInfo. It changes only with the key, not with the host name
@@ -149,8 +148,7 @@ listener is unchanged.
   `/health`, whose `lanEndpoint` is `{"host","port","spkiSha256"}` while the
   listener serves and `null` otherwise.
 - Failure: if the key, host name, or bind fails at startup, the gateway logs an
-  error, keeps serving the plaintext listener, and reports `lanEndpoint: null` on
-  macOS. Linux fails startup instead of accepting a partial configuration.
+  error, keeps serving the plaintext listener, and reports `lanEndpoint: null`.
   Each TLS handshake is bounded to 10 seconds, and each request head to 30
   seconds, including the wait for a connection's first or next request, so a
   silent LAN client cannot hold a connection or the shutdown open. When the
