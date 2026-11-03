@@ -90,8 +90,8 @@ opens on: Branch (the default), another Git comparison, Last Turn, or Since a
 start point. The gateway stores it in the conversation's marks
 (`changesView`, schema 4), so it syncs across the user's devices; Branch is
 stored as absence. The view changes only when the user picks one, from the
-review's comparison menu, the pill's hold menu, or a reply's Count Changes
-from Here. A gateway with an older marks schema offers no views: the pill and
+review's comparison menu, the pill's context menu (hold on iOS, secondary-click
+on the Mac), or a reply's Count Changes from Here. A gateway with an older marks schema offers no views: the pill and
 review keep their Branch-first behavior and the conversation entries are hidden.
 
 - A start point is a turn boundary: the start of a turn (a prompt) or the end

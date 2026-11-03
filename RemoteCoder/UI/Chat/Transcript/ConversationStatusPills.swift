@@ -33,24 +33,25 @@ struct StatusPill<Label: View>: View {
 
     var body: some View {
         Button(action: action) {
-            StatusPillFace { label }
+            label
+                .scaledFont(.footnote.weight(.semibold))
+                .foregroundStyle(.primary)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 7)
+                .appGlass(.standard, in: .capsule)
+                .padding(.vertical, StatusPillShape.hitMargin)
+                .contentShape(.rect)
         }
         .buttonStyle(ResponsiveButtonStyle(feedback: .buttonPress, pressedScale: 0.97))
+        .contextMenuPreviewShape(StatusPillShape())
     }
 }
 
-private struct StatusPillFace<Label: View>: View {
-    @ViewBuilder let label: Label
+private struct StatusPillShape: Shape {
+    static let hitMargin: CGFloat = 8
 
-    var body: some View {
-        label
-            .scaledFont(.footnote.weight(.semibold))
-            .foregroundStyle(.primary)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 7)
-            .appGlass(.standard, in: .capsule)
-            .padding(.vertical, 8)
-            .contentShape(.rect)
+    func path(in rect: CGRect) -> Path {
+        Capsule().path(in: rect.insetBy(dx: 0, dy: Self.hitMargin))
     }
 }
 
@@ -61,9 +62,9 @@ struct ChangesPill: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        Group {
-            if changes.offersViews {
-                AppMenu {
+        StatusPill(action: action) { face }
+            .contextMenu {
+                if changes.offersViews {
                     Button("Start From Now", systemImage: ChangesView.sinceSymbol, action: changes.countFromNow)
                     Section {
                         Picker("Compare", selection: Binding(get: { content.view }, set: { changes.select($0) })) {
@@ -79,18 +80,10 @@ struct ChangesPill: View {
                         .pickerStyle(.inline)
                         .labelsHidden()
                     }
-                } label: {
-                    StatusPillFace { face }
-                } primaryAction: {
-                    action()
                 }
-                .menuIndicator(.hidden)
-            } else {
-                StatusPill(action: action) { face }
             }
-        }
-        .accessibilityHint("Shows changes")
-        .accessibilityIdentifier("review-changes")
+            .accessibilityHint("Shows changes")
+            .accessibilityIdentifier("review-changes")
     }
 
     private var face: some View {
