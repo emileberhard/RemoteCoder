@@ -976,8 +976,9 @@ entrypoint linked above.
   something to show, sharing `StatusPill`'s glass capsule. The changes pill
   shows `ChangeSummaryModel`'s file and line totals for the conversation's
   changes view (Branch across worked-in checkouts by default) and opens change
-  review on that view: the sheet on iOS, the inspector on the Mac. Holding it
-  offers Start From Now and the view picker
+  review on that view: the sheet on iOS, the inspector on the Mac. Its context
+  menu (hold on iOS, secondary-click on the Mac) offers Start From Now and the
+  view picker
   ([Change review](../docs/change-review.md#changes-views)). Request summary
   reads through `ChatScreenModel.refreshChangeSummary()`, which admits them only
   while the screen is on screen; the transcript reads only `isVisible` and
