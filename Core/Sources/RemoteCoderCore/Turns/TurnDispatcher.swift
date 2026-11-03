@@ -38,9 +38,9 @@ final class TurnDispatcher {
             let fastMode = thread.extra?.fastModeSelection
             let resolved: ModelOption
             if changedRoute {
-                resolved = (provider == .claude ? ClaudeModelCatalog.model(for: id) : nil)
+                resolved = (provider == .claude && modelProvider?.externalID == nil ? ClaudeModelCatalog.model(for: id) : nil)
                     ?? .unlisted(id: id, modelProvider: modelProvider?.modelProvider,
-                        reportedEffort: effort, reportedFastMode: fastMode == true)
+                        reportedEffort: effort, reportedFastMode: fastMode == true, provider: provider)
             } else {
                 resolved = model
             }

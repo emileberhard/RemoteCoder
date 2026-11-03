@@ -1076,7 +1076,9 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         }
         let inputs = models.map { model in
             UnsentDraftRow.TargetInput(target: model.target, hostName: targetName(of: model),
-                                       remoteHomePath: model.remoteHomePath, drafts: model.drafts.listedUnsentDrafts)
+                                       remoteHomePath: model.remoteHomePath, drafts: model.drafts.listedUnsentDrafts,
+                                       modelProviders: Dictionary(uniqueKeysWithValues: (model.codexModels.catalog?.entries ?? [])
+                                        .map { ($0.id, $0.option.provider) }))
         }
         return UnsentDraftRow.rows(from: inputs, selected: shown,
                                    showsHostLabels: ConversationSidebarProjection.showsHostLabels(targetCount: models.count),
@@ -1500,7 +1502,10 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
     @discardableResult
     func startNewConversation(onHostID hostID: UUID) -> ChatScreenModel? {
         let source = selectedScreen
-        guard let destination = startNewConversation(provider: newChatProvider, preferredHostID: hostID) else { return nil }
+        let preferredID = NewChatDefaults.preferredModelID(defaults: defaults)
+        let provider = preferredID.map { newConversationTarget(preferredHostID: hostID)?.modelCatalog.provider(forModelID: $0)
+            ?? AgentProvider.provider(forModelID: $0) } ?? .codex
+        guard let destination = startNewConversation(provider: provider, preferredHostID: hostID) else { return nil }
         if source?.hostID == destination.hostID, let directory = source?.workingDirectory {
             destination.suggestWorkingDirectory(directory)
         }
@@ -1654,7 +1659,9 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
 
     var newChatProvider: AgentProvider {
         let preferredID = NewChatDefaults.preferredModelID(defaults: defaults)
-        return preferredID.map(AgentProvider.provider(forModelID:)) ?? .codex
+        guard let preferredID else { return .codex }
+        return newConversationTarget(preferredHostID: selectedHostID)?.modelCatalog.provider(forModelID: preferredID)
+            ?? AgentProvider.provider(forModelID: preferredID)
     }
 
     func newChatDefaultModel() -> NewChatModelLookup {
@@ -1662,7 +1669,8 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
     }
 
     func configuredModel(id: String) -> NewChatModelLookup {
-        newChatLookup(provider: AgentProvider.provider(forModelID: id)) { $0.configuredModel(id: id) }
+        newChatLookup(provider: newConversationTarget(preferredHostID: selectedHostID)?.modelCatalog.provider(forModelID: id)
+            ?? AgentProvider.provider(forModelID: id)) { $0.configuredModel(id: id) }
     }
 
     private func newChatLookup(

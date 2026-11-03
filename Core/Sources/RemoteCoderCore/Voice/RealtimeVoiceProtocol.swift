@@ -200,9 +200,7 @@ struct RealtimeVoiceConversationContext: Sendable {
             case .selection:
                 updated.fastModeState = settings.fastModeState
             case .readback:
-                let remembered = AgentProvider.provider(forModelID: settings.model) == AgentProvider.provider(forModelID: model)
-                    ? fastModeState.remembered : nil
-                updated.fastModeState = settings.fastModeState.restoringPreference(remembered)
+                updated.fastModeState = settings.fastModeState.restoringPreference(fastModeState.remembered)
             }
         }
         return updated

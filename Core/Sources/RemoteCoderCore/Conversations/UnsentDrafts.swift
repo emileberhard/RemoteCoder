@@ -88,6 +88,7 @@ struct UnsentDraftRow: Identifiable, Equatable, Sendable {
         let hostName: String
         let remoteHomePath: String?
         let drafts: [UnsentDraftSummary]
+        let modelProviders: [String: AgentProvider]
     }
 
     static func rows(from targets: [TargetInput], selected: UnsentDraftAddress?, showsHostLabels: Bool,
@@ -102,7 +103,7 @@ struct UnsentDraftRow: Identifiable, Equatable, Sendable {
                         condensedPaths.condensedPath($0, remoteHomePath: input.remoteHomePath)
                     } ?? "",
                     hostName: input.hostName, showsHostLabel: showsHostLabels,
-                    provider: draft.setup?.modelID.map(AgentProvider.provider(forModelID:)),
+                    provider: draft.setup?.modelID.map { input.modelProviders[$0] ?? AgentProvider.provider(forModelID: $0) },
                     modifiedAt: draft.modifiedAt,
                     ageLabel: draft.modifiedAt.map { ConversationSidebarDate.age(of: $0, now: now) },
                     isSelected: address == selected)

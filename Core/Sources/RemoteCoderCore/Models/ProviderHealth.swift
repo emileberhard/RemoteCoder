@@ -35,9 +35,10 @@ struct ProviderHealth: Sendable, Equatable {
     }
 
     func isImpaired(_ model: ModelOption) -> Bool {
-        switch statuses[model.provider] {
+        guard model.modelProvider == nil else { return false }
+        return switch statuses[model.provider] {
         case .unavailable: true
-        case .fallback: model.modelProvider == nil
+        case .fallback: true
         case .ready, nil: false
         }
     }

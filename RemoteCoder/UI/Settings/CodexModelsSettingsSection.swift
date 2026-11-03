@@ -43,7 +43,7 @@ struct CodexModelsSettingsSection: View {
                     .foregroundStyle(.secondary)
             }
         } header: {
-            Text("Codex models")
+            Text("Gateway models")
         }
     }
 }
@@ -96,7 +96,7 @@ private struct CodexModelsSettingsPage: View {
             modelSection(entries.filter(\.isHiddenUpstream), header: "Hidden by the host",
                          footer: "The host hides these by default. Turn one on to add it to the pickers.")
         }
-        .navigationTitle("Codex Models")
+        .navigationTitle("Gateway Models")
         .inlineNavigationTitle()
     }
 

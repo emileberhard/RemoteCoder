@@ -16,6 +16,7 @@ extension CodexAppServerV2 {
         let hidden: Bool
         let isDefault: Bool
         let modelProvider: ModelProvider?
+        let agentProvider: AgentProvider
     }
 
     struct ModelProvider: Sendable, Hashable {
@@ -80,6 +81,7 @@ extension CodexAppServerV2.Model: Codable {
         case isDefault
         case modelProvider
         case modelProviderName
+        case agentProvider
     }
 
     init(from decoder: Decoder) throws {
@@ -95,6 +97,7 @@ extension CodexAppServerV2.Model: Codable {
         self.availableAccessPrograms = try container.decodeIfPresent(CodexAppServerV2.ModelAccessPrograms.self, forKey: .availableAccessPrograms)
         self.hidden = try container.decode(Bool.self, forKey: .hidden)
         self.isDefault = try container.decode(Bool.self, forKey: .isDefault)
+        self.agentProvider = try container.decodeIfPresent(AgentProvider.self, forKey: .agentProvider) ?? .codex
         self.modelProvider = try container.decodeIfPresent(String.self, forKey: .modelProvider).map {
             CodexAppServerV2.ModelProvider(id: $0, name: try container.decode(String.self, forKey: .modelProviderName))
         }
@@ -112,6 +115,7 @@ extension CodexAppServerV2.Model: Codable {
         try container.encodeIfPresent(availableAccessPrograms, forKey: .availableAccessPrograms)
         try container.encode(hidden, forKey: .hidden)
         try container.encode(isDefault, forKey: .isDefault)
+        try container.encode(agentProvider, forKey: .agentProvider)
         try container.encodeIfPresent(modelProvider?.id, forKey: .modelProvider)
         try container.encodeIfPresent(modelProvider?.name, forKey: .modelProviderName)
     }

@@ -30,7 +30,7 @@ struct CodexModelCatalog: Equatable, Sendable {
                     supportsFastMode: supportsFastMode,
                     supportsDaybreakBlue: model.availableAccessPrograms?.cyber.contains("daybreakBlue") == true,
                     acceptsImages: model.inputModalities.contains(.image),
-                    provider: .codex,
+                    provider: model.agentProvider,
                     modelProvider: model.modelProvider,
                     isListed: true
                 ),
@@ -74,8 +74,8 @@ enum NewChatModelLookup: Equatable {
 }
 
 enum NewChatModelResolution {
-    static func provider(preferredID: String?, providers: Set<AgentProvider>) -> AgentProvider? {
-        let preferred = preferredID.map(AgentProvider.provider(forModelID:)) ?? .codex
+    static func provider(preferredID: String?, providers: Set<AgentProvider>, catalog: CodexModelCatalog? = nil) -> AgentProvider? {
+        let preferred = preferredID.map { catalog?.entry(for: $0)?.option.provider ?? AgentProvider.provider(forModelID: $0) } ?? .codex
         return providers.contains(preferred) ? preferred : AgentProvider.allCases.first(where: providers.contains)
     }
 
@@ -87,13 +87,15 @@ enum NewChatModelResolution {
         providers: Set<AgentProvider>
     ) -> ModelOption? {
         let preferredClaude = preferredID.flatMap(ClaudeModelCatalog.model(for:))
-        switch provider(preferredID: preferredID, providers: providers) {
+        switch provider(preferredID: preferredID, providers: providers, catalog: codex) {
         case .claude:
             let visible = ClaudeModelCatalog.models.filter { claudeVisibility.isVisible(id: $0.id) }
-            return visible.first { $0.id == preferredClaude?.id } ?? visible.first
+            let external = codex?.entries.filter { $0.option.provider == .claude && codexVisibility.isVisible($0) } ?? []
+            return external.first { $0.id == preferredID }?.option
+                ?? visible.first { $0.id == preferredClaude?.id } ?? visible.first ?? external.first?.option
         case .codex:
             guard let codex else { return nil }
-            let visible = codex.entries.filter(codexVisibility.isVisible)
+            let visible = codex.entries.filter { $0.option.provider == .codex && codexVisibility.isVisible($0) }
             return (visible.first { $0.id == preferredID }
                 ?? visible.first { $0.id == NewChatDefaults.initialCodexModelID }
                 ?? visible.first(where: \.isUpstreamDefault)
