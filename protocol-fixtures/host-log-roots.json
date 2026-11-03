@@ -1,0 +1,6 @@
+{
+  "logRoots": {
+    "Darwin": "Library/Logs/remote-coder",
+    "Linux": ".local/state/remote-coder/logs"
+  }
+}

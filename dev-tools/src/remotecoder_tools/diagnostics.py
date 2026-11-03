@@ -18,14 +18,15 @@ from .rpc import (
     _ws_connect,
     _ws_recv_json,
 )
+from .host_logs import LOG_ROOT_VARIABLE, log_root_shell
 from .turns import _assert_e2e, _norm_turn_id, mark_purpose, release_claude_runtime
 from .verdict import cleanup_after
 
 
-DEFAULT_JOURNAL_DIR = "~/Library/Logs/remote-coder/journal"
+DEFAULT_JOURNAL_DIR = f"${LOG_ROOT_VARIABLE}/journal"
 
 
-DEFAULT_DESKTOP_DIR = "~/Library/Logs/remote-coder/desktop"
+DEFAULT_DESKTOP_DIR = f"${LOG_ROOT_VARIABLE}/desktop"
 
 
 def _parse_since(value: str) -> float:
@@ -63,14 +64,18 @@ def _journal_day_files(directory: str, since_epoch: float | None) -> list[str]:
 
 
 def _journal_quote(path: str) -> str:
-    """Quotes a path for `sh -c`, letting a leading `~` expand on the far end."""
+    """Quotes a path for `sh -c`, letting a leading `~` or log root variable expand on the far end."""
     if path.startswith("~/"):
         return '"$HOME/' + path[2:] + '"'
+    if path.startswith(f"${LOG_ROOT_VARIABLE}/"):
+        return f'"{path}"'
     return shlex.quote(path)
 
 
 def _journal_shell(args: argparse.Namespace, command: str) -> list[str]:
     host = _gateway_read_host(args)
+    if f"${LOG_ROOT_VARIABLE}" in command:
+        command = log_root_shell() + command
     if host is None:
         return ["sh", "-c", command]
     return ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", host, command]
