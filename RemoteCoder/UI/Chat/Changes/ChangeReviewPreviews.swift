@@ -268,4 +268,13 @@ private struct ChangeReviewPreview: View {
 #Preview("M · Checkouts not loaded") {
     ChangeReviewPreview(.unavailable(.notRepository))
 }
+
+#Preview("N · Checkout options") {
+    if let model = ChangeReviewFixture.model(.ready(ChangeReviewFixture.worktreeReview),
+                                             summary: ChangeReviewFixture.summary, root: ChangeReviewFixture.worktree) {
+        Form {
+            CheckoutPicker(model: model, checkouts: ChangeReviewFixture.summary, remoteHomePath: "/Users/emil")
+        }
+    }
+}
 #endif

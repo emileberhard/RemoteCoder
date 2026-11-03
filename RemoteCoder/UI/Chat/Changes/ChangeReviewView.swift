@@ -211,7 +211,7 @@ private struct ChangeReviewHeader: View {
     }
 }
 
-private struct CheckoutPicker: View {
+struct CheckoutPicker: View {
     @Bindable var model: ChangeReviewModel
     let checkouts: PreparedChangeSummary
     let remoteHomePath: String?
@@ -221,13 +221,15 @@ private struct CheckoutPicker: View {
             Section("Worked In") {
                 Picker("Worked In", selection: $model.selectedRoot) {
                     ForEach(checkouts.workedIn, id: \.root) { checkout in
-                        Group {
-                            Label(displayPath(checkout.root), systemImage: symbol(for: checkout.evidence))
+                        Label {
+                            Text(displayPath(checkout.root))
                             if let totals = checkout.totals {
-                                if totals.files == 0 { Text("No changes") } else { Text("\(totals.files) files") }
+                                if totals.files == 0 { Text("No changes") } else { FileCount(files: totals.files).text }
                             } else {
-                                Text("Couldn't read")
+                                Text("Couldn’t read")
                             }
+                        } icon: {
+                            Image(systemName: symbol(for: checkout.evidence))
                         }
                         .tag(Optional(checkout.root))
                     }
@@ -415,6 +417,10 @@ struct FileCount: View {
     let files: Int
 
     var body: some View {
+        text
+    }
+
+    fileprivate var text: Text {
         Text(files == 1 ? "1 file" : "\(files) files")
     }
 }
