@@ -179,7 +179,7 @@ enum ChangeReviewFixture {
             ])
         })
         let summaryModel = ChangeSummaryModel(conversation: "preview", directory: "/Users/emil/stretch", client: client, views: views,
-                                              lastRead: nil)
+                                              lastRead: nil, remember: { _ in })
         summaryModel.showPreview(summary, view: view)
         return summaryModel
     }

@@ -20,6 +20,7 @@ final class ChangeSummaryModel {
     private(set) var startTurnID: String?
     @ObservationIgnored private let client: GatewayClient
     @ObservationIgnored private let views: ConversationChangesViews
+    @ObservationIgnored private let remember: @MainActor (ChangeSummaryRead?) -> Void
     @ObservationIgnored private var reading: Task<Void, Never>?
     @ObservationIgnored private var following: Task<Void, Never>?
     @ObservationIgnored private var resolvingNow: Task<Void, Never>?
@@ -30,20 +31,17 @@ final class ChangeSummaryModel {
     private static let spacing = Duration.seconds(10)
 
     init(conversation: String, directory: String, client: GatewayClient, views: ConversationChangesViews,
-         lastRead: ChangeSummaryRead?) {
+         lastRead: ChangeSummaryRead?, remember: @escaping @MainActor (ChangeSummaryRead?) -> Void) {
         self.conversation = conversation
         self.directory = directory
         self.client = client
         self.views = views
+        self.remember = remember
         let stored = views.read()
         offersViews = stored != nil
         if let lastRead, lastRead.directory == directory, lastRead.content.view == stored ?? .standard {
             publish(lastRead)
         }
-    }
-
-    var lastRead: ChangeSummaryRead? {
-        content.map { ChangeSummaryRead(directory: directory, content: $0, summary: summary) }
     }
 
     func summarizes(conversation: String?, directory: String?) -> Bool {
@@ -158,6 +156,7 @@ final class ChangeSummaryModel {
     }
 
     private func publish(_ read: ChangeSummaryRead?) {
+        remember(read)
         if read?.summary != summary { summary = read?.summary }
         if read?.content != content { content = read?.content }
         let isVisible = read?.content.isVisible ?? false

@@ -73,9 +73,9 @@ struct RecentConversationCache {
         touch(value.threadID)
     }
 
-    mutating func record(_ value: ChangeSummaryRead, threadID: String) {
+    mutating func record(_ value: ChangeSummaryRead?, threadID: String) {
         changes[threadID] = value
-        touch(threadID)
+        if value != nil { touch(threadID) }
     }
 
     mutating func removeAll(keeping threadIDs: Set<String>) {

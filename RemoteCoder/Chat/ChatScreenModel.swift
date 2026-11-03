@@ -216,15 +216,13 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
 
     private func followChangeSummary() {
         guard changeSummary?.summarizes(conversation: activeSessionID, directory: workingDirectory) != true else { return }
-        if let changeSummary, let lastRead = changeSummary.lastRead {
-            target.recentConversations.record(lastRead, threadID: changeSummary.conversation)
-        }
         changeSummary?.stop()
         changeSummary = activeSessionID.flatMap { conversation in
             workingDirectory.map {
                 ChangeSummaryModel(conversation: conversation, directory: $0, client: target.gatewayClient,
                                    views: changesViews(of: conversation),
-                                   lastRead: target.recentConversations.changes(threadID: conversation))
+                                   lastRead: target.recentConversations.changes(threadID: conversation),
+                                   remember: { [weak target] in target?.recentConversations.record($0, threadID: conversation) })
             }
         }
     }

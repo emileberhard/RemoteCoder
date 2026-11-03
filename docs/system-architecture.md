@@ -1242,7 +1242,7 @@ followed by reflow. `RecentConversationCache` keeps the last published
 presentation and composer settings of the eight most recent conversations:
 presentations at publication and background warm-up, settings when a
 conversation is left, each conversation's agents model with its last list,
-and the changes pill's last result when a conversation is left, so known
+and the changes pill's latest published result, so known
 subagents and changes pills are present in the switch's first frame. An uncached
 agents model has no summary until its first read. Each model coalesces selection,
 inspector, sheet and warmer reads into one cancellable RPC, reuses successful
