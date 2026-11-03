@@ -161,15 +161,8 @@ private struct ChangeReviewHeader: View {
                     }
                 }
                 .pickerStyle(.inline)
-                if case .git = model.mode {
-                    switch model.checkouts {
-                    case .found(let checkouts):
-                        CheckoutPicker(model: model, checkouts: checkouts, remoteHomePath: remoteHomePath)
-                    case .failed:
-                        Text("Couldn’t find the checkouts agents worked in.")
-                    case .unknown:
-                        EmptyView()
-                    }
+                if case .git = model.mode, let checkouts = model.summary?.summary {
+                    CheckoutPicker(model: model, checkouts: checkouts, remoteHomePath: remoteHomePath)
                 }
                 if let review, !review.files.isEmpty {
                     Divider()
@@ -188,11 +181,6 @@ private struct ChangeReviewHeader: View {
                             Text((root as NSString).lastPathComponent)
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
-                        }
-                        if case .failed = model.checkouts {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .foregroundStyle(.orange)
-                                .accessibilityLabel("Couldn’t find checkouts")
                         }
                     }
                     Image(systemName: "chevron.up.chevron.down")
@@ -223,9 +211,9 @@ private struct ChangeReviewHeader: View {
     }
 }
 
-private struct CheckoutPicker: View {
+struct CheckoutPicker: View {
     @Bindable var model: ChangeReviewModel
-    let checkouts: CheckoutDiscovery
+    let checkouts: PreparedChangeSummary
     let remoteHomePath: String?
 
     var body: some View {
@@ -233,7 +221,17 @@ private struct CheckoutPicker: View {
             Section("Worked In") {
                 Picker("Worked In", selection: $model.selectedRoot) {
                     ForEach(checkouts.workedIn, id: \.root) { checkout in
-                        Label(displayPath(checkout.root), systemImage: symbol(for: checkout.evidence)).tag(Optional(checkout.root))
+                        Label {
+                            Text(displayPath(checkout.root))
+                            if let totals = checkout.totals {
+                                if totals.files == 0 { Text("No changes") } else { FileCount(files: totals.files).text }
+                            } else {
+                                Text("Couldn’t read")
+                            }
+                        } icon: {
+                            Image(systemName: symbol(for: checkout.evidence))
+                        }
+                        .tag(Optional(checkout.root))
                     }
                 }
                 .pickerStyle(.inline)
@@ -259,7 +257,7 @@ private struct CheckoutPicker: View {
         WorkingDirectoryPathFormatter.displayPath(root, remoteHomePath: remoteHomePath)
     }
 
-    private func symbol(for evidence: Set<CheckoutDiscovery.Checkout.Evidence>) -> String {
+    private func symbol(for evidence: Set<ChangeSummary.Evidence>) -> String {
         if evidence.contains(.edited) { "pencil" } else if evidence.contains(.command) { "terminal" } else { "folder" }
     }
 }
@@ -419,6 +417,10 @@ struct FileCount: View {
     let files: Int
 
     var body: some View {
+        text
+    }
+
+    fileprivate var text: Text {
         Text(files == 1 ? "1 file" : "\(files) files")
     }
 }

@@ -1717,8 +1717,11 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
             if haptics.consume(occurrence), !replay, isPresenting(threadID) { feedback(.warning) }
         }
 
-        if method == "item/completed", !replay, case .fileChange = event.item {
-            refreshChangeSummaries(showing: threadID)
+        if method == "item/completed", !replay {
+            switch event.item {
+            case .fileChange, .commandExecution: refreshChangeSummaries(showing: threadID)
+            default: break
+            }
         }
 
         if method == "turn/completed" {

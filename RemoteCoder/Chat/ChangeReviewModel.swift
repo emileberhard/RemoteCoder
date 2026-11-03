@@ -11,7 +11,7 @@ final class ChangeReviewModel {
         static let all: [Mode] = [.lastTurn] + ChangeSource.allCases.map(Mode.git)
     }
 
-    nonisolated static let defaultSource = ChangeSource.uncommitted
+    nonisolated static let defaultSource = ChangeSource.branch
 
     enum State {
         case loading
@@ -21,33 +21,26 @@ final class ChangeReviewModel {
         case failed(String)
     }
 
-    enum Checkouts {
-        case unknown
-        case failed
-        case found(CheckoutDiscovery)
-    }
-
     let conversation: String?
     let directory: String
     private(set) var mode: Mode = .git(defaultSource)
     private(set) var state: State = .loading
-    private(set) var checkouts: Checkouts = .unknown
+    let summary: ChangeSummaryModel?
     private(set) var root: String?
     private(set) var isRefreshing = false
     private(set) var collapsedFiles: [ReviewedFile.ID: Bool] = [:]
     private(set) var notes: [ReviewNote.Anchor: ReviewNoteDraft] = [:]
     var focusedNote: ReviewNote.Anchor?
     @ObservationIgnored private let client: GatewayClient
-    @ObservationIgnored private var chosenRoot: String?
-    @ObservationIgnored private var discoversCheckouts = true
     @ObservationIgnored private var loading: Task<Void, Never>?
     @ObservationIgnored private var revision = 0
     @ObservationIgnored private let logger = AppLogger(category: "ChangeReview")
 
-    init(conversation: String?, directory: String, client: GatewayClient) {
+    init(conversation: String?, directory: String, client: GatewayClient, summary: ChangeSummaryModel?) {
         self.conversation = conversation
         self.directory = directory
         self.client = client
+        self.summary = summary
     }
 
     func reviews(conversation: String?, directory: String?, through client: GatewayClient) -> Bool {
@@ -72,26 +65,24 @@ final class ChangeReviewModel {
     }
 
     func select(root: String?) {
-        guard let root, root != chosenRoot else { return }
-        chosenRoot = root
-        if root != self.root {
-            self.root = root
-            state = .loading
-        }
+        guard let root, root != self.root else { return }
+        self.root = root
+        state = .loading
         load()
     }
 
     func refresh() {
-        discoversCheckouts = true
+        summary?.refresh()
         load()
     }
 
     func reopen() {
-        let initial = Mode.git(Self.defaultSource)
-        if mode != initial || chosenRoot != nil {
+        let primary = summary?.summary?.primary
+        let initial = Mode.git(primary?.source ?? Self.defaultSource)
+        let root = primary?.root ?? summary?.summary?.workedIn.first?.root
+        if mode != initial || self.root != root {
             mode = initial
-            chosenRoot = nil
-            root = nil
+            self.root = root
             state = .loading
         }
         refresh()
@@ -102,14 +93,10 @@ final class ChangeReviewModel {
         revision += 1
         let revision = revision
         let mode = mode
-        let chosen = chosenRoot
-        let known = checkouts
-        let discovering = discoversCheckouts
+        let chosen = root
         isRefreshing = true
         loading = Task { [weak self, client, conversation, directory] in
             let result: State
-            var discovered: Checkouts?
-            var reviewed: String?
             do {
                 switch mode {
                 case .lastTurn:
@@ -122,13 +109,7 @@ final class ChangeReviewModel {
                     case .noRecentEdits(let complete): result = .noRecentEdits(isComplete: complete)
                     }
                 case .git(let source):
-                    async let fresh: Checkouts? = discovering
-                        ? await Self.discoverCheckouts(client: client, conversation: conversation, directory: directory) : nil
-                    let target = if let chosen { chosen } else { Self.defaultRoot(in: discovering ? await fresh ?? .unknown : known) }
-                    reviewed = target
-                    async let read = client.readChanges(directory: target ?? directory, source: source)
-                    discovered = await fresh
-                    switch try await read {
+                    switch try await client.readChanges(directory: chosen ?? directory, source: source) {
                     case .ready(let snapshot): result = .ready(await ChangeReviewPreparation.prepare(snapshot, revision: revision))
                     case .unavailable(let reason): result = .unavailable(reason)
                     }
@@ -140,31 +121,9 @@ final class ChangeReviewModel {
             }
             guard let self, self.revision == revision, !Task.isCancelled else { return }
             if case .failed(let message) = result { self.logger.notice("Reading changes failed: \(message)") }
-            if case .git = mode {
-                self.root = reviewed
-                if let discovered {
-                    self.checkouts = discovered
-                    self.discoversCheckouts = false
-                }
-            }
             self.state = result
             self.isRefreshing = false
         }
-    }
-
-    private nonisolated static func discoverCheckouts(client: GatewayClient, conversation: String?,
-                                                      directory: String) async -> Checkouts {
-        do {
-            return .found(try await client.readCheckouts(threadID: conversation, directory: directory))
-        } catch {
-            AppLogger(category: "ChangeReview").notice("Finding checkouts failed: \(error.localizedDescription)")
-            return .failed
-        }
-    }
-
-    private nonisolated static func defaultRoot(in checkouts: Checkouts) -> String? {
-        guard case .found(let discovery) = checkouts else { return nil }
-        return discovery.defaultRoot
     }
 
     func stop() {
@@ -294,11 +253,10 @@ final class ReviewNoteDraft: Identifiable {
 
 #if DEBUG
 extension ChangeReviewModel {
-    func showPreview(_ state: State, mode: Mode = .git(defaultSource), checkouts: Checkouts = .unknown, root: String? = nil,
+    func showPreview(_ state: State, mode: Mode = .git(defaultSource), root: String? = nil,
                      notes: [ReviewNote] = []) {
         self.state = state
         self.mode = mode
-        self.checkouts = checkouts
         self.root = root
         isRefreshing = false
         self.notes = Dictionary(uniqueKeysWithValues: notes.map { note in
