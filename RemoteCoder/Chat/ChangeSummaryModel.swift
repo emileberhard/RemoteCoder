@@ -54,6 +54,11 @@ final class ChangeSummaryModel {
         views.read() ?? .standard
     }
 
+    var selectedView: ChangesView {
+        get { content?.view ?? view }
+        set { select(newValue) }
+    }
+
     func startPoints() -> ChangesStartPoints {
         views.startPoints()
     }

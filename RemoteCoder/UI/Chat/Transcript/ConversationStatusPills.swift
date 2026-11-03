@@ -57,7 +57,7 @@ private struct StatusPillShape: Shape {
 }
 
 struct ChangesPill: View {
-    let changes: ChangeSummaryModel
+    @Bindable var changes: ChangeSummaryModel
     let content: ChangesPillContent
     let action: () -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -68,7 +68,7 @@ struct ChangesPill: View {
                 if changes.offersViews {
                     Button("Start From Now", systemImage: ChangesView.sinceSymbol, action: changes.countFromNow)
                     Section {
-                        Picker("Compare", selection: Binding(get: { content.view }, set: { changes.select($0) })) {
+                        Picker("Compare", selection: $changes.selectedView) {
                             if content.view != .standard && content.view != .lastTurn {
                                 Label(content.label ?? content.view.title, systemImage: content.view.systemImage)
                                     .tag(content.view)
