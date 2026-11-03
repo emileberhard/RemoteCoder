@@ -14,6 +14,8 @@ from pathlib import Path
 
 API = "https://api.appstoreconnect.apple.com/v1/"
 EDITABLE = {"PREPARE_FOR_SUBMISSION", "DEVELOPER_REJECTED", "REJECTED", "METADATA_REJECTED", "INVALID_BINARY"}
+IN_REVIEW = {"WAITING_FOR_REVIEW", "IN_REVIEW"}
+OPEN_SUBMISSIONS = "READY_FOR_REVIEW,WAITING_FOR_REVIEW,IN_REVIEW,UNRESOLVED_ISSUES,CANCELING"
 RELEASED = {"READY_FOR_DISTRIBUTION", "PROCESSING_FOR_DISTRIBUTION", "REPLACED_WITH_NEW_VERSION"}
 DEADLINE = time.monotonic() + 40 * 60
 
@@ -96,7 +98,12 @@ def draft_version(app, platform, version):
     state, name = draft["attributes"]["appVersionState"], draft["attributes"]["versionString"]
     if parse(name) > parse(version):
         sys.exit(f"App Store version {name} is newer than {version}.")
-    if state not in EDITABLE:
+    if state in IN_REVIEW and name == version:
+        print(f"::notice::App Store version {version} is already {state}.", file=sys.stderr)
+        return None, released
+    if released and state in IN_REVIEW | {"READY_FOR_REVIEW"}:
+        withdraw(app, platform, draft["id"], name)
+    elif state not in EDITABLE:
         print(f"::notice::App Store version {name} is {state}; preparation of {version} is pending until it is released or removed from review.", file=sys.stderr)
         return None, released
     updated = api("PATCH", f"appStoreVersions/{draft['id']}", {"type": "appStoreVersions", "id": draft["id"],
@@ -170,6 +177,50 @@ def set_what_to_test(app, build, notes):
             "id": localization["id"], "attributes": {"whatsNew": notes}})
 
 
+def submission_for(app, platform, version_id):
+    submissions = [s for s in api("GET", "reviewSubmissions", limit=200, include="appStoreVersionForReview",
+                                  **{"filter[app]": app, "filter[platform]": platform, "filter[state]": OPEN_SUBMISSIONS})
+                   if (s["relationships"]["appStoreVersionForReview"].get("data") or {}).get("id") == version_id]
+    if len(submissions) > 1:
+        sys.exit(f"App Store Connect shows {len(submissions)} open review submissions for one App Store version; inspect App Review.")
+    return submissions[0] if submissions else None
+
+
+def version_items(submission, version_id):
+    return [item for item in api("GET", f"reviewSubmissions/{submission}/items", limit=200, include="appStoreVersion")
+            if (item["relationships"]["appStoreVersion"].get("data") or {}).get("id") == version_id]
+
+
+def withdraw(app, platform, version_id, name):
+    submission = submission_for(app, platform, version_id)
+    state = submission and submission["attributes"]["state"]
+    if state == "READY_FOR_REVIEW":
+        for item in version_items(submission["id"], version_id):
+            api("DELETE", f"reviewSubmissionItems/{item['id']}")
+    elif state in IN_REVIEW:
+        api("PATCH", f"reviewSubmissions/{submission['id']}", {"type": "reviewSubmissions", "id": submission["id"], "attributes": {"canceled": True}})
+    elif state != "CANCELING":
+        sys.exit(f"App Store version {name} is in review, but its review submission is {state or 'missing'}; inspect App Review.")
+    wait(f"Removing {name} from review", lambda: api("GET", f"appStoreVersions/{version_id}")["attributes"]["appVersionState"] in EDITABLE or None)
+    print(f"Removed App Store version {name} from review.", file=sys.stderr)
+
+
+def submit_for_review(app, platform, version_id, version):
+    submission = submission_for(app, platform, version_id)
+    if submission:
+        for item in version_items(submission["id"], version_id):
+            if item["attributes"]["state"] == "REJECTED":
+                api("PATCH", f"reviewSubmissionItems/{item['id']}", {"type": "reviewSubmissionItems", "id": item["id"], "attributes": {"resolved": True}})
+    else:
+        drafts = api("GET", "reviewSubmissions", limit=1, **{"filter[app]": app, "filter[platform]": platform, "filter[state]": "READY_FOR_REVIEW"})
+        submission = drafts[0] if drafts else api("POST", "reviewSubmissions", {"type": "reviewSubmissions",
+            "attributes": {"platform": platform}, "relationships": {"app": link("apps", app)}})
+        api("POST", "reviewSubmissionItems", {"type": "reviewSubmissionItems", "relationships": {
+            "reviewSubmission": link("reviewSubmissions", submission["id"]), "appStoreVersion": link("appStoreVersions", version_id)}})
+    api("PATCH", f"reviewSubmissions/{submission['id']}", {"type": "reviewSubmissions", "id": submission["id"], "attributes": {"submitted": True}})
+    print(f"Submitted App Store version {version} for App Review.", file=sys.stderr)
+
+
 def testflight(app, platform, version, number, notes):
     build = wait(f"The {version} build", lambda: processed_build(app, version, number, platform))
     subprocess.run([sys.executable, "scripts/release_tag.py", version, os.environ["GITHUB_SHA"]], check=True)
@@ -187,7 +238,10 @@ def app_store(app, platform, version, number, notes):
             api("PATCH", f"appStoreVersionLocalizations/{localization['id']}", {"type": "appStoreVersionLocalizations",
                 "id": localization['id'], "attributes": {"whatsNew": notes}})
     api("PATCH", f"appStoreVersions/{version_id}/relationships/build", {"type": "builds", "id": build})
-    print(f"App Store version {version} for {platform} is prepared with build {number} and manual release.", file=sys.stderr)
+    if released:
+        submit_for_review(app, platform, version_id, version)
+    else:
+        print(f"::notice::App Store version {version} for {platform} is ready for the app's first App Review submission, which stays manual.", file=sys.stderr)
 
 
 def main(command, *arguments):

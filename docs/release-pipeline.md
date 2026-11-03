@@ -66,8 +66,8 @@ patch tag. Published tags never move.
 RemoteCoder has never been submitted to the App Store. Its editable iOS and Mac
 1.0 drafts become the tag version with manual release. Noneditable versions are preserved. Existing screenshots and internal TestFlight distribution
 policy are preserved because this repository has no screenshot capture source.
-The pipeline prepares editable versions only; it never submits App Review or
-presses Release.
+Once the app has a release, the pipeline submits each version for App Review;
+it never presses Release.
 
 Rejected alternatives: putting cloud signing on the Mini uses its installed
 Distribution certificate and defeats cloud signing; putting hosted archives in
