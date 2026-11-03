@@ -283,6 +283,16 @@ impl ExternalProviders {
     ) -> std::result::Result<bool, RpcError> {
         match self.providers.first().filter(|first| first.id == source) {
             Some(fallback) => {
+                let selected = selected_models(fields).collect::<Vec<_>>();
+                if selected
+                    .iter()
+                    .any(|model| fallback.harness(model) == Some(Provider::Claude))
+                    || (selected.is_empty()
+                        && current_model
+                            .is_some_and(|model| fallback.harness(model) == Some(Provider::Claude)))
+                {
+                    return Ok(false);
+                }
                 let models = self.fallback_catalog(fallback).await?;
                 Ok(self.map_onto_fallback(fields, &models, current_model))
             }
@@ -389,7 +399,17 @@ impl ExternalProviders {
         self.providers
             .iter()
             .filter_map(|provider| catalogs.get(&provider.id).map(|models| (provider, models)))
-            .flat_map(|(provider, models)| models.iter().map(|model| picker_row(provider, model)))
+            .flat_map(|(provider, models)| {
+                models
+                    .iter()
+                    .filter(|model| {
+                        model["slug"].as_str().is_some_and(|id| {
+                            provider.harness(id) != Some(Provider::Claude)
+                                || model["rc_messages"] == true
+                        })
+                    })
+                    .map(|model| picker_row(provider, model))
+            })
             .collect()
     }
 
@@ -796,12 +816,6 @@ fn project(provider: &ExternalProvider, listing: &Value) -> Result<Vec<Value>> {
             continue;
         };
         match native_model(id, entry, priority).and_then(|mut model| {
-            ensure!(
-                configured.harness() != Provider::Claude
-                    || strings(&entry["capabilities"]["endpoints"])
-                        .any(|endpoint| endpoint == "/v1/messages"),
-                "it does not serve /v1/messages"
-            );
             model["rc_messages"] = json!(
                 strings(&entry["capabilities"]["endpoints"])
                     .any(|endpoint| endpoint == "/v1/messages")

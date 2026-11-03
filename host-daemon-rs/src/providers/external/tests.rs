@@ -40,12 +40,34 @@ async fn claude_admission_requires_messages_and_never_enters_codex_fallback() {
         id: MODEL.into(),
         harness: Provider::Claude,
     }];
-    assert!(project(&configured_provider, &listing()).is_err());
+    let without_messages = project(&configured_provider, &listing()).unwrap();
+    let directory = state.path().join(CATALOG_DIRECTORY);
+    private_state::ensure_private_directory(&directory).unwrap();
+    private_state::write_json(
+        &directory.join("relay.json"),
+        &json!({"models": without_messages}),
+    )
+    .unwrap();
+    let providers = ExternalProviders::new(vec![configured_provider.clone()], state.path())
+        .unwrap()
+        .unwrap();
+    assert!(providers.model_rows().is_empty());
+    assert!(
+        providers
+            .claude_model(MODEL, true, None, false)
+            .await
+            .is_err()
+    );
+    let mut resume = json!({"threadId":"existing", "model":MODEL});
+    assert!(
+        providers
+            .admit("thread/resume", &mut resume, Some("relay"), None)
+            .await
+            .is_ok()
+    );
     let mut supported = listing();
     supported["data"][0]["capabilities"]["endpoints"] = json!(["/v1/responses", "/v1/messages"]);
     let rows = project(&configured_provider, &supported).unwrap();
-    let directory = state.path().join(CATALOG_DIRECTORY);
-    private_state::ensure_private_directory(&directory).unwrap();
     private_state::write_json(&directory.join("relay.json"), &json!({"models": rows})).unwrap();
     let providers = ExternalProviders::new(vec![configured_provider], state.path())
         .unwrap()
