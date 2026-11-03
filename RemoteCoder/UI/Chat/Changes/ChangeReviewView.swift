@@ -248,7 +248,7 @@ private struct ChangesStartMenu: View {
     var body: some View {
         let points = model.startPoints
         if points.now != nil || !points.prompts.isEmpty {
-            Menu("Start From", systemImage: ChangesView.sinceSymbol) {
+            AppMenu(trigger: .submenu) {
                 if points.now != nil {
                     Button("Now", action: model.countFromNow)
                 }
@@ -260,6 +260,8 @@ private struct ChangesStartMenu: View {
                         Text(ChangesView.formattedTime(prompt.date))
                     }
                 }
+            } label: {
+                Label("Start From", systemImage: ChangesView.sinceSymbol)
             }
         }
     }

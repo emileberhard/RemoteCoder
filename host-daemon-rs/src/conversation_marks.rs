@@ -9,7 +9,7 @@ use tokio::sync::Semaphore;
 
 mod migration;
 
-const SCHEMA_VERSION: u32 = 4;
+pub(crate) const SCHEMA_VERSION: u32 = 4;
 pub(crate) const FILE_NAME: &str = "conversation-marks.v4.json";
 pub(crate) const PRIOR_FILE_NAMES: [&str; 3] = [
     "conversation-marks.v3.json",
@@ -50,7 +50,7 @@ pub(crate) struct Settlement {
     deny_unknown_fields
 )]
 pub(crate) enum ChangesView {
-    LastTurn,
+    LastTurn {},
     Git {
         source: crate::changes::Source,
     },
@@ -63,7 +63,7 @@ pub(crate) enum ChangesView {
 impl ChangesView {
     fn validate(&self) -> Result<()> {
         match self {
-            Self::LastTurn => Ok(()),
+            Self::LastTurn {} => Ok(()),
             Self::Git { source } => {
                 ensure!(
                     *source != crate::changes::Source::Branch,

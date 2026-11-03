@@ -189,6 +189,7 @@ struct UnifiedDiffTests {
             switch anchor.comparison {
             case .git(let source): "the \(source.rawValue) changes in \(anchor.root)"
             case .turn(let id, _): "turn \(id) in \(anchor.root)"
+            case .since(let start, _): "changes since turn \(start.turnID) in \(anchor.root)"
             }
         }
 

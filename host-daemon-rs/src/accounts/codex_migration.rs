@@ -829,7 +829,7 @@ fn merge_marks(
             .map(|id| (id.clone(), Some("source".to_owned())))
             .collect(),
     )?;
-    target["schemaVersion"] = 3.into();
+    target["schemaVersion"] = crate::conversation_marks::SCHEMA_VERSION.into();
     if !pending.is_empty() {
         target["pendingNativeUnarchive"] = serde_json::to_value(pending)?;
     }

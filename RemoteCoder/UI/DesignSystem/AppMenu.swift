@@ -3,7 +3,7 @@ import SwiftUI
 /// The native menu, with tactile trigger styling that cannot be accidentally
 /// replaced by a caller's plain style. Menu tracking and item feedback stay native.
 struct AppMenu<Label: View, Content: View>: View {
-    enum Trigger { case labeled, icon, toolbarItem }
+    enum Trigger { case labeled, icon, toolbarItem, submenu }
     private let trigger: Trigger
     private let menu: Menu<Label, Content>
 
@@ -20,7 +20,7 @@ struct AppMenu<Label: View, Content: View>: View {
 
     var body: some View {
         switch trigger {
-        case .toolbarItem:
+        case .toolbarItem, .submenu:
             menu
         case .labeled, .icon:
             menu

@@ -1218,7 +1218,7 @@ fn large_marks(prefix: &str, count: usize) -> Value {
             )
         })
         .collect();
-    json!({"schemaVersion":3,"revision":1,"readBaseline":100,"threads":threads})
+    json!({"schemaVersion":crate::conversation_marks::SCHEMA_VERSION,"revision":1,"readBaseline":100,"threads":threads})
 }
 
 #[test]
@@ -1228,8 +1228,8 @@ fn merged_marks_refuse_capacity_before_any_staged_gateway_write() {
     let incoming = large_marks("source", 15000);
     crate::conversation_marks::validate_migration_document(&host).unwrap();
     crate::conversation_marks::validate_migration_document(&incoming).unwrap();
-    let host_marks = fixture.state(false, "conversation-marks.v3.json", &host);
-    let source_marks = fixture.state(true, "conversation-marks.v3.json", &incoming);
+    let host_marks = fixture.state(false, crate::conversation_marks::FILE_NAME, &host);
+    let source_marks = fixture.state(true, crate::conversation_marks::FILE_NAME, &incoming);
     let metadata_path = fixture.state(
         false,
         "session-metadata-v2.json",
@@ -1268,7 +1268,7 @@ fn replayed_marks_validate_capacity_and_schema_before_any_staged_gateway_write()
         let root = Root::open(fixture.home.path()).unwrap();
         let destination = fixture.state(
             false,
-            "conversation-marks.v3.json",
+            crate::conversation_marks::FILE_NAME,
             &large_marks("original", 1),
         );
         let metadata = fixture.state(false, "session-metadata-v2.json", &json!({"original":true}));
