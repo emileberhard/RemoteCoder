@@ -158,8 +158,8 @@ reason; native has no shell-command dialog, files browser or starter cards.
   click and touch hold), `IconButton`, `HostPicker` and `ProviderMark`.
 - Check layout at 1440, 402 and 360 CSS px with no horizontal overflow.
 
-The macOS web deploy owner fences the launchd listener before checking every
-TCP connection. It refuses a switch while any connection is active, then keeps
-the listener fenced until it retires. A pipe-owned watchdog resumes a fenced
-listener if the deployment process exits. Retained releases own their Bun bytes
-and service definition; rollback uses the retained runtime.
+The macOS web deploy owner stages a verified candidate and preserves an immutable
+snapshot of the current release and its Bun. It does not switch the service.
+Activation and rollback require a bridge owner that fences admission to the
+exact service generation, preserves calls and turns, and recovers interrupted
+cutovers before pruning.
