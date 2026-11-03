@@ -387,7 +387,10 @@ fn adopting_a_lower_marks_baseline_preserves_implicit_claude_reads_once() {
         &json!({"schemaVersion":3,"revision":5,"readBaseline":100,"threads":{}}),
     );
     let source_before = std::fs::read(&source).unwrap();
+    let host_before = std::fs::read(&host).unwrap();
     run(fixture.home.path(), &fixture.target, &fixture.claude_home).unwrap();
+    assert_eq!(std::fs::read(&host).unwrap(), host_before);
+    let host = host.with_file_name(crate::conversation_marks::FILE_NAME);
     let persisted = std::fs::read(&host).unwrap();
     let marks: Value = serde_json::from_slice(&persisted).unwrap();
     assert_eq!(marks["readBaseline"], 100);
@@ -1154,7 +1157,7 @@ fn rollout_only_scopes_preserve_implicit_read_and_attention_thresholds_without_c
         let receipt = run(fixture.home.path(), &fixture.target, &fixture.claude_home).unwrap();
         let first = planned(
             receipt.profiles[ACCOUNT].writes.as_ref().unwrap(),
-            "conversation-marks.v3.json",
+            crate::conversation_marks::FILE_NAME,
         );
         assert!(first["threads"].get(FUTURE).is_none());
         let final_marks: Value = serde_json::from_slice(
@@ -1162,7 +1165,8 @@ fn rollout_only_scopes_preserve_implicit_read_and_attention_thresholds_without_c
                 fixture
                     .home
                     .path()
-                    .join(".remote-coder/conversation-marks.v3.json"),
+                    .join(".remote-coder")
+                    .join(crate::conversation_marks::FILE_NAME),
             )
             .unwrap(),
         )

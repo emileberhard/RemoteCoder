@@ -203,7 +203,7 @@ export async function prepareClones(lab, id = "393971f9-71aa-4a14-aa7e-e103f296d
         await writeFile(join(home, "config.toml"), "cli_auth_credentials_store = \"file\"\n[analytics]\nenabled = false\n", { mode: 0o600 });
     }
     const states = ["session-metadata-v2.json", "agent-calls.json", "live-activity-finished-turns.json", "conversation-marks.json",
-        "conversation-marks.v2.json", "conversation-marks.v3.json", "questions", "queues"];
+        "conversation-marks.v2.json", "conversation-marks.v3.json", "conversation-marks.v4.json", "questions", "queues"];
     await cloneEntries(join(originalProfile, "state"), join(profile, "state"), states);
     await cloneEntries(join(lab.realHome, ".remote-coder"), lab.path(".remote-coder"), [...states, "account-enrollments.json", "claude-profile-migration.json"]);
 }

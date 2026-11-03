@@ -9,8 +9,13 @@ use tokio::sync::Semaphore;
 
 mod migration;
 
-const SCHEMA_VERSION: u32 = 3;
-const FILE_NAME: &str = "conversation-marks.v3.json";
+const SCHEMA_VERSION: u32 = 4;
+pub(crate) const FILE_NAME: &str = "conversation-marks.v4.json";
+pub(crate) const PRIOR_FILE_NAMES: [&str; 3] = [
+    "conversation-marks.v3.json",
+    "conversation-marks.v2.json",
+    "conversation-marks.json",
+];
 const MAXIMUM_STORE_BYTES: u64 = 8 * 1024 * 1024;
 const MAXIMUM_THREAD_ID_BYTES: usize = 512;
 const MAXIMUM_PIN_NAME_BYTES: usize = 256;
@@ -37,6 +42,40 @@ pub(crate) struct Settlement {
     pub through: i64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub(crate) enum ChangesView {
+    LastTurn,
+    Git {
+        source: crate::changes::Source,
+    },
+    Since {
+        turn_id: String,
+        boundary: crate::changes::Boundary,
+    },
+}
+
+impl ChangesView {
+    fn validate(&self) -> Result<()> {
+        match self {
+            Self::LastTurn => Ok(()),
+            Self::Git { source } => {
+                ensure!(
+                    *source != crate::changes::Source::Branch,
+                    "branch is the default changes view; clear the view instead"
+                );
+                Ok(())
+            }
+            Self::Since { turn_id, .. } => crate::changes::validate_turn_id(turn_id),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct ThreadMarks {
@@ -53,6 +92,8 @@ pub(crate) struct ThreadMarks {
     pub settlement: Option<Settlement>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub done_through: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub changes_view: Option<ChangesView>,
 }
 
 impl ThreadMarks {
@@ -63,6 +104,7 @@ impl ThreadMarks {
             && self.purpose.is_none()
             && self.settlement.is_none()
             && self.done_through.is_none()
+            && self.changes_view.is_none()
     }
 
     fn mark_read_through(&mut self, through: i64) {
@@ -85,6 +127,10 @@ pub(crate) enum Change {
     SetPurpose { thread_id: String, purpose: Purpose },
     Settle { thread_id: String, through: i64 },
     Unsettle { thread_id: String, through: i64 },
+    SetChangesView {
+        thread_id: String,
+        view: Option<ChangesView>,
+    },
 }
 
 impl Change {
@@ -96,7 +142,8 @@ impl Change {
             | Self::Unpin { thread_id }
             | Self::SetPurpose { thread_id, .. }
             | Self::Settle { thread_id, .. }
-            | Self::Unsettle { thread_id, .. } => Some(thread_id),
+            | Self::Unsettle { thread_id, .. }
+            | Self::SetChangesView { thread_id, .. } => Some(thread_id),
             Self::MarkAllRead { .. } | Self::MarkRetiredScopeRead { .. } => None,
         }
     }
@@ -113,6 +160,12 @@ impl Change {
                 id.as_str() == scope_id,
                 "scopeId must be default or a canonical retired UUID"
             );
+        }
+        if let Self::SetChangesView {
+            view: Some(view), ..
+        } = self
+        {
+            view.validate()?;
         }
         if let Self::Pin { name, .. } = self {
             ensure!(
@@ -181,6 +234,9 @@ impl Document {
                 marks.revision > 0 && marks.revision <= self.revision && !marks.is_empty(),
                 "invalid conversation marks entry"
             );
+            if let Some(view) = &marks.changes_view {
+                view.validate()?;
+            }
         }
         for id in &self.pending_native_unarchive {
             validate_thread_id(id)?;
@@ -306,6 +362,9 @@ impl<'a> Transition<'a> {
                     through,
                 });
             }),
+            Change::SetChangesView { thread_id, view } => {
+                self.update(&thread_id, |marks| marks.changes_view = view)
+            }
         }
         Ok(())
     }
@@ -634,6 +693,73 @@ mod tests {
                 through: 9
             }
         );
+        assert_eq!(
+            change(serde_json::json!({"op": "setChangesView", "threadId": "a",
+                "view": {"kind": "since", "turnId": "t", "boundary": "end"}})),
+            Change::SetChangesView {
+                thread_id: "a".into(),
+                view: Some(ChangesView::Since {
+                    turn_id: "t".into(),
+                    boundary: crate::changes::Boundary::End
+                })
+            }
+        );
+        assert_eq!(
+            change(serde_json::json!({"op": "setChangesView", "threadId": "a"})),
+            Change::SetChangesView {
+                thread_id: "a".into(),
+                view: None
+            }
+        );
+        assert!(
+            serde_json::from_value::<Change>(serde_json::json!({"op": "setChangesView",
+                "threadId": "a", "view": {"kind": "lastTurn", "turnId": "t"}}))
+            .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_changes_view_syncs_per_thread_and_clearing_it_returns_to_branch() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = store(&directory);
+        store.read(100).await.unwrap();
+        let since = ChangesView::Since {
+            turn_id: "turn-7".into(),
+            boundary: crate::changes::Boundary::End,
+        };
+        let delta = store
+            .update(
+                vec![Change::SetChangesView {
+                    thread_id: "a".into(),
+                    view: Some(since.clone()),
+                }],
+                200,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(&delta.threads["a"]).unwrap(),
+            serde_json::json!({"revision": delta.revision,
+                "changesView": {"kind": "since", "turnId": "turn-7", "boundary": "end"}})
+        );
+        assert_eq!(
+            store.read(300).await.unwrap().threads["a"].changes_view,
+            Some(since)
+        );
+        let cleared = store
+            .update(
+                vec![Change::SetChangesView {
+                    thread_id: "a".into(),
+                    view: None,
+                }],
+                400,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(cleared.threads["a"].is_empty());
+        assert!(!store.read(500).await.unwrap().threads.contains_key("a"));
     }
 
     #[tokio::test]
@@ -878,7 +1004,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&settled).unwrap(),
             serde_json::json!({
-                "schemaVersion": 3,
+                "schemaVersion": SCHEMA_VERSION,
                 "revision": settled.revision,
                 "readBaseline": 100,
                 "threads": {"a": {
@@ -977,7 +1103,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(delta.schema_version, 3);
+        assert_eq!(delta.schema_version, SCHEMA_VERSION);
         assert_eq!(delta.threads["a"].done_through, Some(300));
         assert!(
             store
@@ -1065,6 +1191,19 @@ mod tests {
             }],
             vec![Change::MarkUnread {
                 thread_id: " a".into(),
+            }],
+            vec![Change::SetChangesView {
+                thread_id: "a".into(),
+                view: Some(ChangesView::Git {
+                    source: crate::changes::Source::Branch,
+                }),
+            }],
+            vec![Change::SetChangesView {
+                thread_id: "a".into(),
+                view: Some(ChangesView::Since {
+                    turn_id: String::new(),
+                    boundary: crate::changes::Boundary::End,
+                }),
             }],
         ] {
             assert!(store.update(changes, 10).await.is_err());

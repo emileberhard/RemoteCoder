@@ -55,20 +55,23 @@ struct RecordedThread {
 }
 
 pub(super) fn import(location: &Location) -> Result<Option<Document>> {
-    if let Some(mut document) = super::read_json::<Document>(
-        &location.directory.join("conversation-marks.v2.json"),
-        "version 2 conversation marks",
-    )? {
+    for (version, name) in [(3, "conversation-marks.v3.json"), (2, "conversation-marks.v2.json")] {
+        let Some(mut document) = super::read_json::<Document>(
+            &location.directory.join(name),
+            &format!("version {version} conversation marks"),
+        )?
+        else {
+            continue;
+        };
         ensure!(
-            document.schema_version == 2,
+            document.schema_version == version,
             "unsupported conversation marks version"
         );
         ensure!(
-            document
-                .threads
-                .values()
-                .all(|marks| marks.done_through.is_none()),
-            "invalid version 2 conversation marks"
+            document.threads.values().all(|marks| {
+                marks.changes_view.is_none() && (version == 3 || marks.done_through.is_none())
+            }),
+            "invalid version {version} conversation marks"
         );
         document.validate()?;
         document.schema_version = SCHEMA_VERSION;
@@ -103,7 +106,7 @@ pub(super) fn import(location: &Location) -> Result<Option<Document>> {
         settled,
         dropped = archived - settled,
         pending_native_unarchive = document.pending_native_unarchive.len(),
-        "conversation marks migrated to schema version 3"
+        "conversation marks migrated to schema version {SCHEMA_VERSION}"
     );
     Ok(Some(document))
 }
@@ -146,6 +149,7 @@ fn migrate(legacy: LegacyDocument, handoff_owned: &HashSet<String>) -> Document 
                     through,
                 }),
                 done_through: None,
+                changes_view: None,
             };
             (!migrated.is_empty()).then_some((id, migrated))
         })
@@ -166,6 +170,51 @@ mod tests {
     use std::fs;
 
     #[tokio::test]
+    async fn version_three_import_keeps_done_suggestions_and_leaves_the_rollback_file_untouched() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("conversation-marks.v3.json");
+        let old = serde_json::json!({"schemaVersion":3,"revision":4,"readBaseline":10,"threads":{
+            "a":{"revision":4,"pinName":"Keep","doneThrough":90}
+        }})
+        .to_string();
+        fs::write(&path, &old).unwrap();
+        fs::write(
+            directory.path().join("conversation-marks.v2.json"),
+            b"older rollback state",
+        )
+        .unwrap();
+        let store = ConversationMarksStore::new(Some(Location {
+            directory: directory.path().into(),
+            handoff_records: directory.path().join("handoffs"),
+        }));
+
+        let imported = store.read(100).await.unwrap();
+        assert_eq!(
+            (imported.schema_version, imported.revision),
+            (SCHEMA_VERSION, 4)
+        );
+        assert_eq!(imported.threads["a"].done_through, Some(90));
+        assert_eq!(imported.threads["a"].pin_name.as_deref(), Some("Keep"));
+        assert_eq!(fs::read_to_string(&path).unwrap(), old);
+        assert!(directory.path().join(FILE_NAME).exists());
+
+        let invalid = tempfile::tempdir().unwrap();
+        fs::write(
+            invalid.path().join("conversation-marks.v3.json"),
+            serde_json::json!({"schemaVersion":3,"revision":1,"readBaseline":0,"threads":{
+                "a":{"revision":1,"changesView":{"kind":"lastTurn"}}
+            }})
+            .to_string(),
+        )
+        .unwrap();
+        let store = ConversationMarksStore::new(Some(Location {
+            directory: invalid.path().into(),
+            handoff_records: invalid.path().join("handoffs"),
+        }));
+        assert!(store.read(100).await.is_err());
+    }
+
+    #[tokio::test]
     async fn version_two_import_preserves_all_marks_and_pending_work_without_writing_older_files() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("conversation-marks.v2.json");
@@ -180,7 +229,7 @@ mod tests {
             handoff_records: directory.path().join("handoffs"),
         }));
         let imported = store.read(100).await.unwrap();
-        assert_eq!(imported.schema_version, 3);
+        assert_eq!(imported.schema_version, SCHEMA_VERSION);
         assert_eq!(imported.revision, 7);
         assert_eq!(imported.read_baseline, 10);
         assert_eq!(imported.threads["a"].pin_name.as_deref(), Some("Keep"));
@@ -264,7 +313,7 @@ mod tests {
         let marks = store.read(1_000).await.unwrap();
         assert_eq!(
             (marks.schema_version, marks.revision, marks.read_baseline),
-            (3, 9, 10)
+            (SCHEMA_VERSION, 9, 10)
         );
         assert_eq!(marks.threads["codex-archived"].settlement, settled(50));
         assert_eq!(marks.threads["codex-archived"].seen_through, Some(40));
@@ -311,7 +360,7 @@ mod tests {
         );
         let stored: serde_json::Value =
             serde_json::from_slice(&fs::read(directory.path().join(FILE_NAME)).unwrap()).unwrap();
-        assert_eq!(stored["schemaVersion"], 3);
+        assert_eq!(stored["schemaVersion"], SCHEMA_VERSION);
         assert!(stored.get("pendingNativeUnarchive").is_none());
     }
 }

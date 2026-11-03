@@ -53,6 +53,36 @@ pub(crate) enum Source {
     Branch,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum Boundary {
+    Start,
+    End,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct Anchor {
+    pub(crate) turn_id: String,
+    pub(crate) boundary: Boundary,
+}
+
+const MAXIMUM_TURN_ID_BYTES: usize = 512;
+
+impl Anchor {
+    pub(crate) fn validate(&self) -> Result<()> {
+        validate_turn_id(&self.turn_id)
+    }
+}
+
+pub(crate) fn validate_turn_id(turn_id: &str) -> Result<()> {
+    anyhow::ensure!(
+        !turn_id.is_empty() && turn_id.trim() == turn_id && turn_id.len() <= MAXIMUM_TURN_ID_BYTES,
+        "turnId must be nonempty, trimmed and at most {MAXIMUM_TURN_ID_BYTES} bytes"
+    );
+    Ok(())
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct ReadRequest {
@@ -160,10 +190,10 @@ enum Comparison {
     Summary,
 }
 
-pub(crate) async fn summary(directory: &Path) -> Result<ChangeRead> {
+pub(crate) async fn summary(directory: &Path, source: Option<Source>) -> Result<ChangeRead> {
     read(
         directory,
-        Comparison::Summary,
+        source.map_or(Comparison::Summary, Comparison::Selected),
         Budgets {
             file_patch_bytes: 0,
             hunk_bytes: 0,
@@ -1185,8 +1215,14 @@ mod tests {
         let branch = snapshot(repository.read(Source::Branch).await);
         assert_eq!(branch.base.as_deref(), Some("origin/main"));
         assert_eq!(branch.files.len(), 2);
-        let summary = snapshot(summary(&repository.root).await.unwrap());
+        let summary = snapshot(summary(&repository.root, None).await.unwrap());
         assert_eq!(summary.source, Source::Uncommitted);
+        let staged = snapshot(
+            super::summary(&repository.root, Some(Source::Staged))
+                .await
+                .unwrap(),
+        );
+        assert_eq!((staged.source, staged.files.len()), (Source::Staged, 0));
         assert_eq!(
             headers(&summary),
             ["diff --git a/working.txt b/working.txt"]

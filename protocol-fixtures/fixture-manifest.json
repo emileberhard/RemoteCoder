@@ -41,6 +41,11 @@
       "consumers": ["host-daemon-rs/src/gateway/conversation_changes.rs", "Core/Tests/RemoteCoderCoreTests/Changes/ConversationChangesTests.swift"]
     },
     {
+      "path": "changes/range-ready.json",
+      "contract": "changes/turn with since returns one net patch per file for every edit after a turn boundary, with the boundary turn, its time when known, the number of counted turns, and command and omitted-agent counts.",
+      "consumers": ["host-daemon-rs/src/gateway/conversation_changes.rs", "Core/Tests/RemoteCoderCoreTests/Changes/ConversationChangesTests.swift"]
+    },
+    {
       "path": "checkpoints/inline-literal-text-v2.json",
       "contract": "Typed v1/v2 markers remain literal text around an ordered paste; current checkpoints retain chip identity and old decoders receive readable expanded text.",
       "consumers": ["Core/Tests/RemoteCoderCoreTests/Conversations/AttachmentCheckpointCompatibilityTests.swift"]
