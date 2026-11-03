@@ -40,22 +40,22 @@
     "status": "operator-acceptance-not-published",
     "liveAcceptanceStatus": "not-published"
   },
-  "protocolSourceCommit": "1f412796c9b46d46fd218d43fd47ea3455c46c55",
+  "protocolSourceCommit": "7133910f6709274b35f310b2b68d27d5a6cd6a76",
   "runtimeTargets": {
     "aarch64-apple-darwin": {
-      "sourceCommit": "1f412796c9b46d46fd218d43fd47ea3455c46c55",
-      "runtimePackageSHA256": "438db899935e297ec428f69d532e9d2c7984431b7406357d0f8dc9d34ffd89df",
+      "sourceCommit": "7133910f6709274b35f310b2b68d27d5a6cd6a76",
+      "runtimePackageSHA256": "6596c6c6e06322f0b8527c1e1661b4bc2bbcba29373a6ee10d52dd846af09820",
       "runtimeHashes": {
-        "bin/codex": "417584132fa4a87815b99291987403d3577f1783c659f49e5d1a6ba582da5bb2",
-        "bin/codex-code-mode-host": "ad607c9873f686fc3bf0ee4f8f50d81ec83b97ad2699b1db243fdf0f0d07119a"
+        "bin/codex": "882403b22e3daed21668308c2dbb0e3944dc0d10a07333e7c2ceb7c3466d6e70",
+        "bin/codex-code-mode-host": "0a62a4680d81c1f424953289723a802cab4759c41b8b428def52bf01281962f5"
       }
     },
     "x86_64-unknown-linux-musl": {
-      "sourceCommit": "f8d9f770971005e9a809460da4cf557fcbbcce03",
-      "runtimePackageSHA256": "3726c986dcf1d3a46e4863a93e5b8d051f87879b9e49db6a406e79b7f9feb6ca",
+      "sourceCommit": "09c13024bda50b1204d9faae5cd91e2081a540f8",
+      "runtimePackageSHA256": "c63c85995cceb287a7a7c51e8a02c48cbae1427a0ec192726bb07b0fa6b9638e",
       "runtimeHashes": {
-        "bin/codex": "60b7980748ae6ea423900fa50f4b4a9babc94d95d2fbe1b65e20fd4807263a03",
-        "bin/codex-code-mode-host": "3fb4c764b8e861171efef36b61d96f9ea2e8e34135cb955f42c02cd92695968c"
+        "bin/codex": "177548a38de93de491b9f93b50d5e60dc4b19713ff0b63f8c1568114993e80ca",
+        "bin/codex-code-mode-host": "21ff78a46f030490a644771bc9e6af40eed99f16a0ba7c86dc2d6c74f9486f32"
       }
     }
   }
