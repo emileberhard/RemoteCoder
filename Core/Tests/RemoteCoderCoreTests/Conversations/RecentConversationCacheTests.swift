@@ -48,6 +48,23 @@ struct RecentConversationCacheTests {
         #expect(cache.presentation(threadID: "empty") == nil)
     }
 
+    @Test func aChangesReadLeavesWithItsConversationOrWhenCleared() {
+        let read = ChangeSummaryRead(directory: "/repo", content: ChangesPillContent(view: .standard, count: .unknown), summary: nil)
+        var cache = RecentConversationCache(capacity: 2)
+        cache.record(read, threadID: "a")
+        cache.record(read, threadID: "b")
+        #expect(cache.changes(threadID: "a") == read && cache.changes(threadID: "b") == read)
+        cache.record(nil, threadID: "b")
+        #expect(cache.changes(threadID: "b") == nil)
+        cache.record(snapshot("c"), session: nil)
+        cache.record(snapshot("d"), session: nil)
+        #expect(cache.changes(threadID: "a") == nil)
+        cache.record(read, threadID: "d")
+        #expect(cache.changes(threadID: "d") == read)
+        cache.removeAll(keeping: ["c"])
+        #expect(cache.changes(threadID: "d") == nil)
+    }
+
     @Test func memoryPressureKeepsOnlyTheVisibleConversation() {
         var cache = RecentConversationCache(capacity: 4)
         cache.record(snapshot("visible"), session: nil)
