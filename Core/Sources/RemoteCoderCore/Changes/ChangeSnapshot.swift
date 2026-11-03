@@ -59,6 +59,7 @@ struct ChangeSnapshot: Decodable, Sendable {
 enum TurnChangesRead: Decodable, Sendable {
     case ready(TurnChanges)
     case noRecentEdits(complete: Bool)
+    case anchorMissing(complete: Bool)
 
     private enum CodingKeys: String, CodingKey {
         case status, complete
@@ -69,6 +70,7 @@ enum TurnChangesRead: Decodable, Sendable {
         switch try container.decode(String.self, forKey: .status) {
         case "ready": self = .ready(try TurnChanges(from: decoder))
         case "noRecentEdits": self = .noRecentEdits(complete: try container.decode(Bool.self, forKey: .complete))
+        case "anchorMissing": self = .anchorMissing(complete: try container.decode(Bool.self, forKey: .complete))
         case let status:
             throw DecodingError.dataCorruptedError(forKey: .status, in: container,
                                                    debugDescription: "Unknown turn changes status \(status)")
@@ -77,7 +79,7 @@ enum TurnChangesRead: Decodable, Sendable {
 }
 
 struct TurnChanges: Decodable, Sendable {
-    struct Turn: Decodable, Sendable {
+    struct Turn: Decodable, Hashable, Sendable {
         let id: String
         let startedAtMs: Int64
         let running: Bool
@@ -88,18 +90,75 @@ struct TurnChanges: Decodable, Sendable {
         }
     }
 
+    struct Since: Hashable, Sendable {
+        let anchor: ChangesAnchor
+        let atMs: Int64?
+        let turns: Int
+
+        var at: Date? {
+            atMs.map { Date(timeIntervalSince1970: TimeInterval($0) / 1_000) }
+        }
+    }
+
+    enum Window: Hashable, Sendable {
+        case turn(Turn)
+        case since(Since)
+    }
+
     struct File: Sendable {
         let root: String
         let change: ChangeSnapshot.File
     }
 
-    let turn: Turn
+    let window: Window
     let files: [File]
     let unlistedFiles: Int
     let commands: Int
     let omittedAgents: Int
     let complete: Bool
     let capturedAtMs: Int64
+
+    private enum CodingKeys: String, CodingKey {
+        case turn, since, turns, files, unlistedFiles, commands, omittedAgents, complete, capturedAtMs
+    }
+
+    private struct Start: Decodable {
+        let turnId: String
+        let boundary: ChangesAnchor.Boundary
+        let atMs: Int64?
+    }
+
+    init(window: Window, files: [File], unlistedFiles: Int, commands: Int, omittedAgents: Int, complete: Bool,
+         capturedAtMs: Int64) {
+        self.window = window
+        self.files = files
+        self.unlistedFiles = unlistedFiles
+        self.commands = commands
+        self.omittedAgents = omittedAgents
+        self.complete = complete
+        self.capturedAtMs = capturedAtMs
+    }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if let start = try container.decodeIfPresent(Start.self, forKey: .since) {
+            window = .since(Since(anchor: ChangesAnchor(turnID: start.turnId, boundary: start.boundary), atMs: start.atMs,
+                                  turns: try container.decode(Int.self, forKey: .turns)))
+        } else {
+            window = .turn(try container.decode(Turn.self, forKey: .turn))
+        }
+        files = try container.decode([File].self, forKey: .files)
+        unlistedFiles = try container.decode(Int.self, forKey: .unlistedFiles)
+        commands = try container.decode(Int.self, forKey: .commands)
+        omittedAgents = try container.decode(Int.self, forKey: .omittedAgents)
+        complete = try container.decode(Bool.self, forKey: .complete)
+        capturedAtMs = try container.decode(Int64.self, forKey: .capturedAtMs)
+    }
+
+    var totals: ChangeTotals {
+        ChangeTotals(counted: files.lazy.map { UnifiedDiff.header(of: $0.change).countedLines },
+                     unlistedFiles: unlistedFiles, isComplete: complete)
+    }
 }
 
 extension TurnChanges.File: Decodable {

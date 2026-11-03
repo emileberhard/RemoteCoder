@@ -42,16 +42,18 @@ final class TranscriptNativeActions {
     private var onLoadHistory: ((HistoryEdge) -> Void)?
     private var onToggleTimeline: ((String, String) -> Void)?
     private var onFork: ((ChatMessage) -> Void)?
+    private var onCountChanges: ((ChatMessage) -> Void)?
     private var queued: MessageDeliveryActions?
     private var onRefreshCompaction: (() -> Void)?
 
     func bind(openAttachment: @escaping (MessageAttachment) -> Void, loadHistory: @escaping (HistoryEdge) -> Void,
               toggleTimeline: @escaping (String, String) -> Void, onFork: @escaping (ChatMessage) -> Void,
-              deliveryActions: MessageDeliveryActions, refreshCompaction: (() -> Void)?) {
+              countChanges: ((ChatMessage) -> Void)?, deliveryActions: MessageDeliveryActions, refreshCompaction: (() -> Void)?) {
         onOpenAttachment = openAttachment
         onLoadHistory = loadHistory
         onToggleTimeline = toggleTimeline
         self.onFork = onFork
+        onCountChanges = countChanges
         queued = deliveryActions
         onRefreshCompaction = refreshCompaction
     }
@@ -61,6 +63,7 @@ final class TranscriptNativeActions {
         onLoadHistory = nil
         onToggleTimeline = nil
         onFork = nil
+        onCountChanges = nil
         queued = nil
         onRefreshCompaction = nil
     }
@@ -69,6 +72,7 @@ final class TranscriptNativeActions {
     func loadHistory(_ edge: HistoryEdge) { onLoadHistory?(edge) }
     func toggleTimeline(_ id: String, rowID: String) { onToggleTimeline?(id, rowID) }
     func fork(_ message: ChatMessage) { onFork?(message) }
+    func countChanges(_ message: ChatMessage) { onCountChanges?(message) }
     func refreshCompaction() { onRefreshCompaction?() }
 
     var deliveryActions: MessageDeliveryActions {

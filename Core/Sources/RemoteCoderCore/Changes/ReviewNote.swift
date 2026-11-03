@@ -3,6 +3,7 @@ import Foundation
 enum ReviewComparison: Hashable, Sendable {
     case git(ChangeSource)
     case turn(id: String, startedAt: Date)
+    case since(ChangesAnchor, at: Date?)
 }
 
 struct ReviewNote: Equatable, Sendable {

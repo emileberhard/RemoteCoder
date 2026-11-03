@@ -9,8 +9,8 @@ struct ConversationStatusPills: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            if let totals = changes?.totals {
-                ChangesPill(totals: totals, action: onReviewChanges)
+            if let changes, let content = changes.content {
+                ChangesPill(changes: changes, content: content, action: onReviewChanges)
                     .transition(pillTransition)
             }
             if let agents {
@@ -18,7 +18,7 @@ struct ConversationStatusPills: View {
                     .transition(pillTransition)
             }
         }
-        .animation(.smooth, value: changes?.totals)
+        .animation(.smooth, value: changes?.content)
         .animation(.smooth, value: agents != nil)
     }
 
@@ -33,36 +33,89 @@ struct StatusPill<Label: View>: View {
 
     var body: some View {
         Button(action: action) {
-            label
-                .scaledFont(.footnote.weight(.semibold))
-                .foregroundStyle(.primary)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 7)
-                .appGlass(.standard, in: .capsule)
-                .padding(.vertical, 8)
-                .contentShape(.rect)
+            StatusPillFace { label }
         }
         .buttonStyle(ResponsiveButtonStyle(feedback: .buttonPress, pressedScale: 0.97))
     }
 }
 
+private struct StatusPillFace<Label: View>: View {
+    @ViewBuilder let label: Label
+
+    var body: some View {
+        label
+            .scaledFont(.footnote.weight(.semibold))
+            .foregroundStyle(.primary)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+            .appGlass(.standard, in: .capsule)
+            .padding(.vertical, 8)
+            .contentShape(.rect)
+    }
+}
+
 struct ChangesPill: View {
-    let totals: ChangeTotals
+    let changes: ChangeSummaryModel
+    let content: ChangesPillContent
     let action: () -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        StatusPill(action: action) {
-            HStack(spacing: 6) {
-                FileCount(files: totals.files)
-                if let lines = totals.lines {
-                    DiffCounts(additions: lines.additions, deletions: lines.deletions)
+        Group {
+            if changes.offersViews {
+                AppMenu {
+                    Button("Start From Now", systemImage: ChangesView.sinceSymbol, action: changes.countFromNow)
+                    Section {
+                        Picker("Compare", selection: Binding(get: { content.view }, set: { changes.select($0) })) {
+                            if content.view != .standard && content.view != .lastTurn {
+                                Label(content.label ?? content.view.title, systemImage: content.view.systemImage)
+                                    .tag(content.view)
+                            }
+                            Label(ChangesView.standard.title, systemImage: ChangesView.standard.systemImage)
+                                .tag(ChangesView.standard)
+                            Label(ChangesView.lastTurn.title, systemImage: ChangesView.lastTurn.systemImage)
+                                .tag(ChangesView.lastTurn)
+                        }
+                        .pickerStyle(.inline)
+                        .labelsHidden()
+                    }
+                } label: {
+                    StatusPillFace { face }
+                } primaryAction: {
+                    action()
                 }
+                .menuIndicator(.hidden)
+            } else {
+                StatusPill(action: action) { face }
             }
-            .monospacedDigit()
-            .contentTransition(reduceMotion ? .identity : .numericText())
         }
         .accessibilityHint("Shows changes")
         .accessibilityIdentifier("review-changes")
+    }
+
+    private var face: some View {
+        ViewThatFits(in: .horizontal) {
+            counts(compact: false)
+            counts(compact: true)
+        }
+        .monospacedDigit()
+        .contentTransition(reduceMotion ? .identity : .numericText())
+    }
+
+    private func counts(compact: Bool) -> some View {
+        HStack(spacing: 6) {
+            if let label = content.label {
+                Text(label).foregroundStyle(.secondary)
+            }
+            if let totals = content.totals {
+                FileCount(files: totals.files)
+                if let lines = totals.lines {
+                    DiffCounts(additions: lines.additions, deletions: lines.deletions, compact: compact)
+                }
+            } else {
+                Text("Start Not Found")
+            }
+        }
+        .lineLimit(1)
     }
 }

@@ -4,6 +4,7 @@ struct ChatBubbleMenu: View {
     let message: ChatMessage
     let rendered: RenderedMessage?
     let onFork: ((ChatMessage) -> Void)?
+    let onCountChanges: ((ChatMessage) -> Void)?
     let deliveryActions: MessageDeliveryActions?
     let onSelectText: ((String) -> Void)?
 
@@ -42,11 +43,14 @@ struct ChatBubbleMenu: View {
             Label("Share", systemImage: "square.and.arrow.up")
         }
 
-        if let onFork {
-            Button {
-                onFork(message)
-            } label: {
-                Label("Fork from here", systemImage: "arrow.triangle.branch")
+        if onFork != nil || onCountChanges != nil {
+            Section {
+                if let onFork {
+                    Button("Fork from Here", systemImage: "arrow.triangle.branch") { onFork(message) }
+                }
+                if let onCountChanges {
+                    Button("Count Changes from Here", systemImage: ChangesView.sinceSymbol) { onCountChanges(message) }
+                }
             }
         }
     }

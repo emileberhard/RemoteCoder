@@ -1816,7 +1816,7 @@ private struct CompactVisualTranscriptView: View {
         ChatTranscriptView(items: fixture.showsContent ? fixture.snapshot.items : [],
             readingPosition: fixture.readingPosition, rowPresentations: fixture.rowPresentations,
             readingScope: fixture.readingScope, retainedSurfaces: nil, renderedMessages: fixture.renderedMessages,
-            forkableMessageIDs: [], scrollToRow: fixture.request, onFork: { _ in },
+            forkableMessageIDs: [], scrollToRow: fixture.request, onFork: { _ in }, countChanges: nil,
             deliveryActions: MessageDeliveryActions(sendNow: nil, remove: { _ in }),
             onToggleTimeline: { _ in }, questionCard: { _ in EmptyView() }, onBackgroundTap: {},
             historyEdgeStatus: [:], canPrefetchOlderHistory: false, canLoadHistory: true, onLoadHistory: { _ in nil }, onShowLatest: {},

@@ -739,7 +739,8 @@ entrypoint linked above.
   - Unknown state offers Refresh, never an inferred pending prompt. Summary
     previews never pin an unpositioned question to the transcript tail.
 - Only the final assistant bubble of a completed turn, with its history tail
-  loaded, offers **Fork from here**. The server cutoff includes the whole turn,
+  loaded, offers **Fork from Here** and, beside it, **Count Changes from Here**
+  (hidden on the current start point). The server cutoff includes the whole turn,
   so user bubbles, intermediate replies, active turns and pages with newer items
   must not offer it.
 - `ConversationCheckpointStore` persists canonical checkpoints with revision and
@@ -973,12 +974,14 @@ entrypoint linked above.
   above the composer, on both platforms: the changes pill (`review-changes`)
   before the subagents pill (`open-agents`), each shown only while it has
   something to show, sharing `StatusPill`'s glass capsule. The changes pill
-  shows `ChangeSummaryModel`'s summed file and line totals across worked-in
-  checkouts, including committed branch work, and opens change review at its primary:
-  the sheet on iOS, the inspector on the Mac
-  ([Change review](../docs/change-review.md#changes-pill)). Request summary
+  shows `ChangeSummaryModel`'s file and line totals for the conversation's
+  changes view (Branch across worked-in checkouts by default) and opens change
+  review on that view: the sheet on iOS, the inspector on the Mac. Holding it
+  offers Start From Now and the view picker
+  ([Change review](../docs/change-review.md#changes-views)). Request summary
   reads through `ChatScreenModel.refreshChangeSummary()`, which admits them only
-  while the screen is on screen; the transcript reads only `hasChanges`.
+  while the screen is on screen; the transcript reads only `isVisible` and
+  `startTurnID`.
 - User and assistant bubbles render Markdown blocks. Block gaps, heading
   margins and list spacing read `interfaceScale` in the rendering views; zoom
   changes layout without reparsing Markdown or changing block versions.

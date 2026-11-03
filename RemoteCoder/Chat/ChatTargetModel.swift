@@ -705,6 +705,10 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
         presentingScreens.first { $0.activeSessionID == threadID } ?? screens.first { $0.activeSessionID == threadID }
     }
 
+    private func followChangesViews() {
+        for screen in presentingScreens { screen.followChangesView() }
+    }
+
     private func refreshChangeSummaries(showing threadID: String) {
         let address = ConversationAddress(hostID: hostID, threadID: threadID)
         for screen in presentingScreens where screen.activeSessionID == threadID
@@ -1441,7 +1445,10 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
             #endif
             refreshQuestionScopes()
             if codexModels.hasFetched == false { startCodexModelRefresh() }
-            ownedTasks.start(.marksSync) { [weak self] in await self?.conversationList.syncMarks() }
+            ownedTasks.start(.marksSync) { [weak self] in
+                await self?.conversationList.syncMarks()
+                self?.followChangesViews()
+            }
             await refreshMetadataForCurrentConnection()
         }
         else {
@@ -1626,6 +1633,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
             break
         case .marks(let delta):
             conversationList.receiveMarks(delta)
+            followChangesViews()
         case .favorites(let favorites):
             directories.receiveFavorites(favorites)
         case .preferences(let preferences):

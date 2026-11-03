@@ -93,6 +93,10 @@ struct ConversationTranscriptView: View {
                     await screen.forkConversation(from: message)
                 }
             },
+            countChanges: screen.changeSummary.flatMap { summary in
+                summary.offersViews ? ChangesStartAction(startTurnID: summary.startTurnID,
+                                                         select: { [screen] in screen.countChanges(from: $0) }) : nil
+            },
             deliveryActions: deliveryActions,
             onToggleTimeline: { jobID in
                 #if os(iOS)
@@ -114,7 +118,7 @@ struct ConversationTranscriptView: View {
     }
 
     private var statusPills: ConversationStatusPills? {
-        let changes = screen.changeSummary.flatMap { $0.hasChanges ? $0 : nil }
+        let changes = screen.changeSummary.flatMap { $0.isVisible ? $0 : nil }
         let agents = screen.conversationAgents.flatMap { ($0.summary?.total ?? 0) > 0 ? $0 : nil }
         guard changes != nil || agents != nil else { return nil }
         return ConversationStatusPills(changes: changes, agents: agents, onReviewChanges: onReviewChanges, onShowAgents: onShowAgents)

@@ -1,7 +1,8 @@
 # Change review
 
 Change review shows what changed in the checkouts a conversation worked in, or
-what its last turn with edits changed anywhere on the host, and turns line
+what the conversation's own turns changed anywhere on the host, either its last
+turn with edits or every turn since a chosen point, and turns line
 comments into one pasted block in the composer, so the user can review an
 agent's work and answer it without leaving the chat. On iPhone and
 iPad it is a sheet opened from the changes pill above the composer; on the Mac
@@ -41,7 +42,10 @@ A conversation's folder is often not the repository its agents changed: a
 folder of repositories such as `~/stretch`, or a main checkout while agents
 edit worktrees. `changes/summary` (`{threadId, directory}`, both required,
 absolute directory, unknown fields rejected) discovers candidates and counts
-them under one change-reader admission. Older apps retain `changes/checkouts`
+them under one change-reader admission. An optional `source` of `uncommitted`,
+`staged` or `unstaged` counts every checkout in that comparison instead;
+`branch` is rejected, because omitting `source` already selects the summary's
+own rule below. Older apps retain `changes/checkouts`
 with its discovery-only reply.
 
 - Discovery reads the conversation's newest ten history pages and, at the same
@@ -79,10 +83,33 @@ unavailability from a missing base or merge base also falls back to
 Uncommitted. Upstream tracking alone never identifies a base checkout: a new
 feature worktree can track `origin/main` too.
 
+## Changes views
+
+Each conversation has one changes view, which the pill counts and the review
+opens on: Branch (the default), another Git comparison, Last Turn, or Since a
+start point. The gateway stores it in the conversation's marks
+(`changesView`, schema 4), so it syncs across the user's devices; Branch is
+stored as absence. The view changes only when the user picks one, from the
+review's comparison menu, the pill's hold menu, or a reply's Count Changes
+from Here. A gateway with an older marks schema offers no views: the pill and
+review keep their Branch-first behavior and the conversation entries are hidden.
+
+- A start point is a turn boundary: the start of a turn (a prompt) or the end
+  of a turn (after its final reply). Start From Now and Count Changes from
+  Here use the end of the newest or chosen turn; the Start From submenu lists
+  the six most recent prompts that started a turn, by their first line and time.
+- Count Changes from Here appears in a reply's Fork group, only on the final
+  reply of a completed turn, and not on the current start point.
+- A non-Branch view names itself in the pill and keeps the pill visible at zero,
+  so a fresh start point shows as Since 14:05 with no changes. Branch keeps the
+  hide-at-zero rule. When the start turn is no longer in the conversation's
+  history, the pill shows Start Not Found and the review offers Branch.
+
 ## Changes pill
 
-The pill sums files across all worked-in checkouts, including committed branch
-work, until that work is merged into its base. Core prepares each checkout's
+The pill counts the conversation's view. For Branch it sums files across all
+worked-in checkouts, including committed branch work, until that work is
+merged into its base. Core prepares each checkout's
 `ChangeTotals?`, the sum and the primary checkout off the main actor. File
 counts add over known checkouts; line totals are shown only when every
 checkout and file has known counts. An unavailable or failed checkout remains
@@ -91,9 +118,12 @@ worked-in checkout with known changed files and carries its snapshot's source.
 A New Chat without a conversation has no pill.
 
 `ChangeSummaryModel` owns one summary for the screen's conversation and folder.
-Each refresh makes one `changes/summary` call and publishes totals, `hasChanges`
-and the prepared summary only when they change. The pill reads only totals;
-the transcript reads only `hasChanges`.
+It reads the stored view from the conversation list; Git views make one
+`changes/summary` call per refresh and Last Turn and Since make one
+`changes/turn` call. It publishes the pill's content, visibility, the current
+start turn and the prepared summary only when they change. The pill reads only
+its content; the transcript reads only visibility and the start turn. A marks
+change that alters the stored view restarts the read at once.
 
 - Refreshes happen on appear, non-replay file-change and command completions,
   turn completion, activation and reconnect, for the shown conversation and
@@ -104,9 +134,9 @@ the transcript reads only `hasChanges`.
   gateway's MethodNotFound clears the pill and logs once per model; later
   refreshes can discover an updated gateway.
 - The review shares the screen's summary and performs no separate discovery.
-  Each reopening starts on the primary's checkout and comparison. Without a
-  primary it opens Branch on the first worked-in checkout, else the working
-  folder. Selection stays fixed during refresh; refresh also requests a new
+  Each reopening starts on the stored view. For Branch it starts on the
+  primary's checkout and comparison; without a primary it opens Branch on the
+  first worked-in checkout, else the working folder. Selection stays fixed during refresh; refresh also requests a new
   summary. The checkout menu shows each worked-in checkout's file count,
   No changes or Couldn't read, plus in-folder candidates and incomplete coverage.
 - Opening the review reads full patches again, so its state can be newer than
@@ -114,7 +144,7 @@ the transcript reads only `hasChanges`.
 
 ## Last turn
 
-`changes/turn` (`{threadId}`) answers from the agents' own edit records, so it
+`changes/turn` (`{threadId, since?}`) answers from the agents' own edit records, so it
 works outside Git and across checkouts. It finds the newest of the last 20
 turns whose window contains a completed `fileChange`: the conversation's own
 items of that turn, or a same-host child agent's items between the turn's start
@@ -149,6 +179,24 @@ unchanged.
 - The read shares `PatchSplitter`'s budgets and the change reader's admission
   and timeout. Net diffs run four at a time and stream into the splitter in
   file order; `noRecentEdits` answers when no recent turn edited a file.
+
+## Since a start point
+
+`changes/turn` with `since: {turnId, boundary}` (`start` or `end`) counts
+every turn from the start point to now with the same records, net diffs and
+budgets as Last Turn, and answers `ready` with `since: {turnId, boundary,
+atMs?}` and the number of `turns` in place of `turn`.
+
+- The gateway pages the conversation's turn list newest first, 100 turns a
+  page and five pages at most, until it finds the start turn; if it does not,
+  it answers `anchorMissing` with `complete` false when the list was cut.
+- A `start` boundary includes the start turn; `end` begins after it. Child
+  agents' edits are placed by time from the start turn's start, or from one
+  second after its completion (else the next turn's start) for `end`, so a
+  reply's own edits never count after it. `atMs` is that time, absent while
+  an `end` start turn is still running; such a range is empty and complete.
+- The conversation's own turns share 40 item pages, read newest first;
+  running out of pages makes the answer incomplete rather than wrong.
 
 ## Ownership and boundaries
 
@@ -208,8 +256,9 @@ unchanged.
   written comments closes and is kept, so reviewing that conversation again
   restores them, until another review replaces it. Adding comments checks the
   destination again.
-- A comment is anchored to its comparison (a Git source, or the turn by id
-  and start time, which names it in the prompt),
+- A comment is anchored to its comparison (a Git source, the turn by id
+  and start time, or the start point and its time, which name it in the
+  prompt),
   its checkout or folder, path, side and line number. Comments whose line is
   not shown, after a refresh, in another comparison or in a file past the line
   limit, stay listed and editable in every state. The prompt groups comments by
@@ -231,9 +280,15 @@ stays a thin host boundary.
   shell commands, other agents and the user. Last Turn complements it with the
   agents' own records, which work outside Git and across checkouts but miss
   command edits, so it says how many commands ran instead of guessing.
-- The pill follows ChatGPT for iOS 1.2026.286's hide-at-zero and reset-on-open
-  behavior. Its Branch comparison deliberately departs from ChatGPT's Unstaged:
-  agents commit as they work, so Uncommitted and Unstaged erase useful counts.
+- The pill follows ChatGPT for iOS 1.2026.286's hide-at-zero behavior for its
+  default view. Its Branch comparison deliberately departs from ChatGPT's
+  Unstaged: agents commit as they work, so Uncommitted and Unstaged erase
+  useful counts. ChatGPT's reset-on-open was dropped: in a long conversation
+  the user wants the pill to keep counting the comparison they chose.
+- The view is one choice per conversation, stored with the other marks rather
+  than per device, so the phone and the Mac count the same thing. Start points
+  sit on turn boundaries because edit records and child agents can only be
+  placed by turn and time; a point inside a turn would guess.
 - Base checkouts use Uncommitted so another agent's unpushed commits on shared
   main do not become this conversation's work. Shared uncommitted edits and
   branch changes still cannot be attributed to one agent by Git. A checkout
