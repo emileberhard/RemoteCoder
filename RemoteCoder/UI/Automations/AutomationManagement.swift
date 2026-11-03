@@ -72,7 +72,7 @@ final class AutomationManagement {
         do {
             guard await refreshCapabilities() else { return }
             let result = try await gateway.listAutomations(AutomationRequest(
-                includeRemoved: selected == .all || selected == .removed,
+                includeArchived: selected == .all || selected == .archived,
                 state: selected == .all ? nil : selected.rawValue, search: search.isEmpty ? nil : search, limit: Self.pageSize, offset: offset))
             let list = try result.value()
             let preparedItems = await AutomationPresentation.prepare(list.items)
@@ -118,7 +118,7 @@ final class AutomationManagement {
         let envelope: AutomationEnvelope<JSONValue>
         switch mutation.operation {
         case .save: envelope = try await gateway.setAutomation(mutation.request)
-        case .remove: envelope = try await gateway.removeAutomation(mutation.request)
+        case .archive: envelope = try await gateway.archiveAutomation(mutation.request)
         case .restore: envelope = try await gateway.restoreAutomation(mutation.request)
         case .run: envelope = try await gateway.runAutomation(mutation.request)
         }

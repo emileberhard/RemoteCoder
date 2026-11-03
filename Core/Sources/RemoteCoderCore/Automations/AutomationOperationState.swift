@@ -1,7 +1,7 @@
 import Foundation
 
 struct AutomationMutation: Equatable, Sendable {
-    enum Operation: Equatable, Sendable { case save, remove, restore, run }
+    enum Operation: Equatable, Sendable { case save, archive, restore, run }
     let operation: Operation
     let request: AutomationRequest
 }

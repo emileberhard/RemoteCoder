@@ -42,9 +42,8 @@ struct AutomationEditorView: View {
                 actionSections
                 conditionSection
                 Section("Limits") {
-                    TextField("Maximum event age (for example 1h)", text: text(["max_age"], optional: true))
                     TextField("Expires at (ISO date with offset)", text: text(["expires_at"], optional: true))
-                    validationErrors(groups: ["max_age", "expires_at"])
+                    validationErrors(groups: ["expires_at"])
                     Text("A schedule resumes with the next due wake-up; missed intervals are not replayed without limit.")
                         .scaledFont(.footnote).foregroundStyle(.secondary)
                 }.disabled(locked)

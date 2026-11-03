@@ -107,8 +107,8 @@ async fn lost_mutation_acknowledgement_keeps_exact_request_id() {
 async fn absent_socket_reports_unavailable_without_claiming_a_mutation_was_sent() {
     let directory = tempfile::tempdir().unwrap();
     let request = prepare(
-        "automations/remove",
-        json!({"id":"digest","expectedRevision":4,"requestId":"remove-1"}),
+        "automations/archive",
+        json!({"id":"digest","expectedRevision":4,"requestId":"archive-1"}),
     )
     .unwrap();
     let error = call(&directory.path().join("absent.sock"), request)
@@ -193,7 +193,7 @@ fn management_routes_stay_host_owned_and_mutations_survive_connection_lifetime()
             json!({"id":"digest"}),
         ),
         (
-            "automations/remove",
+            "automations/archive",
             RequestLifetime::Command,
             true,
             json!({"id":"digest"}),
@@ -241,7 +241,10 @@ fn management_routes_stay_host_owned_and_mutations_survive_connection_lifetime()
 fn request_boundary_rejects_unsafe_writes_and_top_level_contract_drift() {
     for (method, params) in [
         ("automations/set", json!({"id":"x","requestId":"one"})),
-        ("automations/remove", json!({"id":"x","expectedRevision":2})),
+        (
+            "automations/archive",
+            json!({"id":"x","expectedRevision":2}),
+        ),
         (
             "automations/restore",
             json!({"id":"x","requestId":"one","expectedRevision":2,"targetRevision":0}),
@@ -252,7 +255,7 @@ fn request_boundary_rejects_unsafe_writes_and_top_level_contract_drift() {
         ("automations/show", json!({"id":"x","outputLimit":262145})),
         ("automations/status", json!({"data":{"x":1}})),
         (
-            "automations/remove",
+            "automations/archive",
             json!({"id":"x","expectedRevision":2,"requestId":"one","replaceDefinition":true}),
         ),
         (
@@ -361,7 +364,7 @@ async fn inventory_search_reaches_service_as_literal_text_before_pagination() {
         let (_, body) = read_request(&mut stream).await;
         assert_eq!(
             body,
-            json!({"op":"list","search":"%_☃","limit":50,"offset":200,"include_removed":true})
+            json!({"op":"list","search":"%_☃","limit":50,"offset":200,"include_archived":true})
         );
         let bytes = br#"{"ok":true,"data":{"items":[],"offset":200,"limit":50},"health":{"status":"healthy"}}"#;
         stream
@@ -374,7 +377,7 @@ async fn inventory_search_reaches_service_as_literal_text_before_pagination() {
     });
     let request = prepare(
         "automations/list",
-        json!({"search":"%_☃","limit":50,"offset":200,"includeRemoved":true}),
+        json!({"search":"%_☃","limit":50,"offset":200,"includeArchived":true}),
     )
     .unwrap();
     assert_eq!(call(&socket, request).await.unwrap()["data"]["offset"], 200);

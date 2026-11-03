@@ -35,10 +35,10 @@ pub(crate) struct AutomationParams {
     pub target_revision: Option<u64>,
     #[serde(
         default,
-        rename(deserialize = "includeRemoved"),
+        rename(deserialize = "includeArchived"),
         skip_serializing_if = "Option::is_none"
     )]
-    pub include_removed: Option<bool>,
+    pub include_archived: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub state: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

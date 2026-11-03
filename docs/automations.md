@@ -110,7 +110,7 @@ message content or schedules. Automation run history remains another entry
 point to the exact recorded conversation.
 
 Automations is reachable through the existing app navigation. Inventory shows
-active/paused/removed state, expiry or completion, trigger, next due time where applicable, and last
+active/paused/archived state, expiry or completion, trigger, next due time where applicable, and last
 result. A failed run does not mean the automation is paused. Event triggers do
 not receive an invented next due time.
 
@@ -208,7 +208,7 @@ The configs installer requires explicit ownership cutover for legacy unmarked
 state. Migration reconciles the last manifest-owned definitions once under the
 source lock, preserves database-only definitions and runtime state, and commits
 the authority marker with the final changes. Database-owned restarts and config
-sync do not reload templates or re-enable removed/paused definitions.
+sync do not reload templates or re-enable archived or paused definitions.
 
 Git versions service/job code and optional import templates. Applying a prompt
 file/template explicitly creates a definition revision; editing the file alone
@@ -219,7 +219,7 @@ Use the configs automation CLI for exports, imports, online SQLite backups, and
 service operations. Snapshot exports are not complete database recovery images.
 A complete export gathers bounded pages against one history generation and
 rejects concurrent definition changes. Import uses exported head revisions and
-skips removed definitions and service-managed sources. The cutover installer
+skips archived definitions and service-managed sources. The cutover installer
 takes a private online backup before stopping the old service. It restores the
 prior job only before ownership commits; after commitment it retains the new
 database-aware release and reloads normal launch arguments.

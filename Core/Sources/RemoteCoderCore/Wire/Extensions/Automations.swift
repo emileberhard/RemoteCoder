@@ -77,12 +77,6 @@ struct AutomationStatus: Decodable, Sendable {
         enum CodingKeys: String, CodingKey { case apiVersion = "api_version", historyVersion = "history_version" }
     }
     let capabilities: Capabilities?
-    let definitionAuthority: String?
-    let historyCoverage: String?
-    enum CodingKeys: String, CodingKey {
-        case capabilities
-        case definitionAuthority = "definition_authority", historyCoverage = "history_coverage"
-    }
     var supportsManagement: Bool { capabilities?.apiVersion == 1 && capabilities?.historyVersion == 1 }
 }
 
@@ -93,7 +87,7 @@ struct AutomationRequest: Encodable, Equatable, Sendable {
     var requestId: String?
     var expectedRevision: Int?
     var targetRevision: Int?
-    var includeRemoved: Bool?
+    var includeArchived: Bool?
     var state: String?
     var search: String?
     var limit: Int?
@@ -121,7 +115,7 @@ struct AutomationSummary: Decodable, Identifiable, Sendable {
     let revision: Int
     let name: String?
     let enabled: Bool
-    let removed: JSONValue?
+    let archived: JSONValue?
     let completed: Bool?
     let when: JSONValue?
     let kind: String?
@@ -131,14 +125,14 @@ struct AutomationSummary: Decodable, Identifiable, Sendable {
     let managed: Bool?
     let nextDueTimezone: String?
     enum CodingKeys: String, CodingKey {
-        case id, revision, name, enabled, removed, completed, when, kind, expired, managed
+        case id, revision, name, enabled, archived, completed, when, kind, expired, managed
         case nextDue = "next_due", lastRun = "last_run", nextDueTimezone = "next_due_timezone"
     }
     var nextDueLabel: String? = nil
-    var isRemoved: Bool { removed == .bool(true) || removed == .number(1) }
+    var isArchived: Bool { archived == .bool(true) || archived == .number(1) }
     var isSource: Bool { id.hasPrefix("source/") }
     var stateLabel: String {
-        if isRemoved { return "Removed" }
+        if isArchived { return "Archived" }
         if expired == true { return "Expired" }
         if completed == true { return "Completed" }
         return enabled ? "Active" : "Paused"
@@ -157,24 +151,23 @@ struct AutomationDetail: Decodable, Sendable {
     let id: String
     let revision: Int
     let definition: AutomationDefinition
-    let removed: JSONValue?
+    let archived: JSONValue?
     let runs: [AutomationRunSummary]?
-    let importedRuns: [JSONValue]?
     let revisionMetadata: AutomationRevision?
     let managed: Bool?
     let expired: Bool?
     let completed: JSONValue?
     enum CodingKeys: String, CodingKey {
-        case id, revision, definition, removed, runs, managed, expired, completed
-        case importedRuns = "imported_runs", revisionMetadata = "revision_metadata"
+        case id, revision, definition, archived, runs, managed, expired, completed
+        case revisionMetadata = "revision_metadata"
     }
-    var isRemoved: Bool { removed == .bool(true) || removed == .number(1) }
+    var isArchived: Bool { archived == .bool(true) || archived == .number(1) }
 }
 
 struct AutomationRevision: Decodable, Identifiable, Sendable {
     let revision: Int
     let schemaVersion: Int
-    let removed: Bool
+    let archived: Bool
     let changeKind: String
     let recordedAt: JSONValue
     let actor: JSONValue?
@@ -182,7 +175,7 @@ struct AutomationRevision: Decodable, Identifiable, Sendable {
     let restoredFromRevision: Int?
     var id: Int { revision }
     enum CodingKeys: String, CodingKey {
-        case revision, removed, actor, reason
+        case revision, archived, actor, reason
         case schemaVersion = "schema_version", changeKind = "change_kind", recordedAt = "recorded_at"
         case restoredFromRevision = "restored_from_revision"
     }
@@ -203,20 +196,18 @@ struct AutomationHistory: Decodable, Sendable {
 struct AutomationRunDetail: Decodable, Sendable {
     let id: String
     let state: String
-    let revision: Int?
+    let revision: Int
     let definition: AutomationDefinition?
     let receipt: JSONValue?
     let output: String?
     let outputCoverage: JSONValue?
     let error: String?
-    let imported: Bool?
-    let definitionHistory: String?
     let created: Double?
     let started: Double?
     let finished: Double?
     enum CodingKeys: String, CodingKey {
-        case id, state, revision, definition, receipt, output, error, imported, created, started, finished
-        case outputCoverage = "output_coverage", definitionHistory = "definition_history"
+        case id, state, revision, definition, receipt, output, error, created, started, finished
+        case outputCoverage = "output_coverage"
     }
     var isActive: Bool { ["queued", "running", "uncertain"].contains(state) }
 }

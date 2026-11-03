@@ -23,8 +23,8 @@ extension GatewayClient {
     func setAutomation(_ request: AutomationRequest) async throws -> AutomationEnvelope<JSONValue> {
         try await automationCall("set", request: request)
     }
-    func removeAutomation(_ request: AutomationRequest) async throws -> AutomationEnvelope<JSONValue> {
-        try await automationCall("remove", request: request)
+    func archiveAutomation(_ request: AutomationRequest) async throws -> AutomationEnvelope<JSONValue> {
+        try await automationCall("archive", request: request)
     }
     func restoreAutomation(_ request: AutomationRequest) async throws -> AutomationEnvelope<JSONValue> {
         try await automationCall("restore", request: request)
