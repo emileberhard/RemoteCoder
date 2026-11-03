@@ -17,7 +17,9 @@ app ═══════════ inner TLS, pinned gateway LAN SPKI, end to
 
 - **VPS.** An operator-provisioned VPS whose reviewed address and port mapping
   live in private topology configuration (see the tracked synthetic example). nftables admits only SSH and
-  443, SSH takes keys only, and unattended upgrades reboot at the operator-configured maintenance time when needed.
+  443, and SSH takes keys only. Unattended upgrades install updates, but automatic
+  reboot is disabled. Activating a new kernel requires a separately coordinated
+  reboot that preserves active work.
 - **HAProxy** terminates TLS 1.3 on 443 with a self-signed P-256 certificate
   whose SPKI the app pins, and passes only streams that begin with `CONNECT `.
 - **tinyproxy** requires Basic auth (it answers 407 and closes; URLSession
