@@ -58,13 +58,17 @@ async fn claude_admission_requires_messages_and_never_enters_codex_fallback() {
             .await
             .is_err()
     );
-    let mut resume = json!({"threadId":"existing", "model":MODEL});
+    let mut resume = json!({"threadId":"existing", "model":MODEL, "serviceTier":"fast", "serviceTierForTurn":"fast", "config":{"model_reasoning_effort":"xhigh"}});
     assert!(
         providers
             .admit("thread/resume", &mut resume, Some("relay"), None)
             .await
             .is_ok()
     );
+    assert_eq!(resume["model"], MODEL);
+    assert!(resume.get("serviceTier").is_none());
+    assert!(resume.get("serviceTierForTurn").is_none());
+    assert_eq!(resume["config"]["model_reasoning_effort"], "high");
     let mut supported = listing();
     supported["data"][0]["capabilities"]["endpoints"] = json!(["/v1/responses", "/v1/messages"]);
     let rows = project(&configured_provider, &supported).unwrap();

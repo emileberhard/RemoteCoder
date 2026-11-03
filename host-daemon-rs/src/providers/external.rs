@@ -283,17 +283,12 @@ impl ExternalProviders {
     ) -> std::result::Result<bool, RpcError> {
         match self.providers.first().filter(|first| first.id == source) {
             Some(fallback) => {
-                let selected = selected_models(fields).collect::<Vec<_>>();
-                if selected
-                    .iter()
-                    .any(|model| fallback.harness(model) == Some(Provider::Claude))
-                    || (selected.is_empty()
-                        && current_model
-                            .is_some_and(|model| fallback.harness(model) == Some(Provider::Claude)))
-                {
-                    return Ok(false);
-                }
-                let models = self.fallback_catalog(fallback).await?;
+                let models = self.catalog(fallback).await.ok_or_else(|| {
+                    RpcError::new(
+                        RpcCode::Unavailable,
+                        format!("{} model metadata is unavailable", fallback.name),
+                    )
+                })?;
                 Ok(self.map_onto_fallback(fields, &models, current_model))
             }
             None => Ok(false),
