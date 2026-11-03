@@ -126,6 +126,22 @@ else:
                     deploy.prune()
             self.assertTrue(pinned.exists())
 
+    def test_smoke_uses_owned_process_and_retained_runtime(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            release = root / "release"
+            (release / "dist").mkdir(parents=True)
+            bun = release / "bun"
+            bun.write_text("#!/bin/sh\nprintf '{\"revision\":\"fixture\"}\\n'\n")
+            bun.chmod(0o755)
+            definition = {"ProgramArguments": [str(bun), str(release / "service.js")]}
+            (release / "service.plist").write_bytes(plistlib.dumps(definition))
+            metadata = {"release": release.name, "bunSha256": deploy.digest(bun), "serviceSha256": deploy.digest(release / "service.plist")}
+            (release / "dist/deployment.json").write_text(json.dumps(metadata))
+            with tempfile.TemporaryFile() as lock:
+                result = deploy.smoke(release, "http://127.0.0.1", "local", lock, root)
+            self.assertEqual(result, {"revision": "fixture"})
+
     def test_staging_process_stops_after_controller_group_termination(self):
         controller = subprocess.Popen(
             [sys.executable, "-u", "-c", """

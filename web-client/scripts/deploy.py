@@ -134,10 +134,6 @@ def snapshot_legacy(release):
     return snapshot
 
 
-def smoke(release, address, mode):
-    return json.loads(run(runtime(release), release / "smoke.js", address, ORIGIN, mode, stdout=subprocess.PIPE, text=True, timeout=35).stdout)
-
-
 def staged_process(arguments, lock, timeout, **options):
     return subprocess.Popen(
         [sys.executable, str(WORKER), str(timeout), *(str(value) for value in arguments)],
@@ -155,6 +151,23 @@ def staged_run(arguments, lock, timeout, **options):
         process.stdin.close()
         if process.poll() is None:
             process.wait(timeout=10)
+
+
+def smoke(release, address, mode, lock, temporary):
+    command = [runtime(release), release / "smoke.js", address, ORIGIN, mode]
+    environment = {**os.environ, "TMPDIR": str(temporary), "BUN_RUNTIME_TRANSPILER_CACHE_PATH": "0"}
+    process = staged_process(command, lock, 35, stdout=subprocess.PIPE, text=True, env=environment)
+    try:
+        output = process.stdout.read()
+        status = process.wait(timeout=45)
+        if status:
+            raise subprocess.CalledProcessError(status, command)
+        return json.loads(output)
+    finally:
+        process.stdin.close()
+        if process.poll() is None:
+            process.wait(timeout=10)
+        process.stdout.close()
 
 
 def candidate(release, environment, mode, lock):
@@ -179,7 +192,7 @@ def candidate(release, environment, mode, lock):
                 time.sleep(0.1)
             else:
                 raise RuntimeError("Candidate did not open its listener within three seconds")
-            result = smoke(release, f"http://127.0.0.1:{port}", mode)
+            result = smoke(release, f"http://127.0.0.1:{port}", mode, lock, Path(temporary))
             expected = json.loads((release / "dist/deployment.json").read_text())
             if any(result.get(key) != value for key, value in expected.items()):
                 raise RuntimeError("Candidate did not report its expected release identity")
@@ -243,7 +256,7 @@ def main():
                     if digest(staged_bun) != bun_hash:
                         raise RuntimeError("Bun changed before the build")
                     archive = staging / "source.tar"
-                    run("git", "-C", repository, "archive", "--output", archive, revision, "web-client", "THIRD_PARTY_NOTICES.md", "LICENSES")
+                    staged_run(["git", "-C", repository, "archive", "--output", archive, revision, "web-client", "THIRD_PARTY_NOTICES.md", "LICENSES"], lock, 60)
                     check_budget()
                     with tarfile.open(archive) as source:
                         source.extractall(staging, filter="data")
