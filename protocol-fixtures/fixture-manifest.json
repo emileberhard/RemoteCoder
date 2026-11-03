@@ -101,6 +101,11 @@
       "consumers": ["host-daemon-rs/src/rpc/error.rs", "host-daemon-rs/src/rpc/error.rs", "Core/Tests/RemoteCoderCoreTests/Gateway/GatewayOwnedContractTests.swift"]
     },
     {
+      "path": "host-log-roots.json",
+      "contract": "Each gateway host's RemoteCoder log root relative to HOME, keyed by `uname -s`. The gateway writes its journal and app-log stores there; the dev-tools readers resolve every host's stores from it.",
+      "consumers": ["host-daemon-rs/src/config/mod.rs", "dev-tools/src/remotecoder_tools/host_logs.py"]
+    },
+    {
       "path": "metadata-conflict.json",
       "contract": "Owned error payload for a conversation metadata revision conflict.",
       "consumers": ["host-daemon-rs/src/gateway/tests.rs", "Core/Tests/RemoteCoderCoreTests/Gateway/GatewayOwnedContractTests.swift"]

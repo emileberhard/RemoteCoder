@@ -15,15 +15,17 @@ from concurrent.futures import FIRST_COMPLETED, Future, ProcessPoolExecutor, wai
 from dataclasses import dataclass
 from pathlib import Path
 from typing import IO
+from urllib.parse import urlparse
 
 from .app_telemetry_summary import summarize_segment
 from .config import _matches_local_identity
+from .host_logs import LOG_ROOT_VARIABLE, local_log_root, log_root_shell
 
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "scripts"))
 import maintainer_config  # noqa: E402
 
-APP_LOG_DIRECTORY = "Library/Logs/remote-coder/app-logs"
+APP_LOGS = "app-logs"
 RETENTION_MARKER = "retention.json"
 LISTING_SEPARATOR = "--retention--"
 INDEX_ROOT = Path.home() / "Library/Caches/RemoteCoder/app-telemetry/index"
@@ -80,17 +82,28 @@ def _retention(text: str) -> dict | None:
     return marker if isinstance(marker, dict) else None
 
 
+def local_app_log_root() -> Path:
+    return local_log_root() / APP_LOGS
+
+
+def _cd_app_logs() -> str:
+    return f'cd "${LOG_ROOT_VARIABLE}/{APP_LOGS}"'
+
+
 def host_key(host: str) -> str:
     return "".join(character if character.isalnum() or character in ".-_" else "_" for character in host)
 
 
 def configured_hosts() -> list[str]:
-    release = maintainer_config.load().get("releaseConfig", {})
-    hosts = [LOCAL]
-    for field in ("macMiniHostname", "macBookHostname"):
-        if isinstance(name := release.get(field), str) and name and not _matches_local_identity(name):
-            hosts.append(_tailnet_host_name(name))
-    return hosts
+    return [LOCAL, *(_tailnet_host_name(name) for name in _cluster_gateway_hosts() if not _matches_local_identity(name))]
+
+
+def _cluster_gateway_hosts() -> list[str]:
+    relative = maintainer_config.load().get("clusterRoutes")
+    if not relative:
+        return []
+    routes = json.loads((maintainer_config.path().parent / relative).read_text())["routes"]
+    return sorted({host for url in routes.values() if (host := urlparse(url).hostname)})
 
 
 def _tailnet_host_name(address: str) -> str:
@@ -110,7 +123,7 @@ def _tailnet_host_name(address: str) -> str:
 
 def list_store(host: str) -> StoreListing:
     if host == LOCAL:
-        root = Path.home() / APP_LOG_DIRECTORY
+        root = local_app_log_root()
         if not root.is_dir():
             return StoreListing(host, None, f"{root} does not exist")
         segments = []
@@ -123,8 +136,9 @@ def list_store(host: str) -> StoreListing:
         marker = root / RETENTION_MARKER
         return StoreListing(host, tuple(segments), None, _retention(marker.read_text()) if marker.is_file() else None)
     command = (
-        f'cd "$HOME/{APP_LOG_DIRECTORY}" || exit 3; '
-        "find . -mindepth 2 -maxdepth 2 -type f -name '*.jsonl.gz' -exec stat -f '%z %m %N' {} + || exit 4; "
+        f"{log_root_shell()}{_cd_app_logs()} || exit 3; "
+        "case \"$(uname -s)\" in Darwin) set -- -f '%z %m %N';; *) set -- -c '%s %Y %n';; esac; "
+        "find . -mindepth 2 -maxdepth 2 -type f -name '*.jsonl.gz' -exec stat \"$@\" {} + || exit 4; "
         f"echo {LISTING_SEPARATOR}; cat {RETENTION_MARKER} 2>/dev/null; exit 0"
     )
     try:
@@ -197,7 +211,7 @@ def _summarize_file(path: str) -> dict:
 
 def _remote_members(host: str, segments: list[Segment]) -> Iterator[tuple[str, bytes]]:
     names = "\n".join(f"{segment.device}/{segment.name}.jsonl.gz" for segment in segments)
-    command = f'cd "$HOME/{APP_LOG_DIRECTORY}" && tar -cf - -T -'
+    command = f"{log_root_shell()}{_cd_app_logs()} && tar -cf - -T -"
     process = subprocess.Popen([*SSH, host, command], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                stderr=subprocess.PIPE)
     assert process.stdin is not None and process.stdout is not None
@@ -265,7 +279,7 @@ def indexed(segments: Iterable[Segment]) -> tuple[list[tuple[Segment, dict]], di
             for host, pending in missing.items():
                 try:
                     if host == LOCAL:
-                        root = Path.home() / APP_LOG_DIRECTORY
+                        root = local_app_log_root()
                         paths = [str(root / segment.device / f"{segment.name}.jsonl.gz") for segment in pending]
                         summaries = pool.map(_summarize_file, paths, chunksize=16)
                         for segment, summary in zip(pending, summaries, strict=True):

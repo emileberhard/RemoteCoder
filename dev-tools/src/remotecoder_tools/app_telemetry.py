@@ -43,6 +43,7 @@ from .app_telemetry_summary import (
     telemetry_runs,
     timeline,
 )
+from .app_telemetry_releases import RELEASES_NOTE, release_rows
 from .app_telemetry_symbols import Capture, annotate_heaviest, profile, symbolicate
 from .diagnostics import _parse_since
 
@@ -112,6 +113,8 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
     child.set_defaults(func=cmd_activity)
     command("checkpoint-inventory", "latest retained checkpoint inventory per host; missing fields are unknown", "24h").set_defaults(
         func=cmd_checkpoint_inventory)
+    command("releases", "one row per build: CPU, drawer, memory and disk per measured state, with minutes",
+            "14d").set_defaults(func=cmd_releases)
     command("export-cost", "what the log export and the sampler cost on the device", "24h").set_defaults(
         func=cmd_export_cost)
 
@@ -447,6 +450,11 @@ async def cmd_activity(args: argparse.Namespace) -> int:
     intervals = [interval for run in runs for interval in sample_intervals(run["records"])]
     return _emit({"coverage": coverage, "note": ASSOCIATION_NOTE, "kinds": INTERVAL_KINDS,
                   "states": activity(intervals, args.by or ACTIVITY_FIELDS)})
+
+
+async def cmd_releases(args: argparse.Namespace) -> int:
+    runs, coverage = _telemetry(args)
+    return _emit({"coverage": coverage, "note": RELEASES_NOTE, "builds": release_rows(runs)})
 
 
 async def cmd_export_cost(args: argparse.Namespace) -> int:

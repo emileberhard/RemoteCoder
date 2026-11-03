@@ -425,12 +425,12 @@ def diagnostic_record(kind: str, start: datetime.datetime, states: list[dict] | 
 
 
 def write_store(tmp_path: Path, monkeypatch, segments: dict[str, list[dict]]) -> None:
-    root = tmp_path / app_telemetry_store.APP_LOG_DIRECTORY / "iPhone-test"
+    monkeypatch.setattr(app_telemetry_store.Path, "home", lambda: tmp_path)
+    root = app_telemetry_store.local_app_log_root() / "iPhone-test"
     root.mkdir(parents=True)
     for index, (name, records) in enumerate(segments.items()):
         (root / f"20261023-{int(DAY.timestamp() * 1000) + index:015d}-{name}.jsonl.gz").write_bytes(
             gzip.compress(b"\n".join(json.dumps(record).encode() for record in records)))
-    monkeypatch.setattr(app_telemetry_store.Path, "home", lambda: tmp_path)
     monkeypatch.setattr(app_telemetry_store, "INDEX_ROOT", tmp_path / "index")
 
 

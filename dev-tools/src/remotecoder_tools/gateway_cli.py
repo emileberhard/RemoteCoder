@@ -26,6 +26,7 @@ from .diagnostics import (
     cmd_e2e_journal_live,
     cmd_journal,
 )
+from .host_logs import LOG_ROOT_VARIABLE
 from .event_log import event_log
 from .file_io import finish_thread_io
 from .performance import cmd_e2e_reads
@@ -1023,7 +1024,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument(
         "--journal-dir",
         default=DEFAULT_JOURNAL_DIR,
-        help=f"journal directory on the gateway host (default: {DEFAULT_JOURNAL_DIR})",
+        help=f"journal directory on the gateway host (default: {DEFAULT_JOURNAL_DIR}, where {LOG_ROOT_VARIABLE} is the host's RemoteCoder log root)",
     )
     s.set_defaults(func=cmd_e2e_journal_live)
 
@@ -1076,7 +1077,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument(
         "--journal-dir",
         default=DEFAULT_JOURNAL_DIR,
-        help=f"journal directory on the gateway host (default: {DEFAULT_JOURNAL_DIR})",
+        help=f"journal directory on the gateway host (default: {DEFAULT_JOURNAL_DIR}, where {LOG_ROOT_VARIABLE} is the host's RemoteCoder log root)",
     )
     s.set_defaults(func=cmd_e2e_agent_tools_live)
 
@@ -1121,7 +1122,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument(
         "--journal-dir",
         default=DEFAULT_JOURNAL_DIR,
-        help=f"journal directory on the gateway host (default: {DEFAULT_JOURNAL_DIR})",
+        help=f"journal directory on the gateway host (default: {DEFAULT_JOURNAL_DIR}, where {LOG_ROOT_VARIABLE} is the host's RemoteCoder log root)",
     )
     s.set_defaults(func=cmd_e2e_upload_live)
 
@@ -1155,7 +1156,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument(
         "--journal-dir",
         default=DEFAULT_JOURNAL_DIR,
-        help=f"journal directory on the gateway host (default: {DEFAULT_JOURNAL_DIR})",
+        help=f"journal directory on the gateway host (default: {DEFAULT_JOURNAL_DIR}, where {LOG_ROOT_VARIABLE} is the host's RemoteCoder log root)",
     )
     s.set_defaults(func=cmd_journal)
 
@@ -1190,7 +1191,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument(
         "--desktop-dir",
         default=DEFAULT_DESKTOP_DIR,
-        help=f"desktop journal directory on the gateway host (default: {DEFAULT_DESKTOP_DIR})",
+        help=f"desktop journal directory on the gateway host (default: {DEFAULT_DESKTOP_DIR}, where {LOG_ROOT_VARIABLE} is the host's RemoteCoder log root)",
     )
     s.set_defaults(func=cmd_desktop_journal)
 

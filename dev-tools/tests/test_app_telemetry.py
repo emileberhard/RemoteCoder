@@ -301,7 +301,7 @@ def test_an_oversized_segment_is_reported_unreadable(monkeypatch):
 
 def test_a_local_listing_reads_the_gateway_cap_marker(tmp_path, monkeypatch):
     monkeypatch.setattr(app_telemetry_store.Path, "home", lambda: tmp_path)
-    root = tmp_path / app_telemetry_store.APP_LOG_DIRECTORY
+    root = app_telemetry_store.local_app_log_root()
     (root / "iPhone-a").mkdir(parents=True)
     (root / "iPhone-a" / "20261024-001792850000000-aaaaaaaa-telemetry.jsonl.gz").write_bytes(gzip.compress(b""))
     (root / "retention.json").write_text(json.dumps({"evictedThroughMs": 1_792_850_000_000, "files": 0, "met": False,

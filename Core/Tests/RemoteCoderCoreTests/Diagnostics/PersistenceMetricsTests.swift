@@ -25,15 +25,7 @@ struct PersistenceMetricsTests {
         #expect(checkpoint.phases["sqlCommit"]?.milliseconds == 15)
         #expect(checkpoint.phases["predecessorWait"] == nil)
 
-        let context = UsageContext(scene: .active, surface: .chat, turnRunningVisible: true, voiceCall: false,
-            thermal: .nominal, lowPower: false)
-        let resources = ProcessResources(cpuUserNanoseconds: 1, cpuSystemNanoseconds: 1,
-            interruptWakeups: 0, idleWakeups: 0, timerWakeups: 0, footprintBytes: 1)
-        let line = TelemetryLine(runID: "test", seq: 1, at: .now, monoNs: 1, record: .sample(
-            ProcessSample(reason: .interval, resources: resources, readNanoseconds: 1,
-                persistence: metrics.snapshot(), mixed: false, context: context)))
-        let data = try JSONEncoder().encode(line)
-        #expect(data.count < 4_096)
+        let data = try JSONEncoder().encode(Self.sampleLine(persistence: metrics.snapshot(), magnitude: 1))
         let json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
         let persistence = try #require(json["persistence"] as? [String: [String: Any]])
         let exported = try #require(persistence["checkpoints"]?["checkpoint"] as? [String: Any])
@@ -43,6 +35,65 @@ struct PersistenceMetricsTests {
         #expect(phases["encodeRun"]?["maxMilliseconds"] as? Double == 10)
         #expect(phases["encodeRun"]?["samples"] == nil)
         #expect(phases["encodeRun"]?["buckets"] == nil)
+    }
+
+    @Test func aSampleWithEveryFieldAtLongRunMagnitudesFitsTheLineBudget() throws {
+        let metrics = PersistenceMetrics()
+        for owner in PersistenceMetrics.Owner.allCases {
+            for _ in 0..<3 {
+                metrics.wrote(owner, bytes: 987_654_321, elapsed: .nanoseconds(123_456_789))
+                metrics.wrote(owner, bytes: nil, elapsed: .nanoseconds(987_654_321))
+                metrics.skipped(owner)
+                metrics.failed(owner)
+            }
+        }
+        for phase in Self.checkpointPhases {
+            for index in 0..<200 {
+                metrics.recordCheckpointPhase(phase, elapsed: .nanoseconds(1_234_567 + index * 7_919))
+            }
+        }
+        metrics.recordCheckpointWrite(inputBytes: 9_876_543_210, newPayloadBytes: 1_234_567_890,
+            chunking: .nanoseconds(3_333_333), sqlCommit: .nanoseconds(7_777_777))
+        metrics.recordReadmittedHistory(bytes: 9_876_543_210)
+        metrics.recordDeferredHistory(bytes: 9_876_543_210)
+        metrics.recordHistoryShed()
+        metrics.recordCheckpointCompaction()
+        let snapshot = metrics.snapshot()
+        #expect(snapshot.count == PersistenceMetrics.Owner.allCases.count)
+        #expect(snapshot[.checkpoints]?.checkpoint?.phases.count == Self.checkpointPhases.count)
+
+        let data = try JSONEncoder().encode(Self.sampleLine(persistence: snapshot, magnitude: 604_800_000_000_000))
+        #expect(data.count < 4_096, "sample line is \(data.count) bytes")
+    }
+
+    private static let checkpointPhases: [PersistenceMetrics.CheckpointPhase] = [
+        .total, .preflight, .predecessorWait, .encodeWait, .encodeQueue, .encodeRun, .encodeResume,
+        .admission, .database, .chunking, .sqlCommit, .finalize, .historyShedRead,
+    ]
+
+    private static func sampleLine(persistence: [PersistenceMetrics.Owner: PersistenceMetrics.Counters],
+                                   magnitude: UInt64) -> TelemetryLine {
+        let context = UsageContext(scene: .background, surface: .drawer, turnRunningVisible: true, voiceCall: true,
+            recording: true, composing: true, thermal: .critical, lowPower: true, batteryPercent: 100, charging: true,
+            brightnessPercent: 100, network: .cellular, route: .restarting)
+        let resources = ProcessResources(cpuUserNanoseconds: magnitude, cpuSystemNanoseconds: magnitude,
+            interruptWakeups: magnitude, idleWakeups: magnitude, timerWakeups: magnitude, footprintBytes: magnitude)
+        var mainRunLoop = MainRunLoopBusyPeriods.Counters()
+        mainRunLoop.busyNanoseconds = magnitude
+        mainRunLoop.busyPeriods = magnitude
+        mainRunLoop.hangNanoseconds = magnitude
+        mainRunLoop.busyPeriodsAtLeast = mainRunLoop.busyPeriodsAtLeast.map { _ in magnitude }
+        var historyOpens = ResponsivenessMetrics.HistoryOpens()
+        historyOpens.completed = magnitude
+        historyOpens.abandoned = magnitude
+        historyOpens.completedNanoseconds = magnitude
+        historyOpens.completedWithin = historyOpens.completedWithin.map { _ in magnitude }
+        return TelemetryLine(runID: UUID().uuidString, seq: magnitude, at: .now, monoNs: magnitude,
+            record: .sample(ProcessSample(reason: .background, resources: resources, mainThreadCPUNanoseconds: magnitude,
+                readNanoseconds: magnitude, persistence: persistence,
+                responsiveness: .init(mainRunLoop: mainRunLoop, historyOpens: historyOpens),
+                workload: Workload(runningTurnNanoseconds: magnitude, streamedDeltas: magnitude, streamedBytes: magnitude),
+                mixed: true, context: context)))
     }
 
     @Test func olderPersistenceCountersKeepCheckpointPhasesUnknown() throws {

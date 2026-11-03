@@ -347,6 +347,46 @@ def _counter(record: dict, *names: str) -> int:
     return sum(int(record.get(name) or 0) for name in names)
 
 
+def _known(record: dict, *path: str) -> int | None:
+    value: object = record
+    for key in path:
+        value = value.get(key) if isinstance(value, dict) else None
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _known_delta(start: dict, end: dict, *path: str) -> int | None:
+    first, last = _known(start, *path), _known(end, *path)
+    return last - first if first is not None and last is not None else None
+
+
+def _seconds(nanoseconds: int | None) -> float | None:
+    return nanoseconds / 1e9 if nanoseconds is not None else None
+
+
+def _bins_delta(start: dict, end: dict, group: str, key: str) -> dict[str, int] | None:
+    first, last = (start.get(group) or {}).get(key), (end.get(group) or {}).get(key)
+    if not isinstance(first, dict) or not isinstance(last, dict) or first.keys() != last.keys():
+        return None
+    return {bound: int(last[bound]) - int(first[bound]) for bound in last}
+
+
+def _main_run_loop(start: dict, end: dict) -> dict | None:
+    busy, periods, hang = (_known_delta(start, end, "mainRunLoop", key) for key in ("busyNs", "busyPeriods", "hangNs"))
+    bins = _bins_delta(start, end, "mainRunLoop", "busyPeriodsAtLeastMs")
+    if busy is None or periods is None or hang is None or bins is None:
+        return None
+    return {"busySeconds": busy / 1e9, "busyPeriods": periods, "hangSeconds": hang / 1e9, "busyPeriodsAtLeastMs": bins}
+
+
+def _history_opens(start: dict, end: dict) -> dict | None:
+    completed, abandoned, total = (_known_delta(start, end, "historyOpens", key)
+                                   for key in ("completed", "abandoned", "completedNs"))
+    bins = _bins_delta(start, end, "historyOpens", "completedWithinMs")
+    if completed is None or abandoned is None or total is None or bins is None:
+        return None
+    return {"completed": completed, "abandoned": abandoned, "completedSeconds": total / 1e9, "completedWithinMs": bins}
+
+
 def sample_intervals(records: list[dict]) -> list[dict]:
     samples = [record for record in records
                if record.get("recordType") == "sample" and isinstance(record.get("context"), dict)]
@@ -377,6 +417,12 @@ def sample_intervals(records: list[dict]) -> list[dict]:
                                  for owner, counters in end_persistence.items()},
             "persistenceWrites": {owner: int(counters.get("writes", 0)) - int(start_persistence.get(owner, {}).get("writes", 0))
                                   for owner, counters in end_persistence.items()},
+            "mainThreadCpuSeconds": _seconds(_known_delta(start, end, "mainThreadCpuNs")),
+            "mainRunLoop": _main_run_loop(start, end),
+            "historyOpens": _history_opens(start, end),
+            "runningTurnSeconds": _seconds(_known_delta(start, end, "workload", "runningTurnNs")),
+            "streamedDeltas": _known_delta(start, end, "workload", "streamedDeltas"),
+            "streamedBytes": _known_delta(start, end, "workload", "streamedBytes"),
         })
     return intervals
 

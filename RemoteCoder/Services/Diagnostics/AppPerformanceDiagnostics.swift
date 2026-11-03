@@ -144,29 +144,32 @@ actor AppPerformanceDiagnostics {
 /// Tap-to-visible-content timing for one chat open. MetricKit aggregates an
 /// interval by name alone, so only opens that reach visible content end it;
 /// every other outcome is a separate event.
+@MainActor
 struct HistoryOpenSignpost {
     enum Abandonment: String { case superseded, cancelled, empty, failed }
 
     private static let name: StaticString = "HistorySelectionToFirstContent"
-    private var interval: OSSignpostID?
+    private var open: (interval: OSSignpostID, start: ResponsivenessMetrics.HistoryOpenStart)?
 
     mutating func begin() {
         abandon(.superseded)
         let id = OSSignpostID(log: AppPerformanceDiagnostics.historyLog)
         mxSignpost(.begin, log: AppPerformanceDiagnostics.historyLog, name: Self.name, signpostID: id)
-        interval = id
+        open = (id, ResponsivenessMetrics.shared.historyOpenStarted(at: .now))
     }
 
     mutating func contentVisible() {
-        guard let interval else { return }
-        mxSignpost(.end, log: AppPerformanceDiagnostics.historyLog, name: Self.name, signpostID: interval)
-        self.interval = nil
+        guard let open else { return }
+        mxSignpost(.end, log: AppPerformanceDiagnostics.historyLog, name: Self.name, signpostID: open.interval)
+        ResponsivenessMetrics.shared.historyOpenReachedContent(open.start, at: .now)
+        self.open = nil
     }
 
     mutating func abandon(_ reason: Abandonment) {
-        guard interval != nil else { return }
+        guard open != nil else { return }
         AppPerformanceDiagnostics.signposter.emitEvent("HistoryOpenAbandoned", "outcome=\(reason.rawValue, privacy: .public)")
-        interval = nil
+        ResponsivenessMetrics.shared.historyOpenAbandoned()
+        open = nil
     }
 }
 

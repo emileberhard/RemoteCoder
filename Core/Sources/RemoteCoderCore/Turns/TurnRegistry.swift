@@ -57,6 +57,7 @@ final class TurnRegistry {
     @ObservationIgnored private var ownersByThreadID: [String: String] = [:]
 
     var trackedThreadIDs: Set<String> { Set(turnsByThreadID.keys) }
+    var trackedTurnCount: Int { turnsByThreadID.count }
 
     var runningTurns: Set<RunningTurn> {
         Set(turnsByThreadID.values.map { RunningTurn(threadID: $0.threadID, turnID: $0.turnID) })
