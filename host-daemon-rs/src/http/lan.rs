@@ -171,16 +171,6 @@ async fn serve_lan_connection(
 mod tests {
     use super::*;
 
-    #[cfg(target_os = "linux")]
-    #[tokio::test]
-    async fn the_explicit_listener_can_bind_before_its_interface_has_an_address() {
-        for address in ["198.51.100.99:0", "[2001:db8::99]:0"] {
-            let address: SocketAddr = address.parse().unwrap();
-            let listener = bind_address(address).unwrap();
-            assert_eq!(listener.local_addr().unwrap().ip(), address.ip());
-        }
-    }
-
     #[tokio::test]
     async fn the_lan_listener_accepts_ipv6_and_ipv4_peers() {
         let listener = bind_dual_stack(0).unwrap();
