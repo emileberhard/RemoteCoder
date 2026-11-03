@@ -100,6 +100,35 @@ try {
     assert.deepEqual(checkouts.result, {
         workedIn: [{ root: repository, evidence: ["edited"] }], inFolder: [other], complete: true,
     }, JSON.stringify(checkouts));
+    const listed = await call("thread/turns/list", { threadId: thread, sortDirection: "desc", limit: 1, itemsView: "notLoaded" });
+    const turnId = listed.result?.data?.[0]?.id;
+    assert(turnId, JSON.stringify(listed));
+    const fromStart = await call("changes/turn", { threadId: thread, since: { turnId, boundary: "start" } });
+    assert.equal(fromStart.result?.status, "ready", JSON.stringify(fromStart));
+    assert.deepEqual([fromStart.result.since.turnId, fromStart.result.since.boundary, fromStart.result.turns], [turnId, "start", 1]);
+    assert.equal(typeof fromStart.result.since.atMs, "number");
+    assert.deepEqual(fromStart.result.files.map(file => file.patch), turn.result.files.map(file => file.patch));
+    const afterEnd = await call("changes/turn", { threadId: thread, since: { turnId, boundary: "end" } });
+    assert.deepEqual([afterEnd.result?.status, afterEnd.result?.turns, afterEnd.result?.files?.length, afterEnd.result?.complete],
+        ["ready", 0, 0, true], JSON.stringify(afterEnd));
+    const missing = await call("changes/turn", { threadId: thread, since: { turnId: "turn-gone", boundary: "end" } });
+    assert.deepEqual(missing.result, { status: "anchorMissing", complete: true }, JSON.stringify(missing));
+    const blank = await call("changes/turn", { threadId: thread, since: { turnId: " ", boundary: "end" } });
+    assert.equal(blank.error?.code, -32602, JSON.stringify(blank));
+    const stagedSummary = await call("changes/summary", { threadId: thread, directory: lab.root, source: "staged" });
+    const stagedCheckout = stagedSummary.result?.workedIn?.find(checkout => checkout.root === repository);
+    assert.equal(stagedCheckout?.status, "ready", JSON.stringify(stagedSummary));
+    assert.deepEqual(stagedCheckout.snapshot.files.map(file => file.patch.split("\n")[0]), ["diff --git a/staged.txt b/staged.txt"]);
+    const branchSource = await call("changes/summary", { threadId: thread, directory: lab.root, source: "branch" });
+    assert.equal(branchSource.error?.code, -32602, JSON.stringify(branchSource));
+    const view = { kind: "since", turnId, boundary: "end" };
+    const stored = await call("conversation/marks/update", { changes: [{ op: "setChangesView", threadId: thread, view }] });
+    assert.deepEqual(stored.result?.delta?.threads?.[thread]?.changesView, view, JSON.stringify(stored));
+    const marks = await call("conversation/marks/read");
+    assert.equal(marks.result.schemaVersion, 4);
+    assert.deepEqual(marks.result.threads[thread].changesView, view);
+    await call("conversation/marks/update", { changes: [{ op: "setChangesView", threadId: thread }] });
+    assert.equal((await call("conversation/marks/read")).result.threads[thread]?.changesView, undefined);
     assert.deepEqual((await readFile(join(repository, ".git/index"))).compare(index), 0, "A conversation read changed the index");
     console.log(JSON.stringify({ ok: true, files: uncommitted.result.snapshot.files.length, turnFiles: turn.result.files.length }));
 } catch (error) {
