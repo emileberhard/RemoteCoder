@@ -142,21 +142,26 @@ private enum ChangeReviewFixture {
             files: Array(snapshot.files.prefix(2)), unlistedFiles: 0, complete: true), revision: 1)
     }
 
-    static var checkouts: CheckoutDiscovery {
-        CheckoutDiscovery(workedIn: [.init(root: worktree, evidence: [.edited, .command]),
-                                     .init(root: "/Users/emil/stretch/care.ai", evidence: [.command])],
-                          inFolder: ["/Users/emil/stretch/kartan"], complete: true)
+    static var summary: PreparedChangeSummary {
+        let data = Data(#"{"workedIn":[{"root":"/Users/emil/stretch/care.ai.worktrees/codeact","evidence":["edited","command"],"status":"ready","snapshot":{"source":"branch","root":"/Users/emil/stretch/care.ai.worktrees/codeact","files":[],"unlistedFiles":2,"complete":false,"capturedAtMs":0}},{"root":"/Users/emil/stretch/care.ai","evidence":["command"],"status":"failed"}],"inFolder":["/Users/emil/stretch/kartan"],"complete":false}"#.utf8)
+        do {
+            return PreparedChangeSummary(try JSONDecoder().decode(ChangeSummary.self, from: data))
+        } catch {
+            preconditionFailure("Invalid preview summary: \(error)")
+        }
     }
 
     @MainActor
     static func model(_ state: ChangeReviewModel.State, mode: ChangeReviewModel.Mode = .git(.uncommitted),
-                      checkouts: ChangeReviewModel.Checkouts = .unknown, root: String? = nil,
+                      summary: PreparedChangeSummary? = nil, root: String? = nil,
                       notes: [ReviewNote] = []) -> ChangeReviewModel? {
         let host = GatewayHostConfiguration(id: UUID(), name: "Preview", hostname: "127.0.0.1", port: 1,
                                             authToken: "preview", transport: .trustedNetwork)
         guard let client = try? GatewayClient(host: host, routes: nil) else { return nil }
-        let model = ChangeReviewModel(conversation: "preview", directory: "/Users/emil/stretch", client: client)
-        model.showPreview(state, mode: mode, checkouts: checkouts, root: root, notes: notes)
+        let summaryModel = ChangeSummaryModel(conversation: "preview", directory: "/Users/emil/stretch", client: client)
+        summaryModel.showPreview(summary)
+        let model = ChangeReviewModel(conversation: "preview", directory: "/Users/emil/stretch", client: client, summary: summaryModel)
+        model.showPreview(state, mode: mode, root: root, notes: notes)
         return model
     }
 
@@ -180,9 +185,9 @@ private struct ChangeReviewPreview: View {
     @State private var theme = AppThemeStore()
 
     init(_ state: ChangeReviewModel.State, mode: ChangeReviewModel.Mode = .git(.uncommitted),
-         checkouts: ChangeReviewModel.Checkouts = .unknown, root: String? = nil, notes: [ReviewNote] = [],
+         summary: PreparedChangeSummary? = nil, root: String? = nil, notes: [ReviewNote] = [],
          collapsing paths: Set<String> = []) {
-        let model = ChangeReviewFixture.model(state, mode: mode, checkouts: checkouts, root: root, notes: notes)
+        let model = ChangeReviewFixture.model(state, mode: mode, summary: summary, root: root, notes: notes)
         if let model, case .ready(let review) = state {
             for file in review.files where paths.contains(file.path) { model.toggleCollapsed(file) }
         }
@@ -245,7 +250,7 @@ private struct ChangeReviewPreview: View {
 }
 
 #Preview("J · Worktree checkout") {
-    ChangeReviewPreview(.ready(ChangeReviewFixture.worktreeReview), checkouts: .found(ChangeReviewFixture.checkouts),
+    ChangeReviewPreview(.ready(ChangeReviewFixture.worktreeReview), summary: ChangeReviewFixture.summary,
                         root: ChangeReviewFixture.worktree)
 }
 
@@ -260,7 +265,7 @@ private struct ChangeReviewPreview: View {
                         mode: .lastTurn)
 }
 
-#Preview("M · Checkouts unavailable") {
-    ChangeReviewPreview(.unavailable(.notRepository), checkouts: .failed)
+#Preview("M · Checkouts not loaded") {
+    ChangeReviewPreview(.unavailable(.notRepository))
 }
 #endif

@@ -31,6 +31,24 @@ struct ChangeTotals: Equatable, Sendable {
         self.init(counted: snapshot.files.lazy.map { UnifiedDiff.header(of: $0).countedLines },
                   unlistedFiles: snapshot.unlistedFiles, isComplete: snapshot.complete)
     }
+
+    init(summing checkouts: some Sequence<ChangeTotals?>) {
+        var files = 0
+        var additions = 0
+        var deletions = 0
+        var knowsEveryCount = true
+        for checkout in checkouts {
+            files += checkout?.files ?? 0
+            if let lines = checkout?.lines {
+                additions += lines.additions
+                deletions += lines.deletions
+            } else {
+                knowsEveryCount = false
+            }
+        }
+        self.files = files
+        lines = knowsEveryCount ? Lines(additions: additions, deletions: deletions) : nil
+    }
 }
 
 extension FileDiff {

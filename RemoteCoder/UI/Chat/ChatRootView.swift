@@ -885,7 +885,8 @@ private struct ChatScreen: View {
         let client = screen.target.gatewayClient
         if changeReview?.reviews(conversation: screen.activeSessionID, directory: directory, through: client) != true {
             changeReview?.stop()
-            changeReview = ChangeReviewModel(conversation: screen.activeSessionID, directory: directory, client: client)
+            changeReview = ChangeReviewModel(conversation: screen.activeSessionID, directory: directory, client: client,
+                                            summary: screen.changeSummary)
         }
         changeReview?.reopen()
         isReviewingChanges = true
