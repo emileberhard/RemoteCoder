@@ -289,7 +289,7 @@ private struct ChatScreen: View {
 
     var body: some View {
         eventPresenter?.install(for: screen, perform: perform)
-        return ChatSidebarContainer(
+        let surface = ChatSidebarContainer(
             isPersistent: usesPersistentSidebar,
             isOpen: $isHistoryOpen,
             onBeginOpening: { dismissComposerFocus() }
@@ -364,6 +364,7 @@ private struct ChatScreen: View {
             PerformanceReplaySidebarPublisher(window: window, isOpen: { isHistoryOpen }, toggle: toggleHistory, select: selectConversation)
         }
         #endif
+        return surface
         .onChange(of: usesPersistentSidebar, initial: true) { _, persistent in isHistoryOpen = persistent }
         .onAppear {
             VoiceModeDiagnostics.log("chat screen appeared")
