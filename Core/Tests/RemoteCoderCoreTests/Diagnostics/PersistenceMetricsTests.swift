@@ -27,11 +27,18 @@ struct PersistenceMetricsTests {
 
         let context = UsageContext(scene: .active, surface: .chat, turnRunningVisible: true, voiceCall: false,
             thermal: .nominal, lowPower: false)
-        let resources = ProcessResources(cpuUserNanoseconds: 1, cpuSystemNanoseconds: 1,
-            interruptWakeups: 0, idleWakeups: 0, timerWakeups: 0, footprintBytes: 1)
+        let resources = ProcessResources(cpuUserNanoseconds: .max, cpuSystemNanoseconds: .max,
+            interruptWakeups: .max, idleWakeups: .max, timerWakeups: .max, footprintBytes: .max,
+            mainThreadCPUNanoseconds: .max)
+        let runLoop = ResponsivenessMetrics.RunLoop(busyNanoseconds: .max, busyPeriods: .max, hangNanoseconds: .max,
+            busyPeriodsAtLeast: ResponsivenessMetrics.RunLoop.thresholdsMilliseconds.map { _ in .max })
+        let switches = ResponsivenessMetrics.Switches(completed: .max, abandoned: .max, completedNanoseconds: .max,
+            completedWithin: ResponsivenessMetrics.Switches.boundsMilliseconds.map { _ in .max })
         let line = TelemetryLine(runID: "test", seq: 1, at: .now, monoNs: 1, record: .sample(
             ProcessSample(reason: .interval, resources: resources, readNanoseconds: 1,
-                persistence: metrics.snapshot(), mixed: false, context: context)))
+                persistence: metrics.snapshot(), responsiveness: .init(runLoop: runLoop, switches: switches),
+                workload: Workload(runningTurns: .max, runningTurnNanoseconds: .max, streamedDeltas: .max, streamedBytes: .max),
+                mixed: false, context: context)))
         let data = try JSONEncoder().encode(line)
         #expect(data.count < 4_096)
         let json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])

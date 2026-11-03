@@ -29,7 +29,10 @@ struct FieldTelemetryTests {
     private func sample(_ reason: ProcessSample.Reason = .interval) -> TelemetryRecord {
         .sample(ProcessSample(reason: reason, resources: ProcessResources(cpuUserNanoseconds: 2, cpuSystemNanoseconds: 1,
             interruptWakeups: 3, idleWakeups: 4, timerWakeups: 5, footprintBytes: 6), readNanoseconds: 7,
-            persistence: [.checkpoints: PersistenceMetrics.Counters(writes: 1, bytes: 10)], mixed: false, context: context))
+            persistence: [.checkpoints: PersistenceMetrics.Counters(writes: 1, bytes: 10)],
+            responsiveness: .init(runLoop: .init(), switches: .init()),
+            workload: Workload(runningTurns: nil, runningTurnNanoseconds: nil, streamedDeltas: 0, streamedBytes: 0),
+            mixed: false, context: context))
     }
 
     @Test func machCPUTimeMatchesTheKernelsResourceUsage() throws {
@@ -386,6 +389,25 @@ struct FieldTelemetryTests {
         }
         #expect(samples.map(\.reason) == [.launch, .foreground])
         #expect(samples.map(\.mixed) == [false, true])
+    }
+
+    @MainActor @Test func runningTurnsStayUnknownUntilTheContextReportsThem() {
+        let buffer = TelemetryBuffer(runID: "test")
+        let resources = ProcessResources(cpuUserNanoseconds: 1, cpuSystemNanoseconds: 1, interruptWakeups: 0,
+                                         idleWakeups: 0, timerWakeups: 0, footprintBytes: 1)
+        let sampler = ProcessResourceSampler(recorder: buffer, read: { resources })
+        sampler.update(context)
+        sampler.runningTurnsChanged(2)
+        var background = context
+        background.scene = .background
+        sampler.update(background)
+        let workloads = buffer.take().compactMap { line -> Workload? in
+            if case .sample(let sample) = line.record { return sample.workload }
+            return nil
+        }
+        #expect(workloads.map(\.runningTurns) == [nil, 2])
+        #expect(workloads[0].runningTurnNanoseconds == nil)
+        #expect(workloads[1].runningTurnNanoseconds != nil)
     }
 }
 

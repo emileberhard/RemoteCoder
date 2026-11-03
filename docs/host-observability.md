@@ -638,7 +638,9 @@ only, never WebKit's processes, and it cannot apportion battery to a feature.
 
 - **Sampling.** `ProcessResourceSampler` (Core) reads `TASK_POWER_INFO_V2` and
   `TASK_VM_INFO`: user and system CPU in nanoseconds (converted from Mach time),
-  interrupt, idle and timer wakeups and the physical footprint. It samples on
+  interrupt, idle and timer wakeups and the physical footprint, plus the main
+  thread's CPU (`mainThreadCpuNs`, one `THREAD_BASIC_INFO` read of the calling
+  main thread, microsecond resolution; off-main readers leave it unknown). It samples on
   launch, every 30 s while a scene is active, on each state change (at least
   1 s apart), once on backgrounding and once on return. A change it could not
   sample at once marks the next sample `mixed`. It runs on the main actor, where
@@ -650,6 +652,29 @@ only, never WebKit's processes, and it cannot apportion battery to a feature.
   so it read 0 through launch and active use on the test iPhone; MetricKit's
   `gpuTimeMetric` is the GPU source. P-core time and CPU energy stay out until a
   device run validates them.
+- **Responsiveness.** `ResponsivenessMetrics` (Core) is installed by the
+  sampler and lives for the process, since there is one main run loop. Two
+  main-run-loop observers in the common modes time each busy period from
+  `afterWaiting` (first observer) to `beforeWaiting` (last observer, so the Core
+  Animation commit is inside it), Apple's definition of a hang interval. A
+  sample's `runLoop` holds cumulative `busyNs`, `busyPeriods`, `hangNs` (busy
+  time in periods of 250 ms or more) and `busyPeriodsAtLeastMs`, the count of
+  periods reaching each of 17, 33, 50, 100, 250, 500, 1000 and 2000 ms. A busy
+  period of 250 ms or more also logs one `Responsiveness` notice with its length
+  and the surface, at most every 10 s, naming how many it suppressed. The
+  observers add no timer, wakeup or display link. `switches` comes from
+  `HistoryOpenSignpost`: opens that reached visible content (`completed`, their
+  `completedNs` and `completedWithinMs`, cumulative counts within 50 ms to 4 s)
+  and `abandoned` ones. Busy minus main-thread CPU is time the main thread was
+  runnable or blocked rather than computing.
+- **Workload.** `workload` holds `runningTurns`, the turns every loaded host's
+  `TurnRegistry` tracks at the sample, and `runningTurnNs`, that count
+  integrated over time, so an interval's average is its delta over the
+  interval's length. `TelemetryContext` observes the count separately from the
+  usage context, so a turn starting or ending never forces a sample; both stay
+  absent until the first count arrives. `streamedDeltas` and `streamedBytes`
+  count agent-message, reasoning and plan text deltas and their UTF-8 bytes as
+  `GatewayNotificationRouting` decodes them off the main actor.
 - **State.** `TelemetryContext` (app) projects the scene, the visible surface
   (chat or drawer), whether the shown conversation has a running turn, a voice
   call, whether any loaded target is recording composer dictation, whether the
@@ -689,6 +714,11 @@ only, never WebKit's processes, and it cannot apportion battery to a feature.
   started in one state and finished in the next counts toward the next. Battery
   levels appear on timeline stretches only; a 1 % step lands in whichever state
   held when iOS reported it, so no per-state battery rate is computed.
+  `releases` prints one row per build from measured active intervals: chat CPU
+  with and without a visible turn, drawer CPU per visit, footprint and disk per
+  active hour, each with the minutes it covers. The store and journal readers
+  resolve each host's log root from `protocol-fixtures/host-log-roots.json`,
+  which the gateway's `HostPaths` test also pins.
 - **Checkpoint inventory.** `TelemetryContext` queries each loaded checkpoint owner
   on a 30 s foreground observation cadence, once after its ordinary index has loaded
   and then at most once per four hours per host in the app run. It stops in the
@@ -788,6 +818,18 @@ second disk scan and an inventory file were rejected: both add I/O and another
 lifetime owner. Untracked attachment sizes remain unknown. The byte accounting
 is a point-in-time owner snapshot; external disk changes are visible only when
 the store's normal operations account for them.
+
+Decision summary (2026-11-03, responsiveness and workload; [#582](https://github.com/emileberhard/tracker/issues/582)).
+A release-by-release field review needed one-off scripts and still could not
+see the main thread or the workload behind a CPU number. Samples now carry
+main-thread CPU, run-loop busy periods and switch latency, and the running-turn
+integral and streamed text, all cumulative like `PersistenceMetrics`, so every
+reader keeps taking deltas. `ResponsivenessMetrics` owns the observers and the
+switch counts; the sampler owns installation and the turn integral;
+`TelemetryContext` feeds the count. Rejected: a watchdog thread (wakeups), a
+display-link frame counter (changes the display rate) and MetricKit alone
+(daily and mixes builds). Costly to change later: the uploaded field names,
+which readers keep reading through retention.
 
 ### Checkpoint save phases
 

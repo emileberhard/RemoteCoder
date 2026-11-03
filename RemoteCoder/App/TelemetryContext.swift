@@ -13,6 +13,7 @@ final class TelemetryContext {
     private let network = NetworkInterfaceState()
     private let sampler: ProcessResourceSampler?
     private var observation: Task<Void, Never>?
+    private var turnObservation: Task<Void, Never>?
     private var inventoryObservation: Task<Void, Never>?
     private let recorder: TelemetryBuffer
     private var lastInventories: [UUID: ContinuousClock.Instant] = [:]
@@ -37,6 +38,17 @@ final class TelemetryContext {
                 self?.publish(context)
             }
         }
+        guard let sampler else { return }
+        turnObservation = Task { [weak self] in
+            for await count in Observations({ @MainActor [weak self] in self?.runningTurns() }) {
+                guard let count, !Task.isCancelled else { continue }
+                sampler.runningTurnsChanged(count)
+            }
+        }
+    }
+
+    private func runningTurns() -> Int {
+        workspace.models.reduce(0) { $0 + $1.turns.trackedTurnCount }
     }
 
     func sceneChanged() {
@@ -78,6 +90,8 @@ final class TelemetryContext {
         inventoryObservation = nil
         observation?.cancel()
         observation = nil
+        turnObservation?.cancel()
+        turnObservation = nil
         device.stop()
         network.stop()
         sampler?.stop()

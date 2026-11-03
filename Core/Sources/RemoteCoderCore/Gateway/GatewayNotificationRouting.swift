@@ -98,6 +98,13 @@ enum GatewayNotificationRouting {
 
     static func route(_ note: CodexGatewayNotification) -> RoutedGatewayEvent? {
         switch note.server {
+        case .agentMessageDelta(let delta), .reasoningSummaryDelta(let delta), .reasoningTextDelta(let delta),
+             .planDelta(let delta):
+            StreamedTextMetrics.shared.record(delta.delta)
+        default:
+            break
+        }
+        switch note.server {
         case .gatewayWarning(let warning):
             return .warning(warning)
         case .providerHealthChanged(let health):

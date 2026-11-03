@@ -13,16 +13,19 @@ final class ProcessResourceSampler {
     private var unsampledChange = false
     private var periodic: Task<Void, Never>?
     private var deferred: Task<Void, Never>?
+    private var runningTurns = RunningTurnIntegral()
 
     init(recorder: TelemetryBuffer, read: @escaping () -> ProcessResources? = ProcessResources.current) {
         self.recorder = recorder
         self.read = read
+        ResponsivenessMetrics.shared.install()
     }
 
     func update(_ next: UsageContext) {
         guard next != context else { return }
         let previous = context
         context = next
+        ResponsivenessMetrics.shared.surface = next.surface
         let reason: ProcessSample.Reason = switch (previous?.scene, next.scene) {
         case (nil, _): .launch
         case (_, .background): .background
@@ -50,6 +53,10 @@ final class ProcessResourceSampler {
         sample(reason)
     }
 
+    func runningTurnsChanged(_ count: Int) {
+        runningTurns.set(count, at: clock.now)
+    }
+
     func stop() {
         periodic?.cancel()
         periodic = nil
@@ -75,15 +82,19 @@ final class ProcessResourceSampler {
             if reason != .interval { unsampledChange = true }
             return
         }
-        let readTime = started.duration(to: clock.now)
-        lastSample = clock.now
+        let now = clock.now
+        lastSample = now
+        runningTurns.accrue(to: now)
         let mixed = unsampledChange
         unsampledChange = false
+        let streamed = StreamedTextMetrics.shared.snapshot()
         recorder.record(.sample(ProcessSample(
-            reason: reason, resources: resources,
-            readNanoseconds: UInt64(readTime.components.seconds) * 1_000_000_000
-                + UInt64(readTime.components.attoseconds / 1_000_000_000),
-            persistence: PersistenceMetrics.shared.snapshot(), mixed: mixed, context: context
+            reason: reason, resources: resources, readNanoseconds: started.duration(to: now).clampedNanoseconds,
+            persistence: PersistenceMetrics.shared.snapshot(), responsiveness: ResponsivenessMetrics.shared.snapshot,
+            workload: Workload(runningTurns: runningTurns.current,
+                               runningTurnNanoseconds: runningTurns.current == nil ? nil : runningTurns.nanoseconds,
+                               streamedDeltas: streamed.deltas, streamedBytes: streamed.bytes),
+            mixed: mixed, context: context
         )))
     }
 }
