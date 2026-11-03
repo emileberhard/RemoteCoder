@@ -52,7 +52,7 @@ final class ResponsivenessMetrics {
         busyPeriods.label = "scene=\(context.scene.rawValue) surface=\(context.surface?.rawValue ?? "unknown")"
     }
 
-    func snapshot(at now: UInt64) -> Snapshot {
+    func settle(at now: UInt64) -> Snapshot {
         Snapshot(mainRunLoop: busyPeriods.settle(at: now), historyOpens: historyOpens)
     }
 
@@ -134,7 +134,7 @@ final class MainRunLoopBusyPeriods {
     }
 
     func settle(at now: UInt64) -> Counters {
-        if let busySince, now >= busySince { advance(to: now - busySince) }
+        if let busySince, now >= busySince, now - busySince >= Self.hangThreshold { advance(to: now - busySince) }
         return completed
     }
 

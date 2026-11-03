@@ -41,21 +41,22 @@ struct ResponsivenessMetricsTests {
         #expect(after.busyPeriodsAtLeast == [1, 1, 1, 1, 1, 1, 1, 0])
     }
 
-    @Test func hangTimeNeverExceedsTheBusyTimeOfTheIntervalItLandsIn() {
-        let periods = MainRunLoopBusyPeriods()
-        periods.wake(at: 0)
+    @Test func aRunningPeriodSettlesOnlyOnceItIsAHangSoSamplingNeverChangesTheTotals() {
+        let sampled = MainRunLoopBusyPeriods()
+        sampled.wake(at: 0)
+        let early = sampled.settle(at: 200 * Self.millisecond)
+        let crossed = sampled.settle(at: 300 * Self.millisecond)
+        sampled.sleep(at: 400 * Self.millisecond)
+        let unsampled = MainRunLoopBusyPeriods()
+        unsampled.wake(at: 0)
+        unsampled.sleep(at: 400 * Self.millisecond)
 
-        let first = periods.settle(at: 200 * Self.millisecond)
-        let second = periods.settle(at: 300 * Self.millisecond)
-        periods.sleep(at: 300 * Self.millisecond)
-        let third = periods.settle(at: 400 * Self.millisecond)
-
-        #expect(first.busyNanoseconds == 200 * Self.millisecond)
-        #expect(first.hangNanoseconds == 0)
-        #expect(second.busyNanoseconds - first.busyNanoseconds == 100 * Self.millisecond)
-        #expect(second.hangNanoseconds == 100 * Self.millisecond)
-        #expect(second.busyPeriodsAtLeast[4] == 1)
-        #expect(third == second)
+        #expect(early == MainRunLoopBusyPeriods.Counters())
+        #expect(crossed.busyNanoseconds == 300 * Self.millisecond)
+        #expect(crossed.hangNanoseconds == 300 * Self.millisecond)
+        #expect(crossed.busyPeriods == 1)
+        #expect(sampled.completed == unsampled.completed)
+        #expect(sampled.completed.hangNanoseconds == 400 * Self.millisecond)
     }
 
     @Test func aSleepWithoutItsWakeIsNotAPeriod() {

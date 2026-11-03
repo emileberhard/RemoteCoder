@@ -83,7 +83,7 @@ final class ProcessResourceSampler {
             return
         }
         let mainThreadCPU = ProcessResources.mainThreadCPUNanoseconds()
-        let responsiveness = ResponsivenessMetrics.shared.snapshot(at: ResponsivenessMetrics.now())
+        let responsiveness = ResponsivenessMetrics.shared.settle(at: ResponsivenessMetrics.now())
         let now = clock.now
         lastSample = now
         runningTurns.accrue(to: now)
