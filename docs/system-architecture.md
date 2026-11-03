@@ -1241,8 +1241,9 @@ Opening a conversation is a deliberate short transition, not a blank frame
 followed by reflow. `RecentConversationCache` keeps the last published
 presentation and composer settings of the eight most recent conversations:
 presentations at publication and background warm-up, settings when a
-conversation is left, and each conversation's agents model with its last list,
-so a known subagents pill is present in the switch's first frame. An uncached
+conversation is left, each conversation's agents model with its last list,
+and the changes pill's last result when a conversation is left, so known
+subagents and changes pills are present in the switch's first frame. An uncached
 agents model has no summary until its first read. Each model coalesces selection,
 inspector, sheet and warmer reads into one cancellable RPC, reuses successful
 results within its freshness window (`RemoteCoder/AGENTS.md`), and refreshes

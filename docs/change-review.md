@@ -131,7 +131,9 @@ start turn and the prepared summary only when they change. The pill reads only
 its content; the transcript reads only visibility and the start turn. While it
 refreshes it observes the conversation's effective view (acknowledged marks
 plus pending changes), so any change to it, from this device, another device or
-an acknowledgement, restarts the read at once.
+an acknowledgement, restarts the read at once. Switching away records the last
+result in the host's `RecentConversationCache`; reopening the conversation in
+the same folder and view shows it at once until the first read replaces it.
 
 - Refreshes happen on appear, non-replay file-change and command completions,
   turn completion, activation and reconnect, for the shown conversation and

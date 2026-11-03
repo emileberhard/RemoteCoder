@@ -178,7 +178,8 @@ enum ChangeReviewFixture {
                       date: .now.addingTimeInterval(-1_800)),
             ])
         })
-        let summaryModel = ChangeSummaryModel(conversation: "preview", directory: "/Users/emil/stretch", client: client, views: views)
+        let summaryModel = ChangeSummaryModel(conversation: "preview", directory: "/Users/emil/stretch", client: client, views: views,
+                                              lastRead: nil)
         summaryModel.showPreview(summary, view: view)
         return summaryModel
     }

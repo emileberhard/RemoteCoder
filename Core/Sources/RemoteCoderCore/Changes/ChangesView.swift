@@ -83,6 +83,12 @@ struct ChangesPillContent: Equatable, Sendable {
     }
 }
 
+struct ChangeSummaryRead: Equatable, Sendable {
+    let directory: String
+    let content: ChangesPillContent
+    let summary: PreparedChangeSummary?
+}
+
 extension ChangesView {
     func label(since: TurnChanges.Since?, now: Date = .now) -> String? {
         switch self {
