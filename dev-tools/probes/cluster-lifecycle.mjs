@@ -82,15 +82,8 @@ async function worker(binary, runtimePackage) {
         const key = (await readFile(keyFile, "utf8")).trim();
         secrets.push(key);
         lab.router = startStubRouter({ url, key });
-        const linuxBinding = process.platform === "linux" ? [
-            `RC_CODEX_GATEWAY_LAN_BIND_ADDRESS=${process.env.RC_PROBE_LAN_ADDRESS}`,
-            `RC_CODEX_GATEWAY_LAN_HOST=${process.env.RC_PROBE_LAN_HOST}`,
-        ] : [];
-        if (process.platform === "linux") assert(process.env.RC_PROBE_LAN_ADDRESS && process.env.RC_PROBE_LAN_HOST,
-            "Linux cluster probe requires an explicit private interface address and host name");
         await lab.writeGatewayEnv([
             `RC_CODEX_GATEWAY_LAN_PORT=${process.platform === "linux" ? 19878 : await availablePort()}`,
-            ...linuxBinding,
             `RC_CODEX_GATEWAY_EXTERNAL_PROVIDERS_FILE=${lab.path("external-providers.json")}`,
             "RC_CLAUDE_ENABLED=true", `RC_CLAUDE_HOME=${lab.path(".claude")}`,
             `RC_CLAUDE_PATH=${process.env.RC_PROBE_CLAUDE_PATH ?? join(lab.realHome, ".local/bin/claude")}`,

@@ -17,8 +17,6 @@ pub(super) async fn run(sources: &ConfigSources) -> Result<()> {
         "RC_CODEX_GATEWAY_BIND_HOST",
         "RC_CODEX_GATEWAY_PORT",
         "RC_CODEX_GATEWAY_LAN_PORT",
-        "RC_CODEX_GATEWAY_LAN_BIND_ADDRESS",
-        "RC_CODEX_GATEWAY_LAN_HOST",
         "RC_CODEX_GATEWAY_AUTH_TOKEN",
         crate::cluster::routes::ENV_KEY,
         "RC_AGENT_JOB_SOCKET",

@@ -42,8 +42,6 @@ mod wire;
 use std::sync::Arc;
 use std::time::Duration;
 
-#[cfg(target_os = "linux")]
-use anyhow::Context;
 use anyhow::Result;
 use clap::Parser;
 use tracing::{error, info};
@@ -344,20 +342,10 @@ async fn run(
         Settings::load(&sources)?
     };
 
-    #[cfg(target_os = "linux")]
-    let lan = match &settings.lan {
-        Some(lan) => Some(
-            LanListener::bind(lan)
-                .await
-                .context("required Linux TLS listener failed")?,
-        ),
-        None => None,
-    };
-
     info!(
         bind_host = %settings.bind_host,
         port = settings.port,
-        lan_port = ?settings.lan.as_ref().map(|lan| lan.port),
+        lan_port = ?settings.lan_port,
         codex_path = %settings.codex_path.display(),
         codex_version = %settings.codex_version,
         codex_code_mode_host_path = %settings.codex_code_mode_host_path.display(),
@@ -443,8 +431,6 @@ async fn run(
         router,
         journal.clone(),
         recovery_only,
-        #[cfg(target_os = "linux")]
-        lan,
     )
     .await;
     let _ = gateway.stop().await;
@@ -459,7 +445,6 @@ async fn serve_started(
     router: Arc<providers::router::Router>,
     journal: Journal,
     recovery_only: bool,
-    #[cfg(target_os = "linux")] lan: Option<LanListener>,
 ) -> Result<()> {
     let accounts = accounts::Accounts::open(
         &settings.host_paths,
@@ -475,8 +460,6 @@ async fn serve_started(
         accounts.clone(),
         journal,
         recovery_only,
-        #[cfg(target_os = "linux")]
-        lan,
     )
     .await;
     if let Some(accounts) = accounts {
@@ -493,7 +476,6 @@ async fn serve_http(
     accounts: Option<Arc<accounts::Accounts>>,
     journal: Journal,
     recovery_only: bool,
-    #[cfg(target_os = "linux")] lan: Option<LanListener>,
 ) -> Result<()> {
     if recovery_only {
         return runtime::install::wait_for_recovery_completion().await;
@@ -515,13 +497,12 @@ async fn serve_http(
         settings.speech_clients.clone(),
         journal.clone(),
     )?;
-    #[cfg(not(target_os = "linux"))]
-    let lan = match &settings.lan {
-        Some(lan_settings) => match LanListener::bind(lan_settings).await {
+    let lan = match settings.lan_port {
+        Some(lan_port) => match LanListener::bind(lan_port).await {
             Ok(lan) => Some(lan),
             Err(error) => {
                 error!(
-                    lan_port = lan_settings.port,
+                    lan_port,
                     "LAN TLS listener unavailable; serving only the plaintext listener: {error:#}"
                 );
                 None
@@ -532,7 +513,7 @@ async fn serve_http(
     if let Some(listener) = &lan {
         gateway.configure_call_tls_endpoint(listener.endpoint().clone())?;
     }
-    let relay_route = match (&settings.lan, &lan) {
+    let relay_route = match (settings.lan_port, &lan) {
         (None, _) => RelayRoute::Absent,
         (Some(_), None) => RelayRoute::Unavailable,
         (Some(_), Some(_)) => {
