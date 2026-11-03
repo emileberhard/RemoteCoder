@@ -1019,13 +1019,13 @@ duration, or whose table the trace did not collect; `app.cpuUnavailableReason`
 and `renderServer.cpuUnavailableReason` do the same for samples without a
 weight.
 
-A trace is rejected (exit 1, after the JSON) when any app sample ran inside
-XCTest's automation frameworks under `/System/Developer/Library/`. agent-device,
-XCUITest and Xcode's device interaction take accessibility snapshots on the
-app's main thread; on 2026-10-19 they made a fling look 70–90 % main-busy when
-the app's own work was about 15 %. `app.automation` counts those samples and
-their CPU time by thread; rejection rests on the count, so a sample without a
-weight still rejects the trace. Drive measured journeys with `dev-tools/perf-sim`
+A trace is rejected (exit 1, after the JSON) when app samples inside XCTest's
+automation frameworks under `/System/Developer/Library/` exceed 1 % of the
+app's CPU or of its main-thread CPU, or when that share is unknown, such as for
+samples without a weight. agent-device, XCUITest and Xcode's device interaction
+take accessibility snapshots on the app's main thread; on 2026-10-19 they made
+a fling look 70–90 % main-busy when the app's own work was about 15 %.
+`app.automation` counts those samples and their CPU time by thread. Drive measured journeys with `dev-tools/perf-sim`
 or by hand, never with an XCTest-based driver, and close any such session before
 recording.
 Traces stay on
