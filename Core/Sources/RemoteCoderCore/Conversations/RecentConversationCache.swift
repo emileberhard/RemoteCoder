@@ -26,6 +26,7 @@ struct RecentConversationCache {
     private var presentations: [String: Presentation] = [:]
     private var settings: [String: Settings] = [:]
     private var agents: [String: ConversationAgentsModel] = [:]
+    private var changes: [String: ChangeSummaryRead] = [:]
     private var recency: [String] = []
 
     init(capacity: Int) {
@@ -38,6 +39,8 @@ struct RecentConversationCache {
     func settings(threadID: String) -> Settings? { settings[threadID] }
 
     func agents(threadID: String) -> ConversationAgentsModel? { agents[threadID] }
+
+    func changes(threadID: String) -> ChangeSummaryRead? { changes[threadID] }
 
     mutating func record(_ snapshot: ConversationSnapshot, session: ConversationSession?) {
         guard let threadID = snapshot.threadID, !snapshot.items.isEmpty else { return }
@@ -70,11 +73,17 @@ struct RecentConversationCache {
         touch(value.threadID)
     }
 
+    mutating func record(_ value: ChangeSummaryRead?, threadID: String) {
+        changes[threadID] = value
+        if value != nil { touch(threadID) }
+    }
+
     mutating func removeAll(keeping threadIDs: Set<String>) {
         presentations = presentations.filter { threadIDs.contains($0.key) }
         settings = settings.filter { threadIDs.contains($0.key) }
         agents = agents.filter { threadIDs.contains($0.key) }
-        recency.removeAll { presentations[$0] == nil && settings[$0] == nil && agents[$0] == nil }
+        changes = changes.filter { threadIDs.contains($0.key) }
+        recency.removeAll { presentations[$0] == nil && settings[$0] == nil && agents[$0] == nil && changes[$0] == nil }
     }
 
     private mutating func touch(_ threadID: String) {
@@ -96,6 +105,7 @@ struct RecentConversationCache {
             presentations[evicted] = nil
             settings[evicted] = nil
             agents[evicted] = nil
+            changes[evicted] = nil
         }
     }
 }

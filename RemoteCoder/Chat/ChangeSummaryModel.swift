@@ -20,6 +20,7 @@ final class ChangeSummaryModel {
     private(set) var startTurnID: String?
     @ObservationIgnored private let client: GatewayClient
     @ObservationIgnored private let views: ConversationChangesViews
+    @ObservationIgnored private let remember: @MainActor (ChangeSummaryRead?) -> Void
     @ObservationIgnored private var reading: Task<Void, Never>?
     @ObservationIgnored private var following: Task<Void, Never>?
     @ObservationIgnored private var resolvingNow: Task<Void, Never>?
@@ -29,11 +30,18 @@ final class ChangeSummaryModel {
     @ObservationIgnored private let logger = AppLogger(category: "ChangeReview")
     private static let spacing = Duration.seconds(10)
 
-    init(conversation: String, directory: String, client: GatewayClient, views: ConversationChangesViews) {
+    init(conversation: String, directory: String, client: GatewayClient, views: ConversationChangesViews,
+         lastRead: ChangeSummaryRead?, remember: @escaping @MainActor (ChangeSummaryRead?) -> Void) {
         self.conversation = conversation
         self.directory = directory
         self.client = client
         self.views = views
+        self.remember = remember
+        let stored = views.read()
+        offersViews = stored != nil
+        if let lastRead, lastRead.directory == directory, lastRead.content.view == stored ?? .standard {
+            publish(lastRead)
+        }
     }
 
     func summarizes(conversation: String?, directory: String?) -> Bool {
@@ -42,6 +50,11 @@ final class ChangeSummaryModel {
 
     var view: ChangesView {
         views.read() ?? .standard
+    }
+
+    var selectedView: ChangesView {
+        get { content?.view ?? view }
+        set { select(newValue) }
     }
 
     func startPoints() -> ChangesStartPoints {
@@ -142,7 +155,8 @@ final class ChangeSummaryModel {
         reading = nil
     }
 
-    private func publish(_ read: Read?) {
+    private func publish(_ read: ChangeSummaryRead?) {
+        remember(read)
         if read?.summary != summary { summary = read?.summary }
         if read?.content != content { content = read?.content }
         let isVisible = read?.content.isVisible ?? false
@@ -151,30 +165,28 @@ final class ChangeSummaryModel {
         if start != startTurnID { startTurnID = start }
     }
 
-    private struct Read: Sendable {
-        let content: ChangesPillContent
-        let summary: PreparedChangeSummary?
-    }
-
     @concurrent private static func read(client: GatewayClient, conversation: String, directory: String,
-                                         view: ChangesView) async throws -> Read {
+                                         view: ChangesView) async throws -> ChangeSummaryRead {
+        func result(_ content: ChangesPillContent, summary: PreparedChangeSummary? = nil) -> ChangeSummaryRead {
+            ChangeSummaryRead(directory: directory, content: content, summary: summary)
+        }
         switch view {
         case .git(let source):
             let summary = PreparedChangeSummary(try await client.readChangeSummary(
                 threadID: conversation, directory: directory, source: source == .branch ? nil : source))
-            return Read(content: ChangesPillContent(view: view, count: .known(summary.totals)), summary: summary)
+            return result(ChangesPillContent(view: view, count: .known(summary.totals)), summary: summary)
         case .lastTurn, .since:
             switch try await client.readTurnChanges(threadID: conversation, since: view.anchor) {
             case .ready(let changes):
                 let since: TurnChanges.Since? = if case .since(let since) = changes.window { since } else { nil }
-                return Read(content: ChangesPillContent(view: view, since: since, count: .known(changes.totals)), summary: nil)
+                return result(ChangesPillContent(view: view, since: since, count: .known(changes.totals)))
             case .noRecentEdits(true):
                 let none = ChangeTotals(counted: [ChangeTotals.Lines?](), unlistedFiles: 0, isComplete: true)
-                return Read(content: ChangesPillContent(view: view, count: .known(none)), summary: nil)
+                return result(ChangesPillContent(view: view, count: .known(none)))
             case .noRecentEdits(false):
-                return Read(content: ChangesPillContent(view: view, count: .unknown), summary: nil)
+                return result(ChangesPillContent(view: view, count: .unknown))
             case .anchorMissing:
-                return Read(content: ChangesPillContent(view: view, count: .startMissing), summary: nil)
+                return result(ChangesPillContent(view: view, count: .startMissing))
             }
         }
     }
@@ -184,7 +196,9 @@ final class ChangeSummaryModel {
 extension ChangeSummaryModel {
     func showPreview(_ summary: PreparedChangeSummary?, view: ChangesView = .standard) {
         offersViews = true
-        publish(summary.map { Read(content: ChangesPillContent(view: view, count: .known($0.totals)), summary: $0) })
+        publish(summary.map {
+            ChangeSummaryRead(directory: directory, content: ChangesPillContent(view: view, count: .known($0.totals)), summary: $0)
+        })
     }
 }
 #endif

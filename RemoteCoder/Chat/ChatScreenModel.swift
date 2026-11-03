@@ -220,7 +220,9 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         changeSummary = activeSessionID.flatMap { conversation in
             workingDirectory.map {
                 ChangeSummaryModel(conversation: conversation, directory: $0, client: target.gatewayClient,
-                                   views: changesViews(of: conversation))
+                                   views: changesViews(of: conversation),
+                                   lastRead: target.recentConversations.changes(threadID: conversation),
+                                   remember: { [weak target] in target?.recentConversations.record($0, threadID: conversation) })
             }
         }
     }
