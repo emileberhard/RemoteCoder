@@ -265,11 +265,11 @@ ios-build-local:
     python3 scripts/xcode_build.py ios-build xcodebuild -project RemoteCoder.xcodeproj -scheme RemoteCoder -configuration Debug \
         -derivedDataPath "${RC_DERIVED_DATA:-$PWD/build/ios-build-derived}" \
         -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO {{ simulator_compile_settings }} \
-        -disableAutomaticPackageResolution -onlyUsePackageVersionsFromResolvedFile -skipPackageUpdates build-for-testing
+        -disableAutomaticPackageResolution -onlyUsePackageVersionsFromResolvedFile build-for-testing
     python3 scripts/xcode_build.py ios-build xcodebuild -project RemoteCoder.xcodeproj -scheme RemoteCoderUITests -configuration Debug \
         -derivedDataPath "${RC_DERIVED_DATA:-$PWD/build/ios-build-derived}" \
         -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO {{ simulator_compile_settings }} \
-        -disableAutomaticPackageResolution -onlyUsePackageVersionsFromResolvedFile -skipPackageUpdates build-for-testing
+        -disableAutomaticPackageResolution -onlyUsePackageVersionsFromResolvedFile build-for-testing
 
 # Build-only check of the macOS app; nothing is launched, signed or tested.
 mac-build:
@@ -291,7 +291,7 @@ mac-build-local *build_settings:
     python3 scripts/xcode_build.py mac-build xcodebuild -project RemoteCoder.xcodeproj -scheme RemoteCoderMac -configuration Debug \
         -derivedDataPath "${RC_DERIVED_DATA:-$PWD/build/mac-build-derived}" \
         -destination 'generic/platform=macOS' CODE_SIGNING_ALLOWED=NO \
-        -disableAutomaticPackageResolution -onlyUsePackageVersionsFromResolvedFile -skipPackageUpdates COMPILER_INDEX_STORE_ENABLE=NO "$@" build
+        -disableAutomaticPackageResolution -onlyUsePackageVersionsFromResolvedFile COMPILER_INDEX_STORE_ENABLE=NO "$@" build
 
 mac-harness-build:
     python3 scripts/remote-build.py mac-harness-build
@@ -321,13 +321,13 @@ ios-simulator-test-local *test_ids: setup
         -project RemoteCoder.xcodeproj -scheme "{{ scheme }}"
         -configuration Debug "RC_LIVE_GATEWAY=${RC_LIVE_GATEWAY:-0}" -derivedDataPath "$derived_data"
         -destination "$destination"
-        -disableAutomaticPackageResolution -onlyUsePackageVersionsFromResolvedFile -skipPackageUpdates -collect-test-diagnostics never
+        -disableAutomaticPackageResolution -onlyUsePackageVersionsFromResolvedFile -collect-test-diagnostics never
         CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- {{ simulator_compile_settings }})
     mkdir -p "$derived_data"
     xcodebuild -project RemoteCoder.xcodeproj -alltargets -configuration Debug \
         -IDEDerivedDataPathOverride="$derived_data" \
         -clonedSourcePackagesDirPath "$derived_data/SourcePackages" \
-        -disableAutomaticPackageResolution -onlyUsePackageVersionsFromResolvedFile -skipPackageUpdates \
+        -disableAutomaticPackageResolution -onlyUsePackageVersionsFromResolvedFile \
         -sdk iphonesimulator CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- \
         -showBuildSettings -json >"$derived_data/simulator-build-settings.json"
     ./scripts/run-logged ios-simulator-build python3 scripts/xcode_build.py ios-build "${build_command[@]}" build-for-testing
@@ -354,7 +354,7 @@ ios-ui-test-local *test_ids: setup
         -project RemoteCoder.xcodeproj -scheme "RemoteCoderUITests"
         -derivedDataPath "${RC_DERIVED_DATA:-$PWD/build/ios-test-derived}"
         -destination "platform=iOS Simulator,name=${RC_IOS_SIMULATOR:?},OS=latest"
-        -disableAutomaticPackageResolution -onlyUsePackageVersionsFromResolvedFile -skipPackageUpdates -collect-test-diagnostics never test CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- {{ simulator_compile_settings }})
+        -disableAutomaticPackageResolution -onlyUsePackageVersionsFromResolvedFile -collect-test-diagnostics never test CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- {{ simulator_compile_settings }})
     for test_id in "$@"; do
         [[ -z "$test_id" ]] || command+=("-only-testing:$test_id")
     done

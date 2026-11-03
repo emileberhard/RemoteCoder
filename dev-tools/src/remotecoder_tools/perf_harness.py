@@ -299,7 +299,7 @@ def build_commands(device: Simulator | Device) -> list[list[str]]:
             "xcodebuild", "-jobs", os.environ.get("EMIL_BUILD_JOBS", "6"),
             "-project", "RemoteCoder.xcodeproj", "-scheme", "RemoteCoder",
             *device.build_settings(),
-            "-derivedDataPath", str(device.derived), "-disableAutomaticPackageResolution", "-onlyUsePackageVersionsFromResolvedFile", "-skipPackageUpdates",
+            "-derivedDataPath", str(device.derived), "-disableAutomaticPackageResolution", "-onlyUsePackageVersionsFromResolvedFile",
             "-skipPackagePluginValidation", "-skipMacroValidation",
             "COMPILER_INDEX_STORE_ENABLE=NO", "SWIFT_ACTIVE_COMPILATION_CONDITIONS=$(inherited) RC_PERF_HARNESS",
             "build",
