@@ -121,6 +121,20 @@ async fn cold_threads_keep_their_recorded_provider_and_imports_stay_native() {
             .is_err()
     );
     agent
+        .record_initial_selection(
+            "claude_effort",
+            "/tmp",
+            &selection("vendor/model", Some("xhigh")),
+        )
+        .await
+        .unwrap();
+    assert!(
+        agent
+            .update_settings("claude_effort", &external)
+            .await
+            .is_ok()
+    );
+    agent
         .record_initial_selection("claude_native", "/tmp", &native)
         .await
         .unwrap();

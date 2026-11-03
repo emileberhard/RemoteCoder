@@ -54,8 +54,21 @@ impl ClaudeSupervisor {
             .resolve_selection(selection, first_turn && previous.is_none())
             .await?;
         for old in previous.iter().chain(current.iter()) {
-            let old_route = self.resolve_selection(old, false).await?;
-            if old_route.provider_id() != route.provider_id()
+            let old_provider = self
+                .settings
+                .external_providers
+                .as_ref()
+                .and_then(|providers| providers.owner(&old.model))
+                .map(|provider| provider.id())
+                .or_else(|| {
+                    crate::providers::claude::exec::is_native_model(&old.model).then_some("claude")
+                })
+                .ok_or_else(|| TurnStartError {
+                    data: Some(super::TurnErrorData::ProviderUnavailable),
+                    code: crate::rpc::error::RpcCode::Unavailable,
+                    message: format!("Claude provider is unavailable for {}", old.model),
+                })?;
+            if old_provider != route.provider_id()
                 || (route.provider_id() != "claude" && old.model != selection.model)
             {
                 return Err(TurnStartError { data: None, code: crate::rpc::error::RpcCode::InvalidParams,
