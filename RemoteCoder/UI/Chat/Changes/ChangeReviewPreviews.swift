@@ -1,7 +1,7 @@
 #if DEBUG
 import SwiftUI
 
-private enum ChangeReviewFixture {
+enum ChangeReviewFixture {
     static let patches: [(String, Int, Int, ChangeSnapshot.Omission?)] = [
         ("""
         diff --git a/RemoteCoder/Chat/ChatScreenModel.swift b/RemoteCoder/Chat/ChatScreenModel.swift
@@ -155,9 +155,22 @@ private enum ChangeReviewFixture {
     static func model(_ state: ChangeReviewModel.State, view: ChangesView = .git(.uncommitted),
                       summary: PreparedChangeSummary? = nil, root: String? = nil,
                       notes: [ReviewNote] = []) -> ChangeReviewModel? {
+        guard let client = client() else { return nil }
+        let summaryModel = summaryModel(view: view, summary: summary, client: client)
+        let model = ChangeReviewModel(conversation: "preview", directory: "/Users/emil/stretch", client: client,
+                                      summary: summaryModel)
+        model.showPreview(state, view: view, root: root, notes: notes)
+        return model
+    }
+
+    static func client() -> GatewayClient? {
         let host = GatewayHostConfiguration(id: UUID(), name: "Preview", hostname: "127.0.0.1", port: 1,
                                             authToken: "preview", transport: .trustedNetwork)
-        guard let client = try? GatewayClient(host: host, routes: nil) else { return nil }
+        return try? GatewayClient(host: host, routes: nil)
+    }
+
+    @MainActor
+    static func summaryModel(view: ChangesView, summary: PreparedChangeSummary?, client: GatewayClient) -> ChangeSummaryModel {
         let views = ConversationChangesViews(read: { view }, write: { _ in }, startPoints: {
             ChangesStartPoints(now: ChangesAnchor(turnID: "turn-2", boundary: .end), prompts: [
                 .init(anchor: ChangesAnchor(turnID: "turn-2", boundary: .start), preview: "Ship the changes pill", date: .now),
@@ -167,9 +180,7 @@ private enum ChangeReviewFixture {
         })
         let summaryModel = ChangeSummaryModel(conversation: "preview", directory: "/Users/emil/stretch", client: client, views: views)
         summaryModel.showPreview(summary, view: view)
-        let model = ChangeReviewModel(conversation: "preview", directory: "/Users/emil/stretch", client: client, summary: summaryModel)
-        model.showPreview(state, view: view, root: root, notes: notes)
-        return model
+        return summaryModel
     }
 
     static var comment: ReviewNote {
