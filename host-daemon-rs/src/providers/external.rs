@@ -810,12 +810,12 @@ fn project(provider: &ExternalProvider, listing: &Value) -> Result<Vec<Value>> {
             warn!(provider = %provider.id, model = %id, "enabled external model is not listed");
             continue;
         };
-        match native_model(id, entry, priority).and_then(|mut model| {
+        match native_model(id, entry, priority).map(|mut model| {
             model["rc_messages"] = json!(
                 strings(&entry["capabilities"]["endpoints"])
                     .any(|endpoint| endpoint == "/v1/messages")
             );
-            Ok(model)
+            model
         }) {
             Ok(model) => models.push(model),
             Err(error) => {
