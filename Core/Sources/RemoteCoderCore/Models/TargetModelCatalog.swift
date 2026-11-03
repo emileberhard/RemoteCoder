@@ -83,8 +83,16 @@ struct TargetModelCatalog {
     func option(id: String, threadID: String, modelProvider: ThreadModelProvider?, effort: String?, fastMode: Bool) -> ModelOption? {
         guard !id.isEmpty else { return nil }
         let provider = AgentProvider.provider(forThreadID: threadID)
-        if let option = service.catalog?.entry(for: id)?.option, option.provider == provider,
-           modelProvider == nil || option.modelProvider?.id == modelProvider?.externalID { return option }
+        if let option = service.catalog?.entry(for: id)?.option {
+            if option.provider == provider, modelProvider == nil || option.modelProvider?.id == modelProvider?.externalID {
+                return option
+            }
+            if let route = modelProvider?.externalID, option.modelProvider?.id == route {
+                return ModelOption(id: option.id, displayName: option.displayName, reasoningEfforts: option.reasoningEfforts,
+                    supportsFastMode: option.supportsFastMode, supportsDaybreakBlue: option.supportsDaybreakBlue,
+                    acceptsImages: option.acceptsImages, provider: provider, modelProvider: option.modelProvider, isListed: option.isListed)
+            }
+        }
         if provider == .claude, modelProvider?.externalID == nil,
            let option = ClaudeModelCatalog.model(for: id) { return option }
         return .unlisted(id: id, modelProvider: modelProvider?.modelProvider,
