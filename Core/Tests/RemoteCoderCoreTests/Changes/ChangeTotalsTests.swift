@@ -30,4 +30,19 @@ struct ChangeTotalsTests {
         #expect(unlisted.files == 4)
         #expect(unlisted.lines == nil)
     }
+
+    @Test func summingAddsKnownFilesAndRequiresEveryLineCount() {
+        let known = ChangeTotals(snapshot([modified, binary]))
+        let other = ChangeTotals(snapshot([modified]))
+        let summed = ChangeTotals(summing: [known, other])
+        #expect(summed.files == 3)
+        #expect(summed.lines == ChangeTotals.Lines(additions: 4, deletions: 2))
+        for unknown in [nil, ChangeTotals(snapshot([unmerged])), ChangeTotals(snapshot([modified], complete: false))] {
+            let sum = ChangeTotals(summing: [known, unknown])
+            #expect(sum.files == 2 + (unknown?.files ?? 0))
+            #expect(sum.lines == nil)
+        }
+        let empty = ChangeTotals(summing: [ChangeTotals?]())
+        #expect(empty.files == 0 && empty.lines == .init(additions: 0, deletions: 0))
+    }
 }

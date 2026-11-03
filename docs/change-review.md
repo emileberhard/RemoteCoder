@@ -17,75 +17,100 @@ Changes button or the command palette).
 | `uncommitted` | `HEAD` (or the empty tree before the first commit) with the working tree | yes |
 | `staged` | `HEAD` with the index | no |
 | `unstaged` | the index with the working tree | yes |
-| `branch` | the merge base with the default branch with the working tree | yes |
+| `branch` | the merge base with the branch’s start point with the working tree | yes |
 
-The default branch is `origin/HEAD`, then `origin/main`, `origin/master`,
-`main` and `master`, each compared by its full ref name; the snapshot's `base`
-is the short name for display. A read answers `ready` with a snapshot or
-`unavailable` with a reason (`missingDirectory`, `notRepository`,
-`noBaseBranch`, `noMergeBase`). Only Git's "not found" exit status means
-absent; every other Git failure is an RPC error. The app shows each as its own
-state, never as an empty comparison.
+Branch reads HEAD's full branch ref and streams its reflog newest first, up to
+1 MiB, stopping at the first `branch: Created from` or `branch: Reset to`
+entry. A surviving named ref other than HEAD's own branch is the base. For
+`HEAD`, `@`, a commit, an expression or a deleted ref, the entry's commit and
+the default branch compete: the merge base leaving fewer commits ahead of
+HEAD wins, with the default winning ties. A commit base is shown as an
+abbreviated hash. `reset: moving to` entries are ignored.
+
+Without a start point, including detached HEAD, the default branch is
+`origin/HEAD`, then `origin/main`, `origin/master`, `main` and `master`, each
+compared by its full ref name. The snapshot's `base` is its display name. A
+read answers `ready` with a snapshot or `unavailable` with a reason
+(`missingDirectory`, `notRepository`, `noBaseBranch`, `noMergeBase`). Only
+Git's "not found" exit status means absent; other Git failures are RPC errors.
+The app shows each as its own state, never as an empty comparison.
 
 ## Checkouts
 
 A conversation's folder is often not the repository its agents changed: a
 folder of repositories such as `~/stretch`, or a main checkout while agents
-edit worktrees. `changes/checkouts` (`{threadId?, directory}`) finds the
-candidates without running Git:
+edit worktrees. `changes/summary` (`{threadId, directory}`, both required,
+absolute directory, unknown fields rejected) discovers candidates and counts
+them under one change-reader admission. Older apps retain `changes/checkouts`
+with its discovery-only reply.
 
-- It reads the conversation's newest ten history pages and, at the same time,
-  five pages of each of its 16 most recently active same-host child agents,
-  four agents at a time, keeping only folder paths. Each completed
-  `fileChange` path's folder (and move target) is `edited` evidence and each
-  command's `cwd` is `command` evidence.
+- Discovery reads the conversation's newest ten history pages and, at the same
+  time, five pages of each of its 16 most recently active same-host child
+  agents, four agents at a time, keeping only folder paths. Completed
+  `fileChange` paths and move targets provide `edited` evidence; commands
+  provide `command` evidence.
+- A command's folder is its `cwd`, except a leading literal `cd` to an
+  unquoted absolute path, `~` or `~/…`, followed by `&&`, `;`, newline or end.
+  Home expands from the gateway's HOME, read once; `.` and `..` normalize
+  lexically. Relative paths, shell expansions, quotes, escapes, globs and
+  other shell operators do not qualify. Codex's wrapped shell strings keep
+  their recorded workdir.
 - A folder's checkout is the nearest ancestor holding `.git` (directory or
-  file), so worktrees and submodules stay separate. Folders that no longer
-  exist are skipped.
-- `workedIn` lists up to 16 checkouts, most recently observed first. A
-  working folder inside a checkout adds `workingFolder` evidence; a working
-  folder that is not a checkout lists its direct child checkouts the agents did
-  not work in as `inFolder` (up to 64, from its first 4,096 entries).
+  file), so worktrees and submodules stay separate. Missing folders are skipped.
+- `workedIn` lists up to 16 checkouts, most recently observed first. A working
+  folder inside a checkout adds `workingFolder` evidence. A working folder
+  outside any checkout lists its unworked direct child checkouts in `inFolder`
+  (up to 64, from its first 4,096 entries).
 - `complete` is false when history or an agent could not be read, the agent
   list was incomplete, or a list was cut at its limit.
 
-The app reads the first `workedIn` checkout with `edited` evidence, else the
-first one, else the working folder, and shows every candidate in the
-comparison menu. Opening or refreshing the review finds the checkouts again,
-so the default follows the latest edits; switching comparisons reuses the
-last answer. Each opening starts at the default comparison and checkout, the
-ones the changes pill counted, as ChatGPT's capsule does; until then a chosen
-comparison and checkout stay selected across refreshes. When
-discovery fails, the menu says so and the review reads the chosen checkout or
-the working folder.
+Each worked-in checkout is read sequentially with header-only patch budgets.
+Its flattened outcome is `ready` with a snapshot, `unavailable` with a reason,
+or `failed`. Git errors are logged with the checkout root and fail only that
+checkout. A 20-second deadline after admission includes discovery and all
+checkout reads; unfinished checkout reads become failed. Discovery exceeding
+the deadline fails the request because no completed checkout inventory exists.
+Per-file hunk omissions in these snapshots are expected and used only for counts;
+review always reads its own full patches.
+
+The summary reads Branch, except it reads Uncommitted when the base ref is
+HEAD's own branch or a remote-tracking ref of the same branch name. Branch
+unavailability from a missing base or merge base also falls back to
+Uncommitted. Upstream tracking alone never identifies a base checkout: a new
+feature worktree can track `origin/main` too.
 
 ## Changes pill
 
-The changes pill sits beside the subagents pill above the composer, as in
-ChatGPT for iOS, and appears only while the conversation's checkout has
-uncommitted changes. It shows the file count and, when every file's counts are
-known, the added and removed lines. `ChangeSummaryModel` owns those totals for
-the screen's conversation and folder: it reads `changes/checkouts`, then
-`changes/read` with the review's default comparison
-(`ChangeReviewModel.defaultSource`) in the same default checkout the review
-opens, and keeps only the totals (`ChangeTotals`, which the review's summary
-shares). A New Chat without a conversation has no pill.
+The pill sums files across all worked-in checkouts, including committed branch
+work, until that work is merged into its base. Core prepares each checkout's
+`ChangeTotals?`, the sum and the primary checkout off the main actor. File
+counts add over known checkouts; line totals are shown only when every
+checkout and file has known counts. An unavailable or failed checkout remains
+unknown, and other checkouts still contribute. The primary is the first
+worked-in checkout with known changed files and carries its snapshot's source.
+A New Chat without a conversation has no pill.
 
-- It reads when the conversation appears, when a file change or turn of the
-  shown conversation or one of its listed agents completes, when the app
-  becomes active and when the gateway connects, and only while the screen is
-  on screen in an active scene. Backgrounding cancels a running read. One read
-  runs at a time and each is followed by two quiet seconds; requests in between
-  start a single further read, so a turn that edits many files costs a read
-  every few seconds at most.
-- A failed read, including failed checkout discovery, keeps the last totals and
-  logs rather than counting another checkout; a folder that is not a
-  repository, or has no changes, hides the pill.
-- iOS has no other entry to the review, so it is unreachable while the
-  checkout has no uncommitted changes, for example after an agent commits its
-  work. The Mac keeps the toolbar's Changes button and ⇧⌘D.
-- Opening the review reads again, so the review can list a newer state than
-  the pill counted.
+`ChangeSummaryModel` owns one summary for the screen's conversation and folder.
+Each refresh makes one `changes/summary` call and publishes totals, `hasChanges`
+and the prepared summary only when they change. The pill reads only totals;
+the transcript reads only `hasChanges`.
+
+- Refreshes happen on appear, non-replay file-change and command completions,
+  turn completion, activation and reconnect, for the shown conversation and
+  its listed agents. Only visible screens in active scenes request them;
+  backgrounding cancels a running read. One read runs at a time, followed by
+  ten quiet seconds, and intervening demand coalesces into one further read.
+- A request failure retains the last summary and logs the error. An old
+  gateway's MethodNotFound clears the pill and logs once per model; later
+  refreshes can discover an updated gateway.
+- The review shares the screen's summary and performs no separate discovery.
+  Each reopening starts on the primary's checkout and comparison. Without a
+  primary it opens Branch on the first worked-in checkout, else the working
+  folder. Selection stays fixed during refresh; refresh also requests a new
+  summary. The checkout menu shows each worked-in checkout's file count,
+  No changes or Couldn't read, plus in-folder candidates and incomplete coverage.
+- Opening the review reads full patches again, so its state can be newer than
+  the pill. On the Mac the toolbar's Changes button and ⇧⌘D also remain available.
 
 ## Last turn
 
@@ -206,14 +231,23 @@ stays a thin host boundary.
   shell commands, other agents and the user. Last Turn complements it with the
   agents' own records, which work outside Git and across checkouts but miss
   command edits, so it says how many commands ran instead of guessing.
-- The pill follows ChatGPT for iOS 1.2026.286, whose capsule on a connected
-  host hides at zero files and resets its review to the comparison it counts
-  on every opening. ChatGPT counts Unstaged because it stages from its review.
-  RemoteCoder has no staging, so the pill counts Uncommitted, which keeps work
-  an agent staged but did not commit visible.
-- Checkout discovery reads history and the filesystem only: no Git process,
-  branch names or dirty filtering, so it stays cheap enough to repeat on every
-  refresh.
+- The pill follows ChatGPT for iOS 1.2026.286's hide-at-zero and reset-on-open
+  behavior. Its Branch comparison deliberately departs from ChatGPT's Unstaged:
+  agents commit as they work, so Uncommitted and Unstaged erase useful counts.
+- Base checkouts use Uncommitted so another agent's unpushed commits on shared
+  main do not become this conversation's work. Shared uncommitted edits and
+  branch changes still cannot be attributed to one agent by Git. A checkout
+  whose branch starts from its same-named remote also uses this exception.
+- The latest branch creation or forced branch reset defines its start point;
+  ordinary commit resets do not change that intent. Commit start points compete
+  with the default to exclude upstream work after a rebase. Reflog expiry and
+  detached HEAD use the default rule; this can temporarily broaden a comparison.
+- One summary RPC owns discovery and sequential header reads, avoiding duplicate
+  app discovery and full patch decoding just to count. Partial checkout failures
+  preserve known counts. Command completions cover shell-only edits, with ten-second
+  spacing limiting refresh cost. Old gateways show no pill until updated.
+- Discovery itself reads only history and the filesystem; Git reads follow it
+  inside the same bounded admission. The summary and review share discovery state.
 - The gateway sends per-file patch text instead of a structured diff. One
   display parser in Core avoids two diff models and keeps the wire stable; the
   gateway still bounds sizes and counts lines for files it omits. Last Turn's

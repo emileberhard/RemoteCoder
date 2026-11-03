@@ -13,13 +13,13 @@ extension GatewayClient {
         )
     }
 
-    func readCheckouts(threadID: String?, directory: String) async throws -> CheckoutDiscovery {
+    func readChangeSummary(threadID: String, directory: String) async throws -> ChangeSummary {
         struct Request: Encodable {
-            let threadId: String?
+            let threadId: String
             let directory: String
         }
         return try await callDecodable(
-            method: "changes/checkouts",
+            method: "changes/summary",
             params: encodeToJSONValue(Request(threadId: threadID, directory: directory)),
             timeout: timeouts.history
         )

@@ -9,11 +9,13 @@ final class ChangeSummaryModel {
     let directory: String
     private(set) var totals: ChangeTotals?
     private(set) var hasChanges = false
+    private(set) var summary: PreparedChangeSummary?
     @ObservationIgnored private let client: GatewayClient
     @ObservationIgnored private var reading: Task<Void, Never>?
     @ObservationIgnored private var isStale = false
+    @ObservationIgnored private var loggedUnsupportedGateway = false
     @ObservationIgnored private let logger = AppLogger(category: "ChangeReview")
-    private static let spacing = Duration.seconds(2)
+    private static let spacing = Duration.seconds(10)
 
     init(conversation: String, directory: String, client: GatewayClient) {
         self.conversation = conversation
@@ -46,9 +48,16 @@ final class ChangeSummaryModel {
         repeat {
             isStale = false
             do {
-                let totals = try await Self.read(client: client, conversation: conversation, directory: directory)
+                let summary = try await Self.read(client: client, conversation: conversation, directory: directory)
                 guard !Task.isCancelled else { return }
-                publish(totals)
+                publish(summary)
+            } catch GatewayClient.ClientError.serverError(_, let code) where code == -32601 {
+                guard !Task.isCancelled else { return }
+                publish(nil)
+                if !loggedUnsupportedGateway {
+                    loggedUnsupportedGateway = true
+                    logger.notice("Changes summary is unavailable until the gateway updates")
+                }
             } catch {
                 guard !Task.isCancelled else { return }
                 logger.notice("Summarizing changes failed: \(error.localizedDescription)")
@@ -58,17 +67,23 @@ final class ChangeSummaryModel {
         reading = nil
     }
 
-    private func publish(_ totals: ChangeTotals?) {
+    private func publish(_ summary: PreparedChangeSummary?) {
+        if summary != self.summary { self.summary = summary }
+        let totals = summary?.totals
         if totals != self.totals { self.totals = totals }
         let hasChanges = (totals?.files ?? 0) > 0
         if hasChanges != self.hasChanges { self.hasChanges = hasChanges }
     }
 
-    @concurrent private static func read(client: GatewayClient, conversation: String, directory: String) async throws -> ChangeTotals? {
-        let root = try await client.readCheckouts(threadID: conversation, directory: directory).defaultRoot
-        switch try await client.readChanges(directory: root ?? directory, source: ChangeReviewModel.defaultSource) {
-        case .ready(let snapshot): return ChangeTotals(snapshot)
-        case .unavailable: return nil
-        }
+    @concurrent private static func read(client: GatewayClient, conversation: String, directory: String) async throws -> PreparedChangeSummary {
+        PreparedChangeSummary(try await client.readChangeSummary(threadID: conversation, directory: directory))
     }
 }
+
+#if DEBUG
+extension ChangeSummaryModel {
+    func showPreview(_ summary: PreparedChangeSummary?) {
+        publish(summary)
+    }
+}
+#endif

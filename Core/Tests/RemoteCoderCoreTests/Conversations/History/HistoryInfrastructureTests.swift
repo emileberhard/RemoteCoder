@@ -38,9 +38,9 @@ struct HistoryInfrastructureTests {
         let service = GatewayHistoryService(gateway: gateway, cache: cache)
         let header = ConversationHeader.historyFixture()
         let older = Task { try await service.openTail(header: header, base: nil, bypassCache: true) }
-        try await eventually { await gateway.pendingItems == 1 }
+        await gateway.waitForItemRequests(1)
         let newer = Task { try await service.openTail(header: header, base: nil, bypassCache: true) }
-        try await eventually { await gateway.pendingItems == 2 }
+        await gateway.waitForItemRequests(2)
         await gateway.releaseItems(1, text: "newer")
         let newerSnapshot = try await newer.value
         #expect(newerSnapshot.window.turns.flatMap { $0.entries.map(\.item) } == [.agentMessage(id: "reply", text: "newer")])
@@ -53,7 +53,7 @@ struct HistoryInfrastructureTests {
         #expect(cached.window.turns.flatMap { $0.entries.map(\.item) } == [.agentMessage(id: "reply", text: "newer")])
         let next = Task { try await service.openTail(header: header, base: nil) }
         defer { await gateway.releaseItems(2, text: "current"); _ = await next.result }
-        try await eventually { await gateway.pendingItems == 1 }
+        await gateway.waitForItemRequests(3)
         await gateway.releaseItems(2, text: "current")
         let read = try await next.value
         #expect(read.source == .gateway)
@@ -371,8 +371,14 @@ private actor ReadGate {
 private actor OrderedHistoryGateway: CodexHistoryGateway {
     let historyHostID = "host"
     private var items: [Int: CheckedContinuation<Data, any Error>] = [:]
+    private var itemWaiter: (count: Int, continuation: CheckedContinuation<Void, Never>)?
     private(set) var itemRequests = 0
-    var pendingItems: Int { items.count }
+
+    func waitForItemRequests(_ count: Int) async {
+        guard itemRequests < count else { return }
+        precondition(itemWaiter == nil)
+        await withCheckedContinuation { itemWaiter = (count, $0) }
+    }
 
     func historyPageData(method: String, params: JSONValue) async throws -> Data {
         if method == "thread/turns/list" {
@@ -383,7 +389,13 @@ private actor OrderedHistoryGateway: CodexHistoryGateway {
         guard method == "thread/items/list" else { throw ProbeFailure.expected }
         let id = itemRequests
         itemRequests += 1
-        return try await withCheckedThrowingContinuation { items[id] = $0 }
+        return try await withCheckedThrowingContinuation { continuation in
+            items[id] = continuation
+            if let waiter = itemWaiter, itemRequests >= waiter.count {
+                itemWaiter = nil
+                waiter.continuation.resume()
+            }
+        }
     }
 
     func releaseItems(_ id: Int, text: String) {

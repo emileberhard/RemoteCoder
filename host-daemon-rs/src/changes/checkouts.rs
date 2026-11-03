@@ -30,6 +30,72 @@ pub(crate) struct Discovery {
     pub complete: bool,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ChangeSummary {
+    pub worked_in: Vec<CheckoutSummary>,
+    pub in_folder: Vec<String>,
+    pub complete: bool,
+}
+
+#[derive(Serialize)]
+pub(crate) struct CheckoutSummary {
+    pub root: String,
+    pub evidence: BTreeSet<Evidence>,
+    #[serde(flatten)]
+    pub outcome: SummaryOutcome,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "status", rename_all = "camelCase")]
+pub(crate) enum SummaryOutcome {
+    Ready {
+        snapshot: crate::changes::Snapshot,
+    },
+    Unavailable {
+        reason: crate::changes::Unavailability,
+    },
+    Failed,
+}
+
+pub(crate) fn command_directory(command: &str, home: &Path) -> Option<PathBuf> {
+    let command = command.trim_start().strip_prefix("cd")?;
+    if !command.starts_with([' ', '\t']) {
+        return None;
+    }
+    let command = command.trim_start_matches([' ', '\t']);
+    let end = command
+        .find(|c: char| c.is_whitespace() || ";&|<>()".contains(c))
+        .unwrap_or(command.len());
+    let token = &command[..end];
+    let rest = command[end..].trim_start_matches([' ', '\t']);
+    if !(rest.is_empty() || rest.starts_with("&&") || rest.starts_with([';', '\n']))
+        || token.contains(['\'', '"', '$', '`', '\\', '*', '?', '[', '{'])
+    {
+        return None;
+    }
+    let path = if token == "~" {
+        home.to_path_buf()
+    } else if let Some(relative) = token.strip_prefix("~/") {
+        home.join(relative)
+    } else if token.starts_with('/') {
+        PathBuf::from(token)
+    } else {
+        return None;
+    };
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            std::path::Component::CurDir => {}
+            component => normalized.push(component),
+        }
+    }
+    Some(normalized)
+}
+
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct Observations(HashMap<PathBuf, (BTreeSet<Evidence>, Option<i64>)>);
 
@@ -156,6 +222,42 @@ fn child_checkouts(
 mod tests {
     use super::*;
 
+    #[test]
+    fn leading_cd_accepts_only_literal_absolute_or_home_paths() {
+        for (command, expected) in [
+            ("cd ~/a && x", Some("/home/agent/a")),
+            ("cd /a/b; x", Some("/a/b")),
+            ("cd /a/../b\nx", Some("/b")),
+            ("cd ~", Some("/home/agent")),
+            (" \tcd /a/./b && x", Some("/a/b")),
+            ("cd $HOME/a", None),
+            ("cd \"/a\"", None),
+            ("cd a", None),
+            ("cd -", None),
+            ("cd ~bob", None),
+            ("cd /a || x", None),
+            ("cd /a | x", None),
+            ("cd /a &", None),
+            ("cd /a*", None),
+            ("/bin/zsh -lc 'cd /a && x'", None),
+            ("echo; cd /a", None),
+            ("cd /a\\b", None),
+            ("cd /a$(x)", None),
+            ("cd /a`x`", None),
+            ("cd /a?", None),
+            ("cd /a[0]", None),
+            ("cd /a{x,y}", None),
+            ("cd /a > out", None),
+            ("cd /a(x)", None),
+        ] {
+            assert_eq!(
+                command_directory(command, Path::new("/home/agent")),
+                expected.map(PathBuf::from),
+                "{command}"
+            );
+        }
+    }
+
     fn repository(path: &Path) {
         std::fs::create_dir_all(path.join(".git")).unwrap();
     }
@@ -242,6 +344,77 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(serde_json::to_value(discovery).unwrap(), fixture);
+    }
+
+    #[test]
+    fn summary_serializes_like_the_shared_fixture() {
+        use super::super::{
+            Snapshot, Source, Unavailability,
+            patch::{ChangedFile, Omission, OmissionReason},
+        };
+        let empty = Snapshot {
+            source: Source::Uncommitted,
+            root: "/Users/agent/configs".into(),
+            branch: Some("main".into()),
+            base: None,
+            captured_at_ms: 1_793_636_914_000,
+            files: Vec::new(),
+            unlisted_files: 0,
+            complete: true,
+        };
+        let branch = Snapshot {
+            source: Source::Branch,
+            root: "/Users/agent/RemoteCoder-worktrees/x".into(),
+            branch: Some("feature".into()),
+            base: Some("origin/main".into()),
+            captured_at_ms: 1_793_636_914_000,
+            files: vec![ChangedFile {
+                patch: "diff --git a/app.swift b/app.swift\n--- a/app.swift\n+++ b/app.swift\n"
+                    .into(),
+                additions: 3,
+                deletions: 1,
+                omitted: Some(Omission {
+                    reason: OmissionReason::FileTooLarge,
+                    patch_bytes: 25,
+                }),
+                replaced_invalid_utf8: false,
+            }],
+            unlisted_files: 0,
+            complete: true,
+        };
+        let summary = ChangeSummary {
+            worked_in: vec![
+                CheckoutSummary {
+                    root: empty.root.clone(),
+                    evidence: BTreeSet::from([Evidence::Command]),
+                    outcome: SummaryOutcome::Ready { snapshot: empty },
+                },
+                CheckoutSummary {
+                    root: branch.root.clone(),
+                    evidence: BTreeSet::from([Evidence::Edited, Evidence::Command]),
+                    outcome: SummaryOutcome::Ready { snapshot: branch },
+                },
+                CheckoutSummary {
+                    root: "/Users/agent/gone".into(),
+                    evidence: BTreeSet::from([Evidence::Edited]),
+                    outcome: SummaryOutcome::Unavailable {
+                        reason: Unavailability::MissingDirectory,
+                    },
+                },
+                CheckoutSummary {
+                    root: "/Users/agent/broken".into(),
+                    evidence: BTreeSet::from([Evidence::Command]),
+                    outcome: SummaryOutcome::Failed,
+                },
+            ],
+            in_folder: vec!["/Users/agent/stretch/kartan".into()],
+            complete: false,
+        };
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../protocol-fixtures/changes/summary.json"
+        ))
+        .unwrap();
+        assert_eq!(serde_json::to_value(summary).unwrap(), fixture);
     }
 
     #[test]
