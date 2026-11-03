@@ -61,6 +61,62 @@ def test_releases_split_each_build_by_surface_and_count_drawer_visits():
     assert second["diskMBPerActiveHour"] == {"total": None, "byOwner": {}}
 
 
+RUN_LOOP_BOUNDS = ("17", "33", "50", "100", "250", "500", "1000", "2000")
+SWITCH_BOUNDS = ("50", "100", "150", "200", "300", "500", "750", "1000", "2000", "4000")
+
+
+def responsive_sample(seq: int, seconds: int, cpu_ms: int, main_ms: int, busy_ms: int, hang_ms: int,
+                      at_least: list[int], turn_seconds: int | None, streamed: tuple[int, int],
+                      switches: list[int]) -> dict:
+    record = sample("c", seq, seconds, cpu_ms, 100, 0)
+    workload = {"streamedDeltas": streamed[0], "streamedBytes": streamed[1]}
+    if turn_seconds is not None:
+        workload |= {"runningTurns": 1, "runningTurnNs": turn_seconds * 1_000_000_000}
+    return record | {
+        "mainThreadCpuNs": main_ms * 1_000_000,
+        "runLoop": {"busyNs": busy_ms * 1_000_000, "busyPeriods": seq * 50, "hangNs": hang_ms * 1_000_000,
+                    "busyPeriodsAtLeastMs": dict(zip(RUN_LOOP_BOUNDS, at_least, strict=True))},
+        "switches": {"completed": switches[-1], "abandoned": 0, "completedNs": 0,
+                     "completedWithinMs": dict(zip(SWITCH_BOUNDS, switches, strict=True))},
+        "workload": workload,
+    }
+
+
+def test_releases_read_main_thread_workload_and_switches_and_keep_older_builds_unknown():
+    records = [
+        header("old", "3.92.0"),
+        sample("old", 1, 0, 0, 100, 0),
+        sample("old", 2, 30, 300, 100, 0),
+        header("c", "3.94.0"),
+        responsive_sample(1, 0, 0, 0, 0, 0, [0] * 8, None, (0, 0), [0] * 10),
+        responsive_sample(2, 30, 3000, 1500, 3000, 300, [10, 5, 3, 2, 1, 0, 0, 0], 0, (10, 1000),
+                          [0, 0, 1, 1, 1, 1, 1, 1, 1, 1]),
+        responsive_sample(3, 60, 4500, 2100, 3900, 300, [11, 5, 3, 2, 1, 0, 0, 0], 90, (40, 7000),
+                          [0, 1, 2, 2, 2, 3, 3, 3, 3, 3]),
+        responsive_sample(4, 90, 5400, 2400, 4200, 300, [11, 5, 3, 2, 1, 0, 0, 0], 120, (40, 7000),
+                          [0, 1, 2, 2, 2, 3, 3, 3, 3, 3]),
+    ]
+
+    rows = {row["build"]["appVersion"]: row for row in release_rows(telemetry_runs(records))}
+    old, new = rows["3.92.0"], rows["3.94.0"]
+
+    assert new["mainThread"] == {"minutes": 1.5, "cpuPercent": 2.67, "busyPercent": 4.67, "blockedPercent": 2.0,
+                                 "stallsPerActiveHour": {"atLeast100Ms": 80.0, "atLeast250Ms": 40.0},
+                                 "hangSecondsPerActiveHour": 12.0}
+    assert new["workload"] == {"minutes": 1.0, "averageRunningTurns": 2.0, "streamedDeltasPerMinute": 30.0,
+                               "streamedKBPerMinute": 6.0}
+    assert new["chat"]["likeForLike"] == {"maxRunningTurns": 2, "minutes": 0.5, "cpuPercent": 3.0}
+    assert new["switches"] == {"intervals": 3, "completed": 3, "abandoned": 0, "p50Ms": 150, "p90Ms": 500}
+
+    assert old["mainThread"]["minutes"] == 0
+    assert old["mainThread"]["cpuPercent"] is None
+    assert old["mainThread"]["stallsPerActiveHour"] == {"atLeast100Ms": None, "atLeast250Ms": None}
+    assert old["workload"] == {"minutes": 0, "averageRunningTurns": None, "streamedDeltasPerMinute": None,
+                               "streamedKBPerMinute": None}
+    assert old["chat"]["likeForLike"]["cpuPercent"] is None
+    assert old["switches"] == {"intervals": 0, "completed": 0, "abandoned": 0, "p50Ms": None, "p90Ms": None}
+
+
 def resolve_root(tmp_path: Path, path: str) -> subprocess.CompletedProcess:
     command = host_logs.log_root_shell() + f'printf %s "${host_logs.LOG_ROOT_VARIABLE}"'
     return subprocess.run(["sh", "-c", command], env={"HOME": str(tmp_path), "PATH": path},
