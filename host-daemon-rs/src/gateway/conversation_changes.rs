@@ -1,6 +1,8 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use futures_util::StreamExt;
@@ -10,7 +12,9 @@ use serde_json::{Value, json};
 use super::Gateway;
 use super::rpc_methods::decode_params;
 use crate::changes::Admission;
-use crate::changes::checkouts::{self, Discovery, Evidence, Observations};
+use crate::changes::checkouts::{
+    self, ChangeSummary, CheckoutSummary, Discovery, Evidence, Observations, SummaryOutcome,
+};
 use crate::changes::turn::{self, Change, Edit, TurnFile};
 use crate::rpc::error::RpcCode;
 use crate::rpc::{RpcError, RpcResult};
@@ -22,6 +26,14 @@ const RECENT_TURNS: usize = 20;
 const MAXIMUM_AGENTS: usize = 16;
 const CONCURRENT_AGENT_READS: usize = 4;
 const MAXIMUM_RECORDED_EDIT_BYTES: usize = 32 * 1024 * 1024;
+const SUMMARY_TIMEOUT: Duration = Duration::from_secs(20);
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SummaryRequest {
+    thread_id: String,
+    directory: String,
+}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -200,6 +212,15 @@ impl Gateway {
                         .await?,
                 )
             }
+            "changes/summary" => {
+                let request: SummaryRequest = decode_params(params)?;
+                absolute(&request.directory)?;
+                serde_json::to_value(
+                    self.changes
+                        .admit(|admission| self.change_summary(request, admission))
+                        .await?,
+                )
+            }
             "changes/turn" => {
                 let TurnRequest { thread_id } = decode_params(params)?;
                 serde_json::to_value(
@@ -216,6 +237,27 @@ impl Gateway {
             }
         };
         Ok(response.context("Could not encode the changes")?)
+    }
+
+    async fn change_summary(
+        &self,
+        request: SummaryRequest,
+        admission: Admission,
+    ) -> Result<ChangeSummary> {
+        let deadline = tokio::time::Instant::now() + SUMMARY_TIMEOUT;
+        let discovery = tokio::time::timeout_at(
+            deadline,
+            self.checkouts(
+                CheckoutsRequest {
+                    thread_id: Some(request.thread_id),
+                    directory: request.directory,
+                },
+                admission,
+            ),
+        )
+        .await
+        .context("Checkout discovery exceeded the summary deadline")??;
+        Ok(summarize_checkouts(discovery, deadline).await)
     }
 
     async fn checkouts(
@@ -502,21 +544,149 @@ fn active_since(last_active_seconds: Option<i64>, since_ms: i64) -> bool {
 }
 
 fn activity_kind(item: &Value) -> Option<ActivityKind> {
+    static HOME: OnceLock<PathBuf> = OnceLock::new();
     match item["type"].as_str()? {
         "fileChange" => Some(ActivityKind::Edits(turn::recorded_edits(item))),
         "commandExecution" => Some(ActivityKind::Command {
-            cwd: item["cwd"]
+            cwd: item["command"]
                 .as_str()
-                .filter(|cwd| cwd.starts_with('/'))
-                .map(str::to_owned),
+                .and_then(|command| {
+                    checkouts::command_directory(
+                        command,
+                        HOME.get_or_init(|| {
+                            PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
+                        }),
+                    )
+                    .filter(|path| path.is_absolute())
+                    .map(|path| path.to_string_lossy().into_owned())
+                })
+                .or_else(|| {
+                    item["cwd"]
+                        .as_str()
+                        .filter(|cwd| cwd.starts_with('/'))
+                        .map(str::to_owned)
+                }),
         }),
         _ => None,
+    }
+}
+
+async fn summarize_checkouts(
+    discovery: Discovery,
+    deadline: tokio::time::Instant,
+) -> ChangeSummary {
+    let mut worked_in = Vec::with_capacity(discovery.worked_in.len());
+    for checkout in discovery.worked_in {
+        let outcome = if tokio::time::Instant::now() >= deadline {
+            SummaryOutcome::Failed
+        } else {
+            match tokio::time::timeout_at(
+                deadline,
+                crate::changes::summary(Path::new(&checkout.root)),
+            )
+            .await
+            {
+                Ok(Ok(crate::changes::ChangeRead::Ready { snapshot })) => {
+                    SummaryOutcome::Ready { snapshot }
+                }
+                Ok(Ok(crate::changes::ChangeRead::Unavailable { reason })) => {
+                    SummaryOutcome::Unavailable { reason }
+                }
+                Ok(Err(error)) => {
+                    tracing::warn!(root = %checkout.root, %error, "checkout changes summary failed");
+                    SummaryOutcome::Failed
+                }
+                Err(_) => {
+                    tracing::warn!(root = %checkout.root, "checkout changes summary deadline exceeded");
+                    SummaryOutcome::Failed
+                }
+            }
+        };
+        worked_in.push(CheckoutSummary {
+            root: checkout.root,
+            evidence: checkout.evidence,
+            outcome,
+        });
+    }
+    ChangeSummary {
+        worked_in,
+        in_folder: discovery.in_folder,
+        complete: discovery.complete,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn summary_keeps_other_checkouts_when_one_fails_and_bounds_unfinished_reads() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(temporary.path()).unwrap();
+        let ready = root.join("ready");
+        let broken = root.join("broken");
+        for path in [&ready, &broken] {
+            std::fs::create_dir(path).unwrap();
+            assert!(
+                std::process::Command::new("git")
+                    .args(["init", "-q"])
+                    .arg(path)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        }
+        std::fs::write(ready.join("new.txt"), "new\n").unwrap();
+        std::fs::write(broken.join(".git/config"), "[invalid\n").unwrap();
+        let discovery = || Discovery {
+            worked_in: [&ready, &broken, &root.join("missing")]
+                .map(|path| checkouts::Checkout {
+                    root: path.to_string_lossy().into_owned(),
+                    evidence: std::collections::BTreeSet::from([Evidence::Command]),
+                })
+                .into(),
+            in_folder: Vec::new(),
+            complete: true,
+        };
+        let summary =
+            summarize_checkouts(discovery(), tokio::time::Instant::now() + SUMMARY_TIMEOUT).await;
+        assert!(
+            matches!(&summary.worked_in[0].outcome, SummaryOutcome::Ready { snapshot } if snapshot.files.len() == 1)
+        );
+        assert!(matches!(
+            summary.worked_in[1].outcome,
+            SummaryOutcome::Failed
+        ));
+        assert!(matches!(
+            summary.worked_in[2].outcome,
+            SummaryOutcome::Unavailable {
+                reason: crate::changes::Unavailability::MissingDirectory
+            }
+        ));
+        let expired = summarize_checkouts(
+            discovery(),
+            tokio::time::Instant::now() - Duration::from_secs(1),
+        )
+        .await;
+        assert!(
+            expired
+                .worked_in
+                .iter()
+                .all(|checkout| matches!(checkout.outcome, SummaryOutcome::Failed))
+        );
+    }
+
+    #[test]
+    fn summary_requires_a_thread_directory_and_no_extra_fields() {
+        for params in [
+            json!({"directory":"/repo"}),
+            json!({"threadId":"t"}),
+            json!({"threadId":"t","directory":"/repo","source":"branch"}),
+        ] {
+            assert!(decode_params::<SummaryRequest>(params).is_err());
+        }
+        assert!(absolute("relative").is_err());
+    }
 
     #[test]
     fn edits_and_commands_become_observed_folders() {
@@ -527,13 +697,15 @@ mod tests {
             json!({"type":"commandExecution","status":"completed","cwd":"/repo","command":"ls"});
         let mut observations = Observations::default();
         let empty = AtomicUsize::new(0);
-        for (item, at) in [(edit, 10), (command, 20)] {
+        let cd = json!({"type":"commandExecution","status":"completed","cwd":"/repo","command":"cd /other/./src && x"});
+        for (item, at) in [(edit, 10), (command, 20), (cd, 30)] {
             assert!(observations.collect(Some(at), &item, &empty));
         }
         let mut expected = Observations::default();
         expected.record(PathBuf::from("/repo/src"), Evidence::Edited, Some(10));
         expected.record(PathBuf::from("/repo/lib"), Evidence::Edited, Some(10));
         expected.record(PathBuf::from("/repo"), Evidence::Command, Some(20));
+        expected.record(PathBuf::from("/other/src"), Evidence::Command, Some(30));
         assert_eq!(observations, expected);
         assert!(activity_kind(&json!({"type":"agentMessage"})).is_none());
     }

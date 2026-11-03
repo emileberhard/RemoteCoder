@@ -28,6 +28,11 @@
     {
       "path": "changes/checkouts.json",
       "contract": "changes/checkouts lists the checkouts a conversation and its agents worked in, newest first with their evidence, other checkouts directly in a plain working folder, and whether the list is complete.",
+      "consumers": ["host-daemon-rs/src/changes/checkouts.rs"]
+    },
+    {
+      "path": "changes/summary.json",
+      "contract": "changes/summary preserves checkout order and evidence, header-only ready snapshots, unavailable reasons, failed reads, in-folder candidates and discovery coverage for cross-checkout totals and primary selection.",
       "consumers": ["host-daemon-rs/src/changes/checkouts.rs", "Core/Tests/RemoteCoderCoreTests/Changes/ConversationChangesTests.swift"]
     },
     {

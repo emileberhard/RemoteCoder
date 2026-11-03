@@ -610,6 +610,7 @@ const METHOD_SPECS: &[MethodSpec] = &[
         0
     ),
     spec!("changes/read", Changes, Some(RequestLifetime::Query), 0),
+    spec!("changes/summary", Changes, Some(RequestLifetime::Query), 0),
     spec!(
         "changes/checkouts",
         Changes,
