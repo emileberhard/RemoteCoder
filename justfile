@@ -541,15 +541,15 @@ gateway-e2e-change-review-isolated $candidate:
 gateway-e2e-provider-fallback-isolated $candidate:
     bun dev-tools/probes/provider-fallback.mjs "$candidate"
 
-# Configure the Tailscale-independent relay server from relay/ (docs/relay-route.md; run on the Mac mini).
+# Configure the Tailscale-independent relay server from relay/ (docs/relay-route.md; run on the topology's provisioner).
 relay-provision:
     python3 scripts/relay.py provision
 
-# Install this Mac's relay tunnel and the route its gateway publishes on /relay.
+# Install this host's relay tunnel and the route its gateway publishes on /relay.
 relay-install-client:
     python3 scripts/relay.py install-client
 
-# Check this Mac's gateway through the relay, including the refusals.
+# Check this host's gateway through the relay, including the refusals.
 relay-probe:
     python3 scripts/relay.py probe
 

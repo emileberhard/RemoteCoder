@@ -8,8 +8,8 @@ and their security boundary.
 
 ```
 app ──TLS, pinned relay SPKI──▶ VPS :443 HAProxy ──▶ tinyproxy 127.0.0.1:8888 ──▶ 127.0.0.1:2000x
-                                                                                    ║ ssh -R from the Mac
-                                                                     Mac 127.0.0.1:8789 gateway LAN TLS listener
+                                                                                    ║ ssh -R from the host
+                                                                    host 127.0.0.1:<lan port> gateway LAN TLS listener
 app ═══════════ inner TLS, pinned gateway LAN SPKI, end to end; the VPS sees only ciphertext ═══════════
 ```
 
@@ -26,9 +26,10 @@ app ═══════════ inner TLS, pinned gateway LAN SPKI, end to
   `/etc/hosts` on the VPS maps to loopback. HostUp's cloud-init rewrites
   `/etc/hosts` at boot, so the `remote-coder-relay-hosts` unit adds the names
   back after it.
-- **Host tunnels.** Each Mac runs `/usr/bin/ssh -N` as the KeepAlive
-  LaunchAgent `com.remote-coder.relay-tunnel`, with its own key, config and
-  pinned host key under `~/.remote-coder/relay/`. It forwards its relay port on
+- **Host tunnels.** Each host runs `/usr/bin/ssh -N` under its supervisor, the
+  KeepAlive LaunchAgent `com.remote-coder.relay-tunnel` on macOS and the
+  lingering user unit `remote-coder-relay-tunnel.service` on Linux, with its
+  own key, config and pinned host key under `~/.remote-coder/relay/`. It forwards its relay port on
   the VPS loopback to its gateway's LAN listener. sshd lets the `relay-tunnel`
   user open only those remote listeners: no shell, no TTY, no local forwarding,
   each key limited to its own port. Client alive probes clear a dead tunnel's
@@ -44,7 +45,7 @@ IP literal and pin keys, and the relay names resolve only on the VPS.
 The VPS never holds a gateway credential or sees plaintext: the app's inner
 handshake pins the gateway's LAN key before it sends the bearer, exactly as on
 the home network. An unauthenticated client gets no byte through tinyproxy, an
-authenticated one reaches only the two LAN listeners, and those still require a
+authenticated one reaches only the hosts' LAN listeners, and those still require a
 bearer or installation credential.
 
 The relay credential, or a compromised VPS, therefore extends what the home
@@ -57,7 +58,7 @@ gateway journal.
 Secrets live in one place each. `just relay-provision` on the configured provisioner creates
 the relay's TLS key and admission credential once in
 `~/.remote-coder/relay/server/` (mode 0600) and installs them on the VPS, so a
-rebuilt VPS keeps the pin the apps have. Each Mac's installer reads the client
+rebuilt VPS keeps the pin the apps have. Each host's installer reads the client
 copy from the VPS over admin SSH. Tunnel keys never leave their Mac; their
 public halves are installed from private operator configuration.
 
@@ -77,8 +78,9 @@ refusal of a wrong gateway pin and authorized route publication.
 
 ## Logs
 
-- Tunnel: `~/Library/Logs/remote-coder/relay-tunnel.log` (errors only) and
-  `launchctl print gui/$(id -u)/com.remote-coder.relay-tunnel`.
+- Tunnel: on macOS `~/Library/Logs/remote-coder/relay-tunnel.log` (errors
+  only) and `launchctl print gui/$(id -u)/com.remote-coder.relay-tunnel`; on
+  Linux `journalctl --user -u remote-coder-relay-tunnel`.
 - VPS: `journalctl -u haproxy -u tinyproxy -u ssh` over admin SSH.
 - App: the `GatewayRoutes` category logs learned routes and every route
   failure that changes the order.

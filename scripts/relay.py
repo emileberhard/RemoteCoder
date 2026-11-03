@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Provision the Tailscale-independent relay and connect this Mac's gateway to it (docs/relay-route.md)."""
+"""Provision the Tailscale-independent relay and connect this host's gateway to it (docs/relay-route.md)."""
 
 import argparse
 import base64
@@ -9,6 +9,7 @@ import json
 import os
 import plistlib
 import secrets
+import socket
 import subprocess
 import sys
 import tarfile
@@ -25,6 +26,7 @@ GATEWAY_ENV = Path.home() / ".remote-coder" / "codex-gateway.env"
 LAUNCH_AGENT_LABEL = "com.remote-coder.relay-tunnel"
 LAUNCH_AGENT = Path.home() / "Library" / "LaunchAgents" / f"{LAUNCH_AGENT_LABEL}.plist"
 TUNNEL_LOG = Path.home() / "Library" / "Logs" / "remote-coder" / "relay-tunnel.log"
+SYSTEMD_UNIT = Path.home() / ".config" / "systemd" / "user" / "remote-coder-relay-tunnel.service"
 OPERATOR_TOPOLOGY = maintainer_config().get("relayTopology")
 TOPOLOGY = Path(os.environ.get("RC_RELAY_TOPOLOGY", maintainer_path().parent / OPERATOR_TOPOLOGY if OPERATOR_TOPOLOGY else STATE / "topology.json"))
 KEYS = TOPOLOGY.parent / "keys"
@@ -46,7 +48,9 @@ def topology() -> dict:
 
 
 def this_host() -> str:
-    return subprocess.run(["/usr/sbin/scutil", "--get", "LocalHostName"], check=True, capture_output=True, text=True).stdout.strip()
+    if sys.platform == "darwin":
+        return subprocess.run(["/usr/sbin/scutil", "--get", "LocalHostName"], check=True, capture_output=True, text=True).stdout.strip()
+    return socket.gethostname().split(".")[0]
 
 
 def run(command: list[str], *, input: bytes | None = None) -> bytes:
@@ -83,7 +87,7 @@ def server_secrets(certificate_name: str) -> tuple[bytes, bytes, str]:
     SERVER_STATE.mkdir(mode=0o700, parents=True, exist_ok=True)
     key, certificate, credential = SERVER_STATE / "relay.key", SERVER_STATE / "relay.crt", SERVER_STATE / "credential"
     if not key.exists():
-        print(f"creating a new relay key in {SERVER_STATE}; every Mac must rerun `just relay-install-client` afterwards")
+        print(f"creating a new relay key in {SERVER_STATE}; every host must rerun `just relay-install-client` afterwards")
         run(["/usr/bin/openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1",
              "-pkeyopt", "ec_param_enc:named_curve", "-nodes",
              "-keyout", str(key), "-out", str(certificate), "-days", "36500", "-subj", f"/CN={certificate_name}",
@@ -208,15 +212,27 @@ def install_client(_: argparse.Namespace) -> None:
         "username": record["username"],
         "password": record["password"],
     }, indent=2).encode())
-    install_launch_agent()
+    install_tunnel_service()
     print(f"{host} tunnels {entry['target']}:{entry['port']} to 127.0.0.1:{lan_port}; restart the gateway to publish the route")
 
 
-def install_launch_agent() -> None:
+def install_tunnel_service() -> None:
+    command = ["/usr/bin/ssh", "-F", str(STATE / "ssh_config"), "-N", TUNNEL_USER]
+    if sys.platform != "darwin":
+        SYSTEMD_UNIT.parent.mkdir(parents=True, exist_ok=True)
+        SYSTEMD_UNIT.write_text("\n".join([
+            "[Unit]", "Description=RemoteCoder relay tunnel", "StartLimitIntervalSec=0", "",
+            "[Service]", f"ExecStart={' '.join(command)}", "Restart=always", "RestartSec=10", "",
+            "[Install]", "WantedBy=default.target", "",
+        ]))
+        run(["systemctl", "--user", "daemon-reload"])
+        run(["systemctl", "--user", "enable", SYSTEMD_UNIT.name])
+        run(["systemctl", "--user", "restart", SYSTEMD_UNIT.name])
+        return
     TUNNEL_LOG.parent.mkdir(parents=True, exist_ok=True)
     agent = {
         "Label": LAUNCH_AGENT_LABEL,
-        "ProgramArguments": ["/usr/bin/ssh", "-F", str(STATE / "ssh_config"), "-N", TUNNEL_USER],
+        "ProgramArguments": command,
         "RunAtLoad": True,
         "KeepAlive": True,
         "ThrottleInterval": 10,
@@ -304,8 +320,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("provision", help="configure the relay server from the operator topology (run on its configured provisioner)").set_defaults(run=provision)
-    commands.add_parser("install-client", help="install this Mac's tunnel and gateway relay file").set_defaults(run=install_client)
-    commands.add_parser("probe", help="check this Mac's gateway through the relay").set_defaults(run=probe)
+    commands.add_parser("install-client", help="install this host's tunnel and gateway relay file").set_defaults(run=install_client)
+    commands.add_parser("probe", help="check this host's gateway through the relay").set_defaults(run=probe)
     arguments = parser.parse_args()
     try:
         arguments.run(arguments)
