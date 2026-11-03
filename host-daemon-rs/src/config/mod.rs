@@ -930,15 +930,18 @@ mod tests {
                 .path()
                 .join(".remote-coder/codex-restart-recovery.json")
         );
-        let roots: serde_json::Value =
-            serde_json::from_str(include_str!("../../../protocol-fixtures/host-log-roots.json"))
-                .expect("log root fixture");
+        let roots: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../protocol-fixtures/host-log-roots.json"
+        ))
+        .expect("log root fixture");
         let system = if cfg!(target_os = "linux") {
             "Linux"
         } else {
             "Darwin"
         };
-        let root = roots["logRoots"][system].as_str().expect("log root for this OS");
+        let root = roots["logRoots"][system]
+            .as_str()
+            .expect("log root for this OS");
         assert_eq!(
             paths.logs("journal"),
             directory.path().join(root).join("journal")
