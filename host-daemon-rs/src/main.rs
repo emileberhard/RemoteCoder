@@ -425,14 +425,7 @@ async fn run(
         .configure_routes(settings.cluster_routes.clone())?;
     gateway.start().await?;
 
-    let served = serve_started(
-        &settings,
-        &gateway,
-        router,
-        journal.clone(),
-        recovery_only,
-    )
-    .await;
+    let served = serve_started(&settings, &gateway, router, journal.clone(), recovery_only).await;
     let _ = gateway.stop().await;
     info!("gateway stopped");
     journal.drain(JOURNAL_DRAIN_DEADLINE).await;

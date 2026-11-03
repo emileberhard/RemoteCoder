@@ -70,7 +70,10 @@ fn local_host_name() -> Result<String> {
         .context("reading the host name")?
         .into_string()
         .map_err(|_| anyhow::anyhow!("the host name is not UTF-8"))?;
-    Ok(name.split_once('.').map_or(name.as_str(), |(label, _)| label).to_string())
+    Ok(name
+        .split_once('.')
+        .map_or(name.as_str(), |(label, _)| label)
+        .to_string())
 }
 
 fn load_or_create_key(path: &Path) -> Result<KeyPair> {
