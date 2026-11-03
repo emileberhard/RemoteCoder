@@ -1,0 +1,92 @@
+---
+name: performance-audit
+description: Audit RemoteCoder performance per build from uploaded field telemetry, MetricKit and device traces, and keep a per-build record over time. Use for how a release performs, CPU, hang, memory, disk or battery regressions, or a perf audit.
+---
+
+# Performance audit
+
+Field data says how each build performs on real devices; lab traces attribute
+or confirm what the field shows. The contracts behind every number are in
+`docs/host-observability.md` (*Field telemetry*, *iOS 27 performance reports*,
+*Device traces*), `docs/performance-replay.md` and the root `AGENTS.md`
+(*Engineering invariants*, *Measuring*). Read the section a step relies on.
+
+Maintainers: the private operations entrypoint names the devices to audit, the
+test devices for traces and the audit-record directory. Contributors audit their
+own gateway and device and keep records outside this repository. Never commit
+field data, device identifiers or traces here.
+
+## Audit
+
+1. **Pick the device.** `just app-telemetry stores` lists device directories
+   (`iPhone-…`, `iPad-…`, Mac host names).
+2. **Read the record first.** Load the device's earlier records so the audit
+   reports a trend since the last one, not a snapshot.
+3. **Read the per-build table.** Save
+   `just app-telemetry releases --device <dir> > <file>` (14 days by default)
+   and extract the columns you need from the file; the full output is large.
+   Check its `coverage` before any verdict: unread stores, `unreadableSegments`,
+   `losses` and runs with `missingRecords` all make the data incomplete.
+4. **Compare like for like.** Rank only builds with `lowData` false, and check
+   each metric's own coverage (minutes, intervals, opens or visits); a build
+   with enough minutes can still have too little for one group. Check `workload`
+   before blaming code for CPU, and use `chat.lowWorkload`, which keeps
+   intervals at a comparable number of running turns. For a pair of builds,
+   `just app-telemetry compare --device <dir> --before <a> --after <b>` splits
+   the change by app state.
+5. **Attribute.** `timeline` and `activity` show state stretches, `persistence`
+   disk writes per owner, `export-cost` the telemetry's own cost, and
+   `metrickit`, `states` and `diagnostics` Apple's daily reports and sampled
+   hang, CPU and memory diagnostics. `just gateway-journal` covers host-side
+   causes such as reconnects and slow RPCs.
+6. **Confirm in the lab** only when the field shows a change you cannot
+   attribute, or to measure a fix: one journey on one test device in one energy
+   state, before and after, with `just perf-trace` or `dev-tools/perf-sim`.
+7. **Record, then report.** Pipe the saved table into
+   `python3 .agents/skills/performance-audit/scripts/record_builds.py --into <records>/<device>`
+   and commit the records where they live. Lead the report with a verdict per
+   build that has enough data (better, worse, unchanged or unknown against the
+   previous comparable build, naming the metric and its coverage), then the
+   table. Keep field evidence, lab evidence and inference apart.
+
+## Records
+
+Each build has one JSON-lines file; each line is a distinct snapshot of its row
+with the coverage it was read under, newest last. Stores keep about 7 days per
+host, so a build that aged out exists only in its record. Snapshots of one
+build overlap; never sum them. Compare with the snapshot whose coverage best
+fits the metric, usually the latest. Audit soon after a release reaches 30
+active minutes, and again before it ages out if it stays in use.
+
+## Reading field data
+
+- `null` means not measured: the build predates the field or no interval
+  qualified. It is never zero.
+- Development installs report version `0.0.0`; tell them apart by
+  `build.sourceCommit`.
+- Only measured, active intervals count. Work that began in one state lands in
+  the next, so every per-state number is an association.
+- Low Power Mode and serious thermal states switch rendering and prefetch
+  paths (`AppEnergyPolicy`). Add `--by lowPower --by thermal` to `compare`
+  together with the default fields it would otherwise drop
+  (`--by scene --by surface --by turnRunningVisible --by voiceCall --by recording --by composing`):
+  explicit `--by` replaces the defaults.
+- MetricKit reports arrive about a day late, cover mixed builds (the reader
+  attributes them through run headers) and sample diagnostics; an empty stream
+  proves nothing.
+- `mainThread.blockedPercent` is busy time the main thread spent waiting, not
+  computing: look for locks, I/O or scheduling, not hot code.
+
+## Lab traces
+
+- Keep the `.trace` and rerun `just perf-trace summarize <trace>` with other
+  options instead of recording again.
+- `--frames N` lists only the N heaviest frames; a function's absence bounds it
+  below the last entry. Use a large N to find a small cost.
+- `--callers` on `__CFRUNLOOP_IS_CALLING_OUT_TO_AN_OBSERVER` matches every
+  run-loop observer, including Core Animation's commit and SwiftUI's update.
+  Match your own symbols instead.
+- A cost of a few 1 ms Time Profiler samples is noise; report it as an upper
+  bound.
+- Use the configured test iPad for the canonical `perf-sim` replay; its
+  magnitudes are not field-calibrated.
