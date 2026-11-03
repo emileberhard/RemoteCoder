@@ -240,6 +240,7 @@ jobs:
             '{sourceCommit:$commit,buildId:$run}' > "$RC_BUILD_PROVENANCE"
       - run: just mac-build-local
       - run: just mac-harness-build-local
+      - run: python3 -m unittest web-client/scripts/test_deploy.py
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure()
         with:
