@@ -24,8 +24,9 @@ copy. It never discards the shared original or result versions.
 
 The producer spool has a 512 MiB budget. Unpublished originals are never evicted
 to make space. Each publication pass releases the oldest originals iCloud has
-acknowledged until the spool is at most half full, so a full spool of uploaded
-audio never stops archiving. Settings offers an explicit Free Uploaded Local
+acknowledged and still holds until the spool is at most half full, so a full
+spool of uploaded audio never stops archiving; an original iCloud cannot
+confirm stays local and shows as a publication failure. Settings offers an explicit Free Uploaded Local
 Audio action for the remaining acknowledged originals; its confirmation
 distinguishes iCloud acknowledgment from independent backup. Account confirmations freeze the confirmed
 lease so an account change cannot redirect assignment or deletion. A full/unwritable spool is visible and leaves ordinary local
