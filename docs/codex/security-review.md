@@ -6,7 +6,7 @@ The runtime ships the `codex` CLI (including app-server) and `codex-code-mode-ho
 cargo tree --locked --target <package-target> --edges normal,build -p codex-cli -p codex-code-mode-host
 ```
 
-The publication patch updates Rustls to 0.23.46, rustls-webpki to 0.103.16, webpki-roots/root-certs to 1.0.10, plist to 1.10.1, and ZIP to 9.0.0. The plugin extractor keeps ordinary permission bits and has a focused extraction regression. Dependency release timestamps were checked against the 12-hour update policy. The exact deployed source and binary hashes remain in compatibility.json.
+The publication patch updates Rustls to 0.23.46, rustls-webpki to 0.103.16, webpki-roots/root-certs to 1.0.10, plist to 1.10.1, and ZIP to 9.0.0. The plugin extractor keeps ordinary permission bits and has a focused extraction regression. Dependency release timestamps were checked against the 12-hour update policy. The approved matched-runtime source and binary hashes remain in compatibility.json.
 
 A raw, unfiltered RustSec audit must be run outside the Codex workspace, because upstream's `.cargo/audit.toml` ignores reviewed advisories. A green ordinary `cargo audit` is not evidence of zero advisory records.
 
