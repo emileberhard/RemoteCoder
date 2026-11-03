@@ -64,7 +64,7 @@ is not permission to upload that release again. A code change requires the next
 patch tag. Published tags never move.
 
 RemoteCoder has never been submitted to the App Store. Its editable iOS and Mac
-1.0 drafts become the tag version with manual release. Noneditable versions are preserved. Existing screenshots and internal TestFlight distribution
+1.0 drafts become the tag version with manual release. Before the first release, noneditable versions are preserved. Existing screenshots and internal TestFlight distribution
 policy are preserved because this repository has no screenshot capture source.
 Once the app has a release, the pipeline submits each version for App Review;
 it never presses Release.

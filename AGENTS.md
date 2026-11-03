@@ -222,8 +222,10 @@ hosted runners and cloud-signs checked App Store exports. `Config/entitlements-*
 covers every shipped bundle. The upload fence checks earlier attempts' upload
 steps; a retry queries Apple and refuses a second uncertain upload. Each platform then
 waits for processing, updates What to Test under the existing internal distribution
-policy and prepares its App Store version, preserving screenshots. A version in
-review or pending release is left untouched. App Review and release stay with Emil.
+policy and prepares its App Store version, preserving screenshots. Once the platform
+has a release, it submits the version for App Review and withdraws an older one
+still in review; before that, a version in review or pending release is left
+untouched. The first submission and every release stay with Emil.
 
 The protected `testflight` environment supplies `APP_BUNDLE_ID`, the ASC key,
 `RC_RELEASE_CONFIGURATION` (the operator's nonsecret xcodeSettings and public

@@ -101,6 +101,9 @@ def draft_version(app, platform, version):
     if state in IN_REVIEW and name == version:
         print(f"::notice::App Store version {version} is already {state}.", file=sys.stderr)
         return None, released
+    if released and state == "READY_FOR_REVIEW" and name == version:
+        submit_for_review(app, platform, draft["id"], version)
+        return None, released
     if released and state in IN_REVIEW | {"READY_FOR_REVIEW"}:
         withdraw(app, platform, draft["id"], name)
     elif state not in EDITABLE:
@@ -197,6 +200,9 @@ def withdraw(app, platform, version_id, name):
     if state == "READY_FOR_REVIEW":
         for item in version_items(submission["id"], version_id):
             api("DELETE", f"reviewSubmissionItems/{item['id']}")
+    elif state == "UNRESOLVED_ISSUES":
+        for item in version_items(submission["id"], version_id):
+            api("PATCH", f"reviewSubmissionItems/{item['id']}", {"type": "reviewSubmissionItems", "id": item["id"], "attributes": {"removed": True}})
     elif state in IN_REVIEW:
         api("PATCH", f"reviewSubmissions/{submission['id']}", {"type": "reviewSubmissions", "id": submission["id"], "attributes": {"canceled": True}})
     elif state != "CANCELING":
@@ -212,7 +218,8 @@ def submit_for_review(app, platform, version_id, version):
             if item["attributes"]["state"] == "REJECTED":
                 api("PATCH", f"reviewSubmissionItems/{item['id']}", {"type": "reviewSubmissionItems", "id": item["id"], "attributes": {"resolved": True}})
     else:
-        drafts = api("GET", "reviewSubmissions", limit=1, **{"filter[app]": app, "filter[platform]": platform, "filter[state]": "READY_FOR_REVIEW"})
+        drafts = [draft for draft in api("GET", "reviewSubmissions", limit=200, **{"filter[app]": app, "filter[platform]": platform, "filter[state]": "READY_FOR_REVIEW"})
+                  if not api("GET", f"reviewSubmissions/{draft['id']}/items", limit=1)]
         submission = drafts[0] if drafts else api("POST", "reviewSubmissions", {"type": "reviewSubmissions",
             "attributes": {"platform": platform}, "relationships": {"app": link("apps", app)}})
         api("POST", "reviewSubmissionItems", {"type": "reviewSubmissionItems", "relationships": {
