@@ -346,7 +346,7 @@ blocks startup or provider journal retirement.
 
 ## Gateway RPCs
 
-- External model providers (`src/providers/codex/external.rs`, wired in
+- External model providers (`src/providers/external.rs`, wired in
   `src/gateway/external_providers.rs`) come only from the operator file in
   `RC_CODEX_GATEWAY_EXTERNAL_PROVIDERS_FILE`; public sources carry no ids, URLs
   or model names. The owner projects each provider's `/models` listing into a
@@ -356,6 +356,24 @@ blocks startup or provider journal retirement.
   request path that reaches the app-server, native passthrough, control calls,
   pending/observer resumes and restart recovery, so non-UI callers get the same
   rules:
+
+  The operator external-providers file is the one owner of external model
+  routing. Each model entry's `harness` (a bare string means `codex`) chooses
+  only the harness for new conversations; `model/list` reports it as
+  `agentProvider` and the inference owner as `modelProvider`. External ids must
+  not match the native Claude model grammar. A new Claude conversation on an
+  external model requires `harness: claude` and catalog evidence of streaming
+  Messages tools. An existing Claude thread resolves its recorded model's
+  configured owner whatever the current harness; an unknown model or a removed
+  owner stops execution with `providerUnavailable` rather than falling back to
+  the native route, and an imported thread without a recorded selection stays
+  native. A thread never changes provider. An external Claude runtime is pinned
+  to its model, because its key, helper-model pins and context window are fixed
+  in the process environment at spawn. The Codex catalog keeps every configured
+  external model, so existing Codex threads on a model whose harness moved to
+  Claude resume unchanged. Rollout: deploy compatible gateways to every host
+  before changing the operator file; roll the file back before the gateway.
+
   - Projection offers only models whose listing reports `/v1/responses`, a
     positive `prompt_tokens`, `streaming` and `tool_calls`.
   - `thread/start` takes `modelProvider`, or the provider that lists the model;
@@ -378,12 +396,12 @@ blocks startup or provider journal retirement.
     external thread's recovery carries its provider definition and catalog,
     which the fenced daemon applies only when it loads the thread from storage.
   - `model/list` is gateway-owned: the native list plus one row per external
-    model, with `modelProvider` and `modelProviderName`, on the last page.
+    model, with `agentProvider`, `modelProvider` and `modelProviderName`, on the last page.
   - The first configured provider is the Codex fallback. A failed router token
     issue holds Codex readiness for at most 2 minutes while the recovery
     journal has pending tasks; while no valid subscription token is installed, client
     `thread/start` on the native provider moves to the fallback's matching or
-    first model, and threads never change provider afterwards. On fallback
+    first eligible Codex model, and threads never change provider afterwards. On fallback
     threads, every thread-scoped request (`thread/resume`, `thread/fork`,
     `turn/start`, settings updates) maps a native model to the matching
     fallback model or drops it, and drops service tiers, through
