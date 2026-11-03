@@ -262,11 +262,11 @@ carries that session.
 
 The relay route (`docs/relay-route.md`) exposes that LAN listener through a VPS
 without widening this boundary: the VPS terminates only the outer TLS, admits
-only authenticated `CONNECT` requests for the two relay names, and forwards
-ciphertext to each Mac's reverse SSH tunnel, so the app's inner handshake still
+only authenticated `CONNECT` requests for the hosts' relay names, and forwards
+ciphertext to each host's reverse SSH tunnel, so the app's inner handshake still
 pins the LAN key before any bearer is sent. The relay admission credential and
-the relay's TLS key are generated on the Mac mini (`~/.remote-coder/relay/server/`,
-mode 0600) and live on the VPS; each Mac's `relay.json` holds the client copy,
+the relay's TLS key are generated on the topology's provisioner (`~/.remote-coder/relay/server/`,
+mode 0600) and live on the VPS; each host's `relay.json` holds the client copy,
 the gateway serves it only on the authorized, uncached `GET /relay`, and the
 app keeps it in the device-only Keychain.
 

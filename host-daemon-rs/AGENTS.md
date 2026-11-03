@@ -122,7 +122,7 @@ blocks startup or provider journal retirement.
   WebSocket, speech or peer operations (`docs/owned-operations.md`).
   Token values never appear in logs or source.
 - With `RC_CODEX_GATEWAY_LAN_PORT` set, every route is also served over pinned
-  TLS 1.3 and published as `lanEndpoint`. macOS retains its dual-stack wildcard default. An explicit `RC_CODEX_GATEWAY_LAN_BIND_ADDRESS` and `RC_CODEX_GATEWAY_LAN_HOST` select one address and advertised DNS name. Linux requires both, rejects wildcard TLS binds, requires loopback plaintext ingress, and fails startup if configured TLS cannot bind. Operator network policy restricts the selected address to the private interface and blocks container access. The endpoint is published in the
+  TLS 1.3 and published as `lanEndpoint`. It binds dual-stack on every platform and advertises the host's `.local` name. Linux requires loopback plaintext ingress, and its operator network policy admits the TLS port only from the home LAN and tailnet interfaces and blocks container access. The endpoint is published in the
   authorized `/health`. The app's `GatewayRoutes` tries it first on Wi-Fi or Ethernet
   (`docs/system-architecture.md`, *LAN route*). With
   `~/.remote-coder/relay/relay.json` present, the authorized, uncached

@@ -2,7 +2,6 @@ use std::fs::{File, OpenOptions};
 use std::io::{ErrorKind, Read};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::Arc;
 
 use anyhow::{Context, Result, ensure};
@@ -44,7 +43,14 @@ pub(crate) fn default_key_path() -> Result<PathBuf> {
 }
 
 pub(crate) fn mdns_host_name() -> Result<String> {
-    let output = Command::new("/usr/sbin/scutil")
+    let name = local_host_name()?;
+    ensure!(!name.is_empty(), "the local host name is empty");
+    Ok(format!("{name}.local"))
+}
+
+#[cfg(target_os = "macos")]
+fn local_host_name() -> Result<String> {
+    let output = std::process::Command::new("/usr/sbin/scutil")
         .args(["--get", "LocalHostName"])
         .output()
         .context("running scutil --get LocalHostName")?;
@@ -55,9 +61,19 @@ pub(crate) fn mdns_host_name() -> Result<String> {
         String::from_utf8_lossy(&output.stderr).trim()
     );
     let name = String::from_utf8(output.stdout).context("LocalHostName is not UTF-8")?;
-    let name = name.trim();
-    ensure!(!name.is_empty(), "LocalHostName is empty");
-    Ok(format!("{name}.local"))
+    Ok(name.trim().to_string())
+}
+
+#[cfg(target_os = "linux")]
+fn local_host_name() -> Result<String> {
+    let name = nix::unistd::gethostname()
+        .context("reading the host name")?
+        .into_string()
+        .map_err(|_| anyhow::anyhow!("the host name is not UTF-8"))?;
+    Ok(name
+        .split_once('.')
+        .map_or(name.as_str(), |(label, _)| label)
+        .to_string())
 }
 
 fn load_or_create_key(path: &Path) -> Result<KeyPair> {

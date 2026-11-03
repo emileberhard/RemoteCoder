@@ -402,7 +402,7 @@ owner rather than the sidebar selection. Log export follows the visible host.
 A host's configured address is usually its tailnet address. When the gateway
 sets `RC_CODEX_GATEWAY_LAN_PORT`, it also serves the same routes over TLS 1.3 on
 every IPv6 and IPv4 address, with a persisted P-256 key and a certificate for its
-`<LocalHostName>.local` name (see `host-daemon-rs/README.md`, *LAN TLS
+`<host>.local` name (see `host-daemon-rs/README.md`, *LAN TLS
 listener*). Its authorized `/health` publishes that listener as
 `lanEndpoint: {host, port, spkiSha256}`, or `null` when it is not serving.
 
@@ -448,7 +448,7 @@ The relay is a second way to reach the LAN listener when the configured
 (tailnet) address fails, with no Tailscale on the phone, the host or the
 control plane. A Stockholm VPS accepts TLS on its IPv4 literal, admits only
 authenticated `CONNECT` requests for each host's relay name, and reaches each
-Mac's LAN listener through that Mac's reverse SSH tunnel. Inside, the app runs
+host's LAN listener through that host's reverse SSH tunnel. Inside, the app runs
 the same pinned LAN TLS, so the VPS sees only ciphertext.
 [`relay-route.md`](relay-route.md) owns the server, tunnels and security
 boundary.
