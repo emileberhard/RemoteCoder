@@ -149,26 +149,26 @@ struct HistoryOpenSignpost {
     enum Abandonment: String { case superseded, cancelled, empty, failed }
 
     private static let name: StaticString = "HistorySelectionToFirstContent"
-    private var open: (interval: OSSignpostID, started: ContinuousClock.Instant)?
+    private var open: (interval: OSSignpostID, start: ResponsivenessMetrics.HistoryOpenStart)?
 
     mutating func begin() {
         abandon(.superseded)
         let id = OSSignpostID(log: AppPerformanceDiagnostics.historyLog)
         mxSignpost(.begin, log: AppPerformanceDiagnostics.historyLog, name: Self.name, signpostID: id)
-        open = (id, .now)
+        open = (id, ResponsivenessMetrics.shared.historyOpenStarted(at: .now))
     }
 
     mutating func contentVisible() {
         guard let open else { return }
         mxSignpost(.end, log: AppPerformanceDiagnostics.historyLog, name: Self.name, signpostID: open.interval)
-        ResponsivenessMetrics.shared.switchCompleted(after: open.started.duration(to: .now))
+        ResponsivenessMetrics.shared.historyOpenReachedContent(open.start, at: .now)
         self.open = nil
     }
 
     mutating func abandon(_ reason: Abandonment) {
         guard open != nil else { return }
         AppPerformanceDiagnostics.signposter.emitEvent("HistoryOpenAbandoned", "outcome=\(reason.rawValue, privacy: .public)")
-        ResponsivenessMetrics.shared.switchAbandoned()
+        ResponsivenessMetrics.shared.historyOpenAbandoned()
         open = nil
     }
 }

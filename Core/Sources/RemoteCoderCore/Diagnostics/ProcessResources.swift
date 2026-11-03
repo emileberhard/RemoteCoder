@@ -8,7 +8,6 @@ struct ProcessResources: Sendable, Equatable {
     var idleWakeups: UInt64
     var timerWakeups: UInt64
     var footprintBytes: UInt64
-    var mainThreadCPUNanoseconds: UInt64?
 
     var cpuNanoseconds: UInt64 { cpuUserNanoseconds &+ cpuSystemNanoseconds }
 
@@ -35,18 +34,18 @@ struct ProcessResources: Sendable, Equatable {
             interruptWakeups: cpu.task_interrupt_wakeups,
             idleWakeups: cpu.task_platform_idle_wakeups,
             timerWakeups: cpu.task_timer_wakeups_bin_1 &+ cpu.task_timer_wakeups_bin_2,
-            footprintBytes: UInt64(memory.phys_footprint),
-            mainThreadCPUNanoseconds: mainThreadCPUNanoseconds()
+            footprintBytes: UInt64(memory.phys_footprint)
         )
     }
 
-    static func mainThreadCPUNanoseconds() -> UInt64? {
-        guard pthread_main_np() != 0 else { return nil }
+    @MainActor private static let mainThread = pthread_mach_thread_np(pthread_self())
+
+    @MainActor static func mainThreadCPUNanoseconds() -> UInt64? {
         var info = thread_basic_info()
         var count = mach_msg_type_number_t(MemoryLayout<thread_basic_info>.size / MemoryLayout<integer_t>.size)
         let result = withUnsafeMutablePointer(to: &info) {
             $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
-                thread_info(pthread_mach_thread_np(pthread_self()), thread_flavor_t(THREAD_BASIC_INFO), $0, &count)
+                thread_info(mainThread, thread_flavor_t(THREAD_BASIC_INFO), $0, &count)
             }
         }
         guard result == KERN_SUCCESS else { return nil }

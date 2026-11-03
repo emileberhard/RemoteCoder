@@ -2,13 +2,12 @@ import Foundation
 import Synchronization
 
 struct Workload: Sendable, Equatable, Encodable {
-    let runningTurns: Int?
     let runningTurnNanoseconds: UInt64?
     let streamedDeltas: UInt64
     let streamedBytes: UInt64
 
     private enum CodingKeys: String, CodingKey {
-        case runningTurns, runningTurnNanoseconds = "runningTurnNs", streamedDeltas, streamedBytes
+        case runningTurnNanoseconds = "runningTurnNs", streamedDeltas, streamedBytes
     }
 }
 

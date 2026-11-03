@@ -28,10 +28,10 @@ struct FieldTelemetryTests {
 
     private func sample(_ reason: ProcessSample.Reason = .interval) -> TelemetryRecord {
         .sample(ProcessSample(reason: reason, resources: ProcessResources(cpuUserNanoseconds: 2, cpuSystemNanoseconds: 1,
-            interruptWakeups: 3, idleWakeups: 4, timerWakeups: 5, footprintBytes: 6), readNanoseconds: 7,
-            persistence: [.checkpoints: PersistenceMetrics.Counters(writes: 1, bytes: 10)],
-            responsiveness: .init(runLoop: .init(), switches: .init()),
-            workload: Workload(runningTurns: nil, runningTurnNanoseconds: nil, streamedDeltas: 0, streamedBytes: 0),
+            interruptWakeups: 3, idleWakeups: 4, timerWakeups: 5, footprintBytes: 6), mainThreadCPUNanoseconds: nil,
+            readNanoseconds: 7, persistence: [.checkpoints: PersistenceMetrics.Counters(writes: 1, bytes: 10)],
+            responsiveness: .init(mainRunLoop: .init(), historyOpens: .init()),
+            workload: Workload(runningTurnNanoseconds: nil, streamedDeltas: 0, streamedBytes: 0),
             mixed: false, context: context))
     }
 
@@ -405,7 +405,6 @@ struct FieldTelemetryTests {
             if case .sample(let sample) = line.record { return sample.workload }
             return nil
         }
-        #expect(workloads.map(\.runningTurns) == [nil, 2])
         #expect(workloads[0].runningTurnNanoseconds == nil)
         #expect(workloads[1].runningTurnNanoseconds != nil)
     }

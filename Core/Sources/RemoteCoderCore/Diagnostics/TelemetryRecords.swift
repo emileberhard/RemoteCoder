@@ -28,6 +28,7 @@ struct ProcessSample: Sendable {
 
     let reason: Reason
     let resources: ProcessResources
+    let mainThreadCPUNanoseconds: UInt64?
     let readNanoseconds: UInt64
     let persistence: [PersistenceMetrics.Owner: PersistenceMetrics.Counters]
     let responsiveness: ResponsivenessMetrics.Snapshot
@@ -134,7 +135,7 @@ struct TelemetryLine: Encodable, Sendable {
     private enum Key: String, CodingKey {
         case recordType, schemaVersion, runID, seq, ts, monoNs, reason
         case cpuUserNs, cpuSystemNs, interruptWakeups, idleWakeups, timerWakeups, footprintBytes, mainThreadCpuNs, readNs
-        case persistence, runLoop, switches, workload, mixed, context
+        case persistence, mainRunLoop, historyOpens, workload, mixed, context
         case encodeMs, writeMs, compressMs, uploadMs, totalMs, kept, segments, bytes
         case flushedRecords, uploadedSegments, uploadedBytes, footprintBefore, footprintSampledMax, footprintAfter
         case processCpuNs, logWrite
@@ -159,12 +160,12 @@ struct TelemetryLine: Encodable, Sendable {
             try container.encode(resources.idleWakeups, forKey: .idleWakeups)
             try container.encode(resources.timerWakeups, forKey: .timerWakeups)
             try container.encode(resources.footprintBytes, forKey: .footprintBytes)
-            try container.encodeIfPresent(resources.mainThreadCPUNanoseconds, forKey: .mainThreadCpuNs)
+            try container.encodeIfPresent(sample.mainThreadCPUNanoseconds, forKey: .mainThreadCpuNs)
             try container.encode(sample.readNanoseconds, forKey: .readNs)
             try container.encode(Dictionary(uniqueKeysWithValues: sample.persistence.map { ($0.key.rawValue, $0.value) }),
                                  forKey: .persistence)
-            try container.encode(sample.responsiveness.runLoop, forKey: .runLoop)
-            try container.encode(sample.responsiveness.switches, forKey: .switches)
+            try container.encode(sample.responsiveness.mainRunLoop, forKey: .mainRunLoop)
+            try container.encode(sample.responsiveness.historyOpens, forKey: .historyOpens)
             try container.encode(sample.workload, forKey: .workload)
             try container.encode(sample.mixed, forKey: .mixed)
             try container.encode(sample.context, forKey: .context)

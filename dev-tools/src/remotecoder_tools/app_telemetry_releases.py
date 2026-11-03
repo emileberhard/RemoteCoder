@@ -1,3 +1,5 @@
+import math
+import statistics
 from collections import Counter, defaultdict
 
 from .app_telemetry_analysis import MIN_MEASURED_MINUTES
@@ -5,15 +7,19 @@ from .app_telemetry_builds import Build, run_build
 from .app_telemetry_summary import sample_intervals
 
 MIB = 1024 * 1024
-LIKE_FOR_LIKE_MAX_TURNS = 2
+LOW_WORKLOAD_MAX_AVERAGE_TURNS = 2
 STALL_THRESHOLDS_MS = ("100", "250")
 RELEASES_NOTE = (
     "One row per build from this device's sampler. Rates come from measured intervals while the app was active; "
     "mixed, gap, background and incomplete intervals are excluded. Each group names the minutes it covers, and "
     "lowData marks a build with fewer active minutes than a comparison needs. null means not measured, never zero: "
     "builds before the responsiveness and workload fields report those groups with 0 minutes. "
-    "chat.likeForLike keeps intervals averaging at most maxRunningTurns running turns. mainThread.blockedPercent "
-    "is busy minus main-thread CPU. Switch percentiles are the upper bound of the bin holding that share of opens."
+    "Running turns are the turns the app tracks across its loaded hosts; streamed counters count routed text "
+    "notifications, including replays. chat.lowWorkload keeps intervals whose time-averaged running turns stay at "
+    "most maxAverageRunningTurns. mainThread.blockedPercent is main run loop busy time minus main-thread CPU. "
+    "A drawer visit is a contiguous drawer stretch with at least one active measured interval. History-open "
+    "percentiles are the upper bound of the bin holding that share of opens. intervalPeakFootprintMiB takes each "
+    "interval's larger endpoint footprint; p95 is nearest-rank."
 )
 
 
@@ -26,9 +32,8 @@ def _rate(intervals: list[dict], key: str, scale: float = 1.0) -> float | None:
     return round(sum(interval[key] for interval in intervals) / seconds * scale, 2) if seconds else None
 
 
-def _percentile(values: list[float], share: float) -> float | None:
-    ordered = sorted(values)
-    return ordered[min(len(ordered) - 1, int(share * len(ordered)))] if ordered else None
+def _nearest_rank(values: list[float], share: float) -> float:
+    return sorted(values)[math.ceil(share * len(values)) - 1]
 
 
 def _cpu(intervals: list[dict]) -> dict:
@@ -37,12 +42,13 @@ def _cpu(intervals: list[dict]) -> dict:
 
 def _drawer_visits(intervals: list[dict]) -> int:
     visits = 0
-    previous_surface = None
+    counted = False
     for interval in intervals:
-        surface = interval["context"].get("surface")
-        if surface == "drawer" and previous_surface != "drawer" and _active_measured(interval):
+        if interval["context"].get("surface") != "drawer":
+            counted = False
+        elif not counted and _active_measured(interval):
             visits += 1
-        previous_surface = surface
+            counted = True
     return visits
 
 
@@ -66,14 +72,14 @@ def _workload(active: list[dict]) -> dict:
 
 def _main_thread(active: list[dict]) -> dict:
     known = [interval for interval in active
-             if interval.get("mainThreadCpuSeconds") is not None and interval.get("runLoop") is not None]
+             if interval.get("mainThreadCpuSeconds") is not None and interval.get("mainRunLoop") is not None]
     seconds = sum(interval["seconds"] for interval in known)
     if not seconds:
         return {"minutes": 0, "cpuPercent": None, "busyPercent": None, "blockedPercent": None,
                 "stallsPerActiveHour": {f"atLeast{bound}Ms": None for bound in STALL_THRESHOLDS_MS},
                 "hangSecondsPerActiveHour": None}
     cpu = sum(interval["mainThreadCpuSeconds"] for interval in known) / seconds * 100
-    busy = sum(interval["runLoop"]["busySeconds"] for interval in known) / seconds * 100
+    busy = sum(interval["mainRunLoop"]["busySeconds"] for interval in known) / seconds * 100
     hours = seconds / 3600
     return {
         "minutes": _minutes(known),
@@ -81,10 +87,10 @@ def _main_thread(active: list[dict]) -> dict:
         "busyPercent": round(busy, 2),
         "blockedPercent": round(busy - cpu, 2),
         "stallsPerActiveHour": {
-            f"atLeast{bound}Ms": round(sum(interval["runLoop"]["busyPeriodsAtLeastMs"].get(bound, 0)
+            f"atLeast{bound}Ms": round(sum(interval["mainRunLoop"]["busyPeriodsAtLeastMs"].get(bound, 0)
                                            for interval in known) / hours, 1)
             for bound in STALL_THRESHOLDS_MS},
-        "hangSecondsPerActiveHour": round(sum(interval["runLoop"]["hangSeconds"] for interval in known) / hours, 2),
+        "hangSecondsPerActiveHour": round(sum(interval["mainRunLoop"]["hangSeconds"] for interval in known) / hours, 2),
     }
 
 
@@ -98,16 +104,18 @@ def _bin_percentile(within: Counter, count: int, share: float) -> int | str | No
     return f">{bounds[-1]}" if bounds else None
 
 
-def _switches(runs: list[list[dict]]) -> dict:
-    known = [interval["switches"] for run in runs for interval in run if interval.get("switches") is not None]
-    completed = sum(switches["completed"] for switches in known)
+def _history_opens(runs: list[list[dict]]) -> dict:
+    known = [interval["historyOpens"] for run in runs for interval in run if interval.get("historyOpens") is not None]
+    if not known:
+        return {"intervals": 0, "completed": None, "abandoned": None, "p50Ms": None, "p90Ms": None}
+    completed = sum(opens["completed"] for opens in known)
     within: Counter = Counter()
-    for switches in known:
-        within.update(switches["completedWithinMs"])
+    for opens in known:
+        within.update(opens["completedWithinMs"])
     return {
         "intervals": len(known),
         "completed": completed,
-        "abandoned": sum(switches["abandoned"] for switches in known),
+        "abandoned": sum(opens["abandoned"] for opens in known),
         "p50Ms": _bin_percentile(within, completed, 0.5),
         "p90Ms": _bin_percentile(within, completed, 0.9),
     }
@@ -142,23 +150,23 @@ def _row(build: Build, runs: list[list[dict]]) -> dict:
             "turnVisible": _cpu([interval for interval in chat if interval["context"].get("turnRunningVisible")]),
             "noTurnVisible": _cpu([interval for interval in chat
                                    if interval["context"].get("turnRunningVisible") is False]),
-            "likeForLike": {"maxRunningTurns": LIKE_FOR_LIKE_MAX_TURNS, **_cpu([
+            "lowWorkload": {"maxAverageRunningTurns": LOW_WORKLOAD_MAX_AVERAGE_TURNS, **_cpu([
                 interval for interval in chat
-                if (turns := _average_turns(interval)) is not None and turns <= LIKE_FOR_LIKE_MAX_TURNS])},
+                if (turns := _average_turns(interval)) is not None and turns <= LOW_WORKLOAD_MAX_AVERAGE_TURNS])},
         },
         "workload": _workload(active),
         "mainThread": _main_thread(active),
-        "switches": _switches(runs),
+        "historyOpens": _history_opens(runs),
         "drawer": {
             **_cpu(drawer),
             "visits": visits,
             "cpuSecondsPerVisit": round(sum(interval["cpuSeconds"] for interval in drawer) / visits, 3)
             if visits else None,
         },
-        "footprintMiB": {
+        "intervalPeakFootprintMiB": {
             "intervals": len(footprints),
-            "median": round(median, 1) if (median := _percentile(footprints, 0.5)) is not None else None,
-            "p95": round(p95, 1) if (p95 := _percentile(footprints, 0.95)) is not None else None,
+            "median": round(statistics.median(footprints), 1) if footprints else None,
+            "p95": round(_nearest_rank(footprints, 0.95), 1) if footprints else None,
         },
         "diskMBPerActiveHour": {
             "total": round(sum(disk.values()) / 1e6 / hours, 1) if hours else None,

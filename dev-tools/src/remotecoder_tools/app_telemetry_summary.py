@@ -370,18 +370,18 @@ def _bins_delta(start: dict, end: dict, group: str, key: str) -> dict[str, int] 
     return {bound: int(last[bound]) - int(first[bound]) for bound in last}
 
 
-def _run_loop(start: dict, end: dict) -> dict | None:
-    busy, periods, hang = (_known_delta(start, end, "runLoop", key) for key in ("busyNs", "busyPeriods", "hangNs"))
-    bins = _bins_delta(start, end, "runLoop", "busyPeriodsAtLeastMs")
+def _main_run_loop(start: dict, end: dict) -> dict | None:
+    busy, periods, hang = (_known_delta(start, end, "mainRunLoop", key) for key in ("busyNs", "busyPeriods", "hangNs"))
+    bins = _bins_delta(start, end, "mainRunLoop", "busyPeriodsAtLeastMs")
     if busy is None or periods is None or hang is None or bins is None:
         return None
     return {"busySeconds": busy / 1e9, "busyPeriods": periods, "hangSeconds": hang / 1e9, "busyPeriodsAtLeastMs": bins}
 
 
-def _switches(start: dict, end: dict) -> dict | None:
-    completed, abandoned, total = (_known_delta(start, end, "switches", key)
+def _history_opens(start: dict, end: dict) -> dict | None:
+    completed, abandoned, total = (_known_delta(start, end, "historyOpens", key)
                                    for key in ("completed", "abandoned", "completedNs"))
-    bins = _bins_delta(start, end, "switches", "completedWithinMs")
+    bins = _bins_delta(start, end, "historyOpens", "completedWithinMs")
     if completed is None or abandoned is None or total is None or bins is None:
         return None
     return {"completed": completed, "abandoned": abandoned, "completedSeconds": total / 1e9, "completedWithinMs": bins}
@@ -418,8 +418,8 @@ def sample_intervals(records: list[dict]) -> list[dict]:
             "persistenceWrites": {owner: int(counters.get("writes", 0)) - int(start_persistence.get(owner, {}).get("writes", 0))
                                   for owner, counters in end_persistence.items()},
             "mainThreadCpuSeconds": _seconds(_known_delta(start, end, "mainThreadCpuNs")),
-            "runLoop": _run_loop(start, end),
-            "switches": _switches(start, end),
+            "mainRunLoop": _main_run_loop(start, end),
+            "historyOpens": _history_opens(start, end),
             "runningTurnSeconds": _seconds(_known_delta(start, end, "workload", "runningTurnNs")),
             "streamedDeltas": _known_delta(start, end, "workload", "streamedDeltas"),
             "streamedBytes": _known_delta(start, end, "workload", "streamedBytes"),

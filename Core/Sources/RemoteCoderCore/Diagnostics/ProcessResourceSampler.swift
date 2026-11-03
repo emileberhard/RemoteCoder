@@ -25,7 +25,7 @@ final class ProcessResourceSampler {
         guard next != context else { return }
         let previous = context
         context = next
-        ResponsivenessMetrics.shared.surface = next.surface
+        ResponsivenessMetrics.shared.contextChanged(next)
         let reason: ProcessSample.Reason = switch (previous?.scene, next.scene) {
         case (nil, _): .launch
         case (_, .background): .background
@@ -82,6 +82,8 @@ final class ProcessResourceSampler {
             if reason != .interval { unsampledChange = true }
             return
         }
+        let mainThreadCPU = ProcessResources.mainThreadCPUNanoseconds()
+        let responsiveness = ResponsivenessMetrics.shared.snapshot(at: ResponsivenessMetrics.now())
         let now = clock.now
         lastSample = now
         runningTurns.accrue(to: now)
@@ -89,10 +91,10 @@ final class ProcessResourceSampler {
         unsampledChange = false
         let streamed = StreamedTextMetrics.shared.snapshot()
         recorder.record(.sample(ProcessSample(
-            reason: reason, resources: resources, readNanoseconds: started.duration(to: now).clampedNanoseconds,
-            persistence: PersistenceMetrics.shared.snapshot(), responsiveness: ResponsivenessMetrics.shared.snapshot,
-            workload: Workload(runningTurns: runningTurns.current,
-                               runningTurnNanoseconds: runningTurns.current == nil ? nil : runningTurns.nanoseconds,
+            reason: reason, resources: resources, mainThreadCPUNanoseconds: mainThreadCPU,
+            readNanoseconds: started.duration(to: now).clampedNanoseconds,
+            persistence: PersistenceMetrics.shared.snapshot(), responsiveness: responsiveness,
+            workload: Workload(runningTurnNanoseconds: runningTurns.current == nil ? nil : runningTurns.nanoseconds,
                                streamedDeltas: streamed.deltas, streamedBytes: streamed.bytes),
             mixed: mixed, context: context
         )))

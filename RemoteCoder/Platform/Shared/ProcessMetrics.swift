@@ -8,7 +8,7 @@ enum ProcessMetrics {
         return seconds(usage.ru_utime) + seconds(usage.ru_stime)
     }
 
-    static func mainThreadCPUSeconds() -> Double? {
+    @MainActor static func mainThreadCPUSeconds() -> Double? {
         ProcessResources.mainThreadCPUNanoseconds().map { Double($0) / 1e9 }
     }
 
