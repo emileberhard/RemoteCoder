@@ -159,7 +159,7 @@ def provision(_: argparse.Namespace) -> None:
     print(f"relay provisioned at {address}; proxy pin {spki_sha256(certificate)}")
 
 
-def install_client(_: argparse.Namespace) -> None:
+def install_client(arguments: argparse.Namespace) -> None:
     layout = topology()
     host = this_host()
     entry = layout["hosts"].get(host)
@@ -177,7 +177,7 @@ def install_client(_: argparse.Namespace) -> None:
         tracked.write_text(public_key + "\n")
         raise RelayError(f"wrote {tracked}; commit it, run `just relay-provision`, then rerun this")
 
-    record = json.loads(admin_ssh(address, f"cat {CLIENT_RECORD}"))
+    record = json.loads(sys.stdin.read() if arguments.record_from_stdin else admin_ssh(address, f"cat {CLIENT_RECORD}"))
     lan_port = gateway_env().get("RC_CODEX_GATEWAY_LAN_PORT")
     if not lan_port:
         raise RelayError("the relay forwards to the gateway's LAN listener; set RC_CODEX_GATEWAY_LAN_PORT first")
@@ -320,7 +320,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("provision", help="configure the relay server from the operator topology (run on its configured provisioner)").set_defaults(run=provision)
-    commands.add_parser("install-client", help="install this host's tunnel and gateway relay file").set_defaults(run=install_client)
+    install = commands.add_parser("install-client", help="install this host's tunnel and gateway relay file")
+    install.add_argument("--record-from-stdin", action="store_true",
+                         help=f"read {CLIENT_RECORD} from stdin instead of over relay admin SSH, for a host without the admin key")
+    install.set_defaults(run=install_client)
     commands.add_parser("probe", help="check this host's gateway through the relay").set_defaults(run=probe)
     arguments = parser.parse_args()
     try:
