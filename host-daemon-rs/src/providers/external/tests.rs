@@ -110,7 +110,7 @@ async fn external_command_uses_only_the_selected_provider_credentials() {
         .collect::<std::collections::HashMap<_, _>>();
     assert_eq!(env["ANTHROPIC_BASE_URL"], "http://127.0.0.1:9");
     assert_eq!(env["ANTHROPIC_AUTH_TOKEN"], "external-secret");
-    assert_eq!(env["MAX_CONTEXT_TOKENS"], "200000");
+    assert_eq!(env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"], "200000");
     assert_eq!(env["ANTHROPIC_DEFAULT_SONNET_MODEL"], MODEL);
     assert_eq!(env["CLAUDE_CODE_SUBAGENT_MODEL"], MODEL);
     assert!(!format!("{command:?}").contains("external-secret"));

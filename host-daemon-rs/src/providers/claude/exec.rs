@@ -210,7 +210,7 @@ pub(crate) fn command_on_route(
             cmd.env("ANTHROPIC_BASE_URL", provider.claude_base_url());
             cmd.env("ANTHROPIC_AUTH_TOKEN", key);
             cmd.env("CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK", "1");
-            cmd.env("MAX_CONTEXT_TOKENS", context.to_string());
+            cmd.env("CLAUDE_CODE_MAX_CONTEXT_TOKENS", context.to_string());
             for key in [
                 "ANTHROPIC_DEFAULT_OPUS_MODEL",
                 "ANTHROPIC_DEFAULT_SONNET_MODEL",

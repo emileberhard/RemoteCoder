@@ -1211,12 +1211,17 @@ impl Gateway {
             .map(|mut result| {
                 if let Some(rows) = result["data"].as_array_mut() {
                     for row in rows {
-                        if let Some(provider) = row["model"]
-                            .as_str()
-                            .and_then(|model| self.external_providers.as_ref()?.owner(model))
-                        {
-                            row["modelProvider"] = json!(provider.id());
-                        }
+                        let provider = row["model"].as_str().and_then(|model| {
+                            self.external_providers
+                                .as_ref()
+                                .and_then(|external| external.owner(model))
+                                .map(|provider| provider.id())
+                                .or_else(|| {
+                                    crate::providers::claude::exec::is_native_model(model)
+                                        .then_some("claude")
+                                })
+                        });
+                        row["modelProvider"] = json!(provider);
                     }
                 }
                 result

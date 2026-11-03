@@ -1028,7 +1028,7 @@ async fn rpc_capacity_writer_refuses_an_oversized_response_and_keeps_the_next_re
         .respond(
             &producer,
             json!("bounded-id"),
-            Ok(json!({"cwd":"x".repeat(12 * 1024 * 1024)})),
+            Ok(json!({"cwd":"x".repeat(MAX_WEBSOCKET_BYTES + 1)})),
             Some("thread/start"),
         )
         .await
