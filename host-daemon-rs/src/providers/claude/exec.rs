@@ -94,15 +94,11 @@ fn child_env_from(value_for: impl Fn(&str) -> Option<String>) -> HashMap<String,
     env
 }
 
-/// Builds a `claude` command with a cleared, allow-listed environment.
-///
-/// `args` is the complete argument vector; callers own argv construction so there
-/// is exactly one place per call site to audit.
 #[derive(Clone)]
 pub(crate) enum Route {
     Default,
     External {
-        provider: crate::providers::external::ExternalProvider,
+        provider: Box<crate::providers::external::ExternalProvider>,
         model: String,
         context: i64,
     },
@@ -133,7 +129,7 @@ pub(crate) async fn resolve(
             .await?
     {
         return Ok(Route::External {
-            provider: provider.clone(),
+            provider: Box::new(provider.clone()),
             model: selection.model.clone(),
             context,
         });
@@ -163,6 +159,10 @@ pub(crate) fn is_native_model(model: &str) -> bool {
     ) || model.starts_with("claude-")
 }
 
+/// Builds a `claude` command with a cleared, allow-listed environment.
+///
+/// `args` is the complete argument vector; callers own argv construction so there
+/// is exactly one place per call site to audit.
 pub(crate) fn command(settings: &ClaudeSettings, args: &[String]) -> Result<ClaudeCommand> {
     command_on_route(settings, args, &Route::Default)
 }

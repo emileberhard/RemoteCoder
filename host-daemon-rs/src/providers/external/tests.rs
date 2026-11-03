@@ -90,7 +90,7 @@ async fn external_command_uses_only_the_selected_provider_credentials() {
     let mut provider = provider();
     provider.key_file = key.clone();
     let route = crate::providers::claude::exec::Route::External {
-        provider,
+        provider: Box::new(provider),
         model: MODEL.into(),
         context: 200000,
     };
