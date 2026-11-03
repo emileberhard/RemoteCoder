@@ -60,8 +60,9 @@ the relay's TLS key and admission credential once in
 `~/.remote-coder/relay/server/` (mode 0600) and installs them on the VPS, so a
 rebuilt VPS keeps the pin the apps have. Each host's installer reads the client
 copy from the VPS over admin SSH; a host without the admin key, such as Linux,
-receives it on stdin from the provisioner (`--record-from-stdin`). Tunnel keys never leave their Mac; their
-public halves are installed from private operator configuration.
+receives it on stdin from the provisioner (`--record-from-stdin`). Tunnel keys
+never leave their host; their public halves are installed from private operator
+configuration.
 
 ## Operate
 

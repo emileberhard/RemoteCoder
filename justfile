@@ -546,8 +546,8 @@ relay-provision:
     python3 scripts/relay.py provision
 
 # Install this host's relay tunnel and the route its gateway publishes on /relay.
-relay-install-client:
-    python3 scripts/relay.py install-client
+relay-install-client *args:
+    python3 scripts/relay.py install-client {{ args }}
 
 # Check this host's gateway through the relay, including the refusals.
 relay-probe:
