@@ -93,9 +93,10 @@ private extension NSMenu {
         for item in items {
             if let title = item.submenu?.shortcutTitle(for: shortcut) { return title }
             let flags = item.keyEquivalentModifierMask.intersection([.command, .option, .control, .shift])
-            var modifiers = EventModifiers(flags)
-            if item.keyEquivalent != item.keyEquivalent.lowercased() { modifiers.insert(.shift) }
-            if item.keyEquivalent.lowercased() == String(shortcut.key.character).lowercased(), modifiers == shortcut.modifiers {
+            let equivalent = item.userKeyEquivalent.isEmpty ? item.keyEquivalent : item.userKeyEquivalent
+            guard equivalent.count == 1, let character = equivalent.first else { continue }
+            let binding = KeyboardShortcut(recordedCharacter: character, modifiers: EventModifiers(flags))
+            if binding.key == shortcut.key, binding.modifiers == shortcut.modifiers {
                 return item.title
             }
         }
@@ -166,9 +167,10 @@ final class ShortcutRecorderButton: NSButton {
     override func keyDown(with event: NSEvent) {
         guard isRecording else { return super.keyDown(with: event) }
         let flags = event.modifierFlags.intersection([.command, .option, .control, .shift])
-        guard let characters = event.characters(byApplyingModifiers: []), characters.count == 1,
-              let character = characters.lowercased().first else { return }
-        let key = KeyEquivalent(character)
+        guard let characters = event.characters(byApplyingModifiers: flags.intersection(.shift)), characters.count == 1,
+              let character = characters.first else { return }
+        let shortcut = KeyboardShortcut(recordedCharacter: character, modifiers: EventModifiers(flags))
+        let key = shortcut.key
         if key == .escape { finishRecording(); return }
         if key == .tab {
             finishRecording()
@@ -184,8 +186,7 @@ final class ShortcutRecorderButton: NSButton {
             title = "Use ⌘ or ⌃"
             return
         }
-        let modifiers = EventModifiers(flags)
-        if record?(KeyboardShortcut(key, modifiers: modifiers, localization: .custom)) == true {
+        if record?(shortcut) == true {
             finishRecording()
         }
     }

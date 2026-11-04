@@ -38,4 +38,20 @@ struct KeyboardShortcutTests {
         try preferences.set(nil, for: .toggleSidebar)
         #expect(preferences.conflict(for: KeyboardShortcut("j", modifiers: [.command, .shift]), excluding: .newChat) == nil)
     }
+
+    @Test func recordedKeysNormalizeImplicitShiftAndPhysicalBackspace() {
+        let help = KeyboardShortcut(recordedCharacter: "?", modifiers: [.command, .shift])
+        #expect(help.key == "?")
+        #expect(help.modifiers == .command)
+        let letter = KeyboardShortcut(recordedCharacter: "J", modifiers: [.command, .shift])
+        #expect(letter.key == "j")
+        #expect(letter.modifiers == [.command, .shift])
+        let backspace = KeyboardShortcut(recordedCharacter: "\u{7f}", modifiers: [])
+        #expect(backspace.key == .delete)
+        #expect(backspace.modifiers.isEmpty)
+        let modifiedBackspace = KeyboardShortcut(recordedCharacter: "\u{7f}", modifiers: .command)
+        #expect(modifiedBackspace.key == .delete)
+        #expect(modifiedBackspace.modifiers == .command)
+    }
+
 }

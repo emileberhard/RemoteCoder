@@ -69,3 +69,14 @@ extension ChatCommand {
         return shortcut
     }
 }
+
+extension KeyboardShortcut {
+    init(recordedCharacter: Character, modifiers: EventModifiers) {
+        var modifiers = modifiers
+        if recordedCharacter.isUppercase { modifiers.insert(.shift) }
+        if recordedCharacter.isPunctuation || recordedCharacter.isSymbol { modifiers.remove(.shift) }
+        let key: KeyEquivalent = recordedCharacter == "\u{7f}"
+            ? .delete : KeyEquivalent(Character(recordedCharacter.lowercased()))
+        self.init(key, modifiers: modifiers, localization: .custom)
+    }
+}
