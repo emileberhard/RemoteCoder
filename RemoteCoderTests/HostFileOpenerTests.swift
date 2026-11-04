@@ -53,7 +53,6 @@ struct HostFileOpenerTests {
         await access.waitForRelease(lease.id)
         #expect(opener.sheet == nil)
         #expect(opener.quickLook == nil)
-        #expect(opener.lastDocument == nil)
         #expect(opener.origin == nil)
     }
 
@@ -78,7 +77,6 @@ struct HostFileOpenerTests {
         #expect(await access.releasedOnAdmission[1].contains(oldLease.id))
         await access.finish(1, with: .success(lease(latest)))
         await worker.value
-        #expect(opener.lastDocument?.host?.lease.reference == latest)
         #expect(opener.quickLook == nil)
         guard case .html(let file) = opener.sheet?.content else {
             Issue.record("Expected the HTML preview")
@@ -103,7 +101,11 @@ struct HostFileOpenerTests {
         #expect(await access.references == [reference])
         #expect(await access.cancelledReferences.isEmpty)
         #expect(await access.busyFailures == 0)
-        #expect(opener.lastDocument?.host?.lease.reference == reference)
+        guard case .html(let file) = opener.sheet?.content else {
+            Issue.record("Expected the HTML preview")
+            return
+        }
+        #expect(file.lease.reference == reference)
         opener.invalidate()
     }
 
@@ -119,7 +121,6 @@ struct HostFileOpenerTests {
         await access.waitForOpen(1)
         await access.finish(0, with: .failure(HostFileError.unavailable))
         await operation.value
-        #expect(opener.lastDocument == nil)
         guard case .failure(let failure) = opener.sheet?.content else {
             Issue.record("Expected the failed revalidation surface")
             return
@@ -129,10 +130,13 @@ struct HostFileOpenerTests {
         #expect(cached.lease.downloadedAt == saved.downloadedAt)
         opener.useCachedCopy(cached)
         #expect(opener.sheet == nil)
-        #expect(opener.lastDocument == nil)
         opener.presentationDismissed()
         await opener.operation?.value
-        #expect(opener.lastDocument?.host?.isCachedCopy == true)
+        guard case .html(let file) = opener.sheet?.content else {
+            Issue.record("Expected the saved HTML preview")
+            return
+        }
+        #expect(file.isCachedCopy)
         #expect(opener.quickLook == nil)
         opener.invalidate()
     }
@@ -155,7 +159,6 @@ struct HostFileOpenerTests {
         }
         #expect(failure.reason == .preparation)
         #expect(failure.reference == reference)
-        #expect(opener.lastDocument == nil)
         #expect(opener.quickLook == nil)
         opener.invalidate()
     }
@@ -174,7 +177,6 @@ struct HostFileOpenerTests {
         opener.cancelDownload()
         opener.presentationDismissed()
         #expect(opener.sheet == nil)
-        #expect(opener.loadingName == nil)
         #expect(await access.openCount == 1)
     }
 
@@ -235,7 +237,7 @@ struct HostFileOpenerTests {
     }
 
     @Test(arguments: ["report.html", "report.HTM", "report.xhtml"])
-    func htmlUsesItsOwnPreviewAndInformationActionsRemainAvailable(name: String) async throws {
+    func htmlUsesItsOwnPreviewAndExportsOriginalFile(name: String) async throws {
         let access = ControlledFileAccess()
         let opener = HostFileOpener(access: access, canPreview: { _ in true })
         let origin = origin()
@@ -251,14 +253,48 @@ struct HostFileOpenerTests {
         }
         #expect(file.lease.reference == reference)
         #expect(opener.quickLook == nil)
-        opener.sheet = nil
+        #expect(HostFileExportItem(file: .host(file)).url == file.lease.url)
+        opener.invalidate()
+    }
+
+    @Test func quickLookDismissalReleasesTheOpenedFile() async throws {
+        let access = ControlledFileAccess()
+        let opener = HostFileOpener(access: access, canPreview: { _ in true })
+        let origin = origin()
+        let reference = try HostFileReference(hostID: origin.hostID, path: "/tmp/photo.png")
+        let downloaded = lease(reference)
+        opener.request(reference, origin: origin, transition: nil)
+        await access.waitForOpen(1)
+        await access.finish(0, with: .success(downloaded))
+        await opener.operation?.value
+        #expect(opener.quickLook?.id == downloaded.id)
         opener.presentationDismissed()
-        opener.showOptions()
-        guard case .document(let exported, nil) = opener.sheet?.content else {
-            Issue.record("Expected file information and original-byte export")
+        await access.waitForRelease(downloaded.id)
+        #expect(opener.quickLook == nil)
+        #expect(opener.sheet == nil)
+    }
+
+    @Test func unavailableQuickLookKeepsTheFileExportable() async throws {
+        let access = ControlledFileAccess()
+        let opener = HostFileOpener(access: access, canPreview: { _ in true })
+        let origin = origin()
+        let reference = try HostFileReference(hostID: origin.hostID, path: "/tmp/photo.png")
+        let downloaded = lease(reference)
+        opener.request(reference, origin: origin, transition: nil)
+        await access.waitForOpen(1)
+        await access.finish(0, with: .success(downloaded))
+        await opener.operation?.value
+        opener.quickLookUnavailable(UUID())
+        #expect(opener.quickLook?.id == downloaded.id)
+        #expect(opener.sheet == nil)
+        opener.quickLookUnavailable(downloaded.id)
+        #expect(opener.quickLook == nil)
+        guard case .document(let file, nil) = opener.sheet?.content else {
+            Issue.record("Expected file information and export actions")
             return
         }
-        #expect(exported.id == file.id)
+        #expect(file.id == downloaded.id)
+        #expect(HostFileExportItem(file: file).url == downloaded.url)
         opener.invalidate()
     }
 
@@ -339,7 +375,7 @@ struct HostFileOpenerTests {
             #expect(file.transition?.frame() == CGRect(x: 10, y: 20, width: 30, height: 40))
             folder = file.url.deletingLastPathComponent()
         }
-        opener.invalidate()
+        opener.presentationDismissed()
         for _ in 0..<100 where FileManager.default.fileExists(atPath: folder.path) {
             try await Task.sleep(for: .milliseconds(20))
         }
@@ -372,7 +408,6 @@ struct HostFileOpenerTests {
         #expect(opener.quickLook != nil)
         opener.leavePresentationScope(sheet)
         #expect(opener.quickLook == nil)
-        #expect(opener.lastDocument == nil)
         #expect(!opener.presents(in: nil))
         opener.open(EmbeddedFileRequest(dataURL: "data:text/csv;base64,YSxi", suggestedName: "table"),
                     origin: origin(), frame: nil)

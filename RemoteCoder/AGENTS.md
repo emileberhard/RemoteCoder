@@ -1578,7 +1578,7 @@ entrypoint linked above.
     float over content, with the theme's translucent accent tint and a hairline
     stroke. `.appContentSurface(role, in:)` styles content-layer
     surfaces (rows, chips, cards) with an opaque premixed theme fill and stroke
-    on both platforms. Banners and floating file status use `.appGlass`.
+    on both platforms. Banners use `.appGlass`.
     `GlassRole` is `standard` or `selected`, and the tint mix and opacities are
     private to that file.
   - `.buttonStyle(.appGlass)` is tinted glass on iOS and untinted system glass
