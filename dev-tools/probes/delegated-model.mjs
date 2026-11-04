@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import {cp,mkdir,readFile,realpath,symlink,writeFile} from "node:fs/promises";
+import {cp,mkdir,readFile,symlink,writeFile} from "node:fs/promises";
 import {join} from "node:path";
 import {randomUUID} from "node:crypto";
 
@@ -84,13 +84,8 @@ export async function installPackage(lab,runtimePackage) {
     const release = join(standalone, "releases", `${manifest.version}-${manifest.target}`);
     await mkdir(join(standalone, "releases"), { recursive: true });
     await cp(runtimePackage, release, { recursive: true, verbatimSymlinks: true });
-    const executable = join(release, "codex");
-    if (await Bun.file(executable).exists()) {
-        assert.equal(await realpath(executable), await realpath(join(release, manifest.entrypoint)),
-            "Copied runtime executable must resolve to its matching package entrypoint");
-    } else await symlink(manifest.entrypoint, executable);
     await symlink(release, join(standalone, "current"));
-    lab.codex = join(standalone, "current/codex");
+    lab.codex = join(standalone, "current", manifest.entrypoint);
 }
 
 export async function writeProviderConfig(lab, model) {
