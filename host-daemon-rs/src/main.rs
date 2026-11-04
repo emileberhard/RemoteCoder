@@ -153,7 +153,13 @@ async fn run(
         anyhow::bail!("This runtime operation is macOS-only; use the Linux host deployment owner");
     }
     if !cfg!(target_os = "linux")
-        && matches!(&args.command, Some(config::Command::Runtime { command: config::RuntimeCommand::ActivatePrepared { .. } | config::RuntimeCommand::RestorePrepared }))
+        && matches!(
+            &args.command,
+            Some(config::Command::Runtime {
+                command: config::RuntimeCommand::ActivatePrepared { .. }
+                    | config::RuntimeCommand::RestorePrepared
+            })
+        )
     {
         anyhow::bail!("Prepared runtime activation is owned by the Linux service installer");
     }

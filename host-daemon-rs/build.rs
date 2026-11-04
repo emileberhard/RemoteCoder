@@ -199,14 +199,33 @@ fn main() {
         .pointer(&format!("/runtimeTargets/{target}"))
         .unwrap_or_else(|| panic!("no approved Codex package for {target}"));
     println!("cargo::rustc-env=RC_REQUIRED_CODEX_TARGET={target}");
-    let mut version = record["codexCliVersion"].as_str().expect("Codex version").split('.');
-    let major: u32 = version.next().expect("Codex major").parse().expect("numeric Codex major");
-    let minor: u32 = version.next().expect("Codex minor").parse().expect("numeric Codex minor");
+    let mut version = record["codexCliVersion"]
+        .as_str()
+        .expect("Codex version")
+        .split('.');
+    let major: u32 = version
+        .next()
+        .expect("Codex major")
+        .parse()
+        .expect("numeric Codex major");
+    let minor: u32 = version
+        .next()
+        .expect("Codex minor")
+        .parse()
+        .expect("numeric Codex minor");
     if (major, minor) >= (0, 166) {
-        assert!(approval.pointer("/runtimeHashes/bin~1codex-exec-server").is_some(), "Codex 0.166 and newer require an approved exec server");
+        assert!(
+            approval
+                .pointer("/runtimeHashes/bin~1codex-exec-server")
+                .is_some(),
+            "Codex 0.166 and newer require an approved exec server"
+        );
     }
     if let Some(hash) = approval.pointer("/runtimeHashes/bin~1codex-exec-server") {
-        println!("cargo::rustc-env=RC_REQUIRED_EXEC_SERVER_SHA256={}", hash.as_str().expect("exec server hash must be a string"));
+        println!(
+            "cargo::rustc-env=RC_REQUIRED_EXEC_SERVER_SHA256={}",
+            hash.as_str().expect("exec server hash must be a string")
+        );
     }
 
     for (name, value) in [

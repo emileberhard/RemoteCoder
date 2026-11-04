@@ -2375,7 +2375,11 @@ fn installed_package_check_accepts_only_a_completed_matching_swap() {
         std::fs::write(location.join("codex-package.json"), "approved manifest").expect("manifest");
         std::fs::write(location.join("bin/codex"), "approved codex").expect("codex");
         std::fs::write(location.join("bin/codex-code-mode-host"), "approved host").expect("host");
-        std::fs::write(location.join("bin/codex-exec-server"), "approved exec server").expect("exec server");
+        std::fs::write(
+            location.join("bin/codex-exec-server"),
+            "approved exec server",
+        )
+        .expect("exec server");
     }
     let paths = RuntimePaths {
         release: root.join("release"),

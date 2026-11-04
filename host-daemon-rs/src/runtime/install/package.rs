@@ -89,7 +89,8 @@ pub(in crate::runtime) fn validate_runtime_package(package_dir: &Path) -> Result
         || manifest.target != REQUIRED_CODEX_TARGET
         || manifest.variant != "codex"
         || manifest.entrypoint != "bin/codex"
-        || manifest.exec_server.as_deref() != REQUIRED_EXEC_SERVER_SHA256.map(|_| "bin/codex-exec-server")
+        || manifest.exec_server.as_deref()
+            != REQUIRED_EXEC_SERVER_SHA256.map(|_| "bin/codex-exec-server")
         || manifest.resources_dir != "codex-resources"
         || manifest.path_dir != "codex-path"
     {
@@ -111,7 +112,10 @@ pub(in crate::runtime) fn validate_runtime_package(package_dir: &Path) -> Result
     for (name, approved) in [
         ("bin/codex", REQUIRED_CODEX_SHA256),
         ("bin/codex-code-mode-host", REQUIRED_CODE_MODE_HOST_SHA256),
-    ].into_iter().chain(REQUIRED_EXEC_SERVER_SHA256.map(|hash| ("bin/codex-exec-server", hash))) {
+    ]
+    .into_iter()
+    .chain(REQUIRED_EXEC_SERVER_SHA256.map(|hash| ("bin/codex-exec-server", hash)))
+    {
         let declared = manifest
             .binaries
             .get(name)

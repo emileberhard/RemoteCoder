@@ -21,7 +21,8 @@ pub(crate) const REQUIRED_CODEX_TARGET: &str = env!("RC_REQUIRED_CODEX_TARGET");
 pub(crate) const REQUIRED_CODEX_VERSION: &str = env!("RC_REQUIRED_CODEX_VERSION");
 pub(crate) const REQUIRED_CODEX_SOURCE_COMMIT: &str = env!("RC_REQUIRED_CODEX_SOURCE_COMMIT");
 pub(crate) const REQUIRED_CODEX_SHA256: &str = env!("RC_REQUIRED_CODEX_SHA256");
-pub(crate) const REQUIRED_EXEC_SERVER_SHA256: Option<&str> = option_env!("RC_REQUIRED_EXEC_SERVER_SHA256");
+pub(crate) const REQUIRED_EXEC_SERVER_SHA256: Option<&str> =
+    option_env!("RC_REQUIRED_EXEC_SERVER_SHA256");
 pub(crate) const REQUIRED_CODE_MODE_HOST_SHA256: &str = env!("RC_REQUIRED_CODE_MODE_HOST_SHA256");
 const CODE_MODE_HOST_NAME: &str = if cfg!(windows) {
     "codex-code-mode-host.exe"
@@ -95,7 +96,9 @@ pub(crate) enum RuntimeCommand {
         check_installed: bool,
     },
     #[command(about = "Activate an approved package after the Linux service has stopped.")]
-    ActivatePrepared { package_dir: PathBuf },
+    ActivatePrepared {
+        package_dir: PathBuf,
+    },
     #[command(about = "Restore the retained package before restarting the Linux service.")]
     RestorePrepared,
     /// Restart the managed app-server and recover every active exact turn.
@@ -411,10 +414,9 @@ impl CodexSettings {
             resolve_executable_path(sources.required_path("RC_CODEX_GATEWAY_CODEX_PATH")?);
         let identity = crate::runtime::identity::PackageIdentity::read(&codex_path)?;
         let runtime = validate_codex_runtime_for_version(&codex_path, &identity.version)?;
-        let current =
-            crate::config::HostPaths::from_env()?
-                .home()
-                .join(".codex/packages/standalone/current/bin/codex");
+        let current = crate::config::HostPaths::from_env()?
+            .home()
+            .join(".codex/packages/standalone/current/bin/codex");
         identity.verify(&current)?;
         Ok(Self {
             codex_path,
