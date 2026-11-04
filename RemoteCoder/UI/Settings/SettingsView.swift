@@ -1,7 +1,7 @@
 import Observation
 import SwiftUI
 
-enum SettingsPane: String { case chat, accounts, hosts, cluster, automations, location, audio }
+enum SettingsPane: String { case chat, accounts, hosts, cluster, automations, location, audio, keyboard }
 
 struct SettingsView: View {
     @Environment(\.scenePhase) private var scenePhase
@@ -39,6 +39,12 @@ struct SettingsView: View {
                     }
                 }
             }
+
+            #if os(macOS)
+            Tab("Keyboard", systemImage: "keyboard", value: SettingsPane.keyboard) {
+                KeyboardShortcutsSettings()
+            }
+            #endif
 
             Tab("Accounts", systemImage: "person.crop.circle", value: SettingsPane.accounts) {
                 SettingsAccountsPage(workspace: workspace)

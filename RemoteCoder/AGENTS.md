@@ -967,7 +967,7 @@ entrypoint linked above.
   trailing inspector, applied outside the split view. The inspector also shows
   the host, folder, model, reasoning and context usage; an unread value reads
   Unknown. Its open state is per window (`@SceneStorage`), and `ChatWindowActions`
-  publishes it to the View menu (⌥⌘I). The subagents pill opens it. Review
+  publishes it to the View menu (⌥⌘B by default). The subagents pill opens it. Review
   Changes (⇧⌘D) switches the inspector to the folder's change review, wider than
   the details; the inspector toggle reopens the details.
 - **Status pills.** `ConversationStatusPills` is the transcript's bottom bar
@@ -1325,7 +1325,12 @@ entrypoint linked above.
   commands; the identity-compared performer resolves current actions when run.
   Draft edits that leave this state unchanged do not republish the menus.
   `ChatCommand` is the one list of command titles and
-  shortcuts for the menus and the ⌘K `CommandPalette`. Go-menu order comes from
+  default shortcuts for the menus and the ⌘K `CommandPalette`. The Mac delegate
+  owns `ChatKeyboardShortcuts`, the device-local override store; menus and palette
+  labels read that same owner. Settings → Keyboard records, clears and restores
+  bindings. Left and right sidebars default to ⌘B and ⌥⌘B. Recording is confined
+  to its focused native button and bypasses `AppKeyMonitor` while it has focus.
+  Go-menu order comes from
   `ConversationSidebarNavigation` over the sidebar projection, resolved only
   when a command runs. Positions and Previous/Next follow the visible rows;
   ⌘K and Next Needing Attention read the projection with every fold open. Find in Conversation (`TranscriptFind`) matches loaded
@@ -1959,9 +1964,9 @@ The gateway side is in `host-daemon-rs/AGENTS.md`; both paths are in
 - **Windows.** Both apps declare `WindowGroup(for: ConversationWindowValue.self)`.
   The iPhone and iPad run one window (`UIApplicationSupportsMultipleScenes` is
   false in `Config/InfoPlists/RemoteCoder-Info.plist`). The Mac runs one conversation per window, with
-  native window tabs and the sidebar in every window: ⇧⌘N opens a window, ⌘T
-  opens a tab through `WindowTabbing` (AppKit `addTabbedWindow`; SwiftUI has no
-  tabbing API), and the app keeps running after its last window closes.
+  the sidebar in every window: ⇧⌘N opens a window, and the app keeps running
+  after its last window closes. Native window tabbing is disabled; do not add
+  tab commands or tab adoption. Use the sidebar to switch chats.
   - Each scene attaches its own `ChatWindowModel` with its own selection and
     screens. A window without a value is the primary one; a window
     opened with a value performs that `.open` once on its own screen.

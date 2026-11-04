@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct ChatCommands: Commands {
+    let shortcuts: ChatKeyboardShortcuts
     @FocusedValue(\.chatWindowActions) private var actions
     @Environment(\.openWindow) private var openWindow
 
@@ -13,7 +14,7 @@ struct ChatCommands: Commands {
                     .disabled((actions?.hosts.count ?? 0) < 2)
             }
             Button(ChatCommand.newWindow.title(in: actions)) { openWindow.openNewChatWindow() }
-                .keyboardShortcut(ChatCommand.newWindow.shortcut)
+                .keyboardShortcut(shortcuts.shortcut(for: .newWindow))
             Divider()
             command(.fork)
             command(.chooseFolder)
@@ -77,7 +78,7 @@ struct ChatCommands: Commands {
 
     private func command(_ command: ChatCommand) -> some View {
         Button(command.title(in: actions)) { actions?.run(command) }
-            .keyboardShortcut(command.shortcut)
+            .keyboardShortcut(shortcuts.shortcut(for: command))
             .disabled(actions?.isEnabled(command) != true)
     }
 
@@ -86,6 +87,7 @@ struct ChatCommands: Commands {
             get: { actions?.isOn(command) == true },
             set: { _ in actions?.run(command) }
         ))
+        .keyboardShortcut(shortcuts.shortcut(for: command))
         .disabled(actions?.isEnabled(command) != true)
     }
 
