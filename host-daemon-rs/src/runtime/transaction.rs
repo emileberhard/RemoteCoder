@@ -346,7 +346,7 @@ impl<'a> RecoveryTransaction<'a> {
         };
         let journal = restore_previous_runtime(self.store, &generation_id, &paths)?;
         let source_server = CodexAppServer::for_runtime(
-            paths.current.join("codex"),
+            paths.current.join("bin/codex"),
             self.app_server.child_environment().clone(),
         )?;
         let recovery = RecoveryTransaction::new(&source_server, self.store);

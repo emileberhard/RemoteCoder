@@ -46,10 +46,13 @@ cat >"${temp_root}/package/databases.json" <<'EOF'
 EOF
 cp "${temp_root}/package/databases.json" "${temp_root}/databases.json"
 print -rn -- 'test-code-mode-host' >"${temp_root}/package/bin/codex-code-mode-host"
+print -rn -- 'test-exec-server' >"${temp_root}/package/bin/codex-exec-server"
 chmod 755 "${temp_root}/package/bin/codex" \
-  "${temp_root}/package/bin/codex-code-mode-host"
+  "${temp_root}/package/bin/codex-code-mode-host" \
+  "${temp_root}/package/bin/codex-exec-server"
 codex_hash="$(shasum -a 256 "${temp_root}/package/bin/codex" | awk '{print $1}')"
 code_mode_hash="$(shasum -a 256 "${temp_root}/package/bin/codex-code-mode-host" | awk '{print $1}')"
+exec_server_hash="$(shasum -a 256 "${temp_root}/package/bin/codex-exec-server" | awk '{print $1}')"
 cat >"${temp_root}/package/codex-package.json" <<EOF
 {
   "layoutVersion": 1,
@@ -57,12 +60,14 @@ cat >"${temp_root}/package/codex-package.json" <<EOF
   "target": "aarch64-apple-darwin",
   "variant": "codex",
   "entrypoint": "bin/codex",
+  "execServer": "bin/codex-exec-server",
   "resourcesDir": "codex-resources",
   "pathDir": "codex-path",
   "sourceCommit": "0123456789abcdef0123456789abcdef01234567",
   "binaries": {
     "bin/codex": {"sha256": "${codex_hash}"},
-    "bin/codex-code-mode-host": {"sha256": "${code_mode_hash}"}
+    "bin/codex-code-mode-host": {"sha256": "${code_mode_hash}"},
+    "bin/codex-exec-server": {"sha256": "${exec_server_hash}"}
   }
 }
 EOF
@@ -85,7 +90,7 @@ pins = {}
 for name in native.TABLES:
     with native.connect(pathlib.Path(sys.argv[2]) / name, True) as connection:
         fingerprint = native.fingerprint(connection)
-    pins[name] = {"schema": fingerprint["schema"], "migrations": fingerprint["migrations"]}
+    pins[name] = {"current": {"schema": fingerprint["schema"], "migrations": fingerprint["migrations"]}}
 print(json.dumps(pins))
 EOF
 }
@@ -126,12 +131,13 @@ uv run --script "${script}" apply --repo-root "${temp_root}" --json \
   --package "${temp_root}/package" |
   jq -e '.ok == true and .adoptionMigrations["state_5.sqlite"] == 1' >/dev/null
 jq -e --slurpfile before "${temp_root}/before.json" \
-  --arg codex "${codex_hash}" --arg host "${code_mode_hash}" '
+  --arg codex "${codex_hash}" --arg host "${code_mode_hash}" --arg exec_server "${exec_server_hash}" '
     del(.runtimeTargets["aarch64-apple-darwin"].runtimePackageSHA256) == ($before[0] | del(.runtimeTargets["aarch64-apple-darwin"].runtimePackageSHA256) |
       .codexCliVersion = "9.8.7-alpha.6" |
       .runtimeTargets["aarch64-apple-darwin"].sourceCommit = "0123456789abcdef0123456789abcdef01234567" |
       .runtimeTargets["aarch64-apple-darwin"].runtimeHashes["bin/codex"] = $codex |
-      .runtimeTargets["aarch64-apple-darwin"].runtimeHashes["bin/codex-code-mode-host"] = $host) and
+      .runtimeTargets["aarch64-apple-darwin"].runtimeHashes["bin/codex-code-mode-host"] = $host |
+      .runtimeTargets["aarch64-apple-darwin"].runtimeHashes["bin/codex-exec-server"] = $exec_server) and
     .runtimeTargets["aarch64-apple-darwin"].runtimePackageSHA256 != $before[0].runtimeTargets["aarch64-apple-darwin"].runtimePackageSHA256' \
   "${temp_root}/docs/codex/compatibility.json" >/dev/null
 

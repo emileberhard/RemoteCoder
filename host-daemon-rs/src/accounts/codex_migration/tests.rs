@@ -802,6 +802,136 @@ fn snapshot_covers_memory_collisions_created_by_an_earlier_profile() {
     assert_eq!(std::fs::read(second).unwrap(), b"Second profile memory");
 }
 
+fn current_state(directory: &Path) {
+    let status = Command::new("tar")
+        .arg("-xzf")
+        .arg(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("test-fixtures/codex-adoption/native-state-62.tar.gz"),
+        )
+        .arg("-C")
+        .arg(directory)
+        .status()
+        .unwrap();
+    assert!(status.success());
+}
+
+#[test]
+fn prior_native_state_adopts_into_current_host_with_null_attached_parents() {
+    let fixture = Fixture::new();
+    let manifest = fixture.native();
+    current_state(&fixture.target);
+    let original = source_bytes(&fixture.source);
+    run(fixture.home.path(), &fixture.target, &fixture.claude_home).unwrap();
+    let actual = python(
+        r#"
+import json,sqlite3,sys
+with sqlite3.connect(sys.argv[1]) as db:
+    print(json.dumps({'threads':db.execute('SELECT id FROM threads ORDER BY id').fetchall(),'parents':db.execute('SELECT attached_thread_parent_id FROM threads').fetchall(),'migration':db.execute('SELECT max(version) FROM _sqlx_migrations').fetchone()[0]}))
+"#,
+        &[fixture.target.join("state_5.sqlite")],
+    );
+    let ids = actual["threads"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row[0].as_str().unwrap())
+        .collect::<BTreeSet<_>>();
+    let expected = manifest["threads"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["id"].as_str().unwrap())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(ids, expected);
+    assert!(
+        actual["parents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row[0].is_null())
+    );
+    assert_eq!(actual["migration"], 62);
+    assert_eq!(source_bytes(&fixture.source), original);
+    assert!(
+        run(fixture.home.path(), &fixture.target, &fixture.claude_home)
+            .unwrap()
+            .complete
+    );
+}
+
+#[test]
+fn current_state_refuses_a_prior_host_before_import_even_with_a_saved_plan() {
+    let fixture = Fixture::new();
+    fixture.native();
+    let old = std::fs::read(fixture.source.join("c/state_5.sqlite")).unwrap();
+    current_state(&fixture.source.join("c"));
+    current_state(&fixture.target);
+    let plan = serde_json::from_value(
+        native(
+            "plan",
+            &fixture.source.join("c"),
+            &fixture.target,
+            &NativePlan::default(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let mut planned = Receipt {
+        read_scopes: Some(BTreeMap::new()),
+        ..Receipt::default()
+    };
+    planned.profiles.insert(
+        ACCOUNT.into(),
+        Adoption {
+            native: plan,
+            ..Adoption::default()
+        },
+    );
+    Root::open(fixture.home.path())
+        .unwrap()
+        .write_json(
+            &fixture.home.path().join(".remote-coder").join(RECEIPT),
+            &planned,
+        )
+        .unwrap();
+    std::fs::write(fixture.target.join("state_5.sqlite"), old).unwrap();
+    let source = source_bytes(&fixture.source);
+    let target = source_bytes(&fixture.target);
+    let error = run(fixture.home.path(), &fixture.target, &fixture.claude_home)
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(
+        error.contains("requires a native target upgrade"),
+        "{error}"
+    );
+    assert!(error.contains("attached_thread_parent_id"), "{error}");
+    assert_eq!(source_bytes(&fixture.source), source);
+    assert_eq!(source_bytes(&fixture.target), target);
+    assert!(!fixture.target.join("sessions").exists());
+}
+
+#[test]
+fn a_current_schema_with_prior_migrations_is_rejected_before_import() {
+    let fixture = Fixture::new();
+    fixture.native();
+    current_state(&fixture.source.join("c"));
+    python(
+        "import sqlite3,sys\nwith sqlite3.connect(sys.argv[1]) as db: db.execute('DELETE FROM _sqlx_migrations WHERE version=62')\nprint('{}')",
+        &[fixture.source.join("c/state_5.sqlite")],
+    );
+    let original = source_bytes(&fixture.source);
+    let error = run(fixture.home.path(), &fixture.target, &fixture.claude_home)
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(error.contains("Unsupported pinned Codex schema"), "{error}");
+    assert!(!fixture.target.join("state_5.sqlite").exists());
+    assert!(!fixture.target.join("sessions").exists());
+    assert_eq!(source_bytes(&fixture.source), original);
+}
+
 #[test]
 fn native_schema_drift_is_rejected_before_any_source_history_is_copied() {
     let fixture = Fixture::new();

@@ -17,7 +17,7 @@ RC_GATEWAY_BUILD_HOST=local just codex-runtime-build ../remotecoder-codex "$HOME
 just codex-runtime-approve "$HOME/.local/share/remotecoder/codex-package"
 ```
 
-The builder installs the fork's pinned Rust toolchain through rustup as needed, verifies the pinned OpenAI V8 archive, resolves the checksum-pinned ripgrep distribution, and produces the complete package: `bin/codex`, its `bin/codex-code-mode-host` sibling, `codex-path/rg`, package metadata, LICENSE, NOTICE and LICENSES. Keep this layout intact. The built package may have different executable hashes from the maintainer's build; approval records the actual local bytes while retaining the exact source/version identity.
+The builder installs the fork's pinned Rust toolchain through rustup as needed, verifies the pinned OpenAI V8 archive, resolves the checksum-pinned ripgrep distribution, and produces the complete package: `bin/codex`, its `bin/codex-code-mode-host` and `bin/codex-exec-server` siblings, `codex-path/rg`, package metadata, LICENSE, NOTICE and LICENSES. Keep this layout intact. The built package may have different executable hashes from the maintainer's build; approval records the actual local bytes while retaining the exact source/version identity.
 
 Sign in with your own account and create the gateway configuration:
 
@@ -49,3 +49,24 @@ ingress and acceptance belong to the operator.
 For a common source move, run `scripts/codex-runtime-approval evaluate --package <package> --output <receipt>` natively for every target, then `scripts/codex-runtime-approval apply-set --receipt <mac-receipt> --receipt <linux-receipt> --protocol-source-commit <commit> --source-dir <fork-checkout>`. The atomic update rejects missing targets, mixed versions, changed adoption pins or different database migrations before writing any approval.
 
 The checked-in source pins and hashes describe exact matched runtimes. Host-specific acceptance, installed paths and private configuration are operator records outside this repository.
+
+The matched identity also includes `chatgptChromeExtension` beside `chatgptBuild`:
+the original Web Store extension ID, version and raw CRX SHA-256. Chrome must not
+advance it independently of the approved app's Computer Use runtime. Maintainers
+stage the unchanged signed CRX and immutable update feed, then apply and verify
+a dedicated managed Chrome policy per Mac through RemoteCoder-deploy's extension
+owner in the same upgrade. The policy force-installs this extension, overrides
+its update URL and sets its minimum version to the pin. A new app or extension
+pair requires live Chrome creation and reacquisition through the bridge on both
+Macs. No official app, extension bundle or Chrome preferences are patched.
+Self-hosters own their browser-management policy; the gateway's public bootstrap
+does not require the maintainer's MDM or hosting.
+
+Linux deployment uses service-free `runtime activate-prepared` and
+`runtime restore-prepared` after its service owner has verified shutdown. The
+runtime owns package validation, stopped-generation identity and durable swap;
+the service owner starts the regular gateway and verifies that exact recovery
+generation before `runtime commit`. A retry of the same pending candidate keeps
+its source rollback identity. A committed runtime downgrade requires a new
+source-approved release. The canonical executable is `current/bin/codex` on both
+platforms.

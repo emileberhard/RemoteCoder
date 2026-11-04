@@ -1033,7 +1033,7 @@ blocks startup or provider journal retirement.
 - Never copy a bare `codex` executable. Build the canonical package with the
   fork's `scripts/build_codex_package.py` and install it through
   `host-daemon-rs/scripts/install-codex-runtime.zsh <package-directory>`. The
-  installer validates both matched binaries and their reviewed source commit,
+  installer validates all three matched binaries and their reviewed source commit,
   and keeps the custom runtime's upstream updater disabled; the pinned runtime
   changes only through a reviewed package install. It suppresses every external
   ingress during cutover, starts the replacement fenced and relay-disabled,
@@ -1048,11 +1048,11 @@ blocks startup or provider journal retirement.
   └── current -> releases/<version>-<approved-target>
   ```
 
-  `current/codex` is the daemon-managed executable, and the package's
-  `bin/codex-code-mode-host` must match it. The builder derives the manifest
+  `current/bin/codex` is the daemon-managed executable, and the package's
+  `bin/codex-code-mode-host` and `bin/codex-exec-server` must match it. The builder derives the manifest
   source commit from a clean Git checkout. Activation is atomic and requires
-  that commit, both manifest digests and the actual binaries to match the
-  pinned approved artifact hashes; it then validates both executables, the CLI
+  that commit, every manifest digest and the actual binaries to match the
+  pinned approved artifact hashes; it then validates the executables, the CLI
   version, the official daemon lifecycle response, the daemon's managed version
   and its live app-server version. A version change uses the validated source package for capture and the
   approved target for activation and recovery; the persisted generation binds
@@ -2110,3 +2110,19 @@ suffix resolution cannot prove uniqueness while native coverage is incomplete.
 Mirror entry failures advance the feed, retain existing copies and log transitions.
 The 600-second full reconciliation repairs missed copies; incomplete manifests
 never authorize reclamation. Verified-prefix growth appends in place.
+
+Linux service deployment owns stop/start outside the runtime transaction.
+`runtime activate-prepared <package>` and `runtime restore-prepared` only mutate
+a verified stopped generation under the runtime lease; they never start a
+recovery daemon or temporary gateway. Activation ends at `RuntimeInstalled`.
+The normal gateway bootstrap starts and recovers the daemon inside the service
+unit. `runtime commit` follows exact recovery and authenticated health checks.
+All platforms address the package entrypoint as `current/bin/codex`; root-level
+executable aliases are not part of the package contract.
+
+The retired-profile adoption schema inventory names one current schema/checksum
+pair per database and any explicitly supported previous pairs. Admission compares
+complete pairs; native package evaluation accepts only current. Every import
+attempt validates source columns against the target before file writes, even
+when reusing a persisted plan. Never discard a newer source column to fit an
+older host: require a native target upgrade first.

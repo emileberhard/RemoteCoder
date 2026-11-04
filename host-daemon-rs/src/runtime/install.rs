@@ -22,6 +22,7 @@ pub(crate) mod call_worker;
 pub(crate) mod claude_state;
 pub(super) mod package;
 pub(crate) mod pair;
+pub(super) mod prepared;
 pub(crate) mod staging;
 pub(super) mod transaction;
 pub(super) mod uninstall;
@@ -38,7 +39,7 @@ pub(super) async fn install(
         .load()?
         .is_some_and(|journal| journal.is_prepared_handoff());
     let source_codex = match RuntimePaths::load() {
-        Ok(paths) => paths.current.join("codex"),
+        Ok(paths) => paths.current.join("bin/codex"),
         Err(error) if prepared_on_entry => {
             return restore_prepared_entry_after_error(recovery, env_file, error).await;
         }
@@ -129,7 +130,7 @@ async fn install_version_matched_runtime(
             .context("unfinished restart transaction must reconcile before an upgrade")?;
     }
     let preflight = async {
-        let source_codex_path = staged.paths.current.join("codex");
+        let source_codex_path = staged.paths.current.join("bin/codex");
         let source_sha256 = sha256_file(&source_codex_path)?;
         if !prepared_handoff && app_server.verify_ready().await.is_ok() {
             let mut rpc = RpcClient::connect(app_server).await?;
@@ -243,7 +244,7 @@ async fn install_version_matched_runtime(
     };
     if let Err(error) = result {
         let installed_server = crate::providers::codex::daemon::CodexAppServer::for_runtime(
-            staged.paths.current.join("codex"),
+            staged.paths.current.join("bin/codex"),
             app_server.child_environment().clone(),
         )?;
         let restore = RecoveryTransaction::new(&installed_server, store)
@@ -307,7 +308,7 @@ async fn prepared_handoff_install_transaction(
     claude_state::ClaudeStateBackup::for_host()?.capture(&claude_home, &codex_home)?;
     let journal = activate_staged_runtime(store, &journal.generation_id, staged)?;
     let target_server = crate::providers::codex::daemon::CodexAppServer::for_runtime(
-        staged.paths.current.join("codex"),
+        staged.paths.current.join("bin/codex"),
         app_server.child_environment().clone(),
     )?;
     let recovery = RecoveryTransaction::new(&target_server, store);

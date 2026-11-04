@@ -5,7 +5,7 @@ import { dirname, join, resolve } from "node:path";
 const project = resolve(import.meta.dir, "..");
 const compatibility = await Bun.file(join(project, "../docs/codex/compatibility.json")).json();
 const binary =
-  process.env.CODEX_BIN ?? join(process.env.HOME ?? "", ".codex/packages/standalone/current/codex");
+  process.env.CODEX_BIN ?? join(process.env.HOME ?? "", ".codex/packages/standalone/current/bin/codex");
 const version = (await new Response(Bun.spawn([binary, "--version"]).stdout).text()).trim();
 if (version !== `codex-cli ${compatibility.codexCliVersion}`)
   throw new Error("CODEX_BIN must match docs/codex/compatibility.json");

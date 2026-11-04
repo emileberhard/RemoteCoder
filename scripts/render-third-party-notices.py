@@ -60,7 +60,7 @@ def render(source: Path, destination: Path, title: str, target: str) -> None:
             ]
         )
     destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.write_text("\n".join(lines))
+    destination.write_text("\n".join(line.rstrip() for line in "\n".join(lines).splitlines()) + "\n")
 
 
 def main() -> None:

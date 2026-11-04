@@ -416,6 +416,7 @@ pub(crate) fn run(home: &Path, target: &Path, claude_home: &Path) -> Result<Rece
             continue;
         }
         if !receipt.profiles[&id].imported {
+            native("validate", &source, target, &receipt.profiles[&id].native)?;
             if !receipt.profiles[&id].native.replaced.is_empty() {
                 let _native = lock_native(target)?;
                 let conflicts = home.join(".remote-coder/codex-profile-conflicts").join(&id);

@@ -64,6 +64,7 @@ class AtomicApprovalTests(unittest.TestCase):
                     "source_commit": self.protocol,
                     "codex_sha256": "1" * 64,
                     "code_mode_host_sha256": "2" * 64,
+                    "exec_server_sha256": "4" * 64,
                 },
                 "package_sha256": "3" * 64,
                 "adoption_pins_sha256": hashlib.sha256(pins.read_bytes()).hexdigest(),
@@ -136,6 +137,9 @@ class AtomicApprovalTests(unittest.TestCase):
             receipts = copy.deepcopy(self.receipts)
             receipts[1][field] = value
             cases.append(receipts)
+        receipts = copy.deepcopy(self.receipts)
+        receipts[1]["approval"].pop("exec_server_sha256")
+        cases.append(receipts)
         before = self.path.read_bytes()
         for receipts in cases:
             with self.subTest(receipts=receipts), self.assertRaises(RuntimeError):
