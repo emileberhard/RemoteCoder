@@ -359,34 +359,10 @@ async fn settings(
 ) -> Result<ExecutionSettings> {
     match provider {
         Provider::Codex => models::codex(model, effort, tier, &model_catalog(endpoint).await?),
-        Provider::Claude => {
-            let model = model.to_ascii_lowercase();
-            ensure!(
-                matches!(
-                    model.as_str(),
-                    "default"
-                        | "best"
-                        | "fable"
-                        | "fable[1m]"
-                        | "haiku"
-                        | "opus"
-                        | "opus[1m]"
-                        | "opusplan"
-                        | "sonnet"
-                        | "sonnet[1m]"
-                ),
-                "Claude requires a moving model family alias"
-            );
-            ensure!(
-                tier.is_none_or(|tier| matches!(tier, "standard" | "fast")),
-                "Claude supports standard or fast mode"
-            );
-            Ok(ExecutionSettings::Claude {
-                model,
-                effort: effort.map(str::to_owned),
-                fast: tier == Some("fast"),
-            })
+        Provider::Claude if models::is_claude_alias(model) => {
+            models::claude(model, effort, tier, &[])
         }
+        Provider::Claude => models::claude(model, effort, tier, &model_catalog(endpoint).await?),
     }
 }
 
@@ -571,7 +547,7 @@ async fn spawn(endpoint: &Endpoint, arguments: SpawnArgs) -> Result<Value> {
         let settings =
             if arguments.model_override.is_some() || arguments.effort.is_some() || tier.is_some() {
                 let selected = if let Some(model) = &arguments.model_override {
-                    let (effort, tier) = match original_settings {
+                    let (current_effort, current_tier) = match original_settings {
                         ExecutionSettings::Codex {
                             effort,
                             service_tier,
@@ -582,7 +558,14 @@ async fn spawn(endpoint: &Endpoint, arguments: SpawnArgs) -> Result<Value> {
                             Some(if *fast { "fast" } else { "standard" }),
                         ),
                     };
-                    settings(endpoint, original_settings.provider(), model, effort, tier).await?
+                    settings(
+                        endpoint,
+                        original_settings.provider(),
+                        model,
+                        arguments.effort.as_deref().or(current_effort),
+                        tier.or(current_tier),
+                    )
+                    .await?
                 } else {
                     original_settings.clone()
                 };
@@ -723,22 +706,36 @@ fn update_settings(
             }
         }
         (
-            ExecutionSettings::Claude { .. },
             ExecutionSettings::Claude {
-                effort: selected_effort,
-                fast,
+                model: current_model,
                 ..
             },
+            ExecutionSettings::Claude {
+                model: selected_model,
+                effort: selected_effort,
+                fast,
+            },
         ) => {
+            let native = crate::providers::claude::exec::is_native_model;
+            ensure!(
+                (native(current_model) && native(selected_model))
+                    || current_model == selected_model,
+                "A continuation cannot change model provider"
+            );
             if let Some(effort) = effort {
                 *selected_effort = Some(effort.to_owned());
             }
             if let Some(tier) = tier {
-                ensure!(
-                    matches!(tier, "standard" | "fast"),
-                    "Claude supports standard or fast mode"
-                );
-                *fast = tier == "fast";
+                if native(selected_model) {
+                    ensure!(
+                        matches!(tier, "standard" | "fast"),
+                        "Claude supports standard or fast mode"
+                    );
+                    *fast = tier == "fast";
+                } else {
+                    ensure!(tier == "standard", "External models have no service tiers");
+                    *fast = false;
+                }
             }
         }
         _ => bail!("A continuation cannot change provider"),
@@ -1477,6 +1474,50 @@ mod tests {
         assert_eq!(
             human_listing(&json!({"agents":[],"warnings":[]})).unwrap(),
             "No matching agents"
+        );
+    }
+
+    #[test]
+    fn continuation_preserves_external_claude_model_and_rejects_provider_or_fast_changes() {
+        let external = ExecutionSettings::Claude {
+            model: "copilot/gemini-4-argon".into(),
+            effort: Some("high".into()),
+            fast: false,
+        };
+        let native = ExecutionSettings::Claude {
+            model: "opus".into(),
+            effort: Some("xhigh".into()),
+            fast: false,
+        };
+        assert_eq!(
+            update_settings(
+                &external,
+                external.clone(),
+                Some("medium"),
+                Some("standard")
+            )
+            .unwrap(),
+            ExecutionSettings::Claude {
+                model: "copilot/gemini-4-argon".into(),
+                effort: Some("medium".into()),
+                fast: false,
+            }
+        );
+        assert!(update_settings(&external, external.clone(), None, Some("fast")).is_err());
+        assert!(update_settings(&external, native.clone(), None, None).is_err());
+        assert!(update_settings(&native, external.clone(), None, None).is_err());
+        assert!(
+            update_settings(
+                &external,
+                ExecutionSettings::Claude {
+                    model: "copilot/other-model".into(),
+                    effort: Some("high".into()),
+                    fast: false,
+                },
+                None,
+                None
+            )
+            .is_err()
         );
     }
 }
