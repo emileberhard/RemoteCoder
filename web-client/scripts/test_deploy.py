@@ -1,3 +1,4 @@
+import fcntl
 import importlib.util
 import json
 from contextlib import redirect_stdout
@@ -30,15 +31,34 @@ class ReleaseTests(unittest.TestCase):
             bun = root / "bun"
             bun.write_text("#!/bin/sh\necho 1.4.3\n")
             bun.chmod(0o755)
+            (old / "service.js").write_text("service")
             (old / "service.plist").write_bytes(plistlib.dumps({"ProgramArguments": [str(bun), "service.js"]}))
             (old / "dist/deployment.json").write_text(json.dumps({"revision": "old", "bun": "1.4.3"}))
             with patch.object(deploy, "ROOT", root), patch.object(deploy, "RELEASES", releases):
                 retained = deploy.snapshot_legacy(old)
                 bun.unlink()
                 self.assertEqual(subprocess.check_output([deploy.runtime(retained), "--version"], text=True).strip(), "1.4.3")
-                (retained / "bun").write_text("changed")
-                with self.assertRaisesRegex(RuntimeError, "does not match"):
+                (retained / "service.js").write_text("changed")
+                with self.assertRaisesRegex(RuntimeError, "do not match"):
                     deploy.runtime(retained)
+                (retained / "service.js").write_text("service")
+                (retained / "bun").write_text("changed")
+                with self.assertRaisesRegex(RuntimeError, "do not match"):
+                    deploy.runtime(retained)
+
+    def test_version_is_verified_on_copied_runtime(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source"
+            source.write_text("#!/bin/sh\necho 1.4.4\n")
+            source.chmod(0o755)
+            original = deploy.shutil.copy2
+            def replace_on_copy(src, destination):
+                original(src, destination)
+                Path(destination).write_text("#!/bin/sh\necho 1.4.5\n")
+            with patch.object(deploy.shutil, "copy2", side_effect=replace_on_copy):
+                with self.assertRaisesRegex(RuntimeError, "Expected Bun 1.4.4, found 1.4.5"):
+                    deploy.copy_runtime(source, root / "copy", "1.4.4")
 
     def test_release_identity_changes_with_runtime_and_service_inputs(self):
         identity = deploy.release_identity("commit", "1.4.4", "bytes", b"service")
@@ -92,9 +112,9 @@ else:
             service.write_bytes(plistlib.dumps({"EnvironmentVariables": {}}))
             settings = {"host": "fixture-host", "bunPath": str(bun), "bunVersion": "1.4.4"}
             output = io.StringIO()
-            with patch.object(deploy, "ROOT", root), patch.object(deploy, "RELEASES", releases), patch.object(deploy, "WEB", settings), patch.object(deploy, "SERVICE_PLIST", service), patch.object(deploy, "__file__", str(scripts / "deploy.py")), patch.object(deploy.socket, "gethostname", return_value="fixture-host"), patch.object(deploy, "candidate") as smoke, patch.dict(os.environ, {"STAGE_TEST_LOG": str(log)}), patch.object(sys, "argv", ["deploy.py", "deploy"]), redirect_stdout(output):
+            with patch.object(deploy, "ROOT", root), patch.object(deploy, "RELEASES", releases), patch.object(deploy, "WEB", settings), patch.object(deploy, "SERVICE_PLIST", service), patch.object(deploy, "__file__", str(scripts / "deploy.py")), patch.object(deploy.socket, "gethostname", return_value="fixture-host"), patch.object(deploy, "candidate") as smoke, patch.dict(os.environ, {"STAGE_TEST_LOG": str(log)}), patch.object(sys, "argv", ["deploy.py", "stage"]), redirect_stdout(output):
                 exit_code = deploy.main()
-            self.assertEqual(exit_code, 2)
+            self.assertEqual(exit_code, 0)
             result = json.loads(output.getvalue().splitlines()[-1])
             self.assertEqual(result["status"], "staged")
             self.assertEqual(result["activation"], "pending")
@@ -138,6 +158,7 @@ else:
             (release / "service.plist").write_bytes(plistlib.dumps(definition))
             metadata = {"release": release.name, "bunSha256": deploy.digest(bun), "serviceSha256": deploy.digest(release / "service.plist")}
             (release / "dist/deployment.json").write_text(json.dumps(metadata))
+            deploy.write_manifest(release)
             with tempfile.TemporaryFile() as lock:
                 result = deploy.smoke(release, "http://127.0.0.1", "local", lock, root)
             self.assertEqual(result, {"revision": "fixture"})
@@ -145,10 +166,11 @@ else:
     def test_staging_process_stops_after_controller_group_termination(self):
         controller = subprocess.Popen(
             [sys.executable, "-u", "-c", """
-import subprocess, sys
-child = subprocess.Popen([sys.executable, sys.argv[1], '30', sys.executable, '-u', '-c', "import time; print('ready', flush=True); time.sleep(30)"], stdin=subprocess.PIPE, start_new_session=True)
+import os, subprocess, sys
+lock_fd = os.open(sys.argv[2], os.O_CREAT | os.O_RDWR, 0o600)
+child = subprocess.Popen([sys.executable, sys.argv[1], '30', str(lock_fd), sys.executable, '-u', '-c', "import time; print('ready', flush=True); time.sleep(30)"], stdin=subprocess.PIPE, start_new_session=True, pass_fds=(lock_fd,))
 sys.stdin.read()
-""", str(deploy.WORKER)],
+""", str(deploy.WORKER), str(Path(tempfile.gettempdir()) / f"web-stage-test-{os.getpid()}-lock")],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
@@ -167,16 +189,117 @@ sys.stdin.read()
                 controller.wait(timeout=5)
             controller.stdin.close()
             controller.stdout.close()
+            (Path(tempfile.gettempdir()) / f"web-stage-test-{os.getpid()}-lock").unlink(missing_ok=True)
+
+    def test_command_leader_exit_kills_descendant_ignoring_term(self):
+        with tempfile.TemporaryDirectory() as directory, tempfile.TemporaryFile() as lock:
+            ready = Path(directory) / "ready"
+            program = """
+import os, pathlib, signal, sys, time
+pid = os.fork()
+if pid == 0:
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    pathlib.Path(sys.argv[1]).write_text(str(os.getpid()))
+    time.sleep(30)
+else:
+    while not pathlib.Path(sys.argv[1]).exists():
+        time.sleep(0.01)
+"""
+            with self.assertRaises(subprocess.CalledProcessError):
+                deploy.staged_run([sys.executable, "-c", program, str(ready)], lock, 10, stderr=subprocess.DEVNULL)
+            self.assertTrue(ready.exists())
+            with self.assertRaises(ProcessLookupError):
+                os.kill(int(ready.read_text()), 0)
+
+    def test_deadline_fails_when_term_handler_exits_zero(self):
+        program = "import signal, sys, time; signal.signal(signal.SIGTERM, lambda *args: sys.exit(0)); time.sleep(30)"
+        with tempfile.TemporaryFile() as lock:
+            with self.assertRaises(subprocess.CalledProcessError):
+                deploy.staged_run([sys.executable, "-c", program], lock, 0.5, stderr=subprocess.DEVNULL)
+
+    def test_worker_termination_cleans_its_term_ignoring_command(self):
+        program = "import os, signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); print(os.getpid(), flush=True); time.sleep(30)"
+        with tempfile.TemporaryFile() as lock:
+            worker = deploy.staged_process([sys.executable, "-u", "-c", program], lock, 30, stdout=subprocess.PIPE)
+            child = None
+            try:
+                ready, _, _ = select.select([worker.stdout], [], [], 5)
+                self.assertTrue(ready)
+                child = int(worker.stdout.readline())
+                worker.terminate()
+                self.assertNotEqual(worker.wait(timeout=10), 0)
+                with self.assertRaises(ProcessLookupError):
+                    os.kill(child, 0)
+            finally:
+                if worker.poll() is None:
+                    worker.kill()
+                    worker.wait(timeout=5)
+                if child:
+                    try:
+                        os.kill(child, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                worker.stdin.close()
+                worker.stdout.close()
+
+    def test_killed_worker_leaves_lock_with_its_command(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "lock"
+            lock = path.open("w")
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            program = "import os, time; print(os.getpid(), flush=True); time.sleep(30)"
+            worker = deploy.staged_process([sys.executable, "-u", "-c", program], lock, 30, stdout=subprocess.PIPE)
+            child = None
+            try:
+                ready, _, _ = select.select([worker.stdout], [], [], 5)
+                self.assertTrue(ready)
+                child = int(worker.stdout.readline())
+                worker.kill()
+                worker.wait(timeout=5)
+                lock.close()
+                with path.open("w") as contender:
+                    with self.assertRaises(BlockingIOError):
+                        fcntl.flock(contender, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            finally:
+                if child:
+                    try:
+                        os.kill(child, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                if worker.poll() is None:
+                    worker.kill()
+                    worker.wait(timeout=5)
+                worker.stdin.close()
+                worker.stdout.close()
+                if not lock.closed:
+                    lock.close()
+
+    def test_smoke_rejects_excessive_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            release = root / "release"
+            (release / "dist").mkdir(parents=True)
+            bun = release / "bun"
+            bun.write_text("#!/bin/sh\nhead -c 1048577 /dev/zero\n")
+            bun.chmod(0o755)
+            (release / "service.plist").write_bytes(plistlib.dumps({"ProgramArguments": [str(bun), str(release / "service.js")]}))
+            metadata = {"release": release.name, "bunSha256": deploy.digest(bun), "serviceSha256": deploy.digest(release / "service.plist")}
+            (release / "dist/deployment.json").write_text(json.dumps(metadata))
+            deploy.write_manifest(release)
+            with tempfile.TemporaryFile() as lock:
+                with self.assertRaisesRegex(RuntimeError, "exceeds 1 MiB"):
+                    deploy.smoke(release, "http://127.0.0.1", "local", lock, root)
 
     def test_staging_process_has_its_own_deadline(self):
         with tempfile.TemporaryFile() as lock:
             with self.assertRaises(subprocess.CalledProcessError):
                 deploy.staged_run([sys.executable, "-c", "import time; time.sleep(30)"], lock, 0.1, stderr=subprocess.DEVNULL)
 
-    def test_rollback_refuses_before_any_mutation(self):
-        with patch.object(sys, "argv", ["deploy.py", "rollback"]):
-            with self.assertRaisesRegex(RuntimeError, "call-safe admission fencing"):
+    def test_rollback_is_not_an_operation(self):
+        with patch.object(sys, "argv", ["deploy.py", "rollback"]), patch("sys.stderr", new_callable=io.StringIO):
+            with self.assertRaises(SystemExit) as error:
                 deploy.main()
+            self.assertEqual(error.exception.code, 2)
 
 
 if __name__ == "__main__":

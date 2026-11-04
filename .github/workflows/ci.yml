@@ -44,7 +44,7 @@ jobs:
           }
           gateway=$(inputs "$APP_SOURCES")
           apps=$(inputs "$GATEWAY_SOURCES")
-          for lane in gateway:$gateway gateway-lint:$gateway gateway-linux:$gateway swift:$(inputs '') apps-ios:$apps apps-mac:$(inputs "${GATEWAY_SOURCES/ web-client/}"); do
+          for lane in gateway:$gateway gateway-lint:$gateway gateway-linux:$gateway swift:$(inputs '') apps-ios:$apps apps-mac:$apps; do
             name=ci-lane-${lane%%:*}-${lane#*:}
             if gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=$name&per_page=100" \
                 --jq '[.artifacts[] | select((.expired | not) and .workflow_run.head_repository_id == .workflow_run.repository_id)] | length > 0' | grep -qx true; then
@@ -240,7 +240,6 @@ jobs:
             '{sourceCommit:$commit,buildId:$run}' > "$RC_BUILD_PROVENANCE"
       - run: just mac-build-local
       - run: just mac-harness-build-local
-      - run: python3 -m unittest web-client/scripts/test_deploy.py
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure()
         with:
@@ -257,6 +256,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - run: python3 -m unittest web-client/scripts/test_deploy.py
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.4

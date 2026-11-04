@@ -17,11 +17,8 @@ visual_preview_swiftc := "xcrun swiftc -parse-as-library -swift-version 6 -targe
 default:
     @just --list
 
-web-deploy:
-    python3 web-client/scripts/deploy.py deploy
-
-web-rollback:
-    python3 web-client/scripts/deploy.py rollback
+web-stage:
+    python3 web-client/scripts/deploy.py stage
 
 # Reuse or build this exact source; install directly when reachable, through MDM away.
 # Use delivery=direct or delivery=mdm to select a transport explicitly.

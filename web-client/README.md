@@ -48,7 +48,7 @@ the asset's mtime; stale siblings fall back to the original. Generate compressio
 after building, never on the request path.
 
 Maintainers: immutable service deployment, private DNS, ingress, retained
-releases, read-only smoke checks and rollback configuration live in the private
+releases, read-only smoke checks and the activation boundary live in the private
 [RemoteCoder-deploy operations entrypoint](https://github.com/emileberhard/RemoteCoder-deploy/blob/main/AGENTS.md).
 
 ## Browser bridge contract

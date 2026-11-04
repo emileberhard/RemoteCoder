@@ -134,6 +134,13 @@ change real host preferences to verify a refactor.
 Run `bun run format`, `bun run check`, `bun run typecheck`, `bun test` and
 `bun run build` in this directory.
 
+The macOS web deploy owner stages a verified candidate and preserves an immutable
+snapshot of the current release and its Bun. It does not switch the service.
+Activation and rollback require a bridge owner that fences admission to the
+exact service generation, preserves calls and turns, and recovers interrupted
+cutovers before pruning. Remove the legacy snapshot path once that cutover and
+its retained rollback are accepted.
+
 ## UI
 
 `src/ui/` mirrors the native `RemoteCoder/UI/` tree (`chat/`, `conversations/`,
@@ -157,9 +164,3 @@ reason; native has no shell-command dialog, files browser or starter cards.
   (popover API), `useAnchoredPopover`, `useContextMenu`/`ContextMenu` (right
   click and touch hold), `IconButton`, `HostPicker` and `ProviderMark`.
 - Check layout at 1440, 402 and 360 CSS px with no horizontal overflow.
-
-The macOS web deploy owner stages a verified candidate and preserves an immutable
-snapshot of the current release and its Bun. It does not switch the service.
-Activation and rollback require a bridge owner that fences admission to the
-exact service generation, preserves calls and turns, and recovers interrupted
-cutovers before pruning.
