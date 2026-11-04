@@ -1,29 +1,50 @@
 {
   "state_5.sqlite": {
-    "schema": "c21296b03b414e9f80764408d01844e463a195f53b5f897553909d1af315eef6",
-    "migrations": "4609a7213cb9b687b150a47905b5ac684fbdbdfb20f0e930f9675f2b8901a8a2"
+    "current": {
+      "schema": "c21296b03b414e9f80764408d01844e463a195f53b5f897553909d1af315eef6",
+      "migrations": "4609a7213cb9b687b150a47905b5ac684fbdbdfb20f0e930f9675f2b8901a8a2"
+    },
+    "previous": [
+      {
+        "schema": "cd134af74a7b6ee760eaae8f003f1858da9c6bed434d5232472a46141390ebb8",
+        "migrations": "899bc0ad2af9296b069f936e218bd217de2c2aeecfba238cafd5005bae277536"
+      }
+    ]
   },
   "thread_history_1.sqlite": {
-    "schema": [
-      "3fffb3c54ea9c7a34c7c81c0e19a47a58bb320f1c3bcb8fdeafc9b7ecca755b0",
-      "d4fb2edf45cd232322d580c42cf826e1a3b0e7339450dc6b554a5f1d91d12d1b"
-    ],
-    "migrations": "7002a8fa3de51521591f5a910f71e4b6dd467aebf523d64ede78f4b8c2a43ee9"
+    "current": {
+      "schema": "d4fb2edf45cd232322d580c42cf826e1a3b0e7339450dc6b554a5f1d91d12d1b",
+      "migrations": "7002a8fa3de51521591f5a910f71e4b6dd467aebf523d64ede78f4b8c2a43ee9"
+    },
+    "previous": [
+      {
+        "schema": "3fffb3c54ea9c7a34c7c81c0e19a47a58bb320f1c3bcb8fdeafc9b7ecca755b0",
+        "migrations": "7002a8fa3de51521591f5a910f71e4b6dd467aebf523d64ede78f4b8c2a43ee9"
+      }
+    ]
   },
   "queue_1.sqlite": {
-    "schema": "bcfb7277891e0058458b8d3d65029c7a029ff9846238d3d7398efafd69ee65d8",
-    "migrations": "e1e66702fa0f9e36688a2f9458e389e6c5ca69e69f0dade8adaeceaea4deadb1"
+    "current": {
+      "schema": "bcfb7277891e0058458b8d3d65029c7a029ff9846238d3d7398efafd69ee65d8",
+      "migrations": "e1e66702fa0f9e36688a2f9458e389e6c5ca69e69f0dade8adaeceaea4deadb1"
+    }
   },
   "goals_1.sqlite": {
-    "schema": "b5bbeffcdce787cf1c58e2f7f36224636c1e537071d63def3e6126db1aed7b78",
-    "migrations": "c1461e8966f697a99c75432d954833033b710f25cfb7a620cea25d7605d05ef5"
+    "current": {
+      "schema": "b5bbeffcdce787cf1c58e2f7f36224636c1e537071d63def3e6126db1aed7b78",
+      "migrations": "c1461e8966f697a99c75432d954833033b710f25cfb7a620cea25d7605d05ef5"
+    }
   },
   "memories_1.sqlite": {
-    "schema": "2e7cf952ee319741ae5276b3dee7d135ec37ce8f2b4575447b203167eab8ec92",
-    "migrations": "20525156c4950eeb341e7edcdfb966045a5ec4e11e065681ccf3ca088ed252b0"
+    "current": {
+      "schema": "2e7cf952ee319741ae5276b3dee7d135ec37ce8f2b4575447b203167eab8ec92",
+      "migrations": "20525156c4950eeb341e7edcdfb966045a5ec4e11e065681ccf3ca088ed252b0"
+    }
   },
   "memories_v2_1.sqlite": {
-    "schema": "2e7cf952ee319741ae5276b3dee7d135ec37ce8f2b4575447b203167eab8ec92",
-    "migrations": "20525156c4950eeb341e7edcdfb966045a5ec4e11e065681ccf3ca088ed252b0"
+    "current": {
+      "schema": "2e7cf952ee319741ae5276b3dee7d135ec37ce8f2b4575447b203167eab8ec92",
+      "migrations": "20525156c4950eeb341e7edcdfb966045a5ec4e11e065681ccf3ca088ed252b0"
+    }
   }
 }

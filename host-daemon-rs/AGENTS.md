@@ -2119,3 +2119,10 @@ The normal gateway bootstrap starts and recovers the daemon inside the service
 unit. `runtime commit` follows exact recovery and authenticated health checks.
 All platforms address the package entrypoint as `current/bin/codex`; root-level
 executable aliases are not part of the package contract.
+
+The retired-profile adoption schema inventory names one current schema/checksum
+pair per database and any explicitly supported previous pairs. Admission compares
+complete pairs; native package evaluation accepts only current. Every import
+attempt validates source columns against the target before file writes, even
+when reusing a persisted plan. Never discard a newer source column to fit an
+older host: require a native target upgrade first.

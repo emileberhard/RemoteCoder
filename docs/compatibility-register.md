@@ -158,3 +158,11 @@ store always returns image bytes. Generated-image history therefore retains
 0.163 runtime and current Swift clients require that inline field. Changing the
 injected store to produce `fileId` requires client support and a new rollback
 boundary before enabling that writer.
+
+The retired-profile adoption reader admits the exact reviewed state-61 schema
+and migration pair alongside current state-62. Its named-column copy into a
+state-62 host gives older rows a NULL attached parent. Every import attempt,
+including a saved-plan retry, rechecks target columns before copying source
+files. A state-62 source cannot import into a state-61 host: it fails before
+writes and requires the owning native runtime to upgrade the target first.
+Native package approval checks only the named current schema pair.

@@ -103,12 +103,12 @@ def fingerprint(connection):
 
 def validate(connection, path, expected):
     actual = fingerprint(connection)
-    accepted = (
-        expected["schema"]
-        if isinstance(expected["schema"], list)
-        else [expected["schema"]]
-    )
-    if actual["schema"] not in accepted or actual["migrations"] != expected["migrations"]:
+    accepted = [expected["current"], *expected.get("previous", [])]
+    if not any(
+        actual["schema"] == pair["schema"]
+        and actual["migrations"] == pair["migrations"]
+        for pair in accepted
+    ):
         raise ValueError(
             f"Unsupported pinned Codex schema or migration checksums: {path}"
         )
@@ -119,6 +119,27 @@ def validate(connection, path, expected):
         raise ValueError(
             f"Unclassified Codex tables in {path}: {', '.join(unclassified)}"
         )
+
+
+def validate_current(connection, path, expected):
+    validate(connection, path, {"current": expected["current"]})
+
+
+def validate_layouts(source, target, schema):
+    for name in schema:
+        source_path, target_path = source / name, target / name
+        if not source_path.exists() or not target_path.exists():
+            continue
+        with connect(source_path, True) as incoming, connect(target_path, True) as host:
+            for table in TABLES[name]:
+                missing = {row[1] for row in columns(incoming, table)} - {
+                    row[1] for row in columns(host, table)
+                }
+                if missing:
+                    raise ValueError(
+                        f"Codex adoption requires a native target upgrade before importing "
+                        f"{name}/{table}; target lacks columns: {', '.join(sorted(missing))}"
+                    )
 
 
 def columns(connection, table):
@@ -283,7 +304,9 @@ def rollout_files(directory):
             elif entry.is_file(follow_symlinks=False):
                 yield pathlib.Path(entry.path)
             else:
-                raise ValueError(f"Codex adoption refuses nonregular entry {entry.path}")
+                raise ValueError(
+                    f"Codex adoption refuses nonregular entry {entry.path}"
+                )
 
 
 def read_scope(home):
@@ -297,7 +320,9 @@ def read_scope(home):
         except FileNotFoundError:
             continue
         if not stat.S_ISDIR(metadata.st_mode):
-            raise ValueError(f"Codex adoption refuses non-directory rollout root {directory}")
+            raise ValueError(
+                f"Codex adoption refuses non-directory rollout root {directory}"
+            )
         for path in rollout_files(directory):
             name = path.name.removesuffix(".zst")
             if not name.startswith("rollout-") or not name.endswith(".jsonl"):
@@ -331,6 +356,9 @@ def main(request):
         raise ValueError(
             f"Unclassified Codex databases in {source}: {', '.join(unclassified)}"
         )
+    validate_layouts(source, target, request["schema"])
+    if request["mode"] == "validate":
+        return {}
     if request["mode"] == "plan":
         threads, replace, host_threads = thread_plan(source, target)
         return {"threads": threads, "replaced": replace, "host_threads": host_threads}

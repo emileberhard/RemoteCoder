@@ -90,7 +90,7 @@ pins = {}
 for name in native.TABLES:
     with native.connect(pathlib.Path(sys.argv[2]) / name, True) as connection:
         fingerprint = native.fingerprint(connection)
-    pins[name] = {"schema": fingerprint["schema"], "migrations": fingerprint["migrations"]}
+    pins[name] = {"current": {"schema": fingerprint["schema"], "migrations": fingerprint["migrations"]}}
 print(json.dumps(pins))
 EOF
 }

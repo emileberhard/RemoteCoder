@@ -59,5 +59,15 @@
     ]
   ],
   "archiveSha256": "d59280271523e328ec70599cbd715b7811eeb33aa77ae4b5ff9d3ceaab7cc58b",
-  "queueRows": 1
+  "queueRows": 1,
+  "currentStateFixture": {
+    "path": "native-state-62.tar.gz",
+    "codexVersion": "0.166.0-alpha.6",
+    "codexCommit": "fb9ddbe0ee7c152e0e722cfbf5318e0d3a4e80a1",
+    "method": "Native app-server initialized state; fixture thread removed; schema and migration fingerprints unchanged",
+    "schema": {
+      "schema": "c21296b03b414e9f80764408d01844e463a195f53b5f897553909d1af315eef6",
+      "migrations": "4609a7213cb9b687b150a47905b5ac684fbdbdfb20f0e930f9675f2b8901a8a2"
+    }
+  }
 }

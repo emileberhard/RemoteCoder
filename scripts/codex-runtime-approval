@@ -476,7 +476,7 @@ def adoption_pins(root: Path, package: Path) -> dict[str, int]:
                 with native.connect(path, True) as connection:
                     fingerprint = native.fingerprint(connection)
                     try:
-                        native.validate(connection, path, pins[name])
+                        native.validate_current(connection, path, pins[name])
                     except ValueError as error:
                         raise ApprovalError(
                             f"{error}. The approved runtime creates {name} with schema "
