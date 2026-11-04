@@ -332,9 +332,11 @@ while True:
 
     def test_natural_command_failure_preserves_exit_status(self):
         with tempfile.TemporaryFile() as lock:
-            with self.assertRaises(subprocess.CalledProcessError) as error:
-                deploy.staged_run([sys.executable, "-c", "raise SystemExit(37)"], lock, 10)
-            self.assertEqual(error.exception.returncode, 37)
+            for child, expected in ((37, 37), (125, 1)):
+                with self.subTest(child=child):
+                    with self.assertRaises(subprocess.CalledProcessError) as error:
+                        deploy.staged_run([sys.executable, "-c", f"raise SystemExit({child})"], lock, 10)
+                    self.assertEqual(error.exception.returncode, expected)
 
     def test_killed_worker_preserves_staging_until_command_exits(self):
         with tempfile.TemporaryDirectory() as directory:

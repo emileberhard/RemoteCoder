@@ -83,6 +83,6 @@ finally:
     process.wait()
 if controller_closed and not interrupted:
     sys.exit(CONTROLLER_CLOSED)
-if failed:
+if failed or process.returncode == CONTROLLER_CLOSED:
     sys.exit(1)
 sys.exit(process.returncode if process.returncode >= 0 else 128 - process.returncode)
