@@ -49,6 +49,15 @@ impl Gateway {
         ))
     }
 
+    pub(crate) async fn job_validate_claude_selection(
+        &self,
+        selection: &crate::providers::claude::ClaudeSelection,
+        new: bool,
+    ) -> Result<()> {
+        crate::providers::claude::exec::resolve(&self.claude_settings, selection, new).await?;
+        Ok(())
+    }
+
     pub(crate) async fn job_provider_ready(&self, provider: Provider) -> bool {
         match provider {
             Provider::Codex => self.codex_ready().await,

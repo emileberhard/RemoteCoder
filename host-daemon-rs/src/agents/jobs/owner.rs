@@ -260,16 +260,16 @@ impl JobOwner {
                 effort,
                 fast,
             } => {
-                crate::providers::claude::exec::resolve(
-                    &self.gateway()?.claude_settings,
-                    &crate::providers::claude::ClaudeSelection {
-                        model: model.clone(),
-                        effort: effort.clone(),
-                        fast: *fast,
-                    },
-                    new,
-                )
-                .await?;
+                self.gateway()?
+                    .job_validate_claude_selection(
+                        &crate::providers::claude::ClaudeSelection {
+                            model: model.clone(),
+                            effort: effort.clone(),
+                            fast: *fast,
+                        },
+                        new,
+                    )
+                    .await?;
             }
         }
         Ok(())
