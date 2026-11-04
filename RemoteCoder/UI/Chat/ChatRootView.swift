@@ -565,7 +565,6 @@ private struct ChatScreen: View {
                     chatComposerInset.environment(\.surfaceVisibility, SurfaceVisibility(chatVisibility))
                 }
                 .composerAttachmentDrop(screen: screen)
-                .safeAreaBar(edge: .top, spacing: 0) { HostFileStatusBar(opener: screen.target.fileOpener) }
                 .modifier(ChatScreenChrome(
                     workspace: workspace,
                     screen: screen,

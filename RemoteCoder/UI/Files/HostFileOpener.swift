@@ -321,19 +321,14 @@ struct HostFileSheet: Identifiable {
 @Observable
 final class HostFileOpener {
     private(set) var origin: HostFileOrigin?
-    private(set) var progress: HostFileProgress?
-    private(set) var loadingName: String?
-    private(set) var showsProgress = false
     var sheet: HostFileSheet?
     private(set) var quickLook: OpenedFile?
-    private(set) var lastDocument: OpenedFile?
     @ObservationIgnored private let access: any HostFileAccess
     @ObservationIgnored private let canPreview: @MainActor (URL) -> Bool
     @ObservationIgnored private let logger = AppLogger(category: "HostFiles")
     @ObservationIgnored private let reader = HostFileReader(render: HostFileReader.renderMarkdown)
     @ObservationIgnored private var generation = UUID()
     @ObservationIgnored private(set) var operation: Task<Void, Never>?
-    @ObservationIgnored private var progressDelay: Task<Void, Never>?
     @ObservationIgnored private var activeWork: Task<Void, Never>?
     @ObservationIgnored private var loadingReference: HostFileReference?
     private enum PendingWork {
@@ -359,7 +354,6 @@ final class HostFileOpener {
     deinit {
         operation?.cancel()
         activeWork?.cancel()
-        progressDelay?.cancel()
     }
 
     func open(_ url: URL, origin: HostFileOrigin, relativeTo: String?, transition: HostFileTransition?) -> OpenURLAction.Result {
@@ -410,7 +404,6 @@ final class HostFileOpener {
     }
 
     func presentationDismissed() {
-        if let shown = quickLook ?? lastDocument { logger.notice("file presentation dismissed file=\(Self.tag(shown.id))") }
         quickLook = nil
         awaitsDismissal = false
         let next = pendingAction
@@ -441,11 +434,6 @@ final class HostFileOpener {
         pendingWork = nil
         activeWork?.cancel()
         loadingReference = nil
-        progressDelay?.cancel()
-        progressDelay = nil
-        progress = nil
-        loadingName = nil
-        showsProgress = false
     }
 
     func invalidate() {
@@ -453,7 +441,6 @@ final class HostFileOpener {
         awaitsDismissal = awaitsDismissal || sheet != nil || quickLook != nil
         sheet = nil
         quickLook = nil
-        lastDocument = nil
         origin = nil
     }
 
@@ -465,20 +452,16 @@ final class HostFileOpener {
     }
 
     func quickLookUnavailable(_ id: UUID) {
-        guard quickLook?.id == id else { return }
+        guard let file = quickLook, file.id == id else { return }
         logger.notice("quick look unavailable file=\(Self.tag(id))")
         quickLook = nil
         awaitsDismissal = false
+        sheet = HostFileSheet(content: .document(file, nil))
     }
 
     func leaveScreen() {
         invalidate()
         awaitsDismissal = false
-    }
-
-    func showOptions() {
-        guard let lastDocument else { return }
-        sheet = HostFileSheet(content: .document(lastDocument, nil))
     }
 
     func useCachedCopy(_ file: OpenedHostFile) {
@@ -489,7 +472,7 @@ final class HostFileOpener {
     }
 
     private func start(_ reference: HostFileReference, origin: HostFileOrigin, transition: HostFileTransition?) {
-        let token = begin(origin: origin, name: (reference.path as NSString).lastPathComponent)
+        let token = begin(origin: origin)
         loadingReference = reference
         logger.notice("file open requested operation=\(Self.tag(token)) type=\(reference.diagnosticType) source=\(transition == nil ? "link" : "image")")
         pendingWork = .download(reference, token, transition)
@@ -497,24 +480,16 @@ final class HostFileOpener {
     }
 
     private func start(_ embedded: EmbeddedFileRequest, origin: HostFileOrigin, frame: HostFileTransition.Frame?) {
-        let token = begin(origin: origin, name: embedded.suggestedName.isEmpty ? "File" : embedded.suggestedName)
+        let token = begin(origin: origin)
         logger.notice("file open requested operation=\(Self.tag(token)) source=embedded length=\(embedded.dataURL.utf16.count)")
         pendingWork = .embedded(embedded, token, frame)
         runPendingWork()
     }
 
-    private func begin(origin: HostFileOrigin, name: String) -> UUID {
+    private func begin(origin: HostFileOrigin) -> UUID {
         invalidate()
         self.origin = origin
-        loadingName = name
-        let token = generation
-        progressDelay = Task { [weak self] in
-            do { try await Task.sleep(for: .milliseconds(250)) } catch { return }
-            guard let self, generation == token, loadingName != nil else { return }
-            showsProgress = true
-            AccessibilityNotification.Announcement("Downloading file").post()
-        }
-        return token
+        return generation
     }
 
     private func runPendingWork() {
@@ -537,7 +512,7 @@ final class HostFileOpener {
                             present(.host(file), content: content, prefersQuickLook: false)
                         } catch {
                             guard generation == token, !Task.isCancelled else { return }
-                            finishLoading()
+                            loadingReference = nil
                             sheet = HostFileSheet(content: .failure(HostFileFailure(reason: .preparation,
                                 reference: file.lease.reference, message: error.localizedDescription, cached: nil)))
                         }
@@ -555,12 +530,7 @@ final class HostFileOpener {
         let started = ContinuousClock.now
         let lease: HostFileLease
         do {
-            lease = try await access.open(reference: reference, containingDirectory: nil) { [weak self] value in
-                Task { @MainActor [weak self] in
-                    guard let self, self.generation == token else { return }
-                    self.progress = value
-                }
-            }
+            lease = try await access.open(reference: reference, containingDirectory: nil, progress: { _ in })
         } catch {
             if !(error is CancellationError) {
                 logger.error("file open failed operation=\(Self.tag(token)) elapsed=\(started.elapsedMilliseconds)ms reason=\(error.diagnosticReason)")
@@ -579,7 +549,7 @@ final class HostFileOpener {
         } catch {
             await access.release(lease)
             guard generation == token, !Task.isCancelled else { return }
-            finishLoading()
+            loadingReference = nil
             sheet = HostFileSheet(content: .failure(HostFileFailure(reason: .preparation,
                 reference: reference, message: error.localizedDescription, cached: nil)))
             return
@@ -600,7 +570,7 @@ final class HostFileOpener {
         } catch {
             guard generation == token, !Task.isCancelled else { return }
             logger.error("file open failed operation=\(Self.tag(token)) elapsed=\(started.elapsedMilliseconds)ms reason=\(error.diagnosticReason)")
-            finishLoading()
+            loadingReference = nil
             sheet = HostFileSheet(content: .failure(HostFileFailure(reason: .preparation,
                 reference: nil, message: error.localizedDescription, cached: nil)))
             return
@@ -647,14 +617,13 @@ final class HostFileOpener {
             return
         }
         let cached = cachedLease.map { OpenedHostFile(lease: $0, isCachedCopy: true, transition: nil, access: access) }
-        finishLoading()
+        loadingReference = nil
         sheet = HostFileSheet(content: .failure(HostFileFailure(reason: .transfer,
             reference: reference, message: message, cached: cached)))
     }
 
     private func present(_ file: OpenedFile, content: HostFileReaderContent?, prefersQuickLook: Bool) {
-        finishLoading()
-        lastDocument = file
+        loadingReference = nil
         if let host = file.host, HostHTMLDocument.admits(host.lease) {
             logger.notice("file presented file=\(Self.tag(file.id)) as=html")
             sheet = HostFileSheet(content: .html(host))
@@ -672,12 +641,4 @@ final class HostFileOpener {
         String(id.uuidString.prefix(8))
     }
 
-    private func finishLoading() {
-        loadingReference = nil
-        progressDelay?.cancel()
-        progressDelay = nil
-        loadingName = nil
-        progress = nil
-        showsProgress = false
-    }
 }

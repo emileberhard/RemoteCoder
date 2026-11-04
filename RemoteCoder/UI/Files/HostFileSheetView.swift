@@ -70,7 +70,7 @@ struct HostFileSheetView: View {
         }
         .environment(\.openURL, OpenURLAction { url in
             guard let file = openedFile, let origin = opener.origin,
-                  opener.lastDocument?.id == file.id else { return .discarded }
+                  opener.sheet?.id == item.id else { return .discarded }
             return opener.open(url, origin: origin,
                                relativeTo: file.host.map { ($0.lease.reference.path as NSString).deletingLastPathComponent }
                                    ?? origin.workingDirectory,

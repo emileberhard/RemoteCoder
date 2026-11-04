@@ -163,11 +163,8 @@ durable user export; the cache is not permanent attachment retention.
 ## Presentation and export
 
 One open operation is active per chat screen. A new tap cancels its predecessor;
-leaving the conversation invalidates pending presentation. Fetch first, show a
-delayed cancellable status surface in the chat, then present one viewer. The
-status surface (`HostFileStatusBar`) is a pill in a bar below the chat header,
-so it never covers header controls or transcript content. Unknown byte totals
-remain indeterminate, and fast downloads do not flash a loading sheet.
+leaving the conversation invalidates pending presentation. Fetch first, then
+present one viewer. File opens add no status banner to the chat.
 
 | Content | Presentation |
 | --- | --- |
@@ -198,8 +195,7 @@ when permitted and supported; it remains exportable when no preview is usable.
 and macOS. The sheet retains its opened-file owner and keeps Save and Share
 available, including after a preview failure. A dated saved copy uses the same
 viewer and retains its warning. HTML has no separate preview-size cutoff beyond
-the existing transfer and storage budgets. `showOptions` always opens file
-information instead of starting another preview.
+the existing transfer and storage budgets.
 
 `HostHTMLDocument` gives each opened document a separate
 `host-file-preview` origin with their remote paths as logical paths. The custom
@@ -240,10 +236,10 @@ with Try Again for the failed destination, including after the initial load.
 Native toolbar controls keep an opaque app background so their
 contrast does not depend on the HTML page's colors.
 
-Other active web formats remain information/export. Quick Look owns its native toolbar and internal rendering
-errors. After dismissal the same pill names the last opened file and opens
-app-owned Save and Share until it is dismissed, so a failed native preview does
-not prevent export.
+Other active web formats remain information/export. Quick Look owns its native
+toolbar, sharing and internal rendering errors. If Quick Look cannot be
+presented, the file information sheet keeps Save and Share available. Dismissing
+a viewer releases its opened-file owner unless an export still retains it.
 Do not infer successful rendering from `canPreview` alone.
 
 On iOS the presenter shows Quick Look `.overFullScreen`. A `.fullScreen` UIKit
