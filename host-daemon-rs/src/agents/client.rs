@@ -544,40 +544,22 @@ async fn spawn(endpoint: &Endpoint, arguments: SpawnArgs) -> Result<Value> {
             arguments.sandbox_root.is_none(),
             "A continuation keeps its recorded sandbox root"
         );
-        let settings =
-            if arguments.model_override.is_some() || arguments.effort.is_some() || tier.is_some() {
-                let selected = if let Some(model) = &arguments.model_override {
-                    let (current_effort, current_tier) = match original_settings {
-                        ExecutionSettings::Codex {
-                            effort,
-                            service_tier,
-                            ..
-                        } => (Some(effort.as_str()), service_tier.as_deref()),
-                        ExecutionSettings::Claude { effort, fast, .. } => (
-                            effort.as_deref(),
-                            Some(if *fast { "fast" } else { "standard" }),
-                        ),
-                    };
-                    settings(
-                        endpoint,
-                        original_settings.provider(),
-                        model,
-                        arguments.effort.as_deref().or(current_effort),
-                        tier.or(current_tier),
-                    )
-                    .await?
-                } else {
-                    original_settings.clone()
-                };
-                Some(update_settings(
-                    original_settings,
-                    selected,
-                    arguments.effort.as_deref(),
-                    tier,
-                )?)
-            } else {
-                None
-            };
+        let catalog = if (arguments.model_override.is_some()
+            || arguments.effort.is_some()
+            || tier.is_some())
+            && needs_catalog_for_continue(original_settings, arguments.model_override.as_deref())
+        {
+            model_catalog(endpoint).await?
+        } else {
+            Vec::new()
+        };
+        let settings = continue_settings(
+            original_settings,
+            arguments.model_override.as_deref(),
+            arguments.effort.as_deref(),
+            tier,
+            &catalog,
+        )?;
         let params = ContinueParams {
             job_id: new_job_id(original_settings.provider(), arguments.job_id)?,
             agent_id: source.job.agent_id,
@@ -671,75 +653,96 @@ async fn spawn(endpoint: &Endpoint, arguments: SpawnArgs) -> Result<Value> {
     admission(endpoint, "agent/jobs/start", params.job_id.clone(), params).await
 }
 
+fn needs_catalog_for_continue(original: &ExecutionSettings, model_override: Option<&str>) -> bool {
+    match model_override {
+        Some(model) => original.provider() == Provider::Codex || !models::is_claude_alias(model),
+        None => matches!(
+            original,
+            ExecutionSettings::Claude { model, .. }
+                if !crate::providers::claude::exec::is_native_model(model)
+        ),
+    }
+}
+
+fn continue_settings(
+    original: &ExecutionSettings,
+    model_override: Option<&str>,
+    effort: Option<&str>,
+    tier: Option<&str>,
+    catalog: &[models::Model],
+) -> Result<Option<ExecutionSettings>> {
+    if model_override.is_none() && effort.is_none() && tier.is_none() {
+        return Ok(None);
+    }
+    let (current_effort, current_tier) = match original {
+        ExecutionSettings::Codex {
+            effort,
+            service_tier,
+            ..
+        } => (Some(effort.as_str()), service_tier.as_deref()),
+        ExecutionSettings::Claude { effort, fast, .. } => (
+            effort.as_deref(),
+            Some(if *fast { "fast" } else { "standard" }),
+        ),
+    };
+    let effective_effort = effort.or(current_effort);
+    let effective_tier = tier.or(current_tier);
+    let selected = match (original, model_override) {
+        (_, Some(model)) => match original.provider() {
+            Provider::Codex => models::codex(model, effective_effort, effective_tier, catalog)?,
+            Provider::Claude => models::claude(model, effective_effort, effective_tier, catalog)?,
+        },
+        (ExecutionSettings::Claude { model, .. }, None)
+            if !crate::providers::claude::exec::is_native_model(model) =>
+        {
+            models::claude(model, effective_effort, effective_tier, catalog)?
+        }
+        (_, None) => original.clone(),
+    };
+    Ok(Some(update_settings(original, selected, effort, tier)?))
+}
+
 fn update_settings(
     current: &ExecutionSettings,
     mut selected: ExecutionSettings,
     effort: Option<&str>,
     tier: Option<&str>,
 ) -> Result<ExecutionSettings> {
-    match (&current, &mut selected) {
-        (
-            ExecutionSettings::Codex {
-                model_provider: current_provider,
-                ..
-            },
-            ExecutionSettings::Codex {
-                model_provider,
-                effort: selected_effort,
-                service_tier,
-                ..
-            },
-        ) => {
-            ensure!(
-                current_provider == model_provider,
-                "A continuation cannot change model provider"
-            );
+    match &mut selected {
+        ExecutionSettings::Codex {
+            effort: selected_effort,
+            service_tier,
+            ..
+        } => {
             if let Some(effort) = effort {
                 *selected_effort = effort.to_owned();
             }
             if let Some(tier) = tier {
                 ensure!(
-                    model_provider == "openai" || tier == "standard",
-                    "External models have no service tiers"
+                    matches!(tier, "standard" | "fast" | "flex"),
+                    "Service tier must be standard, fast or flex"
                 );
                 *service_tier = (tier != "standard").then(|| tier.to_owned());
             }
         }
-        (
-            ExecutionSettings::Claude {
-                model: current_model,
-                ..
-            },
-            ExecutionSettings::Claude {
-                model: selected_model,
-                effort: selected_effort,
-                fast,
-            },
-        ) => {
-            let native = crate::providers::claude::exec::is_native_model;
-            ensure!(
-                (native(current_model) && native(selected_model))
-                    || current_model == selected_model,
-                "A continuation cannot change model provider"
-            );
+        ExecutionSettings::Claude {
+            effort: selected_effort,
+            fast,
+            ..
+        } => {
             if let Some(effort) = effort {
                 *selected_effort = Some(effort.to_owned());
             }
             if let Some(tier) = tier {
-                if native(selected_model) {
-                    ensure!(
-                        matches!(tier, "standard" | "fast"),
-                        "Claude supports standard or fast mode"
-                    );
-                    *fast = tier == "fast";
-                } else {
-                    ensure!(tier == "standard", "External models have no service tiers");
-                    *fast = false;
-                }
+                ensure!(
+                    matches!(tier, "standard" | "fast"),
+                    "Claude supports standard or fast mode"
+                );
+                *fast = tier == "fast";
             }
         }
-        _ => bail!("A continuation cannot change provider"),
     }
+    current.validate_continuation(&selected)?;
     Ok(selected)
 }
 
@@ -1478,44 +1481,70 @@ mod tests {
     }
 
     #[test]
-    fn continuation_preserves_external_claude_model_and_rejects_provider_or_fast_changes() {
+    fn continuation_validates_effort_and_preserves_external_or_historical_claude_models() {
+        let catalog = models::tests::catalog();
         let external = ExecutionSettings::Claude {
             model: "copilot/gemini-4-argon".into(),
             effort: Some("high".into()),
             fast: false,
         };
-        let native = ExecutionSettings::Claude {
-            model: "opus".into(),
-            effort: Some("xhigh".into()),
+        let historical_native = ExecutionSettings::Claude {
+            model: "claude-opus-4-7".into(),
+            effort: Some("medium".into()),
             fast: false,
         };
         assert_eq!(
-            update_settings(
-                &external,
-                external.clone(),
-                Some("medium"),
-                Some("standard")
-            )
-            .unwrap(),
-            ExecutionSettings::Claude {
+            continue_settings(&external, None, None, None, &[]).unwrap(),
+            None
+        );
+        assert!(needs_catalog_for_continue(&external, None));
+        assert!(!needs_catalog_for_continue(&historical_native, None));
+        assert!(!needs_catalog_for_continue(
+            &historical_native,
+            Some("sonnet")
+        ));
+        assert!(needs_catalog_for_continue(
+            &historical_native,
+            Some("copilot/gemini-4-argon")
+        ));
+        assert_eq!(
+            continue_settings(&external, None, Some("medium"), Some("standard"), &catalog).unwrap(),
+            Some(ExecutionSettings::Claude {
                 model: "copilot/gemini-4-argon".into(),
                 effort: Some("medium".into()),
                 fast: false,
-            }
+            })
         );
-        assert!(update_settings(&external, external.clone(), None, Some("fast")).is_err());
-        assert!(update_settings(&external, native.clone(), None, None).is_err());
-        assert!(update_settings(&native, external.clone(), None, None).is_err());
+        assert!(continue_settings(&external, None, Some("xhigh"), None, &catalog).is_err());
+        assert!(continue_settings(&external, None, None, Some("fast"), &catalog).is_err());
+        assert!(continue_settings(&external, Some("opus"), None, None, &catalog).is_err());
         assert!(
-            update_settings(
-                &external,
-                ExecutionSettings::Claude {
-                    model: "copilot/other-model".into(),
-                    effort: Some("high".into()),
-                    fast: false,
-                },
+            continue_settings(&external, Some("copilot/other-model"), None, None, &catalog)
+                .is_err()
+        );
+        assert_eq!(
+            continue_settings(&historical_native, None, Some("high"), Some("fast"), &[]).unwrap(),
+            Some(ExecutionSettings::Claude {
+                model: "claude-opus-4-7".into(),
+                effort: Some("high".into()),
+                fast: true,
+            })
+        );
+        assert_eq!(
+            continue_settings(&historical_native, Some("sonnet"), None, None, &[]).unwrap(),
+            Some(ExecutionSettings::Claude {
+                model: "sonnet".into(),
+                effort: Some("medium".into()),
+                fast: false,
+            })
+        );
+        assert!(
+            continue_settings(
+                &historical_native,
+                Some("copilot/gemini-4-argon"),
+                Some("high"),
                 None,
-                None
+                &catalog
             )
             .is_err()
         );

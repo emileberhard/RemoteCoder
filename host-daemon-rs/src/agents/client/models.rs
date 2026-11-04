@@ -242,10 +242,10 @@ pub(super) fn claude(
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
 
-    fn catalog() -> Vec<Model> {
+    pub(in crate::agents::client) fn catalog() -> Vec<Model> {
         serde_json::from_value(serde_json::json!([
             {"id":"gpt-6.2-sol","model":"gpt-6.2-sol","supportedReasoningEfforts":[{"reasoningEffort":"medium"}],"defaultReasoningEffort":"low"},
             {"id":"gpt-6.10-sol","model":"gpt-6.10-sol","supportedReasoningEfforts":[{"reasoningEffort":"medium"},{"reasoningEffort":"xhigh"}],"defaultReasoningEffort":"low"},

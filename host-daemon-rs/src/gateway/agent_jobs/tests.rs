@@ -417,3 +417,250 @@ async fn captured_native_claude_context_outlives_its_child_but_not_its_owner_or_
     );
     drop(listener);
 }
+
+#[tokio::test]
+async fn job_owner_rejects_invalid_external_claude_starts_and_continuations_before_admission() {
+    use crate::observability::journal::Journal;
+    use crate::providers::claude::restart::test_support::StubClaude;
+    use crate::providers::codex::daemon::CodexAppServer;
+    use crate::providers::external::{ExternalProvider, ExternalProviders};
+
+    let mut stub = StubClaude::new();
+    let catalog_dir = stub.state.join("external-models");
+    crate::storage::private_state::ensure_private_directory(&catalog_dir).unwrap();
+    crate::storage::private_state::write_json(
+        &catalog_dir.join("copilot.json"),
+        &json!({"models": [
+            {
+                "slug": "copilot/gemini-4-argon",
+                "display_name": "Gemini 4 Argon",
+                "default_reasoning_level": "medium",
+                "supported_reasoning_levels": [
+                    {"effort": "low", "description": "low"},
+                    {"effort": "medium", "description": "medium"},
+                    {"effort": "high", "description": "high"}
+                ],
+                "context_window": 200000,
+                "input_modalities": ["text"],
+                "rc_messages": true
+            },
+            {
+                "slug": "copilot/codex-only",
+                "display_name": "Codex Only",
+                "default_reasoning_level": "medium",
+                "supported_reasoning_levels": [
+                    {"effort": "high", "description": "high"}
+                ],
+                "context_window": 200000,
+                "input_modalities": ["text"],
+                "rc_messages": true
+            }
+        ]}),
+    )
+    .unwrap();
+    let providers: Vec<ExternalProvider> = serde_json::from_value(json!([{
+        "id": "copilot",
+        "name": "Copilot",
+        "baseUrl": "http://127.0.0.1:9/v1",
+        "keyFile": "/private/copilot.key",
+        "models": [
+            {"id": "copilot/gemini-4-argon", "harness": "claude"},
+            {"id": "copilot/other-model", "harness": "claude"},
+            {"id": "copilot/codex-only", "harness": "codex"}
+        ]
+    }]))
+    .unwrap();
+    stub.settings.external_providers = ExternalProviders::new(providers, &stub.state).unwrap();
+    let gateway = Gateway::with_turn_state(
+        Arc::new(CodexAppServer::new_for_test_socket(
+            stub.state.join("codex"),
+        )),
+        stub.settings.clone(),
+        Journal::disabled(),
+        Some(stub.turn_state_path()),
+    );
+    for invalid_start in [
+        ExecutionSettings::Claude {
+            model: "copilot/gemini-4-argon".into(),
+            effort: Some("xhigh".into()),
+            fast: false,
+        },
+        ExecutionSettings::Claude {
+            model: "copilot/gemini-4-argon".into(),
+            effort: Some("high".into()),
+            fast: true,
+        },
+        ExecutionSettings::Claude {
+            model: "copilot/codex-only".into(),
+            effort: Some("high".into()),
+            fast: false,
+        },
+        ExecutionSettings::Claude {
+            model: "copilot/unconfigured".into(),
+            effort: Some("high".into()),
+            fast: false,
+        },
+    ] {
+        assert!(
+            gateway
+                .jobs
+                .start(
+                    StartParams {
+                        job_id: JobId::for_mutation(Provider::Claude, "invalid-start").unwrap(),
+                        spec: JobSpec {
+                            prompt: "Read fixture".into(),
+                            cwd: stub.cwd.clone().into(),
+                            settings: invalid_start,
+                            tool_scope: ToolScope::Full,
+                            title: None,
+                        },
+                        caller: Caller::Operator,
+                    },
+                    Origin::TopLevel,
+                )
+                .await
+                .is_err()
+        );
+    }
+    let start_id = JobId::for_mutation(Provider::Claude, "valid-external-start").unwrap();
+    let admitted = gateway
+        .jobs
+        .start(
+            StartParams {
+                job_id: start_id.clone(),
+                spec: JobSpec {
+                    prompt: "Read fixture".into(),
+                    cwd: stub.cwd.clone().into(),
+                    settings: ExecutionSettings::Claude {
+                        model: "copilot/gemini-4-argon".into(),
+                        effort: Some("high".into()),
+                        fast: false,
+                    },
+                    tool_scope: ToolScope::Full,
+                    title: None,
+                },
+                caller: Caller::Operator,
+            },
+            Origin::TopLevel,
+        )
+        .await
+        .unwrap();
+    let store = gateway.jobs.store().await.unwrap();
+    let bound = store
+        .bind(
+            start_id.clone(),
+            admitted.job.revision,
+            gateway.job_new_claude_conversation().unwrap(),
+            10,
+        )
+        .await
+        .unwrap();
+    store
+        .advance(
+            start_id.clone(),
+            bound.revision,
+            ExecutionState::Terminal {
+                terminal: Terminal {
+                    at_ms: Some(11),
+                    execution: None,
+                    git: GitSnapshot::Unknown {
+                        reason: "fixture".into(),
+                    },
+                    outcome: JobOutcome::Completed,
+                    result: ResultEvidence::Unavailable {
+                        reason: "fixture".into(),
+                    },
+                    completion: Completion::NotRequired,
+                    cleanup: CleanupState::Complete,
+                },
+            },
+            11,
+        )
+        .await
+        .unwrap();
+    for (label, invalid_continue) in [
+        (
+            "unsupported-effort",
+            ExecutionSettings::Claude {
+                model: "copilot/gemini-4-argon".into(),
+                effort: Some("xhigh".into()),
+                fast: false,
+            },
+        ),
+        (
+            "fast-tier",
+            ExecutionSettings::Claude {
+                model: "copilot/gemini-4-argon".into(),
+                effort: Some("high".into()),
+                fast: true,
+            },
+        ),
+        (
+            "switch-to-native",
+            ExecutionSettings::Claude {
+                model: "opus".into(),
+                effort: Some("high".into()),
+                fast: false,
+            },
+        ),
+        (
+            "switch-external-model",
+            ExecutionSettings::Claude {
+                model: "copilot/other-model".into(),
+                effort: Some("high".into()),
+                fast: false,
+            },
+        ),
+    ] {
+        assert!(
+            gateway
+                .jobs
+                .continue_job(
+                    ContinueParams {
+                        job_id: JobId::for_mutation(Provider::Claude, label).unwrap(),
+                        agent_id: admitted.job.agent_id.clone(),
+                        prompt: "Follow up".into(),
+                        settings: Some(invalid_continue),
+                        expected_previous_job_id: Some(start_id.clone()),
+                        intent: ContinueIntent::Explicit,
+                        recipient: ContinueRecipient::Current,
+                        caller: Caller::Operator,
+                    },
+                    Origin::TopLevel,
+                )
+                .await
+                .is_err(),
+            "{label}"
+        );
+    }
+    assert_eq!(
+        store
+            .agent(admitted.job.agent_id.clone())
+            .await
+            .unwrap()
+            .latest_job_id,
+        Some(start_id.clone())
+    );
+    let continued = gateway
+        .jobs
+        .continue_job(
+            ContinueParams {
+                job_id: JobId::for_mutation(Provider::Claude, "valid-continue").unwrap(),
+                agent_id: admitted.job.agent_id,
+                prompt: "Follow up".into(),
+                settings: Some(ExecutionSettings::Claude {
+                    model: "copilot/gemini-4-argon".into(),
+                    effort: Some("medium".into()),
+                    fast: false,
+                }),
+                expected_previous_job_id: Some(start_id),
+                intent: ContinueIntent::Explicit,
+                recipient: ContinueRecipient::Current,
+                caller: Caller::Operator,
+            },
+            Origin::TopLevel,
+        )
+        .await
+        .unwrap();
+    assert!(matches!(continued.job.execution, ExecutionState::Admitted));
+}

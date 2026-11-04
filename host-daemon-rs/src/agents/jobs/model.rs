@@ -214,6 +214,51 @@ impl ExecutionSettings {
             Self::Claude { .. } => Provider::Claude,
         }
     }
+
+    pub(crate) fn validate_continuation(&self, next: &Self) -> anyhow::Result<()> {
+        use anyhow::{bail, ensure};
+        match (self, next) {
+            (
+                Self::Codex {
+                    model_provider: current_provider,
+                    ..
+                },
+                Self::Codex {
+                    model_provider,
+                    service_tier,
+                    ..
+                },
+            ) => {
+                ensure!(
+                    current_provider == model_provider,
+                    "Continue cannot change the conversation's model provider"
+                );
+                ensure!(
+                    model_provider == "openai" || service_tier.is_none(),
+                    "External models have no service tiers"
+                );
+            }
+            (
+                Self::Claude {
+                    model: current_model,
+                    ..
+                },
+                Self::Claude { model, fast, .. },
+            ) => {
+                let native = crate::providers::claude::exec::is_native_model;
+                ensure!(
+                    (native(current_model) && native(model)) || current_model == model,
+                    "Continue cannot change the conversation's model provider"
+                );
+                ensure!(
+                    native(model) || !*fast,
+                    "External models have no service tiers"
+                );
+            }
+            _ => bail!("Continue cannot change provider"),
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
