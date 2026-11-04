@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod claude;
 pub mod codex;
+pub(crate) mod external;
 pub(crate) mod router;
 
 /// Which agent surface a call arrived on. Recorded on every journal line so a

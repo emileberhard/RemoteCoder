@@ -196,7 +196,7 @@ async fn restricted_codex_requests_never_change_to_full_access_claude() {
 
 #[tokio::test]
 async fn both_first_party_unavailable_use_configured_copilot_with_native_codex_auth() {
-    use crate::providers::codex::external::{ExternalProvider, ExternalProviders};
+    use crate::providers::external::{ExternalProvider, ExternalProviders};
     use crate::storage::private_state;
     let home = ClaudeSettings::isolated_for_test();
     let directory = tempfile::tempdir().unwrap();

@@ -17,6 +17,7 @@ struct ConversationHistoryList: View {
     @State private var selection: Set<ConversationAddress>?
     @Environment(AppThemeStore.self) private var themeStore
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @ScaledMetric(relativeTo: .subheadline) private var headerIconWidth: CGFloat = 18
 
     var body: some View {
         ZStack {
@@ -29,6 +30,7 @@ struct ConversationHistoryList: View {
     private var content: some View {
         let items = snapshot?.items ?? []
         let drafts = selection == nil ? snapshot?.drafts ?? [] : []
+        let firstItemID = drafts.isEmpty ? items.first?.id : nil
 
         ScrollView {
             LazyVStack(spacing: DrawerListMetrics.rowSpacing) {
@@ -47,65 +49,43 @@ struct ConversationHistoryList: View {
                     ForEach(items) { item in
                         switch item {
                         case let .pinnedHeader(summary):
-                            sectionHeader(summary, identifier: "drawer-pinned") {
+                            sectionHeader(summary, identifier: "drawer-pinned",
+                                          isFirst: item.id == firstItemID) {
                                 workspace.drawerPreferences.isPinnedFolded = summary.fold == .expanded
                             } title: {
-                                HStack(spacing: 6) {
-                                    Image(systemName: "pin.fill")
-                                        .font(.subheadline.weight(.semibold))
-                                        .foregroundStyle(.secondary)
-                                        .accessibilityHidden(true)
-                                    Text("Pinned")
-                                }
+                                sectionTitle("Pinned", systemImage: "pin.fill")
                             }
-                            .sectionHeaderSpacing(isFirst: drafts.isEmpty && item.id == items.first?.id)
                         case let .automationsHeader(summary):
-                            sectionHeader(summary, identifier: "drawer-automations") {
+                            sectionHeader(summary, identifier: "drawer-automations",
+                                          isFirst: item.id == firstItemID) {
                                 workspace.drawerPreferences.isAutomationsFolded = summary.fold == .expanded
                             } title: {
-                                HStack(spacing: 6) {
-                                    Image(systemName: "clock.arrow.circlepath")
-                                        .font(.subheadline.weight(.semibold))
-                                        .foregroundStyle(.secondary)
-                                        .accessibilityHidden(true)
-                                    Text("Automations")
-                                }
+                                sectionTitle("Automations", systemImage: "clock.arrow.circlepath")
                             }
-                            .sectionHeaderSpacing(isFirst: drafts.isEmpty && item.id == items.first?.id)
                         case let .moreAutomations(hiddenCount):
                             moreButton("Show \(hiddenCount) more") {
                                 withAnimation(reduceMotion ? nil : .snappy) { window.revealAllAutomations() }
                             }
                         case .chatsHeader:
-                            Text("Chats")
-                                .font(.headline)
-                                .sectionHeaderFrame()
-                                .accessibilityAddTraits(.isHeader)
-                                .sectionHeaderSpacing(isFirst: false)
+                            staticSectionHeader("Chats", systemImage: "bubble.left.and.bubble.right.fill", isFirst: false)
                         case let .project(header):
-                            sectionHeader(header.summary, identifier: "drawer-project-\(header.key)") {
+                            sectionHeader(header.summary, identifier: "drawer-project-\(header.key)",
+                                          isFirst: item.id == firstItemID) {
                                 workspace.setFolded(header.summary.fold == .expanded, project: header.key, in: window)
                             } title: {
                                 projectTitle(header)
                             }
-                            .sectionHeaderSpacing(isFirst: drafts.isEmpty && item.id == items.first?.id)
                         case let .more(key, hiddenCount):
                             moreButton("Show \(hiddenCount) more") {
                                 withAnimation(reduceMotion ? nil : .snappy) { window.reveal(project: key) }
                             }
                         case let .settledHeader(summary):
-                            sectionHeader(summary, identifier: "drawer-settled") {
+                            sectionHeader(summary, identifier: "drawer-settled",
+                                          isFirst: item.id == firstItemID) {
                                 workspace.drawerPreferences.isSettledFolded = summary.fold == .expanded
                             } title: {
-                                HStack(spacing: 6) {
-                                    Image(systemName: ConversationSettlementSymbol.shelf)
-                                        .font(.subheadline.weight(.semibold))
-                                        .foregroundStyle(.secondary)
-                                        .accessibilityHidden(true)
-                                    Text("Settled")
-                                }
+                                sectionTitle("Settled", systemImage: ConversationSettlementSymbol.shelf)
                             }
-                            .sectionHeaderSpacing(isFirst: drafts.isEmpty && item.id == items.first?.id)
                         case let .moreSettled(hiddenCount):
                             moreButton("Show \(hiddenCount) more") {
                                 withAnimation(reduceMotion ? nil : .snappy) { window.revealMoreSettled() }
@@ -201,11 +181,7 @@ struct ConversationHistoryList: View {
 
     @ViewBuilder
     private func draftsSection(_ drafts: [UnsentDraftRow], above firstItem: ConversationSidebarItem?) -> some View {
-        Text("Drafts")
-            .font(.headline)
-            .sectionHeaderFrame()
-            .accessibilityAddTraits(.isHeader)
-            .sectionHeaderSpacing(isFirst: true)
+        staticSectionHeader("Drafts", systemImage: "square.and.pencil", isFirst: true)
         ForEach(drafts) { draft in
             UnsentDraftRowView(row: draft, open: { actions.openDraft(draft.address) },
                                discard: { actions.discardDraft(draft.address) })
@@ -226,11 +202,7 @@ struct ConversationHistoryList: View {
             }
         }
         if case .row? = firstItem {
-            Text("Chats")
-                .font(.headline)
-                .sectionHeaderFrame()
-                .accessibilityAddTraits(.isHeader)
-                .sectionHeaderSpacing(isFirst: false)
+            staticSectionHeader("Chats", systemImage: "bubble.left.and.bubble.right.fill", isFirst: false)
         }
     }
 
@@ -243,23 +215,40 @@ struct ConversationHistoryList: View {
         onInteractionChanged(isScrolling || !swipedEdges.isEmpty || rowMenu.liftedID != nil)
     }
 
+    private func staticSectionHeader(_ title: LocalizedStringKey, systemImage: String, isFirst: Bool) -> some View {
+        sectionTitle(title, systemImage: systemImage)
+            .font(.subheadline.weight(.semibold))
+            .staticSectionHeaderFrame(isFirst: isFirst)
+            .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(.isHeader)
+    }
+
     @ViewBuilder
     private func sectionHeader(_ summary: ConversationSectionSummary, identifier: String,
-                               toggle: @escaping () -> Void, @ViewBuilder title: () -> some View) -> some View {
+                               isFirst: Bool, toggle: @escaping () -> Void,
+                               @ViewBuilder title: () -> some View) -> some View {
         if summary.fold == .searching {
-            title()
-                .font(.headline)
-                .sectionHeaderFrame()
-                .accessibilityElement(children: .combine)
-                .accessibilityAddTraits(.isHeader)
-                .accessibilityIdentifier(identifier)
+            HStack(spacing: 8) {
+                title()
+                Spacer(minLength: 8)
+                Text(summary.rowCount, format: .number)
+                    .font(.footnote.weight(.medium).monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+            }
+            .font(.subheadline.weight(.semibold))
+            .staticSectionHeaderFrame(isFirst: isFirst)
+            .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(.isHeader)
+            .accessibilityIdentifier(identifier)
         } else {
-            foldableHeader(summary, identifier: identifier, toggle: toggle, title: title)
+            foldableHeader(summary, identifier: identifier, isFirst: isFirst, toggle: toggle, title: title)
         }
     }
 
     private func foldableHeader(_ summary: ConversationSectionSummary, identifier: String,
-                                toggle: @escaping () -> Void, @ViewBuilder title: () -> some View) -> some View {
+                                isFirst: Bool, toggle: @escaping () -> Void,
+                                @ViewBuilder title: () -> some View) -> some View {
         let isFolded = summary.fold == .folded
         return Button(action: toggle) {
             HStack(spacing: 8) {
@@ -272,58 +261,96 @@ struct ConversationHistoryList: View {
                     if summary.unreadCount > 0 {
                         Circle()
                             .fill(themeStore.theme.colors.accentTint)
-                            .frame(width: 8, height: 8)
+                            .frame(width: 7, height: 7)
+                            .accessibilityHidden(true)
                     }
-                    Text(summary.rowCount, format: .number)
-                        .font(.subheadline.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                        .accessibilityHidden(true)
                 }
+                Text(summary.rowCount, format: .number)
+                    .font(.footnote.weight(.medium).monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .contentTransition(.numericText())
+                    .accessibilityHidden(true)
                 Image(systemName: "chevron.down")
-                    .font(.footnote.weight(.bold))
-                    .foregroundStyle(themeStore.theme.colors.accentTint)
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.secondary)
                     .rotationEffect(.degrees(isFolded ? -90 : 0))
                     .accessibilityHidden(true)
             }
-            .font(.headline)
-            .sectionHeaderFrame()
-            .contentShape(.rect)
+            .font(.subheadline.weight(.semibold))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .frame(minHeight: ControlMetrics.minimumTarget, alignment: .leading)
+            .glassTapTarget(cornerRadius: DrawerListMetrics.cardCornerRadius)
         }
-        .buttonStyle(ResponsiveButtonStyle(feedback: .disclosure, pressedScale: 0.99, pressedOpacity: 0.8))
+        .buttonStyle(ResponsiveButtonStyle(feedback: .disclosure, pressedScale: 0.985, pressedOpacity: 0.9))
+        .background {
+            Color.clear
+                .appContentSurface(.standard, in: .rect(cornerRadius: DrawerListMetrics.cardCornerRadius))
+                .opacity(isFolded ? 1 : 0)
+        }
+        .padding(.top, isFirst ? (isFolded ? 0 : -6) : (isFolded ? 4 : 2))
+        .padding(.bottom, isFolded ? 0 : -10)
         .accessibilityAddTraits(.isHeader)
         .accessibilityValue(foldValue(summary, isFolded: isFolded))
         .accessibilityIdentifier(identifier)
     }
 
+    private func sectionTitle(_ title: LocalizedStringKey, systemImage: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: systemImage)
+                .font(.subheadline.weight(.semibold))
+                .symbolRenderingMode(.hierarchical)
+                .foregroundStyle(.secondary)
+                .frame(width: headerIconWidth, alignment: .center)
+                .accessibilityHidden(true)
+            Text(title)
+        }
+    }
+
     private func projectTitle(_ header: ConversationProjectHeader) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Text(header.title)
-                .lineLimit(1)
-                .truncationMode(.head)
-            if let hostName = header.hostName {
-                Text(hostName)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(themeStore.theme.colors.accentTint)
+        HStack(spacing: 8) {
+            Image(systemName: "folder.fill")
+                .font(.subheadline.weight(.semibold))
+                .symbolRenderingMode(.hierarchical)
+                .foregroundStyle(.secondary)
+                .frame(width: headerIconWidth, alignment: .center)
+                .accessibilityHidden(true)
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(header.title)
                     .lineLimit(1)
+                    .truncationMode(.head)
+                if let hostName = header.hostName {
+                    Text(hostName)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(themeStore.theme.colors.accentTint)
+                        .lineLimit(1)
+                }
             }
         }
     }
 
     private func foldValue(_ summary: ConversationSectionSummary, isFolded: Bool) -> String {
-        guard isFolded else { return "Expanded" }
-        let chats = "Collapsed, \(summary.rowCount) \(summary.rowCount == 1 ? "chat" : "chats")"
-        return summary.unreadCount > 0 ? "\(chats), \(summary.unreadCount) unread" : chats
+        let state = isFolded ? "Collapsed" : "Expanded"
+        let chats = "\(state), \(summary.rowCount) \(summary.rowCount == 1 ? "chat" : "chats")"
+        return isFolded && summary.unreadCount > 0 ? "\(chats), \(summary.unreadCount) unread" : chats
     }
 
     private func moreButton(_ title: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Text(title)
-                .font(.footnote.weight(.medium))
-                .foregroundStyle(themeStore.theme.colors.accentTint)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 12)
-                .contentShape(.rect)
+            HStack(spacing: 8) {
+                Image(systemName: "chevron.down")
+                    .font(.caption2.weight(.bold))
+                    .frame(width: headerIconWidth, alignment: .center)
+                    .accessibilityHidden(true)
+                Text(title)
+                    .font(.footnote.weight(.semibold))
+            }
+            .foregroundStyle(themeStore.theme.colors.accentTint)
+            .padding(.horizontal, 12)
+            .frame(maxWidth: .infinity, minHeight: ControlMetrics.minimumTarget, alignment: .leading)
+            .contentShape(.rect)
         }
+        .padding(.vertical, -6)
         .buttonStyle(ResponsiveButtonStyle(feedback: .disclosure, pressedScale: 0.99, pressedOpacity: 0.8))
     }
 
@@ -542,16 +569,14 @@ extension ConversationHistoryList {
 
 private enum DrawerListMetrics {
     static let rowSpacing: CGFloat = 10
+    static let cardCornerRadius: CGFloat = 16
 }
 
 private extension View {
-    func sectionHeaderFrame() -> some View {
-        frame(maxWidth: .infinity, minHeight: ControlMetrics.minimumTarget, alignment: .leading)
+    func staticSectionHeaderFrame(isFirst: Bool) -> some View {
+        frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 12)
-    }
-
-    func sectionHeaderSpacing(isFirst: Bool) -> some View {
-        padding(.top, isFirst ? 0 : 12)
-            .padding(.bottom, -DrawerListMetrics.rowSpacing)
+            .padding(.top, isFirst ? 6 : 14)
+            .padding(.bottom, 2)
     }
 }

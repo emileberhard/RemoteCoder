@@ -1654,7 +1654,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         switch newChatModelSource {
         case .resolvedDefault(let provider): provider
         case .chosen: nil
-        case .unavailable(let modelID, _): AgentProvider.provider(forModelID: modelID)
+        case .unavailable(let modelID, _): target.modelCatalog.provider(forModelID: modelID)
         }
     }
 
@@ -1793,16 +1793,20 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
     }
 
     func applyModelCatalog(for provider: AgentProvider, visibilityBefore: ModelVisibility) {
+        if activeSessionID == nil, case .resolvedDefault(nil) = newChatModelSource {
+            refreshNewChatDefaults()
+            return
+        }
         guard let current = selectedModel else {
             if case .unavailable(let modelID, _) = newChatModelSource {
-                guard AgentProvider.provider(forModelID: modelID) == provider else { return }
+                guard provider == .codex || target.modelCatalog.provider(forModelID: modelID) == provider else { return }
                 _ = adoptSettings(modelID: modelID, reasoning: reasoningSelection, fastModeState: fastModeState, source: .draftSetup)
             } else {
                 refreshNewChatDefaults(for: requestedNewChatProvider)
             }
             return
         }
-        guard current.provider == provider else { return }
+        guard (current.modelProvider == nil ? current.provider : .codex) == provider else { return }
         let option: ModelOption?
         if let activeSessionID {
             option = modelOption(id: current.id, threadID: activeSessionID,
@@ -1820,7 +1824,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
 
     private func keepsNewChatModel(_ option: ModelOption?, visibilityBefore: ModelVisibility) -> Bool {
         guard let option else { return false }
-        let visible = target.modelCatalog.isVisible(option, using: target.modelPickerPreferences.modelVisibility(for: option.provider))
+        let visible = target.modelCatalog.isVisible(option, using: target.modelPickerPreferences.modelVisibility(for: option.modelProvider == nil ? option.provider : .codex))
         switch newChatModelSource {
         case .resolvedDefault: return visible
         case .chosen, .unavailable: return visible || !target.modelCatalog.isVisible(option, using: visibilityBefore)
@@ -2213,8 +2217,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
 
     func incomingVoiceFastModeState(for context: RealtimeVoiceConversationContext) async -> FastModeState {
         let saved = await target.metadataService.metadata(for: context.threadID)
-        guard let saved,
-              AgentProvider.provider(forModelID: saved.modelID) == AgentProvider.provider(forModelID: context.model) else {
+        guard let saved else {
             return context.fastModeState
         }
         return context.fastModeState.restoringPreference(saved.fastModeEnabled)

@@ -69,6 +69,18 @@ impl ClaudeSupervisor {
                     .to_string(),
             })?;
             request.selection = settings.effective().clone();
+        } else if let Some(selection) = self
+            .conversation_index
+            .parent(&request.thread_id)
+            .await
+            .map_err(|error| TurnStartError {
+                data: None,
+                code: RpcCode::Unavailable,
+                message: format!("Claude selection could not be read: {error:#}"),
+            })?
+            .selection
+        {
+            request.selection = selection.selection();
         }
         self.start_turn_locked(request, TurnOrigin::Dispatched)
             .await
@@ -90,6 +102,9 @@ impl ClaudeSupervisor {
         policy: super::jobs::LaunchPolicy,
     ) -> Result<String, TurnStartError> {
         self.refuse_while_closing()?;
+        let route = self
+            .validate_route(&request.thread_id, &request.selection, request.first_turn)
+            .await?;
         self.recover_stored_cwd(&mut request, &policy).await?;
         request.input.client_id.get_or_insert_with(new_session_uuid);
         self.prepare_job_resume(&request, &policy).await?;
@@ -247,7 +262,7 @@ impl ClaudeSupervisor {
                 )
             } else {
                 drop(runtimes);
-                let spawned = self.spawn_runtime(&request, &policy)?;
+                let spawned = self.spawn_runtime(&request, &policy, &route)?;
                 let slot = spawned.runtime.input.reserve().await?;
                 let process_admission = spawned.admission;
                 let process_group_id = spawned.process_group_id;

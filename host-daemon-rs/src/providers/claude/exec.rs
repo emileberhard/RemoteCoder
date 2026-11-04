@@ -94,11 +94,84 @@ fn child_env_from(value_for: impl Fn(&str) -> Option<String>) -> HashMap<String,
     env
 }
 
+#[derive(Clone)]
+pub(crate) enum Route {
+    Default,
+    External {
+        provider: Box<crate::providers::external::ExternalProvider>,
+        model: String,
+        context: i64,
+    },
+}
+
+impl Route {
+    pub(crate) fn provider_id(&self) -> &str {
+        match self {
+            Self::Default => "claude",
+            Self::External { provider, .. } => provider.id(),
+        }
+    }
+}
+
+pub(crate) async fn resolve(
+    settings: &ClaudeSettings,
+    selection: &super::ClaudeSelection,
+    new: bool,
+) -> anyhow::Result<Route> {
+    if let Some(providers) = &settings.external_providers
+        && let Some((provider, context)) = providers
+            .claude_model(
+                &selection.model,
+                new,
+                selection.effort.as_deref(),
+                selection.fast,
+            )
+            .await?
+    {
+        return Ok(Route::External {
+            provider: Box::new(provider.clone()),
+            model: selection.model.clone(),
+            context,
+        });
+    }
+    anyhow::ensure!(
+        is_native_model(&selection.model),
+        "Claude model provider is unavailable for {}",
+        selection.model
+    );
+    Ok(Route::Default)
+}
+
+pub(crate) fn is_native_model(model: &str) -> bool {
+    let model = model.to_ascii_lowercase();
+    matches!(
+        model.as_str(),
+        "default"
+            | "best"
+            | "fable"
+            | "fable[1m]"
+            | "haiku"
+            | "opus"
+            | "opus[1m]"
+            | "opusplan"
+            | "sonnet"
+            | "sonnet[1m]"
+    ) || model.starts_with("claude-")
+}
+
 /// Builds a `claude` command with a cleared, allow-listed environment.
 ///
 /// `args` is the complete argument vector; callers own argv construction so there
 /// is exactly one place per call site to audit.
 pub(crate) fn command(settings: &ClaudeSettings, args: &[String]) -> Result<ClaudeCommand> {
+    command_on_route(settings, args, &Route::Default)
+}
+
+pub(crate) fn command_on_route(
+    settings: &ClaudeSettings,
+    args: &[String],
+    route: &Route,
+) -> Result<ClaudeCommand> {
     debug_assert!(
         !args.iter().any(|arg| arg == "--bare"),
         "claude must never be invoked with --bare"
@@ -115,13 +188,39 @@ pub(crate) fn command(settings: &ClaudeSettings, args: &[String]) -> Result<Clau
     if let Some(directory) = &settings.config_dir {
         cmd.env("CLAUDE_CONFIG_DIR", directory);
     }
-    if let Some(router) = &settings.router {
-        let key = router
-            .key()
-            .map_err(|error| Error::other(error.to_string()))?;
-        cmd.env("ANTHROPIC_BASE_URL", router.inference_base());
-        cmd.env("ANTHROPIC_AUTH_TOKEN", key);
-        cmd.env("CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK", "1");
+    match route {
+        Route::Default => {
+            if let Some(router) = &settings.router {
+                let key = router
+                    .key()
+                    .map_err(|error| Error::other(error.to_string()))?;
+                cmd.env("ANTHROPIC_BASE_URL", router.inference_base());
+                cmd.env("ANTHROPIC_AUTH_TOKEN", key);
+                cmd.env("CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK", "1");
+            }
+        }
+        Route::External {
+            provider,
+            model,
+            context,
+        } => {
+            let key = provider
+                .key()
+                .map_err(|error| Error::other(error.to_string()))?;
+            cmd.env("ANTHROPIC_BASE_URL", provider.claude_base_url());
+            cmd.env("ANTHROPIC_AUTH_TOKEN", key);
+            cmd.env("CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK", "1");
+            cmd.env("CLAUDE_CODE_MAX_CONTEXT_TOKENS", context.to_string());
+            for key in [
+                "ANTHROPIC_DEFAULT_OPUS_MODEL",
+                "ANTHROPIC_DEFAULT_SONNET_MODEL",
+                "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+                "ANTHROPIC_DEFAULT_FABLE_MODEL",
+                "CLAUDE_CODE_SUBAGENT_MODEL",
+            ] {
+                cmd.env(key, model);
+            }
+        }
     }
     Ok(ClaudeCommand(cmd))
 }

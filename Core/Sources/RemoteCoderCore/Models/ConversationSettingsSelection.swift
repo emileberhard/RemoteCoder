@@ -141,9 +141,7 @@ struct ConversationSettingsSelection: Equatable {
         } else {
             restoredReasoning = savedReasoning ?? .automatic
         }
-        let rememberedFastMode = saved.flatMap {
-            AgentProvider.provider(forModelID: $0.modelID) == option.provider ? $0.fastModeEnabled : nil
-        }
+        let rememberedFastMode = saved?.fastModeEnabled
         let restoredFastMode = option.provider == .codex
             ? FastModeState.readback(thread.extra?.fastModeSelection, remembered: rememberedFastMode)
             : FastModeState.selection(rememberedFastMode)

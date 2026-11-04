@@ -35,11 +35,11 @@ struct ProviderHealthTests {
         #expect(decoded.workingProviders == Set(AgentProvider.allCases))
     }
 
-    @Test func anUnavailableProviderMarksAllItsModelsAndExplainsASwitchAway() throws {
+    @Test func anUnavailableNativeProviderLeavesExternalRouteUnknownAndExplainsASwitchAway() throws {
         let decoded = try health(#"{"codex": {"state": "unavailable", "reason": "Codex sign-in needed on mac-mini"}, "claude": {"state": "ready"}}"#)
         let fable = try #require(ClaudeModelCatalog.model(for: "fable"))
 
-        #expect(decoded.isImpaired(native) && decoded.isImpaired(copilot) && !decoded.isImpaired(fable))
+        #expect(decoded.isImpaired(native) && !decoded.isImpaired(copilot) && !decoded.isImpaired(fable))
         #expect(decoded.warning(for: native, isNewChat: true) == "Codex sign-in needed on mac-mini")
         #expect(decoded.switchNotice(preferred: .codex, selected: .claude) == "Codex sign-in needed on mac-mini")
         #expect(decoded.switchNotice(preferred: .claude, selected: .claude) == nil)

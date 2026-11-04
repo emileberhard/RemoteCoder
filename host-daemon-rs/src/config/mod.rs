@@ -181,7 +181,7 @@ pub(crate) struct Settings {
     pub push: crate::push::PushConfiguration,
     pub claude: ClaudeSettings,
     pub router: Option<crate::providers::router::RouterConfig>,
-    pub external_providers: Vec<crate::providers::codex::external::ExternalProvider>,
+    pub external_providers: Vec<crate::providers::external::ExternalProvider>,
     pub speech_clients: crate::voice::speech::SpeechClients,
 }
 
@@ -266,7 +266,7 @@ impl Settings {
         } = codex;
 
         let router = crate::providers::router::RouterConfig::load(sources)?;
-        let external_providers = crate::providers::codex::external::load(sources)?;
+        let external_providers = crate::providers::external::load(sources)?;
         let claude = ClaudeSettings::load(sources, &host_paths, port, router.clone())?;
 
         Ok(Self {

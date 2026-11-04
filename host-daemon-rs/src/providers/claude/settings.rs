@@ -15,6 +15,7 @@ pub(crate) struct ClaudeSettings {
     pub claude_home: PathBuf,
     pub config_dir: Option<PathBuf>,
     pub router: Option<crate::providers::router::RouterConfig>,
+    pub external_providers: Option<std::sync::Arc<crate::providers::external::ExternalProviders>>,
     pub default_model: String,
     pub auth_preflight_interval_secs: u64,
     /// Where a spawned Claude runtime reaches the gateway's own MCP server for
@@ -45,6 +46,7 @@ impl ClaudeSettings {
             claude_home: paths.home().join(".claude"),
             config_dir: None,
             router: None,
+            external_providers: None,
             default_model: "claude-fable-5".to_owned(),
             auth_preflight_interval_secs: 300,
             mcp_endpoint: String::new(),
@@ -74,6 +76,7 @@ impl ClaudeSettings {
             router: Some(
                 crate::providers::router::RouterConfig::unreachable_for_test(router_key_file),
             ),
+            external_providers: None,
             default_model: "claude-fable-5".to_string(),
             auth_preflight_interval_secs: 300,
             mcp_endpoint: String::new(),
@@ -119,6 +122,7 @@ impl ClaudeSettings {
             config_dir,
             claude_home,
             router,
+            external_providers: None,
             default_model,
             auth_preflight_interval_secs,
             mcp_endpoint: format!("http://127.0.0.1:{gateway_port}/mcp"),
