@@ -1,9 +1,14 @@
 {
   "schemaVersion": 2,
   "component": "remote-coder-codex-gateway",
-  "chatgptBuild": "26.1016.51333",
-  "codexCliVersion": "0.163.0-alpha.11",
-  "codexUpstreamBaseCommit": "5425d3e625daa58eea3ad1de27c087eb3b2ffbd3",
+  "chatgptBuild": "26.1029.61003",
+  "chatgptChromeExtension": {
+    "id": "hehggadaopoacecdllhhajmbjkdcmajg",
+    "version": "1.26.1102.11740",
+    "crxSHA256": "d8575514d5359df727ef57ca6a0f9818c2426751e4ef150b0804c17f04340566"
+  },
+  "codexCliVersion": "0.166.0-alpha.6",
+  "codexUpstreamBaseCommit": "4f093f2748667f3b0e6a07e3d4055121cbd3ce64",
   "codexAppServerTransport": "websocket-over-unix",
   "codexAppServerSocket": "~/.codex/app-server-control/app-server-control.sock",
   "status": "runtime-identity-only",
@@ -40,22 +45,24 @@
     "status": "operator-acceptance-not-published",
     "liveAcceptanceStatus": "not-published"
   },
-  "protocolSourceCommit": "1f412796c9b46d46fd218d43fd47ea3455c46c55",
+  "protocolSourceCommit": "fb9ddbe0ee7c152e0e722cfbf5318e0d3a4e80a1",
   "runtimeTargets": {
     "aarch64-apple-darwin": {
-      "sourceCommit": "1f412796c9b46d46fd218d43fd47ea3455c46c55",
-      "runtimePackageSHA256": "438db899935e297ec428f69d532e9d2c7984431b7406357d0f8dc9d34ffd89df",
+      "sourceCommit": "fb9ddbe0ee7c152e0e722cfbf5318e0d3a4e80a1",
+      "runtimePackageSHA256": "46fe1736005cdedeba164638ad542662de01c64a3022db5eaccee5fb29ec6929",
       "runtimeHashes": {
-        "bin/codex": "417584132fa4a87815b99291987403d3577f1783c659f49e5d1a6ba582da5bb2",
-        "bin/codex-code-mode-host": "ad607c9873f686fc3bf0ee4f8f50d81ec83b97ad2699b1db243fdf0f0d07119a"
+        "bin/codex": "481f267e11791ed4e546fdffef71e63e0793ee4d0438762cfba7852f50ebb340",
+        "bin/codex-code-mode-host": "b95982efdd31972fdcc7a3df372b88ac79b82fd8b8b468fafc7fe24577463ab6",
+        "bin/codex-exec-server": "09e03ca5aaf80123a49cc9ed5e50ac30ebf6f7284858403c8a8f2306bb86ebe2"
       }
     },
     "x86_64-unknown-linux-musl": {
-      "sourceCommit": "f8d9f770971005e9a809460da4cf557fcbbcce03",
-      "runtimePackageSHA256": "3726c986dcf1d3a46e4863a93e5b8d051f87879b9e49db6a406e79b7f9feb6ca",
+      "sourceCommit": "fb9ddbe0ee7c152e0e722cfbf5318e0d3a4e80a1",
+      "runtimePackageSHA256": "a9cb59d7d11c5302190ddc75b27eafb28cd0952169f0f7e595c7fae7149e3a8e",
       "runtimeHashes": {
-        "bin/codex": "60b7980748ae6ea423900fa50f4b4a9babc94d95d2fbe1b65e20fd4807263a03",
-        "bin/codex-code-mode-host": "3fb4c764b8e861171efef36b61d96f9ea2e8e34135cb955f42c02cd92695968c"
+        "bin/codex": "485fddba6808c267f8bdeec297e465f86995d414d1dbf29537bc7c889b545a8c",
+        "bin/codex-code-mode-host": "b700040171e4df5a56120de884898e9c84181f01c95667fe854ddfefd13e0824",
+        "bin/codex-exec-server": "0b51a8825bbc5d5c8caaaebb143320169aebc7d2b994688a41c3061a0c901d84"
       }
     }
   }
