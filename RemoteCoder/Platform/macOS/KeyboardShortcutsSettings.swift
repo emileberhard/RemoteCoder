@@ -13,12 +13,12 @@ struct KeyboardShortcutsSettings: View {
                     ForEach(ChatCommand.allCases, id: \.self) { command in
                         LabeledContent(command.shortcutTitle) {
                             HStack(spacing: 8) {
-                                ShortcutRecorder(shortcut: shortcuts.shortcut(for: command), label: command.shortcutTitle) {
-                                    assign($0, to: command, in: shortcuts)
+                                ShortcutRecorder(shortcut: shortcuts.shortcut(for: command), label: command.shortcutTitle) { shortcut, event in
+                                    assign(shortcut, event: event, to: command, in: shortcuts)
                                 }
                                 .scaledFrame(width: 124, height: 24)
                                 Button("Clear", systemImage: "xmark.circle.fill") {
-                                    _ = assign(nil, to: command, in: shortcuts)
+                                    _ = assign(nil, event: nil, to: command, in: shortcuts)
                                 }
                                 .labelStyle(.iconOnly)
                                 .buttonStyle(.borderless)
@@ -46,7 +46,7 @@ struct KeyboardShortcutsSettings: View {
         }
     }
 
-    private func assign(_ shortcut: KeyboardShortcut?, to command: ChatCommand, in preferences: ChatKeyboardShortcuts) -> Bool {
+    private func assign(_ shortcut: KeyboardShortcut?, event: NSEvent?, to command: ChatCommand, in preferences: ChatKeyboardShortcuts) -> Bool {
         if let shortcut {
             if let conflict = preferences.conflict(for: shortcut, excluding: command) {
                 error = "\(shortcut.symbols) is already used for \(conflict.shortcutTitle)."
@@ -54,7 +54,8 @@ struct KeyboardShortcutsSettings: View {
             }
             let current = preferences.shortcut(for: command)
             if current?.key != shortcut.key || current?.modifiers != shortcut.modifiers {
-                if let title = NSApp.mainMenu?.shortcutTitle(for: shortcut) {
+                if let event, let menu = NSApp.mainMenu,
+                   let title = ShortcutMenuProbe().title(for: event, in: menu) {
                     error = "\(shortcut.symbols) is already used for \(title)."
                     return false
                 }
@@ -88,20 +89,34 @@ private extension ChatCommand {
     }
 }
 
-private extension NSMenu {
-    func shortcutTitle(for shortcut: KeyboardShortcut) -> String? {
-        for item in items {
-            if let title = item.submenu?.shortcutTitle(for: shortcut) { return title }
-            let flags = item.keyEquivalentModifierMask.intersection([.command, .option, .control, .shift])
-            let equivalent = item.userKeyEquivalent.isEmpty ? item.keyEquivalent : item.userKeyEquivalent
-            guard equivalent.count == 1, let character = equivalent.first else { continue }
-            let binding = KeyboardShortcut(recordedCharacter: character, modifiers: EventModifiers(flags))
-            if binding.key == shortcut.key, binding.modifiers == shortcut.modifiers {
-                return item.title
-            }
-        }
-        return nil
+@MainActor
+private final class ShortcutMenuProbe: NSObject {
+    private var matchedTitle: String?
+
+    func title(for event: NSEvent, in menu: NSMenu) -> String? {
+        let probe = makeMenu(menu)
+        _ = probe.performKeyEquivalent(with: event)
+        return matchedTitle
     }
+
+    private func makeMenu(_ source: NSMenu) -> NSMenu {
+        let menu = NSMenu(title: source.title)
+        menu.autoenablesItems = false
+        for sourceItem in source.items {
+            let item = NSMenuItem(title: sourceItem.title, action: #selector(match(_:)), keyEquivalent: sourceItem.keyEquivalent)
+            item.target = self
+            item.keyEquivalentModifierMask = sourceItem.keyEquivalentModifierMask
+            item.allowsAutomaticKeyEquivalentLocalization = sourceItem.allowsAutomaticKeyEquivalentLocalization
+            item.allowsAutomaticKeyEquivalentMirroring = sourceItem.allowsAutomaticKeyEquivalentMirroring
+            item.isHidden = sourceItem.isHidden
+            item.allowsKeyEquivalentWhenHidden = sourceItem.allowsKeyEquivalentWhenHidden
+            if let submenu = sourceItem.submenu { item.submenu = makeMenu(submenu) }
+            menu.addItem(item)
+        }
+        return menu
+    }
+
+    @objc private func match(_ item: NSMenuItem) { matchedTitle = item.title }
 }
 
 private extension EventModifiers {
@@ -117,7 +132,7 @@ private extension EventModifiers {
 private struct ShortcutRecorder: NSViewRepresentable {
     let shortcut: KeyboardShortcut?
     let label: String
-    let record: (KeyboardShortcut?) -> Bool
+    let record: (KeyboardShortcut?, NSEvent) -> Bool
 
     func makeNSView(context: Context) -> ShortcutRecorderButton { ShortcutRecorderButton() }
 
@@ -131,7 +146,7 @@ private struct ShortcutRecorder: NSViewRepresentable {
 
 final class ShortcutRecorderButton: NSButton {
     var shortcutLabel = "Record Shortcut" { didSet { if !isRecording { title = shortcutLabel } } }
-    var record: ((KeyboardShortcut?) -> Bool)?
+    var record: ((KeyboardShortcut?, NSEvent) -> Bool)?
     private var isRecording = false
 
     init() {
@@ -179,14 +194,14 @@ final class ShortcutRecorderButton: NSButton {
             return
         }
         if flags.isEmpty, key == .delete || key == .deleteForward {
-            if record?(nil) == true { finishRecording() }
+            if record?(nil, event) == true { finishRecording() }
             return
         }
         guard !flags.isDisjoint(with: [.command, .control]) else {
             title = "Use ⌘ or ⌃"
             return
         }
-        if record?(shortcut) == true {
+        if record?(shortcut, event) == true {
             finishRecording()
         }
     }
