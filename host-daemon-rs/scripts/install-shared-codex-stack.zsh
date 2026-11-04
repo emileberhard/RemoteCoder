@@ -206,7 +206,7 @@ start() {
   plutil -insert EnvironmentVariables.HOME -string "${HOME}" "${plist}"
   plutil -insert EnvironmentVariables.PATH -string "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" "${plist}"
   plutil -insert EnvironmentVariables.RC_CODEX_GATEWAY_INSTALL_OWNER -string launchd "${plist}"
-  plutil -insert RunAtLoad -bool true "${plist}"
+  plutil -insert RunAtLoad -bool false "${plist}"
   plutil -insert KeepAlive -bool false "${plist}"
   # This short-lived job may start the canonical app-server during cutover.
   # Keep that process out of Darwin's inherited background throttle.
@@ -217,6 +217,7 @@ start() {
   plutil -lint "${plist}"
 
   launchctl bootstrap "${domain}" "${plist}"
+  launchctl kickstart "${job}"
   print -r -- "submitted=${job}"
   print -r -- "stdout=${stdout_log}"
   print -r -- "stderr=${stderr_log}"
