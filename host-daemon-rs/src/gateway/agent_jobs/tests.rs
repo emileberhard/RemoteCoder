@@ -425,7 +425,7 @@ async fn job_owner_rejects_invalid_external_claude_starts_and_continuations_befo
     use crate::providers::codex::daemon::CodexAppServer;
     use crate::providers::external::{ExternalProvider, ExternalProviders};
 
-    let mut stub = StubClaude::new();
+    let stub = StubClaude::new();
     let catalog_dir = stub.state.join("external-models");
     crate::storage::private_state::ensure_private_directory(&catalog_dir).unwrap();
     crate::storage::private_state::write_json(
