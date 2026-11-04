@@ -21,7 +21,6 @@ impl RouterConfig {
             "RC_CODEX_GATEWAY_ROUTER_ACCOUNTS_URL",
             "RC_CODEX_GATEWAY_ROUTER_KEY_FILE",
             "RC_CODEX_GATEWAY_ROUTER_CODEX_ACCOUNT",
-            "RC_CODEX_GATEWAY_ROUTER_ALLOWED_ORIGINS",
         ]
         .iter()
         .any(|name| sources.raw(name).is_some())
@@ -94,37 +93,6 @@ fn listener(sources: &ConfigSources, name: &str) -> Result<reqwest::Url> {
         .with_context(|| format!("Set {name} to the llm-router listener URL"))?;
     let url = reqwest::Url::parse(&raw).with_context(|| format!("{name} is not a URL"))?;
     validate_origin(&url, name)?;
-    let loopback = url
-        .host_str()
-        .is_some_and(|host| matches!(host, "127.0.0.1" | "localhost" | "[::1]"));
-    if !loopback {
-        let allowed = sources
-            .optional_string("RC_CODEX_GATEWAY_ROUTER_ALLOWED_ORIGINS")
-            .unwrap_or_default();
-        ensure!(
-            allowed.len() <= 8192,
-            "RC_CODEX_GATEWAY_ROUTER_ALLOWED_ORIGINS exceeds 8192 bytes"
-        );
-        let origins: Vec<_> = allowed
-            .split(',')
-            .filter(|origin| !origin.trim().is_empty())
-            .collect();
-        ensure!(
-            origins.len() <= 32,
-            "RC_CODEX_GATEWAY_ROUTER_ALLOWED_ORIGINS exceeds 32 origins"
-        );
-        let mut matched = false;
-        for raw in origins {
-            let origin = reqwest::Url::parse(raw.trim())
-                .context("RC_CODEX_GATEWAY_ROUTER_ALLOWED_ORIGINS contains an invalid URL")?;
-            validate_origin(&origin, "RC_CODEX_GATEWAY_ROUTER_ALLOWED_ORIGINS")?;
-            matched |= origin.origin() == url.origin();
-        }
-        ensure!(
-            matched,
-            "{name} must be loopback or explicitly listed in RC_CODEX_GATEWAY_ROUTER_ALLOWED_ORIGINS"
-        );
-    }
     Ok(url)
 }
 
@@ -379,15 +347,15 @@ mod tests {
                 "HTTP(S) origin",
             ),
             (
-                "http://unlisted.example.com:42069",
+                "http://user:never-disclose-sentinel@127.0.0.1",
                 private,
                 "/tmp/key",
                 "workspace-a",
-                "RC_CODEX_GATEWAY_ROUTER_ALLOWED_ORIGINS",
+                "HTTP(S) origin",
             ),
             (
-                "http://user:never-disclose-sentinel@127.0.0.1",
-                private,
+                loopback,
+                "https://user:never-disclose-sentinel@accounts.example.com",
                 "/tmp/key",
                 "workspace-a",
                 "HTTP(S) origin",
@@ -426,10 +394,6 @@ mod tests {
             (
                 "RC_CODEX_GATEWAY_ROUTER_ACCOUNTS_URL".into(),
                 "https://router.example.com:42070".into(),
-            ),
-            (
-                "RC_CODEX_GATEWAY_ROUTER_ALLOWED_ORIGINS".into(),
-                "https://router.example.com:42069,https://router.example.com:42070".into(),
             ),
             ("RC_CODEX_GATEWAY_ROUTER_KEY_FILE".into(), "/tmp/key".into()),
             (

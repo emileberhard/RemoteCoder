@@ -1729,8 +1729,8 @@ Claude. The `RC_CLAUDE_*` settings are in
 - **Router authentication.** `RouterConfig` (`providers/router.rs`) is the one
   owner of optional llm-router listeners and the host key. Router configuration
   requires the inference URL, accounts URL, absolute private key-file path and
-  exact Codex account together. Non-loopback origins need explicit
-  `RC_CODEX_GATEWAY_ROUTER_ALLOWED_ORIGINS`; no personal suffix grants trust.
+  exact Codex account together. Both URLs must be HTTP(S) origins without
+  credentials, a path, query or fragment.
   With no router, the unmodified Claude Code CLI uses its own native login, and
   Codex uses its managed-home login. Router-only account, title and speech
   services stay unavailable. In router mode, canonical command

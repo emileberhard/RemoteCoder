@@ -121,7 +121,6 @@ try {
         `RC_CODEX_GATEWAY_AUTH_TOKEN=${lab.token}`, `RC_CODEX_GATEWAY_CODEX_PATH=${lab.codex}`,
         "RC_CODEX_GATEWAY_PUSH_BROKER_ENABLED=false", ...keys.map(key => `${key}=${values[key]}`),
         `RC_CODEX_GATEWAY_ROUTER_KEY_FILE=${lab.path("router-key")}`,
-        ...(values.RC_CODEX_GATEWAY_ROUTER_ALLOWED_ORIGINS ? [`RC_CODEX_GATEWAY_ROUTER_ALLOWED_ORIGINS=${values.RC_CODEX_GATEWAY_ROUTER_ALLOWED_ORIGINS}`] : []),
         "RC_CLAUDE_ENABLED=true", `RC_CLAUDE_HOME=${lab.path(".claude")}`, `RC_CLAUDE_PATH=${claude}`,
         `CODEX_HOME=${lab.nativeDefault}`, "RUST_LOG=warn",
     ].join("\n") + "\n");
