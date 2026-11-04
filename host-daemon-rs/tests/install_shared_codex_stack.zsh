@@ -267,6 +267,8 @@ done
   start "${package_dir}" "${gateway_bundle}"
 readonly worker_plist="${HOME}/.remote-coder/shared-codex-install/com.remote-coder.shared-codex-install.plist"
 [[ "$(plutil -extract ProcessType raw -o - "${worker_plist}")" == "Interactive" ]]
+[[ "$(plutil -extract RunAtLoad raw -o - "${worker_plist}")" == false ]]
+grep -F "launchctl kickstart gui/$(id -u)/com.remote-coder.shared-codex-install" "${TEST_SHARED_INSTALL_LOG}" >/dev/null
 if plutil -extract EnvironmentVariables.SSL_CERT_FILE raw -o - "${worker_plist}" >/dev/null 2>&1; then
   echo 'detached installer must inherit host CA policy' >&2
   exit 1
