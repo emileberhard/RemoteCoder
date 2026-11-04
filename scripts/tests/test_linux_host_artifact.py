@@ -6,6 +6,8 @@ import tarfile
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 SCRIPTS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SCRIPTS))
@@ -17,6 +19,107 @@ spec.loader.exec_module(module)
 
 
 class LinuxArchiveTests(unittest.TestCase):
+    def test_build_from_group_writable_inputs_passes_its_archive_verifier(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source"
+            (source / "LICENSES").mkdir(parents=True)
+            (source / "host-daemon-rs/systemd").mkdir(parents=True)
+            for name in [
+                "LICENSE",
+                "THIRD_PARTY_NOTICES.md",
+                "LICENSES/notice",
+                "host-daemon-rs/systemd/remote-coder-gateway.service",
+            ]:
+                path = source / name
+                path.write_text("source payload")
+                path.chmod(0o664)
+            (source / "LICENSES").chmod(0o775)
+            package = root / "codex"
+            (package / "bin").mkdir(parents=True)
+            (package / "codex-package.json").write_text(
+                json.dumps({"linuxSandbox": "system"})
+            )
+            (package / "bin/codex").write_bytes(b"codex payload")
+            (package / "bin/codex").chmod(0o775)
+            claude = root / "claude"
+            claude.write_bytes(b"claude payload")
+            provenance = root / "provenance.json"
+            claude_pin = {
+                "version": "2.1.311",
+                "linuxX64": {
+                    "sha256": module.sha256(claude),
+                    "manifestSigningFingerprint": "signature",
+                },
+            }
+            provenance.write_text(
+                json.dumps(
+                    {
+                        "version": claude_pin["version"],
+                        "sha256": claude_pin["linuxX64"]["sha256"],
+                        "manifestSignature": {"fingerprint": "signature"},
+                    }
+                )
+            )
+            codex_pin = {
+                "sourceCommit": "b" * 40,
+                "runtimePackageSHA256": module.tree_digest(package),
+                "runtimeHashes": {"bin/codex": module.sha256(package / "bin/codex")},
+            }
+            (source / "docs/codex").mkdir(parents=True)
+            (source / "docs/codex/compatibility.json").write_text(
+                json.dumps(
+                    {
+                        "codexCliVersion": "0.166.0-alpha.6",
+                    }
+                )
+            )
+            target = root / "target"
+            gateway = (
+                target / module.GATEWAY_TARGET / "release/remote-coder-codex-gateway"
+            )
+            gateway.parent.mkdir(parents=True)
+            gateway.write_bytes(b"gateway payload")
+            commit = "a" * 40
+            identity = {"version": "0.0.0", "commit": commit, "modified": False}
+            args = SimpleNamespace(
+                version="0.0.0",
+                commit=commit,
+                codex_package=package,
+                claude=claude,
+                claude_provenance=provenance,
+                target_dir=target,
+                output=root / "host.tar.gz",
+            )
+
+            def output(command, **options):
+                return commit if command[0] == "git" else json.dumps(identity)
+
+            with (
+                patch.object(module, "ROOT", source),
+                patch.object(module, "pins", return_value=(codex_pin, claude_pin)),
+                patch.object(module.platform, "system", return_value="Linux"),
+                patch.object(module.platform, "machine", return_value="x86_64"),
+                patch.object(module.subprocess, "run"),
+                patch.object(module.subprocess, "check_output", side_effect=output),
+            ):
+                expected = module.build(args)
+                extracted = module.unpack(args.output, root / "extracted")
+                self.assertEqual(
+                    module.verify_tree(extracted, args.version, commit), expected
+                )
+            self.assertEqual((extracted / "LICENSE").stat().st_mode & 0o777, 0o644)
+            self.assertEqual((extracted / "licenses").stat().st_mode & 0o777, 0o755)
+            self.assertEqual(
+                (extracted / "runtime/codex/bin/codex").stat().st_mode & 0o777, 0o755
+            )
+            self.assertEqual(
+                module.tree_digest(extracted / "runtime/codex"),
+                codex_pin["runtimePackageSHA256"],
+            )
+            self.assertEqual((source / "LICENSE").stat().st_mode & 0o777, 0o664)
+            self.assertEqual((package / "bin/codex").stat().st_mode & 0o777, 0o775)
+
     def test_approved_read_only_and_executable_modes_survive_extraction(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

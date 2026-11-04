@@ -281,6 +281,9 @@ def build(args):
         shutil.copytree(ROOT / "LICENSES", root / "licenses")
         shutil.copy2(ROOT / "LICENSE", root / "LICENSE")
         shutil.copy2(ROOT / "THIRD_PARTY_NOTICES.md", root / "THIRD_PARTY_NOTICES.md")
+        for path in root.rglob("*"):
+            if not path.is_symlink():
+                path.chmod(path.stat().st_mode & 0o755)
         manifest = {
             "schemaVersion": 1,
             "version": args.version,
