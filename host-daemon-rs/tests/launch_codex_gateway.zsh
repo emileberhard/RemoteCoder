@@ -70,11 +70,26 @@ function run(arguments) {
 JXA
 }
 
-[[ "$(registered_fixture_bundles)" == "${first_bundle}"$'\n'"${second_bundle}" ]]
+wait_for_fixture_registration() {
+  local expected="$1" actual
+  local -i deadline=$(( SECONDS + 10 ))
+  while true; do
+    actual="$(registered_fixture_bundles)"
+    [[ "${actual}" != "${expected}" ]] || return 0
+    if (( SECONDS >= deadline )); then
+      print -u2 -r -- "Expected registered fixture bundles: ${expected}"
+      print -u2 -r -- "Observed registered fixture bundles: ${actual}"
+      return 1
+    fi
+    sleep 0.1
+  done
+}
+
+wait_for_fixture_registration "${first_bundle}"$'\n'"${second_bundle}"
 ln -sf "${first_bundle}/Contents/MacOS/remote-coder-codex-gateway" "${install_dir}/remote-coder-codex-gateway"
 print -r -- "planned-generation" >"${launch_state}/planned-handoff"
 "${install_dir}/launch-codex-gateway"
-[[ "$(registered_fixture_bundles)" == "${first_bundle}" ]]
+wait_for_fixture_registration "${first_bundle}"
 
 ln -sf "${second_bundle}/Contents/MacOS/remote-coder-codex-gateway" "${install_dir}/remote-coder-codex-gateway"
 print -r -- "planned-generation" >"${launch_state}/planned-handoff"
@@ -82,7 +97,7 @@ if "${install_dir}/launch-codex-gateway"; then
   echo 'Gateway launcher did not execute the selected second binary' >&2
   exit 1
 fi
-[[ "$(registered_fixture_bundles)" == "${second_bundle}" ]]
+wait_for_fixture_registration "${second_bundle}"
 
 if (unset SSL_CERT_FILE; "${install_dir}/launch-codex-gateway") >"${scratch}/ca-policy.err" 2>&1; then
   echo 'missing inherited CA policy was accepted' >&2
