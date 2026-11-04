@@ -1334,9 +1334,9 @@ entrypoint linked above.
 - `ConversationHistoryView` owns the snapshot observation, the captured layout
   (held by `ChatScreen` as `drawerLayout`, so window commands can walk the
   displayed order) and the pin prompts. The `ConversationHistoryList` seam
-  presents it: the iOS arm uses opaque content-surface rows under headline
-  section headers whose trailing chevron folds Pinned, each project, Automations and
-  Settled, and the
+  presents it: the iOS arm uses opaque content-surface rows under subheadline
+  semibold section headers whose trailing chevron folds Pinned, each project, Automations and
+  Settled into content-surface shelf cards, and the
   Mac arm is a `List(selection:)` source list with a Pinned
   `Section(isExpanded:)`, an Automations `Section(isExpanded:)`, a Chats
   `Section` below them, and, in Projects, one `Section(isExpanded:)` per
