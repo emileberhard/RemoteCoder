@@ -277,6 +277,65 @@ else:
                 if not lock.closed:
                     lock.close()
 
+    def test_killed_candidate_worker_cannot_publish_success(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            release = root / "release"
+            (release / "dist").mkdir(parents=True)
+            (release / "dist/deployment.json").write_text('{"revision":"fixture"}')
+            (release / "server.js").write_text("""
+import os, pathlib, socket, time
+listener = socket.socket()
+listener.bind(('127.0.0.1', int(os.environ['RC_WEB_PORT'])))
+pathlib.Path(os.environ['TEST_PID']).write_text(str(os.getpid()))
+listener.listen()
+while True:
+    time.sleep(1)
+""")
+            lock_path = root / "lock"
+            pid_path = root / "server-pid"
+            original = deploy.staged_process
+            workers = []
+
+            def start_worker(*args, **kwargs):
+                worker = original(*args, **kwargs)
+                workers.append(worker)
+                return worker
+
+            def kill_worker_after_readiness(*args):
+                workers[0].kill()
+                workers[0].wait(timeout=5)
+                return {"revision": "fixture"}
+
+            with lock_path.open("w") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                try:
+                    with patch.object(deploy, "ROOT", root), patch.object(deploy, "runtime", return_value=sys.executable), patch.object(deploy, "smoke", return_value={"revision": "fixture"}), redirect_stdout(io.StringIO()):
+                        deploy.candidate(release, {"TEST_PID": str(pid_path)}, "primary", lock)
+                    self.assertFalse(list(root.glob(".build-*")))
+                    pid_path.unlink()
+                    with patch.object(deploy, "ROOT", root), patch.object(deploy, "runtime", return_value=sys.executable), patch.object(deploy, "staged_process", side_effect=start_worker), patch.object(deploy, "smoke", side_effect=kill_worker_after_readiness):
+                        with self.assertRaises(subprocess.CalledProcessError) as error:
+                            deploy.candidate(release, {"TEST_PID": str(pid_path)}, "primary", lock)
+                    self.assertEqual(error.exception.returncode, -signal.SIGKILL)
+                    self.assertTrue(list(root.glob(".build-*/candidate.log")))
+                    self.assertTrue(release.exists())
+                finally:
+                    if pid_path.exists():
+                        try:
+                            os.kill(int(pid_path.read_text()), signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                    if workers and workers[0].poll() is None:
+                        workers[0].kill()
+                        workers[0].wait(timeout=5)
+
+    def test_natural_command_failure_preserves_exit_status(self):
+        with tempfile.TemporaryFile() as lock:
+            with self.assertRaises(subprocess.CalledProcessError) as error:
+                deploy.staged_run([sys.executable, "-c", "raise SystemExit(37)"], lock, 10)
+            self.assertEqual(error.exception.returncode, 37)
+
     def test_killed_worker_preserves_staging_until_command_exits(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -9,6 +9,7 @@ import time
 limit = float(sys.argv[1])
 lock_fd = int(sys.argv[2])
 command = sys.argv[3:]
+CONTROLLER_CLOSED = 125
 interrupted = False
 
 
@@ -23,6 +24,7 @@ for signum in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
 process = subprocess.Popen(command, stdin=subprocess.DEVNULL, start_new_session=True, pass_fds=(lock_fd,))
 deadline = time.monotonic() + limit
 failed = False
+controller_closed = False
 
 
 def group_exists():
@@ -54,6 +56,7 @@ try:
         ready, _, _ = select.select([sys.stdin], [], [], min(remaining, 0.25))
         if ready and not os.read(sys.stdin.fileno(), 1):
             failed = True
+            controller_closed = True
             break
     if interrupted:
         failed = True
@@ -78,4 +81,8 @@ finally:
                     reported = True
                 time.sleep(0.05)
     process.wait()
-sys.exit(1 if failed or process.returncode else 0)
+if controller_closed and not interrupted:
+    sys.exit(CONTROLLER_CLOSED)
+if failed:
+    sys.exit(1)
+sys.exit(process.returncode if process.returncode >= 0 else 128 - process.returncode)

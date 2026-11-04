@@ -28,6 +28,7 @@ RELEASES = ROOT / "releases"
 ORIGIN = WEB.get("origin", "")
 MAX_TOTAL_BYTES = 1536 * 1024 * 1024
 WORKER = Path(__file__).resolve().with_name("stage-process.py")
+CONTROLLER_CLOSED = 125
 
 
 def run(*arguments, **options):
@@ -237,7 +238,8 @@ def candidate(release, environment, mode, lock):
             expected = json.loads((release / "dist/deployment.json").read_text())
             if any(result.get(key) != value for key, value in expected.items()):
                 raise RuntimeError("Candidate did not report its expected release identity")
-            print(f"Candidate verified: {json.dumps(result)}", flush=True)
+            if process.poll() is not None:
+                raise RuntimeError("Candidate exited before verification completed")
         except BaseException:
             output.seek(0, 2)
             output.seek(max(0, output.tell() - 4096))
@@ -245,8 +247,11 @@ def candidate(release, environment, mode, lock):
             raise
         finally:
             process.stdin.close()
-            process.wait(timeout=10)
+            status = process.wait(timeout=10)
+            if status != CONTROLLER_CLOSED:
+                raise subprocess.CalledProcessError(status, process.args)
         check_budget()
+        print(f"Candidate verified: {json.dumps(result)}", flush=True)
 
 
 def main():
