@@ -6,6 +6,34 @@ import Testing
 struct ChatModelSelectionTests {
     private typealias Fixtures = CodexModelFixtures
 
+    @Test(.timeLimit(.minutes(1))) func reconnectRefreshesTheHarnessForNewChats() async throws {
+        let modelID = "copilot/gemini-4-argon"
+        var model = Fixtures.wireModel(modelID, name: "Gemini 4 Argon", efforts: ["low", "medium", "high"])
+        model["modelProvider"] = "copilot"
+        model["modelProviderName"] = "Copilot"
+        let server = try FakeGatewayServer()
+        try await server.serveModels(Fixtures.models([model]))
+        let fixture = await WorkspaceFixture(miniGatewayPort: try await server.start())
+        defer { await fixture.cleanUp(); await server.stop() }
+        let screen = try #require(fixture.workspace.selectedScreen)
+        await screen.target.prepareIfNeeded()
+        await screen.target.refreshCodexModels()
+        screen.selectModel(try #require(screen.target.configuredModel(id: modelID).model), for: nil)
+        #expect(screen.selectedModel?.provider == .codex)
+        let connection = try #require(await screen.target.gatewayClient.connectionIdentity)
+
+        model["agentProvider"] = "claude"
+        try await server.serveModels(Fixtures.models([model]))
+        await screen.target.gatewayClient.disconnect()
+        try await screen.target.gatewayClient.connectIfNeeded()
+
+        #expect(await screen.target.gatewayClient.connectionIdentity != connection)
+        try #require(await waitUntil { screen.selectedModel?.provider == .claude })
+        #expect(screen.selectedModel?.id == modelID)
+        #expect(screen.selectedModel?.modelProvider?.id == "copilot")
+        #expect(screen.target.newChatDefaultModel().model?.provider == .claude)
+    }
+
     @Test func selectingAModelDuringAnExistingRunningTurnKeepsTheConversation() async throws {
         let fixture = await WorkspaceFixture()
         defer { await fixture.cleanUp() }

@@ -1440,7 +1440,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
             }
             #endif
             refreshQuestionScopes()
-            if codexModels.hasFetched == false { startCodexModelRefresh() }
+            startCodexModelRefresh()
             ownedTasks.start(.marksSync) { [weak self] in await self?.conversationList.syncMarks() }
             await refreshMetadataForCurrentConnection()
         }
