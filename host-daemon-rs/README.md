@@ -68,11 +68,10 @@ To enable the operator integration, configure all four values together:
 - `RC_CODEX_GATEWAY_ROUTER_KEY_FILE`: absolute path to a private host key file.
 - `RC_CODEX_GATEWAY_ROUTER_CODEX_ACCOUNT`: exact router Codex account ID.
 
-A partial configuration fails validation. Non-loopback origins must be explicitly
-listed in `RC_CODEX_GATEWAY_ROUTER_ALLOWED_ORIGINS` (comma-separated, at most
-32 origins / 8,192 bytes). This is an exact operator allowlist; no personal DNS
-suffix is implicitly trusted. `scripts/install-router-key.zsh` takes inference
-and accounts origins as arguments and the key on stdin. Never place it in argv.
+A partial configuration fails validation. Both URLs must be HTTP(S) origins
+without credentials, a path, query or fragment. `scripts/install-router-key.zsh`
+takes inference and accounts origins as arguments and the key on stdin. Never
+place it in argv.
 
 The host key needs the router scopes used by enabled features (`inference`,
 `accounts:read`, `accounts:prefer`, `accounts:redeem`, `codex:token`). The gateway

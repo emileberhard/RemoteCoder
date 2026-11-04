@@ -105,8 +105,7 @@ token claims and native account identity. The quota cache
 owns usage only; unavailable quota does not block a valid installed token.
 
 Each host uses one separately revocable router key, mode 0600, for inference,
-accounts and Codex tokens. Origins can be loopback or explicitly allowlisted
-operator endpoints. `RC_CODEX_GATEWAY_ROUTER_URL`,
+accounts and Codex tokens. `RC_CODEX_GATEWAY_ROUTER_URL`,
 `RC_CODEX_GATEWAY_ROUTER_ACCOUNTS_URL` and `RC_CODEX_GATEWAY_ROUTER_KEY_FILE`
 stay gateway-owned and are not inherited by Codex. HTTP redirects and proxy
 routing are disabled. The key is read for each request and never stored in an

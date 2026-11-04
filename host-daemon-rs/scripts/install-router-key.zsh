@@ -32,7 +32,6 @@ settings = {
     'RC_CODEX_GATEWAY_ROUTER_URL': inference_origin,
     'RC_CODEX_GATEWAY_ROUTER_ACCOUNTS_URL': accounts_origin,
     'RC_CODEX_GATEWAY_ROUTER_KEY_FILE': key_file,
-    'RC_CODEX_GATEWAY_ROUTER_ALLOWED_ORIGINS': f'{inference_origin},{accounts_origin}',
 }
 lines = [line for line in lines if not any(re.match(r'(?:export\s+)?' + name + r'\s*=', line) for name in settings)]
 lines.extend(f'{name}={shlex.quote(value)}' for name, value in settings.items())
