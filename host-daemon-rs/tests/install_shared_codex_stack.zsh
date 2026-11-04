@@ -104,8 +104,7 @@ print -r -- '{"version":"0.151.0-alpha.7.1"}' \
   >"${HOME}/.codex/packages/standalone/current/codex-package.json"
 cp "${package_dir}/bin/codex" \
   "${HOME}/.codex/packages/standalone/current/bin/codex"
-ln -s bin/codex "${HOME}/.codex/packages/standalone/current/codex"
-print -r -- "RC_CODEX_GATEWAY_CODEX_PATH=${HOME}/.codex/packages/standalone/current/codex" \
+print -r -- "RC_CODEX_GATEWAY_CODEX_PATH=${HOME}/.codex/packages/standalone/current/bin/codex" \
   >"${gateway_env}"
 
 "${scripts_dir}/install-shared-codex-stack.zsh" \
@@ -186,7 +185,7 @@ if "${scripts_dir}/install-shared-codex-stack.zsh" \
 fi
 grep -F 'source executable differs' "${scratch}/different-source.err" >/dev/null
 [[ ! -s "${TEST_SHARED_INSTALL_LOG}" ]]
-print -r -- "RC_CODEX_GATEWAY_CODEX_PATH=${HOME}/.codex/packages/standalone/current/codex" \
+print -r -- "RC_CODEX_GATEWAY_CODEX_PATH=${HOME}/.codex/packages/standalone/current/bin/codex" \
   >"${gateway_env}"
 
 # A completed runtime swap awaiting gateway health validation is still served

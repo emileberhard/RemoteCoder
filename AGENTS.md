@@ -40,7 +40,11 @@ Its `main` branch is canonical and the GitHub default. Read
 cross-repository runtime, Git topology or release flow.
 
 - RemoteCoder owns the gateway, the iOS client, runtime packaging and
-  installers, both-host acceptance, and `docs/codex/compatibility.json`.
+  installers, both-host acceptance, and `docs/codex/compatibility.json`, including
+  the ChatGPT Chrome extension ID/version/raw CRX hash paired with `chatgptBuild`.
+  The private deployment owner renders its immutable feed and per-host managed
+  Chrome policy; extension bumps use the same matched-stack upgrade and bridge
+  acceptance as the app/runtime.
 - The operator owns user and host configuration; none is required from a personal
   dotfiles repository for the public chat path.
 - The public Apache-2.0 fork is [`emileberhard/codex`](https://github.com/emileberhard/codex)

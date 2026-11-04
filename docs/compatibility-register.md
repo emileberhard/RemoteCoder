@@ -96,6 +96,7 @@ an old backup keeps its item until the check passes.
 | Pid record key `linuxProcessIdentity` | `PidRecord` (`providers/codex/daemon.rs`) | The Codex daemon (upstream `app-server-daemon`) still accepts and may have written it | The pinned fork stops accepting the alias and no running daemon was started before that build |
 | Codex packages under `packages/standalone` for homes that already use them | `providers/codex/package.rs` | An existing home keeps its namespace instead of moving | No enrolled home uses `packages/standalone` |
 | Removal of the old `launch-chatgpt-with-shared-codex` launcher on install and uninstall | `LEGACY_DESKTOP_LAUNCHER` (`runtime/install/transaction.rs`, `runtime/install/uninstall.rs`) | Hosts installed before the current launcher name | No enrolled host has the file |
+| Approved packages before Codex 0.166 without `execServer` and its digest | Package manifest/approval readers and runtime source identity | Exact source capture and a source-approved reverse deployment must still read the previous package; new package approvals require the helper and its digest | No supported source or rollback package predates 0.166 |
 | Official ChatGPT bundled Codex at `Contents/Resources/codex` or `Contents/Resources/codex-cli/bin/codex`, requiring exactly one present path | `read_bundled_codex_version` (`runtime/desktop.rs`), `chatgpt_matches_release` (`scripts/install-shared-codex-stack.zsh`) | The source official app uses the earlier layout and must remain usable during matched-stack rollback | Both hosts and every supported official-app rollback artifact use the newer layout |
 | Claude minted-session record in its own `.minted` file | `providers/claude/conversation_index.rs` | Older gateways reject unknown records in the identity index, so a rollback must still read it | Rollback to a gateway before the record is no longer supported |
 | Synthetic turn id `claude-turn-<n>` for history rows without an index identity | `providers/claude/projection.rs` | Sessions recorded before the identity index | No indexed session lacks row identities, or those sessions are re-indexed |
@@ -142,3 +143,11 @@ parent's thread ID only when the parent belongs to this host; remote parents
 and promoted roots project to null. The authoritative header field is
 `parent: {hostId, threadId} | null`. Remove the flat projection when the minimum
 supported app version reads the nested parent address.
+
+## Codex 0.166 attached-thread metadata
+
+Migration 0062 adds nullable `threads.attached_thread_parent_id` and its partial
+index. The retained 0.163 runtime ignores newer migrations and continues reading
+the same tables. Threads attached while running 0.163 retain a NULL parent when
+upgraded again; their turns and transcript remain readable. Native copied-home
+acceptance owns the source → candidate → source proof.

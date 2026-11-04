@@ -17,6 +17,7 @@ readonly stderr_log="${logs_dir}/shared-codex-install.err.log"
 runtime_matches_package() {
   local package_dir="${1}"
   local current_dir="${HOME}/.codex/packages/standalone/current"
+  local exec_server
 
   [[ -f "${current_dir}/codex-package.json" \
     && -x "${current_dir}/bin/codex" \
@@ -26,7 +27,12 @@ runtime_matches_package() {
     && cmp -s "${package_dir}/bin/codex" "${current_dir}/bin/codex" \
     && cmp -s \
       "${package_dir}/bin/codex-code-mode-host" \
-      "${current_dir}/bin/codex-code-mode-host"
+      "${current_dir}/bin/codex-code-mode-host" || return 1
+  exec_server="$(plutil -extract execServer raw -o - "${package_dir}/codex-package.json" 2>/dev/null)" || exec_server=""
+  if [[ -n "${exec_server}" ]]; then
+    [[ "${exec_server}" == "bin/codex-exec-server" && -x "${current_dir}/${exec_server}" ]] \
+      && cmp -s "${package_dir}/${exec_server}" "${current_dir}/${exec_server}" || return 1
+  fi
 }
 
 chatgpt_matches_release() {
@@ -106,7 +112,7 @@ worker() {
     if [[ "${configured_codex}" != */* ]]; then
       configured_codex="$(command -v "${configured_codex}" 2>/dev/null || true)"
     fi
-    current_codex="${current_manifest:h}/codex"
+    current_codex="${current_manifest:h}/bin/codex"
     if [[ ! -x "${configured_codex}" || ! -x "${current_codex}" ]] \
       || ! cmp -s "${configured_codex}" "${current_codex}"; then
       echo "Installed gateway source executable differs from the approved current package; refusing handoff" >&2

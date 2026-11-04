@@ -1,6 +1,6 @@
 use crate::config::{
     HostPaths, REQUIRED_CODE_MODE_HOST_SHA256, REQUIRED_CODEX_SHA256, REQUIRED_CODEX_SOURCE_COMMIT,
-    REQUIRED_CODEX_TARGET, REQUIRED_CODEX_VERSION,
+    REQUIRED_CODEX_TARGET, REQUIRED_CODEX_VERSION, REQUIRED_EXEC_SERVER_SHA256,
 };
 use crate::runtime::recovery::{RecoveryJournal, RecoveryPhase, RecoveryStore, RuntimeSwap};
 use crate::storage::private_state::{self, Creation};
@@ -55,6 +55,7 @@ pub(crate) struct PackageManifest {
     pub(crate) target: String,
     pub(crate) variant: String,
     pub(crate) entrypoint: String,
+    pub(crate) exec_server: Option<String>,
     pub(crate) resources_dir: String,
     pub(crate) path_dir: String,
     pub(crate) linux_sandbox: Option<LinuxSandbox>,
@@ -88,6 +89,7 @@ pub(in crate::runtime) fn validate_runtime_package(package_dir: &Path) -> Result
         || manifest.target != REQUIRED_CODEX_TARGET
         || manifest.variant != "codex"
         || manifest.entrypoint != "bin/codex"
+        || manifest.exec_server.as_deref() != REQUIRED_EXEC_SERVER_SHA256.map(|_| "bin/codex-exec-server")
         || manifest.resources_dir != "codex-resources"
         || manifest.path_dir != "codex-path"
     {
@@ -109,7 +111,7 @@ pub(in crate::runtime) fn validate_runtime_package(package_dir: &Path) -> Result
     for (name, approved) in [
         ("bin/codex", REQUIRED_CODEX_SHA256),
         ("bin/codex-code-mode-host", REQUIRED_CODE_MODE_HOST_SHA256),
-    ] {
+    ].into_iter().chain(REQUIRED_EXEC_SERVER_SHA256.map(|hash| ("bin/codex-exec-server", hash))) {
         let declared = manifest
             .binaries
             .get(name)
@@ -137,10 +139,6 @@ pub(super) fn stage_runtime_package(package_dir: &Path) -> Result<StagedRuntime>
     std::fs::create_dir(&paths.staging)?;
     let stage_result = (|| {
         copy_tree_contents(&package_dir, &paths.staging)?;
-        let root_codex = paths.staging.join("codex");
-        if !root_codex.exists() {
-            std::os::unix::fs::symlink("bin/codex", &root_codex)?;
-        }
         validate_runtime_package(&paths.staging)?;
         write_installed_approval(&paths.staging)?;
         Ok::<_, anyhow::Error>(())
@@ -163,7 +161,7 @@ pub(super) fn stage_runtime_package(package_dir: &Path) -> Result<StagedRuntime>
 }
 
 fn write_installed_approval(package: &Path) -> Result<()> {
-    let approval = serde_json::json!({
+    let mut approval = serde_json::json!({
         "codexCliVersion": REQUIRED_CODEX_VERSION,
         "codexForkCommit": REQUIRED_CODEX_SOURCE_COMMIT,
         "runtimeHashes": {
@@ -171,6 +169,9 @@ fn write_installed_approval(package: &Path) -> Result<()> {
             "bin/codex-code-mode-host": REQUIRED_CODE_MODE_HOST_SHA256,
         },
     });
+    if let Some(hash) = REQUIRED_EXEC_SERVER_SHA256 {
+        approval["runtimeHashes"]["bin/codex-exec-server"] = serde_json::json!(hash);
+    }
     let manifest_sha256 = sha256_file(&package.join("codex-package.json"))?;
     let directory = package
         .parent()
@@ -234,7 +235,7 @@ pub(super) fn activate_staged_runtime(
     };
     let had_gateway_env = paths.gateway_env.is_file();
     let source_identity =
-        super::super::identity::PackageIdentity::read(&paths.current.join("codex"))?;
+        super::super::identity::PackageIdentity::read(&paths.current.join("bin/codex"))?;
     let target_identity =
         super::super::identity::PackageIdentity::read(&staged.path.join("bin/codex"))?;
     let journal = store
@@ -276,7 +277,7 @@ pub(super) fn activate_staged_runtime(
         std::fs::rename(&staged.path, &paths.release)?;
         std::os::unix::fs::symlink(&paths.release, &paths.current)?;
         if had_gateway_env {
-            rewrite_gateway_codex_path(&paths.gateway_env, &paths.current.join("codex"))?;
+            rewrite_gateway_codex_path(&paths.gateway_env, &paths.current.join("bin/codex"))?;
         }
         fsync_runtime_paths(paths)
     })();
@@ -324,9 +325,9 @@ pub(in crate::runtime) fn settle_interrupted_activation(
         .as_ref()
         .context("interrupted activation has no target identity")?;
     source.verify(&previous_runtime_codex(paths, swap)?)?;
-    if path_exists(&paths.current)? && target.verify(&paths.current.join("codex")).is_ok() {
+    if path_exists(&paths.current)? && target.verify(&paths.current.join("bin/codex")).is_ok() {
         if swap.had_gateway_env {
-            rewrite_gateway_codex_path(&paths.gateway_env, &paths.current.join("codex"))?;
+            rewrite_gateway_codex_path(&paths.gateway_env, &paths.current.join("bin/codex"))?;
         }
         fsync_runtime_paths(paths)?;
         store.update(&journal.generation_id, |journal| {
@@ -336,7 +337,7 @@ pub(in crate::runtime) fn settle_interrupted_activation(
         })?;
     } else {
         restore_runtime_paths(paths, swap)?;
-        source.verify(&paths.current.join("codex"))?;
+        source.verify(&paths.current.join("bin/codex"))?;
         remove_path(&paths.staging)?;
         store.update(&journal.generation_id, |journal| {
             journal.runtime_swap = None;
@@ -392,12 +393,12 @@ pub(in crate::runtime) fn previous_runtime_codex(
         if path_exists(&paths.previous_release)? {
             Ok(paths.previous_release.join("bin/codex"))
         } else {
-            Ok(paths.current.join("codex"))
+            Ok(paths.current.join("bin/codex"))
         }
     } else if path_exists(&paths.previous_current)? {
-        Ok(paths.previous_current.join("codex"))
+        Ok(paths.previous_current.join("bin/codex"))
     } else {
-        Ok(paths.current.join("codex"))
+        Ok(paths.current.join("bin/codex"))
     }
 }
 
@@ -624,7 +625,7 @@ mod tests {
             &paths.gateway_env,
             format!(
                 "RC_CODEX_GATEWAY_CODEX_PATH={}\n",
-                paths.current.join("codex").display()
+                paths.current.join("bin/codex").display()
             ),
         )
         .expect("env");
@@ -634,7 +635,7 @@ mod tests {
             paths: paths.clone(),
         };
         let identity =
-            PackageIdentity::read(&paths.current.join("codex")).expect("source identity");
+            PackageIdentity::read(&paths.current.join("bin/codex")).expect("source identity");
         let store = RecoveryStore::new(root.join("state/recovery.json"));
         let mut journal = RecoveryJournal::new(
             "generation-1".into(),
@@ -679,9 +680,9 @@ mod tests {
             .expect("target identity");
         assert_eq!(target.version, REQUIRED_CODEX_VERSION);
         target
-            .verify(&paths.current.join("codex"))
+            .verify(&paths.current.join("bin/codex"))
             .expect("target bytes");
-        assert!(source.verify(&paths.current.join("codex")).is_err());
+        assert!(source.verify(&paths.current.join("bin/codex")).is_err());
         assert!(
             !paths.previous_release.exists(),
             "different source version stays in its own release"
@@ -689,7 +690,7 @@ mod tests {
         let restored =
             restore_previous_runtime(&store, "generation-1", &paths).expect("source restored");
         source
-            .verify(&paths.current.join("codex"))
+            .verify(&paths.current.join("bin/codex"))
             .expect("exact source bytes");
         assert_eq!(restored.package_identity.as_ref(), Some(&source));
         assert_eq!(restored.tasks, installed.tasks);
@@ -743,7 +744,7 @@ mod tests {
                 assert_eq!(settled.package_identity, Some(source.clone()));
                 assert!(settled.runtime_swap.is_none());
                 source
-                    .verify(&paths.current.join("codex"))
+                    .verify(&paths.current.join("bin/codex"))
                     .expect("source restored");
             }
         }
@@ -785,7 +786,6 @@ mod tests {
         let native = root.path().join("c");
         let reply = root.path().join("lifecycle.json");
         let actions = root.path().join("actions");
-        std::fs::remove_file(staged.path.join("codex")).expect("replace staged test script");
         write_test_package(
             &staged.path,
             REQUIRED_CODEX_VERSION,
@@ -804,7 +804,7 @@ mod tests {
                 Ok(())
             })
             .expect("source turn already completed on target");
-        let codex = paths.current.join("codex");
+        let codex = paths.current.join("bin/codex");
         let server = CodexAppServer::for_runtime(
             codex.clone(),
             HashMap::from([("CODEX_HOME".into(), native.to_string_lossy().into_owned())]),
@@ -885,7 +885,7 @@ mod tests {
         assert_eq!(restored.tasks, captured.tasks);
         assert_eq!(restored.generation_id, captured.generation_id);
         source
-            .verify(&paths.current.join("codex"))
+            .verify(&paths.current.join("bin/codex"))
             .expect("exact original source package");
         let actions = std::fs::read_to_string(actions).expect("lifecycle actions");
         assert!(actions.contains("prepare-restart\n"));

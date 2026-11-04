@@ -143,10 +143,19 @@ async fn run(
                     | config::RuntimeCommand::Restart
                     | config::RuntimeCommand::PrepareHandoff
                     | config::RuntimeCommand::PrepareShutdown
-                    | config::RuntimeCommand::RetryFailed { .. })
+                    | config::RuntimeCommand::RetryFailed { .. }
+                    | config::RuntimeCommand::ActivatePrepared { .. }
+                    | config::RuntimeCommand::RestorePrepared
+                    | config::RuntimeCommand::Commit
+                    | config::RuntimeCommand::Install { check_only: true, .. })
         )
     {
         anyhow::bail!("This runtime operation is macOS-only; use the Linux host deployment owner");
+    }
+    if !cfg!(target_os = "linux")
+        && matches!(&args.command, Some(config::Command::Runtime { command: config::RuntimeCommand::ActivatePrepared { .. } | config::RuntimeCommand::RestorePrepared }))
+    {
+        anyhow::bail!("Prepared runtime activation is owned by the Linux service installer");
     }
     if matches!(args.command, Some(config::Command::CheckConfig)) {
         let sources = ConfigSources::load(args.env_file.as_deref())?;

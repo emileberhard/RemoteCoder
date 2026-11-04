@@ -41,7 +41,11 @@ impl PackageIdentity {
                 && manifest.path_dir == "codex-path",
             "unsupported recovery package layout"
         );
-        for executable in [&codex, &bin.join("codex-code-mode-host")] {
+        let exec_server = manifest.exec_server.as_deref().map(|path| {
+            anyhow::ensure!(path == "bin/codex-exec-server", "unsupported exec server path");
+            Ok(bin.join("codex-exec-server"))
+        }).transpose()?;
+        for executable in [&codex, &bin.join("codex-code-mode-host")].into_iter().chain(exec_server.iter()) {
             use std::os::unix::fs::PermissionsExt;
             let metadata = std::fs::metadata(executable)?;
             ensure!(
@@ -67,6 +71,14 @@ impl PackageIdentity {
                     .get(name)
                     .is_some_and(|binary| &binary.sha256 == actual),
                 "recovery package executable {name} differs from its manifest"
+            );
+        }
+        if let Some(executable) = exec_server {
+            let actual = sha256_file(&executable)?;
+            ensure!(
+                manifest.binaries.get("bin/codex-exec-server")
+                    .is_some_and(|binary| binary.sha256 == actual),
+                "recovery exec server differs from its manifest"
             );
         }
         let output = std::process::Command::new(&codex)
@@ -168,13 +180,36 @@ pub(super) fn write_test_package(root: &Path, version: &str, body: &str) -> std:
         "layoutVersion": 1, "version": version, "sourceCommit": "b".repeat(40), "target": crate::config::REQUIRED_CODEX_TARGET, "variant": "codex", "entrypoint": "bin/codex", "resourcesDir": "codex-resources", "pathDir": "codex-path",
         "binaries": { "bin/codex": { "sha256": sha256_file(&codex).expect("codex hash") }, "bin/codex-code-mode-host": { "sha256": sha256_file(&host).expect("host hash") } }
     })).expect("manifest JSON")).expect("manifest");
-    std::os::unix::fs::symlink("bin/codex", root.join("codex")).expect("root executable");
     codex
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn source_identity_checks_packaged_exec_server_without_changing_recovery_record() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = tempfile::tempdir().expect("isolated package");
+        let root = directory.path();
+        let codex = write_test_package(root, "0.166.0-alpha.6", "exit 0");
+        let legacy = PackageIdentity::read(&codex).expect("legacy package");
+        let executable = root.join("bin/codex-exec-server");
+        std::fs::write(&executable, "#!/bin/sh\nexit 0\n").expect("exec server");
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).expect("mode");
+        let manifest_path = root.join("codex-package.json");
+        let mut manifest: serde_json::Value = serde_json::from_slice(&std::fs::read(&manifest_path).expect("manifest")).expect("JSON");
+        manifest["execServer"] = serde_json::json!("bin/codex-exec-server");
+        manifest["binaries"]["bin/codex-exec-server"] = serde_json::json!({"sha256": sha256_file(&executable).expect("hash")});
+        std::fs::write(&manifest_path, serde_json::to_vec(&manifest).expect("JSON")).expect("manifest");
+        let current = PackageIdentity::read(&codex).expect("current package");
+        let fields = |identity: &PackageIdentity| {
+            serde_json::to_value(identity).expect("identity JSON").as_object().expect("object").keys().cloned().collect::<Vec<_>>()
+        };
+        assert_eq!(fields(&legacy), fields(&current));
+        std::fs::write(&executable, "changed").expect("tamper helper");
+        assert!(current.verify(&codex).expect_err("tamper rejected").to_string().contains("exec server differs"));
+    }
 
     #[test]
     fn source_package_rejects_missing_manifest_version_and_hash_before_lifecycle() {

@@ -64,7 +64,7 @@ pub(crate) async fn run(
     let store = RecoveryStore::new(RecoveryStore::default_path()?);
     let repair_lease = if matches!(
         command,
-        RuntimeCommand::Rollback | RuntimeCommand::Reconcile
+        RuntimeCommand::Rollback | RuntimeCommand::Reconcile | RuntimeCommand::ActivatePrepared { .. } | RuntimeCommand::RestorePrepared
     ) {
         let lease = RuntimeLease::acquire(&store)?;
         install::package::settle_interrupted_activation(&store, &RuntimePaths::load()?)?;
@@ -74,7 +74,7 @@ pub(crate) async fn run(
     };
     let settings = if matches!(
         command,
-        RuntimeCommand::Install { .. } | RuntimeCommand::Rollback | RuntimeCommand::Reconcile
+        RuntimeCommand::Install { .. } | RuntimeCommand::Rollback | RuntimeCommand::Reconcile | RuntimeCommand::ActivatePrepared { .. } | RuntimeCommand::RestorePrepared
     ) {
         CodexSettings::load_for_runtime(sources)?
     } else {
@@ -101,7 +101,7 @@ pub(crate) async fn run(
     }
     let _lease = if let Some(lease) = repair_lease {
         lease
-    } else if matches!(&command, RuntimeCommand::Install { .. }) {
+    } else if matches!(&command, RuntimeCommand::Install { .. } | RuntimeCommand::Commit) {
         wait_for_runtime_lease(&store).await?
     } else {
         RuntimeLease::acquire(&store)?
@@ -137,6 +137,8 @@ pub(crate) async fn run(
                 install(recovery, &package_dir, env_file.as_deref()).await
             }
         }
+        RuntimeCommand::ActivatePrepared { package_dir } => install::prepared::activate(recovery, &package_dir).await,
+        RuntimeCommand::RestorePrepared => install::prepared::restore(recovery).await,
         RuntimeCommand::Restart => recovery.restart().await,
         RuntimeCommand::PrepareHandoff => recovery.prepare_handoff().await,
         RuntimeCommand::PrepareShutdown => recovery.prepare_shutdown().await,
@@ -222,7 +224,7 @@ async fn check_install_candidate(
     require_gateway_env(env)?;
     let paths = RuntimePaths::load()?;
     check_install_state(&paths, store, package_dir, check_installed)?;
-    let current_codex = paths.current.join("codex");
+    let current_codex = paths.current.join("bin/codex");
     ensure!(
         sha256_file(configured_codex_path)? == sha256_file(&current_codex)?,
         "configured source executable differs from the approved current package"
@@ -251,7 +253,9 @@ fn check_install_state(
     ensure!(
         journal
             .as_ref()
-            .is_none_or(|journal| journal.phase == RecoveryPhase::Completed),
+            .is_none_or(|journal| journal.phase == RecoveryPhase::Completed
+                || cfg!(target_os = "linux") && check_installed && journal.error.is_none()
+                    && (journal.is_prepared_handoff() || journal.phase == RecoveryPhase::RuntimeInstalled)),
         "unfinished runtime recovery must reconcile with the exact candidate before another install"
     );
     let pending_swap = journal
@@ -264,13 +268,13 @@ fn check_install_state(
     }
     if check_installed {
         // The shell's quick comparison is only a routing hint. The candidate
-        // independently proves the installed manifest and both executable
+        // independently proves the installed manifest and all executable
         // bytes before allowing the existing health-gated commit path.
         for relative in [
             "codex-package.json",
             "bin/codex",
             "bin/codex-code-mode-host",
-        ] {
+        ].into_iter().chain(crate::config::REQUIRED_EXEC_SERVER_SHA256.map(|_| "bin/codex-exec-server")) {
             ensure!(
                 sha256_file(&package_dir.join(relative))?
                     == sha256_file(&paths.current.join(relative))?,

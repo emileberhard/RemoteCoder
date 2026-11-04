@@ -57,6 +57,7 @@ class PackageManifest(BaseModel):
     target: Literal["aarch64-apple-darwin", "x86_64-unknown-linux-musl"]
     variant: Literal["codex"]
     entrypoint: Literal["bin/codex"]
+    exec_server: Literal["bin/codex-exec-server"] | None = Field(default=None, alias="execServer")
     resources_dir: Literal["codex-resources"] = Field(alias="resourcesDir")
     path_dir: Literal["codex-path"] = Field(alias="pathDir")
     linux_sandbox: Literal["system"] | None = Field(default=None, alias="linuxSandbox")
@@ -68,6 +69,7 @@ class RuntimeHashes(BaseModel):
     model_config = ConfigDict(extra="ignore")
     codex: Sha256 = Field(alias="bin/codex")
     code_mode_host: Sha256 = Field(alias="bin/codex-code-mode-host")
+    exec_server: Sha256 | None = Field(default=None, alias="bin/codex-exec-server")
 
 
 class TargetApproval(BaseModel):
@@ -93,6 +95,7 @@ class Approval(BaseModel):
     source_commit: GitCommit
     codex_sha256: Sha256
     code_mode_host_sha256: Sha256
+    exec_server_sha256: Sha256 | None = None
 
 
 class Evaluation(BaseModel):
@@ -203,6 +206,10 @@ def file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def requires_exec_server(version: str) -> bool:
+    return tuple(map(int, version.split("-", 1)[0].split("+", 1)[0].split("."))) >= (0, 166, 0)
+
+
 def package_approval(package: Path) -> Approval:
     package = package.resolve()
     manifest_path = package / "codex-package.json"
@@ -224,10 +231,14 @@ def package_approval(package: Path) -> Approval:
         else:
             raise ApprovalError("Linux packages must not bundle a bubblewrap fallback")
 
+    if requires_exec_server(manifest.version) and manifest.exec_server is None:
+        raise ApprovalError("Codex 0.166 and newer require the packaged exec server")
     expected_paths = {"bin/codex", "bin/codex-code-mode-host"}
+    if manifest.exec_server is not None:
+        expected_paths.add(manifest.exec_server)
     if set(manifest.binaries) != expected_paths:
         raise ApprovalError(
-            "package must contain exactly bin/codex and bin/codex-code-mode-host"
+            f"package binaries must be exactly {sorted(expected_paths)}"
         )
     for relative_path, record in manifest.binaries.items():
         binary = package / relative_path
@@ -246,6 +257,7 @@ def package_approval(package: Path) -> Approval:
         source_commit=manifest.source_commit,
         codex_sha256=manifest.binaries["bin/codex"].sha256,
         code_mode_host_sha256=manifest.binaries["bin/codex-code-mode-host"].sha256,
+        exec_server_sha256=(manifest.binaries[manifest.exec_server].sha256 if manifest.exec_server else None),
     )
 
 
@@ -263,6 +275,7 @@ def repo_approval(path: Path, target: str) -> Approval:
         source_commit=selected.source_commit,
         codex_sha256=selected.hashes.codex,
         code_mode_host_sha256=selected.hashes.code_mode_host,
+        exec_server_sha256=selected.hashes.exec_server,
     )
 
 
@@ -282,14 +295,23 @@ def write_atomic(path: Path, content: str) -> None:
         raise ApprovalError(f"cannot update {path}: {error}") from error
 
 
+def runtime_hashes(approval: Approval) -> dict[str, str]:
+    if requires_exec_server(approval.version) and approval.exec_server_sha256 is None:
+        raise ApprovalError("Codex 0.166 and newer require the exec server digest")
+    hashes = {
+        "bin/codex": approval.codex_sha256,
+        "bin/codex-code-mode-host": approval.code_mode_host_sha256,
+    }
+    if approval.exec_server_sha256 is not None:
+        hashes["bin/codex-exec-server"] = approval.exec_server_sha256
+    return hashes
+
+
 def flat_record(approval: Approval) -> dict[str, Any]:
     return {
         "codexCliVersion": approval.version,
         "codexForkCommit": approval.source_commit,
-        "runtimeHashes": {
-            "bin/codex": approval.codex_sha256,
-            "bin/codex-code-mode-host": approval.code_mode_host_sha256,
-        },
+        "runtimeHashes": runtime_hashes(approval),
     }
 
 
@@ -532,10 +554,7 @@ def apply(path: Path, approval: Approval, package_sha256: str) -> None:
     compatibility["runtimeTargets"][approval.target] = {
         "sourceCommit": approval.source_commit,
         "runtimePackageSHA256": package_sha256,
-        "runtimeHashes": {
-            "bin/codex": approval.codex_sha256,
-            "bin/codex-code-mode-host": approval.code_mode_host_sha256,
-        },
+        "runtimeHashes": runtime_hashes(approval),
     }
     write_atomic(path, json.dumps(compatibility, indent=2, ensure_ascii=False) + "\n")
 
