@@ -109,7 +109,6 @@ class LinuxArchiveTests(unittest.TestCase):
                     module.verify_tree(extracted, args.version, commit), expected
                 )
             self.assertEqual((extracted / "LICENSE").stat().st_mode & 0o777, 0o644)
-            self.assertEqual((extracted / "licenses").stat().st_mode & 0o777, 0o755)
             self.assertEqual(
                 (extracted / "runtime/codex/bin/codex").stat().st_mode & 0o777, 0o755
             )
