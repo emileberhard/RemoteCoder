@@ -7,10 +7,13 @@ import os
 from pathlib import Path
 import plistlib
 import select
+import shutil
 import signal
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from unittest.mock import patch
 
@@ -34,8 +37,8 @@ class ReleaseTests(unittest.TestCase):
             (old / "service.js").write_text("service")
             (old / "service.plist").write_bytes(plistlib.dumps({"ProgramArguments": [str(bun), "service.js"]}))
             (old / "dist/deployment.json").write_text(json.dumps({"revision": "old", "bun": "1.4.3"}))
-            with patch.object(deploy, "ROOT", root), patch.object(deploy, "RELEASES", releases):
-                retained = deploy.snapshot_legacy(old)
+            with patch.object(deploy, "ROOT", root), patch.object(deploy, "RELEASES", releases), tempfile.TemporaryFile() as lock:
+                retained = deploy.snapshot_legacy(old, lock)
                 bun.unlink()
                 self.assertEqual(subprocess.check_output([deploy.runtime(retained), "--version"], text=True).strip(), "1.4.3")
                 (retained / "service.js").write_text("changed")
@@ -56,9 +59,9 @@ class ReleaseTests(unittest.TestCase):
             def replace_on_copy(src, destination):
                 original(src, destination)
                 Path(destination).write_text("#!/bin/sh\necho 1.4.5\n")
-            with patch.object(deploy.shutil, "copy2", side_effect=replace_on_copy):
+            with patch.object(deploy.shutil, "copy2", side_effect=replace_on_copy), tempfile.TemporaryFile() as lock:
                 with self.assertRaisesRegex(RuntimeError, "Expected Bun 1.4.4, found 1.4.5"):
-                    deploy.copy_runtime(source, root / "copy", "1.4.4")
+                    deploy.copy_runtime(source, root / "copy", "1.4.4", lock)
 
     def test_release_identity_changes_with_runtime_and_service_inputs(self):
         identity = deploy.release_identity("commit", "1.4.4", "bytes", b"service")
@@ -273,6 +276,71 @@ else:
                 worker.stdout.close()
                 if not lock.closed:
                     lock.close()
+
+    def test_killed_worker_preserves_staging_until_command_exits(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            lock_path = root / "lock"
+            ready = threading.Event()
+            child_pid = []
+            original = deploy.staged_process
+
+            def kill_worker(*args, **kwargs):
+                worker = original(*args, stdout=subprocess.PIPE, **kwargs)
+                def kill_after_ready():
+                    child_pid.append(int(worker.stdout.readline()))
+                    worker.kill()
+                    ready.set()
+                    worker.stdout.close()
+                threading.Thread(target=kill_after_ready, daemon=True).start()
+                return worker
+
+            program = """
+import os, pathlib, sys, time
+staging, proceed, result = map(pathlib.Path, sys.argv[1:])
+print(os.getpid(), flush=True)
+while not proceed.exists():
+    time.sleep(0.02)
+result.write_text(str(staging.exists()))
+"""
+            proceed = root / "proceed"
+            result = root / "result"
+            try:
+                with patch.object(deploy, "ROOT", root), patch.object(deploy, "staged_process", side_effect=kill_worker):
+                    with lock_path.open("w") as lock:
+                        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        with self.assertRaises(subprocess.CalledProcessError):
+                            with deploy.staging_directory() as staging:
+                                (staging / "in-use").write_text("data")
+                                deploy.staged_run([sys.executable, "-u", "-c", program, str(staging / "in-use"), str(proceed), str(result)], lock, 30)
+                    self.assertTrue(ready.wait(5))
+                    self.assertTrue((staging / "in-use").exists())
+                    with lock_path.open("w") as contender:
+                        with self.assertRaises(BlockingIOError):
+                            fcntl.flock(contender, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    proceed.touch()
+                    deadline = time.monotonic() + 5
+                    while not result.exists() and time.monotonic() < deadline:
+                        time.sleep(0.02)
+                    self.assertEqual(result.read_text(), "True")
+                    with lock_path.open("w") as contender:
+                        while True:
+                            try:
+                                fcntl.flock(contender, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                                break
+                            except BlockingIOError:
+                                if time.monotonic() >= deadline:
+                                    raise
+                                time.sleep(0.02)
+                        child_pid.clear()
+                        shutil.rmtree(staging)
+                    self.assertFalse(staging.exists())
+            finally:
+                if child_pid:
+                    try:
+                        os.kill(child_pid[0], signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
 
     def test_smoke_rejects_excessive_output(self):
         with tempfile.TemporaryDirectory() as directory:

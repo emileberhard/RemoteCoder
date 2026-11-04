@@ -1,4 +1,5 @@
 import argparse
+from contextlib import contextmanager
 import fcntl
 import hashlib
 import json
@@ -85,9 +86,9 @@ def release_identity(revision, bun_version, bun_hash, service_bytes):
     return hashlib.sha256(inputs + service_bytes).hexdigest()
 
 
-def copy_runtime(source, destination, expected):
+def copy_runtime(source, destination, expected, lock):
     shutil.copy2(source, destination)
-    version = run(destination, "--version", capture_output=True, text=True, timeout=5).stdout.strip()
+    version = run(destination, "--version", capture_output=True, text=True, timeout=5, pass_fds=(lock.fileno(),)).stdout.strip()
     if version != expected:
         raise RuntimeError(f"Expected Bun {expected}, found {version}")
     return version, digest(destination)
@@ -122,7 +123,14 @@ def runtime(release):
     return bun
 
 
-def snapshot_legacy(release):
+@contextmanager
+def staging_directory():
+    temporary = Path(tempfile.mkdtemp(prefix=".build-", dir=ROOT))
+    yield temporary
+    shutil.rmtree(temporary)
+
+
+def snapshot_legacy(release, lock):
     if not release:
         return None
     metadata = json.loads((release / "dist/deployment.json").read_text())
@@ -132,11 +140,11 @@ def snapshot_legacy(release):
     definition = plistlib.loads((release / "service.plist").read_bytes())
     bun = Path(definition["ProgramArguments"][0])
     check_budget(size(release) + bun.stat().st_size + 65536)
-    with tempfile.TemporaryDirectory(prefix=".build-", dir=ROOT) as temporary:
+    with staging_directory() as temporary:
         built = Path(temporary) / "release"
         shutil.copytree(release, built)
         copied_bun = built / "bun"
-        _, bun_hash = copy_runtime(bun, copied_bun, metadata["bun"])
+        _, bun_hash = copy_runtime(bun, copied_bun, metadata["bun"], lock)
         identity = hashlib.sha256((release.name + bun_hash).encode() + (release / "service.plist").read_bytes()).hexdigest()
         snapshot = RELEASES / identity
         if not snapshot.exists():
@@ -207,7 +215,7 @@ def candidate(release, environment, mode, lock):
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         port = listener.getsockname()[1]
-    with tempfile.TemporaryDirectory(prefix=".build-", dir=ROOT) as temporary, (Path(temporary) / "candidate.log").open("w+b") as output:
+    with staging_directory() as temporary, (temporary / "candidate.log").open("w+b") as output:
         process = staged_process(
             [runtime(release), release / "server.js"], lock, 45,
             cwd=release,
@@ -271,73 +279,62 @@ def main():
             shutil.rmtree(stale)
         prune()
         current = (ROOT / "current").resolve() if (ROOT / "current").exists() else None
-        snapshot = snapshot_legacy(current)
+        snapshot = snapshot_legacy(current, lock)
         if snapshot:
             point("staged-previous", snapshot)
-        release = None
-        try:
-            with tempfile.TemporaryDirectory(prefix=".build-", dir=ROOT) as temporary:
-                staging = Path(temporary)
-                check_budget(bun.stat().st_size)
-                staged_bun = staging / "bun"
-                actual_version, bun_hash = copy_runtime(bun, staged_bun, bun_version)
-                identity = release_identity(revision, actual_version, bun_hash, service_bytes)
-                release = RELEASES / identity
-                if not release.exists():
-                    archive = staging / "source.tar"
-                    staged_run(["git", "-C", repository, "archive", "--output", archive, revision, "web-client", "THIRD_PARTY_NOTICES.md", "LICENSES"], lock, 60)
+        with staging_directory() as temporary:
+            staging = Path(temporary)
+            check_budget(bun.stat().st_size)
+            staged_bun = staging / "bun"
+            actual_version, bun_hash = copy_runtime(bun, staged_bun, bun_version, lock)
+            identity = release_identity(revision, actual_version, bun_hash, service_bytes)
+            release = RELEASES / identity
+            if not release.exists():
+                archive = staging / "source.tar"
+                staged_run(["git", "-C", repository, "archive", "--output", archive, revision, "web-client", "THIRD_PARTY_NOTICES.md", "LICENSES"], lock, 60)
+                check_budget()
+                with tarfile.open(archive) as source:
+                    source.extractall(staging, filter="data")
+                archive.unlink()
+                check_budget()
+                web = staging / "web-client"
+                temporary_dir = staging / "tmp"
+                temporary_dir.mkdir()
+                cache = staging / "cache"
+                environment = {**os.environ, "BUN_INSTALL_CACHE_DIR": str(cache), "BUN_RUNTIME_TRANSPILER_CACHE_PATH": "0", "TMPDIR": str(temporary_dir), "RC_WEB_REVISION": revision}
+                staged_run([staged_bun, "install", "--frozen-lockfile"], lock, 600, cwd=web, env=environment)
+                check_budget()
+                if cache.exists():
+                    shutil.rmtree(cache)
+                staged_run([staged_bun, "scripts/build.ts"], lock, 300, cwd=web, env=environment)
+                check_budget()
+                built = staging / "release"
+                built.mkdir()
+                check_budget(size(web / "dist"))
+                shutil.copytree(web / "dist", built / "dist")
+                check_budget()
+                for source, destination in [("server/index.ts", "server.js"), ("scripts/service.ts", "service.js"), ("scripts/smoke.ts", "smoke.js")]:
+                    staged_run([staged_bun, "build", source, "--target=bun", "--outfile", built / destination], lock, 300, cwd=web, env=environment)
                     check_budget()
-                    with tarfile.open(archive) as source:
-                        source.extractall(staging, filter="data")
-                    archive.unlink()
-                    check_budget()
-                    web = staging / "web-client"
-                    temporary_dir = staging / "tmp"
-                    temporary_dir.mkdir()
-                    cache = staging / "cache"
-                    environment = {**os.environ, "BUN_INSTALL_CACHE_DIR": str(cache), "BUN_RUNTIME_TRANSPILER_CACHE_PATH": "0", "TMPDIR": str(temporary_dir), "RC_WEB_REVISION": revision}
-                    staged_run([staged_bun, "install", "--frozen-lockfile"], lock, 600, cwd=web, env=environment)
-                    check_budget()
-                    if cache.exists():
-                        shutil.rmtree(cache)
-                    staged_run([staged_bun, "scripts/build.ts"], lock, 300, cwd=web, env=environment)
-                    check_budget()
-                    built = staging / "release"
-                    built.mkdir()
-                    check_budget(size(web / "dist"))
-                    shutil.copytree(web / "dist", built / "dist")
-                    check_budget()
-                    for source, destination in [("server/index.ts", "server.js"), ("scripts/service.ts", "service.js"), ("scripts/smoke.ts", "smoke.js")]:
-                        staged_run([staged_bun, "build", source, "--target=bun", "--outfile", built / destination], lock, 300, cwd=web, env=environment)
-                        check_budget()
-                    staged_bun.rename(built / "bun")
-                    if digest(built / "bun") != bun_hash:
-                        raise RuntimeError("Bun changed during the build")
-                    definition = plistlib.loads(service_bytes)
-                    definition["ProgramArguments"] = [str(release / "bun"), str(release / "service.js")]
-                    (built / "service.plist").write_bytes(plistlib.dumps(definition))
-                    (built / "dist/deployment.json").write_text(json.dumps({"revision": revision, "bun": actual_version, "bunSha256": bun_hash, "release": identity, "serviceSha256": digest(built / "service.plist")}) + "\n")
-                    write_manifest(built)
-                    check_budget()
-                    built.rename(release)
-        except BaseException:
-            if release and release.exists() and release.name not in retained():
-                shutil.rmtree(release)
-            raise
-        try:
-            metadata = json.loads((release / "dist/deployment.json").read_text())
-            if (metadata["revision"], metadata["bun"], metadata["bunSha256"], metadata["release"]) != (revision, actual_version, bun_hash, identity):
-                raise RuntimeError("Retained release metadata does not match its inputs")
-            runtime(release)
-            definition = plistlib.loads((release / "service.plist").read_bytes())
-            environment = {"HOME": str(Path.home()), **definition["EnvironmentVariables"]}
-            candidate(release, environment, "primary", lock)
-            check_budget()
-            point("staged", release)
-        except BaseException:
-            if release.exists() and release.name not in retained():
-                shutil.rmtree(release)
-            raise
+                staged_bun.rename(built / "bun")
+                if digest(built / "bun") != bun_hash:
+                    raise RuntimeError("Bun changed during the build")
+                definition = plistlib.loads(service_bytes)
+                definition["ProgramArguments"] = [str(release / "bun"), str(release / "service.js")]
+                (built / "service.plist").write_bytes(plistlib.dumps(definition))
+                (built / "dist/deployment.json").write_text(json.dumps({"revision": revision, "bun": actual_version, "bunSha256": bun_hash, "release": identity, "serviceSha256": digest(built / "service.plist")}) + "\n")
+                write_manifest(built)
+                check_budget()
+                built.rename(release)
+        metadata = json.loads((release / "dist/deployment.json").read_text())
+        if (metadata["revision"], metadata["bun"], metadata["bunSha256"], metadata["release"]) != (revision, actual_version, bun_hash, identity):
+            raise RuntimeError("Retained release metadata does not match its inputs")
+        runtime(release)
+        definition = plistlib.loads((release / "service.plist").read_bytes())
+        environment = {"HOME": str(Path.home()), **definition["EnvironmentVariables"]}
+        candidate(release, environment, "primary", lock)
+        check_budget()
+        point("staged", release)
         prune()
         print(json.dumps({"status": "staged", "release": identity, "revision": revision, "bun": actual_version, "bunSha256": bun_hash, "rollbackSnapshot": snapshot.name if snapshot else None, "retainedBytes": size(RELEASES), "budgetBytes": MAX_TOTAL_BYTES, "activation": "pending", "reason": "The bridge needs call-safe admission fencing and crash recovery before switching"}), flush=True)
         return 0
