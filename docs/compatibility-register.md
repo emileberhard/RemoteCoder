@@ -151,3 +151,10 @@ index. The retained 0.163 runtime ignores newer migrations and continues reading
 the same tables. Threads attached while running 0.163 retain a NULL parent when
 upgraded again; their turns and transcript remain readable. Native copied-home
 acceptance owns the source → candidate → source proof.
+
+The managed app-server injects `passthrough_image_store`, whose inline attachment
+store always returns image bytes. Generated-image history therefore retains
+`result`, including when 0.166 adds `generationId` and `inputImages`. The retained
+0.163 runtime and current Swift clients require that inline field. Changing the
+injected store to produce `fileId` requires client support and a new rollback
+boundary before enabling that writer.
