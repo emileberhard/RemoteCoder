@@ -470,58 +470,22 @@ async fn job_owner_rejects_invalid_external_claude_starts_and_continuations_befo
         ]
     }]))
     .unwrap();
-    stub.settings.external_providers = ExternalProviders::new(providers, &stub.state).unwrap();
-    let gateway = Gateway::with_turn_state(
+    let external_providers = ExternalProviders::new(providers, &stub.state).unwrap();
+    let gateway = Gateway::with_notifier(
         Arc::new(CodexAppServer::new_for_test_socket(
             stub.state.join("codex"),
         )),
+        Arc::new(crate::push::PushService::fixture_disabled(
+            Journal::disabled(),
+        )),
         stub.settings.clone(),
         Journal::disabled(),
-        Some(stub.turn_state_path()),
+        stub.state.clone(),
+        None,
+        None,
+        external_providers,
+        None,
     );
-    for invalid_start in [
-        ExecutionSettings::Claude {
-            model: "copilot/gemini-4-argon".into(),
-            effort: Some("xhigh".into()),
-            fast: false,
-        },
-        ExecutionSettings::Claude {
-            model: "copilot/gemini-4-argon".into(),
-            effort: Some("high".into()),
-            fast: true,
-        },
-        ExecutionSettings::Claude {
-            model: "copilot/codex-only".into(),
-            effort: Some("high".into()),
-            fast: false,
-        },
-        ExecutionSettings::Claude {
-            model: "copilot/unconfigured".into(),
-            effort: Some("high".into()),
-            fast: false,
-        },
-    ] {
-        assert!(
-            gateway
-                .jobs
-                .start(
-                    StartParams {
-                        job_id: JobId::for_mutation(Provider::Claude, "invalid-start").unwrap(),
-                        spec: JobSpec {
-                            prompt: "Read fixture".into(),
-                            cwd: stub.cwd.clone().into(),
-                            settings: invalid_start,
-                            tool_scope: ToolScope::Full,
-                            title: None,
-                        },
-                        caller: Caller::Operator,
-                    },
-                    Origin::TopLevel,
-                )
-                .await
-                .is_err()
-        );
-    }
     let start_id = JobId::for_mutation(Provider::Claude, "valid-external-start").unwrap();
     let admitted = gateway
         .jobs
@@ -545,6 +509,65 @@ async fn job_owner_rejects_invalid_external_claude_starts_and_continuations_befo
         )
         .await
         .unwrap();
+    for (label, invalid_start, expected_error) in [
+        (
+            "invalid-start-effort",
+            ExecutionSettings::Claude {
+                model: "copilot/gemini-4-argon".into(),
+                effort: Some("xhigh".into()),
+                fast: false,
+            },
+            "unsupported effort for copilot/gemini-4-argon",
+        ),
+        (
+            "invalid-start-fast",
+            ExecutionSettings::Claude {
+                model: "copilot/gemini-4-argon".into(),
+                effort: Some("high".into()),
+                fast: true,
+            },
+            "Copilot has no Fast mode",
+        ),
+        (
+            "invalid-start-harness",
+            ExecutionSettings::Claude {
+                model: "copilot/codex-only".into(),
+                effort: Some("high".into()),
+                fast: false,
+            },
+            "copilot/codex-only is not configured for Claude",
+        ),
+        (
+            "invalid-start-unconfigured",
+            ExecutionSettings::Claude {
+                model: "copilot/unconfigured".into(),
+                effort: Some("high".into()),
+                fast: false,
+            },
+            "Claude model provider is unavailable for copilot/unconfigured",
+        ),
+    ] {
+        let error = gateway
+            .jobs
+            .start(
+                StartParams {
+                    job_id: JobId::for_mutation(Provider::Claude, label).unwrap(),
+                    spec: JobSpec {
+                        prompt: "Read fixture".into(),
+                        cwd: stub.cwd.clone().into(),
+                        settings: invalid_start,
+                        tool_scope: ToolScope::Full,
+                        title: None,
+                    },
+                    caller: Caller::Operator,
+                },
+                Origin::TopLevel,
+            )
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(expected_error), "{label}: {error}");
+    }
     let store = gateway.jobs.store().await.unwrap();
     let bound = store
         .bind(
@@ -578,7 +601,7 @@ async fn job_owner_rejects_invalid_external_claude_starts_and_continuations_befo
         )
         .await
         .unwrap();
-    for (label, invalid_continue) in [
+    for (label, invalid_continue, expected_error) in [
         (
             "unsupported-effort",
             ExecutionSettings::Claude {
@@ -586,6 +609,7 @@ async fn job_owner_rejects_invalid_external_claude_starts_and_continuations_befo
                 effort: Some("xhigh".into()),
                 fast: false,
             },
+            "unsupported effort for copilot/gemini-4-argon",
         ),
         (
             "fast-tier",
@@ -594,6 +618,7 @@ async fn job_owner_rejects_invalid_external_claude_starts_and_continuations_befo
                 effort: Some("high".into()),
                 fast: true,
             },
+            "External models have no service tiers",
         ),
         (
             "switch-to-native",
@@ -602,6 +627,7 @@ async fn job_owner_rejects_invalid_external_claude_starts_and_continuations_befo
                 effort: Some("high".into()),
                 fast: false,
             },
+            "Continue cannot change the conversation's model provider",
         ),
         (
             "switch-external-model",
@@ -610,28 +636,28 @@ async fn job_owner_rejects_invalid_external_claude_starts_and_continuations_befo
                 effort: Some("high".into()),
                 fast: false,
             },
+            "Continue cannot change the conversation's model provider",
         ),
     ] {
-        assert!(
-            gateway
-                .jobs
-                .continue_job(
-                    ContinueParams {
-                        job_id: JobId::for_mutation(Provider::Claude, label).unwrap(),
-                        agent_id: admitted.job.agent_id.clone(),
-                        prompt: "Follow up".into(),
-                        settings: Some(invalid_continue),
-                        expected_previous_job_id: Some(start_id.clone()),
-                        intent: ContinueIntent::Explicit,
-                        recipient: ContinueRecipient::Current,
-                        caller: Caller::Operator,
-                    },
-                    Origin::TopLevel,
-                )
-                .await
-                .is_err(),
-            "{label}"
-        );
+        let error = gateway
+            .jobs
+            .continue_job(
+                ContinueParams {
+                    job_id: JobId::for_mutation(Provider::Claude, label).unwrap(),
+                    agent_id: admitted.job.agent_id.clone(),
+                    prompt: "Follow up".into(),
+                    settings: Some(invalid_continue),
+                    expected_previous_job_id: Some(start_id.clone()),
+                    intent: ContinueIntent::Explicit,
+                    recipient: ContinueRecipient::Current,
+                    caller: Caller::Operator,
+                },
+                Origin::TopLevel,
+            )
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(expected_error), "{label}: {error}");
     }
     assert_eq!(
         store
