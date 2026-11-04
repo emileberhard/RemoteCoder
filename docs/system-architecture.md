@@ -166,9 +166,10 @@ Rules:
   which workspace navigation, Shortcuts and direct exec follow.
 - **Windows.** The iPad app runs one window
   (`UIApplicationSupportsMultipleScenes` is false in `Config/InfoPlists/RemoteCoder-Info.plist`). The Mac
-  app's `WindowGroup` is keyed by `ConversationWindowValue`: New Window,
-  Open in New Window and native tabs (`WindowTabbing`) each present their own
-  conversation, and the focused window is the key window. Send, the model
+  app's `WindowGroup` is keyed by `ConversationWindowValue`: New Window
+  and Open in New Window each present their own conversation. Native window
+  tabbing is disabled; the sidebar switches chats. The focused window is the key
+  window. Send, the model
   picker, the question editor, voice-call binding, dictation hand-off, the
   foreground-refresh throttle and observation reconciliation resolve through
   the key window rather than the originating one.

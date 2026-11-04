@@ -5,17 +5,15 @@ import SwiftUI
 @main
 struct RemoteCoderMacApp: App {
     @NSApplicationDelegateAdaptor(RemoteCoderMacAppDelegate.self) private var delegate
-    @State private var tabbing = WindowTabbing()
     private var app: RemoteCoderAppModel { delegate.app }
 
     var body: some Scene {
         WindowGroup("RemoteCoder", id: "main", for: ConversationWindowValue.self) { $value in
-            WindowRoot(app: app, environment: environment, tabbing: tabbing, value: $value)
+            WindowRoot(app: app, environment: environment, value: $value)
         }
         .defaultSize(width: 1100, height: 760)
         .commands {
-            ChatCommands()
-            WindowTabCommands(tabbing: tabbing)
+            ChatCommands(shortcuts: delegate.shortcuts)
             InterfaceZoomCommands(zoom: delegate.zoom)
         }
 
@@ -27,7 +25,7 @@ struct RemoteCoderMacApp: App {
     }
 
     private var environment: AppEnvironment {
-        AppEnvironment(app: app, theme: app.theme, zoom: delegate.zoom, quickEntry: delegate.quickEntry)
+        AppEnvironment(app: app, theme: app.theme, zoom: delegate.zoom, quickEntry: delegate.quickEntry, shortcuts: delegate.shortcuts)
     }
 }
 
@@ -36,6 +34,7 @@ private struct AppEnvironment: ViewModifier {
     let theme: AppThemeStore
     let zoom: InterfaceZoom
     let quickEntry: QuickEntry
+    let shortcuts: ChatKeyboardShortcuts
 
     func body(content: Content) -> some View {
         content
@@ -46,6 +45,7 @@ private struct AppEnvironment: ViewModifier {
             .environment(theme)
             .environment(\.transcriptSurfaceRetention, app.workspace.retainedTranscripts)
             .environment(quickEntry)
+            .environment(\.chatKeyboardShortcuts, shortcuts)
             .environment(\.appEnergyPolicy, app.energy.policy)
             .environment(\.siteIcons, app.workspace.siteIcons)
             .modifier(InterfaceZoomEnvironment(zoom: zoom))
@@ -55,7 +55,6 @@ private struct AppEnvironment: ViewModifier {
 private struct WindowRoot: View {
     let app: RemoteCoderAppModel
     let environment: AppEnvironment
-    let tabbing: WindowTabbing
     @Binding var value: ConversationWindowValue?
 
     var body: some View {
@@ -72,7 +71,6 @@ private struct WindowRoot: View {
         }
             .modifier(environment)
             .modifier(SceneLifecycle(app: app))
-            .background { WindowTabAdoption(tabbing: tabbing, value: value) }
             .frame(minWidth: 720, minHeight: 520)
             .modifier(WindowOpeners(events: app.workspace.events))
     }

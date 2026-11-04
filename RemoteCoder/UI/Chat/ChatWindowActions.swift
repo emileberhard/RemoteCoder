@@ -83,7 +83,7 @@ private struct ChatWindowFocusPublication: View, Equatable {
     }
 }
 
-enum ChatCommand: CaseIterable, Hashable, Sendable {
+enum ChatCommand: String, CaseIterable, Hashable, Sendable {
     case newChat, newChatInHomeFolder, newWindow, fork, chooseFolder
     case findInConversation, findNext, findPrevious
     case commandPalette, toggleSidebar, toggleInspector, reviewChanges, refresh
@@ -96,12 +96,14 @@ enum ChatCommand: CaseIterable, Hashable, Sendable {
         switch self {
         case .newChat: KeyboardShortcut("n")
         case .newWindow: KeyboardShortcut("n", modifiers: [.command, .shift])
+        case .newChatInHomeFolder: KeyboardShortcut("n", modifiers: [.command, .option])
+        case .chooseFolder: KeyboardShortcut("o")
         case .findInConversation: KeyboardShortcut("f")
         case .findNext: KeyboardShortcut("g")
         case .findPrevious: KeyboardShortcut("g", modifiers: [.command, .shift])
         case .commandPalette: KeyboardShortcut("k")
-        case .toggleSidebar: KeyboardShortcut("s", modifiers: [.command, .control])
-        case .toggleInspector: KeyboardShortcut("i", modifiers: [.command, .option])
+        case .toggleSidebar: KeyboardShortcut("b")
+        case .toggleInspector: KeyboardShortcut("b", modifiers: [.command, .option])
         case .reviewChanges: KeyboardShortcut("d", modifiers: [.command, .shift])
         case .refresh: KeyboardShortcut("r")
         case .send: KeyboardShortcut(.return)
@@ -113,7 +115,7 @@ enum ChatCommand: CaseIterable, Hashable, Sendable {
         case .nextConversation: KeyboardShortcut(.downArrow, modifiers: [.command, .option])
         case .nextNeedingAttention: KeyboardShortcut("u", modifiers: [.command, .shift])
         case .settle: KeyboardShortcut("s", modifiers: [.command, .shift])
-        case .newChatInHomeFolder, .fork, .chooseFolder, .toggleFastMode,
+        case .fork, .toggleFastMode,
              .togglePin, .rename, .copyReference, .showAgents, .markUnread,
              .unreadOnly, .markAllRead, .collapseAllSections, .expandAllSections: nil
         }
@@ -205,6 +207,16 @@ extension KeyboardShortcut {
         case .upArrow: "↑"
         case .downArrow: "↓"
         case .escape: "⎋"
+        case .leftArrow: "←"
+        case .rightArrow: "→"
+        case .tab: "⇥"
+        case .space: "Space"
+        case .delete: "⌫"
+        case .deleteForward: "⌦"
+        case .home: "↖"
+        case .end: "↘"
+        case .pageUp: "⇞"
+        case .pageDown: "⇟"
         default: String(key.character).uppercased()
         }
         return prefix + keySymbol

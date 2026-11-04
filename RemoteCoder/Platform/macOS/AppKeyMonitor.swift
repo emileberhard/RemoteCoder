@@ -24,6 +24,7 @@ final class AppKeyMonitor {
     }
 
     private func consume(_ event: NSEvent) -> Bool {
+        if event.window?.firstResponder is ShortcutRecorderButton { return false }
         let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
         if modifiers.contains(.command), modifiers.isDisjoint(with: [.control, .option]),
            let character = event.characters(byApplyingModifiers: modifiers.intersection(.shift)),

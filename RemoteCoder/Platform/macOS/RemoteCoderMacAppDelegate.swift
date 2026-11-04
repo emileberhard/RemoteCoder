@@ -6,6 +6,7 @@ import UserNotifications
 @MainActor
 final class RemoteCoderMacAppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
     let app = RemoteCoderAppModel.live()
+    let shortcuts = ChatKeyboardShortcuts(defaults: AppStorageScope.current.defaults)
     let zoom = InterfaceZoom(defaults: AppStorageScope.current.defaults)
     private(set) lazy var attention = AttentionCenter(workspace: app.workspace)
     private lazy var statusItem = AttentionStatusItem(attention: attention)
@@ -22,6 +23,7 @@ final class RemoteCoderMacAppDelegate: NSObject, NSApplicationDelegate, UNUserNo
     private static let unattendedQuitWait = Duration.seconds(60)
 
     func applicationWillFinishLaunching(_ notification: Notification) {
+        NSWindow.allowsAutomaticWindowTabbing = false
         app.theme.retainedTranscripts = app.workspace.retainedTranscripts
         app.start()
         UNUserNotificationCenter.current().delegate = self

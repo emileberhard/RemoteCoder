@@ -162,6 +162,7 @@ struct CommandPalette: View {
 }
 
 private struct CommandPaletteRow: View {
+    @Environment(\.chatKeyboardShortcuts) private var shortcuts
     let entry: CommandPaletteCatalog.Entry
     let actions: ChatWindowActions
     let isSelected: Bool
@@ -231,6 +232,6 @@ private struct CommandPaletteRow: View {
 
     private var shortcut: String? {
         guard case .command(let command) = entry.item else { return nil }
-        return command.shortcut?.symbols
+        return command.shortcut(in: shortcuts)?.symbols
     }
 }
