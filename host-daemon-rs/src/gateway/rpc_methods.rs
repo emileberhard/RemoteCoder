@@ -53,6 +53,10 @@ impl Gateway {
             }
             OwnedRoute::Agents => self.cluster_agents_rpc(method, params).await,
             OwnedRoute::Cluster => self.cluster_rpc(&out.grant, method, params).await,
+            OwnedRoute::PeerLiveActivity => {
+                self.peer_live_activity_rpc(client_id, &out.grant, params)
+                    .await
+            }
             OwnedRoute::AgentJobs
                 if matches!(
                     &out.grant,
@@ -75,6 +79,10 @@ impl Gateway {
                 return self.handle_daemon_active_turns(out, Some(id)).await;
             }
             OwnedRoute::Execution => self.inspect_execution(params).await,
+            OwnedRoute::LiveActivity if method == "daemon/liveActivity/fleet" => self
+                .fleet_live_activity(params)
+                .await
+                .map_err(|error| RpcError::new(RpcCode::InvalidParams, format!("{error:#}"))),
             OwnedRoute::LiveActivity => {
                 let snapshot = self.apns.live_activity_updates().borrow().clone();
                 Ok(json!(snapshot))
@@ -1666,7 +1674,8 @@ fn host_info(speech_available: bool) -> RpcResult {
         home_directory,
         hostname,
         automations_authority,
-        speech_available
+        speech_available,
+        fleet_live_activity: true
     }))
 }
 

@@ -2,21 +2,27 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use tracing::warn;
 
 use crate::storage::private_state;
+use crate::wire::cluster::AgentAddress;
 
 pub(crate) const MAX_ATTENTION_ROWS: usize = 3;
-const MAX_STATE_BYTES: u64 = 256 * 1024;
+pub(crate) const MAX_FLEET_HOSTS: usize = 32;
+const MAX_STATE_BYTES: u64 = 1024 * 1024;
+const MAX_REPORT_BYTES: usize = 16 * 1024;
+const MAX_PEERS: usize = 32;
+const FLEET_VERSION: u8 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct AttentionRow {
+    #[serde(rename = "hostID", default, skip_serializing_if = "Option::is_none")]
+    pub host_id: Option<String>,
     #[serde(rename = "threadID")]
     pub thread_id: String,
-    #[serde(rename = "accountID", default, skip_serializing_if = "Option::is_none")]
-    pub account_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     #[serde(flatten)]
@@ -55,6 +61,7 @@ impl AttentionRow {
             (Some(left), Some(right)) => right.cmp(&left),
             (left, right) => right.is_some().cmp(&left.is_some()),
         }
+        .then_with(|| self.host_id.cmp(&other.host_id))
         .then_with(|| self.thread_id.cmp(&other.thread_id))
     }
 }
@@ -93,100 +100,431 @@ pub(crate) struct LiveActivitySnapshot {
     pub updated_at_unix_seconds: f64,
 }
 
-#[derive(Debug)]
-pub(super) struct Aggregate {
-    path: Option<PathBuf>,
-    scopes: Option<BTreeMap<String, LiveActivityContent>>,
-    pub(super) delivered_tokens: BTreeSet<String>,
-    last_timestamp: i64,
-    pub(super) required_scopes: Option<BTreeSet<String>>,
-    validated_scopes: BTreeSet<String>,
-    unavailable_scopes: BTreeSet<String>,
-    revision: u64,
-    #[cfg(test)]
-    pub(super) persistence_gate: Option<(
-        std::sync::Arc<tokio::sync::Notify>,
-        std::sync::Arc<tokio::sync::Notify>,
-    )>,
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct FleetContent {
+    #[serde(flatten)]
+    pub content: LiveActivityContent,
+    #[serde(rename = "unavailableHostIDs")]
+    pub unavailable_host_ids: Vec<String>,
 }
 
-impl Aggregate {
-    pub(super) fn load(path: Option<PathBuf>) -> Self {
-        let scopes = match path.as_deref() {
-            Some(path) => match read_scopes(path) {
-                Ok(scopes) => Some(scopes),
-                Err(error) => {
-                    warn!(error = %format!("{error:#}"), "Live Activity state unavailable; preserving state");
-                    None
-                }
-            },
-            None => Some(BTreeMap::new()),
-        };
-        Self {
-            path,
-            scopes,
-            delivered_tokens: BTreeSet::new(),
-            last_timestamp: 0,
-            required_scopes: None,
-            validated_scopes: BTreeSet::new(),
-            unavailable_scopes: BTreeSet::new(),
-            revision: 0,
-            #[cfg(test)]
-            persistence_gate: None,
+impl FleetContent {
+    pub(crate) fn is_certified_empty(&self) -> bool {
+        self.unavailable_host_ids.is_empty() && self.content.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct FleetSnapshot {
+    pub epoch: String,
+    pub revision: u64,
+    pub content: FleetContent,
+    pub relevance_score: u8,
+    pub updated_at_unix_seconds: f64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct SourceProjection {
+    pub content: LiveActivityContent,
+    pub running_roots: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub ancestry: BTreeMap<String, String>,
+    pub remote_parents: BTreeMap<String, AgentAddress>,
+}
+
+impl SourceProjection {
+    pub(crate) fn running_trees(&self, host: &str) -> BTreeSet<AgentAddress> {
+        self.running_roots
+            .values()
+            .map(|root| {
+                self.remote_parents
+                    .get(root)
+                    .cloned()
+                    .unwrap_or_else(|| AgentAddress {
+                        host_id: host.to_owned(),
+                        thread_id: root.clone(),
+                    })
+            })
+            .collect()
+    }
+
+    fn validate_report(&self, host: &str) -> Result<()> {
+        let content = &self.content;
+        ensure!(
+            content.attention.len() <= MAX_ATTENTION_ROWS
+                && content.attention_count >= content.attention.len()
+                && content.active_task_count == self.running_trees(host).len(),
+            "a Live Activity report is inconsistent"
+        );
+        ensure!(
+            content
+                .attention
+                .iter()
+                .all(|row| row.host_id.is_none() && !row.thread_id.is_empty())
+                && self
+                    .running_roots
+                    .iter()
+                    .chain(&self.ancestry)
+                    .all(|(thread, root)| !thread.is_empty() && !root.is_empty())
+                && self.remote_parents.values().all(|parent| {
+                    parent.host_id != host && crate::ids::is_session_uuid(&parent.host_id)
+                }),
+            "a Live Activity report carries only its own host's projection"
+        );
+        ensure!(
+            serde_json::to_vec(self)?.len() <= MAX_REPORT_BYTES,
+            "a Live Activity report exceeds {MAX_REPORT_BYTES} bytes"
+        );
+        Ok(())
+    }
+
+    fn root(&self, thread: &str) -> Option<&String> {
+        self.running_roots
+            .get(thread)
+            .or_else(|| self.ancestry.get(thread))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PeerReport {
+    pub projection: Option<SourceProjection>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum PeerOutcome {
+    Accepted,
+    Stale,
+    Rejected(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Coverage {
+    Current,
+    LastKnown,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LocalState {
+    Restored,
+    Current,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Binding {
+    client: u64,
+    certifies: bool,
+}
+
+#[derive(Debug, Default)]
+struct Peer {
+    projection: Option<SourceProjection>,
+    binding: Option<Binding>,
+}
+
+impl Peer {
+    fn coverage(&self) -> Coverage {
+        match (&self.projection, self.binding) {
+            (
+                Some(_),
+                Some(Binding {
+                    certifies: true, ..
+                }),
+            ) => Coverage::Current,
+            (Some(_), _) => Coverage::LastKnown,
+            (None, _) => Coverage::Unknown,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct CacheDocument {
+    version: u8,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    local: Option<SourceProjection>,
+    peers: BTreeMap<String, SourceProjection>,
+}
+
+#[derive(Debug)]
+pub(super) struct Sources {
+    local: Option<SourceProjection>,
+    local_state: LocalState,
+    peers: BTreeMap<String, Peer>,
+}
+
+#[derive(Debug)]
+pub(super) struct Publication {
+    path: Option<PathBuf>,
+    cached: Option<CacheDocument>,
+    pub(super) delivered: BTreeMap<String, Value>,
+    last_timestamp: i64,
+    revision: u64,
+}
+
+pub(super) fn load(path: Option<PathBuf>) -> (Sources, Publication) {
+    let cached = path.as_deref().and_then(|path| {
+        read_cache(path)
+            .inspect_err(|error| {
+                warn!(error = %format!("{error:#}"), "Live Activity cache unreadable; starting without last-known content");
+            })
+            .ok()
+            .flatten()
+    });
+    let sources = Sources {
+        local: cached.as_ref().and_then(|cache| cache.local.clone()),
+        local_state: LocalState::Restored,
+        peers: cached
+            .as_ref()
+            .map(|cache| {
+                cache
+                    .peers
+                    .iter()
+                    .map(|(host, projection)| {
+                        (
+                            host.clone(),
+                            Peer {
+                                projection: Some(projection.clone()),
+                                binding: None,
+                            },
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+    };
+    let publication = Publication {
+        path,
+        cached,
+        delivered: BTreeMap::new(),
+        last_timestamp: 0,
+        revision: 0,
+    };
+    (sources, publication)
+}
+
+impl Sources {
+    pub(super) fn is_restoring(&self) -> bool {
+        self.local_state == LocalState::Restored
+    }
+
+    pub(super) fn local_content(&self) -> Option<&LiveActivityContent> {
+        self.current_local().map(|local| &local.content)
+    }
+
+    fn current_local(&self) -> Option<&SourceProjection> {
+        (self.local_state == LocalState::Current)
+            .then_some(self.local.as_ref())
+            .flatten()
+    }
+
+    pub(super) fn report(&self) -> PeerReport {
+        PeerReport {
+            projection: self.current_local().cloned(),
         }
     }
 
+    pub(super) fn report_local(&mut self, projection: SourceProjection) -> bool {
+        let changed = self.local.as_ref() != Some(&projection);
+        self.local = Some(projection);
+        let certified = self.local_state != LocalState::Current;
+        self.local_state = LocalState::Current;
+        changed || certified
+    }
+
+    pub(super) fn mark_local_unavailable(&mut self) -> bool {
+        let changed = self.local_state != LocalState::Unavailable;
+        self.local_state = LocalState::Unavailable;
+        changed
+    }
+
+    pub(super) fn receive_peer(
+        &mut self,
+        host: &str,
+        client: u64,
+        projection: Option<SourceProjection>,
+    ) -> (PeerOutcome, bool) {
+        if self
+            .peers
+            .get(host)
+            .and_then(|peer| peer.binding)
+            .is_some_and(|binding| binding.client > client)
+        {
+            return (PeerOutcome::Stale, false);
+        }
+        if !self.peers.contains_key(host) && self.peers.len() >= MAX_PEERS {
+            return (
+                PeerOutcome::Rejected("Live Activity peer capacity exceeded".into()),
+                false,
+            );
+        }
+        let peer = self.peers.entry(host.to_owned()).or_default();
+        let before = (peer.coverage(), peer.projection.clone());
+        let outcome = match projection
+            .as_ref()
+            .map(|projection| projection.validate_report(host))
+            .transpose()
+        {
+            Ok(_) => {
+                peer.binding = Some(Binding {
+                    client,
+                    certifies: projection.is_some(),
+                });
+                if projection.is_some() {
+                    peer.projection = projection;
+                }
+                PeerOutcome::Accepted
+            }
+            Err(error) => {
+                peer.binding = Some(Binding {
+                    client,
+                    certifies: false,
+                });
+                PeerOutcome::Rejected(format!("{error:#}"))
+            }
+        };
+        let changed = before != (peer.coverage(), peer.projection.clone());
+        (outcome, changed)
+    }
+
+    pub(super) fn peer_connection_closed(&mut self, host: &str, client: u64) -> bool {
+        let Some(peer) = self.peers.get_mut(host) else {
+            return false;
+        };
+        if peer.binding.is_none_or(|binding| binding.client != client) {
+            return false;
+        }
+        peer.binding = None;
+        true
+    }
+
+    pub(super) fn retain_peers(&mut self, members: &BTreeSet<String>) -> bool {
+        let before = self.peers.len();
+        self.peers.retain(|host, _| members.contains(host));
+        self.peers.len() != before
+    }
+
+    pub(super) fn referenced(&self) -> BTreeSet<AgentAddress> {
+        self.peers
+            .values()
+            .filter_map(|peer| peer.projection.as_ref())
+            .flat_map(|projection| projection.remote_parents.values().cloned())
+            .collect()
+    }
+
+    fn projection(&self, host: &str, local_host: &str) -> Option<&SourceProjection> {
+        if host == local_host {
+            self.local.as_ref()
+        } else {
+            self.peers.get(host)?.projection.as_ref()
+        }
+    }
+
+    fn owning_tree(
+        &self,
+        mut tree: AgentAddress,
+        local_host: &str,
+    ) -> std::result::Result<AgentAddress, AgentAddress> {
+        let mut visited = BTreeSet::new();
+        while visited.insert(tree.clone()) {
+            let Some(root) = self
+                .projection(&tree.host_id, local_host)
+                .and_then(|projection| {
+                    let root = projection.root(&tree.thread_id)?;
+                    Some((root.clone(), projection.remote_parents.get(root)))
+                })
+            else {
+                return Err(tree);
+            };
+            match root {
+                (_, Some(parent)) => tree = parent.clone(),
+                (root, None) => {
+                    tree.thread_id = root;
+                    return Ok(tree);
+                }
+            }
+        }
+        Err(tree)
+    }
+
+    pub(super) fn fleet_content(&self, hosts: &[String], local_host: &str) -> FleetContent {
+        let mut trees = BTreeSet::new();
+        let mut attention = Vec::new();
+        let mut attention_count = 0;
+        let mut unavailable_host_ids = Vec::new();
+        for host in hosts {
+            let (projection, coverage) = if host == local_host {
+                let coverage = match (self.local_state, &self.local) {
+                    (LocalState::Current, Some(_)) => Coverage::Current,
+                    (_, Some(_)) => Coverage::LastKnown,
+                    (_, None) => Coverage::Unknown,
+                };
+                (self.local.as_ref(), coverage)
+            } else {
+                match self.peers.get(host) {
+                    Some(peer) => (peer.projection.as_ref(), peer.coverage()),
+                    None => (None, Coverage::Unknown),
+                }
+            };
+            if coverage != Coverage::Current {
+                unavailable_host_ids.push(host.clone());
+            }
+            let Some(projection) = projection else {
+                continue;
+            };
+            for tree in projection.running_trees(host) {
+                trees.insert(match self.owning_tree(tree, local_host) {
+                    Ok(root) => root,
+                    Err(unresolved) => {
+                        if !unavailable_host_ids.contains(&unresolved.host_id) {
+                            unavailable_host_ids.push(unresolved.host_id.clone());
+                        }
+                        unresolved
+                    }
+                });
+            }
+            attention_count += projection.content.attention_count;
+            attention.extend(projection.content.attention.iter().map(|row| AttentionRow {
+                host_id: Some(host.clone()),
+                ..row.clone()
+            }));
+        }
+        attention.sort_by(AttentionRow::attention_order);
+        attention.truncate(MAX_ATTENTION_ROWS);
+        FleetContent {
+            content: LiveActivityContent {
+                active_task_count: trees.len(),
+                attention,
+                attention_count,
+            },
+            unavailable_host_ids,
+        }
+    }
+
+    pub(super) fn cache(&self) -> CacheDocument {
+        CacheDocument {
+            version: FLEET_VERSION,
+            local: self
+                .local
+                .clone()
+                .filter(|local| *local != SourceProjection::default()),
+            peers: self
+                .peers
+                .iter()
+                .filter_map(|(host, peer)| Some((host.clone(), peer.projection.clone()?)))
+                .collect(),
+        }
+    }
+}
+
+impl Publication {
     pub(super) fn next_timestamp(&mut self, now: i64) -> i64 {
         self.last_timestamp = now.max(self.last_timestamp + 1);
         self.last_timestamp
-    }
-
-    pub(super) async fn report(
-        &mut self,
-        scope: &str,
-        content: LiveActivityContent,
-    ) -> Result<bool> {
-        let scopes = self
-            .scopes
-            .as_mut()
-            .context("Live Activity state unavailable")?;
-        let changed = if content.is_empty() {
-            scopes.remove(scope).is_some()
-        } else {
-            scopes.insert(scope.to_owned(), content.clone()) != Some(content)
-        };
-        self.validated_scopes.insert(scope.to_owned());
-        self.unavailable_scopes.remove(scope);
-        if changed {
-            self.persist().await;
-        }
-
-        Ok(changed)
-    }
-
-    pub(super) async fn retain_scopes(&mut self, retained: &BTreeSet<String>) -> Result<bool> {
-        let scopes = self
-            .scopes
-            .as_mut()
-            .context("Live Activity state unavailable")?;
-        self.required_scopes = Some(retained.clone());
-        let before = scopes.len();
-        scopes.retain(|scope, _| retained.contains(scope));
-        let changed = scopes.len() != before;
-        self.validated_scopes
-            .retain(|scope| retained.contains(scope));
-        self.unavailable_scopes
-            .retain(|scope| retained.contains(scope));
-        if changed {
-            self.persist().await;
-        }
-        Ok(changed)
-    }
-
-    pub(super) fn mark_unavailable(&mut self, scope: &str) {
-        if self.unavailable_scopes.insert(scope.to_owned()) {
-            self.delivered_tokens.clear();
-        }
     }
 
     pub(super) fn next_revision(&mut self) -> u64 {
@@ -194,70 +532,44 @@ impl Aggregate {
         self.revision
     }
 
-    pub(super) fn is_ready(&self) -> bool {
-        self.unavailable_scopes.is_empty()
-            && self.required_scopes.as_ref().is_some_and(|required| {
-                required
-                    .iter()
-                    .all(|scope| self.validated_scopes.contains(scope))
-            })
-            && self.scopes.as_ref().is_some_and(|scopes| {
-                scopes
-                    .keys()
-                    .all(|scope| self.validated_scopes.contains(scope))
-            })
-    }
-
-    async fn persist(&self) {
-        #[cfg(test)]
-        if let Some((started, release)) = &self.persistence_gate {
-            started.notify_one();
-            release.notified().await;
+    pub(super) async fn persist(&mut self, document: CacheDocument) {
+        if self.cached.as_ref() == Some(&document) {
+            return;
         }
-        if let Some(path) = self.path.clone() {
-            let scopes = self.scopes.clone();
-            let persisted = tokio::task::spawn_blocking(move || {
-                private_state::ensure_private_directory(
-                    path.parent()
-                        .context("Live Activity state path has no parent")?,
-                )?;
-                private_state::write_json(&path, &scopes)
-            })
-            .await
-            .context("Live Activity state writer failed")
-            .and_then(|result| result);
-            if let Err(error) = persisted {
-                warn!(error = %format!("{error:#}"), "failed to persist Live Activity state");
-            }
+        let Some(path) = self.path.clone() else {
+            return;
+        };
+        let written = document.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            private_state::ensure_private_directory(
+                path.parent()
+                    .context("Live Activity cache path has no parent")?,
+            )?;
+            private_state::write_json(&path, &written)
+        })
+        .await
+        .context("Live Activity cache writer failed")
+        .and_then(|result| result);
+        match result {
+            Ok(()) => self.cached = Some(document),
+            Err(error) => warn!(error = %format!("{error:#}"), "Live Activity cache not written"),
         }
-    }
-
-    pub(super) fn merged(&self) -> Result<LiveActivityContent> {
-        let mut merged = LiveActivityContent::default();
-        for content in self
-            .scopes
-            .as_ref()
-            .context("Live Activity state unavailable")?
-            .values()
-        {
-            merged.active_task_count += content.active_task_count;
-            merged.attention_count += content.attention_count;
-            merged.attention.extend(content.attention.iter().cloned());
-        }
-        merged.attention.sort_by(AttentionRow::attention_order);
-        merged.attention.truncate(MAX_ATTENTION_ROWS);
-        Ok(merged)
     }
 }
 
-fn read_scopes(path: &Path) -> Result<BTreeMap<String, LiveActivityContent>> {
-    let bytes = private_state::read_bounded(path, MAX_STATE_BYTES)
+fn read_cache(path: &Path) -> Result<Option<CacheDocument>> {
+    let Some(bytes) = private_state::read_bounded(path, MAX_STATE_BYTES)
         .map_err(|error| anyhow::anyhow!("{error:?}"))
-        .with_context(|| format!("reading {}", path.display()))?;
-    match bytes {
-        Some(bytes) => {
-            serde_json::from_slice(&bytes).with_context(|| format!("parsing {}", path.display()))
-        }
-        None => Ok(BTreeMap::new()),
-    }
+        .with_context(|| format!("reading {}", path.display()))?
+    else {
+        return Ok(None);
+    };
+    let document: CacheDocument =
+        serde_json::from_slice(&bytes).with_context(|| format!("parsing {}", path.display()))?;
+    ensure!(
+        document.version == FLEET_VERSION,
+        "unsupported Live Activity cache in {}",
+        path.display()
+    );
+    Ok(Some(document))
 }

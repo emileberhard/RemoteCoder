@@ -6594,41 +6594,6 @@ fn pasted_prompt_notification_subtitles_use_readable_summaries() {
 }
 
 #[tokio::test]
-async fn review_regression_opening_accounts_removes_unregistered_live_activity_scopes() {
-    let gateway = test_gateway();
-    gateway
-        .apns
-        .report_live_activity("default", crate::push::LiveActivityContent::default())
-        .await;
-    gateway
-        .apns
-        .report_live_activity(
-            "removed",
-            crate::push::LiveActivityContent {
-                active_task_count: 1,
-                attention: vec![],
-                attention_count: 0,
-            },
-        )
-        .await;
-    let directory = tempfile::tempdir().unwrap();
-    let _accounts = crate::accounts::Accounts::open_in(
-        directory.path().to_path_buf(),
-        std::sync::Arc::clone(&gateway),
-        gateway.claude_settings.clone(),
-    )
-    .await
-    .unwrap();
-    let snapshot = gateway
-        .apns
-        .live_activity_updates()
-        .borrow()
-        .clone()
-        .unwrap();
-    assert!(snapshot.content.is_empty());
-}
-
-#[tokio::test]
 async fn content_routing_ingest_runs_side_effects_once_and_reconnect_recovers_canonical_items() {
     use crate::rpc::dispatch::{ClaudeMethod, OwnedRoute, OwnedTarget};
 

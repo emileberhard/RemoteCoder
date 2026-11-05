@@ -352,6 +352,8 @@ impl Link {
                 };
                 let capability = if method.starts_with("sessions/") {
                     "sessions.v1"
+                } else if method.starts_with("cluster/liveActivity/") {
+                    LIVE_ACTIVITY_CAPABILITY
                 } else if method.starts_with("agent/parent/") {
                     "agent.parent.v1"
                 } else if method.starts_with("agent/") {
