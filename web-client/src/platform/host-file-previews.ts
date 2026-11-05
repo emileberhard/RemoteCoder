@@ -10,7 +10,7 @@ type Preview = {
 };
 type Queue = { running: boolean; pending: Preview[] };
 
-export class HostImagePreviews {
+export class HostFilePreviews {
   private readonly queues = new Map<string, Queue>();
   private readonly lifetime = new AbortController();
 
@@ -19,11 +19,11 @@ export class HostImagePreviews {
     combined.throwIfAborted();
     let queue = this.queues.get(hostId);
     if (!queue) {
-      if (this.queues.size >= 24) return Promise.reject(new Error("Too many image preview hosts"));
+      if (this.queues.size >= 24) return Promise.reject(new Error("Too many file preview hosts"));
       queue = { running: false, pending: [] };
       this.queues.set(hostId, queue);
     }
-    if (queue.pending.length >= 24) return Promise.reject(new Error("Too many pending image previews"));
+    if (queue.pending.length >= 24) return Promise.reject(new Error("Too many pending file previews"));
     const owner = queue;
     return new Promise((resolve, reject) => {
       const cancel = () => {

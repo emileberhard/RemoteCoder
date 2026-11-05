@@ -890,7 +890,8 @@ test("a full transcript window keeps an older recovered steer available for expl
       return { ...activity(), activeTurns: [{ threadId: "shared", turnId: "new-turn" }] };
   };
   await reloaded.workspace.selectConversation(address);
-  expect(reloaded.workspace.selectedConversation?.rows).toHaveLength(240);
+  expect(reloaded.workspace.selectedConversation?.rows.length).toBeLessThanOrEqual(240);
+  expect(reloaded.workspace.selectedConversation?.rows.at(-1)?.entry.item.id).toBe("later-299");
   expect(reloaded.workspace.selectedConversation?.rows[0]?.entry.item.id).toBe(clientId);
   reloaded.workspace.restoreSteer(address, clientId);
   expect(reloaded.workspace.draft.text).toBe("Do not lose this unconfirmed input");

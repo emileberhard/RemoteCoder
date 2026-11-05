@@ -1,9 +1,18 @@
 import { AlertCircle, X } from "lucide-react";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { api } from "../gateway";
 import { browserDiagrams } from "../platform/diagrams";
 import { browserVisuals } from "../platform/visuals";
 import { addressKey } from "../protocol/boundary";
+import { ChangesReview } from "./chat/changes/changes-review";
 import { useCommandShortcuts } from "./chat/chat-commands";
 import { ChatHeader } from "./chat/chat-header";
 import { type ChatWindow, useChatWindowActions } from "./chat/chat-window-actions";
@@ -28,7 +37,7 @@ const compactQuery = "(max-width: 760px)";
 type Modal =
   | { kind: "settings"; tab: SettingsTab }
   | { kind: "pin"; intent: PinNameIntent }
-  | { kind: "directory" | "voice" | "palette" };
+  | { kind: "directory" | "voice" | "palette" | "changes" };
 
 export function ChatRoot() {
   const workspace = useWorkspace();
@@ -40,6 +49,7 @@ export function ChatRoot() {
   const [sidebarHidden, setSidebarHidden] = useState(false);
   const [compact, setCompact] = useState(() => matchMedia(compactQuery).matches);
   const [modal, setModal] = useState<Modal>();
+  const close = useCallback(() => setModal(undefined), []);
   const [inspector, setInspector] = useState(false);
   const [restored, setRestored] = useState(false);
   const storedSelection = useRef(savedSelection);
@@ -104,6 +114,7 @@ export function ChatRoot() {
       composer,
       toggleSidebar: () => (compact ? setDrawer((value) => !value) : setSidebarHidden((value) => !value)),
       toggleInspector: () => setInspector((value) => !value),
+      openChanges: () => setModal({ kind: "changes" }),
       chooseFolder: () => setModal({ kind: "directory" }),
       openSettings: () => setModal({ kind: "settings", tab: "chat" }),
       togglePalette: () =>
@@ -142,7 +153,7 @@ export function ChatRoot() {
         }}
       />
     );
-  const close = () => setModal(undefined);
+
   return (
     <MediaProvider hostId={snapshot.selectedHostId}>
       <div
@@ -209,6 +220,9 @@ export function ChatRoot() {
         {modal?.kind === "settings" && <SettingsDialog initialTab={modal.tab} close={close} />}
         {modal?.kind === "palette" && <CommandPalette actions={actions} close={close} />}
         {modal?.kind === "directory" && <DirectoryPicker close={close} />}
+        {modal?.kind === "changes" && conversation && (
+          <ChangesReview key={addressKey(conversation.address)} conversation={conversation} close={close} />
+        )}
         {modal?.kind === "pin" && <PinNameDialog intent={modal.intent} close={close} />}
         {modal?.kind === "voice" && conversation && (
           <VoiceDialog key={addressKey(conversation.address)} conversation={conversation} close={close} />

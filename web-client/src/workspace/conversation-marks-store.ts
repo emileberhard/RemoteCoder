@@ -25,6 +25,7 @@ const threadValues = (marks: ThreadMarks | undefined) =>
     marks?.settlement?.state,
     marks?.settlement?.through,
     marks?.doneThrough,
+    marks?.changesView,
   ]);
 
 export class ConversationMarksStore {
@@ -134,6 +135,11 @@ export class ConversationMarksStore {
       return !unchanged;
     });
     if (!validated.length) return;
+    if (
+      validated.some((change) => change.op === "setChangesView") &&
+      (this.replica.acknowledged?.schemaVersion ?? 0) < 4
+    )
+      throw new Error("Changes views require a compatible marks snapshot from the host.");
     if (
       validated.some((change) => change.op === "settle" || change.op === "unsettle") &&
       (this.replica.acknowledged?.schemaVersion ?? 0) < 2

@@ -2,7 +2,7 @@ import { stat } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
 import { object } from "../src/protocol/boundary";
 import { HostRegistry, readCredential } from "./config";
-import { FixtureConnection, fixtureHosts } from "./fixture";
+import { FixtureConnection, fixtureHosts, fixturePDF } from "./fixture";
 import { matchesSecret, Sessions, sameOrigin, validateBrowserAccess } from "./security";
 import {
   unavailableVisual,
@@ -53,7 +53,7 @@ const headers = {
   "Cache-Control": "no-store",
   "X-Content-Type-Options": "nosniff",
   "Referrer-Policy": "no-referrer",
-  "Content-Security-Policy": `default-src 'self'; script-src ${scriptSources}; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; font-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'`,
+  "Content-Security-Policy": `default-src 'self'; script-src ${scriptSources}; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; frame-src 'self' blob:; object-src 'self' blob:; connect-src 'self'; font-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'`,
   "Permissions-Policy": "camera=(), microphone=(self), geolocation=()",
 };
 const json = (value: unknown, status = 200, extra: Record<string, string> = {}) =>
@@ -436,6 +436,8 @@ const server = Bun.serve<BridgeData>({
           }
           if (action === "download") {
             const input = object(await request.json());
+            if (input.path === "/fixture/preview.pdf")
+              return new Response(fixturePDF, { headers: { ...headers, "Content-Type": "application/pdf" } });
             if (input.path === "/fixture/vision.svg")
               return new Response(
                 '<svg xmlns="http://www.w3.org/2000/svg" width="960" height="540" viewBox="0 0 960 540"><rect width="960" height="540" fill="#18342e"/><circle cx="730" cy="150" r="190" fill="#d5e9a3"/><rect x="56" y="62" width="400" height="416" rx="28" fill="#faf8ee"/><text x="90" y="124" fill="#18342e" font-family="sans-serif" font-size="28">Agent vision</text><path d="M90 158h330M90 210h270M90 244h290M90 278h230" stroke="#a5b5aa" stroke-width="10"/><rect x="90" y="340" width="200" height="66" rx="18" fill="#2a6956"/><text x="116" y="382" fill="#ffffff" font-family="sans-serif" font-size="22">Hello, browser</text></svg>',

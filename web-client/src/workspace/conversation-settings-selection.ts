@@ -18,6 +18,7 @@ type PickerSync = { confirmed: PickerSettings; running: boolean; pending?: Picke
 
 export class ConversationSettingsSelection {
   private readonly pickerSyncs = new WeakMap<Conversation, PickerSync>();
+  private readonly reasoningByModel = new Map<string, string>();
   constructor(
     private readonly hosts: HostServices,
     private readonly drafts: ComposerDraftStore,
@@ -140,10 +141,19 @@ export class ConversationSettingsSelection {
   async chooseModel(choice: ModelChoice | undefined) {
     if (!choice || this.isRetired()) return;
     const current = this.current().draft;
+    const currentChoice = this.choices().find(
+      (value) => value.id === current.model && value.provider === current.provider,
+    );
     await this.applyPickerSettings(
       choice,
-      clampedEffort(current.effort, choice.efforts),
-      choice.fast && current.fast,
+      clampedEffort(
+        this.reasoningByModel.get(`${choice.provider}:${choice.id}`) ?? current.effort,
+        choice.efforts,
+      ),
+      choice.fast &&
+        (currentChoice?.fast
+          ? current.fast
+          : (this.preferences.get("codex.fastModeEnabled") ?? current.fast)),
       () => this.preferences.set("codex.defaultModelID", choice.id),
     );
   }
@@ -153,6 +163,13 @@ export class ConversationSettingsSelection {
     const selected = effort === "" ? "" : reasoningEffort(effort);
     if (selected === undefined || (selected !== "" && !choice.efforts.includes(selected)))
       throw new Error("Choose an available reasoning effort");
+    const key = `${choice.provider}:${choice.id}`;
+    this.reasoningByModel.delete(key);
+    this.reasoningByModel.set(key, selected);
+    if (this.reasoningByModel.size > 200) {
+      const oldest = this.reasoningByModel.keys().next().value;
+      if (oldest !== undefined) this.reasoningByModel.delete(oldest);
+    }
     await this.applyPickerSettings(choice, selected, this.current().draft.fast, () =>
       this.preferences.set("codex.defaultReasoningSelection", selected ? `effort-${selected}` : "automatic"),
     );

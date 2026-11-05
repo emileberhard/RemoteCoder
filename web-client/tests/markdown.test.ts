@@ -70,3 +70,13 @@ test("an rc-visual image on its own line becomes a visual block", () => {
   expect(renderMarkdown(`![Chart](rc-visual:${"A".repeat(64)})`)).toContain("html-visual-unavailable");
   expect(renderMarkdown(`See ![Chart](rc-visual:${digest}) here`)).not.toContain("data-visual-digest");
 });
+
+test("local file URLs retain host paths, escaped filenames, line targets and image references", () => {
+  const html = renderMarkdown(
+    "[source](file:///Users/test/A%20File.ts#L12)\n\n![shot](file:///tmp/screen%20shot.png)\n\n[foreign](file://another-host/tmp/private.txt)",
+  );
+  expect(html).toContain('data-host-path="/Users/test/A File.ts" data-host-line="12"');
+  expect(html).toContain('data-host-image="/tmp/screen shot.png"');
+  expect(html).not.toContain('data-host-path="/tmp/private.txt"');
+  expect(html).not.toContain('src="file:');
+});

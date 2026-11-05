@@ -1,19 +1,43 @@
-import { memo, useContext, useEffect, useRef } from "react";
+import { memo, useContext, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { webBuild } from "../../../gateway";
 import { browserDiagrams } from "../../../platform/diagrams";
 import { browserVisuals } from "../../../platform/visuals";
 import { DiagramThemeContext } from "../../design-system/appearance";
+import { imageMimeType } from "../../files/preview";
+import { HostImagePreview } from "./viewed-media";
 
 export const MarkdownBlock = memo(function MarkdownBlock({
   html,
   complete,
   hostId,
+  cwd,
 }: {
   html: string;
   complete: boolean;
   hostId: string;
+  cwd: string;
 }) {
   const root = useRef<HTMLDivElement>(null);
+  const [images, setImages] = useState<{ target: HTMLElement; path: string; caption: string; key: string }[]>(
+    [],
+  );
+  const imageIdentity = useRef(0);
+  useEffect(() => {
+    const element = root.current;
+    if (!element || !complete || !html) {
+      setImages([]);
+      return;
+    }
+    setImages(
+      [...element.querySelectorAll<HTMLElement>("[data-host-image]")].slice(0, 16).map((target) => ({
+        target,
+        key: String(++imageIdentity.current),
+        path: target.dataset.hostImage ?? "",
+        caption: target.dataset.hostCaption || "Image",
+      })),
+    );
+  }, [html, complete]);
   const dark = useContext(DiagramThemeContext);
   const terminal = complete && html.includes('data-mermaid-complete="false"');
   useEffect(() => {
@@ -78,5 +102,20 @@ export const MarkdownBlock = memo(function MarkdownBlock({
       for (const lifetime of lifetimes) lifetime.dispose();
     };
   }, [html, hostId]);
-  return <div ref={root} className="markdown-block" dangerouslySetInnerHTML={{ __html: html }} />;
+  return (
+    <>
+      <div ref={root} className="markdown-block" dangerouslySetInnerHTML={{ __html: html }} />
+      {images.map(({ target, path, caption, key }) =>
+        createPortal(
+          <HostImagePreview
+            media={{ path, name: caption, mimeType: imageMimeType(path) ?? "image/*" }}
+            hostId={hostId}
+            cwd={cwd}
+          />,
+          target,
+          key,
+        ),
+      )}
+    </>
+  );
 });

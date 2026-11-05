@@ -12,6 +12,7 @@ export type ChatWindow = Readonly<{
   composer: RefObject<ComposerHandle | null>;
   toggleSidebar(): void;
   toggleInspector(): void;
+  openChanges(): void;
   chooseFolder(): void;
   openSettings(): void;
   togglePalette(): void;
@@ -36,6 +37,7 @@ export function useChatWindowActions(chatWindow: ChatWindow): ChatWindowActions 
       isEnabled(command: ChatCommand) {
         switch (command) {
           case "fork":
+          case "changes":
           case "copyReference":
           case "toggleInspector":
             return Boolean(conversation);
@@ -100,6 +102,8 @@ export function useChatWindowActions(chatWindow: ChatWindow): ChatWindowActions 
             return workspace.newConversation();
           case "fork":
             return run(() => workspace.fork());
+          case "changes":
+            return chatWindow.openChanges();
           case "chooseFolder":
             return chatWindow.chooseFolder();
           case "commandPalette":

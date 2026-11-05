@@ -6,6 +6,7 @@ import python from "highlight.js/lib/languages/python";
 import swift from "highlight.js/lib/languages/swift";
 import typescript from "highlight.js/lib/languages/typescript";
 import { Marked, Renderer, type TokensList } from "marked";
+import { hostFileReference } from "./platform/host-file-reference";
 
 for (const [name, grammar] of Object.entries({ typescript, swift, python, bash, json, diff }))
   hljs.registerLanguage(name, grammar);
@@ -17,7 +18,8 @@ export const escapeHtml = (text: string) =>
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
 export function safeLink(value: string): string | undefined {
-  if (value.startsWith("/") && !value.startsWith("//")) return value;
+  const file = hostFileReference(value);
+  if (file) return file.path;
   try {
     const url = new URL(value);
     return ["https:", "http:", "mailto:"].includes(url.protocol) ? url.href : undefined;
@@ -29,12 +31,17 @@ const renderer = new Renderer();
 renderer.html = ({ text }) => escapeHtml(text);
 renderer.link = function ({ href, tokens }) {
   const label = this.parser.parseInline(tokens);
+  const file = hostFileReference(href);
+  if (file)
+    return `<a href="#" data-host-path="${escapeHtml(file.path)}"${file.line ? ` data-host-line="${file.line}"` : ""}>${label}</a>`;
   const safe = safeLink(href);
   if (!safe) return label;
-  if (safe.startsWith("/")) return `<a href="#" data-host-path="${escapeHtml(safe)}">${label}</a>`;
   return `<a href="${escapeHtml(safe)}" target="_blank" rel="noopener noreferrer">${label}</a>`;
 };
 renderer.image = ({ href, text }) => {
+  const file = hostFileReference(href);
+  if (file)
+    return `<span class="host-image" data-host-image="${escapeHtml(file.path)}" data-host-caption="${escapeHtml(text)}">${escapeHtml(text || "Image")}</span>`;
   if (/^data:image\/(png|jpeg|gif|webp);base64,[a-zA-Z0-9+/=]+$/.test(href))
     return `<img src="${escapeHtml(href)}" alt="${escapeHtml(text)}" loading="lazy">`;
   return `<span class="markdown-image">${escapeHtml(text || "Image")}</span>`;

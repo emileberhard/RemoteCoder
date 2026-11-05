@@ -115,7 +115,7 @@ export function HistorySidebar({
   const errors = sidebar.hostStates.filter((host) => host.errors.length);
   const showsHost = snapshot.hosts.length > 1;
   return (
-    <aside className="sidebar" aria-label="Conversations" aria-hidden={hidden} inert={hidden}>
+    <aside className="sidebar" aria-label="Conversations" inert={hidden}>
       <div className="sidebar-toolbar">
         <IconButton label="Settings" className="glass-button" onClick={() => openSettings("chat")}>
           <Settings size={19} />

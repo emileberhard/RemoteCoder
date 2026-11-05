@@ -6,6 +6,7 @@ import {
   File,
   Folder,
   GitBranch,
+  GitCompareArrows,
   Globe,
   MessageCircle,
   RefreshCw,
@@ -14,6 +15,7 @@ import {
 } from "lucide-react";
 import { memo } from "react";
 import type { Address, QuestionRecord, VisualPublication } from "../../../protocol/boundary";
+import { parseAttachedFiles } from "../../../workspace/attached-files";
 import type { Row } from "../../../workspace/conversation-session";
 import { downloadFile } from "../../files/download";
 import { basename } from "../../formatting";
@@ -24,10 +26,14 @@ import { MarkdownBlock } from "../transcript/markdown-block";
 import { PublishedVisual } from "../transcript/published-visual";
 import { CopyButton } from "./copy-button";
 import { Diff } from "./diff";
+import { ForkReply } from "./fork-reply";
+import { HostAttachment } from "./host-attachment";
+import { InlineImage } from "./inline-image";
 
 export const MessageRow = memo(function MessageRow({
   row,
   reply,
+  countChanges,
   address,
   cwd,
   question,
@@ -36,6 +42,7 @@ export const MessageRow = memo(function MessageRow({
 }: {
   row: Row;
   reply: boolean;
+  countChanges: boolean;
   address: Address;
   cwd: string;
   question?: QuestionRecord;
@@ -54,34 +61,16 @@ export const MessageRow = memo(function MessageRow({
         <div className="user-bubble">
           {item.content.map((input, index) =>
             input.type === "text" ? (
-              <p key={`part:${index}`}>
-                {input.text.startsWith("<send_user_message_question_reply>")
-                  ? "Answered the agent’s question"
-                  : input.text}
-              </p>
+              <UserText key={`part:${index}`} text={input.text} hostId={hostId} cwd={cwd} />
             ) : input.type === "localImage" ||
               input.type === "localAudio" ||
               input.type === "mention" ||
               input.type === "skill" ? (
-              <button
-                type="button"
-                className="attachment-link"
-                key={`part:${index}`}
-                onClick={() => run(() => downloadFile(hostId, input.path, cwd))}
-              >
-                <File size={15} />
-                {basename(input.path)}
-              </button>
+              <HostAttachment key={`part:${index}`} path={input.path} hostId={hostId} cwd={cwd} />
             ) : input.type === "image" &&
               "url" in input &&
               /^data:image\/(png|jpeg|gif|webp);base64,/.test(input.url) ? (
-              <img
-                className="message-image"
-                key={`part:${index}`}
-                src={input.url}
-                alt="Attachment"
-                loading="lazy"
-              />
+              <InlineImage key={`part:${index}`} src={input.url} name="Attachment" />
             ) : (
               <span className="attachment-link" key={`part:${index}`}>
                 <File size={15} />
@@ -89,6 +78,13 @@ export const MessageRow = memo(function MessageRow({
               </span>
             ),
           )}
+        </div>
+        <div className="message-actions">
+          <CopyButton
+            text={item.content
+              .flatMap((input) => (input.type === "text" ? [parseAttachedFiles(input.text).body] : []))
+              .join("\n\n")}
+          />
         </div>
         {row.delivery && (row.delivery !== "admitted" || row.steer) && (
           <div className={`delivery ${row.delivery}`}>
@@ -139,6 +135,7 @@ export const MessageRow = memo(function MessageRow({
                 html={html}
                 complete={row.entry.isComplete === true}
                 hostId={hostId}
+                cwd={cwd}
               />
             ))
           ) : (
@@ -146,10 +143,30 @@ export const MessageRow = memo(function MessageRow({
           )}
           {row.markdown?.error && <p className="error">{row.markdown.error}</p>}
         </div>
-        {item.type === "agentMessage" && reply && row.entry.isComplete === true && (
+        {item.type === "agentMessage" && row.entry.isComplete === true && (
           <div className="message-actions">
             <CopyButton text={item.text} />
             <SpeakButton id={`${hostId}:${item.id}`} text={item.text} />
+            {reply && <ForkReply address={address} turnId={row.entry.turnId} />}
+            {countChanges && (
+              <button
+                type="button"
+                className="icon-button"
+                aria-label="Count changes from here"
+                title="Count changes from here"
+                onClick={() =>
+                  run(() =>
+                    workspace.selectChangesView(address, {
+                      kind: "since",
+                      turnId: row.entry.turnId,
+                      boundary: "end",
+                    }),
+                  )
+                }
+              >
+                <GitCompareArrows size={15} />
+              </button>
+            )}
           </div>
         )}
       </article>
@@ -283,7 +300,9 @@ export const MessageRow = memo(function MessageRow({
       <div className="agent-row">
         <p>Image generation · {item.status}</p>
         {item.result.startsWith("data:image/") ? (
-          <img className="message-image" src={item.result} alt={item.revisedPrompt ?? "Generated image"} />
+          <InlineImage src={item.result} name="Generated image" />
+        ) : item.savedPath ? (
+          <HostAttachment path={item.savedPath} hostId={hostId} cwd={cwd} />
         ) : (
           <pre>{item.result}</pre>
         )}
@@ -297,7 +316,21 @@ export const MessageRow = memo(function MessageRow({
           <span>{item.type === "collabAgentToolCall" ? item.tool : item.kind}</span>
           <ChevronDown size={13} />
         </summary>
-        <pre>{JSON.stringify(item, null, 2)}</pre>
+        <div className="tool-content">
+          {(item.type === "collabAgentToolCall" ? item.receiverThreadIds : [item.agentThreadId]).map(
+            (threadId) => (
+              <button
+                type="button"
+                className="attachment-link"
+                key={threadId}
+                onClick={() => run(() => workspace.openAgentConversation({ ...address, threadId }, address))}
+              >
+                <GitBranch size={15} />
+                {item.type === "subAgentActivity" ? item.agentPath : threadId}
+              </button>
+            ),
+          )}
+        </div>
       </details>
     );
   return (
@@ -311,3 +344,19 @@ export const MessageRow = memo(function MessageRow({
     </details>
   );
 });
+
+function UserText({ text, hostId, cwd }: { text: string; hostId: string; cwd: string }) {
+  const { body, paths } = parseAttachedFiles(text);
+  return (
+    <div>
+      {body && (
+        <p>
+          {body.startsWith("<send_user_message_question_reply>") ? "Answered the agent’s question" : body}
+        </p>
+      )}
+      {paths.map((path) => (
+        <HostAttachment key={path} path={path} hostId={hostId} cwd={cwd} />
+      ))}
+    </div>
+  );
+}
