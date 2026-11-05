@@ -45,13 +45,4 @@ struct FleetLiveActivityPlanTests {
         #expect(snapshot.content.unavailableHostIDs == [book])
         #expect(!snapshot.content.isEmpty)
     }
-
-    @Test func onlyAZeroViewWithEveryHostCurrentIsCertifiedEmpty() {
-        let incomplete = ActiveTasksLiveActivityContent(activeTaskCount: 0, attention: [], attentionCount: 0,
-                                                        unavailableHostIDs: [book])
-        let complete = ActiveTasksLiveActivityContent(activeTaskCount: 0, attention: [], attentionCount: 0,
-                                                      unavailableHostIDs: [])
-        #expect(incomplete.isEmpty && !incomplete.isCertifiedEmpty)
-        #expect(complete.isCertifiedEmpty)
-    }
 }

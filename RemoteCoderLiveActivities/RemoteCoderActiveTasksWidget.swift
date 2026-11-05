@@ -89,15 +89,16 @@ private struct AttentionRow: View {
 }
 
 private struct MoreCount: View {
-    let count: Int
+    let total: Int
+    let shown: Int
 
     var body: some View {
-        if count > 0 {
-            Text("+\(count) more")
+        if total > shown {
+            Text(shown == 0 ? "\(total) waiting" : "+\(total - shown) more")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
-                .padding(.leading, AttentionRow.markWidth + 8)
+                .padding(.leading, shown == 0 ? 0 : AttentionRow.markWidth + 8)
         }
     }
 }
@@ -136,6 +137,11 @@ private struct CompactStatus: View {
                 .accessibilityLabel("\(waiting) waiting")
         } else if state.activeTaskCount > 0 {
             RunningIndicator(count: state.activeTaskCount, size: size)
+        } else if let unavailable = state.unavailableSummary {
+            Image(systemName: "exclamationmark.icloud")
+                .font(.system(size: size * 0.7, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .accessibilityLabel(unavailable)
         }
     }
 }
@@ -160,7 +166,8 @@ private struct ActiveTasksLockScreen: View {
                 }
             }
 
-            if rows.isEmpty == false {
+            let total = state.attentionCount ?? rows.count
+            if total > 0 {
                 VStack(alignment: .leading, spacing: 6) {
                     ForEach(rows) { attention in
                         if let url = attributes.url(for: attention) {
@@ -169,7 +176,7 @@ private struct ActiveTasksLockScreen: View {
                             AttentionRow(attention: attention)
                         }
                     }
-                    MoreCount(count: (state.attentionCount ?? rows.count) - rows.count)
+                    MoreCount(total: total, shown: rows.count)
                 }
             }
         }
@@ -200,10 +207,11 @@ struct RemoteCoderActiveTasksWidget: Widget {
 
                 DynamicIslandExpandedRegion(.bottom) {
                     VStack(alignment: .leading, spacing: 4) {
+                        let shown = lead == nil ? 0 : 1
                         if let lead {
                             AttentionRow(attention: lead)
-                            MoreCount(count: (state.attentionCount ?? 1) - 1)
                         }
+                        MoreCount(total: state.attentionCount ?? shown, shown: shown)
                         Coverage(summary: state.unavailableSummary)
                     }
                 }

@@ -22,7 +22,6 @@ nonisolated struct ActiveTasksLiveActivityContent: Codable, Hashable, Sendable {
     let unavailableHostIDs: [UUID]
 
     var isEmpty: Bool { activeTaskCount == 0 && attentionCount == 0 }
-    var isCertifiedEmpty: Bool { isEmpty && unavailableHostIDs.isEmpty }
 }
 
 nonisolated struct ActiveTasksLiveActivitySnapshot: Codable, Equatable, Sendable {

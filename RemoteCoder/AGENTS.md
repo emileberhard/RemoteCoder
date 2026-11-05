@@ -1865,11 +1865,13 @@ The gateway side is in `host-daemon-rs/AGENTS.md`; both paths are in
   stays fixed for the activity's lifetime and alone receives the
   `fleetActivity` token with the device's exact configured host UUIDs; every
   other host's registration omits it. The activity starts with the read's
-  content and relevance score only when that content is not empty. A dismissed
-  activity, or a zero view with unavailable hosts, starts nothing new until a
-  certified empty view (`isCertifiedEmpty`). A coordinator whose first read
-  fails is skipped for the next capable host in that pass. Each foreground
-  pass rereads the coordinator; when that fails it ends the activity and moves
+  content and relevance score only when that content is not empty and differs
+  from the content of the last dismissed activity (counts, rows and coverage,
+  ignoring the timestamp), which an observed empty read or a newly started
+  activity clears; End certification stays with the gateway. Adoption
+  seeds the push token from `pushToken` and follows `pushTokenUpdates` for
+  rotation. A coordinator whose first read fails is skipped for the next
+  capable host in that pass. Each foreground pass rereads the coordinator; when that fails it ends the activity and moves
   to another capable host. Removing the coordinator from the configured hosts ends it.
   Launch keeps one live activity whose coordinator is configured and ends every
   other, including per-host activities from earlier builds. Without a capable
@@ -1877,8 +1879,8 @@ The gateway side is in `host-daemon-rs/AGENTS.md`; both paths are in
   Voice-call activities keep their own owner.
 - `RemoteCoderActiveTasksAttributes` carries `startedAt` and `coordinatorID`
   (absent on activities from earlier builds, which are only retired); the
-  device registration, not the attributes, holds the exact host set. Its content state carries the count of running root
-  conversations (`activeTaskCount`), up to three `attention` rows (host,
+  device registration, not the attributes, holds the exact host set. Its
+  content state carries the count of running root conversations (`activeTaskCount`), up to three `attention` rows (host,
   thread, title, `finishedUnread` or `question`, completion time),
   `attentionCount` and `unavailableHostIDs`; all but the count are optional so
   older payloads decode. Rows link to their own host and thread.
@@ -1889,9 +1891,11 @@ The gateway side is in `host-daemon-rs/AGENTS.md`; both paths are in
   orange bubble when it also asked a question you have not seen. It shows the
   title and completion time and links to that conversation; `+N more` covers the rest. Running work is
   only a count in the header's corner, inside a ring that turns when the count
-  changes. Incomplete coverage shows how many hosts are unavailable. The Dynamic Island's expanded view shows the lead row; compact and
-  minimal show the question symbol, else the waiting count, else the running
-  ring. Content is always visible, never `privacySensitive`. The glyph is
+  changes. Incomplete coverage shows how many hosts are unavailable, and
+  waiting work whose rows were all omitted still shows its count. The Dynamic
+  Island's expanded view shows the lead row; compact and minimal show the
+  question symbol, else the waiting count, else the running ring, else the
+  unavailable symbol. Content is always visible, never `privacySensitive`. The glyph is
   `Assets.xcassets/LiveActivityAppGlyph.imageset`.
 - `RemoteCoderVoiceCallWidget` renders the call activity Voice Mode's intent
   starts: host name and call timer. A tap opens `remotecoder://chat/call?id=`,

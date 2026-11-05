@@ -25,7 +25,7 @@ final class FleetLiveActivityService {
     private var token: String?
     private var coordinatorID: UUID?
     private var hasRestored = false
-    private var awaitsEmpty = false
+    private var dismissed: ActiveTasksLiveActivityContent?
     private var observers: [Task<Void, Never>] = []
     private var pass: Task<Void, Never>?
     private var passRequested = false
@@ -76,7 +76,7 @@ final class FleetLiveActivityService {
         let declared = configured()
         let hosts = hosts()
         if let activity, ![.active, .stale].contains(activity.activityState) {
-            if activity.activityState == .dismissed { awaitsEmpty = true }
+            if activity.activityState == .dismissed { dismissed = Self.displayed(activity.content.state) }
             logger.notice("fleet activity left id=\(activity.id) state=\(String(describing: activity.activityState))")
             drop(activity)
         }
@@ -98,10 +98,10 @@ final class FleetLiveActivityService {
             }
             guard activity == nil, !isRetired, scene != .background else { return }
             if snapshot.content.isEmpty {
-                if snapshot.content.isCertifiedEmpty { awaitsEmpty = false }
+                dismissed = nil
                 return
             }
-            guard !awaitsEmpty, ActivityAuthorizationInfo().areActivitiesEnabled else { return }
+            guard snapshot.content != dismissed, ActivityAuthorizationInfo().areActivitiesEnabled else { return }
             request(snapshot, coordinator: coordinator.id)
             return
         }
@@ -162,6 +162,7 @@ final class FleetLiveActivityService {
                 pushType: .token
             )
             logger.notice("started fleet activity id=\(activity.id) coordinator=\(coordinator.uuidString) count=\(state.activeTaskCount)")
+            dismissed = nil
             adopt(activity)
         } catch {
             logger.error("Failed to start fleet activity: \(String(describing: error))")
@@ -193,13 +194,13 @@ final class FleetLiveActivityService {
 
     private func adopt(_ activity: Activity<Attributes>) {
         self.activity = activity
-        token = nil
+        token = activity.pushToken.map(Self.hex)
         for observer in observers { observer.cancel() }
         observers = [
             Task { [weak self] in
                 for await data in activity.pushTokenUpdates {
                     guard !Task.isCancelled else { return }
-                    self?.tokenChanged(data.map { String(format: "%02x", $0) }.joined(), activityID: activity.id)
+                    self?.tokenChanged(Self.hex(data), activityID: activity.id)
                 }
             },
             Task { [weak self] in
@@ -209,6 +210,19 @@ final class FleetLiveActivityService {
                 }
             },
         ]
+    }
+
+    private static func hex(_ data: Data) -> String {
+        data.map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func displayed(_ state: Attributes.ContentState) -> ActiveTasksLiveActivityContent {
+        ActiveTasksLiveActivityContent(
+            activeTaskCount: state.activeTaskCount,
+            attention: state.attention ?? [],
+            attentionCount: state.attentionCount ?? 0,
+            unavailableHostIDs: state.unavailableHostIDs ?? []
+        )
     }
 
     private func tokenChanged(_ token: String, activityID: String) {
