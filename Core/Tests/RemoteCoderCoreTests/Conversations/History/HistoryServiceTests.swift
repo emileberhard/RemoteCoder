@@ -822,7 +822,9 @@ struct HistoryServiceTests {
         offline.markSeen(threadID: header.id, completedAt: 1_001)
         offline.pin(threadID: header.id, name: "Keep")
         await offline.syncMarks()
-        await offline.flushMarks()
+        offline.quiesce()
+        await offline.drain()
+        #expect(await offline.flushMarks())
         #expect(offline.pinnedName(for: "other") == "Legacy")
         #expect(await gateway.markUpdates.isEmpty)
 
@@ -831,7 +833,9 @@ struct HistoryServiceTests {
         #expect(relaunched.pinnedName(for: header.id) == "Keep")
         await gateway.failMarks(false)
         await relaunched.syncMarks()
-        await relaunched.flushMarks()
+        relaunched.quiesce()
+        await relaunched.drain()
+        #expect(await relaunched.flushMarks())
         #expect(await gateway.markUpdates == [[
             .pin(threadID: "other", name: "Legacy"),
             .markRead(threadID: header.id, through: 1_001),
