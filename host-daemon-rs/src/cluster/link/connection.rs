@@ -14,8 +14,17 @@ struct Request {
 pub(super) struct Connection {
     requests: mpsc::Sender<Request>,
     alive: Arc<AtomicBool>,
+    wake: Option<tokio::sync::watch::Sender<u64>>,
     _reader: AbortOnDropHandle<()>,
     pub(super) hello: HelloReceipt,
+}
+
+impl Drop for Connection {
+    fn drop(&mut self) {
+        if let Some(wake) = &self.wake {
+            wake.send_modify(|revision| *revision = revision.wrapping_add(1));
+        }
+    }
 }
 
 impl Connection {
@@ -32,11 +41,11 @@ impl Connection {
             receiver,
             alive.clone(),
             slot,
-            wake,
         )));
         Self {
             requests,
             alive,
+            wake,
             _reader: reader,
             hello,
         }
@@ -69,7 +78,6 @@ async fn read_socket(
     mut requests: mpsc::Receiver<Request>,
     alive: Arc<AtomicBool>,
     slot: Weak<Mutex<Option<Connection>>>,
-    wake: Option<tokio::sync::watch::Sender<u64>>,
 ) {
     let mut pending: Option<Request> = None;
     let result: Result<()> = async {
@@ -118,9 +126,6 @@ async fn read_socket(
             .is_some_and(|connection| Arc::ptr_eq(&connection.alive, &alive))
         {
             cached.take();
-            if let Some(wake) = wake {
-                wake.send_modify(|revision| *revision = revision.wrapping_add(1));
-            }
         }
     }
 }

@@ -122,6 +122,7 @@ pub(crate) enum OwnedRoute {
     ActiveTurns,
     Execution,
     LiveActivity,
+    PeerLiveActivity,
     ReplayNotifications,
     HostInfo,
     Rename,
@@ -228,6 +229,12 @@ const METHOD_SPECS: &[MethodSpec] = &[
         "agent/parent/resolve",
         Cluster,
         Some(RequestLifetime::Query),
+        0
+    ),
+    spec!(
+        "cluster/liveActivity/report",
+        PeerLiveActivity,
+        Some(RequestLifetime::Connection),
         0
     ),
     prefix_spec!("cluster/", Cluster, Some(RequestLifetime::Command)),
@@ -733,6 +740,12 @@ const METHOD_SPECS: &[MethodSpec] = &[
     ),
     spec!(
         "daemon/liveActivity",
+        LiveActivity,
+        Some(RequestLifetime::Status),
+        0
+    ),
+    spec!(
+        "daemon/liveActivity/fleet",
         LiveActivity,
         Some(RequestLifetime::Status),
         0

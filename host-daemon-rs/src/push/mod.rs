@@ -21,7 +21,9 @@ use broker::{
 };
 pub(crate) use broker::{Delivered, DeliveryFailure, DeliveryOutcome};
 pub(crate) use live_activity::{
-    AttentionReason, AttentionRow, LiveActivityContent, LiveActivitySnapshot, MAX_ATTENTION_ROWS,
+    AttentionReason, AttentionRow, FleetSnapshot, Freshness, LiveActivityContent,
+    LiveActivitySnapshot, MAX_ATTENTION_ROWS, MAX_FLEET_HOSTS, PeerOutcome, PeerReport,
+    SourceProjection, attention_title,
 };
 
 const PAYLOAD_KEY: &str = "remoteCoder.taskCompletionPayload";
@@ -110,9 +112,56 @@ pub(crate) struct PushService {
     unavailable_reason: Option<&'static str>,
     devices: Arc<DeviceRegistry>,
     journal: Journal,
-    live_activity: Mutex<live_activity::Aggregate>,
+    live_activity_sources: std::sync::Mutex<live_activity::Sources>,
+    live_activity_publication: Mutex<live_activity::Publication>,
     live_activity_epoch: String,
     live_activity_updates: watch::Sender<Option<LiveActivitySnapshot>>,
+    peer_reports: watch::Sender<Option<PeerReport>>,
+    referenced_threads:
+        watch::Sender<std::collections::BTreeSet<crate::wire::cluster::AgentAddress>>,
+    fleet_changes: watch::Sender<u64>,
+}
+
+#[derive(Clone)]
+struct ActivityPayload {
+    fleet: bool,
+    ends: bool,
+    state: Value,
+    relevance_score: u8,
+    identity: Value,
+}
+
+impl ActivityPayload {
+    fn local(content: &LiveActivityContent, superseded: bool) -> Self {
+        Self::new(
+            false,
+            !superseded && content.is_empty(),
+            content,
+            serde_json::json!({}),
+        )
+    }
+
+    fn fleet(content: &live_activity::FleetContent) -> Self {
+        Self::new(
+            true,
+            content.is_certified_empty(),
+            &content.content,
+            serde_json::json!({"unavailableHostIDs": content.unavailable_host_ids}),
+        )
+    }
+
+    fn new(fleet: bool, ends: bool, content: &LiveActivityContent, mut extra: Value) -> Self {
+        extra["activeTaskCount"] = Value::from(content.active_task_count);
+        extra["attention"] = serde_json::json!(content.attention);
+        extra["attentionCount"] = Value::from(content.attention_count);
+        Self {
+            fleet,
+            ends,
+            relevance_score: content.relevance_score(),
+            identity: serde_json::json!({"ends": ends, "state": extra}),
+            state: extra,
+        }
+    }
 }
 
 impl PushService {
@@ -143,28 +192,30 @@ impl PushService {
             info!("push broker not configured (missing token/config)");
         }
 
+        let (sources, publication) = live_activity::load(live_activity_path);
         Self {
             broker,
             unavailable_reason,
             devices,
             journal,
-            live_activity: Mutex::new(live_activity::Aggregate::load(live_activity_path)),
+            referenced_threads: watch::channel(sources.referenced()).0,
+            live_activity_sources: std::sync::Mutex::new(sources),
+            live_activity_publication: Mutex::new(publication),
             live_activity_epoch: crate::ids::new_session_uuid(),
             live_activity_updates: watch::channel(None).0,
+            peer_reports: watch::channel(None).0,
+            fleet_changes: watch::channel(0).0,
         }
     }
 
     #[cfg(test)]
     pub(crate) fn fixture_disabled(journal: Journal) -> Self {
-        let mut service = Self::new(
+        Self::new(
             PushConfiguration::Disabled,
             journal,
             Arc::new(DeviceRegistry::temporary()),
             None,
-        );
-        service.live_activity.get_mut().required_scopes =
-            Some(std::collections::BTreeSet::from(["default".into()]));
-        service
+        )
     }
 
     pub(crate) fn devices(&self) -> &Arc<DeviceRegistry> {
@@ -194,9 +245,6 @@ impl PushService {
             .register(crate::devices::fixture_registration(1))
             .await
             .expect("fixture device registration");
-        notifier
-            .reconcile_live_activity_scopes(&std::collections::BTreeSet::from(["default".into()]))
-            .await;
         notifier
     }
 
@@ -349,110 +397,204 @@ impl PushService {
     }
 
     #[cfg(test)]
-    pub(crate) async fn report_live_activity(&self, account: &str, content: LiveActivityContent) {
-        // Hold the owner through delivery so a slower older update cannot end a
-        // newer activity belonging to another account.
-        self.report_live_activity_if_current(account, content, || true)
+    pub(crate) async fn report_live_activity(
+        &self,
+        local_host: Option<&str>,
+        projection: SourceProjection,
+    ) {
+        self.report_live_activity_if_current(local_host, projection, Freshness::new(|| true))
             .await;
     }
 
     pub(crate) async fn report_live_activity_if_current(
         &self,
-        account: &str,
-        content: LiveActivityContent,
-        is_current: impl Fn() -> bool + Sync,
+        local_host: Option<&str>,
+        projection: SourceProjection,
+        freshness: Freshness,
     ) {
-        let mut aggregate = self.live_activity.lock().await;
-        if !is_current() {
+        if !freshness.is_fresh() {
             return;
         }
-        let changed = match aggregate.report(account, content).await {
-            Ok(changed) => changed,
-            Err(error) => {
-                warn!(%error, "Live Activity state unavailable");
-                return;
-            }
-        };
-        self.publish_live_activity(&mut aggregate, changed, &is_current)
-            .await;
-        if !is_current() {
-            aggregate.mark_unavailable(account);
-            self.live_activity_updates
-                .send_if_modified(|current| current.take().is_some());
-        }
+        let changed = self.change_local(|sources| sources.report_local(projection, freshness));
+        self.publish_live_activity(changed, local_host).await;
     }
 
     pub(crate) async fn mark_live_activity_unavailable_if_current(
         &self,
-        scope: &str,
-        is_current: impl Fn() -> bool,
+        local_host: Option<&str>,
+        is_current: impl Fn() -> bool + Sync,
     ) {
-        let mut aggregate = self.live_activity.lock().await;
         if !is_current() {
             return;
         }
-        aggregate.mark_unavailable(scope);
-        self.live_activity_updates
-            .send_if_modified(|current| current.take().is_some());
+        let changed = self.change_local(live_activity::Sources::mark_local_unavailable);
+        self.publish_live_activity(changed, local_host).await;
     }
 
-    pub(crate) async fn reconcile_live_activity_scopes(
-        &self,
-        retained: &std::collections::BTreeSet<String>,
-    ) {
-        let mut aggregate = self.live_activity.lock().await;
-        let changed = match aggregate.retain_scopes(retained).await {
-            Ok(changed) => changed,
-            Err(error) => {
-                warn!(%error, "Live Activity scopes unavailable");
-                return;
+    fn sources(&self) -> std::sync::MutexGuard<'_, live_activity::Sources> {
+        self.live_activity_sources
+            .lock()
+            .expect("Live Activity sources poisoned")
+    }
+
+    fn change_local(&self, change: impl FnOnce(&mut live_activity::Sources) -> bool) -> bool {
+        let mut sources = self.sources();
+        let changed = change(&mut sources);
+        let report = sources.report();
+        self.peer_reports.send_if_modified(|current| match current {
+            Some(current) if *current == report => false,
+            _ => {
+                *current = Some(report);
+                true
             }
-        };
-        self.publish_live_activity(&mut aggregate, changed, &|| true)
-            .await;
+        });
+        if changed {
+            self.fleet_changes.send_modify(|revision| *revision += 1);
+        }
+        changed
     }
 
-    async fn publish_live_activity(
+    fn change_peers(&self, change: impl FnOnce(&mut live_activity::Sources) -> bool) {
+        let mut sources = self.sources();
+        if change(&mut sources) {
+            let referenced = sources.referenced();
+            self.referenced_threads.send_if_modified(|current| {
+                let changed = *current != referenced;
+                *current = referenced;
+                changed
+            });
+            self.fleet_changes.send_modify(|revision| *revision += 1);
+        }
+    }
+
+    pub(crate) fn live_activity_epoch(&self) -> &str {
+        &self.live_activity_epoch
+    }
+
+    pub(crate) fn peer_live_activity_reports(&self) -> watch::Receiver<Option<PeerReport>> {
+        self.peer_reports.subscribe()
+    }
+
+    pub(crate) fn fleet_live_activity_changes(&self) -> watch::Receiver<u64> {
+        self.fleet_changes.subscribe()
+    }
+
+    pub(crate) fn referenced_thread_changes(
         &self,
-        aggregate: &mut live_activity::Aggregate,
+    ) -> watch::Receiver<std::collections::BTreeSet<crate::wire::cluster::AgentAddress>> {
+        self.referenced_threads.subscribe()
+    }
+
+    pub(crate) fn referenced_threads(
+        &self,
+    ) -> std::collections::BTreeSet<crate::wire::cluster::AgentAddress> {
+        self.referenced_threads.borrow().clone()
+    }
+
+    pub(crate) fn receive_peer_live_activity(
+        &self,
+        host: &str,
+        client: u64,
+        report: Result<Option<SourceProjection>, String>,
+    ) -> PeerOutcome {
+        let mut outcome = PeerOutcome::Stale;
+        self.change_peers(|sources| {
+            let (received, changed) = sources.receive_peer(host, client, report);
+            outcome = received;
+            changed
+        });
+        outcome
+    }
+
+    pub(crate) fn peer_live_activity_closed(&self, host: &str, client: u64) {
+        self.change_peers(|sources| sources.peer_connection_closed(host, client));
+    }
+
+    pub(crate) fn retain_live_activity_peers(&self, members: &std::collections::BTreeSet<String>) {
+        self.change_peers(|sources| sources.retain_peers(members));
+    }
+
+    pub(crate) async fn publish_fleet_live_activity(&self, local_host: Option<&str>) {
+        self.publish_live_activity(false, local_host).await;
+    }
+
+    pub(crate) fn fleet_live_activity_snapshot(
+        &self,
+        hosts: &[String],
+        local_host: &str,
+    ) -> FleetSnapshot {
+        let content = self.sources().fleet_content(hosts, local_host);
+        FleetSnapshot {
+            epoch: self.live_activity_epoch.clone(),
+            revision: *self.fleet_changes.borrow(),
+            relevance_score: content.content.relevance_score(),
+            content,
+            updated_at_unix_seconds: unix_seconds(),
+        }
+    }
+
+    async fn publish_live_activity(&self, changed: bool, local_host: Option<&str>) {
+        let mut publication = self.live_activity_publication.lock().await;
+        let (local, superseded, restoring, revision) = {
+            let sources = self.sources();
+            (
+                sources.local_content().cloned(),
+                sources.local_superseded(),
+                sources.is_restoring(),
+                *self.fleet_changes.borrow(),
+            )
+        };
+        let is_current = || *self.fleet_changes.borrow() == revision;
+        match &local {
+            None => {
+                self.live_activity_updates
+                    .send_if_modified(|current| current.take().is_some());
+            }
+            Some(local) => {
+                self.live_activity_updates.send_if_modified(|current| {
+                    if current
+                        .as_ref()
+                        .is_some_and(|current| current.content == *local)
+                    {
+                        return false;
+                    }
+                    *current = Some(LiveActivitySnapshot {
+                        epoch: self.live_activity_epoch.clone(),
+                        revision: publication.next_revision(),
+                        relevance_score: local.relevance_score(),
+                        content: local.clone(),
+                        updated_at_unix_seconds: unix_seconds(),
+                    });
+                    true
+                });
+            }
+        }
+        if !restoring {
+            self.deliver_live_activity(
+                &mut publication,
+                changed,
+                local.map(|local| ActivityPayload::local(&local, superseded)),
+                local_host,
+                &is_current,
+            )
+            .await;
+        }
+        let cache = self.sources().cache();
+        publication.persist(cache).await;
+    }
+
+    async fn deliver_live_activity(
+        &self,
+        publication: &mut live_activity::Publication,
         changed: bool,
+        local: Option<ActivityPayload>,
+        local_host: Option<&str>,
         is_current: &(impl Fn() -> bool + Sync),
     ) {
-        if changed {
-            aggregate.delivered_tokens.clear();
-        }
-        if !is_current() {
-            return;
-        }
-        if !aggregate.is_ready() {
-            self.live_activity_updates
-                .send_if_modified(|current| current.take().is_some());
-            return;
-        }
-        let merged = match aggregate.merged() {
-            Ok(merged) => merged,
-            Err(error) => {
-                warn!(%error, "Live Activity state unavailable");
-                return;
-            }
-        };
-        self.live_activity_updates.send_if_modified(|current| {
-            if current
-                .as_ref()
-                .is_some_and(|current| current.content == merged)
-            {
-                return false;
-            }
-            *current = Some(LiveActivitySnapshot {
-                epoch: self.live_activity_epoch.clone(),
-                revision: aggregate.next_revision(),
-                content: merged.clone(),
-                relevance_score: merged.relevance_score(),
-                updated_at_unix_seconds: unix_seconds(),
-            });
-            true
-        });
-        let destinations = match self.devices.live_activity_destinations().await {
+        let (legacy, fleet) = match tokio::try_join!(
+            self.devices.live_activity_destinations(),
+            self.devices.fleet_activity_targets()
+        ) {
             Ok(destinations) => destinations,
             Err(error) => {
                 warn!(%error, "device registry unreadable for live activity");
@@ -460,18 +602,33 @@ impl PushService {
                 return;
             }
         };
-        if destinations.is_empty() {
+        if legacy.is_empty() && fleet.is_empty() {
             if changed {
                 self.record_skip("liveActivity", NO_LIVE_ACTIVITY_DEVICE);
             }
+            publication.delivered.clear();
             return;
         }
-        let pending: Vec<_> = destinations
+        let mut payloads: Vec<(Destination, ActivityPayload)> = legacy
             .into_iter()
-            .filter(|destination| {
-                !aggregate
-                    .delivered_tokens
-                    .contains(destination.token.as_str())
+            .filter_map(|destination| Some((destination, local.clone()?)))
+            .collect();
+        if let Some(local_host) = local_host {
+            let sources = self.sources();
+            payloads.extend(fleet.into_iter().map(|target| {
+                let content = sources.fleet_content(&target.hosts, local_host);
+                (target.destination, ActivityPayload::fleet(&content))
+            }));
+        }
+        publication.delivered.retain(|token, _| {
+            payloads
+                .iter()
+                .any(|(destination, _)| destination.token.as_str() == token)
+        });
+        let pending: Vec<_> = payloads
+            .into_iter()
+            .filter(|(destination, payload)| {
+                publication.delivered.get(destination.token.as_str()) != Some(&payload.identity)
             })
             .collect();
         if pending.is_empty() {
@@ -480,74 +637,69 @@ impl PushService {
         let Ok(broker) = self.broker_recorded("liveActivity") else {
             return;
         };
-        let timestamp = aggregate.next_timestamp(unix_seconds().floor() as i64);
+        let timestamp = publication.next_timestamp(unix_seconds().floor() as i64);
         let delivered = self
-            .send_live_activity(broker, &merged, timestamp, pending, is_current)
+            .send_live_activity(broker, timestamp, pending, is_current)
             .await;
-        aggregate.delivered_tokens.extend(delivered);
+        publication.delivered.extend(delivered);
     }
 
     async fn send_live_activity(
         &self,
         broker: &PushBroker,
-        content: &LiveActivityContent,
         timestamp: i64,
-        destinations: Vec<Destination>,
+        pending: Vec<(Destination, ActivityPayload)>,
         is_current: &(impl Fn() -> bool + Sync),
-    ) -> Vec<String> {
-        let (event, stale_date, dismissal_date) = if content.is_empty() {
-            (LiveActivityEvent::End, None, Some(timestamp))
-        } else {
-            (LiveActivityEvent::Update, Some(timestamp + 5 * 60), None)
-        };
-        let content_state = serde_json::json!({
-            "activeTaskCount": content.active_task_count,
-            "attention": content.attention,
-            "attentionCount": content.attention_count,
-            "updatedAtUnixSeconds": unix_seconds(),
-        });
-        let relevance_score = if broker.supports_live_activity_relevance().await {
-            Some(content.relevance_score())
-        } else {
-            None
-        };
-
-        futures_util::stream::iter(destinations)
-            .map(|destination| {
+    ) -> Vec<(String, Value)> {
+        let supports_relevance = broker.supports_live_activity_relevance().await;
+        futures_util::stream::iter(pending)
+            .map(|(destination, payload)| {
+                let (event, stale_date, dismissal_date) = if payload.ends {
+                    (LiveActivityEvent::End, None, Some(timestamp))
+                } else {
+                    (LiveActivityEvent::Update, Some(timestamp + 5 * 60), None)
+                };
+                let mut content_state = payload.state.clone();
+                content_state["updatedAtUnixSeconds"] = Value::from(unix_seconds());
                 let request = BrokerLiveActivityRequest {
                     bundle_id: self.devices.bundle_id().to_owned(),
                     push_environment: destination.environment,
                     device_token: destination.token.as_str().to_owned(),
                     event,
                     timestamp,
-                    content_state: content_state.clone(),
-                    relevance_score,
+                    content_state,
+                    relevance_score: supports_relevance.then_some(payload.relevance_score),
                     stale_date,
                     dismissal_date,
                     alert: None,
                 };
                 async move {
-                    if !is_current() {
+                    if !is_current() || (payload.ends && self.sources().local_superseded()) {
                         return None;
                     }
                     let token = destination.token.as_str().to_owned();
                     self.deliver(
                         broker,
                         Delivery {
-                            kind: TokenKind::LiveActivity,
+                            kind: if payload.fleet {
+                                TokenKind::FleetActivity
+                            } else {
+                                TokenKind::LiveActivity
+                            },
                             journal: Some("liveActivity"),
                             destination: &destination,
                             fields: serde_json::json!({
                                 "activityEvent": event,
-                                "activeTaskCount": content.active_task_count,
-                                "attentionCount": content.attention_count,
+                                "fleet": payload.fleet,
+                                "activeTaskCount": payload.state["activeTaskCount"],
+                                "attentionCount": payload.state["attentionCount"],
                             }),
                         },
                         &request,
                     )
                     .await
                     .ok()
-                    .map(|_| token)
+                    .map(|_| (token, payload.identity))
                 }
             })
             .buffer_unordered(MAX_CONCURRENT_SENDS)

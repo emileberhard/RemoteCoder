@@ -34,6 +34,7 @@ surface:
 | History reads, native pages, `daemon/activeTurns` (read-only) | `just gateway-e2e-reads`, optionally `e2e_thread=<id>` |
 | Owned read burst, exact query cancellation and ready capability (isolated gateway) | `just gateway-e2e-query-admission-isolated /absolute/gateway/binary` |
 | Delegated jobs: Codex and Claude children spawned from a parent's tool process, results, parent callbacks, Stop, restart recovery and same-ID retry (isolated gateway, deterministic Codex model, host router for Claude) | `just gateway-e2e-delegated-jobs-isolated /absolute/gateway/binary /absolute/runtime/package` |
+| Fleet Live Activity: merged peer reports, exact rows, unavailable versus empty, End only when every declared host is current and empty, member and coordinator restarts, local-only legacy tokens (three isolated gateways, stub broker, deterministic Codex model) | `just gateway-e2e-fleet-live-activity-isolated /absolute/gateway/binary /absolute/runtime/package` |
 | First-party-first new conversation admission and last-resort effort clamping (isolated gateway, host router; logged-out Codex xhigh runs on Opus, then unavailable Claude forces Argon high, including a resumed Fast request) | `just gateway-e2e-provider-fallback-isolated /absolute/gateway/binary` |
 | `thread/fork(lastTurnId:)` boundaries (creates threads) | `just gateway-e2e-fork-live`, `just gateway-e2e-claude-fork-live` |
 | Claude steering folds into one completion (router-backed Sonnet; one completion plus an empty active-turn snapshot) | `just gateway-e2e-claude-steer-live` |
@@ -411,8 +412,8 @@ blocks startup or provider journal retirement.
 
 - `src/rpc/dispatch.rs` owns request lifetime classification.
   `conversation/subscriptions/set` executes on its connection in socket order,
-  outside read admission. `daemon/activeTurns`, `daemon/liveActivity` and
-  `host/info` use separate host-wide status admission and never wait behind the
+  outside read admission. `daemon/activeTurns`, `daemon/liveActivity`,
+  `daemon/liveActivity/fleet` and `host/info` use separate host-wide status admission and never wait behind the
   read FIFO or consume the urgent reserve for interrupt, stop and teardown.
 
 - `$/cancelRequest` is a gateway-owned notification with `params.id` equal to
@@ -526,7 +527,7 @@ blocks startup or provider journal retirement.
   correlated to its request (`src/rpc/upstream_errors.rs`), pinned by a test to
   the fork commit in `docs/codex/compatibility.json`.
 - `host/info` returns the gateway process's `homeDirectory`, physical `hostname`,
-  `automationsAuthority` and `speechAvailable` capabilities. These are the
+  `automationsAuthority`, `speechAvailable` and `fleetLiveActivity` capabilities. These are the
   authoritative inputs for client feature availability and physical-host routing.
   Missing capabilities stay unknown/unavailable, never guessed from a display
   name. It is the only way a client learns the home directory; `command/exec` serves
@@ -935,14 +936,18 @@ blocks startup or provider journal retirement.
   card.
 - `devices/` owns every push destination. The app registers each installation
   once per host with `devices/register` (`deviceId`, `bundleId`, `apnsEnvironment`,
-  `appHostId` and a `tokens` set of `alert`, `liveActivity`, `voip` and
-  `location`; the location token carries its navigation start inputs as
-  `{token, navigation}`) and removes it with `devices/unregister`. A
+  `appHostId` and a `tokens` set of `alert`, `liveActivity`, `fleetActivity`,
+  `voip` and `location`; the location token carries its navigation start inputs as
+  `{token, navigation}` and the fleet token its declared host UUIDs as
+  `{token, hosts}`, 1 to 32 distinct) and removes it with `devices/unregister`. A
   registration replaces that device's whole token set, and a token belongs to
   the device that registered it last. The registry holds at most 32 devices
   (`-32001`; nothing is evicted), lives in `~/.remote-coder/devices.json`
   through `private_state::transaction`, and an unreadable or unknown-version
-  file fails visibly and is never overwritten. Tokens never appear in logs or
+  file fails visibly and is never overwritten. A store holding a fleet token is
+  written as version 2. `DeviceRegistry::resolve` loads the file lazily, so an
+  older binary stays healthy on a version-2 file while refusing push delivery
+  and registry operations; the store is forward-only like other release state. Tokens never appear in logs or
   journal lines, only their fingerprints. `devices/register` checks `bundleId`
   against `RC_APNS_BUNDLE_ID` and answers `{hostId}`.
 - Alerts go to every device with an alert token, each stamped with that
@@ -977,13 +982,19 @@ blocks startup or provider journal retirement.
   them read. The attention count counts every unread row.
   Pending or unreadable Claude restart recovery holds publication; resumed
   starts must reach the turn ledger before coverage returns.
-  Superseded async projections are discarded at projection, publication and
-  delivery. Supersession during persistence or delivery leaves that scope
-  unavailable until a current report replaces it. Rows are ordered newest
-  completion first; a title is the pin name, then the native name, then the
-  preview. Delegated agent threads fold into their proven root. Unavailable
-  ancestry marks the shared projection unavailable and holds publication and
-  End, retrying every three seconds until coverage returns. Startup, turn
+  Superseded async projections are discarded at projection. A reported local
+  projection keeps an owned probe of the snapshot watch it was built from;
+  once a newer snapshot is pending it still shows its rows, without marking
+  the host unavailable, but it cannot certify empty or send End, at
+  publication or at delivery, until the newer report replaces it. Rows are
+  ordered newest completion first; a title is the pin name, then the native
+  name, then the preview. Delegated agent threads fold into their proven root,
+  including a root on another member: a child names its remote parent address, and an idle
+  thread that a peer names as parent reports its own root (`ancestry`, at most
+  32) without counting. A hop no current source resolves counts once at the
+  child and marks the unresolved host unavailable; no terminal root is guessed.
+  Unavailable local ancestry marks the shared projection unavailable and holds
+  publication and End, retrying every three seconds until coverage returns. Startup, turn
   events, marks changes, question changes and device registrations refresh
   it, coalesced over 250 ms.
 - A finished turn is recorded on `turn/completed`, except planned
@@ -996,18 +1007,48 @@ blocks startup or provider journal retirement.
   nor `seenThrough` reaches its completion, and `seenThrough` does not pass its
   start. `seenThrough` only holds completion and activity times, so the start
   comparison absorbs Claude's transcript-clock skew.
-- `PushService` publishes the host-default context's content as one per-host
-  activity, persisted in `live-activity.json` so a restart keeps its rows.
-  It publishes the same content through `daemon/liveActivity` and
-  `daemon/liveActivity/changed`, with a process epoch and monotonic revision;
-  the app uses it as the initial content when requesting an activity. A null
-  response or event makes the app projection unavailable and blocks new starts.
-  Startup retains only the default scope and waits for fresh authoritative
-  projection before republishing saved content. Unavailable durable state or
-  pending restoration cannot certify an empty host. It sends current content,
-  or End once the host is empty, to each activity token that has not yet accepted
-  it, so a token registered late still receives the latest state. It
-  sends at APNs priority 10, with a five-minute stale date on updates.
+- `PushService` keeps the local projection and each cluster member's report
+  behind one short synchronous lock (`push::live_activity::Sources`), separate
+  from the async publication lock that serializes revisions, APNs timestamps,
+  delivery and the best-effort cache. A peer report or fleet read never waits
+  for a broker send. The cache, `live-activity-fleet.json`, is written outside
+  the source lock only when it changes; an unreadable cache starts without
+  last-known content and is replaced. The older `live-activity.json` is left
+  for rollback. Restored content stays last known until a fresh projection or
+  report.
+- Each member reports only its local projection with
+  `cluster/liveActivity/report` (`liveActivity.v1` capability), a
+  Connection-lifetime request whose exact dispatch spec precedes the
+  `cluster/` prefix. The receiver keys the report by the authenticated peer
+  grant and binds the member to the newest inbound connection id: an older
+  connection's report is `stale` and cannot replace or revoke the binding. A
+  close withdraws currency only for its bound connection, keeps that id as the
+  ordering fence and is not published while draining. A rejected report
+  (undecodable, another protocol, inconsistent, oversized or over the peer cap)
+  withdraws the bound connection's currency and keeps last-known rows.
+  Accepting peer sockets close after 45 s without an inbound frame (two ping
+  intervals). `cluster/driver.rs` resends after a local change or member wake;
+  dropping an outbound connection (reader end, call timeout or discarded dead
+  socket) wakes its member, so a quietly replaced socket is reported on again. It retries every non-accepted outcome with
+  jittered 0.5–30 s backoff, except that a member lacking `liveActivity.v1`
+  waits for its next wake.
+- The local projection is published unchanged through `daemon/liveActivity`
+  and `daemon/liveActivity/changed` and to `liveActivity` tokens, the per-host
+  activity of released apps. `daemon/liveActivity/fleet {hosts}` (status
+  lifetime) and `daemon/liveActivity/fleet/changed` serve the fleet view for
+  `host/info.fleetLiveActivity`. A fleet view sums counts and keeps the newest
+  three attention rows across the declared hosts, each row carrying its host;
+  a declared host without a current source is listed in `unavailableHostIDs`
+  with its last-known content. Each `fleetActivity` token receives the fleet
+  view of its own declared hosts, and End only when every declared host is
+  current and empty. A publication sends each delivery only while the source
+  revision it captured is current. A running tree's local root resolves
+  through `running_roots` values as well as keys and `ancestry`. Only declared
+  hosts are listed unavailable, and rows over 64 thread-id bytes or 80 title
+  characters, or with control characters, are omitted but counted, keeping
+  the largest state within ActivityKit's 4 KiB. Both kinds are sent to each
+  token that has not yet accepted its current content, so a token registered late still receives
+  the latest state. Updates use APNs priority 10 and a five-minute stale date.
   Relevance is 100 for attention, 25 for running-only work and 0 for empty
   content. Initial app content always uses
   that score. APNs includes `relevance_score` only after the broker's `/healthz`

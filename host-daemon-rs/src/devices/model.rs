@@ -8,6 +8,7 @@ use crate::push::PushEnvironment;
 
 pub(super) const MAX_DEVICES: usize = 32;
 const STORE_VERSION: u8 = 1;
+const FLEET_STORE_VERSION: u8 = 2;
 const MIN_TOKEN_CHARS: usize = 32;
 const MAX_TOKEN_CHARS: usize = 256;
 const MAX_AUTHORIZATION_BYTES: usize = 512;
@@ -17,13 +18,15 @@ const MAX_EVENT_BASE_URL_BYTES: usize = 2048;
 pub(crate) enum TokenKind {
     Alert,
     LiveActivity,
+    FleetActivity,
     Location,
     Voip,
 }
 
-const TOKEN_KINDS: [TokenKind; 4] = [
+const TOKEN_KINDS: [TokenKind; 5] = [
     TokenKind::Alert,
     TokenKind::LiveActivity,
+    TokenKind::FleetActivity,
     TokenKind::Location,
     TokenKind::Voip,
 ];
@@ -33,6 +36,7 @@ impl TokenKind {
         match self {
             Self::Alert => "alert",
             Self::LiveActivity => "liveActivity",
+            Self::FleetActivity => "fleetActivity",
             Self::Location => "location",
             Self::Voip => "voip",
         }
@@ -135,6 +139,30 @@ pub(crate) struct LocationRegistration {
     pub(crate) navigation: NavigationStartInputs,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct FleetActivityRegistration {
+    pub(crate) token: Token,
+    pub(crate) hosts: Vec<String>,
+}
+
+pub(crate) fn fleet_hosts(hosts: Vec<String>) -> Result<Vec<String>> {
+    ensure!(
+        (1..=crate::push::MAX_FLEET_HOSTS).contains(&hosts.len()),
+        "hosts must list 1 to {} host UUIDs",
+        crate::push::MAX_FLEET_HOSTS
+    );
+    let mut canonical = Vec::with_capacity(hosts.len());
+    for host in hosts {
+        let host = parse_uuid(&host)
+            .map(format_uuid)
+            .context("hosts must contain host UUIDs")?;
+        ensure!(!canonical.contains(&host), "hosts must be distinct");
+        canonical.push(host);
+    }
+    Ok(canonical)
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct DeviceTokens {
@@ -142,6 +170,8 @@ pub(crate) struct DeviceTokens {
     pub(super) alert: Option<Token>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) live_activity: Option<Token>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) fleet_activity: Option<FleetActivityRegistration>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) voip: Option<Token>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -153,6 +183,7 @@ impl DeviceTokens {
         match kind {
             TokenKind::Alert => self.alert.as_ref(),
             TokenKind::LiveActivity => self.live_activity.as_ref(),
+            TokenKind::FleetActivity => self.fleet_activity.as_ref().map(|fleet| &fleet.token),
             TokenKind::Voip => self.voip.as_ref(),
             TokenKind::Location => self.location.as_ref().map(|location| &location.token),
         }
@@ -162,6 +193,7 @@ impl DeviceTokens {
         match kind {
             TokenKind::Alert => self.alert = None,
             TokenKind::LiveActivity => self.live_activity = None,
+            TokenKind::FleetActivity => self.fleet_activity = None,
             TokenKind::Voip => self.voip = None,
             TokenKind::Location => self.location = None,
         }
@@ -217,6 +249,9 @@ impl DeviceRegistration {
         if let Some(location) = &self.tokens.location {
             location.navigation.validate()?;
         }
+        if let Some(fleet) = self.tokens.fleet_activity.as_mut() {
+            fleet.hosts = fleet_hosts(std::mem::take(&mut fleet.hosts))?;
+        }
         Ok(self)
     }
 }
@@ -261,9 +296,19 @@ impl Default for DeviceStore {
 impl DeviceStore {
     pub(super) fn validate(&self) -> Result<()> {
         ensure!(
-            self.version == STORE_VERSION,
+            self.version == self.required_version()
+                || (self.version == FLEET_STORE_VERSION
+                    && self.required_version() == STORE_VERSION),
             "unsupported device registry version"
         );
+        for entry in &self.devices {
+            if let Some(fleet) = &entry.tokens.fleet_activity {
+                ensure!(
+                    fleet_hosts(fleet.hosts.clone())? == fleet.hosts,
+                    "device registry has invalid fleet hosts"
+                );
+            }
+        }
         ensure!(
             self.devices.len() <= MAX_DEVICES,
             "device registry capacity exceeded"
@@ -329,6 +374,20 @@ impl DeviceStore {
             None => self.devices.push(entry),
         }
         Ok(())
+    }
+
+    pub(super) fn required_version(&self) -> u8 {
+        if self.holders(TokenKind::FleetActivity).next().is_some() {
+            FLEET_STORE_VERSION
+        } else {
+            STORE_VERSION
+        }
+    }
+
+    pub(super) fn versioned(&self) -> Self {
+        let mut store = self.clone();
+        store.version = store.version.max(self.required_version());
+        store
     }
 
     pub(super) fn remove(&mut self, device_id: &str) -> bool {

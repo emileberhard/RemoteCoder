@@ -15,7 +15,7 @@ const MAX_COLLAPSE_ID_BYTES: usize = 64;
 fn route(kind: TokenKind) -> &'static str {
     match kind {
         TokenKind::Alert => "/v1/internal/alert",
-        TokenKind::LiveActivity => "/v1/internal/live-activity",
+        TokenKind::LiveActivity | TokenKind::FleetActivity => "/v1/internal/live-activity",
         TokenKind::Location => "/v1/internal/location",
         TokenKind::Voip => "/v1/internal/voip",
     }

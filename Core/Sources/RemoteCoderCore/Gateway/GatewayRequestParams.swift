@@ -16,6 +16,10 @@ enum GatewayRequestParams {
         let limit: Int
     }
 
+    struct FleetLiveActivity: Encodable {
+        let hosts: [String]
+    }
+
     struct Subscription: Encodable {
         let subscriptionId: String
     }

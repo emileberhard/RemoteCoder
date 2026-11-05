@@ -16,14 +16,14 @@ struct TargetLifecycleTests {
 
         let effects = life.handle(.appPhase(.active))
 
-        #expect(effects == [.startLoops, .syncLiveActivity(sticky: false), .refreshForeground(generation: 1)])
+        #expect(effects == [.startLoops, .refreshForeground(generation: 1)])
         #expect(life.foreground == .current)
     }
 
     @Test func aHiddenIdleTargetDefersItsRefreshUntilItIsPresented() {
         var life = lifecycle(presented: false)
 
-        #expect(life.handle(.appPhase(.active)) == [.startLoops, .syncLiveActivity(sticky: false)])
+        #expect(life.handle(.appPhase(.active)) == [.startLoops])
         #expect(life.foreground == .deferred)
         #expect(life.handle(.presentation(TargetPresentation(presented: true))) == [.refreshForeground(generation: 1)])
         #expect(life.foreground == .current)
@@ -64,19 +64,18 @@ struct TargetLifecycleTests {
 
         let effects = life.handle(.appPhase(.background))
 
-        #expect(effects == [.flush, .stopLoops, .syncLiveActivity(sticky: false), .disconnect])
+        #expect(effects == [.flush, .stopLoops, .disconnect])
         #expect(life.hold == .disconnected)
         #expect(!life.allowsActivityReads)
     }
 
-    @Test func backgroundingABusyTargetHoldsGraceAndMarksTheLiveActivitySticky() {
+    @Test func backgroundingABusyTargetHoldsGrace() {
         var life = lifecycle(work: 1)
 
         let effects = life.handle(.appPhase(.background))
 
-        #expect(effects == [.flush, .stopLoops, .beginGrace, .syncLiveActivity(sticky: true)])
+        #expect(effects == [.flush, .stopLoops, .beginGrace])
         #expect(life.hold == .grace)
-        #expect(life.backgroundSticky)
     }
 
     @Test func graceExpiryDisconnectsOnceAndALateExpiryIsSilent() {
@@ -88,21 +87,20 @@ struct TargetLifecycleTests {
         #expect(life.handle(.graceExpired) == [])
     }
 
-    @Test func workEndingDuringGraceDisconnectsAtOnceAndClearsTheStickyFlag() {
+    @Test func workEndingDuringGraceDisconnectsAtOnce() {
         var life = lifecycle(work: 2)
         _ = life.handle(.appPhase(.background))
 
-        #expect(life.handle(.activeWorkChanged(count: 1)) == [.syncLiveActivity(sticky: true)])
+        #expect(life.handle(.activeWorkChanged(count: 1)).isEmpty)
         #expect(life.hold == .grace)
-        #expect(life.handle(.activeWorkChanged(count: 0)) == [.syncLiveActivity(sticky: false), .disconnect])
-        #expect(!life.backgroundSticky)
+        #expect(life.handle(.activeWorkChanged(count: 0)) == [.disconnect])
     }
 
     @Test func workStartingWhileDisconnectedInTheBackgroundStartsANewGrace() {
         var life = lifecycle()
         _ = life.handle(.appPhase(.background))
 
-        #expect(life.handle(.activeWorkChanged(count: 1)) == [.syncLiveActivity(sticky: false), .beginGrace])
+        #expect(life.handle(.activeWorkChanged(count: 1)) == [.beginGrace])
         #expect(life.hold == .grace)
     }
 
@@ -111,7 +109,7 @@ struct TargetLifecycleTests {
 
         let effects = life.handle(.appPhase(.background))
 
-        #expect(effects == [.flush, .stopLoops, .syncLiveActivity(sticky: false)])
+        #expect(effects == [.flush, .stopLoops])
         #expect(life.hold == .none)
         #expect(life.allowsActivityReads)
         #expect(life.handle(.voiceCall(false)) == [.disconnect])
@@ -132,10 +130,10 @@ struct TargetLifecycleTests {
         #expect(life.handle(.voiceCall(false)) == [])
     }
 
-    @Test func inactiveWithoutWorkRequestsThePreparedAttentionActivity() {
+    @Test func inactiveWithoutWorkOnlyStopsLoops() {
         var life = lifecycle()
 
-        #expect(life.handle(.appPhase(.inactive)) == [.stopLoops, .syncLiveActivity(sticky: false)])
+        #expect(life.handle(.appPhase(.inactive)) == [.stopLoops])
         #expect(!life.isBackgrounded)
         #expect(life.hold == .none)
     }
@@ -143,17 +141,17 @@ struct TargetLifecycleTests {
     @Test func inactiveWithWorkHoldsTheAssertionWithoutAGraceTimer() {
         var life = lifecycle(work: 1)
 
-        #expect(life.handle(.appPhase(.inactive)) == [.stopLoops, .holdAssertion, .syncLiveActivity(sticky: true)])
+        #expect(life.handle(.appPhase(.inactive)) == [.stopLoops, .holdAssertion])
         #expect(life.hold == .assertion)
         #expect(life.isBackgrounded)
-        #expect(life.handle(.appPhase(.inactive)) == [.stopLoops, .syncLiveActivity(sticky: true)])
+        #expect(life.handle(.appPhase(.inactive)) == [.stopLoops])
     }
 
     @Test func backgroundingAfterAnInactiveHoldStartsTheGraceTimer() {
         var life = lifecycle(work: 1)
         _ = life.handle(.appPhase(.inactive))
 
-        #expect(life.handle(.appPhase(.background)) == [.flush, .stopLoops, .beginGrace, .syncLiveActivity(sticky: true)])
+        #expect(life.handle(.appPhase(.background)) == [.flush, .stopLoops, .beginGrace])
         #expect(life.hold == .grace)
     }
 
@@ -170,7 +168,7 @@ struct TargetLifecycleTests {
 
         let effects = life.handle(.appPhase(.active))
 
-        #expect(effects == [.endGrace, .startLoops, .syncLiveActivity(sticky: true), .refreshForeground(generation: 2)])
+        #expect(effects == [.endGrace, .startLoops, .refreshForeground(generation: 2)])
         #expect(life.hold == .none)
         #expect(!life.isBackgrounded)
     }
@@ -181,7 +179,7 @@ struct TargetLifecycleTests {
 
         let effects = life.handle(.appPhase(.active))
 
-        #expect(effects == [.startLoops, .syncLiveActivity(sticky: false), .refreshForeground(generation: 2)])
+        #expect(effects == [.startLoops, .refreshForeground(generation: 2)])
         #expect(life.hold == .none)
     }
 

@@ -33,7 +33,6 @@ struct TargetLifecycle: Equatable, Sendable {
         case beginGrace
         case endGrace
         case disconnect
-        case syncLiveActivity(sticky: Bool)
         case flush
     }
 
@@ -46,7 +45,6 @@ struct TargetLifecycle: Equatable, Sendable {
     private(set) var foreground = ForegroundRefresh.current
     private(set) var hold = BackgroundHold.none
     private(set) var isBackgrounded = false
-    private(set) var backgroundSticky = false
 
     var isRetired: Bool { phase == .retired }
     var acceptsWork: Bool { phase == .live }
@@ -104,7 +102,7 @@ struct TargetLifecycle: Equatable, Sendable {
     private mutating func activate() -> [Effect] {
         isBackgrounded = false
         var effects: [Effect] = releaseHold()
-        effects += [.startLoops, .syncLiveActivity(sticky: backgroundSticky)]
+        effects.append(.startLoops)
         if needsGatewayLoops {
             foreground = .current
             effects.append(.refreshForeground(generation: generation))
@@ -116,17 +114,12 @@ struct TargetLifecycle: Equatable, Sendable {
 
     private mutating func deactivate() -> [Effect] {
         var effects: [Effect] = [.stopLoops]
-        guard activeWorkCount > 0 else {
-            effects.append(.syncLiveActivity(sticky: false))
-            return effects
-        }
+        guard activeWorkCount > 0 else { return effects }
         isBackgrounded = true
-        backgroundSticky = true
         if hold == .none {
             hold = .assertion
             effects.append(.holdAssertion)
         }
-        effects.append(.syncLiveActivity(sticky: true))
         return effects
     }
 
@@ -135,13 +128,9 @@ struct TargetLifecycle: Equatable, Sendable {
         var effects: [Effect] = [.flush, .stopLoops]
         if voiceCallActive {
             effects += releaseHold()
-            effects.append(.syncLiveActivity(sticky: backgroundSticky))
         } else if activeWorkCount > 0 {
-            backgroundSticky = true
             effects += beginGraceIfNeeded()
-            effects.append(.syncLiveActivity(sticky: true))
         } else {
-            effects.append(.syncLiveActivity(sticky: backgroundSticky))
             effects += disconnectIfNeeded()
         }
         return effects
@@ -161,12 +150,8 @@ struct TargetLifecycle: Equatable, Sendable {
         precondition(count >= 0, "active work count cannot be negative")
         let previous = activeWorkCount
         activeWorkCount = count
-        guard count != previous else { return [] }
-        if count == 0 { backgroundSticky = false }
-        var effects: [Effect] = [.syncLiveActivity(sticky: backgroundSticky)]
-        guard allowsDisconnect else { return effects }
-        effects += count == 0 ? disconnectIfNeeded() : beginGraceIfNeeded()
-        return effects
+        guard count != previous, allowsDisconnect else { return [] }
+        return count == 0 ? disconnectIfNeeded() : beginGraceIfNeeded()
     }
 
     private mutating func changeVoiceCall(to active: Bool) -> [Effect] {

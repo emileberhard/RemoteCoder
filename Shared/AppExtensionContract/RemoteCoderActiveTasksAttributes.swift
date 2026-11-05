@@ -9,23 +9,29 @@ struct RemoteCoderActiveTasksAttributes: ActivityAttributes {
         // Absent until the gateway authors the content, and from older daemon versions.
         let attention: [Attention]?
         let attentionCount: Int?
+        let unavailableHostIDs: [UUID]?
         // Keep the state JSON-serializable for potential remote (APNs) Live Activity updates.
         let updatedAtUnixSeconds: Double
+
+        var unavailableSummary: String? {
+            switch unavailableHostIDs?.count ?? 0 {
+            case 0: nil
+            case 1: "1 host unavailable"
+            case let count: "\(count) hosts unavailable"
+            }
+        }
     }
 
     let startedAt: Date
-    // One aggregate activity per gateway host. Optional so activities requested
-    // by an earlier build still decode; those are treated as legacy and are only
-    // ever retired, never adopted by a host.
-    let hostID: UUID?
-    let hostName: String?
+    // Activities from builds before the fleet activity have none; they are only retired.
+    let coordinatorID: UUID?
 
     func tapURL(for state: ContentState) -> URL {
         state.attention?.first.flatMap(url(for:)) ?? RemoteCoderDeepLinks.openApp
     }
 
     func url(for attention: ContentState.Attention) -> URL? {
-        guard let hostID else { return nil }
+        guard let hostID = attention.hostID else { return nil }
         return RemoteCoderDeepLinks.url(for: RemoteCoderConversationLink(
             hostID: hostID, threadID: attention.threadID))
     }

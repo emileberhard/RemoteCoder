@@ -593,6 +593,21 @@ impl AgentService<'_> {
         }
     }
 
+    pub(in crate::gateway) async fn remote_parents(
+        &self,
+        roots: impl IntoIterator<Item = &String>,
+    ) -> Option<HashMap<String, crate::wire::cluster::AgentAddress>> {
+        let parents = self.gateway.agents.parents.lock().await;
+        let mut remote = HashMap::new();
+        for root in roots {
+            let snapshot = parents.get(root).filter(|snapshot| snapshot.available)?;
+            if let Some(parent) = &snapshot.remote_parent {
+                remote.insert(root.clone(), parent.clone());
+            }
+        }
+        Some(remote)
+    }
+
     pub(in crate::gateway) async fn thread_roots(
         &self,
         threads: &[String],
@@ -609,7 +624,8 @@ impl AgentService<'_> {
                         snapshot.at.elapsed()
                             > Duration::from_secs(if !snapshot.available {
                                 3
-                            } else if snapshot.parent.is_some() {
+                            } else if snapshot.parent.is_some() || snapshot.remote_parent.is_some()
+                            {
                                 300
                             } else {
                                 10
@@ -625,9 +641,13 @@ impl AgentService<'_> {
                             let parent = async {
                                 let host = self.gateway.host_identity().await?.host_id;
                                 self.parent_for_thread(&thread).await.map(|parent| {
-                                    parent
-                                        .filter(|parent| parent.host_id == host)
-                                        .map(|parent| parent.thread_id)
+                                    parent.map(|parent| {
+                                        if parent.host_id == host {
+                                            ParentLink::Local(parent.thread_id)
+                                        } else {
+                                            ParentLink::Remote(parent)
+                                        }
+                                    })
                                 })
                             }
                             .await;
@@ -640,11 +660,17 @@ impl AgentService<'_> {
                     .await;
                 for (thread, parent) in reads {
                     let available = parent.is_ok();
-                    let parent = parent.unwrap_or_else(|_| {
-                        parents
+                    let (parent, remote_parent) = match parent {
+                        Ok(Some(ParentLink::Local(parent))) => (Some(parent), None),
+                        Ok(Some(ParentLink::Remote(parent))) => (None, Some(parent)),
+                        Ok(None) => (None, None),
+                        Err(_) => parents
                             .get(&thread)
-                            .and_then(|snapshot| snapshot.parent.clone())
-                    });
+                            .map(|snapshot| {
+                                (snapshot.parent.clone(), snapshot.remote_parent.clone())
+                            })
+                            .unwrap_or_default(),
+                    };
                     if parents.len() >= 1024
                         && !parents.contains_key(&thread)
                         && let Some(oldest) = parents
@@ -659,6 +685,7 @@ impl AgentService<'_> {
                         ParentSnapshot {
                             at: Instant::now(),
                             parent,
+                            remote_parent,
                             available,
                         },
                     );
@@ -715,4 +742,9 @@ impl AgentService<'_> {
             })
             .collect()
     }
+}
+
+enum ParentLink {
+    Local(String),
+    Remote(crate::wire::cluster::AgentAddress),
 }

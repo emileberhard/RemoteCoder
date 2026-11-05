@@ -97,7 +97,8 @@ One line per term, with the type that owns it and the document that holds its co
 
 | Term | Meaning | Owner | Contract |
 |---|---|---|---|
-| Live Activity attention | One host aggregate of unread finishes (marked when they asked an unseen question) and running root count; gateway-authored initial content, updates and normal End | `ActiveTasksLiveActivityService`, `host-daemon-rs/src/gateway/live_activity.rs`, `PushService` | [Gateway](../host-daemon-rs/AGENTS.md#push-notifications) |
+| Live Activity attention | One fleet aggregate over the device's configured hosts of unread finishes (marked when they asked an unseen question) and running root count, with each row's host and any unavailable hosts; its coordinator gateway authors initial content, updates and End | `FleetLiveActivityService`, `host-daemon-rs/src/gateway/live_activity.rs`, `PushService` | [Gateway](../host-daemon-rs/AGENTS.md#push-notifications), [Fleet Live Activity](fleet-live-activity.md) |
+| Live Activity coordinator | The capable gateway, preferring the automations authority, that alone holds the fleet activity's token for its lifetime and merges current peer reports | `FleetLiveActivityPlan.coordinator`, `push::live_activity::Sources` | [Fleet Live Activity](fleet-live-activity.md) |
 | Voice call Live Activity | The Lock Screen and Dynamic Island activity a Voice Mode intent start presents for its exact call, ended by that call's teardown | `VoiceCallLiveActivity`, `VoiceCall.startWithLiveActivity`, `RemoteCoderVoiceCallWidget` | [App](../RemoteCoder/AGENTS.md#app-intents-and-quick-actions-app-shared) |
 | Live Navigation | Agent-driven live-location guidance on the phone | `host-daemon-rs/src/navigation.rs` | [Live navigation](live-navigation.md) |
 | LPSE | The Location Push Service Extension that wakes the app for one-shot location | `RemoteCoderLocationPushService/` | [Live navigation](live-navigation.md) |

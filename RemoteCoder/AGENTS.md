@@ -123,7 +123,7 @@ entrypoint linked above.
 - `ChatWorkspaceModel` owns one `ChatTargetModel` per configured execution target
   (one per host), through `ExecutionTargetRegistry`.
   - A model's host, gateway client, history and metadata services,
-    conversation index, `HostDirectories` and Live Activity service are fixed
+    conversation index and `HostDirectories` are fixed
     for its lifetime. Switching hosts only changes which model is presented;
     other models keep their socket, draft, selected conversation and running
     turns.
@@ -195,8 +195,8 @@ entrypoint linked above.
     history invalidation and the rest; a slot clears itself when its task ends
     and a replaced task never clears its successor's slot), and cancels the
     `TurnDispatcher`'s sends, steers and Stops. It ends a voice call only if that host
-    owned it. `retire()` then closes the socket, the host directories and the
-    Live Activity, and joins every admitted task, replaced ones included.
+    owned it. `retire()` then closes the socket and the host directories,
+    and joins every admitted task, replaced ones included.
   - Every suspension point in `prepareIfNeeded`, `handleScenePhaseActive` and
     turn dispatch rechecks the fence on resume. Late work therefore cannot
     restart polling, send a turn, or publish into the replacement that now owns
@@ -337,10 +337,10 @@ entrypoint linked above.
     closes when it loses it. A SwiftUI `MenuBarExtra` re-rendered its label in a
     loop with the menu bar's appearance, costing up to 364 ms of main-thread
     time per second while the transcript scrolled.
-  - **Live Activities.** `ActiveTasksLiveActivityScope` keeps one aggregate Live
-    Activity per host, so an idle host cannot end another's. The service retains
-    its restored/requested activity; foreground idle snapshots do not schedule
-    sync, and one pending sync consumes the latest lifecycle and snapshot state.
+  - **Live Activities.** The workspace owns one `FleetLiveActivityService` for
+    all hosts. Target hints (turn count, connect, disconnect and
+    `daemon/liveActivity/fleet/changed`) schedule one coalesced pass; it is
+    described under *Live Activities and widgets*.
   - **Audio.** Audio has one route. `ChatTargetModel.ownsAudioRoute` gates
     spoken replies to the host on screen, and hiding or retiring a host stops
     the reply it is speaking. Hiding a host completes its in-flight
@@ -1299,13 +1299,11 @@ entrypoint linked above.
   Notification taps resolve the recorded host and thread, ignoring retired
   enrollment fields, then recheck that owner after loading before committing
   selection or question focus. Explicit navigation supersedes the pending tap.
-- On `.inactive`/`.background`, `ChatTargetModel` requests the host's Live
-  Activity from its prepared gateway snapshot when work runs or attention waits,
-  and registers its push token. `daemon/liveActivity` and
-  `daemon/liveActivity/changed` carry the same host aggregate used for APNs,
-  including both providers, with an epoch and revision. The gateway authors
-  every later update and ends it once nothing on that host runs or waits for
-  you.
+- On `.inactive` the workspace awaits one fleet Live Activity pass after the
+  hosts' scene work, so an activity and its token registration exist before
+  suspension. The coordinator gateway authors every later update from
+  `daemon/liveActivity/fleet` content, including both providers, and ends it
+  once every declared host is current and empty.
 - Settings include an appearance theme picker (`AppThemeStore`) for subtle
   glass, message, sheet and status tinting.
 
@@ -1869,18 +1867,32 @@ The gateway side is in `host-daemon-rs/AGENTS.md`; both paths are in
 
 ## Live Activities and widgets (`Platform/iOS/LiveActivities/`, `RemoteCoderLiveActivities/`)
 
-- `ActiveTasksLiveActivityService` is the actor that keeps one aggregate Live
-  Activity per gateway host. The app requests it with the gateway's complete initial content and registers
-  its push token; the initial content uses the gateway's relevance score,
-  keeping attention above running-only hosts. The host's gateway authors every update and ends it, so it stays
-  current while the app is suspended. The app ends it itself only when Live
-  Activities are disabled or the host is retired. It touches only activities
-  carrying its own host id, plus host-less ones from earlier builds.
-- `RemoteCoderActiveTasksAttributes` carries the count of running root
-  conversations (`activeTaskCount`), up to three `attention` rows (thread,
-  account, title, `finishedUnread` or `question`, completion time) and
-  `attentionCount`. `attention` is optional for activities from earlier builds. Its `hostID`/`hostName` are optional so older activities still
-  decode; those count as legacy and are only ever retired.
+- `FleetLiveActivityService` keeps one active-tasks Live Activity for every
+  configured host. It starts one only outside the background, from a capable
+  coordinator's fleet read: a canonical host whose `host/info` advertises
+  `fleetLiveActivity`, preferring the automations authority. The coordinator
+  stays fixed for the activity's lifetime and alone receives the
+  `fleetActivity` token with the device's exact configured host UUIDs; every
+  other host's registration omits it. The activity starts with the read's
+  content and relevance score only when that content is not empty and differs
+  from the content of the last dismissed activity (counts, rows and coverage,
+  ignoring the timestamp), which an observed empty read or a newly started
+  activity clears; End certification stays with the gateway. Adoption
+  seeds the push token from `pushToken` and follows `pushTokenUpdates` for
+  rotation. A coordinator whose first read fails is skipped for the next
+  capable host in that pass. Each foreground pass rereads the coordinator; when that fails it ends the activity and moves
+  to another capable host. Removing the coordinator from the configured hosts ends it.
+  Launch keeps one live activity whose coordinator is configured and ends every
+  other, including per-host activities from earlier builds. Without a capable
+  gateway, no activity starts. The Mac arm is a no-op with the same API.
+  Voice-call activities keep their own owner.
+- `RemoteCoderActiveTasksAttributes` carries `startedAt` and `coordinatorID`
+  (absent on activities from earlier builds, which are only retired); the
+  device registration, not the attributes, holds the exact host set. Its
+  content state carries the count of running root conversations (`activeTaskCount`), up to three `attention` rows (host,
+  thread, title, `finishedUnread` or `question`, completion time),
+  `attentionCount` and `unavailableHostIDs`; all but the count are optional so
+  older payloads decode. Rows link to their own host and thread.
   `Shared/AppExtensionContract/` is its single owner, compiled into the app and
   the extension.
 - `RemoteCoderActiveTasksWidget` shows only what waits for you. A Lock Screen
@@ -1888,9 +1900,11 @@ The gateway side is in `host-daemon-rs/AGENTS.md`; both paths are in
   orange bubble when it also asked a question you have not seen. It shows the
   title and completion time and links to that conversation; `+N more` covers the rest. Running work is
   only a count in the header's corner, inside a ring that turns when the count
-  changes. The Dynamic Island's expanded view shows the lead row; compact and
-  minimal show the question symbol, else the waiting count, else the running
-  ring. Content is always visible, never `privacySensitive`. The glyph is
+  changes. Incomplete coverage shows how many hosts are unavailable, and
+  waiting work whose rows were all omitted still shows its count. The Dynamic
+  Island's expanded view shows the lead row; compact and minimal show the
+  question symbol, else the waiting count, else the running ring, else the
+  unavailable symbol. Content is always visible, never `privacySensitive`. The glyph is
   `Assets.xcassets/LiveActivityAppGlyph.imageset`.
 - `RemoteCoderVoiceCallWidget` renders the call activity Voice Mode's intent
   starts: host name and call timer. A tap opens `remotecoder://chat/call?id=`,

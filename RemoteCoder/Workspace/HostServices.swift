@@ -13,9 +13,6 @@ final class HostServices {
     let gateway: GatewayClient
     let directories: HostDirectories
     let preferenceExchange: SyncedPreferenceExchange
-    #if os(iOS)
-    let activities: ActiveTasksLiveActivityService
-    #endif
     let automations: AutomationManagement
     let registration: DeviceRegistration
 
@@ -31,9 +28,6 @@ final class HostServices {
         preferenceExchange = SyncedPreferenceExchange(gateway: gateway, store: store, hostLabel: host.errorLabel)
         htmlVisualDocuments = HTMLVisualDocumentStore(hostID: host.id, access: files, cache: htmlVisuals.documents)
         htmlVisualRenderer = htmlVisuals.renderer
-        #if os(iOS)
-        activities = ActiveTasksLiveActivityService(hostID: host.id, hostName: host.displayName, legacyHostIDs: Set(host.legacyIDs))
-        #endif
         registration = DeviceRegistration(
             appHostID: host.id, eventBaseURL: host.gatewayHTTPBaseURL()?.absoluteString, transport: gateway
         )

@@ -5,6 +5,9 @@ use serde_json::json;
 use std::sync::Arc;
 use std::time::Duration;
 
+const REPORT_RETRY_FLOOR: Duration = Duration::from_millis(500);
+const REPORT_RETRY_CEILING: Duration = Duration::from_secs(30);
+
 pub(crate) fn start(gateway: &Arc<Gateway>) -> Result<()> {
     let weak = Arc::downgrade(gateway);
     let started = gateway
@@ -20,13 +23,17 @@ pub(crate) fn start(gateway: &Arc<Gateway>) -> Result<()> {
             let capacity = Arc::new(tokio::sync::Semaphore::new(64));
             loop {
                 let link = gateway.cluster_link().await?;
-                for member in link
+                let members: Vec<_> = link
                     .store
                     .all()
                     .await?
                     .into_iter()
                     .filter(|member| member.state != MemberState::Removed)
-                {
+                    .collect();
+                gateway.retain_live_activity_peers(
+                    &members.iter().map(|member| member.host.clone()).collect(),
+                );
+                for member in members {
                     if running.insert(member.membership.clone()) {
                         let weak = Arc::downgrade(&gateway);
                         let stop = shutdown.child_token();
@@ -63,6 +70,81 @@ pub(crate) fn start(gateway: &Arc<Gateway>) -> Result<()> {
 }
 
 async fn member_worker(
+    gateway: std::sync::Weak<Gateway>,
+    member: MemberRecord,
+    capacity: Arc<tokio::sync::Semaphore>,
+    shutdown: tokio_util::sync::CancellationToken,
+) -> Result<()> {
+    let stop = shutdown.child_token();
+    let host = member.host.clone();
+    let (deliveries, reports) = tokio::join!(
+        async {
+            let result = member_deliveries(gateway.clone(), member, capacity, stop.clone()).await;
+            stop.cancel();
+            result
+        },
+        live_activity_reports(gateway.clone(), host, stop.clone()),
+    );
+    deliveries.and(reports)
+}
+
+async fn live_activity_reports(
+    gateway: std::sync::Weak<Gateway>,
+    host: String,
+    stop: tokio_util::sync::CancellationToken,
+) -> Result<()> {
+    let Some(owner) = gateway.upgrade() else {
+        return Ok(());
+    };
+    let link = owner.cluster_link().await?;
+    let mut wakes = link.member_wakes(&host).await;
+    let mut reports = owner.peer_live_activity_reports();
+    drop(owner);
+    let mut settled = false;
+    let mut delay = REPORT_RETRY_FLOOR;
+    loop {
+        let report = reports.borrow_and_update().clone();
+        if !settled && let Some(report) = &report {
+            let params = json!(LiveActivityReportParams {
+                protocol: PROTOCOL,
+                projection: report.projection.clone(),
+            });
+            settled = match link
+                .call(&host, "cluster/liveActivity/report", params)
+                .await
+            {
+                Ok(reply) => reply["outcome"] == "accepted",
+                Err(error) => error.class == ErrorClass::Unsupported,
+            };
+            delay = if settled {
+                REPORT_RETRY_FLOOR
+            } else {
+                (delay * 2).min(REPORT_RETRY_CEILING)
+            };
+        }
+        tokio::select! {
+            _ = stop.cancelled() => break,
+            changed = wakes.changed() => {
+                if changed.is_err() { break; }
+                settled = false;
+            }
+            changed = reports.changed() => {
+                if changed.is_err() { break; }
+                settled = false;
+            }
+            _ = tokio::time::sleep(jittered(delay)), if !settled && report.is_some() => {}
+        }
+    }
+    Ok(())
+}
+
+fn jittered(delay: Duration) -> Duration {
+    let fraction =
+        f64::from(getrandom::u32().expect("operating system entropy")) / f64::from(u32::MAX);
+    delay.mul_f64(0.5 + fraction / 2.0)
+}
+
+async fn member_deliveries(
     gateway: std::sync::Weak<Gateway>,
     member: MemberRecord,
     capacity: Arc<tokio::sync::Semaphore>,

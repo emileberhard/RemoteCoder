@@ -246,7 +246,7 @@ async fn the_registry_holds_at_most_thirty_two_devices() {
 
 #[tokio::test]
 async fn an_unreadable_registry_is_reported_and_never_overwritten() {
-    for contents in ["{not json", r#"{"version":2,"devices":[]}"#] {
+    for contents in ["{not json", r#"{"version":3,"devices":[]}"#] {
         let registry = DeviceRegistry::temporary();
         std::fs::write(&registry.path, contents).unwrap();
         assert!(registry.alert_targets().await.is_err());
@@ -256,6 +256,93 @@ async fn an_unreadable_registry_is_reported_and_never_overwritten() {
         ));
         assert_eq!(std::fs::read_to_string(&registry.path).unwrap(), contents);
     }
+}
+
+const FLEET_A: &str = "AAAAAAAA-0000-4000-8000-00000000000A";
+const FLEET_B: &str = "bbbbbbbb-0000-4000-8000-00000000000b";
+
+fn fleet_token(seed: u8) -> String {
+    format!("f1{seed:02x}").repeat(16)
+}
+
+fn with_fleet(seed: u8, hosts: serde_json::Value) -> DeviceRegistration {
+    registration_with(seed, |value| {
+        value["tokens"]["fleetActivity"] = json!({"token": fleet_token(seed), "hosts": hosts});
+    })
+}
+
+fn stored_version(registry: &DeviceRegistry) -> u64 {
+    let document: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&registry.path).unwrap()).unwrap();
+    document["version"].as_u64().unwrap()
+}
+
+#[tokio::test]
+async fn a_fleet_activity_registration_migrates_the_registry_one_way() {
+    let registry = DeviceRegistry::temporary();
+    registry.register(registration(1)).await.unwrap();
+    assert_eq!(stored_version(&registry), 1);
+
+    registry
+        .register(with_fleet(1, json!([FLEET_A, FLEET_B])))
+        .await
+        .unwrap();
+    let targets = registry.fleet_activity_targets().await.unwrap();
+    assert_eq!(targets.len(), 1);
+    assert_eq!(targets[0].destination.token.as_str(), fleet_token(1));
+    assert_eq!(
+        targets[0].hosts,
+        vec![FLEET_A.to_lowercase(), FLEET_B.to_lowercase()]
+    );
+    assert_eq!(
+        registry.live_activity_destinations().await.unwrap().len(),
+        1
+    );
+    assert_eq!(stored_version(&registry), 2);
+
+    registry.register(registration(1)).await.unwrap();
+    assert!(registry.fleet_activity_targets().await.unwrap().is_empty());
+    assert_eq!(stored_version(&registry), 2);
+}
+
+#[tokio::test]
+async fn a_version_one_registry_holding_a_fleet_token_is_unreadable() {
+    let registry = DeviceRegistry::temporary();
+    registry
+        .register(with_fleet(1, json!([FLEET_A])))
+        .await
+        .unwrap();
+    let mut document: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&registry.path).unwrap()).unwrap();
+    document["version"] = json!(1);
+    let contents = document.to_string();
+    std::fs::write(&registry.path, &contents).unwrap();
+    assert!(registry.fleet_activity_targets().await.is_err());
+    assert!(matches!(
+        registry.register(registration(2)).await,
+        Err(RegisterError::Unavailable(_))
+    ));
+    assert_eq!(std::fs::read_to_string(&registry.path).unwrap(), contents);
+}
+
+#[tokio::test]
+async fn fleet_hosts_must_be_one_to_thirty_two_distinct_host_uuids() {
+    let registry = DeviceRegistry::temporary();
+    let many: Vec<String> = (0..33)
+        .map(|index| format!("00000000-0000-4000-8000-{index:012}"))
+        .collect();
+    for hosts in [
+        json!([]),
+        json!(["not-a-host"]),
+        json!([FLEET_A, FLEET_A.to_lowercase()]),
+        json!(many),
+    ] {
+        assert!(matches!(
+            registry.register(with_fleet(1, hosts)).await,
+            Err(RegisterError::Invalid(_))
+        ));
+    }
+    assert!(!registry.path.exists());
 }
 
 #[tokio::test]

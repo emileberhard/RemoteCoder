@@ -1,9 +1,13 @@
-use super::turn_state::{active_tasks_live_activity_snapshot, text_preview};
+use super::turn_state::active_tasks_live_activity_snapshot;
 use super::{ActiveTasksLiveActivitySnapshot, Gateway};
 use crate::conversation_marks::{Marks, ThreadMarks};
 use crate::providers::claude::{is_claude_thread_id, session_uuid_from_thread_id};
-use crate::push::{AttentionReason, AttentionRow, LiveActivityContent, MAX_ATTENTION_ROWS};
+use crate::push::{
+    AttentionReason, AttentionRow, Freshness, LiveActivityContent, MAX_ATTENTION_ROWS, PeerOutcome,
+    PeerReport, SourceProjection, attention_title,
+};
 use crate::storage::private_state;
+use crate::wire::cluster::AgentAddress;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -16,8 +20,8 @@ use tracing::warn;
 
 const COALESCE_WINDOW: Duration = Duration::from_millis(250);
 const TITLE_READ_TIMEOUT: Duration = Duration::from_secs(2);
-const MAX_TITLE_CHARS: usize = 80;
 const MAX_FINISHED_TURNS: usize = 32;
+const MAX_REFERENCED_THREADS: usize = 32;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -131,27 +135,30 @@ fn header_title(header: &Value) -> Option<String> {
         .filter_map(|field| header[field].as_str())
         .map(str::trim)
         .find(|title| !title.is_empty())
-        .map(|title| text_preview(title, MAX_TITLE_CHARS))
+        .map(attention_title)
 }
 
-fn attention_content(
+fn source_projection(
     snapshot: &ActiveTasksLiveActivitySnapshot,
     marks: &Marks,
     latest_questions: &BTreeMap<String, i64>,
     owners: &HashMap<String, String>,
-    account_id: Option<&str>,
-) -> Result<LiveActivityContent> {
-    let running: BTreeSet<&String> = snapshot
+    remote_parents: &HashMap<String, AgentAddress>,
+    ancestry: BTreeMap<String, String>,
+) -> Result<SourceProjection> {
+    let running_roots: BTreeMap<String, String> = snapshot
         .running
         .iter()
-        .filter_map(|thread| owners.get(thread))
+        .filter_map(|thread| Some((thread.clone(), owners.get(thread)?.clone())))
         .collect();
+    let running: BTreeSet<&String> = running_roots.values().collect();
     let mut attention: Vec<_> = snapshot
         .finished
         .known()?
         .iter()
         .filter(|(thread, turn)| {
             owners.get(*thread) == Some(*thread)
+                && !remote_parents.contains_key(*thread)
                 && !running.contains(thread)
                 && turn.is_unread(marks.threads.get(*thread), marks.read_baseline)
         })
@@ -161,8 +168,8 @@ fn attention_content(
                 asked_since_read(asked_at_ms, marks.threads.get(thread), marks.read_baseline)
             });
             AttentionRow {
+                host_id: None,
                 thread_id: thread.clone(),
-                account_id: account_id.map(str::to_owned),
                 title: None,
                 reason: if asked {
                     AttentionReason::Question {
@@ -177,10 +184,33 @@ fn attention_content(
     attention.sort_by(AttentionRow::attention_order);
     let attention_count = attention.len();
     attention.truncate(MAX_ATTENTION_ROWS);
-    Ok(LiveActivityContent {
-        active_task_count: running.len(),
-        attention,
-        attention_count,
+    let ancestry: BTreeMap<String, String> = ancestry
+        .into_iter()
+        .filter(|(thread, _)| !running_roots.contains_key(thread))
+        .collect();
+    let remote_parents: BTreeMap<String, AgentAddress> = running
+        .iter()
+        .copied()
+        .chain(ancestry.values())
+        .filter_map(|root| Some((root.clone(), remote_parents.get(root)?.clone())))
+        .collect();
+    let local_trees = running
+        .iter()
+        .filter(|root| !remote_parents.contains_key(**root))
+        .count();
+    let remote_trees: BTreeSet<&AgentAddress> = running
+        .iter()
+        .filter_map(|root| remote_parents.get(*root))
+        .collect();
+    Ok(SourceProjection {
+        content: LiveActivityContent {
+            active_task_count: local_trees + remote_trees.len(),
+            attention,
+            attention_count,
+        },
+        running_roots,
+        ancestry,
+        remote_parents,
     })
 }
 
@@ -222,8 +252,48 @@ impl Gateway {
         self.refresh_live_activity().await;
     }
 
-    pub(crate) async fn reconcile_live_activity_scopes(&self, retained: &BTreeSet<String>) {
-        self.apns.reconcile_live_activity_scopes(retained).await;
+    pub(crate) fn receive_peer_live_activity(
+        &self,
+        host: &str,
+        client: u64,
+        report: Result<Option<SourceProjection>, String>,
+    ) -> PeerOutcome {
+        self.apns.receive_peer_live_activity(host, client, report)
+    }
+
+    pub(crate) fn peer_live_activity_closed(&self, host: &str, client: u64) {
+        if !self.is_draining() {
+            self.apns.peer_live_activity_closed(host, client);
+        }
+    }
+
+    pub(crate) fn retain_live_activity_peers(&self, members: &BTreeSet<String>) {
+        self.apns.retain_live_activity_peers(members);
+    }
+
+    pub(crate) fn peer_live_activity_reports(&self) -> watch::Receiver<Option<PeerReport>> {
+        self.apns.peer_live_activity_reports()
+    }
+
+    pub(super) async fn fleet_live_activity(&self, params: Value) -> Result<Value> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct Request {
+            hosts: Vec<String>,
+        }
+        let Request { hosts } = serde_json::from_value(params)?;
+        let hosts = crate::devices::fleet_hosts(hosts)?;
+        let local_host = self.host_identity().await?.host_id;
+        Ok(json!(
+            self.apns.fleet_live_activity_snapshot(&hosts, &local_host)
+        ))
+    }
+
+    async fn local_host_id(&self) -> Option<String> {
+        self.host_identity()
+            .await
+            .ok()
+            .map(|identity| identity.host_id)
     }
 
     pub(super) async fn apns_live_activity_loop(
@@ -232,8 +302,36 @@ impl Gateway {
     ) {
         tokio::join!(
             self.project_live_activity_loop(rx),
-            self.broadcast_live_activity_loop()
+            self.broadcast_live_activity_loop(),
+            self.fleet_live_activity_loop(),
+            self.referenced_threads_loop()
         );
+    }
+
+    async fn referenced_threads_loop(&self) {
+        let mut changes = self.apns.referenced_thread_changes();
+        while changes.changed().await.is_ok() {
+            self.refresh_live_activity().await;
+        }
+    }
+
+    async fn fleet_live_activity_loop(&self) {
+        let mut changes = self.apns.fleet_live_activity_changes();
+        while changes.changed().await.is_ok() {
+            let revision = *changes.borrow_and_update();
+            self.apns
+                .publish_fleet_live_activity(self.local_host_id().await.as_deref())
+                .await;
+            if let Err(error) = self.broadcast_json_or_drop(
+                &json!({"method":"daemon/liveActivity/fleet/changed","params":{
+                    "epoch": self.apns.live_activity_epoch(),
+                    "revision": revision,
+                }}),
+                crate::observability::journal::Source::Gateway,
+            ) {
+                warn!(%error, "fleet Live Activity broadcast failed");
+            }
+        }
     }
 
     async fn broadcast_live_activity_loop(&self) {
@@ -254,7 +352,6 @@ impl Gateway {
         &self,
         mut rx: watch::Receiver<ActiveTasksLiveActivitySnapshot>,
     ) {
-        let scope = "default";
         let mut titles = HashMap::new();
         rx.mark_changed();
         let mut retrying = false;
@@ -269,6 +366,7 @@ impl Gateway {
             }
             tokio::time::sleep(COALESCE_WINDOW).await;
             let snapshot = rx.borrow_and_update().clone();
+            let probe = rx.clone();
             let projection = tokio::select! {
                 biased;
                 changed = rx.changed() => {
@@ -282,11 +380,16 @@ impl Gateway {
             if !is_current() {
                 continue;
             }
+            let local_host = self.local_host_id().await;
             match projection {
-                Ok(content) => {
+                Ok(projection) => {
                     retrying = false;
                     self.apns
-                        .report_live_activity_if_current(scope, content, is_current)
+                        .report_live_activity_if_current(
+                            local_host.as_deref(),
+                            projection,
+                            Freshness::new(move || matches!(probe.has_changed(), Ok(false))),
+                        )
                         .await;
                 }
                 Err(error) => {
@@ -295,18 +398,51 @@ impl Gateway {
                     }
                     retrying = true;
                     self.apns
-                        .mark_live_activity_unavailable_if_current(scope, is_current)
+                        .mark_live_activity_unavailable_if_current(
+                            local_host.as_deref(),
+                            is_current,
+                        )
                         .await;
                 }
             }
         }
     }
 
+    async fn referenced_ancestry(
+        &self,
+        snapshot: &ActiveTasksLiveActivitySnapshot,
+        remote_parents: &mut HashMap<String, AgentAddress>,
+    ) -> Result<BTreeMap<String, String>> {
+        let local_host = self.host_identity().await?.host_id;
+        let referenced: Vec<String> = self
+            .apns
+            .referenced_threads()
+            .into_iter()
+            .filter(|address| {
+                address.host_id == local_host && !snapshot.running.contains(&address.thread_id)
+            })
+            .map(|address| address.thread_id)
+            .take(MAX_REFERENCED_THREADS)
+            .collect();
+        let mut ancestry = BTreeMap::new();
+        for (thread, root) in self.agent_service().thread_roots(&referenced).await {
+            if let Some(parents) = self
+                .agent_service()
+                .remote_parents(std::iter::once(&root))
+                .await
+            {
+                remote_parents.extend(parents);
+                ancestry.insert(thread, root);
+            }
+        }
+        Ok(ancestry)
+    }
+
     async fn live_activity_content(
         &self,
         snapshot: &ActiveTasksLiveActivitySnapshot,
         titles: &mut HashMap<String, (Option<i64>, Option<String>)>,
-    ) -> Result<LiveActivityContent> {
+    ) -> Result<SourceProjection> {
         snapshot.finished.known()?;
         anyhow::ensure!(
             self.claude_recovery_complete().await?,
@@ -325,9 +461,23 @@ impl Gateway {
             threads.iter().all(|thread| owners.contains_key(thread)),
             "Live Activity ancestry unavailable"
         );
-        let account_id = None;
-        let mut content =
-            attention_content(snapshot, &marks, &latest_questions, &owners, account_id)?;
+        let mut remote_parents = self
+            .agent_service()
+            .remote_parents(owners.values())
+            .await
+            .context("Live Activity ancestry unavailable")?;
+        let ancestry = self
+            .referenced_ancestry(snapshot, &mut remote_parents)
+            .await?;
+        let mut projection = source_projection(
+            snapshot,
+            &marks,
+            &latest_questions,
+            &owners,
+            &remote_parents,
+            ancestry,
+        )?;
+        let content = &mut projection.content;
 
         titles.retain(|thread, _| content.attention.iter().any(|row| row.thread_id == *thread));
         for row in &mut content.attention {
@@ -349,10 +499,10 @@ impl Gateway {
                 .threads
                 .get(&row.thread_id)
                 .and_then(|marks| marks.pin_name.as_deref())
-                .map(|pinned| text_preview(pinned, MAX_TITLE_CHARS))
+                .map(attention_title)
                 .or(header);
         }
-        Ok(content)
+        Ok(projection)
     }
 
     async fn live_activity_title(&self, thread: &str) -> Result<Option<String>> {
@@ -421,6 +571,23 @@ mod tests {
             running: running.iter().map(|thread| (*thread).to_owned()).collect(),
             finished: turns,
         }
+    }
+
+    fn attention_content(
+        snapshot: &ActiveTasksLiveActivitySnapshot,
+        marks: &Marks,
+        latest_questions: &BTreeMap<String, i64>,
+        owners: &HashMap<String, String>,
+    ) -> Result<LiveActivityContent> {
+        source_projection(
+            snapshot,
+            marks,
+            latest_questions,
+            owners,
+            &HashMap::new(),
+            BTreeMap::new(),
+        )
+        .map(|projection| projection.content)
     }
 
     fn rows(content: &LiveActivityContent) -> Vec<(&str, AttentionReason)> {
@@ -494,7 +661,6 @@ mod tests {
             &marks([("read", seen(1_250))]),
             &questions,
             &owners,
-            Some("account"),
         )
         .unwrap();
 
@@ -517,11 +683,79 @@ mod tests {
                 ),
             ]
         );
-        assert!(
-            content
-                .attention
-                .iter()
-                .all(|row| row.account_id.as_deref() == Some("account"))
+        assert!(content.attention.iter().all(|row| row.host_id.is_none()));
+    }
+
+    #[test]
+    fn remote_parented_trees_count_once_by_their_parent_and_never_add_rows() {
+        let snapshot = snapshot(
+            &["child-a", "child-b", "local"],
+            &[("child-done", turn(1_100, 1_300))],
+        );
+        let owners = HashMap::from([
+            ("child-a".into(), "child-a".into()),
+            ("child-b".into(), "child-b".into()),
+            ("child-done".into(), "child-done".into()),
+            ("local".into(), "local".into()),
+        ]);
+        let parent = AgentAddress {
+            host_id: "ffffffff-0000-4000-8000-000000000001".into(),
+            thread_id: "idle-parent".into(),
+        };
+        let remote = HashMap::from([
+            ("child-a".to_owned(), parent.clone()),
+            ("child-b".to_owned(), parent.clone()),
+            ("child-done".to_owned(), parent.clone()),
+        ]);
+        let projection = source_projection(
+            &snapshot,
+            &marks([]),
+            &BTreeMap::new(),
+            &owners,
+            &remote,
+            BTreeMap::new(),
+        )
+        .unwrap();
+        assert_eq!(projection.content.active_task_count, 2);
+        assert_eq!(projection.content.attention_count, 0);
+        assert_eq!(
+            projection.remote_parents,
+            BTreeMap::from([
+                ("child-a".to_owned(), parent.clone()),
+                ("child-b".to_owned(), parent),
+            ])
+        );
+    }
+
+    #[test]
+    fn an_idle_thread_a_peer_names_as_parent_reports_its_ancestry_without_counting() {
+        let snapshot = snapshot(&["local"], &[]);
+        let owners = HashMap::from([("local".into(), "local".into())]);
+        let parent = AgentAddress {
+            host_id: "ffffffff-0000-4000-8000-000000000001".into(),
+            thread_id: "running-root".into(),
+        };
+        let remote = HashMap::from([("idle-root".to_owned(), parent.clone())]);
+        let projection = source_projection(
+            &snapshot,
+            &marks([]),
+            &BTreeMap::new(),
+            &owners,
+            &remote,
+            BTreeMap::from([
+                ("idle-child".to_owned(), "idle-root".to_owned()),
+                ("local".to_owned(), "local".to_owned()),
+            ]),
+        )
+        .unwrap();
+        assert_eq!(projection.content.active_task_count, 1);
+        assert_eq!(
+            projection.ancestry,
+            BTreeMap::from([("idle-child".to_owned(), "idle-root".to_owned())])
+        );
+        assert_eq!(
+            projection.remote_parents,
+            BTreeMap::from([("idle-root".to_owned(), parent)])
         );
     }
 
@@ -549,7 +783,6 @@ mod tests {
             &marks([("same-second", seen(1_050)), ("stale", seen(1_050))]),
             &questions,
             &owners,
-            None,
         )
         .unwrap();
         assert_eq!(
@@ -585,7 +818,6 @@ mod tests {
             &marks([("asking", seen(1_200))]),
             &BTreeMap::from([("asking".to_owned(), 1_500_000)]),
             &owners,
-            None,
         )
         .unwrap();
         assert!(content.is_empty());
@@ -601,7 +833,6 @@ mod tests {
             &marks([]),
             &BTreeMap::new(),
             &HashMap::new(),
-            None,
         )
         .unwrap();
         assert!(content.is_empty());
@@ -619,11 +850,9 @@ mod tests {
             &marks([]),
             &BTreeMap::from([("both".to_owned(), 1_200_000)]),
             &owners,
-            None,
         )
         .unwrap();
-        let after =
-            attention_content(&snapshot, &marks([]), &BTreeMap::new(), &owners, None).unwrap();
+        let after = attention_content(&snapshot, &marks([]), &BTreeMap::new(), &owners).unwrap();
         assert!(matches!(
             before.attention[0].reason,
             AttentionReason::Question { .. }
@@ -788,6 +1017,7 @@ mod startup_tests {
             super::super::agent_gateway::ParentSnapshot {
                 at: std::time::Instant::now(),
                 parent: None,
+                remote_parent: None,
                 available: true,
             },
         );
@@ -817,8 +1047,8 @@ mod startup_tests {
         ingress.abort();
         agent.stop_all().await;
         assert!(unavailable);
-        assert_eq!(content.active_task_count, 0);
-        assert_eq!(content.attention_count, 1);
+        assert_eq!(content.content.active_task_count, 0);
+        assert_eq!(content.content.attention_count, 1);
     }
 
     #[tokio::test]
@@ -841,17 +1071,20 @@ mod startup_tests {
             if unreadable {
                 std::fs::write(path.with_file_name("claude-restart-recovery.json"), b"{").unwrap();
             }
-            let aggregate_path = stub.state.join("live-activity.json");
+            let aggregate_path = stub.state.join("live-activity-fleet.json");
             {
                 let original =
                     crate::test_support::LiveActivityProbe::new(Some(aggregate_path.clone())).await;
                 original
                     .service
                     .report_live_activity(
-                        "default",
-                        LiveActivityContent {
-                            active_task_count: 1,
-                            ..LiveActivityContent::default()
+                        None,
+                        SourceProjection {
+                            content: LiveActivityContent {
+                                active_task_count: 1,
+                                ..LiveActivityContent::default()
+                            },
+                            ..SourceProjection::default()
                         },
                     )
                     .await;
@@ -890,10 +1123,13 @@ mod startup_tests {
         probe
             .service
             .report_live_activity(
-                "default",
-                LiveActivityContent {
-                    active_task_count: 1,
-                    ..LiveActivityContent::default()
+                None,
+                SourceProjection {
+                    content: LiveActivityContent {
+                        active_task_count: 1,
+                        ..LiveActivityContent::default()
+                    },
+                    ..SourceProjection::default()
                 },
             )
             .await;
@@ -910,6 +1146,7 @@ mod startup_tests {
             super::super::agent_gateway::ParentSnapshot {
                 at: std::time::Instant::now(),
                 parent: None,
+                remote_parent: None,
                 available: true,
             },
         );
@@ -947,7 +1184,7 @@ mod startup_tests {
         let gateway = crate::test_support::TestGateway::new();
         gateway
             .apns
-            .report_live_activity("default", LiveActivityContent::default())
+            .report_live_activity(None, SourceProjection::default())
             .await;
         gateway.core.lock().await.finished_turns = FinishedTurns(None);
         let mut updates = gateway.apns.live_activity_updates();
@@ -999,6 +1236,7 @@ mod startup_tests {
             super::super::agent_gateway::ParentSnapshot {
                 at: std::time::Instant::now(),
                 parent: None,
+                remote_parent: None,
                 available: true,
             },
         );

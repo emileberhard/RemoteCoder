@@ -42,6 +42,9 @@ pub(super) mod queries;
 pub(super) use encoding::{ClientFrame, RejectedFrame};
 use queries::{ConnectionQueries, QueryEvent};
 
+const PING_INTERVAL: Duration = Duration::from_secs(20);
+const PEER_INBOUND_DEADLINE: Duration = Duration::from_secs(45);
+
 pub(super) struct RequestBudgets {
     query: crate::rpc::RequestBudget,
     status: crate::rpc::RequestBudget,
@@ -294,6 +297,9 @@ impl Gateway {
         // so the disconnect is journalled here unconditionally. Gating it on
         // the remove left exactly the abrupt teardowns unrecorded.
         self.questions.client_closed(client_id).await;
+        if let crate::auth::installation_credentials::Grant::Peer { host, .. } = &out_tx.grant {
+            self.peer_live_activity_closed(host, client_id);
+        }
         self.forget_degraded_client(client_id);
         self.clients.remove(&client_id);
         info!(client_id, count = self.clients.len(), "client disconnected");
@@ -365,7 +371,7 @@ impl Gateway {
         mut rx: mpsc::Receiver<ClientCommand>,
         closing: tokio_util::sync::CancellationToken,
     ) {
-        let mut ping = tokio::time::interval(Duration::from_secs(20));
+        let mut ping = tokio::time::interval(PING_INTERVAL);
         ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
         loop {
@@ -462,9 +468,18 @@ impl Gateway {
             requests.out_tx.clone(),
             Arc::clone(&requests.queries),
         );
+        let is_peer = matches!(
+            requests.out_tx.grant,
+            crate::auth::installation_credentials::Grant::Peer { .. }
+        );
+        let mut last_inbound = tokio::time::Instant::now();
         loop {
             let incoming = tokio::select! {
                 incoming = stream.next() => incoming,
+                _ = tokio::time::sleep_until(last_inbound + PEER_INBOUND_DEADLINE), if is_peer => {
+                    warn!(client_id, "peer sent nothing within its liveness deadline; closing connection");
+                    return;
+                }
                 event = queries.next() => {
                     match event {
                         QueryEvent::Admitted | QueryEvent::Finished(Ok(())) => {},
@@ -483,6 +498,7 @@ impl Gateway {
                 }
             };
             let received = tokio::time::Instant::now();
+            last_inbound = received;
             let msg = match incoming {
                 Some(Ok(msg)) => msg,
                 Some(Err(error)) => {

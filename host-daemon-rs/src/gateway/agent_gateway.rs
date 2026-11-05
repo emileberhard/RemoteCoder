@@ -112,6 +112,7 @@ struct AgentViewSnapshot {
 pub(super) struct ParentSnapshot {
     pub(super) at: Instant,
     pub(super) parent: Option<String>,
+    pub(super) remote_parent: Option<crate::wire::cluster::AgentAddress>,
     pub(super) available: bool,
 }
 
