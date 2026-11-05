@@ -113,7 +113,7 @@ export class ComposerDraftStore {
       this.storage?.setItem("remotecoder.web.drafts.v1", JSON.stringify([...this.drafts]));
     } catch {
       if (required)
-        throw new Error("The browser could not save the pending draft. No message was dispatched.");
+        throw new Error("The browser could not save your draft. Keep this tab open until it is sent.");
       this.report("The browser could not save your draft. Keep this tab open until it is sent.");
     }
   }
@@ -121,5 +121,10 @@ export class ComposerDraftStore {
   flush() {
     clearTimeout(this.persistence);
     this.persist();
+  }
+  flushRequired() {
+    clearTimeout(this.persistence);
+    if (!this.storage) throw new Error("Browser draft storage is unavailable. Keep this tab open.");
+    this.persist(true);
   }
 }

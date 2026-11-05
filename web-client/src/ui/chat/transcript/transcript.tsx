@@ -8,6 +8,7 @@ import { MessageRow } from "../bubbles/message-row";
 import { ApprovalCard } from "../questions/approval-card";
 import { Timeline } from "./timeline";
 import { timelineSegments } from "./timeline-segments";
+import { ViewedMedia } from "./viewed-media";
 
 export function Transcript({ conversation }: { conversation: Conversation }) {
   const workspace = useWorkspace();
@@ -137,6 +138,12 @@ export function Transcript({ conversation }: { conversation: Conversation }) {
                 live={segment.live}
                 renderRow={renderRow}
               />
+            ) : segment.kind === "media" ? (
+              <div key={`media-${segment.row.entry.item.id}`}>
+                {segment.media.map((media) => (
+                  <ViewedMedia key={media.path} media={media} hostId={hostId} cwd={conversation.header.cwd} />
+                ))}
+              </div>
             ) : (
               renderRow(segment.row, segment.reply, segment.visual)
             ),

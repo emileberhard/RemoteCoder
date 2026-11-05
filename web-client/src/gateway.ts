@@ -251,17 +251,6 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
     ...init,
     headers: { "Content-Type": "application/json", ...init?.headers },
   });
-  const deployed = response.headers.get("x-remotecoder-web-build");
-  if (
-    webBuild &&
-    deployed &&
-    deployed !== webBuild &&
-    sessionStorage.getItem("remotecoder.web.reloadedFor") !== deployed
-  ) {
-    sessionStorage.setItem("remotecoder.web.reloadedFor", deployed);
-    location.reload();
-    return new Promise<T>(() => {});
-  }
   const result = await response.json();
   if (!response.ok)
     throw new Error(

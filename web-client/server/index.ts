@@ -434,7 +434,15 @@ const server = Bun.serve<BridgeData>({
               201,
             );
           }
-          if (action === "download") return new Response("Fixture file content\n", { headers });
+          if (action === "download") {
+            const input = object(await request.json());
+            if (input.path === "/fixture/vision.svg")
+              return new Response(
+                '<svg xmlns="http://www.w3.org/2000/svg" width="960" height="540" viewBox="0 0 960 540"><rect width="960" height="540" fill="#18342e"/><circle cx="730" cy="150" r="190" fill="#d5e9a3"/><rect x="56" y="62" width="400" height="416" rx="28" fill="#faf8ee"/><text x="90" y="124" fill="#18342e" font-family="sans-serif" font-size="28">Agent vision</text><path d="M90 158h330M90 210h270M90 244h290M90 278h230" stroke="#a5b5aa" stroke-width="10"/><rect x="90" y="340" width="200" height="66" rx="18" fill="#2a6956"/><text x="116" y="382" fill="#ffffff" font-family="sans-serif" font-size="22">Hello, browser</text></svg>',
+                { headers: { ...headers, "Content-Type": "image/svg+xml" } },
+              );
+            return new Response("Fixture file content\n", { headers });
+          }
           if (visualDigest)
             return new Response(unavailableVisual("Visuals need a configured gateway."), {
               status: 404,

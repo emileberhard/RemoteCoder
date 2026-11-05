@@ -19,7 +19,8 @@ export type Host = {
 };
 export type UnknownItem = { type: "unknown"; id: string; wireType: string; payload: Record<string, unknown> };
 export type VisualPublication = { digest: string; title: string };
-export type Item = (ThreadItem & { rcVisual?: VisualPublication }) | UnknownItem;
+export type ToolMedia = { path: string; mimeType: string; name?: string };
+export type Item = (ThreadItem & { rcVisual?: VisualPublication; rcMedia?: ToolMedia[] }) | UnknownItem;
 export type Entry = Omit<ThreadItemEntry, "item"> & { item: Item };
 export type QuestionSlot = {
   index: number;
@@ -154,6 +155,13 @@ export function item(value: unknown): Item {
       string(visual.title);
     }
   }
+  if (record.rcMedia != null)
+    for (const value of array(record.rcMedia, 128)) {
+      const media = object(value);
+      string(media.path);
+      string(media.mimeType);
+      if (media.name != null) string(media.name);
+    }
   return record as Item;
 }
 

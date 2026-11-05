@@ -243,15 +243,15 @@ export const MessageRow = memo(function MessageRow({
             item.contentItems?.map((content, index) =>
               content.type === "inputText" ? (
                 <pre key={`part:${index}`}>{content.text}</pre>
-              ) : (
+              ) : content.type === "inputImage" && content.imageUrl ? (
                 <img
                   key={`part:${index}`}
                   className="message-image"
-                  src={content.type === "inputImage" ? content.imageUrl : undefined}
+                  src={content.imageUrl}
                   alt="Tool result"
                   loading="lazy"
                 />
-              ),
+              ) : null,
             )
           )}
         </div>
@@ -277,17 +277,6 @@ export const MessageRow = memo(function MessageRow({
         </summary>
         <pre>{JSON.stringify(item.action, null, 2)}</pre>
       </details>
-    );
-  if (item.type === "imageView")
-    return (
-      <button
-        type="button"
-        className="attachment-link"
-        onClick={() => run(() => downloadFile(hostId, item.path, cwd))}
-      >
-        <File size={15} />
-        {basename(item.path)}
-      </button>
     );
   if (item.type === "imageGeneration")
     return (
