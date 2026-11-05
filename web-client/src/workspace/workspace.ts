@@ -566,6 +566,9 @@ export class Workspace {
   async older() {
     await (this.state.selected ? this.sessions.get(this.state.selected)?.older() : undefined);
   }
+  async newer() {
+    await (this.state.selected ? this.sessions.get(this.state.selected)?.newer() : undefined);
+  }
   updateDraft(change: Partial<Draft>, key = this.draftKey) {
     this.drafts.update(change, key);
   }

@@ -354,6 +354,7 @@ export class TurnDispatcher {
     const destinationKey = addressKey(current.address);
     const session = this.sessions.get(current.address);
     if (!session) throw new Error("The conversation owner is unavailable");
+    if (current.newer || current.historyReloadRequired) await session.load();
     session.setSubmitting(true);
     let submitted = false;
     let accepted = false;
