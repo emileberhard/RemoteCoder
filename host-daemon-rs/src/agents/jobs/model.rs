@@ -271,6 +271,15 @@ pub(crate) struct JobSpec {
     pub title: Option<String>,
 }
 
+impl JobSpec {
+    pub(crate) fn display_title(&self) -> Option<String> {
+        self.title.clone().or_else(|| {
+            let line = self.prompt.lines().map(str::trim).find(|line| !line.is_empty())?;
+            Some(line.chars().take(120).collect())
+        })
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) enum SpecEvidence {
@@ -654,4 +663,39 @@ pub(crate) enum Inspection {
         outcome: JobOutcome,
         result: ResultEvidence,
     },
+}
+
+#[cfg(test)]
+mod display_title_tests {
+    use super::*;
+
+    fn spec(prompt: &str, title: Option<&str>) -> JobSpec {
+        JobSpec {
+            prompt: prompt.into(),
+            cwd: "/tmp".into(),
+            settings: ExecutionSettings::Codex {
+                model: "gpt-6.1-sol".into(),
+                model_provider: "openai".into(),
+                effort: "medium".into(),
+                service_tier: None,
+                cyber_access_program: None,
+            },
+            tool_scope: ToolScope::Full,
+            title: title.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn an_untitled_job_is_named_by_its_first_prompt_line() {
+        assert_eq!(
+            spec("\n  Review the branch  \nDetails follow", None).display_title(),
+            Some("Review the branch".into())
+        );
+        assert_eq!(
+            spec(&"x".repeat(300), None).display_title().map(|title| title.chars().count()),
+            Some(120)
+        );
+        assert_eq!(spec("Prompt", Some("Reviewer")).display_title(), Some("Reviewer".into()));
+        assert_eq!(spec(" \n ", None).display_title(), None);
+    }
 }

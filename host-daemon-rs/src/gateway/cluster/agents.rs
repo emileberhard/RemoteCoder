@@ -168,10 +168,10 @@ impl Gateway {
     }
 }
 
-fn job_title(job: &crate::agents::jobs::model::JobRecord) -> Option<&str> {
+fn job_title(job: &crate::agents::jobs::model::JobRecord) -> Option<String> {
     match &job.spec {
-        crate::agents::jobs::model::SpecEvidence::Known { spec } => spec.title.as_deref(),
-        crate::agents::jobs::model::SpecEvidence::Expired { title, .. } => title.as_deref(),
+        crate::agents::jobs::model::SpecEvidence::Known { spec } => spec.display_title(),
+        crate::agents::jobs::model::SpecEvidence::Expired { title, .. } => title.clone(),
         _ => None,
     }
 }
@@ -241,7 +241,7 @@ fn runtime_row(owner: &str, root: &str, view: &agent_jobs::JobView) -> Agent {
         thread_id: thread.clone(),
         provider: provider.into(),
         source: "runtime".into(),
-        title: job_title(&view.job).unwrap_or("Agent").into(),
+        title: job_title(&view.job).unwrap_or_else(|| "Agent".into()),
         model: job_model(&view.job).map(str::to_owned),
         capabilities: Capabilities {
             inspect: known,
@@ -292,7 +292,7 @@ fn intent_row(intent: &RemoteIntent) -> Result<Agent> {
         .into(),
         source: "remote_intent".into(),
         title: match &intent.request.operation {
-            AdmissionOperation::Start(spec) => spec.title.clone().unwrap_or_else(|| "Agent".into()),
+            AdmissionOperation::Start(spec) => spec.display_title().unwrap_or_else(|| "Agent".into()),
             AdmissionOperation::Continue(_) => "Agent".into(),
         },
         model: None,
