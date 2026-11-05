@@ -26,9 +26,10 @@ Rows carry their authoritative host UUID; thread IDs alone are not unique.
 
 Each cluster member shares only its local authoritative activity snapshot over
 the existing authenticated cluster link. A small sender owned by the existing
-cluster driver's structured lifetime watches local changes, peer reachability
-and membership. It is independent of delegated-job backoff and sends only changed
-or unsent current state. No polling subsystem or broker-specific merge is added.
+cluster driver's structured lifetime watches local changes, member wakes and
+membership. It is independent of delegated-job backoff, sends only changed or
+undelivered current state, and retries every outcome other than accepted with
+bounded jittered backoff. No polling subsystem or broker-specific merge is added.
 Peer identity comes from the authenticated grant; payloads cannot select another
 host. A versioned capability gates the new report protocol.
 
@@ -48,12 +49,26 @@ counts do not claim completeness. End requires every declared source to be
 current and empty. Unsupported or unjoined configured hosts remain explicitly
 unavailable rather than silently disappearing from the fleet.
 
-Source report ordering must survive normal restarts and reject a late older
-report without relying solely on clocks being synchronized. The existing
-persisted owner should retain the ordering evidence it needs. A coordinator
-serializes content publication, timestamp assignment and APNs delivery. Token
-rotation, invalidation, retained state and tasks keep their existing owners and
-bounds. Network calls do not hold the device registry's storage lock.
+The inbound connection is the authority for a peer's currency and order. A
+report is a Connection-lifetime request, so it commits on its socket before that
+socket's close cleanup runs. Each member binds to the newest connection id that
+reported; an older connection's report is stale and cannot replace or revoke a
+newer binding. Closing a socket withdraws currency only when it is still the
+bound one, and a planned drain does not publish those closes. A rejected report
+from the bound connection withdraws its currency and keeps the last-known rows.
+Accepting peer sockets close after about two ping intervals without an inbound
+frame, so a silent peer turns unavailable within that bound. A restart has no
+bindings: restored content is last known until each source reports again. No
+durable sequence, incarnation or clock comparison is involved.
+
+Short source and peer state sits behind its own lock, separate from the
+coordinator's serialized publication, timestamp assignment, APNs delivery and
+cache persistence; a peer report or fleet status read never waits for a broker
+send. The last-known cache is best effort and written outside the source lock; a
+damaged cache starts without last-known content and is replaced. Finished-turn
+state keeps its own durable owner. Token rotation, invalidation, retained state
+and tasks keep their existing owners and bounds. Network calls do not hold the
+device registry's storage lock.
 
 Old per-host activities on this device are retired when the unified service
 starts. The compatibility path for older installed clients keeps their token
@@ -81,7 +96,10 @@ it is outside this change.
 
 An independent Opus architecture challenge confirmed the push-based cluster
 reuse and one coordinator per token before implementation. The lead retained
-explicit coverage for every configured host and restart-safe source ordering.
+explicit coverage for every configured host. A second challenge replaced a
+durable per-source sequence with connection-owned currency: the transport
+already assigns increasing connection ids and serializes each sender's requests,
+so the sequence only added persistence on the report path.
 
 Current Apple guidance: [Live Activities HIG](https://developer.apple.com/design/human-interface-guidelines/live-activities),
 [ActivityKit push updates](https://developer.apple.com/documentation/activitykit/starting-and-updating-live-activities-with-activitykit-push-notifications)
@@ -90,7 +108,7 @@ Apple recommends one activity for multiple events and updates only when content
 changes. The payload remains within ActivityKit's 4 KiB limit.
 
 Verify exact row links, device-specific host sets, certified-empty End, unavailable
-and restored sources, stale/reordered reports, token rotation, legacy clients and
+and restored sources, stale reports from older connections, token rotation, legacy clients and
 the single app activity. Run targeted native Swift and gateway tests, affected
 app/extension compilation, and an isolated multi-gateway smoke test through real
 RPC and broker boundaries before deploying. Inspect the widget on the test device.

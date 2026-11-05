@@ -193,7 +193,7 @@ Rules:
 The phone talks to every configured gateway at once. One `ChatWorkspaceModel`
 owns one `ChatTargetModel` per execution target, and that model's host id,
 `GatewayClient`, history and metadata services, `ConversationIndex` and
-`HostDirectories`, plus the host's Live Activity service, are immutable for its
+`HostDirectories` are immutable for its
 lifetime. Choosing another host changes only which model is presented; the
 others keep their sockets, drafts, selected conversations and running turns. A
 host whose endpoint or token changes is retired and replaced, never rebound, so
@@ -202,7 +202,7 @@ no thread- or turn-keyed state can cross gateways.
 Retirement is a synchronous fence, not a request. Because the outgoing model and
 its replacement share the same host-scoped files, the model is marked retired and
 its bootstrap, warm-up and turn-dispatch tasks are cancelled *before* it leaves
-the registry; closing the socket, the host directories and the Live Activity
+the registry; closing the socket and the host directories
 follows asynchronously. Every suspension point in bootstrap, the foreground pass
 and turn dispatch rechecks that fence when it resumes, and the foreground pass
 additionally carries a scene generation, so work that resumes after the app is
@@ -373,8 +373,10 @@ canonical turn ID with which to prove that the attention owner already marked
 that completion seen. Event IDs and wall-clock times are not parsed as proof.
 Explicit
 spoken notifications may play their audio with the in-app banner; generic
-operator alerts also use that banner in foreground. Each
-host runs its own aggregate active-tasks Live Activity, tagged with its host id.
+operator alerts also use that banner in foreground. The
+workspace runs one active-tasks Live Activity for all configured hosts; one
+coordinator gateway merges current peer reports
+([Fleet Live Activity](fleet-live-activity.md)).
 Attention counts describe known attention and never claim complete question
 coverage. Startup restores previously known question subjects from bounded
 question-state discovery and saved attention rows through the existing passive
