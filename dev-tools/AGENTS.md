@@ -107,11 +107,14 @@ known activity and no applied deletions; the planner keeps the real home context
 
 `bun dev-tools/probes/fleet-live-activity.mjs <candidate> <matched-runtime-package>`
 starts three private gateways with a stub push broker and the loopback model,
-pairs the coordinator with both members, and registers one legacy and one fleet
-activity token. It checks merged peer counts and exact host/thread attention
-rows through `daemon/liveActivity/fleet` and the broker payloads, a stopped
-member reported as unavailable rather than empty, End only once every declared
-host is current and empty, member and coordinator restart ordering, and local-only
+pairs the coordinator with both members and registers one legacy token. Each
+fleet activity token is registered only after its held work is observed: the
+first lives until its single End and is then unregistered, and a fresh token
+covers the second journey. It checks merged peer counts and exact host/thread
+attention rows through `daemon/liveActivity/fleet` and the broker payloads, a
+stopped member reported as unavailable rather than empty, End only once every
+declared host is current and empty, member and coordinator restart ordering,
+including the persisted token across the coordinator restart, and local-only
 legacy payloads. Production and the real broker are untouched; success removes
 every root, failure retains them as evidence.
 

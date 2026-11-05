@@ -164,6 +164,9 @@ async function main() {
 
     await start(third);
     await waitFor("every current and empty host ends the activity", () => sent(fleetToken).at(-1)?.event === "end");
+    const firstLifetime = sent(fleetToken);
+    assert.equal(firstLifetime.filter(entry => entry.event === "end").length, 1, "One End per activity lifetime");
+    await rpc(coordinator, "devices/unregister", { deviceId: fleetDevice });
 
     await peer.lab.stop();
     await waitFor("peer restart withdraws its currency", async () =>
@@ -171,17 +174,12 @@ async function main() {
     await start(peer);
     await waitFor("restarted peer reports on its new connection", async () => unavailable(await fleet(coordinator)).length === 0);
 
-    const firstLifetime = sent(fleetToken);
-    assert.equal(firstLifetime.filter(entry => entry.event === "end").length, 1, "One End per activity lifetime");
-    assert.equal(firstLifetime.at(-1).event, "end");
-
     const heldThread = await heldTurn(peer, "peer-second");
     await waitFor("second peer turn is running in the fleet view", async () =>
         (await fleet(coordinator)).content.activeTaskCount === 1);
     await registerFleet(coordinator, secondFleetToken);
     await waitFor("the rotated token receives the running update", () =>
         sent(secondFleetToken).at(-1)?.state?.activeTaskCount === 1);
-    assert.equal(sent(fleetToken).length, firstLifetime.length, "The replaced token receives nothing more");
     const epoch = (await fleet(coordinator)).epoch;
     const beforeRestart = deliveries.length;
     await restart(coordinator);
@@ -198,6 +196,7 @@ async function main() {
     await rpc(peer, "conversation/marks/update", { changes: [{ op: "markRead", threadId: heldThread, through: Date.now() + 60000 }] });
     await waitFor("the persisted rotated token ends after restart", () => sent(secondFleetToken).at(-1)?.event === "end");
     assert.equal(sent(secondFleetToken).filter(entry => entry.event === "end").length, 1, "One End per activity lifetime");
+    assert.equal(sent(fleetToken).length, firstLifetime.length, "An ended, unregistered token receives nothing more");
 
     const legacy = sent(legacyToken);
     assert(legacy.length > 0, "The legacy token still receives local content");
