@@ -4,7 +4,6 @@ struct ChatScreenToolbar: View {
     @Namespace private var navigationNamespace
     let workspace: ChatWorkspaceModel
     let screen: ChatScreenModel
-    let isReturningToParent: Bool
     let onReturnToParent: () -> Void
     let onOpenConversations: (() -> Void)?
     let onChooseFolder: () -> Void
@@ -40,13 +39,9 @@ struct ChatScreenToolbar: View {
             else { onOpenConversations?() }
         }
         .glassEffectID("navigation", in: navigationNamespace)
-        .disabled(returnsToParent && isReturningToParent)
         .accessibilityLabel(returnsToParent ? "Return to parent conversation" : "Conversations")
         .accessibilityIdentifier(returnsToParent ? "return-to-parent" : "open-conversations")
     }
 
-    private var returnsToParent: Bool {
-        guard let navigation = workspace.agentNavigation else { return false }
-        return workspace.isShowingConversation(at: navigation.child, on: screen)
-    }
+    private var returnsToParent: Bool { screen.subagentContext != nil }
 }

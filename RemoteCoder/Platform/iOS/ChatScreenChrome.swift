@@ -3,7 +3,6 @@ import SwiftUI
 struct ChatScreenChrome: ViewModifier {
     let workspace: ChatWorkspaceModel
     let screen: ChatScreenModel
-    let isReturningToParent: Bool
     let onReturnToParent: () -> Void
     let onOpenConversations: (() -> Void)?
     let onChooseFolder: () -> Void
@@ -20,7 +19,6 @@ struct ChatScreenChrome: ViewModifier {
                 ChatScreenToolbar(
                     workspace: workspace,
                     screen: screen,
-                    isReturningToParent: isReturningToParent,
                     onReturnToParent: onReturnToParent,
                     onOpenConversations: onOpenConversations,
                     onChooseFolder: onChooseFolder,

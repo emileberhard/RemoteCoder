@@ -70,7 +70,6 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
     func retryDraftRetirement(_ target: ExecutionTarget) { targets.retry(target) }
 
     var notificationRoutingError: String?
-    private(set) var agentNavigation: AgentNavigation?
     @ObservationIgnored private(set) var navigationGeneration = UUID()
     @ObservationIgnored private var notificationSceneGeneration = UUID()
     @ObservationIgnored private let notificationApplicationIsActive: @MainActor () -> Bool
@@ -1402,38 +1401,6 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
 
     func isShowingConversation(at address: ConversationAddress, on screen: ChatScreenModel?) -> Bool {
         screen?.openAddress == address
-    }
-
-    func openAgentConversation(_ agent: ConversationAgent, from parent: ConversationAddress) async throws {
-        guard let threadID = agent.threadId, agent.capabilities.openConversation else {
-            throw ConversationAgentNavigationError.noConversation
-        }
-        let owner = try activeOwner(hostID: agent.ownerHostId ?? parent.hostID)
-        supersedePendingNavigation()
-        let generation = navigationGeneration
-        let header: ConversationHeader
-        do {
-            header = try await agentThreadHeader(threadID, on: owner.target)
-        } catch {
-            guard navigationIsCurrent(generation) else { return }
-            throw error
-        }
-        guard navigationIsCurrent(generation) else { return }
-        guard !owner.isRetired else { throw CancellationError() }
-        let child = ConversationAddress(hostID: agent.ownerHostId ?? parent.hostID, threadID: threadID)
-        owner.resumeConversation(header)
-        select(target: child.target)
-        agentNavigation = AgentNavigation(parent: parent, child: child)
-    }
-
-    func returnToAgentParent() async throws {
-        guard let navigation = agentNavigation else { return }
-        let owner = try activeOwner(hostID: navigation.parent.hostID)
-        let header = try await agentThreadHeader(navigation.parent.threadID, on: owner.target)
-        guard !owner.isRetired, isShowingConversation(at: navigation.child, on: selectedScreen) else { return }
-        owner.resumeConversation(header)
-        select(target: navigation.parent.target)
-        agentNavigation = nil
     }
 
     func sendToAgentParent(_ request: String, from parent: ConversationAddress) async throws {

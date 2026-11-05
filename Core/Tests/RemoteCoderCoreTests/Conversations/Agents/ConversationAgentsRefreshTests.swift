@@ -22,11 +22,11 @@ struct ConversationAgentsRefreshTests {
             await first.value
             #expect(model.isRefreshing)
             #expect(!model.hasLoaded)
-            #expect(model.summary == nil)
+            #expect(!model.hasLoaded)
             try await fixture.releaseRequests(result: page)
             await second.value
             #expect(model.hasLoaded)
-            #expect(model.summary?.total == 1)
+            #expect(model.hasLoaded && model.agents.count == 1)
             #expect(await fixture.recordedNotifications.allSatisfy { $0.method != "$/cancelRequest" })
             await fixture.setResult(page, method: "conversation/agents/list")
             await model.refreshIfNeeded()
@@ -91,7 +91,7 @@ struct ConversationAgentsRefreshTests {
             refresh.cancel()
             await refresh.value
             #expect(!model.isRefreshing && !model.hasLoaded)
-            #expect(model.summary == nil)
+            #expect(!model.hasLoaded)
             for await notification in fixture.notifications where notification.method == "$/cancelRequest" { break }
             _ = try await gateway.call(method: "host/info", params: nil, timeout: .seconds(1))
             #expect(await fixture.recordedNotifications.filter { $0.method == "$/cancelRequest" }.count == 1)
@@ -116,7 +116,7 @@ struct ConversationAgentsRefreshTests {
             for await request in fixture.requests where request.method == "conversation/agents/list" { break }
             try await fixture.releaseRequests(result: page)
             await refresh.value
-            #expect(model.error == nil && model.summary?.total == 1)
+            #expect(model.error == nil && model.hasLoaded && model.agents.count == 1)
             #expect(await fixture.recordedRequests.filter { $0.method == "conversation/agents/list" }.count == 2)
             await gateway.retire()
             await fixture.stop()
@@ -145,7 +145,7 @@ struct ConversationAgentsRefreshTests {
             await model.refreshIfNeeded()
             try await release.value
             await prefetch.value
-            #expect(model.hasLoaded && model.summary?.total == 1 && model.error == nil)
+            #expect(model.hasLoaded && model.hasLoaded && model.agents.count == 1 && model.error == nil)
             #expect(await fixture.recordedRequests.filter { $0.method == "conversation/agents/list" }.count == 2)
             await gateway.retire()
             await fixture.stop()

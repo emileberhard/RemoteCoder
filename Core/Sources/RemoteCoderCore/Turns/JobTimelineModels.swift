@@ -26,6 +26,7 @@ struct JobTimelineEvent: Identifiable, Sendable, Equatable, Codable {
     let subtitle: String?
     let timestamp: Date?
     let details: [JobTimelineEventDetail]
+    var agentThreadID: String? = nil
 }
 
 struct JobTimeline: Identifiable, Sendable, Equatable {

@@ -321,11 +321,6 @@ extension GatewayClient {
             "protocol": .number(1), "parent": parent.json]), timeout: .seconds(10))
     }
 
-    func agentOutput(threadID: String, agentID: String) async throws -> ConversationAgentOutput {
-        try await callDecodable(method: "conversation/agents/read",
-            params: encodeToJSONValue(GatewayRequestParams.AgentRead(threadId: threadID, agentId: agentID)), timeout: timeouts.history)
-    }
-
     func agentAction(threadID: String, agent: ConversationAgent, action: ConversationAgentAction, text: String, mutationID: UUID) async throws {
         let _: JSONValue = try await callDecodable(
             method: "conversation/agents/action",

@@ -248,12 +248,10 @@ private struct ChatScreen: View {
     #else
     @Environment(\.openSettings) private var openSettings
     #endif
-    @State private var presentedAgents: ConversationAgentsModel?
+    @State private var showsAgents = false
     @SceneStorage("chat.isInspectorPresented") private var isInspectorPresented = false
     @State private var changeReview: ChangeReviewModel?
     @State private var isReviewingChanges = false
-    @State private var returningToAgentParent = false
-    @State private var agentNavigationError: String?
     #if os(iOS)
     @State private var voiceModeEntry: VoiceModeEntry?
     #endif
@@ -347,11 +345,11 @@ private struct ChatScreen: View {
                 reviewChanges: reviewChanges,
                 focusComposer: { inputFocused = true },
                 chooseFolder: openDirectoryPickerFromHeader,
-                returnToParent: returningToAgentParent ? nil : { returningToAgentParent = true },
+                returnToParent: returnToAgentParent,
                 selectConversation: { selectConversation($0) },
                 fork: forkConversation,
                 requestPinName: { pinRequest = $0 },
-                showAgents: showAgents,
+                toggleAgents: toggleAgents,
                 attachFile: { fileImportRequest += 1 },
                 toggleCommandPalette: { actions in
                     commandPalette = commandPalette == nil ? CommandPaletteCatalog(actions: actions) : nil
@@ -404,21 +402,6 @@ private struct ChatScreen: View {
         }
         .background {
             ConversationAgentsProbe(screen: screen, isPaused: scenePhase != .active)
-        }
-        .task(id: returningToAgentParent) {
-            guard returningToAgentParent else { return }
-            defer { returningToAgentParent = false }
-            do {
-                try await workspace.returnToAgentParent()
-            } catch is CancellationError {
-            } catch {
-                agentNavigationError = error.localizedDescription
-            }
-        }
-        .alert("Conversation unavailable", isPresented: Binding(get: { agentNavigationError != nil }, set: { if !$0 { agentNavigationError = nil } })) {
-            Button("OK", role: .cancel) { agentNavigationError = nil }
-        } message: {
-            Text(agentNavigationError ?? "")
         }
         #if os(iOS)
         .sheet(isPresented: $showSettings) {
@@ -568,8 +551,7 @@ private struct ChatScreen: View {
                 .modifier(ChatScreenChrome(
                     workspace: workspace,
                     screen: screen,
-                    isReturningToParent: returningToAgentParent,
-                    onReturnToParent: { returningToAgentParent = true },
+                    onReturnToParent: returnToAgentParent,
                     onOpenConversations: usesPersistentSidebar ? nil : {
                         dismissComposerFocus()
                         isHistoryOpen = true
@@ -620,9 +602,9 @@ private struct ChatScreen: View {
     }
 
     private var chatTranscript: some View {
-        ConversationTranscriptView(screen: screen, focus: $inputFocused,
-                                   onDismissComposerFocus: dismissComposerFocus, onShowAgents: showAgents,
-                                   onReviewChanges: reviewChanges)
+        ConversationTranscriptView(screen: screen, workspace: workspace, focus: $inputFocused,
+                                   onDismissComposerFocus: dismissComposerFocus, showsAgents: $showsAgents,
+                                   onOpenAgent: { _ = selectConversation($0) }, onReviewChanges: reviewChanges)
             #if os(macOS)
             .safeAreaInset(edge: .top, spacing: 0) {
                 if find.isPresented { TranscriptFindBar(find: find, screen: screen) }
@@ -641,12 +623,10 @@ private struct ChatScreen: View {
         ConversationDetailsPresentation(
             workspace: workspace,
             screen: screen,
-            presentedAgents: $presentedAgents,
             isInspectorPresented: $isInspectorPresented,
             changeReview: changeReview,
             isReviewingChanges: $isReviewingChanges,
-            onAddReviewComments: addReviewComments,
-            onParentRequestSent: { inputFocused = true }
+            onAddReviewComments: addReviewComments
         )
     }
 
@@ -670,15 +650,14 @@ private struct ChatScreen: View {
                     onQueue: workspace.queue,
                     fileImportRequest: fileImportRequest
                 )
-            } else {
-                VStack(spacing: 8) {
-                    Text("Manage this agent from its parent conversation.")
-                        .scaledFont(.footnote).foregroundStyle(.secondary)
-                    if let question = screen.pendingQuestion {
-                        Button("View question") { reveal(question: question) }
-                    }
-                }
-                .padding(.vertical, 12)
+            } else if screen.activeConversation?.acceptsDirectInput == false {
+                SubagentControls(
+                    canStop: screen.composerStopState.readyTurn != nil,
+                    hasQuestion: screen.pendingQuestion != nil,
+                    onViewQuestion: { if let question = screen.pendingQuestion { reveal(question: question) } },
+                    onAskParent: screen.subagentContext.map { context in { askAgentParent(context) } },
+                    onStop: { if let turn = screen.composerStopState.readyTurn { screen.stopTurn(turn) } }
+                )
             }
         }
         .padding(.horizontal, 12)
@@ -744,7 +723,7 @@ private struct ChatScreen: View {
     }
 
     private var blocksComposerFocus: Bool {
-        blocksFilePresentation || presentedAgents != nil || agentNavigationError != nil || pinRequest != nil
+        blocksFilePresentation || pinRequest != nil
             || isReviewingChangesSheet
             || commandPalette != nil || screen.target.voiceError != nil || composerPresentations.blocksFocus
     }
@@ -765,9 +744,28 @@ private struct ChatScreen: View {
         #endif
     }
 
-    private func showAgents(_ agents: ConversationAgentsModel) {
+    private func toggleAgents() {
         dismissComposerFocus()
-        conversationDetails.show(agents)
+        showsAgents.toggle()
+    }
+
+    private func returnToAgentParent() {
+        guard let parent = screen.subagentContext?.parent else { return }
+        _ = selectConversation(parent)
+    }
+
+    private func askAgentParent(_ context: SubagentContext) {
+        let source = screen
+        Task {
+            do {
+                try await workspace.sendToAgentParent(AgentPrompts.parentRequest(title: context.title, threadID: context.threadID),
+                                                      from: context.parent)
+                inputFocused = true
+            } catch is CancellationError {
+            } catch {
+                source.present(.conversation(error.localizedDescription))
+            }
+        }
     }
 
     private func dismissComposerFocus() {

@@ -4,7 +4,6 @@ import SwiftUI
 struct ChatScreenChrome: ViewModifier {
     let workspace: ChatWorkspaceModel
     let screen: ChatScreenModel
-    let isReturningToParent: Bool
     let onReturnToParent: () -> Void
     let onOpenConversations: (() -> Void)?
     let onChooseFolder: () -> Void
@@ -18,10 +17,10 @@ struct ChatScreenChrome: ViewModifier {
     func body(content: Content) -> some View {
         content
             .navigationTitle(title)
-            .navigationSubtitle("\(workspace.conversationTargetName(of: screen)) · \(folderTitle)")
+            .navigationSubtitle(subtitle)
             .toolbar(id: "chat") {
                 ToolbarItem(id: "return-to-parent", placement: .navigation) { returnToParentButton }
-                    .hidden(!isShowingAgentChild)
+                    .hidden(screen.subagentContext == nil)
                 ToolbarItem(id: "folder", placement: .primaryAction) { folderMenu }
                 ToolbarSpacer(.fixed, placement: .primaryAction)
                 ToolbarItem(id: "stop", placement: .primaryAction) { stopButton }
@@ -40,20 +39,19 @@ struct ChatScreenChrome: ViewModifier {
         return ConversationSidebarProjection.title(for: header, pinnedName: list.pinnedName(for: threadID))
     }
 
+    private var subtitle: String {
+        guard let subagent = screen.subagentContext else { return "\(workspace.conversationTargetName(of: screen)) · \(folderTitle)" }
+        return subagent.parentTitle.map { "Subagent of \($0)" } ?? "Subagent"
+    }
+
     private var folderTitle: String {
         guard let path = screen.workingDirectory else { return "Choose Folder" }
         let condensed = WorkingDirectoryPathFormatter.condensedPath(path, remoteHomePath: screen.target.remoteHomePath)
         return condensed == "~" ? "Home" : condensed
     }
 
-    private var isShowingAgentChild: Bool {
-        guard let navigation = workspace.agentNavigation else { return false }
-        return workspace.isShowingConversation(at: navigation.child, on: screen)
-    }
-
     private var returnToParentButton: some View {
         Button("Back", systemImage: "chevron.backward", action: onReturnToParent)
-            .disabled(isReturningToParent)
             .help("Return to the parent conversation")
             .accessibilityLabel("Return to parent conversation")
             .accessibilityIdentifier("return-to-parent")

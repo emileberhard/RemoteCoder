@@ -28,15 +28,14 @@ struct ConversationAgentsProjection {
 extension ConversationAgentsProjection {
     struct Snapshot: Sendable {
         let agents: [ConversationAgent]
-        let sections: ConversationAgentSections
+        let roster: ConversationAgentRoster
         let warnings: [String]
         let coverage: [ClusterCoverage]
         let coverageByHost: [UUID: ClusterCoverage]
-        let agentsByID: [String: ConversationAgent]
     }
 
     @concurrent static func prepare(rowsByHost: [UUID: [ConversationAgent]], warningsByHost: [UUID: [String]],
-                                    coverage: [UUID: ClusterCoverage], hostOrder: [UUID], activeSince: Int64) async throws -> Snapshot {
+                                    coverage: [UUID: ClusterCoverage], hostOrder: [UUID]) async throws -> Snapshot {
         var coverage = coverage
         var order = hostOrder
         var rows: [ConversationAgent] = []
@@ -61,12 +60,7 @@ extension ConversationAgentsProjection {
                 && $0.ownerHostId.flatMap { coverage[$0]?.state } != .ok
         }.map(\.identity))
         let agents = merge(rows.filter { $0.isStub == true || !unavailable.contains($0.identity) })
-        var index: [String: ConversationAgent] = [:]
-        for agent in agents {
-            index[agent.identity] = agent
-            if index[agent.id] == nil { index[agent.id] = agent }
-        }
-        return Snapshot(agents: agents, sections: .init(agents: agents, activeSince: activeSince), warnings: warnings,
-                        coverage: order.compactMap { coverage[$0] }, coverageByHost: coverage, agentsByID: index)
+        return Snapshot(agents: agents, roster: .init(agents: agents), warnings: warnings,
+                        coverage: order.compactMap { coverage[$0] }, coverageByHost: coverage)
     }
 }

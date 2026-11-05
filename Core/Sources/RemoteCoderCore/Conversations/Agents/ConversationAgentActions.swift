@@ -4,11 +4,6 @@ enum ConversationAgentAction: String, Sendable {
     case message, `continue`, stop
 }
 
-struct AgentNavigation: Equatable, Sendable {
-    let parent: ConversationAddress
-    let child: ConversationAddress
-}
-
 enum ConversationAgentNavigationError: LocalizedError {
     case hostUnavailable
     case noConversation
@@ -19,4 +14,11 @@ enum ConversationAgentNavigationError: LocalizedError {
         case .noConversation: "This agent does not expose a separate conversation."
         }
     }
+}
+
+struct SubagentContext: Equatable, Sendable {
+    let threadID: String
+    let title: String
+    let parent: ConversationAddress
+    let parentTitle: String?
 }

@@ -49,8 +49,5 @@ struct ConversationAgentsTests {
         let agent = try JSONDecoder().decode(ConversationAgent.self, from: agentJSON)
         #expect(agent.provider.displayName == "gemini")
         #expect(agent.state == .unknown)
-        let output = try JSONDecoder().decode(ConversationAgentOutput.self,
-            from: Data(#"{"messages": [{"role": "tool", "text": "x"}, {"role": "user", "text": "y"}], "truncated": false}"#.utf8))
-        #expect(output.messages.map(\.role) == [.init(rawValue: "tool"), .user])
     }
 }

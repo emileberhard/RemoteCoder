@@ -24,6 +24,7 @@ struct TranscriptHostEnvironment: Equatable {
     let htmlVisualCaptureAllowed: Bool
     let htmlVisualSnapshotsOnly: Bool
     let siteIcons: ObjectIdentifier?
+    let agentConversationOpener: ObjectIdentifier?
     let themeStore: ObjectIdentifier
     let codeExportPresenter: ObjectIdentifier
 
@@ -48,6 +49,7 @@ struct TranscriptHostEnvironment: Equatable {
         htmlVisualCaptureAllowed = environment.htmlVisualCaptureAllowed
         htmlVisualSnapshotsOnly = environment.htmlVisualSnapshotsOnly
         siteIcons = environment.siteIcons.map(ObjectIdentifier.init)
+        agentConversationOpener = environment.agentConversationOpener.map(ObjectIdentifier.init)
         self.themeStore = ObjectIdentifier(themeStore)
         self.codeExportPresenter = ObjectIdentifier(codeExportPresenter)
     }

@@ -217,27 +217,40 @@ enum ConversationItemPresentation {
             )
 
         case .subAgentActivity(let id, let activity, let threadID, let path):
+            let title = switch activity {
+            case "started": "Started agent"
+            case "interacted": "Messaged agent"
+            case "interrupted": "Interrupted agent"
+            case "completed": "Agent finished"
+            default: "Agent"
+            }
             return JobTimelineEvent(id: "\(jobID)-\(id)", sequence: sequence,
                 kind: activity == "started" ? .toolCall : .toolResult,
-                title: "Agent", subtitle: "\(path) · \(activity)", timestamp: timestamp,
-                details: [detail("conversation", threadID, limit: 200)])
+                title: title, subtitle: path.split(separator: "/").last.map(String.init) ?? path, timestamp: timestamp,
+                details: [], agentThreadID: threadID)
 
         case .collabAgentToolCall(let id, let tool, let status, let receiverThreadIds, let prompt):
             let kind: JobTimelineEventKind = status == .failed ? .toolError : (status == .inProgress ? .toolCall : .toolResult)
-            let details: [JobTimelineEventDetail] = [
-                detail("tool", tool, limit: 200),
-                detail("status", status.rawValue, limit: 50),
-                receiverThreadIds.isEmpty ? nil : detail("receivers", receiverThreadIds.joined(separator: ", "), limit: 800),
-                prompt.map { detail("prompt", $0, limit: 2400) },
-            ].compactMap { $0 }
+            let title = switch tool {
+            case "spawnAgent": "Spawned agent"
+            case "sendInput", "sendMessage": "Messaged agent"
+            case "followupTask": "Gave agent a follow-up"
+            case "resumeAgent": "Resumed agent"
+            case "interruptAgent": "Interrupted agent"
+            case "wait": status == .inProgress ? "Waiting for agents" : "Waited for agents"
+            case "closeAgent": "Closed agent"
+            case "listAgents": "Listed agents"
+            default: tool
+            }
             return JobTimelineEvent(
                 id: "\(jobID)-\(id)",
                 sequence: sequence,
                 kind: kind,
-                title: "Collaboration",
-                subtitle: tool,
+                title: status == .failed ? "\(title) failed" : title,
+                subtitle: prompt.map { clamp($0, limit: 2400) },
                 timestamp: timestamp,
-                details: details
+                details: [],
+                agentThreadID: receiverThreadIds.count == 1 ? receiverThreadIds.first : nil
             )
 
         case .webSearch(let id, let query, let action):

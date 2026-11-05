@@ -3,8 +3,11 @@ import SwiftUI
 struct ConversationStatusPills: View {
     let changes: ChangeSummaryModel?
     let agents: ConversationAgentsModel?
+    let workspace: ChatWorkspaceModel
+    @Binding var showsAgents: Bool
     let onReviewChanges: () -> Void
-    let onShowAgents: (ConversationAgentsModel) -> Void
+    let onOpenAgent: (ConversationAddress) -> Void
+    @InterfaceScaledMetric(relativeTo: .body) private var rosterGap: CGFloat = 6
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -14,17 +17,32 @@ struct ConversationStatusPills: View {
                     .transition(pillTransition)
             }
             if let agents {
-                SubagentsPill(agents: agents, recent: agents.summary?.recent ?? 0) { onShowAgents(agents) }
+                SubagentsPill(roster: agents.roster, isExpanded: showsAgents) { showsAgents.toggle() }
                     .layoutPriority(1)
                     .transition(pillTransition)
             }
         }
+        .frame(maxWidth: .infinity)
+        .overlay(alignment: .top) {
+            if showsAgents, let agents {
+                let gap = rosterGap
+                AgentRoster(model: agents, workspace: workspace, onOpen: onOpenAgent)
+                    .padding(.horizontal, 12)
+                    .alignmentGuide(.top) { $0[.bottom] + gap }
+                    .transition(rosterTransition)
+            }
+        }
         .animation(.smooth, value: changes?.content)
         .animation(.smooth, value: agents != nil)
+        .animation(reduceMotion ? .easeOut(duration: 0.15) : .spring(response: 0.28, dampingFraction: 0.9), value: showsAgents)
     }
 
     private var pillTransition: AnyTransition {
         reduceMotion ? .opacity : .scale(scale: 0.9).combined(with: .opacity)
+    }
+
+    private var rosterTransition: AnyTransition {
+        reduceMotion ? .opacity : .scale(scale: 0.97, anchor: .bottom).combined(with: .offset(y: 8)).combined(with: .opacity)
     }
 }
 

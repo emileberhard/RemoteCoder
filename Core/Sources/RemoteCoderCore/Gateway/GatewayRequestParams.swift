@@ -40,11 +40,6 @@ enum GatewayRequestParams {
         let limit: Int?
     }
 
-    struct AgentRead: Encodable {
-        let threadId: String
-        let agentId: String
-    }
-
     struct AgentAction: Encodable {
         let threadId: String
         let agentId: String

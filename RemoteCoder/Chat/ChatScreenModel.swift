@@ -1594,6 +1594,18 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
 
     var acceptsConversationInput: Bool { drafts.acceptsInput && activeConversation?.acceptsDirectInput != false }
 
+    var subagentContext: SubagentContext? {
+        guard let conversation = activeConversation, conversation.id == activeSessionID, conversation.isDelegatedAgent,
+              let parent = conversation.agentParentAddress(localHostID: hostID) else { return nil }
+        let list = target.conversationList
+        let parentTitle = parent.hostID == hostID ? list.header(id: parent.threadID).map {
+            ConversationSidebarProjection.title(for: $0, pinnedName: list.pinnedName(for: $0.id))
+        } : nil
+        return SubagentContext(threadID: conversation.id,
+            title: ConversationSidebarProjection.title(for: conversation, pinnedName: list.pinnedName(for: conversation.id)),
+            parent: parent, parentTitle: parentTitle)
+    }
+
     var acceptsAttachments: Bool {
         target.acceptsWork && currentDraft != nil && acceptsConversationInput && currentConversationDispatchBlock != .otherClient
     }

@@ -4,17 +4,10 @@ import SwiftUI
 struct ConversationDetailsPresentation: ViewModifier {
     let workspace: ChatWorkspaceModel
     let screen: ChatScreenModel
-    @Binding var presentedAgents: ConversationAgentsModel?
     @Binding var isInspectorPresented: Bool
     let changeReview: ChangeReviewModel?
     @Binding var isReviewingChanges: Bool
     let onAddReviewComments: (String) -> Bool
-    let onParentRequestSent: () -> Void
-
-    func show(_: ConversationAgentsModel) {
-        isReviewingChanges = false
-        isInspectorPresented = true
-    }
 
     func body(content: Content) -> some View {
         content
@@ -25,7 +18,7 @@ struct ConversationDetailsPresentation: ViewModifier {
                         .inspectorColumnWidth(min: 360, ideal: 560, max: 1_000)
                         .onDisappear { changeReview.stop() }
                 } else {
-                    ConversationInspector(workspace: workspace, screen: screen, onParentRequestSent: onParentRequestSent)
+                    ConversationInspector(workspace: workspace, screen: screen)
                         .inspectorColumnWidth(min: 240, ideal: 300, max: 420)
                 }
             }
@@ -35,11 +28,8 @@ struct ConversationDetailsPresentation: ViewModifier {
 private struct ConversationInspector: View {
     let workspace: ChatWorkspaceModel
     let screen: ChatScreenModel
-    let onParentRequestSent: () -> Void
-    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
-        let agents = screen.conversationAgents
         NavigationStack {
             Form {
                 Section("Conversation") {
@@ -51,47 +41,9 @@ private struct ConversationInspector: View {
                     LabeledContent("Reasoning", value: settings.reasoning)
                     LabeledContent("Context", value: context)
                 }
-                Section("Agents") {
-                    if let agents {
-                        agentRows(agents)
-                    } else {
-                        Text("No Agents").foregroundStyle(.secondary)
-                    }
-                }
             }
             .formStyle(.grouped)
         }
-        .id(agents?.id)
-        .task(id: scenePhase) {
-            guard scenePhase == .active, let agents else { return }
-            await agents.refreshIfNeeded()
-        }
-    }
-
-    @ViewBuilder
-    private func agentRows(_ agents: ConversationAgentsModel) -> some View {
-        ClusterCoverageStrip(coverage: agents.coverage)
-        let earlier = agents.sections.earlier
-        links(agents, rows: agents.sections.recent)
-        if !earlier.isEmpty {
-            EarlierConversationAgents(count: earlier.count) { links(agents, rows: earlier) }
-        }
-        if agents.hasLoaded, let error = agents.error {
-            AgentNote(text: error)
-        }
-        ForEach(agents.warnings, id: \.self) { AgentNote(text: $0) }
-        ConversationAgentsPlaceholder(model: agents)
-    }
-
-    private func links(_ agents: ConversationAgentsModel, rows: [ConversationAgentRow]) -> some View {
-        ConversationAgentLinks(workspace: workspace, model: agents, rows: rows, onParentRequest: { request in
-            try await workspace.sendToAgentParent(request, from: agents.address)
-            onParentRequestSent()
-        }, onOpenConversation: { agent in
-            try await workspace.openAgentConversation(agent, from: agents.address)
-        }, onAction: { agent, action, text, mutationID in
-            try await workspace.performAgentAction(action, on: agent, in: agents.address, text: text, mutationID: mutationID)
-        })
     }
 
     private var folder: String {

@@ -709,13 +709,13 @@ entrypoint linked above.
   high-frequency deltas and internal events. Event rows use compact spacing and
   caption-scale type.
 - `ConversationAgentsModel` owns one shared refresh for each retained conversation.
-  Selection, inspector, sheet and warmer share it and reuse successful reads for
+  Selection, the roster and warmer share it and reuse successful reads for
   15 s; explicit refresh and agent actions bypass freshness. Up to 32 callers
   can await that refresh; further callers reuse its eventual published state.
   All waiters share that RPC's capacity recovery within its original request
   deadline, and the RPC is cancelled when its last waiter leaves.
   Cancelling the last waiter cancels its RPC. The automatic selection probe waits
-  for the transcript tail; explicit details can read immediately. Failed reads
+  for the transcript tail; an opened roster reads immediately. Failed reads
   retain old rows with an error, and unread lists never show No Agents. The 15 s
   freshness window only controls reads; the UI never changes just because it
   elapsed.
@@ -962,14 +962,23 @@ entrypoint linked above.
     `ToolbarSpacer`, on system toolbar glass. `AppMenu(trigger: .toolbarItem)`
     leaves a toolbar menu in the system style. The connection edge glow appears
     only while disconnected. Find spans the detail column below the toolbar.
-- **Conversation details.** `ConversationDetailsPresentation` presents a
-  conversation's agents: the agents sheet on iOS, and on the Mac a full-height
-  trailing inspector, applied outside the split view. The inspector also shows
-  the host, folder, model, reasoning and context usage; an unread value reads
-  Unknown. Its open state is per window (`@SceneStorage`), and `ChatWindowActions`
-  publishes it to the View menu (⌥⌘B by default). The subagents pill opens it. Review
-  Changes (⇧⌘D) switches the inspector to the folder's change review, wider than
-  the details; the inspector toggle reopens the details.
+- **Conversation details.** `ConversationDetailsPresentation` presents change
+  review: a sheet on iOS, and on the Mac a full-height trailing inspector,
+  applied outside the split view. The Mac inspector's details show the host,
+  folder, model, reasoning and context usage; an unread value reads Unknown. Its
+  open state is per window (`@SceneStorage`), and `ChatWindowActions` publishes
+  it to the View menu (⌥⌘B by default). Review Changes (⇧⌘D) switches the
+  inspector to the folder's change review, wider than the details; the inspector
+  toggle reopens the details.
+- **Subagents.** The subagents pill toggles `AgentRoster`, a short glass list
+  that opens in place above the pills on both platforms, with Active and Done
+  sections ([Conversation agents](../docs/conversation-agents.md)). A row opens
+  the agent's conversation through the ordinary conversation switch, as do
+  agent events in the parent's timeline through `agentConversationOpener`. A
+  child conversation shows `SubagentHeader` ("Subagent of" its parent) in place
+  of the folder header, Back returns to the parent, and a read-only child shows
+  `SubagentControls` in place of the composer. There is no separate agent
+  navigation state or detail page.
 - **Status pills.** `ConversationStatusPills` is the transcript's bottom bar
   above the composer, on both platforms: the changes pill (`review-changes`)
   before the subagents pill (`open-agents`), each shown only while it has

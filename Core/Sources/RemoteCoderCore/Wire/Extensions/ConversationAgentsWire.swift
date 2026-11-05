@@ -107,22 +107,3 @@ extension ConversationAgent {
         parentHostID = try parent?.hostId ?? values.decodeIfPresent(UUID.self, forKey: .parentHostID)
     }
 }
-
-struct ConversationAgentOutput: Decodable, Sendable {
-    struct Message: Decodable, Sendable {
-        struct Role: RawRepresentable, Decodable, Sendable, Equatable {
-            let rawValue: String
-            init(rawValue: String) { self.rawValue = rawValue }
-            static let user = Self(rawValue: "user")
-
-            init(from decoder: Decoder) throws {
-                rawValue = try decoder.singleValueContainer().decode(String.self)
-            }
-        }
-
-        let role: Role
-        let text: String
-    }
-    let messages: [Message]
-    let truncated: Bool
-}
