@@ -185,7 +185,7 @@ export const ChangesReview = memo(function ChangesReview({
               <p className="subtle">Some changes are unavailable.</p>
             )}
             {result.files.length > 0 && (
-              <label className="field changes-file">
+              <label className="panel-fields changes-file">
                 File
                 <select
                   value={file ? fileKey(file, index) : ""}
