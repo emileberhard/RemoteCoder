@@ -1,6 +1,10 @@
 import Foundation
 import Testing
+#if canImport(RemoteCoderCore)
+@testable import RemoteCoderCore
+#else
 @testable import RemoteCoder
+#endif
 
 actor HistoryGatewayFixture: CodexHistoryGateway, ConversationMarksRemote {
     enum HeldRead: Sendable { case header, classification, list, page }
@@ -43,7 +47,7 @@ actor HistoryGatewayFixture: CodexHistoryGateway, ConversationMarksRemote {
     private var readSuspension: CheckedContinuation<Void, Never>?
     private var readArrival: (id: UUID, continuation: CheckedContinuation<Bool, Never>)?
     private var claudeListFails = false
-    private(set) var marks = ConversationMarks(schemaVersion: 1, revision: 0, readBaseline: 1_000, threads: [:])
+    private(set) var marks = ConversationMarks(schemaVersion: 2, revision: 0, readBaseline: 1_000, threads: [:], supportsRetiredScopeRead: true)
     private(set) var markUpdates: [[ConversationMarkChange]] = []
     private var marksFail = false
     private var holdMarksUpdate = false
@@ -53,7 +57,27 @@ actor HistoryGatewayFixture: CodexHistoryGateway, ConversationMarksRemote {
     init(threadID: String = "fixture") {
         wireHeader = .historyFixture(id: threadID, updatedAt: 10)
         header = ConversationHeader(wireHeader)
-        history = HistoryServiceTests.workingHistory(turns: 20, ordinals: true)
+        history = Self.workingHistory(turns: 20, ordinals: true)
+    }
+
+    static func workingHistory(turns count: Int, ordinals: Bool) -> History {
+        var entries: [CodexAppServerV2.ThreadItemsListResponse.Entry] = []
+        for index in 0..<count {
+            let items: [CodexAppServerV2.ThreadItem] = [
+                .userMessage(id: "u\(index)", content: [.text(text: "Q\(index)", textElements: [])]),
+                .commandExecution(id: "c\(index)", command: "swift build", cwd: "/tmp", status: .completed,
+                    commandActions: [], aggregatedOutput: nil, exitCode: 0, durationMs: nil),
+                .agentMessage(id: "a\(index)", text: "A\(index)"),
+            ]
+            for item in items {
+                entries.append(.init(turnId: "t\(index)", item: item, startedAtOrdinal: ordinals ? Int64(entries.count) : nil, isComplete: true))
+            }
+        }
+        let turns = (0..<count).map {
+            CodexAppServerV2.Turn(id: "t\($0)", items: [], startedAt: Int64($0), completedAt: Int64($0 + 1),
+                status: .completed, error: nil)
+        }
+        return .init(entries: entries, turns: turns)
     }
 
     static func header(id: String, updatedAt: Int64) -> ConversationHeader {
