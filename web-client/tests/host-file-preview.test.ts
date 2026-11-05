@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
+import { HostFilePreviews } from "../src/platform/host-file-previews";
 import { readHostFile } from "../src/platform/host-files";
-import { HostImagePreviews } from "../src/platform/host-image-previews";
 
 const originalFetch = globalThis.fetch;
 afterEach(() => {
@@ -19,7 +19,7 @@ test("previews serialize per host, cancel queued reads and let another host proc
       return path === "/first.png" ? first.promise : new Response(path);
     },
   });
-  const owner = new HostImagePreviews();
+  const owner = new HostFilePreviews();
   const canceled = new AbortController();
   try {
     const active = owner.read("one", "/first.png", "/", new AbortController().signal);
@@ -54,7 +54,7 @@ test("busy preview reads retry automatically while remaining admitted", async ()
         : new Response("image");
     },
   });
-  const owner = new HostImagePreviews();
+  const owner = new HostFilePreviews();
   try {
     expect(await (await owner.read("host", "/screen.png", "/", new AbortController().signal)).text()).toBe(
       "image",

@@ -2,6 +2,10 @@ import { object } from "../protocol/boundary";
 
 export type ConversationPurpose = "probe" | "automation";
 export type ConversationSettlement = { state: "settled" | "active"; through: number };
+export type ChangesView =
+  | { kind: "git"; source: "uncommitted" | "staged" | "unstaged" }
+  | { kind: "lastTurn" }
+  | { kind: "since"; turnId: string; boundary: "start" | "end" };
 export type ThreadMarks = {
   revision: number;
   seenThrough?: number;
@@ -10,6 +14,7 @@ export type ThreadMarks = {
   purpose?: ConversationPurpose;
   settlement?: ConversationSettlement;
   doneThrough?: number;
+  changesView?: ChangesView;
 };
 export type ConversationMarks = {
   schemaVersion: number;
@@ -28,6 +33,7 @@ export type ConversationMarkChange =
   | { op: "markUnread" | "unpin"; threadId: string }
   | { op: "pin"; threadId: string; name: string }
   | { op: "setPurpose"; threadId: string; purpose: ConversationPurpose }
+  | { op: "setChangesView"; threadId: string; view: ChangesView | null }
   | { op: "markAllRead"; through: number }
   | { op: "markRetiredScopeRead"; scopeId: string; through: number };
 export const automaticSettlementAfter = 3 * 86400;
@@ -45,6 +51,15 @@ function text(value: unknown, maximum: number): string {
 function purpose(value: unknown): ConversationPurpose {
   if (value !== "probe" && value !== "automation") throw new Error("Invalid conversation purpose");
   return value;
+}
+export function decodeChangesView(value: unknown): ChangesView {
+  const view = object(value);
+  if (view.kind === "lastTurn") return { kind: view.kind };
+  if (view.kind === "git" && ["uncommitted", "staged", "unstaged"].includes(String(view.source)))
+    return { kind: view.kind, source: view.source as "uncommitted" | "staged" | "unstaged" };
+  if (view.kind === "since" && (view.boundary === "start" || view.boundary === "end"))
+    return { kind: view.kind, turnId: text(view.turnId, 512), boundary: view.boundary };
+  throw new Error("Invalid changes view");
 }
 export function normalizedPinName(value: string): string | undefined {
   let name = "";
@@ -78,6 +93,8 @@ export function decodeMarkChange(value: unknown): ConversationMarkChange {
       return { op: entry.op, threadId, name: text(entry.name, 256) };
     case "setPurpose":
       return { op: entry.op, threadId, purpose: purpose(entry.purpose) };
+    case "setChangesView":
+      return { op: entry.op, threadId, view: entry.view == null ? null : decodeChangesView(entry.view) };
     default:
       throw new Error("Invalid conversation mark operation");
   }
@@ -98,6 +115,7 @@ export function decodeConversationMarks(value: unknown): ConversationMarks {
     if (row.seenThrough != null) marks.seenThrough = integer(row.seenThrough, "seenThrough");
     if (row.doneThrough != null) marks.doneThrough = integer(row.doneThrough, "doneThrough");
     if (row.pinName != null) marks.pinName = text(row.pinName, 256);
+    if (row.changesView != null) marks.changesView = decodeChangesView(row.changesView);
     if (row.purpose != null) marks.purpose = purpose(row.purpose);
     if (row.settlement != null) {
       const settlement = object(row.settlement);
@@ -174,6 +192,9 @@ export function applyMarkChange(base: ConversationMarks, change: ConversationMar
       break;
     case "setPurpose":
       marks.purpose = change.purpose;
+      break;
+    case "setChangesView":
+      marks.changesView = change.view ?? undefined;
       break;
     case "unsettle":
       marks.settlement = { state: "active", through: change.through };

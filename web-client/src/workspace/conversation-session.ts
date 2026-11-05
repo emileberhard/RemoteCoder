@@ -182,13 +182,12 @@ export class ConversationSession {
   appendSubmission(entry: Entry) {
     this.upsert(entry, true);
   }
-  removeQueuedSubmission(id: string) {
-    this.state.rows = this.state.rows.filter((row) => row.entry.item.id !== id);
-  }
-  removeRestoredSteer(row: Row) {
+  removeSubmission(id: string) {
+    const row = this.state.rows.find((row) => row.entry.item.id === id);
+    if (!row) return;
     this.state.rows = this.state.rows.filter((candidate) => candidate !== row);
     this.state.bytes -= row.bytes;
-    this.renderer?.remove(renderKey(this.state.address, row.entry.item.id));
+    this.renderer?.remove(renderKey(this.state.address, id));
   }
   applyActivity(active: Record<string, unknown>[], coverage: Record<string, unknown>) {
     const turn = active.find((turn) => turn.threadId === this.state.address.threadId);
@@ -253,6 +252,8 @@ export class ConversationSession {
       }
       checked();
       const checkpoint = subscription?.status === "subscribed" ? object(subscription.checkpoint) : undefined;
+      if (checkpoint?.historyUnavailable === true)
+        current.historyError = "Stored history is unavailable. The live window is still shown.";
       const activityRead = this.hosts.beginActivityRead(host);
       const [pageCapture, activityValue] = await Promise.all([
         checkpoint && captured && checkpoint.itemsBackwardsCursor == null
@@ -498,6 +499,7 @@ export class ConversationSession {
       conversation[direction] = next;
       const edge = direction === "older" ? this.pages[0] : this.pages.at(-1);
       if (edge) edge[direction] = next;
+      if (direction === "newer" && next === null) await this.loadTail("window");
       return;
     }
     if (direction === "older") values.reverse();
@@ -506,6 +508,16 @@ export class ConversationSession {
       older: direction === "older" ? next : optionalString(response.backwardsCursor),
       newer: direction === "newer" ? next : optionalString(response.backwardsCursor),
     };
+    const existingIds = new Set(conversation.rows.map((row) => row.entry.item.id));
+    const freshIds = values.filter((value) => !existingIds.has(value.item.id));
+    if (!freshIds.length) {
+      for (const value of values) this.upsert(value, value.isComplete !== false);
+      conversation[direction] = next;
+      const edge = direction === "older" ? this.pages[0] : this.pages.at(-1);
+      if (edge) edge[direction] = next;
+      if (direction === "newer" && next === null) await this.loadTail("window");
+      return;
+    }
     if (direction === "older" && this.pages.at(-1)?.newer === null) {
       const tail = this.pages.at(-1);
       if (tail)

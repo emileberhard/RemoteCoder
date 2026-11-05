@@ -7,7 +7,6 @@ import { useRun, useWorkspace } from "../../workspace-context";
 
 export function ViewedMedia({ media, hostId, cwd }: { media: ToolMedia; hostId: string; cwd: string }) {
   const run = useRun();
-  const [attempt, setAttempt] = useState(0);
   const caption = media.name ?? "Tool image";
   return (
     <figure className="viewed-media">
@@ -16,13 +15,7 @@ export function ViewedMedia({ media, hostId, cwd }: { media: ToolMedia; hostId: 
         <span>{caption}</span>
       </figcaption>
       {media.mimeType.startsWith("image/") ? (
-        <ViewedImage
-          key={`${hostId}:${media.path}:${attempt}`}
-          media={media}
-          hostId={hostId}
-          cwd={cwd}
-          retry={() => setAttempt(attempt + 1)}
-        />
+        <HostImagePreview media={media} hostId={hostId} cwd={cwd} />
       ) : (
         <button
           type="button"
@@ -34,6 +27,19 @@ export function ViewedMedia({ media, hostId, cwd }: { media: ToolMedia; hostId: 
         </button>
       )}
     </figure>
+  );
+}
+
+export function HostImagePreview({ media, hostId, cwd }: { media: ToolMedia; hostId: string; cwd: string }) {
+  const [attempt, setAttempt] = useState(0);
+  return (
+    <ViewedImage
+      key={`${hostId}:${media.path}:${attempt}`}
+      media={media}
+      hostId={hostId}
+      cwd={cwd}
+      retry={() => setAttempt(attempt + 1)}
+    />
   );
 }
 
@@ -50,7 +56,7 @@ function ViewedImage({
 }) {
   const workspace = useWorkspace();
   const run = useRun();
-  const root = useRef<HTMLDivElement>(null);
+  const root = useRef<HTMLSpanElement>(null);
   const [visible, setVisible] = useState(false);
   const [url, setURL] = useState<string>();
   const [error, setError] = useState<string>();
@@ -72,7 +78,7 @@ function ViewedImage({
     let retained: string | undefined;
     setURL(undefined);
     setError(undefined);
-    void workspace.imagePreviews
+    void workspace.filePreviews
       .read(hostId, media.path, cwd, controller.signal)
       .then((blob) => {
         if (controller.signal.aborted) return;
@@ -94,9 +100,9 @@ function ViewedImage({
     };
   }, [hostId, media.path, media.mimeType, cwd, admitted, workspace]);
   return (
-    <div ref={root}>
+    <span ref={root}>
       {error ? (
-        <div className="viewed-media-status" role="status">
+        <span className="viewed-media-status" role="status">
           <span>{error}</span>
           <button type="button" onClick={retry}>
             Retry
@@ -104,7 +110,7 @@ function ViewedImage({
           <button type="button" onClick={() => run(() => downloadFile(hostId, media.path, cwd))}>
             Download
           </button>
-        </div>
+        </span>
       ) : url ? (
         <button
           type="button"
@@ -115,18 +121,18 @@ function ViewedImage({
           <img
             className="message-image"
             src={url}
-            alt={`Viewed ${caption}`}
+            alt={caption}
             onError={() => setError("Image could not be displayed")}
           />
         </button>
       ) : (
-        <div className="viewed-media-status" role="status">
+        <span className="viewed-media-status" role="status">
           Loading image…
-        </div>
+        </span>
       )}
       {expanded && (
         <Dialog title={caption} close={() => setExpanded(false)} wide>
-          {url && <img className="viewed-media-full" src={url} alt={`Viewed ${caption}`} />}
+          {url && <img className="viewed-media-full" src={url} alt={caption} />}
           <button
             type="button"
             className="attachment-link"
@@ -136,6 +142,6 @@ function ViewedImage({
           </button>
         </Dialog>
       )}
-    </div>
+    </span>
   );
 }

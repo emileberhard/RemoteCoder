@@ -172,3 +172,24 @@ loops: their acknowledgment, revision, retry and durability contracts differ.
 Each worker releases its own in-flight slot before completing, so reentrant
 requests cannot land in a finished promise. Sidebar memo keys derive from
 stable host inputs; selected action state reads the addressed marks directly.
+
+## Common conversation parity
+
+Older and newer messages load at the scroll edges. The bounded history window
+keeps the requested page and evicts from the opposite edge; Latest renews the
+tail checkpoint. Unavailable history remains distinct from the start of a
+conversation. User attachment blocks, local file links and Markdown images use
+the authenticated host-file route. Images zoom, PDFs use the browser viewer,
+and text previews honor line links. Copy controls cover user and assistant
+messages; completed replies can fork through their exact turn after the gateway
+confirms completion. Agent activity links preserve parent navigation. Explicit
+reasoning choices return when switching back to a model, and unsupported models
+do not erase the remembered Fast choice.
+
+Changes opens stored Git comparisons, Last Turn or a selected turn boundary,
+using the same changes APIs and schema-4 marks as native. The browser exposes
+partial coverage and omitted patches, and appends line comments to the current
+conversation's draft. It never sends review comments automatically. One file is
+mounted at a time with a 20,000-line preview cap; Copy patch retains full text.
+Text previews cap at 512 KiB and image/PDF reads at 32 MiB; Download remains
+available. Apple OS integrations listed above remain native platform features.

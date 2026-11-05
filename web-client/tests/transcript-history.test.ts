@@ -127,3 +127,48 @@ test("live retention exposes a reload edge instead of silently leaving an unreac
   expect(workspace.selectedConversation?.historyReloadRequired).toBe(false);
   expect(workspace.selectedConversation?.rows[0]?.entry.item.id).toBe("item-540");
 });
+
+test("queue admission releases the removed local row's retained bytes", async () => {
+  const { workspace } = await setup();
+  await workspace.selectConversation({ hostId: "mini", threadId: "shared" });
+  workspace.updateDraft({ text: "A queued follow-up" });
+  await workspace.send("queue");
+  expect(workspace.selectedConversation?.rows).toHaveLength(0);
+  expect(workspace.selectedConversation?.bytes).toBe(0);
+});
+
+test("sending from a historical window rechecks unknown activity after its fresh tail read", async () => {
+  const { workspace, harness } = await historyFixture();
+  for (let page = 0; page < 6; page++) await workspace.older();
+  const previous = harness.handler;
+  harness.handler = (method, params) =>
+    method === "daemon/activeTurns"
+      ? { activeTurns: [], coverage: { codex: false, claude: true } }
+      : previous?.(method, params);
+  workspace.updateDraft({ text: "Do not start another turn without known activity" });
+  await expect(workspace.send()).rejects.toThrow("Turn status is unavailable");
+  expect(harness.calls.some((call) => call.method === "turn/start" || call.method === "turn/steer")).toBe(
+    false,
+  );
+});
+
+test("an unavailable checkpoint history stays distinct from an exhausted history and can recover", async () => {
+  const { workspace, harness } = await setup();
+  const previous = harness.handler;
+  let unavailable = true;
+  harness.handler = (method, params) =>
+    method === "thread/subscribe"
+      ? {
+          status: "subscribed",
+          subscriptionId: "partial",
+          thread: { id: "shared", cwd: "/workspace", name: "Partial", status: { type: "idle" } },
+          checkpoint: { itemsBackwardsCursor: null, historyUnavailable: unavailable, liveItems: [] },
+        }
+      : previous?.(method, params);
+  await workspace.selectConversation({ hostId: "mini", threadId: "shared" });
+  expect(workspace.selectedConversation?.status).toBe("ready");
+  expect(workspace.selectedConversation?.historyError).toContain("Stored history is unavailable");
+  unavailable = false;
+  await workspace.loadConversation({ hostId: "mini", threadId: "shared" });
+  expect(workspace.selectedConversation?.historyError).toBeUndefined();
+});

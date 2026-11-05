@@ -125,8 +125,8 @@ offline transcript caching would require revisiting selection and retention.
 - `dispose()` cancels owned listeners, timers, connections and conversation
   reads, flushes drafts and disposes rendering. Feature subscribers release
   their subscription on unmount.
-- `Workspace.imagePreviews` serializes image reads per physical host, with 24
-  waiting reads and a 32 MiB limit per image. Visibility cancels queue admission
+- `Workspace.filePreviews` serializes file preview reads per physical host, with 24
+  waiting reads and a 32 MiB limit per file. Visibility cancels queue admission
   and releases blob URLs; busy host responses retry within the same owner.
 - Frontend build identity comes from `/build-id.txt`, independently of the
   bridge revision. An available update offers Reload after flushing drafts;
@@ -170,3 +170,26 @@ reason; native has no shell-command dialog, files browser or starter cards.
   (popover API), `useAnchoredPopover`, `useContextMenu`/`ContextMenu` (right
   click and touch hold), `IconButton`, `HostPicker` and `ProviderMark`.
 - Check layout at 1440, 402 and 360 CSS px with no horizontal overflow.
+
+## Browser parity
+
+`ConversationSession` retains pages with their opaque older/newer gateway
+cursors. It evicts whole pages away from the requested edge, never the page
+being requested. A historical window keeps live output outside it; returning
+to the tail renews the observation checkpoint. Live eviction exposes a reload
+edge, and unavailable history stays explicit. Reads coalesce and late results
+must still match their controller and cursor. Local submissions retain their
+receipt protection and release their counted bytes when removed.
+
+`conversation-changes.ts` owns native changes decoding, patch positions and
+review-comment formatting. Changes views use the existing schema-4 marks
+owner; older hosts retain local Git comparisons. The review mounts one file,
+starts at 2,000 lines and caps its preview at 20,000, with full patch copying.
+Comments append to the captured conversation's existing draft and never send.
+
+File previews share the workspace's bounded queue. Text preview is capped at
+512 KiB; images and PDFs at 32 MiB. The mounted preview owns cancellation and
+blob URLs. Markdown host images admit only in completed content, at most 16 per
+block, through the same image owner. File links preserve the exact host and
+optional line target. Dialogs use the shared body portal. Browser PDF embedding
+requires `frame-src` and `object-src` blob admission in the static host policy.

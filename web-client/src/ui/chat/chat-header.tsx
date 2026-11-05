@@ -1,4 +1,11 @@
-import { ChevronDown, ChevronLeft, Menu as MenuLines, PanelLeft, PanelRight } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronLeft,
+  GitCompareArrows,
+  Menu as MenuLines,
+  PanelLeft,
+  PanelRight,
+} from "lucide-react";
 import type { HostState } from "../../workspace/host-services";
 import { NewChatButton } from "../conversations/new-chat-button";
 import { IconButton } from "../design-system/icon-button";
@@ -64,6 +71,13 @@ export function ChatHeader({
         <small>{host?.host.name ?? "No host configured"}</small>
       </button>
       <div className="header-actions">
+        <IconButton
+          label="Changes"
+          onClick={() => actions.run("changes")}
+          disabled={!actions.isEnabled("changes")}
+        >
+          <GitCompareArrows size={19} />
+        </IconButton>
         <NewChatButton onStart={() => undefined} />
         {!compact && (
           <IconButton

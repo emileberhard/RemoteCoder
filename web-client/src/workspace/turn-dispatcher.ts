@@ -18,6 +18,7 @@ import {
   string,
 } from "../protocol/boundary";
 import type { UserInput } from "../protocol/generated/v2/UserInput";
+import { appendAttachedFiles } from "./attached-files";
 import { blank, type ComposerDraftStore, type Draft } from "./composer-draft-store";
 import { conversationHeader } from "./conversation-header";
 import type { Conversation, Row } from "./conversation-session";
@@ -135,8 +136,10 @@ export class TurnDispatcher {
   }
   private inputs(draft: Draft): UserInput[] {
     const files = draft.attachments;
-    const text =
-      `${draft.text.trim()}${files.length ? `\n\nAttached files (uploaded to this host; use these absolute paths):\n${files.map((file) => `- ${file.path}`).join("\n")}` : ""}`.trim();
+    const text = appendAttachedFiles(
+      draft.text.trim(),
+      files.map((file) => file.path),
+    );
     if (!text) throw new Error("Write a message or attach a file first");
     return [{ type: "text", text, text_elements: [] }];
   }
@@ -331,6 +334,12 @@ export class TurnDispatcher {
       throw new Error("Wait for the selected conversation header to load");
     await this.validateExecution(host);
 
+    if (conversation && (conversation.newer || conversation.historyReloadRequired)) {
+      const session = this.sessions.get(conversation.address);
+      if (!session) throw new Error("The conversation owner is unavailable");
+      await session.load();
+    }
+
     if (conversation && conversation.activeTurnId === undefined && mode === "send") {
       const read = this.hosts.beginActivityRead(host);
       const activity = await host.rpc.call("daemon/activeTurns", {});
@@ -354,7 +363,6 @@ export class TurnDispatcher {
     const destinationKey = addressKey(current.address);
     const session = this.sessions.get(current.address);
     if (!session) throw new Error("The conversation owner is unavailable");
-    if (current.newer || current.historyReloadRequired) await session.load();
     session.setSubmitting(true);
     let submitted = false;
     let accepted = false;
@@ -473,7 +481,7 @@ export class TurnDispatcher {
           this.drafts.update({ text: "", attachments: [], uncertain: undefined }, destinationKey);
       }
       if (mode === "queue") {
-        session.removeQueuedSubmission(clientId);
+        session.removeSubmission(clientId);
         await session.refreshQueue();
       }
       this.drafts.persist();
@@ -576,7 +584,7 @@ export class TurnDispatcher {
       this.publish();
       throw error;
     }
-    this.sessions.get(address)?.removeRestoredSteer(row);
+    this.sessions.get(address)?.removeSubmission(row.entry.item.id);
     this.publish();
   }
   private persistReceipts() {

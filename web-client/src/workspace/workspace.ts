@@ -6,7 +6,7 @@ import {
   targetKey,
 } from "../execution-context";
 import { api } from "../gateway";
-import { HostImagePreviews } from "../platform/host-image-previews";
+import { HostFilePreviews } from "../platform/host-file-previews";
 import {
   canonicalModelID,
   type PreferenceKey,
@@ -17,9 +17,11 @@ import { providerForThread } from "../protocol/agent-provider";
 import {
   type Address,
   addressKey,
+  array,
   type Frame,
   type Host,
   object,
+  optionalString,
   type Provider,
   type QuestionRecord,
   questionEnvelope,
@@ -33,6 +35,7 @@ import {
   ConversationDrawerPreferences,
 } from "./conversation-drawer-preferences";
 import { conversationHeader } from "./conversation-header";
+import type { ChangesView } from "./conversation-marks";
 import type { Conversation, Renderer, RequestCard } from "./conversation-session";
 import { ConversationSessions } from "./conversation-sessions";
 import { ConversationSettingsSelection } from "./conversation-settings-selection";
@@ -65,7 +68,7 @@ export type Snapshot = {
 };
 
 export class Workspace {
-  readonly imagePreviews = new HostImagePreviews();
+  readonly filePreviews = new HostFilePreviews();
   private state: Pick<
     Snapshot,
     "selectedHostId" | "selectedTarget" | "selected" | "agentNavigation" | "newDraftId" | "error" | "revision"
@@ -636,13 +639,52 @@ export class Workspace {
   }
   async fork(address = this.state.selected) {
     if (!address) return;
+    return this.forkThrough(address, null);
+  }
+  forkFrom(address: Address, turnId: string) {
+    return this.forkThrough(address, turnId);
+  }
+  private async forkThrough(address: Address, lastTurnId: string | null) {
     const host = this.hosts.get(address);
     const provider = providerForThread(address.threadId);
     const selection = this.selection;
+    if (lastTurnId) {
+      let cursor: string | null = null;
+      let completed = false;
+      for (let page = 0; page < 3; page++) {
+        const response = object(
+          await host.rpc.call(
+            "thread/turns/list",
+            {
+              threadId: address.threadId,
+              sortDirection: "desc",
+              itemsView: "notLoaded",
+              limit: 100,
+              ...(cursor ? { cursor } : {}),
+            },
+            { signal: host.controller.signal },
+          ),
+        );
+        if (!this.hosts.present(host)) return;
+        const turn = array(response.data, 100)
+          .map(object)
+          .find((turn) => turn.id === lastTurnId);
+        if (turn) {
+          completed = turn.status === "completed";
+          break;
+        }
+        cursor = optionalString(response.nextCursor);
+        if (!cursor) break;
+      }
+      if (!completed)
+        throw new Error(
+          "Only a completed turn can be forked from this reply. Refresh its history and try again.",
+        );
+    }
     const result = object(
       await host.rpc.call(
         "thread/fork",
-        { threadId: address.threadId },
+        { threadId: address.threadId, ...(lastTurnId ? { lastTurnId } : {}) },
         { timeout: 150000, signal: host.controller.signal },
       ),
     );
@@ -760,6 +802,16 @@ export class Workspace {
       error: store.error,
       pendingCount: store.pendingCount,
     } as const;
+  }
+  selectChangesView(address: Address, view: ChangesView | null) {
+    this.sidebar.marks(address).recordChanges([{ op: "setChangesView", threadId: address.threadId, view }]);
+  }
+  appendReviewComment(address: Address, comment: string) {
+    if (!this.state.selected || addressKey(this.state.selected) !== addressKey(address))
+      throw new Error("Open the reviewed conversation before adding its comments.");
+    const key = addressKey(address);
+    const draft = this.drafts.get(key);
+    this.drafts.update({ text: `${draft?.text ? `${draft.text}\n\n` : ""}${comment}` }, key);
   }
   pinConversation(address: Address, name: string) {
     this.sidebar.pin(address, name);
@@ -986,7 +1038,7 @@ export class Workspace {
     }
   }
   dispose() {
-    this.imagePreviews.dispose();
+    this.filePreviews.dispose();
     this.disposed = true;
     this.lifecycle.abort();
     this.preferences.dispose();

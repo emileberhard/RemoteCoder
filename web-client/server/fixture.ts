@@ -1,6 +1,11 @@
 import { newerPreference, type PreferenceEntry, preferenceEntry } from "../src/preferences";
 import { type Frame, object, string } from "../src/protocol/boundary";
 import claudeCatalog from "../src/protocol/claude-models.json";
+import {
+  applyMarkChange,
+  type ConversationMarks,
+  decodeMarkChange,
+} from "../src/workspace/conversation-marks";
 import type { PublicHost } from "./config";
 
 export const fixtureHosts: PublicHost[] = [
@@ -22,6 +27,9 @@ export const fixtureHosts: PublicHost[] = [
 const emitters = new Map<string, Set<(frame: unknown) => void>>();
 const databases = new Map<string, Map<string, Record<string, unknown>>>();
 const preferences = new Map<string, Map<string, PreferenceEntry>>();
+const marksByHost = new Map<string, ConversationMarks>();
+const fixturePatch =
+  "diff --git a/example.ts b/example.ts\n--- a/example.ts\n+++ b/example.ts\n@@ -1,2 +1,2 @@\n-const identity = threadId;\n+const identity = { hostId, threadId };\n export { identity };\n";
 const epoch = "fixture-epoch-20261013";
 const agent = (id: string, text: string, phase = "final_answer") => ({
   type: "agentMessage",
@@ -40,7 +48,7 @@ const user = (id: string, text: string, clientId: string | null = null) => ({
 const initialItems = [
   user(
     "user-1",
-    "Make the conversation feel calm while the agent is working. Keep the transcript readable and the controls close at hand.",
+    "Make the conversation feel calm while the agent is working. Keep the transcript readable and the controls close at hand.\n\nAttached files (uploaded to this host; use these absolute paths):\n- /fixture/vision.svg\n- /fixture/example.txt\n- /fixture/preview.pdf",
   ),
   {
     type: "reasoning",
@@ -89,6 +97,19 @@ const initialItems = [
       },
     ],
   },
+  agent(
+    "artifacts",
+    "Local artifacts: [Source](file:///fixture/example.txt#L1)\n\n![Markdown screenshot](file:///fixture/vision.svg)",
+  ),
+  {
+    type: "subAgentActivity",
+    id: "child-activity",
+    kind: "completed",
+    agentThreadId: "fixture-thread-1",
+    agentPath: "Check identity",
+    model: "gpt-6.1-sol",
+    reasoningEffort: "high",
+  },
   {
     type: "imageView",
     id: "viewed-image-1",
@@ -131,6 +152,7 @@ function database(hostId: string) {
     "Keep host identity exact",
     "Review the file changes",
     "Make room for the composer",
+    "Long conversation history",
   ].entries()) {
     const claude = index === 3;
     const id = index === 0 ? "shared-thread-id" : `${claude ? "claude_" : ""}fixture-thread-${index}`;
@@ -152,27 +174,39 @@ function database(hostId: string) {
       extra: { fastModeSelection: false },
       turns: [],
       entries:
-        index === 0
-          ? initialItems.map((item, ordinal) => ({
-              turnId: "fixture-turn-1",
-              item,
+        index === 4
+          ? Array.from({ length: 600 }, (_, ordinal) => ({
+              turnId: "fixture-long-turn",
+              item: agent(
+                `history-${ordinal}`,
+                `History message ${ordinal}. This paragraph stays in chronological order while reading earlier or newer messages.`,
+              ),
               isComplete: true,
               startedAtOrdinal: ordinal,
               startedAtMs: 1791890000000 + ordinal * 1000,
               completedAtMs: 1791890000100 + ordinal * 1000,
             }))
-          : [
-              {
+          : index === 0
+            ? initialItems.map((item, ordinal) => ({
                 turnId: "fixture-turn-1",
-                item: agent(
-                  "intro-1",
-                  `This is a synthetic conversation on **${hostId === "fixture-mini" ? "Mac mini" : "MacBook Pro"}**. Try sending a message, queuing a follow-up, switching hosts, or opening Command.`,
-                ),
+                item,
                 isComplete: true,
-              },
-            ],
+                startedAtOrdinal: ordinal,
+                startedAtMs: 1791890000000 + ordinal * 1000,
+                completedAtMs: 1791890000100 + ordinal * 1000,
+              }))
+            : [
+                {
+                  turnId: "fixture-turn-1",
+                  item: agent(
+                    "intro-1",
+                    `This is a synthetic conversation on **${hostId === "fixture-mini" ? "Mac mini" : "MacBook Pro"}**. Try sending a message, queuing a follow-up, switching hosts, or opening Command.`,
+                  ),
+                  isComplete: true,
+                },
+              ],
       queue: [],
-      activeTurnId: null,
+      activeTurnId: index === 4 ? "fixture-long-turn" : null,
       questionPending: index === 0,
       questionRevision: 1,
     };
@@ -272,6 +306,71 @@ export class FixtureConnection {
       ].includes(method)
     )
       return {};
+    if (method === "conversation/agents/classify")
+      return { relations: {}, knownRoots: params.threadIds, warnings: [] };
+    if (method === "conversation/projects/resolve")
+      return {
+        projects: (params.directories as string[]).map((cwd) => ({
+          cwd,
+          root: cwd,
+          key: cwd,
+          name: cwd.split("/").at(-1),
+          kind: "directory",
+        })),
+      };
+    if (method === "conversation/marks/read" || method === "conversation/marks/update") {
+      let marks = marksByHost.get(this.hostId) ?? {
+        schemaVersion: 4,
+        revision: 0,
+        readBaseline: 0,
+        threads: {},
+      };
+      if (method === "conversation/marks/update") {
+        for (const value of params.changes as unknown[])
+          marks = applyMarkChange(marks, decodeMarkChange(value));
+        const revision = marks.revision + 1;
+        marks = {
+          ...marks,
+          revision,
+          threads: Object.fromEntries(
+            Object.entries(marks.threads).map(([id, value]) => [id, { ...value, revision }]),
+          ),
+        };
+      }
+      marksByHost.set(this.hostId, marks);
+      return method === "conversation/marks/update" ? { delta: marks } : marks;
+    }
+    if (["changes/read", "changes/summary", "changes/turn"].includes(method)) {
+      const root = String(params.directory ?? requireThread().cwd);
+      const file = { patch: fixturePatch, additions: 1, deletions: 1, replacedInvalidUtf8: false };
+      const snapshot = {
+        source: params.source ?? "branch",
+        root,
+        branch: "feature",
+        base: "main",
+        files: [file],
+        complete: true,
+        unlistedFiles: 0,
+        capturedAtMs: Date.now(),
+      };
+      if (method === "changes/summary")
+        return {
+          workedIn: [{ root, evidence: ["workingFolder"], status: "ready", snapshot }],
+          inFolder: [],
+          complete: true,
+        };
+      if (method === "changes/turn")
+        return params.since
+          ? { status: "noRecentEdits", complete: true }
+          : {
+              status: "ready",
+              turn: { id: "fixture-turn-1", startedAtMs: 1791890000000, running: false, latest: true },
+              files: [{ ...file, root }],
+              complete: true,
+              unlistedFiles: 0,
+            };
+      return { status: "ready", snapshot };
+    }
     if (method === "model/list") return { data: catalog, nextCursor: null };
     if (method === "preferences/read" || method === "preferences/update") {
       const entries = new Map(preferences.get(this.hostId));
@@ -320,13 +419,42 @@ export class FixtureConnection {
       };
     }
     if (method === "thread/items/list") {
-      const value = requireThread();
+      const entries = requireThread().entries as { item: { id: string } }[];
+      const ascending = params.sortDirection === "asc";
+      const cursor =
+        typeof params.cursor === "string" && params.cursor !== "fixture-tail"
+          ? (JSON.parse(params.cursor) as { id: string; inclusive: boolean })
+          : undefined;
+      const position = cursor
+        ? entries.findIndex((entry) => entry.item.id === cursor.id)
+        : ascending
+          ? -1
+          : entries.length;
+      if (cursor && position < 0) throw new Error("Invalid fixture history cursor");
+      const anchor = position + (cursor?.inclusive ? (ascending ? -1 : 1) : 0);
+      const limit = Number(params.limit ?? 60);
+      const start = ascending ? anchor + 1 : Math.max(0, anchor - limit);
+      const end = ascending ? Math.min(entries.length, start + limit) : anchor;
+      const selected = entries.slice(start, end);
+      const data = ascending ? selected : selected.reverse();
+      const last = data.at(-1);
+      const first = data[0];
       return {
-        data: [...(value.entries as unknown[])].reverse().slice(0, Number(params.limit ?? 60)),
-        nextCursor: null,
-        backwardsCursor: null,
+        data,
+        nextCursor:
+          last && (ascending ? end < entries.length : start > 0)
+            ? JSON.stringify({ id: last.item.id, inclusive: false })
+            : null,
+        backwardsCursor: first ? JSON.stringify({ id: first.item.id, inclusive: true }) : null,
       };
     }
+    if (method === "thread/turns/list")
+      return {
+        data: [
+          ...new Set((requireThread().entries as { turnId: string }[]).map((entry) => entry.turnId)),
+        ].map((id) => ({ id, status: requireThread().activeTurnId === id ? "inProgress" : "completed" })),
+        nextCursor: null,
+      };
     if (method === "daemon/activeTurns")
       return {
         epoch,
@@ -348,7 +476,7 @@ export class FixtureConnection {
         modelProvider: params.provider === "claude" ? "claude" : "openai",
         model: params.model ?? thread?.model,
         reasoningEffort: "high",
-        updatedAt: Date.now() / 1000,
+        updatedAt: Math.floor(Date.now() / 1000),
         status: { type: "idle" },
         canAcceptDirectInput: true,
         extra: { fastModeSelection: false },
@@ -545,3 +673,8 @@ export class FixtureConnection {
     emitters.get(this.hostId)?.delete(this.emit);
   }
 }
+
+export const fixturePDF = Buffer.from(
+  "JVBERi0xLjQKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2JqCjIgMCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFszIDAgUl0gL0NvdW50IDEgPj4KZW5kb2JqCjMgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVkaWFCb3ggWzAgMCA2MDAgNDAwXSAvUmVzb3VyY2VzIDw8IC9Gb250IDw8IC9GMSA0IDAgUiA+PiA+PiAvQ29udGVudHMgNSAwIFIgPj4KZW5kb2JqCjQgMCBvYmoKPDwgL1R5cGUgL0ZvbnQgL1N1YnR5cGUgL1R5cGUxIC9CYXNlRm9udCAvSGVsdmV0aWNhID4+CmVuZG9iago1IDAgb2JqCjw8IC9MZW5ndGggNTEgPj4Kc3RyZWFtCkJUIC9GMSAyMiBUZiA0MCAzMDAgVGQgKEJyb3dzZXIgUERGIHByZXZpZXcpIFRqIEVUCmVuZHN0cmVhbQplbmRvYmoKeHJlZgowIDYKMDAwMDAwMDAwMCA2NTUzNSBmIAowMDAwMDAwMDA5IDAwMDAwIG4gCjAwMDAwMDAwNTggMDAwMDAgbiAKMDAwMDAwMDExNSAwMDAwMCBuIAowMDAwMDAwMjQxIDAwMDAwIG4gCjAwMDAwMDAzMTEgMDAwMDAgbiAKdHJhaWxlcgo8PCAvU2l6ZSA2IC9Sb290IDEgMCBSID4+CnN0YXJ0eHJlZgo0MTEKJSVFT0YK",
+  "base64",
+);

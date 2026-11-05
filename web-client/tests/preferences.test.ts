@@ -151,6 +151,31 @@ afterEach(() => {
   for (const workspace of workspaces.splice(0)) workspace.dispose();
 });
 
+test("model switches restore explicit reasoning per model and keep the remembered Fast choice", async () => {
+  const { workspace, gateway } = setup();
+  gateway.catalog.push({
+    ...model("limited"),
+    supportedReasoningEfforts: [{ reasoningEffort: "low" }],
+    serviceTiers: [],
+  });
+  await workspace.refreshHost("mini");
+  const original = workspace.choices().find((choice) => choice.id === "gpt-6.1-sol");
+  const limited = workspace.choices().find((choice) => choice.id === "limited");
+  if (!original || !limited) throw new Error("Missing fixture models");
+  await workspace.chooseModel(original);
+  await workspace.chooseReasoning("xhigh");
+  await workspace.chooseFastMode(true);
+  await workspace.chooseModel(limited);
+  await workspace.chooseReasoning("low");
+  expect(workspace.draft).toMatchObject({ effort: "low", fast: false });
+  await workspace.chooseModel(original);
+  expect(workspace.draft).toMatchObject({ effort: "xhigh", fast: true });
+  await workspace.chooseReasoning("");
+  await workspace.chooseModel(limited);
+  await workspace.chooseModel(original);
+  expect(workspace.draft.effort).toBe("");
+});
+
 test("a model change clamps capabilities locally without changing global reasoning or Fast choices", async () => {
   const { workspace, gateway } = setup();
   gateway.catalog.push({

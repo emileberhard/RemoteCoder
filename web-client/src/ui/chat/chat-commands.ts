@@ -9,6 +9,7 @@ import {
   Folder,
   FoldVertical,
   GitBranch,
+  GitCompareArrows,
   type LucideIcon,
   Mail,
   MailOpen,
@@ -30,6 +31,7 @@ import { useEffect } from "react";
 export type ChatCommand =
   | "newChat"
   | "fork"
+  | "changes"
   | "chooseFolder"
   | "commandPalette"
   | "toggleSidebar"
@@ -60,6 +62,12 @@ type Definition = { title: string; Icon: LucideIcon; shortcut?: Shortcut; inPale
 export const chatCommands: Record<ChatCommand, Definition> = {
   newChat: { title: "New Chat", Icon: SquarePen, inPalette: true },
   fork: { title: "Fork Conversation", Icon: GitBranch, inPalette: true },
+  changes: {
+    title: "Changes",
+    Icon: GitCompareArrows,
+    shortcut: { key: "d", shift: true, label: "⇧⌘D" },
+    inPalette: true,
+  },
   chooseFolder: { title: "Choose Folder…", Icon: Folder, inPalette: true },
   commandPalette: {
     title: "Command Palette…",

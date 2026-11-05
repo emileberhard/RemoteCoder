@@ -1,5 +1,6 @@
 import { X } from "lucide-react";
 import { type ReactNode, useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import { IconButton } from "./icon-button";
 
 export function Dialog({
@@ -19,7 +20,7 @@ export function Dialog({
     dialog?.showModal();
     return () => dialog?.close();
   }, []);
-  return (
+  return createPortal(
     <dialog ref={ref} className={`dialog ${wide ? "wide" : ""}`} onCancel={close}>
       <div className="dialog-header">
         <h2>{title}</h2>
@@ -28,6 +29,7 @@ export function Dialog({
         </IconButton>
       </div>
       {children}
-    </dialog>
+    </dialog>,
+    document.body,
   );
 }

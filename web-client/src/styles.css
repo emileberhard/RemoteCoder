@@ -681,6 +681,7 @@ button.primary:hover:not(:disabled) {
   transition: opacity 0.15s;
 }
 .agent-row:hover .message-actions,
+.user-row:hover .message-actions,
 .message-actions:focus-within {
   opacity: 1;
 }
@@ -3336,4 +3337,105 @@ li.selected .directory-name > svg:first-child,
   align-items: center;
   gap: 6px;
   padding-top: 4px;
+}
+.file-pdf {
+  display: block;
+  width: 100%;
+  height: 65dvh;
+  border: 0;
+}
+.file-text {
+  position: relative;
+  max-height: 65dvh;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.changes-toolbar {
+  display: flex;
+  align-items: end;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+.changes-toolbar label,
+.changes-file {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  max-width: 100%;
+  color: var(--muted);
+  font-size: 12px;
+}
+.changes-toolbar select,
+.changes-file select {
+  max-width: 100%;
+  color: var(--foreground);
+}
+.change-lines {
+  overflow: auto;
+  max-height: 55dvh;
+  margin: 12px 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.change-line {
+  display: flex;
+  width: 100%;
+  min-width: max-content;
+  border: 0;
+  border-radius: 0;
+  padding: 0 8px;
+  text-align: left;
+  font:
+    12px / 1.7 ui-monospace,
+    monospace;
+  white-space: pre;
+  user-select: text;
+  background: transparent;
+}
+.change-line:disabled {
+  opacity: 1;
+  cursor: text;
+}
+.change-line span {
+  display: inline-block;
+  flex: 0 0 4em;
+  text-align: right;
+  color: var(--muted);
+  padding-right: 1em;
+}
+.change-line code {
+  font: inherit;
+}
+.change-line.addition {
+  background: color-mix(in srgb, #30a46c 14%, transparent);
+}
+.change-line.deletion {
+  background: color-mix(in srgb, #e5484d 14%, transparent);
+}
+.change-line.header {
+  color: var(--muted);
+}
+.review-comment {
+  margin-top: 16px;
+}
+.review-comment label {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.review-comment textarea {
+  min-height: 100px;
+  resize: vertical;
+}
+
+.host-image {
+  display: block;
+}
+.file-text mark {
+  background: color-mix(in srgb, var(--accent) 24%, transparent);
+  color: inherit;
 }

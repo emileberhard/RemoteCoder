@@ -19,7 +19,8 @@ test("new automation uses the discovered authority's physical hostname and home"
   };
   const owner = automationOwner([secondary, primary]);
   expect(owner).toBe(primary);
-  expect(newAutomation(owner!.info)).toMatchObject({
+  if (!owner) throw new Error("Expected the primary automation owner");
+  expect(newAutomation(owner.info)).toMatchObject({
     cwd: "/home/operator",
     run: { agent: { gateway_host: "gateway-primary" } },
   });

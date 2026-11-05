@@ -3,6 +3,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { addressKey, type VisualPublication } from "../../../protocol/boundary";
 import type { Conversation, Row } from "../../../workspace/conversation-session";
 import { downloadFile } from "../../files/download";
+import { FilePreview, filePreviewKind } from "../../files/preview";
 import { useRun, useWorkspace } from "../../workspace-context";
 import { MessageRow } from "../bubbles/message-row";
 import { ApprovalCard } from "../questions/approval-card";
@@ -22,7 +23,12 @@ export function Transcript({ conversation }: { conversation: Conversation }) {
     | undefined
   >(undefined);
   const lastTop = useRef(0);
+  const touchY = useRef<number | undefined>(undefined);
   const previous = useRef<string | undefined>(undefined);
+  const [file, setFile] = useState<
+    { path: string; kind: "image" | "pdf" | "text"; line?: number } | undefined
+  >(undefined);
+  const closeFile = useCallback(() => setFile(undefined), []);
   const [away, setAway] = useState(false);
   const identity = addressKey(conversation.address);
   const windowKey = conversation.rows.map((row) => row.entry.item.id).join("\0");
@@ -31,6 +37,7 @@ export function Transcript({ conversation }: { conversation: Conversation }) {
       previous.current = identity;
       edge.current = undefined;
       anchor.current = undefined;
+      setFile(undefined);
       anchored.current = true;
       setAway(false);
       if (ref.current) {
@@ -118,6 +125,36 @@ export function Transcript({ conversation }: { conversation: Conversation }) {
   ]);
   useEffect(() => {
     const element = ref.current;
+    if (!element) return;
+    const wheel = (event: WheelEvent) => {
+      if (event.ctrlKey) return;
+      if (event.deltaY) edge.current = event.deltaY < 0 ? "older" : "newer";
+      demand();
+    };
+    const start = (event: TouchEvent) => {
+      touchY.current = event.touches[0]?.clientY;
+    };
+    const move = (event: TouchEvent) => {
+      const next = event.touches[0]?.clientY;
+      if (next !== undefined && touchY.current !== undefined && next !== touchY.current)
+        edge.current = next > touchY.current ? "older" : "newer";
+      touchY.current = next;
+      demand();
+    };
+    const end = () => {
+      touchY.current = undefined;
+    };
+    const lifetime = new AbortController();
+    const options = { passive: true, signal: lifetime.signal };
+    element.addEventListener("wheel", wheel, options);
+    element.addEventListener("touchstart", start, options);
+    element.addEventListener("touchmove", move, options);
+    element.addEventListener("touchend", end, options);
+    element.addEventListener("touchcancel", end, options);
+    return () => lifetime.abort();
+  }, [demand]);
+  useEffect(() => {
+    const element = ref.current;
     const content = element?.querySelector(".transcript-content");
     if (!element || !content) return;
     const observer = new ResizeObserver(() => {
@@ -132,6 +169,8 @@ export function Transcript({ conversation }: { conversation: Conversation }) {
   const hostId = conversation.address.hostId;
   const segments = timelineSegments(conversation.rows, typeof conversation.activeTurnId === "string");
   const questions = conversation.questions;
+  const marks = workspace.conversationMarks(conversation.address)?.marks;
+  const changeView = marks?.threads[conversation.address.threadId]?.changesView;
   const renderRow = (row: Row, reply = false, visual?: VisualPublication) => (
     <div
       key={visual ? `published-visual-${row.entry.item.id}` : row.entry.item.id}
@@ -140,7 +179,24 @@ export function Transcript({ conversation }: { conversation: Conversation }) {
       <MessageRow
         key={visual ? `published-visual-${row.entry.item.id}` : row.entry.item.id}
         row={row}
-        reply={reply}
+        reply={
+          reply &&
+          !conversation.newer &&
+          conversation.activeTurnId !== undefined &&
+          row.entry.turnId !== conversation.activeTurnId
+        }
+        countChanges={
+          reply &&
+          !conversation.newer &&
+          conversation.activeTurnId !== undefined &&
+          row.entry.turnId !== conversation.activeTurnId &&
+          (marks?.schemaVersion ?? 0) >= 4 &&
+          !(
+            changeView?.kind === "since" &&
+            changeView.turnId === row.entry.turnId &&
+            changeView.boundary === "end"
+          )
+        }
         visual={visual}
         address={conversation.address}
         cwd={conversation.header.cwd}
@@ -170,7 +226,14 @@ export function Transcript({ conversation }: { conversation: Conversation }) {
       const link = target.closest<HTMLAnchorElement>("[data-host-path]");
       if (link?.dataset.hostPath) {
         event.preventDefault();
-        await downloadFile(hostId, link.dataset.hostPath, conversation.header.cwd);
+        const kind = filePreviewKind(link.dataset.hostPath);
+        if (kind)
+          setFile({
+            path: link.dataset.hostPath,
+            kind,
+            line: link.dataset.hostLine ? Number(link.dataset.hostLine) : undefined,
+          });
+        else await downloadFile(hostId, link.dataset.hostPath, conversation.header.cwd);
       }
     },
     [hostId, conversation.header.cwd],
@@ -186,6 +249,17 @@ export function Transcript({ conversation }: { conversation: Conversation }) {
   }, [actions, workspace]);
   return (
     <div className="transcript-shell">
+      {file && (
+        <FilePreview
+          key={`${hostId}:${file.path}`}
+          path={file.path}
+          hostId={hostId}
+          cwd={conversation.header.cwd}
+          kind={file.kind}
+          line={file.line}
+          close={closeFile}
+        />
+      )}
       <div
         ref={ref}
         className="transcript"
@@ -218,6 +292,12 @@ export function Transcript({ conversation }: { conversation: Conversation }) {
             <div className="inline-error">
               <AlertCircle size={17} />
               <span>{conversation.historyError}</span>
+              <button
+                type="button"
+                onClick={() => run(() => workspace.loadConversation(conversation.address))}
+              >
+                Refresh history
+              </button>
             </div>
           )}
           {conversation.status === "loading" && <p className="subtle loading">Reading this conversation…</p>}
