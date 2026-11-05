@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
 import { webBuild } from "../gateway";
-import { useWorkspace } from "./workspace-context";
+import { useRun, useWorkspace } from "./workspace-context";
 
 export function DeploymentUpdate() {
   const workspace = useWorkspace();
+  const run = useRun();
   const [available, setAvailable] = useState(false);
   useEffect(() => {
     if (!webBuild) return;
@@ -44,10 +45,12 @@ export function DeploymentUpdate() {
     <button
       type="button"
       className="deployment-update"
-      onClick={() => {
-        workspace.flushDrafts();
-        location.reload();
-      }}
+      onClick={() =>
+        run(() => {
+          workspace.prepareForReload();
+          location.reload();
+        })
+      }
     >
       Update available · Reload
     </button>
