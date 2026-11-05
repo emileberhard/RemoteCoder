@@ -20,6 +20,9 @@ struct MockBroker {
     delay: Duration,
     rejected: Vec<String>,
     relevance: bool,
+    hold_health: std::sync::atomic::AtomicBool,
+    held_health: AtomicUsize,
+    health_release: tokio::sync::Semaphore,
 }
 
 impl MockBroker {
@@ -31,11 +34,28 @@ impl MockBroker {
             delay,
             rejected,
             relevance: false,
+            hold_health: std::sync::atomic::AtomicBool::new(false),
+            held_health: AtomicUsize::new(0),
+            health_release: tokio::sync::Semaphore::new(0),
         })
     }
 
     fn requests(&self) -> Vec<Value> {
         self.requests.lock().expect("recorded requests").clone()
+    }
+
+    async fn while_health_is_held(&self, change: impl FnOnce()) {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while self.held_health.load(Ordering::SeqCst) == 0 {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .expect("the publication never asked the broker for its health");
+        change();
+        self.hold_health.store(false, Ordering::SeqCst);
+        self.held_health.store(0, Ordering::SeqCst);
+        self.health_release.add_permits(1);
     }
 }
 
@@ -64,6 +84,15 @@ async fn record(
 }
 
 async fn capabilities(State(broker): State<Arc<MockBroker>>) -> Json<Value> {
+    if broker.hold_health.load(Ordering::SeqCst) {
+        broker.held_health.fetch_add(1, Ordering::SeqCst);
+        broker
+            .health_release
+            .acquire()
+            .await
+            .expect("health gate")
+            .forget();
+    }
     Json(if broker.relevance {
         json!({"capabilities":{"live_activity_relevance_score":true}})
     } else {
@@ -830,41 +859,84 @@ async fn an_unavailable_local_source_blocks_delivery_until_its_fresh_projection_
 }
 
 #[tokio::test]
-async fn a_fleet_delivery_superseded_while_queued_is_never_sent() {
-    let broker = MockBroker::new(Duration::from_millis(500), Vec::new());
+async fn a_fleet_end_superseded_before_its_send_is_never_sent() {
+    let broker = MockBroker::new(Duration::ZERO, Vec::new());
     let (service, server) = service(&broker).await;
-    for seed in 2..=6 {
-        service
-            .devices()
-            .register(fleet_device(seed, &[LOCAL, PEER]))
-            .await
-            .unwrap();
-    }
+    service
+        .devices()
+        .register(fleet_device(2, &[LOCAL, PEER]))
+        .await
+        .unwrap();
     service
         .report_live_activity(Some(LOCAL), content(0, &[]))
         .await;
     peer(&service, 1, Some(content(0, &[])));
-    tokio::join!(service.publish_fleet_live_activity(Some(LOCAL)), async {
-        while broker.in_flight.load(Ordering::SeqCst) < MAX_CONCURRENT_SENDS {
-            tokio::time::sleep(Duration::from_millis(1)).await;
-        }
-        assert_eq!(
-            peer(&service, 2, Some(content(1, &[]))),
-            PeerOutcome::Accepted
-        );
-    });
+    broker.hold_health.store(true, Ordering::SeqCst);
+    tokio::join!(
+        service.publish_fleet_live_activity(Some(LOCAL)),
+        broker.while_health_is_held(|| {
+            assert_eq!(
+                peer(&service, 2, Some(content(1, &[]))),
+                PeerOutcome::Accepted
+            );
+        })
+    );
     service.publish_fleet_live_activity(Some(LOCAL)).await;
-    let ends = broker
-        .requests()
-        .into_iter()
-        .filter(|request| request["event"] == "end")
-        .count();
-    assert_eq!(ends, MAX_CONCURRENT_SENDS);
-    for seed in 2..=6 {
-        let last = fleet_requests(&broker, seed).last().unwrap().clone();
-        assert_eq!(last["event"], "update");
-        assert_eq!(last["content_state"]["activeTaskCount"], 1);
-    }
+    let requests = fleet_requests(&broker, 2);
+    assert!(requests.iter().all(|request| request["event"] == "update"));
+    assert_eq!(
+        requests.last().unwrap()["content_state"]["activeTaskCount"],
+        1
+    );
+    server.abort();
+}
+
+#[tokio::test]
+async fn a_superseded_local_projection_keeps_its_rows_but_never_ends() {
+    let broker = MockBroker::new(Duration::ZERO, Vec::new());
+    let (service, server) = service(&broker).await;
+    service
+        .devices()
+        .register(fleet_device(2, &[LOCAL, PEER]))
+        .await
+        .unwrap();
+    let fresh = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let probe = Arc::clone(&fresh);
+    service
+        .report_live_activity_if_current(
+            Some(LOCAL),
+            content(0, &[]),
+            Freshness::new(move || probe.load(Ordering::SeqCst)),
+        )
+        .await;
+    fresh.store(false, Ordering::SeqCst);
+    peer(&service, 1, Some(content(0, &[])));
+    service.publish_fleet_live_activity(Some(LOCAL)).await;
+    let pending = fleet(&service, &[LOCAL, PEER]);
+    assert!(pending.unavailable_host_ids.is_empty());
+    assert!(!pending.is_certified_empty());
+    assert!(
+        fleet_requests(&broker, 2)
+            .iter()
+            .all(|request| request["event"] == "update")
+    );
+
+    fresh.store(true, Ordering::SeqCst);
+    broker.hold_health.store(true, Ordering::SeqCst);
+    tokio::join!(
+        service.publish_fleet_live_activity(Some(LOCAL)),
+        broker.while_health_is_held(|| fresh.store(false, Ordering::SeqCst))
+    );
+    assert!(
+        fleet_requests(&broker, 2)
+            .iter()
+            .all(|request| request["event"] == "update")
+    );
+
+    service
+        .report_live_activity(Some(LOCAL), content(0, &[]))
+        .await;
+    assert_eq!(fleet_requests(&broker, 2).last().unwrap()["event"], "end");
     server.abort();
 }
 
@@ -898,6 +970,17 @@ async fn a_running_child_counts_under_its_idle_local_root() {
     let shared = fleet(&service, &[LOCAL, PEER]);
     assert_eq!(shared.content.active_task_count, 1);
     assert!(shared.unavailable_host_ids.is_empty());
+}
+
+#[tokio::test]
+async fn an_unresolved_declared_owner_is_listed_unavailable_once() {
+    let service = PushService::fixture_disabled(Journal::disabled());
+    service
+        .report_live_activity(Some(LOCAL), delegated(&["child"], &[("child", PEER, "b")]))
+        .await;
+    let view = fleet(&service, &[LOCAL, PEER]);
+    assert_eq!(view.content.active_task_count, 1);
+    assert_eq!(view.unavailable_host_ids, vec![PEER.to_owned()]);
 }
 
 #[tokio::test]
@@ -962,6 +1045,7 @@ fn the_largest_supported_fleet_state_fits_the_activity_budget() {
             attention_count: usize::MAX,
         },
         unavailable_host_ids: vec![host.to_owned(); MAX_FLEET_HOSTS],
+        certifies: false,
     };
     let mut state = ActivityPayload::fleet(&content).state;
     state["updatedAtUnixSeconds"] = Value::from(f64::MAX);

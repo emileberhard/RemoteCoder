@@ -387,8 +387,9 @@ unread state continues independently. Claude restart recovery stays unavailable 
 journal is readable and settled and resumed starts reach the turn ledger.
 The host-default scope must provide fresh state before host publication;
 startup discards retired scopes. Unreadable durable state or an unfinished
-restoration cannot certify an empty host. A report superseded during persistence
-or delivery stays unavailable until a current report replaces it.
+restoration cannot certify an empty host. A local report superseded by a newer
+snapshot keeps its rows but cannot certify empty or End until the newer report
+replaces it.
 The gateway publishes the same epoch- and revision-scoped attention snapshot
 through `daemon/liveActivity` and `daemon/liveActivity/changed` and APNs. Before
 inactivity the app retains that snapshot, so an attention-only activity starts

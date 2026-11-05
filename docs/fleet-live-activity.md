@@ -29,8 +29,10 @@ the existing authenticated cluster link. A small sender owned by the existing
 cluster driver's structured lifetime watches local changes, member wakes and
 membership. It is independent of delegated-job backoff, sends only changed or
 undelivered current state, and retries every outcome other than accepted with
-bounded jittered backoff. A member that lacks the capability is not retried
-until its next wake, such as the reconnect after its upgrade. No polling
+bounded jittered backoff. Dropping an outbound connection, whether its reader
+ended, a call timed out or a dead socket was discarded, wakes its member, so the
+report follows each replacement socket. A member that lacks the capability
+is not retried until its next wake, such as the reconnect after its upgrade. No polling
 subsystem or broker-specific merge is added.
 Peer identity comes from the authenticated grant; payloads cannot select another
 host. A versioned capability gates the new report protocol.

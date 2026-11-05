@@ -3,7 +3,7 @@ use super::{ActiveTasksLiveActivitySnapshot, Gateway};
 use crate::conversation_marks::{Marks, ThreadMarks};
 use crate::providers::claude::{is_claude_thread_id, session_uuid_from_thread_id};
 use crate::push::{
-    AttentionReason, AttentionRow, LiveActivityContent, MAX_ATTENTION_ROWS, PeerOutcome,
+    AttentionReason, AttentionRow, Freshness, LiveActivityContent, MAX_ATTENTION_ROWS, PeerOutcome,
     PeerReport, SourceProjection, attention_title,
 };
 use crate::storage::private_state;
@@ -366,6 +366,7 @@ impl Gateway {
             }
             tokio::time::sleep(COALESCE_WINDOW).await;
             let snapshot = rx.borrow_and_update().clone();
+            let probe = rx.clone();
             let projection = tokio::select! {
                 biased;
                 changed = rx.changed() => {
@@ -387,7 +388,7 @@ impl Gateway {
                         .report_live_activity_if_current(
                             local_host.as_deref(),
                             projection,
-                            is_current,
+                            Freshness::new(move || matches!(probe.has_changed(), Ok(false))),
                         )
                         .await;
                 }

@@ -982,12 +982,14 @@ blocks startup or provider journal retirement.
   them read. The attention count counts every unread row.
   Pending or unreadable Claude restart recovery holds publication; resumed
   starts must reach the turn ledger before coverage returns.
-  Superseded async projections are discarded at projection, publication and
-  delivery. Supersession during delivery leaves the local source unavailable
-  until a current report replaces it. Rows are ordered newest
-  completion first; a title is the pin name, then the native name, then the
-  preview. Delegated agent threads fold into their proven root, including a
-  root on another member: a child names its remote parent address, and an idle
+  Superseded async projections are discarded at projection. A reported local
+  projection keeps an owned probe of the snapshot watch it was built from;
+  once a newer snapshot is pending it still shows its rows, without marking
+  the host unavailable, but it cannot certify empty or send End, at
+  publication or at delivery, until the newer report replaces it. Rows are
+  ordered newest completion first; a title is the pin name, then the native
+  name, then the preview. Delegated agent threads fold into their proven root,
+  including a root on another member: a child names its remote parent address, and an idle
   thread that a peer names as parent reports its own root (`ancestry`, at most
   32) without counting. A hop no current source resolves counts once at the
   child and marks the unresolved host unavailable; no terminal root is guessed.
@@ -1025,9 +1027,11 @@ blocks startup or provider journal retirement.
   (undecodable, another protocol, inconsistent, oversized or over the peer cap)
   withdraws the bound connection's currency and keeps last-known rows.
   Accepting peer sockets close after 45 s without an inbound frame (two ping
-  intervals). `cluster/driver.rs` resends after a local change or member wake
-  and retries every non-accepted outcome with jittered 0.5–30 s backoff,
-  except that a member lacking `liveActivity.v1` waits for its next wake.
+  intervals). `cluster/driver.rs` resends after a local change or member wake;
+  dropping an outbound connection (reader end, call timeout or discarded dead
+  socket) wakes its member, so a quietly replaced socket is reported on again. It retries every non-accepted outcome with
+  jittered 0.5–30 s backoff, except that a member lacking `liveActivity.v1`
+  waits for its next wake.
 - The local projection is published unchanged through `daemon/liveActivity`
   and `daemon/liveActivity/changed` and to `liveActivity` tokens, the per-host
   activity of released apps. `daemon/liveActivity/fleet {hosts}` (status

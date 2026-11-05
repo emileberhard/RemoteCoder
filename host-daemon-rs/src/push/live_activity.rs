@@ -1,6 +1,7 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
@@ -137,11 +138,32 @@ pub(crate) struct FleetContent {
     pub content: LiveActivityContent,
     #[serde(rename = "unavailableHostIDs")]
     pub unavailable_host_ids: Vec<String>,
+    #[serde(skip)]
+    pub certifies: bool,
 }
 
 impl FleetContent {
     pub(crate) fn is_certified_empty(&self) -> bool {
-        self.unavailable_host_ids.is_empty() && self.content.is_empty()
+        self.certifies && self.content.is_empty()
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct Freshness(Arc<dyn Fn() -> bool + Send + Sync>);
+
+impl Freshness {
+    pub(crate) fn new(is_fresh: impl Fn() -> bool + Send + Sync + 'static) -> Self {
+        Self(Arc::new(is_fresh))
+    }
+
+    pub(crate) fn is_fresh(&self) -> bool {
+        (self.0)()
+    }
+}
+
+impl std::fmt::Debug for Freshness {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("Freshness")
     }
 }
 
@@ -284,6 +306,7 @@ pub(super) struct CacheDocument {
 #[derive(Debug)]
 pub(super) struct Sources {
     local: Option<SourceProjection>,
+    local_freshness: Option<Freshness>,
     local_state: LocalState,
     peers: BTreeMap<String, Peer>,
 }
@@ -308,6 +331,7 @@ pub(super) fn load(path: Option<PathBuf>) -> (Sources, Publication) {
     });
     let sources = Sources {
         local: cached.as_ref().and_then(|cache| cache.local.clone()),
+        local_freshness: None,
         local_state: LocalState::Restored,
         peers: cached
             .as_ref()
@@ -347,6 +371,14 @@ impl Sources {
         self.current_local().map(|local| &local.content)
     }
 
+    pub(super) fn local_superseded(&self) -> bool {
+        self.local_state == LocalState::Current
+            && self
+                .local_freshness
+                .as_ref()
+                .is_some_and(|freshness| !freshness.is_fresh())
+    }
+
     fn current_local(&self) -> Option<&SourceProjection> {
         (self.local_state == LocalState::Current)
             .then_some(self.local.as_ref())
@@ -359,9 +391,14 @@ impl Sources {
         }
     }
 
-    pub(super) fn report_local(&mut self, projection: SourceProjection) -> bool {
+    pub(super) fn report_local(
+        &mut self,
+        projection: SourceProjection,
+        freshness: Freshness,
+    ) -> bool {
         let changed = self.local.as_ref() != Some(&projection);
         self.local = Some(projection);
+        self.local_freshness = Some(freshness);
         let certified = self.local_state != LocalState::Current;
         self.local_state = LocalState::Current;
         changed || certified
@@ -494,6 +531,7 @@ impl Sources {
         let mut attention = Vec::new();
         let mut attention_count = 0;
         let mut unavailable_host_ids = Vec::new();
+        let mut certifies = true;
         for host in hosts {
             let (projection, coverage) = if host == local_host {
                 let coverage = match (self.local_state, &self.local) {
@@ -509,7 +547,11 @@ impl Sources {
                 }
             };
             if coverage != Coverage::Current {
-                unavailable_host_ids.push(host.clone());
+                if !unavailable_host_ids.contains(host) {
+                    unavailable_host_ids.push(host.clone());
+                }
+            } else if host == local_host && self.local_superseded() {
+                certifies = false;
             }
             let Some(projection) = projection else {
                 continue;
@@ -551,6 +593,7 @@ impl Sources {
                 attention,
                 attention_count,
             },
+            certifies: certifies && unavailable_host_ids.is_empty(),
             unavailable_host_ids,
         }
     }

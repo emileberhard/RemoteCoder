@@ -21,9 +21,9 @@ use broker::{
 };
 pub(crate) use broker::{Delivered, DeliveryFailure, DeliveryOutcome};
 pub(crate) use live_activity::{
-    AttentionReason, AttentionRow, FleetSnapshot, LiveActivityContent, LiveActivitySnapshot,
-    MAX_ATTENTION_ROWS, MAX_FLEET_HOSTS, PeerOutcome, PeerReport, SourceProjection,
-    attention_title,
+    AttentionReason, AttentionRow, FleetSnapshot, Freshness, LiveActivityContent,
+    LiveActivitySnapshot, MAX_ATTENTION_ROWS, MAX_FLEET_HOSTS, PeerOutcome, PeerReport,
+    SourceProjection, attention_title,
 };
 
 const PAYLOAD_KEY: &str = "remoteCoder.taskCompletionPayload";
@@ -122,6 +122,7 @@ pub(crate) struct PushService {
     fleet_changes: watch::Sender<u64>,
 }
 
+#[derive(Clone)]
 struct ActivityPayload {
     fleet: bool,
     ends: bool,
@@ -131,8 +132,13 @@ struct ActivityPayload {
 }
 
 impl ActivityPayload {
-    fn local(content: &LiveActivityContent) -> Self {
-        Self::new(false, content.is_empty(), content, serde_json::json!({}))
+    fn local(content: &LiveActivityContent, superseded: bool) -> Self {
+        Self::new(
+            false,
+            !superseded && content.is_empty(),
+            content,
+            serde_json::json!({}),
+        )
     }
 
     fn fleet(content: &live_activity::FleetContent) -> Self {
@@ -396,7 +402,7 @@ impl PushService {
         local_host: Option<&str>,
         projection: SourceProjection,
     ) {
-        self.report_live_activity_if_current(local_host, projection, || true)
+        self.report_live_activity_if_current(local_host, projection, Freshness::new(|| true))
             .await;
     }
 
@@ -404,17 +410,13 @@ impl PushService {
         &self,
         local_host: Option<&str>,
         projection: SourceProjection,
-        is_current: impl Fn() -> bool + Sync,
+        freshness: Freshness,
     ) {
-        if !is_current() {
+        if !freshness.is_fresh() {
             return;
         }
-        let changed = self.change_local(|sources| sources.report_local(projection));
-        self.publish_live_activity(changed, local_host, &is_current)
-            .await;
-        if !is_current() && self.change_local(live_activity::Sources::mark_local_unavailable) {
-            self.publish_live_activity(true, local_host, &|| true).await;
-        }
+        let changed = self.change_local(|sources| sources.report_local(projection, freshness));
+        self.publish_live_activity(changed, local_host).await;
     }
 
     pub(crate) async fn mark_live_activity_unavailable_if_current(
@@ -426,8 +428,7 @@ impl PushService {
             return;
         }
         let changed = self.change_local(live_activity::Sources::mark_local_unavailable);
-        self.publish_live_activity(changed, local_host, &is_current)
-            .await;
+        self.publish_live_activity(changed, local_host).await;
     }
 
     fn sources(&self) -> std::sync::MutexGuard<'_, live_activity::Sources> {
@@ -514,8 +515,7 @@ impl PushService {
     }
 
     pub(crate) async fn publish_fleet_live_activity(&self, local_host: Option<&str>) {
-        self.publish_live_activity(false, local_host, &|| true)
-            .await;
+        self.publish_live_activity(false, local_host).await;
     }
 
     pub(crate) fn fleet_live_activity_snapshot(
@@ -533,25 +533,18 @@ impl PushService {
         }
     }
 
-    async fn publish_live_activity(
-        &self,
-        changed: bool,
-        local_host: Option<&str>,
-        is_current: &(impl Fn() -> bool + Sync),
-    ) {
+    async fn publish_live_activity(&self, changed: bool, local_host: Option<&str>) {
         let mut publication = self.live_activity_publication.lock().await;
-        if !is_current() {
-            return;
-        }
-        let (local, restoring, revision) = {
+        let (local, superseded, restoring, revision) = {
             let sources = self.sources();
             (
                 sources.local_content().cloned(),
+                sources.local_superseded(),
                 sources.is_restoring(),
                 *self.fleet_changes.borrow(),
             )
         };
-        let is_current = || is_current() && *self.fleet_changes.borrow() == revision;
+        let is_current = || *self.fleet_changes.borrow() == revision;
         match &local {
             None => {
                 self.live_activity_updates
@@ -577,8 +570,14 @@ impl PushService {
             }
         }
         if !restoring {
-            self.deliver_live_activity(&mut publication, changed, local, local_host, &is_current)
-                .await;
+            self.deliver_live_activity(
+                &mut publication,
+                changed,
+                local.map(|local| ActivityPayload::local(&local, superseded)),
+                local_host,
+                &is_current,
+            )
+            .await;
         }
         let cache = self.sources().cache();
         publication.persist(cache).await;
@@ -588,7 +587,7 @@ impl PushService {
         &self,
         publication: &mut live_activity::Publication,
         changed: bool,
-        local: Option<LiveActivityContent>,
+        local: Option<ActivityPayload>,
         local_host: Option<&str>,
         is_current: &(impl Fn() -> bool + Sync),
     ) {
@@ -612,10 +611,7 @@ impl PushService {
         }
         let mut payloads: Vec<(Destination, ActivityPayload)> = legacy
             .into_iter()
-            .filter_map(|destination| {
-                let content = local.as_ref()?;
-                Some((destination, ActivityPayload::local(content)))
-            })
+            .filter_map(|destination| Some((destination, local.clone()?)))
             .collect();
         if let Some(local_host) = local_host {
             let sources = self.sources();
@@ -678,7 +674,7 @@ impl PushService {
                     alert: None,
                 };
                 async move {
-                    if !is_current() {
+                    if !is_current() || (payload.ends && self.sources().local_superseded()) {
                         return None;
                     }
                     let token = destination.token.as_str().to_owned();
