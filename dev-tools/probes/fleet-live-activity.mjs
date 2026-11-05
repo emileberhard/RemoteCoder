@@ -11,7 +11,8 @@ assert(binary && runtimePackage && isAbsolute(binary) && isAbsolute(runtimePacka
 
 const bundleId = "probe.fleet.liveActivity";
 const brokerToken = randomBytes(24).toString("hex");
-const fleetToken = randomBytes(32).toString("hex");
+const fleetTokens = [randomBytes(32).toString("hex"), randomBytes(32).toString("hex")];
+const fleetDevice = randomUUID().toUpperCase();
 const legacyToken = randomBytes(32).toString("hex");
 const deliveries = [];
 const broker = Bun.serve({
@@ -83,6 +84,9 @@ async function heldTurn(host, name) {
 }
 
 const fleetHosts = () => hosts.map(host => host.id);
+const registerFleet = (host, token) => rpc(host, "devices/register", { deviceId: fleetDevice, bundleId,
+    apnsEnvironment: "development", appHostId: randomUUID().toUpperCase(),
+    tokens: { fleetActivity: { token, hosts: fleetHosts() } } });
 const fleet = host => rpc(host, "daemon/liveActivity/fleet", { hosts: fleetHosts() });
 const sent = token => deliveries.filter(entry => entry.token === token);
 const unavailable = view => [...view.content.unavailableHostIDs].sort();
@@ -118,11 +122,6 @@ async function main() {
 
     await rpc(coordinator, "devices/register", { deviceId: randomUUID().toUpperCase(), bundleId,
         apnsEnvironment: "development", appHostId: randomUUID().toUpperCase(), tokens: { liveActivity: legacyToken } });
-    await rpc(coordinator, "devices/register", { deviceId: randomUUID().toUpperCase(), bundleId,
-        apnsEnvironment: "development", appHostId: randomUUID().toUpperCase(),
-        tokens: { fleetActivity: { token: fleetToken, hosts: fleetHosts() } } });
-    const registry = JSON.parse(await readFile(coordinator.lab.path(".remote-coder/devices.json"), "utf8"));
-    assert.equal(registry.version, 2, "A fleet token must write the version-2 registry");
 
     const runningThread = await heldTurn(peer, "peer-first");
     const running = await waitFor("peer running merges into the coordinator", async () => {
@@ -130,6 +129,10 @@ async function main() {
         return view.content.activeTaskCount === 1 && unavailable(view).length === 0 ? view : null;
     });
     assert.equal(running.content.attentionCount, 0);
+    const [fleetToken, secondFleetToken] = fleetTokens;
+    await registerFleet(coordinator, fleetToken);
+    const registry = JSON.parse(await readFile(coordinator.lab.path(".remote-coder/devices.json"), "utf8"));
+    assert.equal(registry.version, 2, "A fleet token must write the version-2 registry");
     await waitFor("fleet token receives the running update", () => sent(fleetToken)
         .some(entry => entry.event === "update" && entry.state.activeTaskCount === 1));
     const local = await rpc(coordinator, "daemon/liveActivity");
@@ -168,8 +171,17 @@ async function main() {
     await start(peer);
     await waitFor("restarted peer reports on its new connection", async () => unavailable(await fleet(coordinator)).length === 0);
 
+    const firstLifetime = sent(fleetToken);
+    assert.equal(firstLifetime.filter(entry => entry.event === "end").length, 1, "One End per activity lifetime");
+    assert.equal(firstLifetime.at(-1).event, "end");
+
     const heldThread = await heldTurn(peer, "peer-second");
-    await waitFor("second peer turn reaches the fleet token", () => sent(fleetToken).at(-1)?.state?.activeTaskCount === 1);
+    await waitFor("second peer turn is running in the fleet view", async () =>
+        (await fleet(coordinator)).content.activeTaskCount === 1);
+    await registerFleet(coordinator, secondFleetToken);
+    await waitFor("the rotated token receives the running update", () =>
+        sent(secondFleetToken).at(-1)?.state?.activeTaskCount === 1);
+    assert.equal(sent(fleetToken).length, firstLifetime.length, "The replaced token receives nothing more");
     const epoch = (await fleet(coordinator)).epoch;
     const beforeRestart = deliveries.length;
     await restart(coordinator);
@@ -179,12 +191,13 @@ async function main() {
         const view = await fleet(coordinator);
         return view.content.activeTaskCount === 1 && unavailable(view).length === 0;
     });
-    assert(!deliveries.slice(beforeRestart).some(entry => entry.token === fleetToken && entry.event === "end"),
+    assert(!deliveries.slice(beforeRestart).some(entry => entry.token === secondFleetToken && entry.event === "end"),
         "A restarted coordinator must not end nonempty work");
     model.release("peer-second");
     await waitFor("second finished turn becomes attention", async () => (await fleet(coordinator)).content.attentionCount === 1);
     await rpc(peer, "conversation/marks/update", { changes: [{ op: "markRead", threadId: heldThread, through: Date.now() + 60000 }] });
-    await waitFor("the persisted fleet token ends after restart", () => sent(fleetToken).at(-1)?.event === "end");
+    await waitFor("the persisted rotated token ends after restart", () => sent(secondFleetToken).at(-1)?.event === "end");
+    assert.equal(sent(secondFleetToken).filter(entry => entry.event === "end").length, 1, "One End per activity lifetime");
 
     const legacy = sent(legacyToken);
     assert(legacy.length > 0, "The legacy token still receives local content");
@@ -193,9 +206,9 @@ async function main() {
 
     console.log(JSON.stringify({ fleetLiveActivityProbe: "passed",
         hosts: hosts.map(host => ({ name: host.name, hostId: host.id })),
-        fleetDeliveries: sent(fleetToken).map(entry => ({ event: entry.event,
+        fleetDeliveries: fleetTokens.map(token => sent(token).map(entry => ({ event: entry.event,
             activeTaskCount: entry.state.activeTaskCount, attentionCount: entry.state.attentionCount,
-            unavailableHostIDs: entry.state.unavailableHostIDs })),
+            unavailableHostIDs: entry.state.unavailableHostIDs }))),
         legacyDeliveries: legacy.length, timings }));
 }
 
