@@ -529,6 +529,10 @@ gateway-e2e-files-live *args:
 gateway-e2e-delegated-jobs-isolated candidate package:
     bun dev-tools/probes/delegated-jobs.mjs "{{ candidate }}" "{{ package }}"
 
+# Fleet Live Activity across three isolated gateways and a stub broker.
+gateway-e2e-fleet-live-activity-isolated candidate package:
+    bun dev-tools/probes/fleet-live-activity.mjs "{{ candidate }}" "{{ package }}"
+
 gateway-e2e-query-admission-isolated $candidate:
     bun dev-tools/probes/query-admission.mjs "$candidate"
 

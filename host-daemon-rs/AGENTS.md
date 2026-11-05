@@ -34,6 +34,7 @@ surface:
 | History reads, native pages, `daemon/activeTurns` (read-only) | `just gateway-e2e-reads`, optionally `e2e_thread=<id>` |
 | Owned read burst, exact query cancellation and ready capability (isolated gateway) | `just gateway-e2e-query-admission-isolated /absolute/gateway/binary` |
 | Delegated jobs: Codex and Claude children spawned from a parent's tool process, results, parent callbacks, Stop, restart recovery and same-ID retry (isolated gateway, deterministic Codex model, host router for Claude) | `just gateway-e2e-delegated-jobs-isolated /absolute/gateway/binary /absolute/runtime/package` |
+| Fleet Live Activity: merged peer reports, exact rows, unavailable versus empty, End only when every declared host is current and empty, member and coordinator restarts, local-only legacy tokens (three isolated gateways, stub broker, deterministic Codex model) | `just gateway-e2e-fleet-live-activity-isolated /absolute/gateway/binary /absolute/runtime/package` |
 | First-party-first new conversation admission and last-resort effort clamping (isolated gateway, host router; logged-out Codex xhigh runs on Opus, then unavailable Claude forces Argon high, including a resumed Fast request) | `just gateway-e2e-provider-fallback-isolated /absolute/gateway/binary` |
 | `thread/fork(lastTurnId:)` boundaries (creates threads) | `just gateway-e2e-fork-live`, `just gateway-e2e-claude-fork-live` |
 | Claude steering folds into one completion (router-backed Sonnet; one completion plus an empty active-turn snapshot) | `just gateway-e2e-claude-steer-live` |

@@ -103,6 +103,18 @@ It then runs the actual configs worktree cleanup planner as a dry run, routing
 only its two gateway clients to the isolated candidate. The receipt requires
 known activity and no applied deletions; the planner keeps the real home context.
 
+## Fleet Live Activity probe
+
+`bun dev-tools/probes/fleet-live-activity.mjs <candidate> <matched-runtime-package>`
+starts three private gateways with a stub push broker and the loopback model,
+pairs the coordinator with both members, and registers one legacy and one fleet
+activity token. It checks merged peer counts and exact host/thread attention
+rows through `daemon/liveActivity/fleet` and the broker payloads, a stopped
+member reported as unavailable rather than empty, End only once every declared
+host is current and empty, member and coordinator restart ordering, and local-only
+legacy payloads. Production and the real broker are untouched; success removes
+every root, failure retains them as evidence.
+
 ## rc-gateway
 
 - **Config discovery:** CLI flags, then `RC_CODEX_GATEWAY_*` env vars, then the
