@@ -72,6 +72,9 @@ dynamic tool items. Previews appear in transcript order outside collapsed
 activity, open in a larger viewer, and download through the existing authenticated
 host-file route. Image reads cancel and release their blob URLs when scrolled
 away or unmounted; unavailable retained files show an error with Retry.
+Preview reads serialize per physical host and retry busy responses. Frontend
+updates use the static build marker, with an explicit Reload action that flushes
+drafts and lets the person finish live work before replacing the page.
 
 `Core/Package.swift` currently targets macOS/iOS27 with Swift6.4. The actual gateway owner uses `URLSessionWebSocketTask`, an `AppStorageScope` network configuration and `OSLog`; the conversation owner also uses Foundation and OSLog. Reusing that package in WebAssembly would require browser transport, storage and logging adapters, a WASM Swift toolchain, JavaScript interop and a UI-facing concurrency boundary before it could replace these browser owners. That cost is material for the independently designed TypeScript UI. This client instead generates the protocol dependency closure from the approved Codex runtime and extracts the Claude model catalog from its native owner. State contracts follow the existing native ownership and recovery rules while browser transport/rendering/media have explicit platform owners. Future portable Swift reducers can be evaluated individually without committing the entire browser UI to WASM.
 

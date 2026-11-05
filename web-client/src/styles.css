@@ -1141,6 +1141,16 @@ button.primary:hover:not(:disabled) {
   margin: auto;
   object-fit: contain;
 }
+.deployment-update {
+  align-self: center;
+  flex: none;
+  margin: 6px 12px;
+  padding: 7px 12px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface-solid);
+  font-size: 13px;
+}
 .attachment-link {
   display: inline-flex;
   align-items: center;

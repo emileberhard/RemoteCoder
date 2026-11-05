@@ -125,6 +125,12 @@ offline transcript caching would require revisiting selection and retention.
 - `dispose()` cancels owned listeners, timers, connections and conversation
   reads, flushes drafts and disposes rendering. Feature subscribers release
   their subscription on unmount.
+- `Workspace.imagePreviews` serializes image reads per physical host, with 24
+  waiting reads and a 32 MiB limit per image. Visibility cancels queue admission
+  and releases blob URLs; busy host responses retry within the same owner.
+- Frontend build identity comes from `/build-id.txt`, independently of the
+  bridge revision. An available update offers Reload after flushing drafts;
+  API responses never reload a page that may own speech or other live work.
 
 Use the fake RPC/storage owners in `tests/fixtures/workspace.ts` for state tests.
 Keep race and recovery assertions at `Workspace`'s public boundary; tests are

@@ -15,6 +15,7 @@ import { MediaProvider, VoiceDialog } from "./chat/media";
 import { Transcript } from "./chat/transcript/transcript";
 import { HistorySidebar } from "./conversations/history-sidebar";
 import { PinNameDialog, type PinNameIntent } from "./conversations/pin-name-dialog";
+import { DeploymentUpdate } from "./deployment-update";
 import { DiagramThemeContext, useDarkAppearance, visualTheme } from "./design-system/appearance";
 import { IconButton } from "./design-system/icon-button";
 import { DirectoryPicker } from "./directory-picker/directory-picker";
@@ -163,6 +164,7 @@ export function ChatRoot() {
         />
         <main className="main">
           <ChatHeader host={host} compact={compact} actions={actions} />
+          <DeploymentUpdate />
           {(snapshot.error || (host?.error && host.status !== "connected")) && (
             <div className="banners">
               {snapshot.error && (

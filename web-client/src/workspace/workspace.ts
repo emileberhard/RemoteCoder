@@ -6,6 +6,7 @@ import {
   targetKey,
 } from "../execution-context";
 import { api } from "../gateway";
+import { HostImagePreviews } from "../platform/host-image-previews";
 import {
   canonicalModelID,
   type PreferenceKey,
@@ -64,6 +65,7 @@ export type Snapshot = {
 };
 
 export class Workspace {
+  readonly imagePreviews = new HostImagePreviews();
   private state: Pick<
     Snapshot,
     "selectedHostId" | "selectedTarget" | "selected" | "agentNavigation" | "newDraftId" | "error" | "revision"
@@ -978,6 +980,7 @@ export class Workspace {
     }
   }
   dispose() {
+    this.imagePreviews.dispose();
     this.disposed = true;
     this.lifecycle.abort();
     this.preferences.dispose();

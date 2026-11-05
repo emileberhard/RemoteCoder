@@ -1,9 +1,68 @@
 import { afterEach, expect, test } from "bun:test";
-import { readHostFile } from "../src/ui/files/download";
+import { readHostFile } from "../src/platform/host-files";
+import { HostImagePreviews } from "../src/platform/host-image-previews";
 
 const originalFetch = globalThis.fetch;
 afterEach(() => {
   globalThis.fetch = originalFetch;
+});
+
+test("previews serialize per host, cancel queued reads and let another host proceed", async () => {
+  const first = Promise.withResolvers<Response>();
+  const requests: string[] = [];
+  Object.defineProperty(globalThis, "fetch", {
+    configurable: true,
+    writable: true,
+    value: async (url: string, init: RequestInit) => {
+      const path = JSON.parse(String(init.body)).path;
+      requests.push(`${url}:${path}`);
+      return path === "/first.png" ? first.promise : new Response(path);
+    },
+  });
+  const owner = new HostImagePreviews();
+  const canceled = new AbortController();
+  try {
+    const active = owner.read("one", "/first.png", "/", new AbortController().signal);
+    const removed = owner.read("one", "/canceled.png", "/", canceled.signal).catch((error) => error);
+    const next = owner.read("one", "/next.png", "/", new AbortController().signal);
+    const other = owner.read("two", "/other.png", "/", new AbortController().signal);
+    canceled.abort();
+    expect((await removed).name).toBe("AbortError");
+    expect(await (await other).text()).toBe("/other.png");
+    expect(requests).toHaveLength(2);
+    first.resolve(new Response("first"));
+    await active;
+    expect(await (await next).text()).toBe("/next.png");
+    expect(requests.some((path) => path.endsWith("/canceled.png"))).toBe(false);
+  } finally {
+    owner.dispose();
+  }
+});
+
+test("busy preview reads retry automatically while remaining admitted", async () => {
+  let requests = 0;
+  Object.defineProperty(globalThis, "fetch", {
+    configurable: true,
+    writable: true,
+    value: async () => {
+      requests++;
+      return requests === 1
+        ? Response.json(
+            { error: "Two downloads are already active" },
+            { status: 429, headers: { "Retry-After": "0" } },
+          )
+        : new Response("image");
+    },
+  });
+  const owner = new HostImagePreviews();
+  try {
+    expect(await (await owner.read("host", "/screen.png", "/", new AbortController().signal)).text()).toBe(
+      "image",
+    );
+    expect(requests).toBe(2);
+  } finally {
+    owner.dispose();
+  }
 });
 
 test("host image reads preserve the exact host, relative file and MIME type", async () => {

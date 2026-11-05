@@ -2,8 +2,8 @@ import { Eye, File } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { ToolMedia } from "../../../protocol/boundary";
 import { Dialog } from "../../design-system/dialog";
-import { downloadFile, readHostFile } from "../../files/download";
-import { useRun } from "../../workspace-context";
+import { downloadFile } from "../../files/download";
+import { useRun, useWorkspace } from "../../workspace-context";
 
 export function ViewedMedia({ media, hostId, cwd }: { media: ToolMedia; hostId: string; cwd: string }) {
   const run = useRun();
@@ -48,6 +48,7 @@ function ViewedImage({
   cwd: string;
   retry(): void;
 }) {
+  const workspace = useWorkspace();
   const run = useRun();
   const root = useRef<HTMLDivElement>(null);
   const [visible, setVisible] = useState(false);
@@ -71,7 +72,8 @@ function ViewedImage({
     let retained: string | undefined;
     setURL(undefined);
     setError(undefined);
-    void readHostFile(hostId, media.path, cwd, controller.signal, 32 * 1024 * 1024)
+    void workspace.imagePreviews
+      .read(hostId, media.path, cwd, controller.signal)
       .then((blob) => {
         if (controller.signal.aborted) return;
         retained = URL.createObjectURL(
@@ -90,7 +92,7 @@ function ViewedImage({
       if (retained) URL.revokeObjectURL(retained);
       setURL(undefined);
     };
-  }, [hostId, media.path, media.mimeType, cwd, admitted]);
+  }, [hostId, media.path, media.mimeType, cwd, admitted, workspace]);
   return (
     <div ref={root}>
       {error ? (
