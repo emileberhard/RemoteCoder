@@ -1,7 +1,7 @@
 import Foundation
 import Synchronization
 import Testing
-@testable import RemoteCoder
+@testable import RemoteCoderCore
 
 struct HistoryServiceTests {
     @MainActor @Test func retiredHeaderReadsRejectASuccessfulHeldResponseAndKeepThePersistedRevision() async throws {
@@ -73,8 +73,8 @@ struct HistoryServiceTests {
         defer { try? FileManager.default.removeItem(at: directory) }
         let gateway = HistoryGatewayFixture()
         await gateway.setCodexHeaders([])
-        let headers = try (0..<600).map { try ThreadFixture.basic("claude_\($0)", updatedAt: Int64(2_000 - $0), preview: "A") }
-        await gateway.setClaudeHeaders(headers.map { CodexAppServerV2.ThreadReadResponse($0).thread })
+        let headers = try (0..<600).map { try ThreadFixture.wire("claude_\($0)", updatedAt: Int64(2_000 - $0), preview: "A") }
+        await gateway.setClaudeHeaders(headers)
         let model = ConversationList(service: GatewayHistoryService(gateway: gateway,
             cache: HistoryPageCache(directory: directory.appending(path: "pages"))), marksRemote: gateway,
             hostID: hostID, threadStore: ConversationHeaderStore(hostID: hostID, directory: directory),
@@ -120,6 +120,7 @@ struct HistoryServiceTests {
         await model.recordTurnCompletion(threadID: wire.id, completedAt: 100)
         await gateway.releaseHeldRead()
         await recovery.value
+        await model.flushHeaders()
         let restored = await ConversationHeaderStore(hostID: hostID, directory: directory).load()
         let kept = try #require(restored.threads.first { $0.id == wire.id })
         #expect(kept.updatedAt == 1)
@@ -214,6 +215,7 @@ struct HistoryServiceTests {
         #expect(model.threads.map(\.id) == [recent.id])
         #expect(!model.hasDiscardedHeaders)
         #expect(!model.canLoadOlder(query: ""))
+        await model.flushHeaders()
         let loaded = await ConversationHeaderStore(hostID: hostID, directory: directory).load()
         #expect(!loaded.hasDiscardedHeaders)
         #expect(loaded.threads.map(\.id) == [recent.id])
@@ -322,6 +324,7 @@ struct HistoryServiceTests {
         #expect(model.canLoadOlder(query: ""))
         #expect(model.continuation.claude == .next("60"))
         #expect(await gateway.pageReads == 0)
+        await model.flushHeaders()
         let reloaded = await ConversationHeaderStore(hostID: hostID, directory: directory).load()
         #expect(reloaded.hasDiscardedHeaders)
         #expect(reloaded.threads.count <= ConversationHeaderRetention.countLimit)
@@ -445,7 +448,7 @@ struct HistoryServiceTests {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let gateway = HistoryGatewayFixture()
-        await gateway.setHistory(Self.workingHistory(turns: 80, ordinals: true))
+        await gateway.setHistory(HistoryGatewayFixture.workingHistory(turns: 80, ordinals: true))
         let service = GatewayHistoryService(gateway: gateway, cache: HistoryPageCache(directory: directory))
         let tail = try await service.openTail(header: gateway.header, base: nil)
         let older = try await service.page(header: gateway.header, window: tail.window, direction: .desc, priority: .foreground)
@@ -467,7 +470,7 @@ struct HistoryServiceTests {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let gateway = HistoryGatewayFixture(threadID: threadID)
-        await gateway.setHistory(Self.workingHistory(turns: 60, ordinals: ordinals))
+        await gateway.setHistory(HistoryGatewayFixture.workingHistory(turns: 60, ordinals: ordinals))
         let service = GatewayHistoryService(gateway: gateway, cache: HistoryPageCache(directory: directory))
         var state = ConversationState(conversationID: UUID(), threadID: threadID)
         state.merge(try await service.openTail(header: gateway.header, base: nil))
@@ -489,10 +492,10 @@ struct HistoryServiceTests {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let gateway = HistoryGatewayFixture()
-        await gateway.setHistory(Self.workingHistory(turns: 80, ordinals: true))
+        await gateway.setHistory(HistoryGatewayFixture.workingHistory(turns: 80, ordinals: true))
         let service = GatewayHistoryService(gateway: gateway, cache: HistoryPageCache(directory: directory))
         var window = try await service.openTail(header: gateway.header, base: nil).window
-        for _ in 0..<1 { window = try await service.page(header: gateway.header, window: window, direction: .desc, priority: .foreground).window }
+        window = try await service.page(header: gateway.header, window: window, direction: .desc, priority: .foreground).window
         let paged = Set(window.items.pages.flatMap { $0.elements.map(\.id) })
         #expect(paged.count == 150)
         await gateway.appendToNewestTurn(5)
@@ -520,27 +523,7 @@ struct HistoryServiceTests {
         #expect((older.update?.items.encodedBytes ?? 0) > 0)
     }
 
-    static func workingHistory(turns count: Int, ordinals: Bool) -> HistoryGatewayFixture.History {
-        var entries: [CodexAppServerV2.ThreadItemsListResponse.Entry] = []
-        for index in 0..<count {
-            let items: [CodexAppServerV2.ThreadItem] = [
-                .userMessage(id: "u\(index)", content: [.text(text: "Q\(index)", textElements: [])]),
-                .commandExecution(id: "c\(index)", command: "swift build", cwd: "/tmp", status: .completed,
-                    commandActions: [], aggregatedOutput: nil, exitCode: 0, durationMs: nil),
-                .agentMessage(id: "a\(index)", text: "A\(index)"),
-            ]
-            for item in items {
-                entries.append(.init(turnId: "t\(index)", item: item, startedAtOrdinal: ordinals ? Int64(entries.count) : nil, isComplete: true))
-            }
-        }
-        let turns = (0..<count).map {
-            CodexAppServerV2.Turn(id: "t\($0)", items: [], startedAt: Int64($0), completedAt: Int64($0 + 1),
-                status: .completed, error: nil)
-        }
-        return .init(entries: entries, turns: turns)
-    }
-
-    static func signature(_ item: ChatStreamItem) -> String {
+    private static func signature(_ item: ChatStreamItem) -> String {
         switch item {
         case .message(let message): "\(message.role == .user ? "user" : "assistant"):\(message.text)"
         case .question(let prompt): "question:\(prompt.itemID)"
@@ -611,6 +594,7 @@ struct HistoryServiceTests {
         await model.refresh()
         #expect(model.threads.first?.lastTurnCompletedAt == 500)
         #expect(model.errorMessage != nil)
+        await model.flushHeaders()
         let restored = await ConversationHeaderStore(hostID: hostID, directory: directory).load()
         #expect(restored.threads.first?.lastTurnCompletedAt == 500)
     }
@@ -646,6 +630,7 @@ struct HistoryServiceTests {
             #expect(model.threads.first(where: { $0.id == threadID })?.displayTitle == "(untitled)")
         }
 
+        await model.flushHeaders()
         var relaunched = launch()
         await relaunched.manualRefresh()
         #expect(relaunched.threads.contains { $0.id == threadID })
@@ -704,7 +689,7 @@ struct HistoryServiceTests {
         #expect(model.pinnedName(for: "same") == "Newer")
         #expect(model.pinnedName(for: "other") == nil)
         #expect(model.marksReplica.pending.map(\.change) == [
-            .markAllRead(through: 2_000), .pin(threadID: "same", name: "Stored"), .pin(threadID: "other", name: "Retained"),
+            .markRetiredScopeRead(scopeID: "default", through: 2_000), .pin(threadID: "same", name: "Stored"), .pin(threadID: "other", name: "Retained"),
             .pin(threadID: "same", name: "Newer"), .unpin(threadID: "other")])
         #expect(await model.flushMarks())
         guard case let .stored(replica) = await disk.load() else { Issue.record("Missing marks"); return }
@@ -837,7 +822,9 @@ struct HistoryServiceTests {
         offline.markSeen(threadID: header.id, completedAt: 1_001)
         offline.pin(threadID: header.id, name: "Keep")
         await offline.syncMarks()
-        await offline.flushMarks()
+        offline.quiesce()
+        await offline.drain()
+        #expect(await offline.flushMarks())
         #expect(offline.pinnedName(for: "other") == "Legacy")
         #expect(await gateway.markUpdates.isEmpty)
 
@@ -846,7 +833,9 @@ struct HistoryServiceTests {
         #expect(relaunched.pinnedName(for: header.id) == "Keep")
         await gateway.failMarks(false)
         await relaunched.syncMarks()
-        await relaunched.flushMarks()
+        relaunched.quiesce()
+        await relaunched.drain()
+        #expect(await relaunched.flushMarks())
         #expect(await gateway.markUpdates == [[
             .pin(threadID: "other", name: "Legacy"),
             .markRead(threadID: header.id, through: 1_001),
