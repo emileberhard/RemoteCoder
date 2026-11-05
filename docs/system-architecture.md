@@ -1,6 +1,6 @@
 # RemoteCoder system architecture
 
-Delegated-work identity, the Agents sheet, controls and history filtering are
+Delegated-work identity, the subagent roster, controls and history filtering are
 defined in [Conversation agents](conversation-agents.md). [Glossary](glossary.md)
 defines the vocabulary used here and names each term's owning type.
 
@@ -1245,15 +1245,15 @@ presentations at publication and background warm-up, settings when a
 conversation is left, each conversation's agents model with its last list,
 and the changes pill's latest published result, so known
 subagents and changes pills are present in the switch's first frame. An uncached
-agents model has no summary until its first read. Each model coalesces selection,
-inspector, sheet and warmer reads into one cancellable RPC, reuses successful
+agents model has no roster until its first read. Each model coalesces selection,
+roster and warmer reads into one cancellable RPC, reuses successful
 results within its freshness window (`RemoteCoder/AGENTS.md`), and refreshes
-explicitly after actions or pull-to-refresh.
+explicitly after actions.
 The freshness window only controls reads and never changes UI state on elapsed
 time. Coalesced callers share one RPC and its capacity recovery within the
 original request deadline, regardless of which surface requested it first.
-The automatic probe waits until the tail finishes loading; opening details can
-read immediately. The last departing caller cancels the shared RPC. Failed
+The automatic probe waits until the tail finishes loading; opening the roster
+reads immediately. The last departing caller cancels the shared RPC. Failed
 reads preserve earlier agents with their error; unread lists
 never become a current No Agents result. Selection requests only newly added
 question scopes. A newly bound session without ready question coverage requests

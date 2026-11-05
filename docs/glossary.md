@@ -69,7 +69,7 @@ One line per term, with the type that owns it and the document that holds its co
 | Camera capture | Shared multi-shot camera for the composer, app and locked extension; original photos save to the camera roll, and Done attaches the selected batch unsent | `CameraCaptureSession`, `CameraCaptureView`, `CameraCaptureBatch`, `LockedCameraCaptureImports`, `RemoteCoderCaptureExtension/` | [App area rules](../RemoteCoder/AGENTS.md) |
 | Question | An agent's asynchronous question with a host-owned answer state | `QuestionReplica` | [Async questions](async-questions.md) |
 | Attention summary | The Mac's cross-target view of conversations that need you (an unseen question or waiting input that no settlement covers) and running ones, for the Dock and the menu bar item | `AttentionSummary`, `AttentionCenter` | [App area rules](../RemoteCoder/AGENTS.md) |
-| Agents | The per-conversation view of subagents and background work | `ConversationAgentsModel` | [Conversation agents](conversation-agents.md) |
+| Agents | The per-conversation roster of subagents, split into Active and Done | `ConversationAgentsModel`, `ConversationAgentRoster` | [Conversation agents](conversation-agents.md) |
 | Other client | A process outside the gateway holding a conversation's session open, such as a terminal TUI; the gateway refuses to resume that session | `host-daemon-rs/src/gateway/takeover.rs`, `ConversationActivity` | [Gateway](../host-daemon-rs/AGENTS.md#gateway-rpcs) |
 | Take over | Stopping the other client so the gateway owns the session; the composer's lock panel | `ChatTargetModel`, `ComposerTakeOverPanel` | [System architecture](system-architecture.md#history-and-live-state) |
 
