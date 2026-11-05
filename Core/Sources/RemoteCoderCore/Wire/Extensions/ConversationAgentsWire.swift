@@ -24,12 +24,8 @@ struct ReportedProvider: RawRepresentable, Decodable, Sendable, Equatable {
 
 struct ConversationAgent: Decodable, Sendable, Identifiable, Equatable {
     struct Capabilities: Decodable, Sendable, Equatable {
-        let inspect: Bool
         let openConversation: Bool
-        let message: Bool
-        let continueWork: Bool
         let stop: Bool
-        let askParent: Bool
     }
 
     enum State: String, Decodable, Sendable {

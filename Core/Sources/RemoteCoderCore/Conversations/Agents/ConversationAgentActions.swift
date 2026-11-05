@@ -1,9 +1,5 @@
 import Foundation
 
-enum ConversationAgentAction: String, Sendable {
-    case message, `continue`, stop
-}
-
 enum ConversationAgentNavigationError: LocalizedError {
     case hostUnavailable
     case noConversation

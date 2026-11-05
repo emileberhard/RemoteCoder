@@ -44,16 +44,14 @@ enum GatewayRequestParams {
         let limit: Int?
     }
 
-    struct AgentAction: Encodable {
+    struct AgentStop: Encodable {
         let threadId: String
         let agentId: String
         let executionId: String?
-        let action: String
-        let text: String
         let mutationId: String
 
         private enum CodingKeys: String, CodingKey {
-            case threadId, agentId, executionId, action, text, mutationId
+            case threadId, agentId, executionId, action, mutationId
         }
 
         func encode(to encoder: any Encoder) throws {
@@ -61,8 +59,7 @@ enum GatewayRequestParams {
             try container.encode(threadId, forKey: .threadId)
             try container.encode(agentId, forKey: .agentId)
             try container.encode(executionId, forKey: .executionId)
-            try container.encode(action, forKey: .action)
-            try container.encode(text, forKey: .text)
+            try container.encode("stop", forKey: .action)
             try container.encode(mutationId, forKey: .mutationId)
         }
     }

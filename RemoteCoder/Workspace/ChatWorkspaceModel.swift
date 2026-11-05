@@ -1430,10 +1430,9 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         }
     }
 
-    func performAgentAction(_ action: ConversationAgentAction, on agent: ConversationAgent, in parent: ConversationAddress, text: String, mutationID: UUID) async throws {
+    func stopAgent(_ agent: ConversationAgent, in parent: ConversationAddress) async throws {
         let owner = try activeOwner(hostID: agent.ownerHostId ?? parent.hostID)
-        let threadID = agent.ownerThreadId
-        try await owner.target.gatewayClient.agentAction(threadID: threadID, agent: agent, action: action, text: text, mutationID: mutationID)
+        try await owner.target.gatewayClient.stopAgent(threadID: agent.ownerThreadId, agent: agent, mutationID: UUID())
     }
 
     func moveAgent(_ address: ConversationAddress, under parent: ConversationAddress?) async throws {

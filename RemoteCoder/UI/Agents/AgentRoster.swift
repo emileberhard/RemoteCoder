@@ -94,7 +94,7 @@ struct AgentRoster: View {
             Divider()
             Button("Stop Agent", systemImage: "stop.circle", role: .destructive) {
                 run {
-                    try await workspace.performAgentAction(.stop, on: agent, in: model.address, text: "", mutationID: UUID())
+                    try await workspace.stopAgent(agent, in: model.address)
                     model.invalidate()
                 }
             }
