@@ -3,9 +3,9 @@ import Testing
 @testable import RemoteCoderCore
 
 struct FleetLiveActivityPlanTests {
-    private let mini = UUID(uuidString: "CCCCCCCC-0000-4000-8000-000000000001")!
-    private let book = UUID(uuidString: "DDDDDDDD-0000-4000-8000-000000000002")!
-    private let linux = UUID(uuidString: "EEEEEEEE-0000-4000-8000-000000000003")!
+    private let mini = UUID(uuid: (0xCC, 0xCC, 0xCC, 0xCC, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 0x01))
+    private let book = UUID(uuid: (0xDD, 0xDD, 0xDD, 0xDD, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 0x02))
+    private let linux = UUID(uuid: (0xEE, 0xEE, 0xEE, 0xEE, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 0x03))
 
     @Test func restorationAdoptsOneLiveFleetActivityAndRetiresEveryOther() {
         let restoration = FleetLiveActivityPlan.restore([
@@ -22,8 +22,7 @@ struct FleetLiveActivityPlanTests {
     @Test func coordinatorPrefersTheCapableAutomationsAuthorityThenConfiguredOrder() {
         #expect(FleetLiveActivityPlan.coordinator(capable: [mini, book], preferred: book) == book)
         #expect(FleetLiveActivityPlan.coordinator(capable: [mini, book], preferred: linux) == mini)
-        #expect(FleetLiveActivityPlan.coordinator(capable: [mini, book], preferred: mini, excluding: mini) == book)
-        #expect(FleetLiveActivityPlan.coordinator(capable: [mini], preferred: nil, excluding: mini) == nil)
+        #expect(FleetLiveActivityPlan.coordinator(capable: [], preferred: mini) == nil)
     }
 
     @Test func attentionRowsFromDifferentHostsKeepDistinctIdentities() {

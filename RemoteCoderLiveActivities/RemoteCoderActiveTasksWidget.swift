@@ -151,7 +151,7 @@ private struct ActiveTasksLockScreen: View {
             HStack(spacing: 8) {
                 LiveActivityGlyph(size: 20, cornerRadius: 5)
 
-                Coverage(summary: attributes.unavailableSummary(for: state))
+                Coverage(summary: state.unavailableSummary)
 
                 Spacer(minLength: 8)
 
@@ -204,7 +204,7 @@ struct RemoteCoderActiveTasksWidget: Widget {
                             AttentionRow(attention: lead)
                             MoreCount(count: (state.attentionCount ?? 1) - 1)
                         }
-                        Coverage(summary: context.attributes.unavailableSummary(for: state))
+                        Coverage(summary: state.unavailableSummary)
                     }
                 }
             } compactLeading: {

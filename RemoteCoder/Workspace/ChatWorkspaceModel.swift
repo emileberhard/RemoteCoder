@@ -1892,7 +1892,6 @@ private extension ChatTargetModel {
         let isCanonical = host.gatewayID == hostID
         return .init(
             id: hostID,
-            name: hostDisplayName,
             isCoordinatorCapable: {
                 guard isCanonical, (try? await directories.resolveHomePath()) != nil else { return false }
                 return directories.information?.fleetLiveActivity == true

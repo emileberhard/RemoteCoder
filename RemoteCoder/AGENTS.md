@@ -1867,16 +1867,17 @@ The gateway side is in `host-daemon-rs/AGENTS.md`; both paths are in
   other host's registration omits it. The activity starts with the read's
   content and relevance score only when that content is not empty. A dismissed
   activity, or a zero view with unavailable hosts, starts nothing new until a
-  certified empty view (`isCertifiedEmpty`). Each foreground pass rereads the
-  coordinator; when that fails it ends the activity and moves to another
-  capable host. Removing the coordinator from the configured hosts ends it.
+  certified empty view (`isCertifiedEmpty`). A coordinator whose first read
+  fails is skipped for the next capable host in that pass. Each foreground
+  pass rereads the coordinator; when that fails it ends the activity and moves
+  to another capable host. Removing the coordinator from the configured hosts ends it.
   Launch keeps one live activity whose coordinator is configured and ends every
   other, including per-host activities from earlier builds. Without a capable
   gateway, no activity starts. The Mac arm is a no-op with the same API.
   Voice-call activities keep their own owner.
-- `RemoteCoderActiveTasksAttributes` carries `startedAt` and `fleet`
-  (coordinator and host names; absent on activities from earlier builds, which
-  are only retired). Its content state carries the count of running root
+- `RemoteCoderActiveTasksAttributes` carries `startedAt` and `coordinatorID`
+  (absent on activities from earlier builds, which are only retired); the
+  device registration, not the attributes, holds the exact host set. Its content state carries the count of running root
   conversations (`activeTaskCount`), up to three `attention` rows (host,
   thread, title, `finishedUnread` or `question`, completion time),
   `attentionCount` and `unavailableHostIDs`; all but the count are optional so
@@ -1888,8 +1889,7 @@ The gateway side is in `host-daemon-rs/AGENTS.md`; both paths are in
   orange bubble when it also asked a question you have not seen. It shows the
   title and completion time and links to that conversation; `+N more` covers the rest. Running work is
   only a count in the header's corner, inside a ring that turns when the count
-  changes. Incomplete coverage names the unavailable host, or how many are
-  unavailable. The Dynamic Island's expanded view shows the lead row; compact and
+  changes. Incomplete coverage shows how many hosts are unavailable. The Dynamic Island's expanded view shows the lead row; compact and
   minimal show the question symbol, else the waiting count, else the running
   ring. Content is always visible, never `privacySensitive`. The glyph is
   `Assets.xcassets/LiveActivityAppGlyph.imageset`.

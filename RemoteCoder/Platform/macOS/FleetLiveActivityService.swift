@@ -5,7 +5,6 @@ import Foundation
 final class FleetLiveActivityService {
     struct Host {
         let id: UUID
-        let name: String
         let isCoordinatorCapable: @MainActor () async -> Bool
         let read: @MainActor ([UUID]) async throws -> ActiveTasksLiveActivitySnapshot
         let register: @MainActor (DeviceRegistrationRequest.FleetActivity?) -> Void

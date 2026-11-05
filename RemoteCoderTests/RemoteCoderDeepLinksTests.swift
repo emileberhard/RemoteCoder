@@ -31,7 +31,7 @@ struct RemoteCoderDeepLinksTests {
     @Test func attentionRowsLinkToTheirOwnHostConversation() {
         typealias Attention = RemoteCoderActiveTasksAttributes.ContentState.Attention
         let otherHostID = UUID()
-        let attributes = RemoteCoderActiveTasksAttributes(startedAt: .distantPast, fleet: nil)
+        let attributes = RemoteCoderActiveTasksAttributes(startedAt: .distantPast, coordinatorID: nil)
         let rows = [hostID, otherHostID].map { host in
             Attention(hostID: host, threadID: "same-thread", title: "Result", reason: .finishedUnread,
                       completedAtUnixSeconds: 20)
@@ -49,7 +49,7 @@ struct RemoteCoderDeepLinksTests {
             State(activeTaskCount: 1, attention: attention, attentionCount: attention?.count, unavailableHostIDs: nil,
                   updatedAtUnixSeconds: 0)
         }
-        let attributes = RemoteCoderActiveTasksAttributes(startedAt: .distantPast, fleet: nil)
+        let attributes = RemoteCoderActiveTasksAttributes(startedAt: .distantPast, coordinatorID: nil)
         let lead = State.Attention(hostID: hostID, threadID: "lead", title: nil, reason: .question,
                                    completedAtUnixSeconds: nil)
         let next = State.Attention(hostID: hostID, threadID: "next", title: nil, reason: .finishedUnread,

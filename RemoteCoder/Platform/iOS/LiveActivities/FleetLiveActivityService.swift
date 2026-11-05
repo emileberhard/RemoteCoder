@@ -5,7 +5,6 @@ import Foundation
 final class FleetLiveActivityService {
     struct Host: Sendable {
         let id: UUID
-        let name: String
         let isCoordinatorCapable: @MainActor () async -> Bool
         let read: @MainActor ([UUID]) async throws -> ActiveTasksLiveActivitySnapshot
         let register: @MainActor (DeviceRegistrationRequest.FleetActivity?) -> Void
@@ -86,26 +85,30 @@ final class FleetLiveActivityService {
             return
         }
         guard scene != .background, !isRetired else { return }
-        guard let coordinator = await coordinator(in: hosts, excluding: nil) else { return }
-        let snapshot: ActiveTasksLiveActivitySnapshot
-        do {
-            snapshot = try await coordinator.read(declared)
-        } catch {
-            logger.notice("fleet activity read failed host=\(coordinator.id.uuidString): \(error.localizedDescription)")
-            coordinatorID = nil
+        var failed: Set<UUID> = []
+        while let coordinator = await coordinator(in: hosts, excluding: failed) {
+            let snapshot: ActiveTasksLiveActivitySnapshot
+            do {
+                snapshot = try await coordinator.read(declared)
+            } catch {
+                logger.notice("fleet activity read failed host=\(coordinator.id.uuidString): \(error.localizedDescription)")
+                failed.insert(coordinator.id)
+                coordinatorID = nil
+                continue
+            }
+            guard activity == nil, !isRetired, scene != .background else { return }
+            if snapshot.content.isEmpty {
+                if snapshot.content.isCertifiedEmpty { awaitsEmpty = false }
+                return
+            }
+            guard !awaitsEmpty, ActivityAuthorizationInfo().areActivitiesEnabled else { return }
+            request(snapshot, coordinator: coordinator.id)
             return
         }
-        guard activity == nil, !isRetired, scene != .background else { return }
-        if snapshot.content.isEmpty {
-            if snapshot.content.isCertifiedEmpty { awaitsEmpty = false }
-            return
-        }
-        guard !awaitsEmpty, ActivityAuthorizationInfo().areActivitiesEnabled else { return }
-        request(snapshot, coordinator: coordinator.id, hosts: hosts)
     }
 
     private func maintain(_ activity: Activity<Attributes>, hosts: [Host], declared: [UUID]) async {
-        guard let coordinatorID = activity.attributes.fleet?.coordinatorID, declared.contains(coordinatorID) else {
+        guard let coordinatorID = activity.attributes.coordinatorID, declared.contains(coordinatorID) else {
             logger.notice("ending fleet activity whose coordinator is no longer configured")
             await end(activity)
             schedule()
@@ -117,7 +120,7 @@ final class FleetLiveActivityService {
             _ = try await coordinator.read(declared)
         } catch {
             guard self.activity?.id == activity.id, scene == .active,
-                  let replacement = await self.coordinator(in: hosts, excluding: coordinatorID) else { return }
+                  let replacement = await self.coordinator(in: hosts, excluding: [coordinatorID]) else { return }
             logger.notice("fleet coordinator \(coordinatorID.uuidString) unavailable; moving to \(replacement.id.uuidString)")
             await end(activity)
             self.coordinatorID = replacement.id
@@ -125,31 +128,26 @@ final class FleetLiveActivityService {
         }
     }
 
-    private func coordinator(in hosts: [Host], excluding failed: UUID?) async -> Host? {
-        if let coordinatorID, coordinatorID != failed, let current = hosts.first(where: { $0.id == coordinatorID }) {
+    private func coordinator(in hosts: [Host], excluding failed: Set<UUID>) async -> Host? {
+        if let coordinatorID, !failed.contains(coordinatorID), let current = hosts.first(where: { $0.id == coordinatorID }) {
             return current
         }
-        let capable = await withTaskGroup(of: (UUID, Bool).self) { group in
-            for host in hosts where host.id != failed {
-                group.addTask { @MainActor in (host.id, await host.isCoordinatorCapable()) }
+        let capable = await withTaskGroup(of: UUID?.self) { group in
+            for host in hosts where !failed.contains(host.id) {
+                group.addTask { await host.isCoordinatorCapable() ? host.id : nil }
             }
             var capable: Set<UUID> = []
-            for await (id, isCapable) in group where isCapable { capable.insert(id) }
+            for await case let id? in group { capable.insert(id) }
             return capable
         }
-        let chosen = FleetLiveActivityPlan.coordinator(
-            capable: hosts.map(\.id).filter(capable.contains), preferred: preferred(), excluding: failed
-        )
+        let chosen = FleetLiveActivityPlan.coordinator(capable: hosts.map(\.id).filter(capable.contains), preferred: preferred())
         coordinatorID = chosen
         return chosen.flatMap { id in hosts.first { $0.id == id } }
     }
 
-    private func request(_ snapshot: ActiveTasksLiveActivitySnapshot, coordinator: UUID, hosts: [Host]) {
+    private func request(_ snapshot: ActiveTasksLiveActivitySnapshot, coordinator: UUID) {
         let content = snapshot.content
-        let attributes = Attributes(
-            startedAt: .now,
-            fleet: .init(coordinatorID: coordinator, hosts: hosts.map { .init(id: $0.id, name: $0.name) })
-        )
+        let attributes = Attributes(startedAt: .now, coordinatorID: coordinator)
         let state = Attributes.ContentState(
             activeTaskCount: content.activeTaskCount,
             attention: content.attention,
@@ -176,7 +174,7 @@ final class FleetLiveActivityService {
         let activities = Activity<Attributes>.activities
         let restoration = FleetLiveActivityPlan.restore(
             activities.map {
-                .init(id: $0.id, coordinatorID: $0.attributes.fleet?.coordinatorID,
+                .init(id: $0.id, coordinatorID: $0.attributes.coordinatorID,
                       isLive: [.active, .stale].contains($0.activityState))
             },
             configured: Set(configured())
@@ -188,7 +186,7 @@ final class FleetLiveActivityService {
             logger.notice("retired \(restoration.ended.count) earlier active-tasks activities")
         }
         if let adopted = activities.first(where: { $0.id == restoration.adopted }) {
-            coordinatorID = adopted.attributes.fleet?.coordinatorID
+            coordinatorID = adopted.attributes.coordinatorID
             adopt(adopted)
         }
     }
@@ -220,7 +218,7 @@ final class FleetLiveActivityService {
     }
 
     private func register(hosts: [Host], declared: [UUID]) {
-        let coordinatorID = activity?.attributes.fleet?.coordinatorID
+        let coordinatorID = activity?.attributes.coordinatorID
         let registration = token.map {
             DeviceRegistrationRequest.FleetActivity(token: $0, hosts: declared.map(\.uuidString))
         }

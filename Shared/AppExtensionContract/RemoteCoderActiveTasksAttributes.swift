@@ -12,21 +12,19 @@ struct RemoteCoderActiveTasksAttributes: ActivityAttributes {
         let unavailableHostIDs: [UUID]?
         // Keep the state JSON-serializable for potential remote (APNs) Live Activity updates.
         let updatedAtUnixSeconds: Double
-    }
 
-    struct Fleet: Codable, Hashable {
-        struct Host: Codable, Hashable {
-            let id: UUID
-            let name: String
+        var unavailableSummary: String? {
+            switch unavailableHostIDs?.count ?? 0 {
+            case 0: nil
+            case 1: "1 host unavailable"
+            case let count: "\(count) hosts unavailable"
+            }
         }
-
-        let coordinatorID: UUID
-        let hosts: [Host]
     }
 
     let startedAt: Date
     // Activities from builds before the fleet activity have none; they are only retired.
-    let fleet: Fleet?
+    let coordinatorID: UUID?
 
     func tapURL(for state: ContentState) -> URL {
         state.attention?.first.flatMap(url(for:)) ?? RemoteCoderDeepLinks.openApp
@@ -36,12 +34,5 @@ struct RemoteCoderActiveTasksAttributes: ActivityAttributes {
         guard let hostID = attention.hostID else { return nil }
         return RemoteCoderDeepLinks.url(for: RemoteCoderConversationLink(
             hostID: hostID, threadID: attention.threadID))
-    }
-
-    func unavailableSummary(for state: ContentState) -> String? {
-        let unavailable = state.unavailableHostIDs ?? []
-        guard let first = unavailable.first else { return nil }
-        guard unavailable.count == 1 else { return "\(unavailable.count) hosts unavailable" }
-        return "\(fleet?.hosts.first { $0.id == first }?.name ?? "A host") unavailable"
     }
 }
