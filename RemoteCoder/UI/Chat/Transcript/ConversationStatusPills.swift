@@ -24,13 +24,16 @@ struct ConversationStatusPills: View {
         }
         .frame(maxWidth: .infinity)
         .overlay(alignment: .top) {
-            if showsAgents, let agents {
-                let gap = rosterGap
-                AgentRoster(model: agents, workspace: workspace, onOpen: onOpenAgent)
-                    .padding(.horizontal, 12)
-                    .alignmentGuide(.top) { $0[.bottom] + gap }
-                    .transition(rosterTransition)
-            }
+            Color.clear
+                .frame(height: 0)
+                .overlay(alignment: .bottom) {
+                    if showsAgents, let agents {
+                        AgentRoster(model: agents, workspace: workspace, onOpen: onOpenAgent)
+                            .padding(.horizontal, 12)
+                            .padding(.bottom, rosterGap)
+                            .transition(rosterTransition)
+                    }
+                }
         }
         .animation(.smooth, value: changes?.content)
         .animation(.smooth, value: agents != nil)
