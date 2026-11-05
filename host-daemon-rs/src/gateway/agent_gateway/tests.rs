@@ -439,6 +439,7 @@ async fn unavailable_root_ancestry_holds_a_previously_verified_activity_child() 
         ParentSnapshot {
             at: Instant::now() - Duration::from_secs(301),
             parent: Some("root".into()),
+            remote_parent: None,
             available: true,
         },
     );
@@ -862,6 +863,7 @@ async fn proven_roots_are_not_reported_as_delegated_agents() {
             ParentSnapshot {
                 at: Instant::now(),
                 parent: parent.map(str::to_owned),
+                remote_parent: None,
                 available: true,
             },
         );
@@ -885,6 +887,7 @@ async fn unavailable_child_ancestry_is_held_even_when_its_cached_root_is_known()
             ParentSnapshot {
                 at: Instant::now(),
                 parent: parent.map(str::to_owned),
+                remote_parent: None,
                 available,
             },
         );
@@ -1268,6 +1271,7 @@ async fn cluster_parent_cycles_are_bounded_and_each_affected_thread_is_a_root() 
             ParentSnapshot {
                 at: Instant::now(),
                 parent: Some(parent.into()),
+                remote_parent: None,
                 available: true,
             },
         );

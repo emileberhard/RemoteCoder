@@ -6,6 +6,7 @@ extension GatewayClient {
         var hostname: String? = nil
         var automationsAuthority: String? = nil
         var speechAvailable: Bool? = nil
+        var fleetLiveActivity: Bool? = nil
     }
 
     func registerDevice(_ request: DeviceRegistrationRequest) async throws -> DeviceRegistrationResponse {
@@ -32,8 +33,12 @@ extension GatewayClient {
         try await callDecodable(method: "daemon/activeTurns", params: encodeToJSONValue(GatewayRequestParams.Empty()), timeout: timeouts.request)
     }
 
-    func readLiveActivity() async throws -> ActiveTasksLiveActivitySnapshot? {
-        try await callDecodable(method: "daemon/liveActivity", params: encodeToJSONValue(GatewayRequestParams.Empty()), timeout: timeouts.request)
+    func readFleetLiveActivity(hosts: [UUID]) async throws -> ActiveTasksLiveActivitySnapshot {
+        try await callDecodable(
+            method: "daemon/liveActivity/fleet",
+            params: encodeToJSONValue(GatewayRequestParams.FleetLiveActivity(hosts: hosts.map(\.uuidString))),
+            timeout: timeouts.request
+        )
     }
 
     func takeOverConversation(threadID: String) async throws {

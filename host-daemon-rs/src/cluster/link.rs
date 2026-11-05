@@ -352,6 +352,8 @@ impl Link {
                 };
                 let capability = if method.starts_with("sessions/") {
                     "sessions.v1"
+                } else if method.starts_with("cluster/liveActivity/") {
+                    LIVE_ACTIVITY_CAPABILITY
                 } else if method.starts_with("agent/parent/") {
                     "agent.parent.v1"
                 } else if method.starts_with("agent/") {
@@ -1027,5 +1029,60 @@ mod tests {
             );
             server.await.unwrap();
         }
+    }
+
+    #[tokio::test]
+    async fn discarding_a_dead_connection_while_its_reader_waits_wakes_the_member() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            socket.close(None).await.unwrap();
+        });
+        let stream = tokio::net::TcpStream::connect(address).await.unwrap();
+        let (socket, _) = tokio_tungstenite::client_async(
+            format!("ws://{address}/ws"),
+            MaybeTlsStream::Plain(stream),
+        )
+        .await
+        .unwrap();
+        let hello = HelloReceipt {
+            protocol: PROTOCOL,
+            version: "test".into(),
+            host: crate::ids::new_session_uuid(),
+            incarnation: crate::ids::new_session_uuid(),
+            capabilities: vec!["cluster.v1".into()],
+            routes: vec![],
+            load: HostLoad {
+                cpu_percent: None,
+                memory_pressure: None,
+                active_agents: 0,
+            },
+        };
+        let (wake, mut wakes) = tokio::sync::watch::channel(0);
+        let slot = Arc::new(Mutex::new(None));
+        let mut cached = slot.lock().await;
+        *cached = Some(Connection::new(
+            socket,
+            hello,
+            Arc::downgrade(&slot),
+            Some(wake),
+        ));
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while cached.as_ref().is_some_and(Connection::is_alive) {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(!wakes.has_changed().unwrap());
+        cached.take();
+        drop(cached);
+        tokio::time::timeout(Duration::from_secs(5), wakes.changed())
+            .await
+            .unwrap()
+            .unwrap();
+        server.await.unwrap();
     }
 }

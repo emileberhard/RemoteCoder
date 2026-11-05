@@ -488,6 +488,7 @@ async fn a_watched_question_marks_its_unread_row_until_its_coverage_is_lost() {
         super::super::agent_gateway::ParentSnapshot {
             at: Instant::now(),
             parent: None,
+            remote_parent: None,
             available: true,
         },
     );

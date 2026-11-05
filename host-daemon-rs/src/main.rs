@@ -410,7 +410,7 @@ async fn run(
         settings.push.clone(),
         journal.clone(),
         devices,
-        Some(settings.host_paths.state("live-activity.json")),
+        Some(settings.host_paths.state("live-activity-fleet.json")),
     ));
     let router = Arc::new(providers::router::Router::new(settings.router.clone())?);
     let codex_router = Arc::new(providers::codex::router::Router::new(Arc::clone(&router)));

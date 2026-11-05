@@ -14,7 +14,7 @@ use crate::push::PushEnvironment;
 use crate::storage::private_state::{self, ReadError};
 use crate::time::unix_millis;
 pub(crate) use model::{
-    CapacityExceeded, DeviceRegistration, NavigationStartInputs, Token, TokenKind,
+    CapacityExceeded, DeviceRegistration, NavigationStartInputs, Token, TokenKind, fleet_hosts,
 };
 use model::{DeviceEntry, DeviceStore};
 
@@ -63,6 +63,12 @@ pub(crate) struct AlertTarget {
     pub(crate) destination: Destination,
     pub(crate) host_id: Option<String>,
     pub(crate) host_binding: &'static str,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct FleetTarget {
+    pub(crate) destination: Destination,
+    pub(crate) hosts: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -181,6 +187,24 @@ impl DeviceRegistry {
                     .collect()
             },
             legacy::Sources::live_activity_destinations,
+        )
+        .await
+    }
+
+    pub(crate) async fn fleet_activity_targets(&self) -> Result<Vec<FleetTarget>> {
+        self.resolve(
+            |store| {
+                store
+                    .holders(TokenKind::FleetActivity)
+                    .filter_map(|entry| {
+                        Some(FleetTarget {
+                            destination: Destination::registered(entry, TokenKind::FleetActivity)?,
+                            hosts: entry.tokens.fleet_activity.as_ref()?.hosts.clone(),
+                        })
+                    })
+                    .collect()
+            },
+            |_| Vec::new(),
         )
         .await
     }
@@ -326,7 +350,7 @@ fn transaction<T>(
         "device registry has no parent",
         |path| Ok(load(path)?.unwrap_or_default()),
         operation,
-        private_state::write_json,
+        |path, store| private_state::write_json(path, &store.versioned()),
     )
 }
 

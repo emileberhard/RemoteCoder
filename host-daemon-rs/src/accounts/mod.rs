@@ -87,10 +87,6 @@ impl Accounts {
             .into_iter()
             .map(AccountId::try_from)
             .collect::<Result<HashSet<_>>>()?;
-        host.reconcile_live_activity_scopes(&std::collections::BTreeSet::from([
-            "default".to_owned()
-        ]))
-        .await;
         let cached = tokio::fs::read(paths.state("account-usage.json"))
             .await
             .ok()

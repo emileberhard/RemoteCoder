@@ -16,7 +16,7 @@ enum RoutedGatewayEvent: Sendable {
     case warning(GatewayWarning)
     case providerHealth(ProviderHealth?)
     case activity(CodexGatewayDaemon.ActiveTurnsResponse)
-    case liveActivity(ActiveTasksLiveActivitySnapshot?)
+    case fleetLiveActivity
 
     var requiresHistoryRefresh: Bool {
         switch self {
@@ -33,7 +33,7 @@ enum RoutedGatewayEvent: Sendable {
         case .tokenUsage(_, let sequence), .historyInvalidated(_, _, let sequence),
              .archive(_, _, let sequence), .settings(_, let sequence), .threadChanged(_, let sequence): sequence
         case .turnEvent(let event): event.sequence
-        case .threadName, .queueChanged, .marks, .favorites, .preferences, .warning, .providerHealth, .activity, .liveActivity: nil
+        case .threadName, .queueChanged, .marks, .favorites, .preferences, .warning, .providerHealth, .activity, .fleetLiveActivity: nil
         }
     }
 }
@@ -111,8 +111,8 @@ enum GatewayNotificationRouting {
             return .providerHealth(health)
         case .activeTurnsChanged(let snapshot):
             return .activity(snapshot)
-        case .liveActivityChanged(let snapshot):
-            return .liveActivity(snapshot)
+        case .fleetLiveActivityChanged:
+            return .fleetLiveActivity
         case .threadStarted(let threadID), .threadStatusChanged(let threadID):
             return .threadChanged(threadID: threadID, sequence: note.sequence)
         case .threadSettingsUpdated(let settings):

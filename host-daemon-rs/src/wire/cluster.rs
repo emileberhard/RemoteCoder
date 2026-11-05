@@ -11,9 +11,11 @@ pub(crate) const CAPABILITIES: &[&str] = &[
     "agent.jobs.v1",
     "agent.parent.v1",
     "sessions.v1",
+    LIVE_ACTIVITY_CAPABILITY,
 ];
+pub(crate) const LIVE_ACTIVITY_CAPABILITY: &str = "liveActivity.v1";
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct AgentAddress {
     pub host_id: String,
@@ -127,6 +129,13 @@ pub(crate) struct RemoveParams {
     pub protocol: u32,
     pub host: String,
     pub membership: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct LiveActivityReportParams {
+    pub protocol: u32,
+    pub projection: Option<crate::push::SourceProjection>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

@@ -89,10 +89,6 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
         case conversationActivity, historyAutoRefresh, historyInvalidation(String), warmConversations
         case routeMove, codexModelCacheLoad, codexModelRefresh, takeOver, marksSync, historyHeaderRecovery, historyRetry
         case titleRegeneration(String)
-        #if os(iOS)
-        case liveActivitySync
-        case liveActivityRead
-        #endif
     }
     /// Turn dispatch is unstructured on purpose — a send must outlive the view
     /// that started it — so the model owns the handles and cancels them when its
@@ -101,6 +97,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
     /// Supersedes pending workspace navigation when another conversation opens.
     @ObservationIgnored var onConversationNavigation: (@MainActor () -> Void)?
     @ObservationIgnored var onGatewayReconnect: (@MainActor () -> Void)?
+    @ObservationIgnored var onLiveActivityHint: (@MainActor () -> Void)?
     @ObservationIgnored private var hasConnectedGateway = false
     /// Set by the workspace to retire a banner when its conversation is opened.
     @ObservationIgnored var onActiveSessionChange: (@MainActor (ChatTargetModel) -> Void)?
@@ -111,10 +108,6 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
     @ObservationIgnored private var scheduledActivityDue: ContinuousClock.Instant?
     @ObservationIgnored private var activitySnapshotVersion: (epoch: String, revision: UInt64)?
     @ObservationIgnored private var activityReadFailures = 0
-    #if os(iOS)
-    @ObservationIgnored private var liveActivitySyncRequested = false
-    @ObservationIgnored private let liveActivityService: ActiveTasksLiveActivityService
-    #endif
     private var isInBackground: Bool { lifecycle.isBackgrounded }
     private var isSceneActive: Bool { lifecycle.isSceneLive }
     var isSceneLive: Bool { lifecycle.isSceneLive }
@@ -211,6 +204,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
             )
         }
         if change.countAfter < change.countBefore { scheduleRouteMove() }
+        if change.countBefore != change.countAfter { onLiveActivityHint?() }
         run(lifecycle.handle(.activeWorkChanged(count: turns.liveActivityTaskCount)))
     }
 
@@ -484,9 +478,6 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
         )
         self.voiceHistoryStore = RealtimeVoiceHistoryStore(hostID: host.id, storage: storage)
         self.directories = hostServices.directories
-        #if os(iOS)
-        self.liveActivityService = hostServices.activities
-        #endif
         startCodexModelCacheLoad()
     }
 
@@ -563,7 +554,6 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
         let historyStarted = ContinuousClock.now
         await conversationList.bootstrap()
         guard acceptsWork else { return }
-        scheduleLiveActivitySync()
         let historyMs = historyStarted.duration(to: .now) / .milliseconds(1)
         let elapsedMs = started.duration(to: .now) / .milliseconds(1)
         logger.notice("host preparation completed host=\(self.hostID.uuidString) elapsedMs=\(elapsedMs) metadataMs=\(metadataMs) historyMs=\(historyMs)")
@@ -858,8 +848,6 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
             case .disconnect:
                 guard lifecycle.hold == .disconnected else { continue }
                 await disconnectForBackground()
-            case .syncLiveActivity:
-                scheduleLiveActivitySync()
             case .flush:
                 await flushPersistentState()
             }
@@ -1021,9 +1009,6 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
             await conversations.flush()
             await conversationList.flushMarks()
             await historyService.invalidateAll()
-            #if os(iOS)
-            await liveActivityService.end()
-            #endif
         }
     }
 
@@ -1035,42 +1020,12 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
         return await drafts.retire()
     }
 
-    // MARK: - Background + Live Activity
+    // MARK: - Background
 
     private func liveActivityDebugSummary() -> String {
-        "bg=\(isInBackground) sticky=\(lifecycle.backgroundSticky) activeTaskCount=\(turns.liveActivityTaskCount) jobs=\(turns.jobs.count) activeTurns=\(turns.trackedThreadIDs.count) pendingRefresh=\(transcriptRecovery.markCount)"
+        "bg=\(isInBackground) activeTaskCount=\(turns.liveActivityTaskCount) jobs=\(turns.jobs.count) activeTurns=\(turns.trackedThreadIDs.count) pendingRefresh=\(transcriptRecovery.markCount)"
     }
 
-    #if os(iOS)
-    private func scheduleLiveActivitySync() {
-        guard acceptsWork else { return }
-        guard gatewayPolicy.registersDevice else { return }
-        liveActivitySyncRequested = true
-        guard !ownedTasks.isRunning(.liveActivitySync) else { return }
-        let registration = hostServices.registration
-        ownedTasks.start(.liveActivitySync) { [self] in
-            while liveActivitySyncRequested {
-                await Task.yield()
-                guard acceptsWork, !Task.isCancelled else { return }
-                liveActivitySyncRequested = false
-                // Keep the Live Activity alive once we've backgrounded at least once during an active task.
-                let requestsActivity = lifecycle.app != .active || lifecycle.backgroundSticky
-                await liveActivityService.sync(
-                    requestsActivity: requestsActivity,
-                    now: .now,
-                    onPushTokenUpdate: { @Sendable token in
-                        let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
-                        guard trimmed.isEmpty == false else { return }
-                        await registration.update(liveActivityToken: trimmed)
-                    },
-                    onEnded: {
-                        await registration.update(liveActivityToken: nil)
-                    }
-                )
-            }
-        }
-    }
-    #endif
 
     private func disconnectForBackground() async {
         logger.notice("disconnectForBackground start: \(self.liveActivityDebugSummary())")
@@ -1424,21 +1379,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
             hostServices.registration.retry()
             directories.syncFavorites()
             hostServices.preferenceExchange.sync()
-            #if os(iOS)
-            if gatewayPolicy.registersDevice {
-                ownedTasks.start(.liveActivityRead) { [weak self] in
-                    guard let self else { return }
-                    do {
-                        try await liveActivityService.refresh { [gateway] in try await gateway.readLiveActivity() }
-                        guard !Task.isCancelled, !isRetired else { return }
-                        scheduleLiveActivitySync()
-                    } catch {
-                        guard !Task.isCancelled else { return }
-                        logger.notice("Live Activity snapshot unavailable: \(error.localizedDescription)")
-                    }
-                }
-            }
-            #endif
+            onLiveActivityHint?()
             refreshQuestionScopes()
             startCodexModelRefresh()
             ownedTasks.start(.marksSync) { [weak self] in await self?.conversationList.syncMarks() }
@@ -1447,6 +1388,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
         else {
             markActivityUnavailable()
             adoptProviderHealth(nil)
+            onLiveActivityHint?()
             if link == .disconnected {
                 recoverDispatchedTurnsAfterConnectionLoss()
                 observation.disconnected()
@@ -1553,14 +1495,8 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
             break
         case .activity(let snapshot):
             applyActivity(snapshot, observedAt: .now)
-        case .liveActivity(let snapshot):
-            #if os(iOS)
-            let hasActivity = await liveActivityService.receive(snapshot)
-            guard !isRetired else { return }
-            if hasActivity || lifecycle.app != .active || lifecycle.backgroundSticky {
-                scheduleLiveActivitySync()
-            }
-            #endif
+        case .fleetLiveActivity:
+            onLiveActivityHint?()
         case .warning(let warning):
             gatewayWarning = warning
             logger.error("\(warning.message)")

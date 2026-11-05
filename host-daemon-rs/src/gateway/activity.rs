@@ -561,6 +561,7 @@ mod tests {
                 super::super::agent_gateway::ParentSnapshot {
                     at: std::time::Instant::now(),
                     parent: parent.map(str::to_owned),
+                    remote_parent: None,
                     available,
                 },
             );

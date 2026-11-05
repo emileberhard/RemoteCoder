@@ -20,6 +20,9 @@ struct MockBroker {
     delay: Duration,
     rejected: Vec<String>,
     relevance: bool,
+    hold_health: std::sync::atomic::AtomicBool,
+    held_health: AtomicUsize,
+    health_release: tokio::sync::Semaphore,
 }
 
 impl MockBroker {
@@ -31,11 +34,28 @@ impl MockBroker {
             delay,
             rejected,
             relevance: false,
+            hold_health: std::sync::atomic::AtomicBool::new(false),
+            held_health: AtomicUsize::new(0),
+            health_release: tokio::sync::Semaphore::new(0),
         })
     }
 
     fn requests(&self) -> Vec<Value> {
         self.requests.lock().expect("recorded requests").clone()
+    }
+
+    async fn while_health_is_held(&self, change: impl FnOnce()) {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while self.held_health.load(Ordering::SeqCst) == 0 {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .expect("the publication never asked the broker for its health");
+        change();
+        self.hold_health.store(false, Ordering::SeqCst);
+        self.held_health.store(0, Ordering::SeqCst);
+        self.health_release.add_permits(1);
     }
 }
 
@@ -64,6 +84,15 @@ async fn record(
 }
 
 async fn capabilities(State(broker): State<Arc<MockBroker>>) -> Json<Value> {
+    if broker.hold_health.load(Ordering::SeqCst) {
+        broker.held_health.fetch_add(1, Ordering::SeqCst);
+        broker
+            .health_release
+            .acquire()
+            .await
+            .expect("health gate")
+            .forget();
+    }
     Json(if broker.relevance {
         json!({"capabilities":{"live_activity_relevance_score":true}})
     } else {
@@ -191,6 +220,10 @@ async fn a_user_alert_fails_with_the_broker_reason_when_every_device_rejects_it(
     server.abort();
 }
 
+const LOCAL: &str = "aaaaaaaa-0000-4000-8000-00000000000a";
+const PEER: &str = "bbbbbbbb-0000-4000-8000-00000000000b";
+const UNJOINED: &str = "cccccccc-0000-4000-8000-00000000000c";
+
 #[tokio::test]
 async fn live_activity_updates_reach_every_registered_activity() {
     let broker = MockBroker::new(Duration::ZERO, Vec::new());
@@ -201,9 +234,7 @@ async fn live_activity_updates_reach_every_registered_activity() {
         .await
         .unwrap();
 
-    service
-        .report_live_activity("default", content(1, &[]))
-        .await;
+    service.report_live_activity(None, content(1, &[])).await;
 
     let requests = broker.requests();
     assert!(
@@ -218,87 +249,36 @@ async fn live_activity_updates_reach_every_registered_activity() {
     assert_eq!(tokens.len(), 2);
     assert!(tokens.iter().all(|token| token.starts_with("a2")));
     assert_eq!(requests[0]["content_state"]["activeTaskCount"], 1);
+    assert!(
+        requests[0]["content_state"]
+            .get("unavailableHostIDs")
+            .is_none()
+    );
     server.abort();
 }
 
-fn content(running: usize, rows: &[(&str, i64)]) -> LiveActivityContent {
-    LiveActivityContent {
-        active_task_count: running,
-        attention: rows
-            .iter()
-            .map(|(thread, completed_at)| AttentionRow {
-                thread_id: (*thread).into(),
-                account_id: None,
-                title: None,
-                reason: AttentionReason::FinishedUnread {
-                    completed_at: *completed_at,
-                },
-            })
-            .collect(),
-        attention_count: rows.len(),
-    }
-}
-
-#[tokio::test]
-async fn review_recheck_a_superseded_persistence_cannot_authorize_another_scopes_end() {
-    let directory = tempfile::tempdir().unwrap();
-    let probe =
-        crate::test_support::LiveActivityProbe::new(Some(directory.path().join("activity.json")))
-            .await;
-    let service = probe.service.clone();
-    service
-        .reconcile_live_activity_scopes(&std::collections::BTreeSet::from([
-            "default".into(),
-            "peer".into(),
-        ]))
-        .await;
-    service.report_live_activity("peer", content(0, &[])).await;
-    service
-        .report_live_activity("default", content(1, &[]))
-        .await;
-    let started = Arc::new(tokio::sync::Notify::new());
-    let release = Arc::new(tokio::sync::Notify::new());
-    service.live_activity.lock().await.persistence_gate = Some((started.clone(), release.clone()));
-    let current = Arc::new(std::sync::atomic::AtomicBool::new(true));
-    let writer = {
-        let service = service.clone();
-        let current = current.clone();
-        tokio::spawn(async move {
-            service
-                .report_live_activity_if_current("default", content(0, &[]), || {
-                    current.load(Ordering::Acquire)
+fn content(running: usize, rows: &[(&str, i64)]) -> SourceProjection {
+    SourceProjection {
+        content: LiveActivityContent {
+            active_task_count: running,
+            attention: rows
+                .iter()
+                .map(|(thread, completed_at)| AttentionRow {
+                    host_id: None,
+                    thread_id: (*thread).into(),
+                    title: None,
+                    reason: AttentionReason::FinishedUnread {
+                        completed_at: *completed_at,
+                    },
                 })
-                .await;
-        })
-    };
-    tokio::time::timeout(Duration::from_secs(3), started.notified())
-        .await
-        .unwrap();
-    current.store(false, Ordering::Release);
-    release.notify_one();
-    writer.await.unwrap();
-    service.live_activity.lock().await.persistence_gate = None;
-    service.report_live_activity("peer", content(0, &[])).await;
-    let held = service.live_activity_updates().borrow().clone();
-    let requests = probe.requests.lock().unwrap().clone();
-    assert!(held.is_none(), "{requests:?}");
-    assert!(
-        requests.iter().all(|request| request["event"] != "end"),
-        "{requests:?}"
-    );
-    service
-        .report_live_activity("default", content(1, &[]))
-        .await;
-    assert_eq!(
-        service
-            .live_activity_updates()
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .content
-            .active_task_count,
-        1
-    );
+                .collect(),
+            attention_count: rows.len(),
+        },
+        running_roots: (0..running)
+            .map(|index| (format!("root-{index}"), format!("root-{index}")))
+            .collect(),
+        ..SourceProjection::default()
+    }
 }
 
 fn sent(broker: &MockBroker) -> Vec<(Value, Value, Vec<Value>)> {
@@ -322,56 +302,278 @@ fn sent(broker: &MockBroker) -> Vec<(Value, Value, Vec<Value>)> {
         .collect()
 }
 
+fn fleet_device(seed: u8, hosts: &[&str]) -> DeviceRegistration {
+    let mut value = fixture_registration_json(seed);
+    value["tokens"] = json!({
+        "alert": alert_token(seed),
+        "fleetActivity": {"token": fleet_token(seed), "hosts": hosts},
+    });
+    serde_json::from_value(value).expect("fleet registration")
+}
+
+fn fleet_token(seed: u8) -> String {
+    format!("f1{seed:02x}").repeat(16)
+}
+
+fn fleet_requests(broker: &MockBroker, seed: u8) -> Vec<Value> {
+    broker
+        .requests()
+        .into_iter()
+        .filter(|request| request["device_token"] == fleet_token(seed))
+        .collect()
+}
+
+fn peer(service: &PushService, client: u64, projection: Option<SourceProjection>) -> PeerOutcome {
+    service.receive_peer_live_activity(PEER, client, Ok(projection))
+}
+
 #[tokio::test]
-async fn accounts_share_one_activity_that_ends_only_when_every_account_is_empty() {
+async fn fleet_tokens_receive_their_declared_hosts_with_exact_row_hosts() {
     let broker = MockBroker::new(Duration::ZERO, Vec::new());
     let (service, server) = service(&broker).await;
-    let account = content(0, &[("b", 20), ("c", 5), ("d", 15)]);
+    service
+        .devices()
+        .register(fleet_device(2, &[LOCAL, PEER]))
+        .await
+        .unwrap();
+    service
+        .devices()
+        .register(fleet_device(3, &[LOCAL]))
+        .await
+        .unwrap();
+    service
+        .devices()
+        .register(device(4, "AAAAAAAA-0000-0000-0000-000000000001"))
+        .await
+        .unwrap();
+    peer(&service, 1, Some(content(2, &[("shared", 30)])));
+    service
+        .report_live_activity(Some(LOCAL), content(1, &[("shared", 20), ("local", 10)]))
+        .await;
+
+    let both = fleet_requests(&broker, 2);
+    let state = &both.last().unwrap()["content_state"];
+    assert_eq!(state["activeTaskCount"], 3);
+    assert_eq!(state["attentionCount"], 3);
+    assert_eq!(
+        state["attention"],
+        json!([
+            {"hostID": PEER, "threadID": "shared", "reason": "finishedUnread", "completedAtUnixSeconds": 30},
+            {"hostID": LOCAL, "threadID": "shared", "reason": "finishedUnread", "completedAtUnixSeconds": 20},
+            {"hostID": LOCAL, "threadID": "local", "reason": "finishedUnread", "completedAtUnixSeconds": 10},
+        ])
+    );
+    assert_eq!(state["unavailableHostIDs"], json!([]));
+    let local_only = fleet_requests(&broker, 3).last().unwrap()["content_state"].clone();
+    assert_eq!(local_only["activeTaskCount"], 1);
+    assert_eq!(local_only["attentionCount"], 2);
+    let legacy = broker
+        .requests()
+        .into_iter()
+        .rfind(|request| request["device_token"].as_str().unwrap().starts_with("a2"))
+        .unwrap();
+    assert!(
+        legacy["content_state"]["attention"][0]
+            .get("hostID")
+            .is_none()
+    );
+    assert!(legacy["content_state"].get("unavailableHostIDs").is_none());
+    server.abort();
+}
+
+#[tokio::test]
+async fn unavailable_hosts_keep_their_last_known_work_and_only_certified_empty_ends() {
+    let broker = MockBroker::new(Duration::ZERO, Vec::new());
+    let (service, server) = service(&broker).await;
+    service
+        .devices()
+        .register(fleet_device(2, &[LOCAL, PEER, UNJOINED]))
+        .await
+        .unwrap();
+    peer(&service, 1, Some(content(1, &[("remote", 30)])));
+    service.peer_live_activity_closed(PEER, 1);
+    service
+        .report_live_activity(Some(LOCAL), content(0, &[]))
+        .await;
+    let state = fleet_requests(&broker, 2).last().unwrap()["content_state"].clone();
+    assert_eq!(state["activeTaskCount"], 1);
+    assert_eq!(state["attention"][0]["hostID"], PEER);
+    assert_eq!(state["unavailableHostIDs"], json!([PEER, UNJOINED]));
+
+    peer(&service, 2, Some(content(0, &[])));
+    service.publish_fleet_live_activity(Some(LOCAL)).await;
+    let last = fleet_requests(&broker, 2).last().unwrap().clone();
+    assert_eq!(last["event"], "update");
+    assert_eq!(
+        last["content_state"]["unavailableHostIDs"],
+        json!([UNJOINED])
+    );
 
     service
-        .report_live_activity("default", content(1, &[("a", 10)]))
-        .await;
-    service
-        .report_live_activity("account", account.clone())
-        .await;
-    service.report_live_activity("account", account).await;
-    service
-        .report_live_activity("default", content(0, &[]))
-        .await;
-    service
-        .report_live_activity("account", content(0, &[]))
-        .await;
+        .devices()
+        .register(fleet_device(2, &[LOCAL, PEER]))
+        .await
+        .unwrap();
+    service.publish_fleet_live_activity(Some(LOCAL)).await;
+    assert_eq!(fleet_requests(&broker, 2).last().unwrap()["event"], "end");
+    server.abort();
+}
+
+#[tokio::test]
+async fn peer_currency_follows_the_newest_connection_and_restarts_as_last_known() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("live-activity-fleet.json");
+    let make = || {
+        PushService::new(
+            crate::push::PushConfiguration::Disabled,
+            Journal::disabled(),
+            Arc::new(DeviceRegistry::temporary()),
+            Some(path.clone()),
+        )
+    };
+    let service = make();
+    assert_eq!(
+        peer(&service, 5, Some(content(1, &[]))),
+        PeerOutcome::Accepted
+    );
+    assert_eq!(peer(&service, 4, Some(content(0, &[]))), PeerOutcome::Stale);
+    service.peer_live_activity_closed(PEER, 4);
+    let current = fleet(&service, &[PEER]);
+    assert_eq!(current.content.active_task_count, 1);
+    assert!(current.unavailable_host_ids.is_empty());
+
+    let mut inconsistent = content(1, &[]);
+    inconsistent.content.active_task_count = 3;
+    assert!(matches!(
+        peer(&service, 5, Some(inconsistent)),
+        PeerOutcome::Rejected(_)
+    ));
+    let withdrawn = fleet(&service, &[PEER]);
+    assert_eq!(withdrawn.content.active_task_count, 1);
+    assert_eq!(withdrawn.unavailable_host_ids, vec![PEER.to_owned()]);
+    assert_eq!(peer(&service, 4, Some(content(0, &[]))), PeerOutcome::Stale);
 
     assert_eq!(
-        sent(&broker),
-        vec![
-            (json!("update"), json!(1), vec![json!("a")]),
-            (
-                json!("update"),
-                json!(4),
-                vec![json!("b"), json!("d"), json!("a")]
-            ),
-            (
-                json!("update"),
-                json!(3),
-                vec![json!("b"), json!("d"), json!("c")]
-            ),
-            (json!("end"), json!(0), vec![]),
-        ]
+        peer(&service, 6, Some(content(2, &[]))),
+        PeerOutcome::Accepted
     );
-    server.abort();
+    assert!(fleet(&service, &[PEER]).unavailable_host_ids.is_empty());
+    service.peer_live_activity_closed(PEER, 6);
+    assert_eq!(peer(&service, 5, Some(content(0, &[]))), PeerOutcome::Stale);
+    let closed = fleet(&service, &[PEER]);
+    assert_eq!(closed.content.active_task_count, 2);
+    assert_eq!(closed.unavailable_host_ids, vec![PEER.to_owned()]);
+    assert_eq!(
+        peer(&service, 7, Some(content(2, &[]))),
+        PeerOutcome::Accepted
+    );
+    assert!(fleet(&service, &[PEER]).unavailable_host_ids.is_empty());
+    assert!(matches!(
+        service.receive_peer_live_activity(PEER, 7, Err("unsupported cluster protocol".into())),
+        PeerOutcome::Rejected(_)
+    ));
+    let undecodable = fleet(&service, &[PEER]);
+    assert_eq!(undecodable.content.active_task_count, 2);
+    assert_eq!(undecodable.unavailable_host_ids, vec![PEER.to_owned()]);
+    assert_eq!(
+        service.receive_peer_live_activity(PEER, 6, Err("late".into())),
+        PeerOutcome::Stale
+    );
+    assert_eq!(
+        peer(&service, 8, Some(content(2, &[]))),
+        PeerOutcome::Accepted
+    );
+    assert!(fleet(&service, &[PEER]).unavailable_host_ids.is_empty());
+    service
+        .report_live_activity(Some(LOCAL), content(0, &[]))
+        .await;
+
+    let restarted = make();
+    let restored = fleet(&restarted, &[PEER]);
+    assert_eq!(restored.content.active_task_count, 2);
+    assert_eq!(restored.unavailable_host_ids, vec![PEER.to_owned()]);
+    assert_eq!(
+        peer(&restarted, 1, Some(content(3, &[]))),
+        PeerOutcome::Accepted
+    );
+    let fresh = fleet(&restarted, &[PEER]);
+    assert_eq!(fresh.content.active_task_count, 3);
+    assert!(fresh.unavailable_host_ids.is_empty());
+}
+
+fn fleet(service: &PushService, hosts: &[&str]) -> super::live_activity::FleetContent {
+    let hosts: Vec<String> = hosts.iter().map(|host| (*host).to_owned()).collect();
+    service.fleet_live_activity_snapshot(&hosts, LOCAL).content
+}
+
+fn delegated(roots: &[&str], parents: &[(&str, &str, &str)]) -> SourceProjection {
+    let mut projection = SourceProjection {
+        content: LiveActivityContent::default(),
+        running_roots: roots
+            .iter()
+            .map(|root| ((*root).to_owned(), (*root).to_owned()))
+            .collect(),
+        remote_parents: parents
+            .iter()
+            .map(|(root, host, thread)| {
+                (
+                    (*root).to_owned(),
+                    crate::wire::cluster::AgentAddress {
+                        host_id: (*host).into(),
+                        thread_id: (*thread).into(),
+                    },
+                )
+            })
+            .collect(),
+        ..SourceProjection::default()
+    };
+    projection.content.active_task_count = projection.running_trees(LOCAL).len();
+    projection
+}
+
+#[tokio::test]
+async fn delegated_trees_count_once_under_their_owning_root() {
+    let service = PushService::fixture_disabled(Journal::disabled());
+    let third = "dddddddd-0000-4000-8000-00000000000d";
+    let hosts = [LOCAL, PEER, third];
+    service
+        .report_live_activity(Some(LOCAL), delegated(&["child"], &[("child", PEER, "b")]))
+        .await;
+    assert_eq!(
+        *service.referenced_thread_changes().borrow(),
+        std::collections::BTreeSet::new()
+    );
+    peer(&service, 1, Some(delegated(&[], &[])));
+    let unresolved = fleet(&service, &hosts);
+    assert_eq!(unresolved.content.active_task_count, 1);
+    assert_eq!(
+        unresolved.unavailable_host_ids,
+        vec![PEER.to_owned(), third.to_owned()]
+    );
+
+    let mut idle_middle = delegated(&[], &[("b", third, "c")]);
+    idle_middle.ancestry.insert("b".into(), "b".into());
+    peer(&service, 1, Some(idle_middle));
+    service.receive_peer_live_activity(third, 2, Ok(Some(delegated(&["c"], &[]))));
+    let nested = fleet(&service, &hosts);
+    assert_eq!(nested.content.active_task_count, 1);
+    assert!(nested.unavailable_host_ids.is_empty());
+    assert!(
+        service
+            .referenced_threads()
+            .contains(&crate::wire::cluster::AgentAddress {
+                host_id: third.into(),
+                thread_id: "c".into(),
+            })
+    );
 }
 
 #[tokio::test]
 async fn a_new_activity_token_receives_the_current_content_once() {
     let broker = MockBroker::new(Duration::ZERO, Vec::new());
     let (service, server) = service(&broker).await;
-    service
-        .report_live_activity("default", content(1, &[]))
-        .await;
-    service
-        .report_live_activity("default", content(1, &[]))
-        .await;
+    service.report_live_activity(None, content(1, &[])).await;
+    service.report_live_activity(None, content(1, &[])).await;
     assert_eq!(broker.requests().len(), 1);
 
     service
@@ -379,12 +581,8 @@ async fn a_new_activity_token_receives_the_current_content_once() {
         .register(device(2, "AAAAAAAA-0000-0000-0000-000000000001"))
         .await
         .unwrap();
-    service
-        .report_live_activity("default", content(1, &[]))
-        .await;
-    service
-        .report_live_activity("default", content(1, &[]))
-        .await;
+    service.report_live_activity(None, content(1, &[])).await;
+    service.report_live_activity(None, content(1, &[])).await;
 
     assert_eq!(broker.requests().len(), 2);
     server.abort();
@@ -394,20 +592,14 @@ async fn a_new_activity_token_receives_the_current_content_once() {
 async fn a_token_registered_after_the_end_is_ended_too() {
     let broker = MockBroker::new(Duration::ZERO, Vec::new());
     let (service, server) = service(&broker).await;
-    service
-        .report_live_activity("default", content(1, &[]))
-        .await;
-    service
-        .report_live_activity("default", content(0, &[]))
-        .await;
+    service.report_live_activity(None, content(1, &[])).await;
+    service.report_live_activity(None, content(0, &[])).await;
     service
         .devices()
         .register(device(2, "AAAAAAAA-0000-0000-0000-000000000001"))
         .await
         .unwrap();
-    service
-        .report_live_activity("default", content(0, &[]))
-        .await;
+    service.report_live_activity(None, content(0, &[])).await;
 
     let events: Vec<Value> = broker
         .requests()
@@ -419,25 +611,40 @@ async fn a_token_registered_after_the_end_is_ended_too() {
 }
 
 #[tokio::test]
-async fn reported_content_survives_a_restart() {
+async fn restored_content_waits_for_a_fresh_projection_before_any_delivery() {
     let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("live-activity.json");
-    let service = |path: &std::path::Path| {
-        PushService::new(
-            crate::push::PushConfiguration::Disabled,
-            Journal::disabled(),
-            Arc::new(DeviceRegistry::temporary()),
-            Some(path.to_owned()),
-        )
-    };
-    service(&path)
-        .report_live_activity("account", content(0, &[("b", 20)]))
+    let path = directory.path().join("live-activity-fleet.json");
+    let probe = crate::test_support::LiveActivityProbe::new(Some(path.clone())).await;
+    probe
+        .service
+        .report_live_activity(Some(LOCAL), content(0, &[("old", 20)]))
         .await;
+    drop(probe);
 
-    let restarted = service(&path);
+    let restarted = crate::test_support::LiveActivityProbe::new(Some(path)).await;
+    let restored = restarted
+        .service
+        .fleet_live_activity_snapshot(&[LOCAL.to_owned()], LOCAL);
+    assert_eq!(restored.content.content.attention_count, 1);
     assert_eq!(
-        restarted.live_activity.lock().await.merged().unwrap(),
-        content(0, &[("b", 20)])
+        restored.content.unavailable_host_ids,
+        vec![LOCAL.to_owned()]
+    );
+    assert!(restarted.service.live_activity_updates().borrow().is_none());
+    restarted
+        .service
+        .publish_fleet_live_activity(Some(LOCAL))
+        .await;
+    assert!(restarted.requests.lock().unwrap().is_empty());
+    restarted
+        .service
+        .report_live_activity(Some(LOCAL), content(0, &[("fresh", 30)]))
+        .await;
+    let requests = restarted.requests.lock().unwrap().clone();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        requests[0]["content_state"]["attention"][0]["threadID"],
+        "fresh"
     );
 }
 
@@ -461,10 +668,10 @@ async fn an_alert_without_a_registered_device_reports_no_destination() {
 }
 
 #[test]
-fn an_attention_row_uses_the_widget_keys_and_omits_an_unknown_account() {
+fn an_attention_row_uses_the_widget_keys_and_omits_an_unknown_host() {
     let mut row = AttentionRow {
+        host_id: None,
         thread_id: "thread-1".into(),
-        account_id: None,
         title: Some("Title".into()),
         reason: AttentionReason::Question { completed_at: None },
     };
@@ -473,13 +680,13 @@ fn an_attention_row_uses_the_widget_keys_and_omits_an_unknown_account() {
         json!({"threadID": "thread-1", "title": "Title", "reason": "question"})
     );
 
-    row.account_id = Some("81c84f21-818e-4af5-9b5f-7413a3ea4fde".into());
+    row.host_id = Some(PEER.into());
     row.reason = AttentionReason::FinishedUnread { completed_at: 20 };
     assert_eq!(
         serde_json::to_value(&row).unwrap(),
         json!({
+            "hostID": PEER,
             "threadID": "thread-1",
-            "accountID": "81c84f21-818e-4af5-9b5f-7413a3ea4fde",
             "title": "Title",
             "reason": "finishedUnread",
             "completedAtUnixSeconds": 20,
@@ -488,17 +695,17 @@ fn an_attention_row_uses_the_widget_keys_and_omits_an_unknown_account() {
 }
 
 #[tokio::test]
-async fn live_activity_clients_receive_the_same_attention_only_host_projection_as_pushes() {
+async fn live_activity_clients_receive_the_same_local_projection_as_pushes() {
     let service = PushService::fixture_disabled(Journal::disabled());
     let updates = service.live_activity_updates();
     assert!(updates.borrow().is_none());
     service
-        .report_live_activity("default", content(0, &[("done", 10)]))
+        .report_live_activity(None, content(0, &[("done", 10)]))
         .await;
     let first = updates.borrow().clone().unwrap();
-    assert_eq!(first.content, content(0, &[("done", 10)]));
+    assert_eq!(first.content, content(0, &[("done", 10)]).content);
     service
-        .report_live_activity("account", content(2, &[("other", 20)]))
+        .report_live_activity(None, content(2, &[("other", 20), ("done", 10)]))
         .await;
     let next = updates.borrow().clone().unwrap();
     assert_eq!(next.epoch, first.epoch);
@@ -506,7 +713,6 @@ async fn live_activity_clients_receive_the_same_attention_only_host_projection_a
     assert_eq!(next.content.active_task_count, 2);
     assert_eq!(next.content.attention_count, 2);
     assert_eq!(next.content.attention[0].thread_id, "other");
-    assert_eq!(next.content.attention[1].thread_id, "done");
 }
 
 #[tokio::test]
@@ -514,26 +720,18 @@ async fn review_regression_an_attention_host_always_outranks_a_running_only_host
     let mut broker = MockBroker::new(Duration::ZERO, vec![]);
     Arc::get_mut(&mut broker).unwrap().relevance = true;
     let (service, server) = service(&broker).await;
-    service
-        .report_live_activity("default", content(4, &[]))
-        .await;
-    service
-        .report_live_activity(
-            "default",
-            LiveActivityContent {
-                active_task_count: 2,
-                attention: vec![AttentionRow {
-                    thread_id: "asking".into(),
-                    account_id: None,
-                    title: None,
-                    reason: AttentionReason::Question {
-                        completed_at: Some(20),
-                    },
-                }],
-                attention_count: 1,
-            },
-        )
-        .await;
+    service.report_live_activity(None, content(4, &[])).await;
+    let mut asking = content(2, &[]);
+    asking.content.attention = vec![AttentionRow {
+        host_id: None,
+        thread_id: "asking".into(),
+        title: None,
+        reason: AttentionReason::Question {
+            completed_at: Some(20),
+        },
+    }];
+    asking.content.attention_count = 1;
+    service.report_live_activity(None, asking).await;
     let requests = broker.requests();
     assert_eq!(requests[0]["relevance_score"], 25);
     assert_eq!(requests[1]["relevance_score"], 100);
@@ -543,8 +741,8 @@ async fn review_regression_an_attention_host_always_outranks_a_running_only_host
 #[test]
 fn attention_rows_are_newest_completion_first_whatever_their_marker() {
     let row = |thread: &str, reason| AttentionRow {
+        host_id: None,
         thread_id: thread.into(),
-        account_id: None,
         title: None,
         reason,
     };
@@ -575,80 +773,33 @@ fn attention_rows_are_newest_completion_first_whatever_their_marker() {
 }
 
 #[tokio::test]
-async fn review_regression_unreadable_aggregate_is_never_replaced_by_an_empty_map() {
+async fn a_damaged_cache_never_blocks_a_fresh_projection() {
     let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("live-activity.json");
-    let bytes = b"{unfinished";
-    std::fs::write(&path, bytes).unwrap();
+    let path = directory.path().join("live-activity-fleet.json");
+    std::fs::write(&path, b"{unfinished").unwrap();
     let service = PushService::new(
         crate::push::PushConfiguration::Disabled,
         Journal::disabled(),
         Arc::new(DeviceRegistry::temporary()),
         Some(path.clone()),
     );
-    service
-        .report_live_activity("default", content(2, &[]))
-        .await;
-    assert!(service.live_activity_updates().borrow().is_none());
-    assert_eq!(std::fs::read(&path).unwrap(), bytes);
-}
-
-#[tokio::test]
-async fn restored_scopes_wait_for_fresh_authoritative_projections() {
-    let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("live-activity.json");
-    let make = || {
-        PushService::new(
-            crate::push::PushConfiguration::Disabled,
-            Journal::disabled(),
-            Arc::new(DeviceRegistry::temporary()),
-            Some(path.clone()),
-        )
-    };
-    let original = make();
-    original
-        .reconcile_live_activity_scopes(&std::collections::BTreeSet::from([
-            "default".into(),
-            "account".into(),
-        ]))
-        .await;
-    original
-        .report_live_activity("default", content(0, &[("old-default", 10)]))
-        .await;
-    original
-        .report_live_activity("account", content(0, &[("old-account", 20)]))
-        .await;
-    let restarted = make();
-    restarted
-        .reconcile_live_activity_scopes(&std::collections::BTreeSet::from([
-            "default".into(),
-            "account".into(),
-        ]))
-        .await;
-    restarted
-        .report_live_activity("default", content(0, &[("fresh-default", 30)]))
-        .await;
-    assert!(restarted.live_activity_updates().borrow().is_none());
-    restarted
-        .report_live_activity("account", content(0, &[("fresh-account", 40)]))
-        .await;
-    let snapshot = restarted.live_activity_updates().borrow().clone().unwrap();
     assert_eq!(
-        snapshot
+        fleet(&service, &[LOCAL]).unavailable_host_ids,
+        vec![LOCAL.to_owned()]
+    );
+    service.report_live_activity(None, content(2, &[])).await;
+    assert_eq!(
+        service
+            .live_activity_updates()
+            .borrow()
+            .as_ref()
+            .unwrap()
             .content
-            .attention
-            .iter()
-            .map(|row| row.thread_id.as_str())
-            .collect::<Vec<_>>(),
-        vec!["fresh-account", "fresh-default"]
+            .active_task_count,
+        2
     );
-    restarted
-        .reconcile_live_activity_scopes(&std::collections::BTreeSet::from(["default".into()]))
-        .await;
-    assert_eq!(
-        make().live_activity.lock().await.merged().unwrap(),
-        content(0, &[("fresh-default", 30)])
-    );
+    let cached: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(cached["local"]["content"]["activeTaskCount"], 2);
 }
 
 #[tokio::test]
@@ -659,28 +810,22 @@ async fn a_rejected_activity_token_stays_eligible_after_the_client_registers_it_
         .to_owned();
     let broker = MockBroker::new(Duration::ZERO, vec![rejected]);
     let (service, server) = service(&broker).await;
-    service
-        .report_live_activity("default", content(1, &[]))
-        .await;
+    service.report_live_activity(None, content(1, &[])).await;
     service
         .devices()
         .register(crate::devices::fixture_registration(1))
         .await
         .unwrap();
-    service
-        .report_live_activity("default", content(1, &[]))
-        .await;
+    service.report_live_activity(None, content(1, &[])).await;
     assert_eq!(broker.requests().len(), 2);
     server.abort();
 }
 
 #[tokio::test]
-async fn an_unavailable_scope_blocks_delivery_until_its_fresh_projection_returns() {
+async fn an_unavailable_local_source_blocks_delivery_until_its_fresh_projection_returns() {
     let broker = MockBroker::new(Duration::ZERO, Vec::new());
     let (service, server) = service(&broker).await;
-    service
-        .report_live_activity("default", content(1, &[]))
-        .await;
+    service.report_live_activity(None, content(1, &[])).await;
     let first_revision = service
         .live_activity_updates()
         .borrow()
@@ -688,19 +833,11 @@ async fn an_unavailable_scope_blocks_delivery_until_its_fresh_projection_returns
         .unwrap()
         .revision;
     service
-        .report_live_activity("account", content(0, &[]))
-        .await;
-    service
-        .mark_live_activity_unavailable_if_current("account", || true)
-        .await;
-    service
-        .report_live_activity("default", content(0, &[]))
+        .mark_live_activity_unavailable_if_current(None, || true)
         .await;
     assert!(service.live_activity_updates().borrow().is_none());
     assert_eq!(broker.requests().len(), 1);
-    service
-        .report_live_activity("account", content(1, &[]))
-        .await;
+    service.report_live_activity(None, content(1, &[])).await;
     assert!(
         service
             .live_activity_updates()
@@ -710,9 +847,7 @@ async fn an_unavailable_scope_blocks_delivery_until_its_fresh_projection_returns
             .revision
             > first_revision
     );
-    service
-        .report_live_activity("account", content(0, &[]))
-        .await;
+    service.report_live_activity(None, content(0, &[])).await;
     assert_eq!(
         sent(&broker)
             .iter()
@@ -724,65 +859,196 @@ async fn an_unavailable_scope_blocks_delivery_until_its_fresh_projection_returns
 }
 
 #[tokio::test]
-async fn review_followup_required_account_absent_from_saved_content_blocks_end() {
-    let broker = MockBroker::new(Duration::ZERO, vec![]);
+async fn a_fleet_end_superseded_before_its_send_is_never_sent() {
+    let broker = MockBroker::new(Duration::ZERO, Vec::new());
     let (service, server) = service(&broker).await;
     service
-        .report_live_activity("default", content(1, &[]))
-        .await;
-    service
-        .reconcile_live_activity_scopes(&std::collections::BTreeSet::from([
-            "default".into(),
-            "account".into(),
-        ]))
-        .await;
-    service
-        .report_live_activity("default", LiveActivityContent::default())
-        .await;
-    let unavailable = service.live_activity_updates().borrow().is_none();
-    let before_account = broker.requests();
-    service
-        .report_live_activity("account", content(1, &[]))
-        .await;
-    let snapshot = service.live_activity_updates().borrow().clone();
-    server.abort();
-    assert!(unavailable, "{before_account:?}");
-    assert!(
-        before_account
-            .iter()
-            .all(|request| request["event"] != "end")
-    );
-    assert_eq!(snapshot.unwrap().content.active_task_count, 1);
-}
-
-#[tokio::test]
-async fn review_followup_an_unverified_registry_cannot_certify_an_empty_host() {
-    let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("live-activity.json");
-    let mut service = PushService::new(
-        crate::push::PushConfiguration::Disabled,
-        Journal::disabled(),
-        Arc::new(DeviceRegistry::temporary()),
-        Some(path),
-    );
-    let broker = MockBroker::new(Duration::ZERO, Vec::new());
-    let app = Router::new()
-        .route("/v1/internal/live-activity", post(record))
-        .with_state(broker.clone());
-    let (address, server) = crate::test_support::serve(app).await;
-    service.broker = Some(PushBroker::new(
-        format!("http://{address}"),
-        "fixture".into(),
-    ));
-    service
         .devices()
-        .register(crate::devices::fixture_registration(1))
+        .register(fleet_device(2, &[LOCAL, PEER]))
         .await
         .unwrap();
     service
-        .report_live_activity("default", LiveActivityContent::default())
+        .report_live_activity(Some(LOCAL), content(0, &[]))
         .await;
-    assert!(service.live_activity_updates().borrow().is_none());
-    assert!(broker.requests().is_empty());
+    peer(&service, 1, Some(content(0, &[])));
+    broker.hold_health.store(true, Ordering::SeqCst);
+    tokio::join!(
+        service.publish_fleet_live_activity(Some(LOCAL)),
+        broker.while_health_is_held(|| {
+            assert_eq!(
+                peer(&service, 2, Some(content(1, &[]))),
+                PeerOutcome::Accepted
+            );
+        })
+    );
+    service.publish_fleet_live_activity(Some(LOCAL)).await;
+    let requests = fleet_requests(&broker, 2);
+    assert!(requests.iter().all(|request| request["event"] == "update"));
+    assert_eq!(
+        requests.last().unwrap()["content_state"]["activeTaskCount"],
+        1
+    );
     server.abort();
+}
+
+#[tokio::test]
+async fn a_superseded_local_projection_keeps_its_rows_but_never_ends() {
+    let broker = MockBroker::new(Duration::ZERO, Vec::new());
+    let (service, server) = service(&broker).await;
+    service
+        .devices()
+        .register(fleet_device(2, &[LOCAL, PEER]))
+        .await
+        .unwrap();
+    let fresh = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let probe = Arc::clone(&fresh);
+    service
+        .report_live_activity_if_current(
+            Some(LOCAL),
+            content(0, &[]),
+            Freshness::new(move || probe.load(Ordering::SeqCst)),
+        )
+        .await;
+    fresh.store(false, Ordering::SeqCst);
+    peer(&service, 1, Some(content(0, &[])));
+    service.publish_fleet_live_activity(Some(LOCAL)).await;
+    let pending = fleet(&service, &[LOCAL, PEER]);
+    assert!(pending.unavailable_host_ids.is_empty());
+    assert!(!pending.is_certified_empty());
+    assert!(
+        fleet_requests(&broker, 2)
+            .iter()
+            .all(|request| request["event"] == "update")
+    );
+
+    fresh.store(true, Ordering::SeqCst);
+    broker.hold_health.store(true, Ordering::SeqCst);
+    tokio::join!(
+        service.publish_fleet_live_activity(Some(LOCAL)),
+        broker.while_health_is_held(|| fresh.store(false, Ordering::SeqCst))
+    );
+    assert!(
+        fleet_requests(&broker, 2)
+            .iter()
+            .all(|request| request["event"] == "update")
+    );
+
+    service
+        .report_live_activity(Some(LOCAL), content(0, &[]))
+        .await;
+    assert_eq!(fleet_requests(&broker, 2).last().unwrap()["event"], "end");
+    server.abort();
+}
+
+#[tokio::test]
+async fn a_running_child_counts_under_its_idle_local_root() {
+    let service = PushService::fixture_disabled(Journal::disabled());
+    let mut local = delegated(&[], &[]);
+    local
+        .running_roots
+        .insert("local-child".into(), "parent".into());
+    local.content.active_task_count = 1;
+    service.report_live_activity(Some(LOCAL), local).await;
+    let mut remote = delegated(&[], &[]);
+    remote
+        .running_roots
+        .insert("peer-child".into(), "peer-root".into());
+    remote.content.active_task_count = 1;
+    peer(&service, 1, Some(remote.clone()));
+    let separate = fleet(&service, &[LOCAL, PEER]);
+    assert_eq!(separate.content.active_task_count, 2);
+    assert!(separate.unavailable_host_ids.is_empty());
+
+    remote.remote_parents.insert(
+        "peer-root".into(),
+        crate::wire::cluster::AgentAddress {
+            host_id: LOCAL.into(),
+            thread_id: "parent".into(),
+        },
+    );
+    peer(&service, 2, Some(remote));
+    let shared = fleet(&service, &[LOCAL, PEER]);
+    assert_eq!(shared.content.active_task_count, 1);
+    assert!(shared.unavailable_host_ids.is_empty());
+}
+
+#[tokio::test]
+async fn an_unresolved_declared_owner_is_listed_unavailable_once() {
+    let service = PushService::fixture_disabled(Journal::disabled());
+    service
+        .report_live_activity(Some(LOCAL), delegated(&["child"], &[("child", PEER, "b")]))
+        .await;
+    let view = fleet(&service, &[LOCAL, PEER]);
+    assert_eq!(view.content.active_task_count, 1);
+    assert_eq!(view.unavailable_host_ids, vec![PEER.to_owned()]);
+}
+
+#[tokio::test]
+async fn unresolved_work_owned_outside_the_declared_hosts_marks_its_reporter() {
+    let service = PushService::fixture_disabled(Journal::disabled());
+    service
+        .report_live_activity(Some(LOCAL), content(0, &[]))
+        .await;
+    peer(
+        &service,
+        1,
+        Some(delegated(&["child"], &[("child", UNJOINED, "parent")])),
+    );
+    let view = fleet(&service, &[LOCAL, PEER]);
+    assert_eq!(view.content.active_task_count, 1);
+    assert_eq!(view.unavailable_host_ids, vec![PEER.to_owned()]);
+}
+
+#[test]
+fn oversized_presentation_rows_are_omitted_but_still_counted() {
+    let service = PushService::fixture_disabled(Journal::disabled());
+    let mut oversized = content(0, &[("t".repeat(65).as_str(), 3), ("long", 2), ("kept", 1)]);
+    oversized.content.attention[1].title = Some("x".repeat(81));
+    oversized.content.attention[2].title = Some(super::attention_title(&"😀\n".repeat(80)));
+    assert_eq!(peer(&service, 1, Some(oversized)), PeerOutcome::Accepted);
+    let view = fleet(&service, &[PEER]);
+    assert_eq!(view.content.attention_count, 3);
+    assert_eq!(
+        view.content
+            .attention
+            .iter()
+            .map(|row| row.thread_id.as_str())
+            .collect::<Vec<_>>(),
+        ["kept"]
+    );
+
+    let mut control = content(0, &[("control", 1)]);
+    control.content.attention[0].title = Some("a\u{1}b".into());
+    assert_eq!(peer(&service, 2, Some(control)), PeerOutcome::Accepted);
+    let view = fleet(&service, &[PEER]);
+    assert_eq!(view.content.attention_count, 1);
+    assert!(view.content.attention.is_empty());
+}
+
+#[test]
+fn the_largest_supported_fleet_state_fits_the_activity_budget() {
+    let host = "ffffffff-ffff-4fff-8fff-ffffffffffff";
+    let title = super::attention_title(&"😀".repeat(200));
+    assert_eq!(title.chars().count(), 80);
+    let row = AttentionRow {
+        host_id: Some(host.into()),
+        thread_id: "\"".repeat(64),
+        title: Some(title),
+        reason: AttentionReason::FinishedUnread {
+            completed_at: i64::MIN,
+        },
+    };
+    let content = super::live_activity::FleetContent {
+        content: LiveActivityContent {
+            active_task_count: usize::MAX,
+            attention: vec![row; MAX_ATTENTION_ROWS],
+            attention_count: usize::MAX,
+        },
+        unavailable_host_ids: vec![host.to_owned(); MAX_FLEET_HOSTS],
+        certifies: false,
+    };
+    let mut state = ActivityPayload::fleet(&content).state;
+    state["updatedAtUnixSeconds"] = Value::from(f64::MAX);
+    let encoded = serde_json::to_vec(&state).unwrap().len();
+    assert!(encoded <= 4096 - 512, "{encoded} bytes");
 }

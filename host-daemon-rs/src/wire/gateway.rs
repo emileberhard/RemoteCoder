@@ -180,12 +180,14 @@ pub(crate) struct RealtimeVoiceStatusResponse {
 pub(crate) struct EmptyResponse {}
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct HostInfoResponse {
     pub home_directory: String,
     pub hostname: String,
     pub automations_authority: Option<String>,
     pub speech_available: bool,
+    #[serde(default)]
+    pub fleet_live_activity: bool,
 }
 
 #[derive(Debug, Deserialize)]

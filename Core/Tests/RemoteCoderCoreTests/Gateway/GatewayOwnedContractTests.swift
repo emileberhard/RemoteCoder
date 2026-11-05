@@ -3,13 +3,15 @@ import Testing
 @testable import RemoteCoderCore
 
 struct GatewayOwnedContractTests {
-    @Test func anUnavailableLiveActivityProjectionReachesTheApplicationRouter() {
-        let note = GatewayEventFixture.notification(method: "daemon/liveActivity/changed", params: .null, receivedAt: .now)
-        guard case .liveActivity(let snapshot) = GatewayNotificationRouting.route(note) else {
-            Issue.record("Unavailable Live Activity projection was discarded")
+    @Test func aFleetLiveActivityChangeReachesTheApplicationRouter() {
+        let note = GatewayEventFixture.notification(
+            method: "daemon/liveActivity/fleet/changed", params: .object(["epoch": .string("e"), "revision": .number(2)]),
+            receivedAt: .now
+        )
+        guard case .fleetLiveActivity = GatewayNotificationRouting.route(note) else {
+            Issue.record("Fleet Live Activity change was discarded")
             return
         }
-        #expect(snapshot == nil)
     }
 
     @Test(arguments: [1, 2, 3])

@@ -62,6 +62,34 @@ impl Gateway {
         Ok(Some((request.method, request.request)))
     }
 
+    pub(super) async fn peer_live_activity_rpc(
+        &self,
+        client: u64,
+        grant: &Grant,
+        params: Value,
+    ) -> RpcResult {
+        let Grant::Peer { host, .. } = grant else {
+            return Err(cluster_error(
+                ErrorClass::Refused,
+                "this cluster method requires an authenticated member",
+            ));
+        };
+        let report = decode::<LiveActivityReportParams>(params)
+            .map_err(|error| format!("{error:#}"))
+            .and_then(|request| {
+                (request.protocol == PROTOCOL)
+                    .then_some(request.projection)
+                    .ok_or_else(|| "unsupported cluster protocol".to_owned())
+            });
+        match self.receive_peer_live_activity(host, client, report) {
+            crate::push::PeerOutcome::Accepted => Ok(json!({"outcome":"accepted"})),
+            crate::push::PeerOutcome::Stale => Ok(json!({"outcome":"stale"})),
+            crate::push::PeerOutcome::Rejected(error) => {
+                Err(cluster_error(ErrorClass::Refused, error))
+            }
+        }
+    }
+
     pub(super) async fn cluster_rpc(
         &self,
         grant: &Grant,

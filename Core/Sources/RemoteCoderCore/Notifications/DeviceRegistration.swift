@@ -20,13 +20,18 @@ struct DeviceRegistrationRequest: Codable, Equatable, Sendable {
         var navigation: Navigation
     }
 
+    struct FleetActivity: Codable, Equatable, Sendable {
+        var token: String
+        var hosts: [String]
+    }
+
     struct Tokens: Codable, Equatable, Sendable {
         var alert: String?
-        var liveActivity: String?
+        var fleetActivity: FleetActivity?
         var voip: String?
         var location: Location?
 
-        var isEmpty: Bool { alert == nil && liveActivity == nil && voip == nil && location == nil }
+        var isEmpty: Bool { alert == nil && fleetActivity == nil && voip == nil && location == nil }
     }
 
     var deviceId: String
@@ -100,7 +105,7 @@ final class DeviceRegistration {
     @ObservationIgnored private let eventBaseURL: String?
     @ObservationIgnored private let transport: any DeviceRegistrationTransport
     @ObservationIgnored private var credentials: DeviceCredentials?
-    @ObservationIgnored private var liveActivityToken: String?
+    @ObservationIgnored private var fleetActivity: DeviceRegistrationRequest.FleetActivity?
     @ObservationIgnored private var settled: Settled?
     @ObservationIgnored private var failedGoal: Goal?
     @ObservationIgnored private var task: Task<Void, Never>?
@@ -117,9 +122,9 @@ final class DeviceRegistration {
         start()
     }
 
-    func update(liveActivityToken: String?) {
-        guard self.liveActivityToken != liveActivityToken else { return }
-        self.liveActivityToken = liveActivityToken
+    func update(fleetActivity: DeviceRegistrationRequest.FleetActivity?) {
+        guard self.fleetActivity != fleetActivity else { return }
+        self.fleetActivity = fleetActivity
         start()
     }
 
@@ -150,7 +155,7 @@ final class DeviceRegistration {
     private var goal: Goal? {
         guard let credentials else { return nil }
         var tokens = DeviceRegistrationRequest.Tokens(
-            alert: credentials.alertToken, liveActivity: liveActivityToken, voip: credentials.voipToken
+            alert: credentials.alertToken, fleetActivity: fleetActivity, voip: credentials.voipToken
         )
         if let location = credentials.location, let eventBaseURL {
             tokens.location = .init(
