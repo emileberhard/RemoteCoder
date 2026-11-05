@@ -254,19 +254,20 @@ export class ConversationSession {
       const checkpoint = subscription?.status === "subscribed" ? object(subscription.checkpoint) : undefined;
       if (checkpoint?.historyUnavailable === true)
         current.historyError = "Stored history is unavailable. The live window is still shown.";
+      const checkpointItems = checkpoint ? array(checkpoint.liveItems, 200).map(entry) : [];
       const activityRead = this.hosts.beginActivityRead(host);
-      const [pageCapture, activityValue] = await Promise.all([
+      let [pageCapture, activityValue] = await Promise.all([
         checkpoint && captured && checkpoint.itemsBackwardsCursor == null
-          ? Promise.resolve({ value: { data: [], nextCursor: null }, receipt: captured.receipt })
-          : host.rpc.capture(
-              "thread/items/list",
-              {
-                threadId: address.threadId,
-                sortDirection: "desc",
-                limit: 60,
-                ...(checkpoint ? { cursor: checkpoint.itemsBackwardsCursor } : {}),
-              },
-              { signal: controller.signal },
+          ? Promise.resolve({
+              response: { data: [], nextCursor: null },
+              values: [],
+              receipt: captured.receipt,
+            })
+          : this.readPage(
+              "desc",
+              checkpoint ? optionalString(checkpoint.itemsBackwardsCursor) : null,
+              controller,
+              checkpointItems,
             ),
         host.rpc.call("daemon/activeTurns", {}, { signal: controller.signal }),
       ]);
@@ -298,8 +299,12 @@ export class ConversationSession {
           current.error = `Live prefix unavailable: ${failure(error)}`;
         }
       }
-      const page = object(pageCapture.value);
-      const entries = array(page.data, 100).map(entry).reverse();
+      const liveItems = claudeSnapshot ? array(claudeSnapshot.liveItems, 200).map(entry) : checkpointItems;
+      if (claudeSnapshot && !this.pageFits(pageCapture.values, liveItems))
+        pageCapture = await this.readPage("desc", null, controller, liveItems);
+      checked();
+      const page = object(pageCapture.response);
+      const entries = [...pageCapture.values].reverse();
       const existing = new Map(current.rows.map((row) => [row.entry.item.id, row]));
       current.rows = [];
       current.bytes = 0;
@@ -312,27 +317,19 @@ export class ConversationSession {
           newer: checkpoint || claudeSnapshot ? optionalString(page.backwardsCursor) : null,
         },
       ];
-      const live = checkpoint ?? claudeSnapshot;
-      if (live) {
-        const values = array(live.liveItems, 200).map(entry);
-        if (values.length)
-          this.pages.push({
-            ids: new Set(values.map((value) => value.item.id)),
-            older: checkpoint
-              ? optionalString(checkpoint.itemsBackwardsCursor)
-              : optionalString(page.backwardsCursor),
-            newer: null,
-          });
-      }
+      if (liveItems.length)
+        this.pages.push({
+          ids: new Set(liveItems.map((value) => value.item.id)),
+          older: checkpoint
+            ? optionalString(checkpoint.itemsBackwardsCursor)
+            : optionalString(page.backwardsCursor),
+          newer: null,
+        });
       this.rebuilding = true;
       for (const value of entries)
         this.upsert(value, value.isComplete !== false, existing.get(value.item.id), undefined, false);
-      if (checkpoint)
-        for (const value of array(checkpoint.liveItems, 200).map(entry))
-          this.upsert(value, value.isComplete === true, undefined, undefined, true);
-      if (claudeSnapshot)
-        for (const value of array(claudeSnapshot.liveItems, 200).map(entry))
-          this.upsert(value, value.isComplete === true, undefined, undefined, true);
+      for (const value of liveItems)
+        this.upsert(value, value.isComplete === true, undefined, undefined, true);
       const previousRows = [...existing.values()];
       for (const [index, row] of previousRows.entries()) {
         const input = row.entry.item;
@@ -418,8 +415,9 @@ export class ConversationSession {
       this.publish();
       await Promise.allSettled([this.refreshQuestions(), this.refreshQueue()]);
       checked();
+      return true;
     } catch (error) {
-      if (controller.signal.aborted) return;
+      if (controller.signal.aborted) return false;
       this.rebuilding = false;
       current.observationBuffer = undefined;
       current.status = "failed";
@@ -438,7 +436,7 @@ export class ConversationSession {
     if (this.historyRead) return this.historyRead;
     const conversation = this.state;
     if (conversation.status !== "ready") return Promise.resolve();
-    if (direction === "older" && conversation.historyReloadRequired) return this.load();
+    if (direction === "older" && conversation.historyReloadRequired) return this.load().then(() => undefined);
     const cursor = conversation[direction];
     if (!cursor) return Promise.resolve();
     const controller = conversation.controller;
@@ -462,37 +460,13 @@ export class ConversationSession {
   }
   private async fetchHistory(direction: "older" | "newer", cursor: string, controller: AbortController) {
     const conversation = this.state;
-    let limit = 60;
-    let response: Record<string, unknown>;
-    let values: Entry[];
-    while (true) {
-      response = object(
-        await this.host.rpc.call(
-          "thread/items/list",
-          {
-            threadId: conversation.address.threadId,
-            sortDirection: direction === "older" ? "desc" : "asc",
-            limit,
-            cursor,
-          },
-          { signal: controller.signal },
-        ),
-      );
-      if (
-        conversation.controller !== controller ||
-        controller.signal.aborted ||
-        conversation[direction] !== cursor
-      )
-        return;
-      values = array(response.data, 100).map(entry);
-      const protectedBytes = conversation.rows
-        .filter((row) => this.protected(row))
-        .reduce((sum, row) => sum + row.bytes, 0);
-      if (values.reduce((sum, value) => sum + itemSize(value.item), 0) + protectedBytes <= 8 * 1024 * 1024)
-        break;
-      if (limit === 1) throw new Error("This history item exceeds the transcript capacity.");
-      limit = Math.max(1, Math.floor(limit / 2));
-    }
+    const { response, values } = await this.readPage(
+      direction === "older" ? "desc" : "asc",
+      cursor,
+      controller,
+      [],
+    );
+    if (conversation[direction] !== cursor) return;
     const next = optionalString(response.nextCursor);
     if (next === cursor) throw new Error("History cursor did not advance");
     if (!values.length) {
@@ -549,6 +523,41 @@ export class ConversationSession {
     this.trimRows(direction);
     this.publish();
     if (direction === "newer" && next === null) await this.loadTail("window");
+  }
+  private async readPage(
+    direction: "asc" | "desc",
+    cursor: string | null,
+    controller: AbortController,
+    retained: Entry[],
+  ) {
+    let limit = 60;
+    while (true) {
+      controller.signal.throwIfAborted();
+      const captured = await this.host.rpc.capture(
+        "thread/items/list",
+        {
+          threadId: this.state.address.threadId,
+          sortDirection: direction,
+          limit,
+          ...(cursor ? { cursor } : {}),
+        },
+        { signal: controller.signal },
+      );
+      controller.signal.throwIfAborted();
+      if (this.state.controller !== controller || !this.actions.present(this))
+        throw new DOMException("Canceled", "AbortError");
+      const response = object(captured.value);
+      const values = array(response.data, 100).map(entry);
+      if (this.pageFits(values, retained)) return { response, values, receipt: captured.receipt };
+      if (limit === 1) throw new Error("This history item exceeds the transcript capacity.");
+      limit = Math.max(1, Math.floor(limit / 2));
+    }
+  }
+  private pageFits(values: Entry[], retained: Entry[]) {
+    const bytes = new Map(values.map((value) => [value.item.id, itemSize(value.item)]));
+    for (const value of retained) bytes.set(value.item.id, itemSize(value.item));
+    for (const row of this.state.rows) if (this.protected(row)) bytes.set(row.entry.item.id, row.bytes);
+    return [...bytes.values()].reduce((sum, value) => sum + value, 0) <= 8 * 1024 * 1024;
   }
   async refreshQueue() {
     const conversation = this.state;

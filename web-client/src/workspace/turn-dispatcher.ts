@@ -337,8 +337,12 @@ export class TurnDispatcher {
     if (conversation && (conversation.newer || conversation.historyReloadRequired)) {
       const session = this.sessions.get(conversation.address);
       if (!session) throw new Error("The conversation owner is unavailable");
-      await session.load();
+      if (!(await session.load()))
+        throw new Error("The conversation refresh was superseded. Wait for it to finish before sending.");
     }
+    if (conversation && conversation.status !== "ready")
+      throw new Error("Wait for the conversation to finish loading before sending.");
+    const readyController = conversation?.controller;
 
     if (conversation && conversation.activeTurnId === undefined && mode === "send") {
       const read = this.hosts.beginActivityRead(host);
@@ -347,6 +351,8 @@ export class TurnDispatcher {
       if (conversation.activeTurnId === undefined)
         throw new Error("Turn status is unavailable. Refresh its authoritative status before sending.");
     }
+    if (conversation && (conversation.status !== "ready" || conversation.controller !== readyController))
+      throw new Error("The conversation refreshed while sending. Wait for it to finish and try again.");
     if (conversation?.submitting) throw new Error("A submission is still waiting for acknowledgment");
     const clientId = crypto.randomUUID();
     let destinationRevision = draft.revision;

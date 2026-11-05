@@ -172,3 +172,64 @@ test("an unavailable checkpoint history stays distinct from an exhausted history
   await workspace.loadConversation({ hostId: "mini", threadId: "shared" });
   expect(workspace.selectedConversation?.historyError).toBeUndefined();
 });
+
+test("a superseded required tail refresh never authorizes a send while its replacement is loading", async () => {
+  const { workspace, harness } = await historyFixture();
+  for (let page = 0; page < 6; page++) await workspace.older();
+  const previous = harness.handler;
+  const started = deferred<void>();
+  const first = deferred<unknown>();
+  const replacement = deferred<unknown>();
+  let subscriptions = 0;
+  harness.handler = (method, params) => {
+    if (method !== "thread/subscribe") return previous?.(method, params);
+    if (++subscriptions === 1) {
+      started.resolve();
+      return first.promise;
+    }
+    return replacement.promise;
+  };
+  workspace.updateDraft({ text: "Preserve the current turn until the authoritative refresh finishes" });
+  const send = workspace.send();
+  await started.promise;
+  const refresh = workspace.loadConversation({ hostId: "mini", threadId: "shared" });
+  first.resolve({ status: "notLoaded" });
+  await expect(send).rejects.toThrow("refresh was superseded");
+  expect(workspace.selectedConversation?.status).toBe("loading");
+  expect(harness.calls.some((call) => call.method === "turn/start" || call.method === "turn/steer")).toBe(
+    false,
+  );
+  replacement.resolve({ status: "notLoaded" });
+  await refresh;
+});
+
+test("capacity-aware tail pages keep older history reachable without a reload loop", async () => {
+  const { workspace, harness } = await historyFixture();
+  const previous = harness.handler;
+  const text = "x".repeat(75000);
+  harness.handler = (method, params) => {
+    const response = previous?.(method, params);
+    if (method !== "thread/items/list" || !response) return response;
+    const page = response as { data: { item: { id: string } }[] };
+    return { ...page, data: page.data.map((value) => ({ ...value, item: { ...value.item, text } })) };
+  };
+  await workspace.loadConversation({ hostId: "mini", threadId: "shared" });
+  const initial = workspace.selectedConversation;
+  expect(initial?.historyReloadRequired).toBe(false);
+  expect(initial?.rows[0]?.entry.item.id).toBe("item-570");
+  const tailReads = harness.calls.filter(
+    (call) => call.method === "thread/items/list" && !call.params.cursor,
+  ).length;
+  const seen = new Set(initial?.rows.map((row) => row.entry.item.id));
+  for (let reads = 0; workspace.selectedConversation?.older; reads++) {
+    expect(reads).toBeLessThan(25);
+    await workspace.older();
+    expect(workspace.selectedConversation?.bytes).toBeLessThanOrEqual(8 * 1024 * 1024);
+    expect(workspace.selectedConversation?.historyReloadRequired).toBe(false);
+    for (const row of workspace.selectedConversation?.rows ?? []) seen.add(row.entry.item.id);
+  }
+  expect(seen.size).toBe(600);
+  expect(
+    harness.calls.filter((call) => call.method === "thread/items/list" && !call.params.cursor),
+  ).toHaveLength(tailReads);
+});

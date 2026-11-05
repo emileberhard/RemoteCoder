@@ -54,7 +54,7 @@ def check_budget(additional=0):
 
 def retained():
     keep = set()
-    for name in ("current", "previous", "staged", "staged-previous"):
+    for name in ("current", "previous", "staged", "staged-previous", "frontend-current", "frontend-previous"):
         pointer = ROOT / name
         if pointer.is_symlink():
             target = pointer.resolve(strict=True)
@@ -72,6 +72,28 @@ def prune():
         if path.name not in keep:
             shutil.rmtree(path)
     check_budget()
+
+
+def record_frontend(revision):
+    if not re.fullmatch(r"[0-9a-f]{40}", revision):
+        raise RuntimeError("Expected the published frontend's full Git revision")
+    retained()
+    release = (ROOT / "staged").resolve(strict=True)
+    if release.parent != RELEASES:
+        raise RuntimeError("Staged frontend is outside the release owner")
+    metadata = json.loads((release / "dist/deployment.json").read_text())
+    if metadata["revision"] != revision:
+        raise RuntimeError("Published frontend revision does not match the staged release")
+    runtime(release)
+    pointer = ROOT / "frontend-current"
+    current = pointer.resolve(strict=True) if pointer.is_symlink() else None
+    if current != release:
+        if current:
+            point("frontend-previous", current)
+        point("frontend-current", release)
+    prune()
+    print(json.dumps({"status": "frontend-recorded", "revision": revision, "release": release.name,
+                      "retainedBytes": size(RELEASES), "budgetBytes": MAX_TOTAL_BYTES}), flush=True)
 
 
 def digest(path):
@@ -256,8 +278,11 @@ def candidate(release, environment, mode, lock):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("operation", choices=["stage"])
-    parser.parse_args()
+    operations = parser.add_subparsers(dest="operation", required=True)
+    operations.add_parser("stage")
+    frontend = operations.add_parser("record-frontend")
+    frontend.add_argument("revision")
+    arguments = parser.parse_args()
     if not WEB or not SERVICE_PLIST.is_file():
         raise RuntimeError("Configure the web deployment and servicePlist in RC_MAINTAINER_CONFIG")
     if socket.gethostname().split(".")[0] != WEB["host"]:
@@ -280,6 +305,9 @@ def main():
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as error:
             raise RuntimeError("Web staging lock is held; inspect deploy.lock for a running or orphaned staging command before cleanup") from error
+        if arguments.operation == "record-frontend":
+            record_frontend(arguments.revision)
+            return 0
         for stale in ROOT.glob(".build-*"):
             shutil.rmtree(stale)
         prune()

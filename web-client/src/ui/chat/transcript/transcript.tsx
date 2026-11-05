@@ -17,7 +17,6 @@ export function Transcript({ conversation }: { conversation: Conversation }) {
   const ref = useRef<HTMLDivElement>(null);
   const anchored = useRef(true);
   const edge = useRef<"older" | "newer" | undefined>(undefined);
-  const reading = useRef(false);
   const anchor = useRef<
     | { identity: string; windowKey: string; id?: string; offset: number; height: number; top: number }
     | undefined
@@ -63,16 +62,14 @@ export function Transcript({ conversation }: { conversation: Conversation }) {
   const page = useCallback(
     (direction: "older" | "newer") => {
       const element = ref.current;
-      if (!element || reading.current || conversation.historyLoading || conversation.status !== "ready")
-        return;
-      reading.current = true;
+      if (!element || conversation.historyLoading || conversation.status !== "ready") return;
       anchored.current = false;
       setAway(true);
       const top = element.getBoundingClientRect().top;
       const visible = [...element.querySelectorAll<HTMLElement>("[data-transcript-anchor]")].find(
         (node) => node.getBoundingClientRect().bottom > top + 8,
       );
-      anchor.current = {
+      const held = {
         identity,
         windowKey,
         id: visible?.dataset.transcriptAnchor,
@@ -80,12 +77,12 @@ export function Transcript({ conversation }: { conversation: Conversation }) {
         height: element.scrollHeight,
         top: element.scrollTop,
       };
+      anchor.current = held;
       void (direction === "older" ? workspace.older() : workspace.newer())
         .catch(() => undefined)
         .finally(() => {
-          reading.current = false;
           requestAnimationFrame(() => {
-            if (anchor.current?.identity === identity) anchor.current = undefined;
+            if (anchor.current === held) anchor.current = undefined;
           });
         });
     },

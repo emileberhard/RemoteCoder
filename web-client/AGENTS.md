@@ -178,7 +178,9 @@ cursors. It evicts whole pages away from the requested edge, never the page
 being requested. A historical window keeps live output outside it; returning
 to the tail renews the observation checkpoint. Live eviction exposes a reload
 edge, and unavailable history stays explicit. Reads coalesce and late results
-must still match their controller and cursor. Local submissions retain their
+must still match their controller and cursor. Initial and edge reads share
+capacity-aware page admission. A send requiring a tail refresh needs explicit
+refresh success and a ready, current observation. Local submissions retain their
 receipt protection and release their counted bytes when removed.
 
 `conversation-changes.ts` owns native changes decoding, patch positions and
@@ -193,3 +195,9 @@ blob URLs. Markdown host images admit only in completed content, at most 16 per
 block, through the same image owner. File links preserve the exact host and
 optional line target. Dialogs use the shared body portal. Browser PDF embedding
 requires `frame-src` and `object-src` blob admission in the static host policy.
+
+The staging retention owner also pins `frontend-current` and `frontend-previous`
+releases within its existing total budget. After verifying a static frontend
+publication, `scripts/deploy.py record-frontend <full-revision>` records the exact
+staged artifact without changing any backend pointer. Record an existing
+frontend before its first later stage so its lazy chunks and rollback survive.
