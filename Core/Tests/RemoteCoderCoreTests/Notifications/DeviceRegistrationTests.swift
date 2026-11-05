@@ -21,14 +21,14 @@ struct DeviceRegistrationTests {
         let transport = MockTransport(routingID: routing)
         let registration = makeRegistration(transport)
         registration.update(credentials: credentials(alert: token(1), voip: token(3)))
-        registration.update(liveActivityToken: token(2))
+        registration.update(fleetActivity: .init(token: token(2), hosts: [appHost.uuidString]))
         await registration.settle()
 
         #expect(registration.state == .registered(routingID: routing))
         let last = await transport.registered.last
         #expect(last?.tokens.alert == token(1))
         #expect(last?.tokens.voip == token(3))
-        #expect(last?.tokens.liveActivity == token(2))
+        #expect(last?.tokens.fleetActivity == .init(token: token(2), hosts: [appHost.uuidString]))
         #expect(last?.appHostId == appHost.uuidString)
     }
 

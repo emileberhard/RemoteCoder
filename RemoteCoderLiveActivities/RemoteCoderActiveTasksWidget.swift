@@ -102,6 +102,19 @@ private struct MoreCount: View {
     }
 }
 
+private struct Coverage: View {
+    let summary: String?
+
+    var body: some View {
+        if let summary {
+            Label(summary, systemImage: "exclamationmark.icloud")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+    }
+}
+
 private struct CompactStatus: View {
     let state: ContentState
     let size: CGFloat
@@ -138,12 +151,7 @@ private struct ActiveTasksLockScreen: View {
             HStack(spacing: 8) {
                 LiveActivityGlyph(size: 20, cornerRadius: 5)
 
-                // With several gateways running turns, the host name is
-                // what tells two identical-looking activities apart.
-                Text(attributes.hostName ?? "RemoteCoder")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                Coverage(summary: attributes.unavailableSummary(for: state))
 
                 Spacer(minLength: 8)
 
@@ -191,11 +199,12 @@ struct RemoteCoderActiveTasksWidget: Widget {
                 }
 
                 DynamicIslandExpandedRegion(.bottom) {
-                    if let lead {
-                        VStack(alignment: .leading, spacing: 4) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        if let lead {
                             AttentionRow(attention: lead)
                             MoreCount(count: (state.attentionCount ?? 1) - 1)
                         }
+                        Coverage(summary: context.attributes.unavailableSummary(for: state))
                     }
                 }
             } compactLeading: {

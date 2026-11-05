@@ -53,6 +53,11 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
     @ObservationIgnored private var scenePhasePass = 0
     let notifications: CompletionNotificationCenter
     let pushTokens: PushTokenSources
+    @ObservationIgnored private lazy var liveActivity = FleetLiveActivityService(
+        hosts: { [weak self] in self?.models.map(\.fleetLiveActivityHost) ?? [] },
+        configured: { [weak self] in self?.settings.hosts.map(\.id) ?? [] },
+        preferred: { [weak self] in self?.automationAuthority?.hostID }
+    )
     @ObservationIgnored private var hasBootstrapped = false
     private let condensedPaths = CondensedPathCache()
     private let sidebarDateLabels = ConversationSidebarDateCache()
@@ -399,6 +404,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         model.onConversationNavigation = { [weak self] in self?.supersedePendingNavigation() }
         model.onActiveSessionChange = { [weak self] _ in self?.openConversationDidChange() }
         model.onGatewayReconnect = { [weak self] in self?.retryGatewayIdentities() }
+        model.onLiveActivityHint = { [weak self] in self?.liveActivity.schedule() }
     }
 
     var clusterHosts: [ClusterModel.Host] {
@@ -671,6 +677,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         }
         if hasBootstrapped {
             for model in models { prepare(target: model.target) }
+            liveActivity.schedule()
         }
         applyVisibility()
     }
@@ -789,6 +796,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         events.setNavigationReady()
         refreshCluster()
         retryGatewayIdentities()
+        liveActivity.schedule()
     }
 
     private func prepare(target: ExecutionTarget) {
@@ -823,6 +831,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
     func handleScenePhaseActive() async {
         guard !isQuiescing else { return }
         let pass = beginScenePhasePass()
+        liveActivity.sceneChanged(.active)
         accountDirectory.startForeground()
         for model in connectedHostModels { model.directories.syncFavorites() }
         syncPreferences()
@@ -847,10 +856,12 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         let pass = beginScenePhasePass()
         notificationSceneGeneration = UUID()
         notifications.dismiss()
+        liveActivity.sceneChanged(.inactive)
         for model in models {
             guard scenePhasePass == pass else { return }
             await model.handleScenePhaseInactive()
         }
+        await liveActivity.settle()
     }
 
     func handleScenePhaseBackground() async {
@@ -859,6 +870,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         notificationSceneGeneration = UUID()
         notifications.dismiss()
         accountDirectory.stopForeground()
+        liveActivity.sceneChanged(.background)
         identityRetryTask?.cancel()
         siteIcons.stopFetching()
         // The app is leaving: a foreground pass still in flight would otherwise
@@ -883,6 +895,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
 
     func teardown() {
         supersedePendingNavigation()
+        liveActivity.retire()
         for window in windows { window.cancelComposerFocus() }
         notifications.dismiss()
         accountDirectory.stop()
@@ -1869,4 +1882,23 @@ struct VoiceCallUnavailable: LocalizedError, CustomLocalizedStringResourceConver
 
     var errorDescription: String? { message }
     var localizedStringResource: LocalizedStringResource { "\(message)" }
+}
+
+private extension ChatTargetModel {
+    var fleetLiveActivityHost: FleetLiveActivityService.Host {
+        let directories = directories
+        let gateway = gatewayClient
+        let registration = hostServices.registration
+        let isCanonical = host.gatewayID == hostID
+        return .init(
+            id: hostID,
+            name: hostDisplayName,
+            isCoordinatorCapable: {
+                guard isCanonical, (try? await directories.resolveHomePath()) != nil else { return false }
+                return directories.information?.fleetLiveActivity == true
+            },
+            read: { try await gateway.readFleetLiveActivity(hosts: $0) },
+            register: { registration.update(fleetActivity: $0) }
+        )
+    }
 }

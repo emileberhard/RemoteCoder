@@ -89,7 +89,7 @@ enum ServerNotification: Sendable {
     case gatewayWarning(GatewayWarning)
     case providerHealthChanged(ProviderHealth)
     case activeTurnsChanged(CodexGatewayDaemon.ActiveTurnsResponse)
-    case liveActivityChanged(ActiveTasksLiveActivitySnapshot?)
+    case fleetLiveActivityChanged
     case transportError(TransportError)
     case unknown(method: String)
     case malformed(method: String, address: TurnAddress?, reason: String)
@@ -106,7 +106,7 @@ extension ServerNotification {
         case .turnPlanUpdated(let text), .turnDiffUpdated(let text): text.address
         case .threadTokenUsageUpdated(let usage): TurnAddress(threadID: usage.threadId, turnID: usage.turnId)
         case .threadStarted, .threadStatusChanged, .threadSettingsUpdated, .threadNameUpdated, .threadHistoryInvalidated, .threadArchived, .threadClosed,
-             .threadQueueChanged, .conversationMarksChanged, .directoryFavoritesChanged, .preferencesChanged, .questionsChanged, .daemonReady, .callChanged, .gatewayWarning, .providerHealthChanged, .activeTurnsChanged, .liveActivityChanged, .transportError, .unknown,
+             .threadQueueChanged, .conversationMarksChanged, .directoryFavoritesChanged, .preferencesChanged, .questionsChanged, .daemonReady, .callChanged, .gatewayWarning, .providerHealthChanged, .activeTurnsChanged, .fleetLiveActivityChanged, .transportError, .unknown,
              .malformed: nil
         }
     }
@@ -237,8 +237,8 @@ extension ServerNotification {
             return .providerHealthChanged(try params(ProviderHealthPayload.self, in: frame).providers)
         case "daemon/activeTurns/changed":
             return .activeTurnsChanged(try params(CodexGatewayDaemon.ActiveTurnsResponse.self, in: frame))
-        case "daemon/liveActivity/changed":
-            return .liveActivityChanged(try params(ActiveTasksLiveActivitySnapshot?.self, in: frame))
+        case "daemon/liveActivity/fleet/changed":
+            return .fleetLiveActivityChanged
         case "thread/settings/updated":
             return .threadSettingsUpdated(try params(CodexAppServerV2.ThreadSettingsUpdatedNotification.self, in: frame))
         case "thread/name/updated":
