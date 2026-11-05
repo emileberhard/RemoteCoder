@@ -108,199 +108,204 @@ export const ChangesReview = memo(function ChangesReview({
     });
   return (
     <Dialog title="Changes" close={close} wide>
-      <div className="changes-toolbar">
-        <label className="field">
-          Compare
-          <select
-            value={mode}
-            onChange={(event) => {
-              const mode = event.target.value;
-              if (mode === "branch") select(null);
-              else if (mode === "lastTurn") select({ kind: "lastTurn" });
-              else if (mode === "now") startNow();
-              else if (mode === "uncommitted" || mode === "staged" || mode === "unstaged")
-                select({ kind: "git", source: mode });
-            }}
-          >
-            <option value="branch">Branch</option>
-            <option value="uncommitted">Uncommitted</option>
-            <option value="staged">Staged</option>
-            <option value="unstaged">Unstaged</option>
-            {supportsViews && (
-              <>
-                <option value="lastTurn">Last Turn</option>
-                {view?.kind === "since" && <option value="since">Since selected turn</option>}
-                <option value="now">Start From Now</option>
-              </>
-            )}
-          </select>
-        </label>
-        {mode !== "lastTurn" && mode !== "since" && (
-          <label className="field">
-            Checkout
-            <select value={directory} onChange={(event) => setSelectedRoot(event.target.value)}>
-              {directories.map((root) => (
-                <option key={root} value={root}>
-                  {root}
-                </option>
-              ))}
+      <div className="changes-review">
+        <div className="panel-toolbar changes-toolbar">
+          <label className="panel-fields">
+            Compare
+            <select
+              value={mode}
+              onChange={(event) => {
+                const mode = event.target.value;
+                if (mode === "branch") select(null);
+                else if (mode === "lastTurn") select({ kind: "lastTurn" });
+                else if (mode === "now") startNow();
+                else if (mode === "uncommitted" || mode === "staged" || mode === "unstaged")
+                  select({ kind: "git", source: mode });
+              }}
+            >
+              <option value="branch">Branch</option>
+              <option value="uncommitted">Uncommitted</option>
+              <option value="staged">Staged</option>
+              <option value="unstaged">Unstaged</option>
+              {supportsViews && (
+                <>
+                  <option value="lastTurn">Last Turn</option>
+                  {view?.kind === "since" && <option value="since">Since selected turn</option>}
+                  <option value="now">Start From Now</option>
+                </>
+              )}
             </select>
           </label>
-        )}
-        <button
-          type="button"
-          onClick={() => {
-            inventory.refresh();
-            read.refresh();
-          }}
-        >
-          Refresh
-        </button>
-      </div>
-      <ReadStatus loading={read.loading} error={read.error} />
-      {inventory.error && <p className="subtle">Checkout inventory unavailable: {inventory.error}</p>}
-      {inventory.value?.complete === false && <p className="subtle">Some checkouts could not be read.</p>}
-      {read.value?.status === "unavailable" && (
-        <p role="status">
-          {{
-            notRepository: "This folder is not a Git repository.",
-            missingDirectory: "The folder is unavailable.",
-            noBaseBranch: "No base branch is available.",
-            noMergeBase: "The branches have no common base.",
-          }[read.value.reason] ?? read.value.reason}
-        </p>
-      )}
-      {result && (
-        <>
-          <p className="subtle">
-            {result.files.length
-              ? `${result.label} · ${result.files.length} ${result.complete ? (result.files.length === 1 ? "file" : "files") : "loaded files"} · ${result.files.every((file) => file.hasLineCounts) ? `+${result.files.reduce((sum, file) => sum + file.additions, 0)} −${result.files.reduce((sum, file) => sum + file.deletions, 0)}` : "Line counts unavailable"}`
-              : result.complete
-                ? "No changes"
-                : "Change coverage is incomplete"}
-            {result.unlisted > 0 && ` · ${result.unlisted} additional files not listed`}
-          </p>
-          {!result.complete && result.files.length > 0 && (
-            <p className="subtle">Some changes are unavailable.</p>
-          )}
-          {result.files.length > 0 && (
-            <label className="field changes-file">
-              File
-              <select
-                value={file ? fileKey(file, index) : ""}
-                onChange={(event) => {
-                  setSelectedFile(event.target.value);
-                  setLineLimit(2000);
-                }}
-              >
-                {result.files.map((file, index) => (
-                  <option key={fileKey(file, index)} value={fileKey(file, index)}>
-                    {file.path ?? "Path unavailable"} ·{" "}
-                    {file.hasLineCounts ? `+${file.additions} −${file.deletions}` : "Line counts unavailable"}
+          {mode !== "lastTurn" && mode !== "since" && (
+            <label className="panel-fields">
+              Checkout
+              <select value={directory} onChange={(event) => setSelectedRoot(event.target.value)}>
+                {directories.map((root) => (
+                  <option key={root} value={root}>
+                    {root}
                   </option>
                 ))}
               </select>
             </label>
           )}
-          {file?.omitted && (
+          <button
+            type="button"
+            onClick={() => {
+              inventory.refresh();
+              read.refresh();
+            }}
+          >
+            Refresh
+          </button>
+        </div>
+        <ReadStatus loading={read.loading} error={read.error} />
+        {inventory.error && <p className="subtle">Checkout inventory unavailable: {inventory.error}</p>}
+        {inventory.value?.complete === false && <p className="subtle">Some checkouts could not be read.</p>}
+        {read.value?.status === "unavailable" && (
+          <p role="status">
+            {{
+              notRepository: "This folder is not a Git repository.",
+              missingDirectory: "The folder is unavailable.",
+              noBaseBranch: "No base branch is available.",
+              noMergeBase: "The branches have no common base.",
+            }[read.value.reason] ?? read.value.reason}
+          </p>
+        )}
+        {result && (
+          <>
             <p className="subtle">
-              Patch omitted:{" "}
-              {{ fileTooLarge: "file exceeds preview capacity", responseBudget: "response capacity reached" }[
-                file.omitted
-              ] ?? file.omitted}
-              .
+              {result.files.length
+                ? `${result.label} · ${result.files.length} ${result.complete ? (result.files.length === 1 ? "file" : "files") : "loaded files"} · ${result.files.every((file) => file.hasLineCounts) ? `+${result.files.reduce((sum, file) => sum + file.additions, 0)} −${result.files.reduce((sum, file) => sum + file.deletions, 0)}` : "Line counts unavailable"}`
+                : result.complete
+                  ? "No changes"
+                  : "Change coverage is incomplete"}
+              {result.unlisted > 0 && ` · ${result.unlisted} additional files not listed`}
             </p>
-          )}
-          {file?.replacedInvalidUtf8 && <p className="subtle">Invalid UTF-8 was replaced in this patch.</p>}
-          {file && (
-            <div className="change-lines">
-              {lines.slice(0, lineLimit).map((line) => (
-                <button
-                  type="button"
-                  key={line.offset}
-                  className={`change-line ${line.kind}`}
-                  disabled={
-                    read.loading ||
-                    !file.path ||
-                    (line.kind === "deletion" ? line.oldNumber : line.newNumber) === undefined
-                  }
-                  title="Comment on this line"
-                  onClick={() => {
-                    if (getSelection()?.toString()) return;
-                    setAnnotation({ file, line, comparison: result.comparison });
-                    setComment("");
+            {!result.complete && result.files.length > 0 && (
+              <p className="subtle">Some changes are unavailable.</p>
+            )}
+            {result.files.length > 0 && (
+              <label className="field changes-file">
+                File
+                <select
+                  value={file ? fileKey(file, index) : ""}
+                  onChange={(event) => {
+                    setSelectedFile(event.target.value);
+                    setLineLimit(2000);
                   }}
                 >
-                  <span>{line.oldNumber}</span>
-                  <span>{line.newNumber}</span>
-                  <code>
-                    {line.kind === "addition"
-                      ? "+"
-                      : line.kind === "deletion"
-                        ? "-"
-                        : line.kind === "context"
-                          ? " "
-                          : ""}
-                    {line.text}
-                  </code>
-                </button>
-              ))}
-            </div>
-          )}
-          {file && (
-            <button type="button" onClick={() => run(() => navigator.clipboard.writeText(file.patch))}>
-              Copy patch
-            </button>
-          )}
-          {lineLimit === 20000 && lines.length > lineLimit && (
-            <p className="subtle">
-              The preview reached its line limit. Copy the patch to read the remaining lines.
+                  {result.files.map((file, index) => (
+                    <option key={fileKey(file, index)} value={fileKey(file, index)}>
+                      {file.path ?? "Path unavailable"} ·{" "}
+                      {file.hasLineCounts
+                        ? `+${file.additions} −${file.deletions}`
+                        : "Line counts unavailable"}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+            {file?.omitted && (
+              <p className="subtle">
+                Patch omitted:{" "}
+                {{
+                  fileTooLarge: "file exceeds preview capacity",
+                  responseBudget: "response capacity reached",
+                }[file.omitted] ?? file.omitted}
+                .
+              </p>
+            )}
+            {file?.replacedInvalidUtf8 && <p className="subtle">Invalid UTF-8 was replaced in this patch.</p>}
+            {file && (
+              <div className="change-lines">
+                {lines.slice(0, lineLimit).map((line) => (
+                  <button
+                    type="button"
+                    key={line.offset}
+                    className={`change-line ${line.kind}`}
+                    disabled={
+                      read.loading ||
+                      !file.path ||
+                      (line.kind === "deletion" ? line.oldNumber : line.newNumber) === undefined
+                    }
+                    title="Comment on this line"
+                    onClick={() => {
+                      if (getSelection()?.toString()) return;
+                      setAnnotation({ file, line, comparison: result.comparison });
+                      setComment("");
+                    }}
+                  >
+                    <span>{line.oldNumber}</span>
+                    <span>{line.newNumber}</span>
+                    <code>
+                      {line.kind === "addition"
+                        ? "+"
+                        : line.kind === "deletion"
+                          ? "-"
+                          : line.kind === "context"
+                            ? " "
+                            : ""}
+                      {line.text}
+                    </code>
+                  </button>
+                ))}
+              </div>
+            )}
+            {file && (
+              <button type="button" onClick={() => run(() => navigator.clipboard.writeText(file.patch))}>
+                Copy patch
+              </button>
+            )}
+            {lineLimit === 20000 && lines.length > lineLimit && (
+              <p className="subtle">
+                The preview reached its line limit. Copy the patch to read the remaining lines.
+              </p>
+            )}
+            {lines.length > lineLimit && lineLimit < 20000 && (
+              <button type="button" onClick={() => setLineLimit(Math.min(20000, lineLimit + 2000))}>
+                Show more lines
+              </button>
+            )}
+          </>
+        )}
+        {annotation && (
+          <form
+            className="panel-form review-comment"
+            onSubmit={(event) => {
+              event.preventDefault();
+              run(() => {
+                workspace.appendReviewComment(
+                  address,
+                  reviewComment(annotation.file, annotation.line, annotation.comparison, comment),
+                );
+                setAnnotation(undefined);
+                setComment("");
+              });
+            }}
+          >
+            <p>
+              {annotation.file.path}:{annotation.line.newNumber ?? annotation.line.oldNumber}
             </p>
-          )}
-          {lines.length > lineLimit && lineLimit < 20000 && (
-            <button type="button" onClick={() => setLineLimit(Math.min(20000, lineLimit + 2000))}>
-              Show more lines
-            </button>
-          )}
-        </>
-      )}
-      {annotation && (
-        <form
-          className="review-comment"
-          onSubmit={(event) => {
-            event.preventDefault();
-            run(() => {
-              workspace.appendReviewComment(
-                address,
-                reviewComment(annotation.file, annotation.line, annotation.comparison, comment),
-              );
-              setAnnotation(undefined);
-              setComment("");
-            });
-          }}
-        >
-          <p>
-            {annotation.file.path}:{annotation.line.newNumber ?? annotation.line.oldNumber}
-          </p>
-          <label>
-            Review comment
-            <textarea
-              value={comment}
-              maxLength={8192}
-              onChange={(event) => setComment(event.target.value)}
-              autoFocus
-            />
-          </label>
-          <div className="panel-actions">
-            <button type="submit" disabled={!comment.trim()}>
-              Add to message
-            </button>
-            <button type="button" onClick={() => setAnnotation(undefined)}>
-              Cancel
-            </button>
-          </div>
-        </form>
-      )}
+            <label>
+              Review comment
+              <textarea
+                value={comment}
+                maxLength={8192}
+                onChange={(event) => setComment(event.target.value)}
+                autoFocus
+              />
+            </label>
+            <div className="panel-actions">
+              <button type="submit" disabled={!comment.trim()}>
+                Add to message
+              </button>
+              <button type="button" onClick={() => setAnnotation(undefined)}>
+                Cancel
+              </button>
+            </div>
+          </form>
+        )}
+      </div>
     </Dialog>
   );
 });

@@ -2586,13 +2586,14 @@ li.selected .directory-name > svg:first-child,
   white-space: nowrap;
 }
 .settings-panel,
-.inspector-section {
+.inspector-section,
+.changes-review {
   --panel-control-radius: 8px;
 }
 :is(.settings-panel, .inspector-section) :is(button, input, select, textarea) {
   font: inherit;
 }
-:is(.settings-panel, .inspector-section)
+:is(.settings-panel, .inspector-section, .changes-review)
   :is(.panel-toolbar, .panel-actions, .panel-list, .panel-form)
   button {
   border: 1px solid var(--line);
@@ -2605,7 +2606,7 @@ li.selected .directory-name > svg:first-child,
   opacity: 0.45;
   cursor: default;
 }
-:is(.settings-panel, .inspector-section)
+:is(.settings-panel, .inspector-section, .changes-review)
   :is(.panel-form, .panel-fields, .panel-toolbar)
   :is(input:not([type="checkbox"]), select, textarea) {
   color: var(--foreground);
@@ -3353,6 +3354,7 @@ li.selected .directory-name > svg:first-child,
 }
 
 .changes-toolbar {
+  justify-content: flex-start;
   display: flex;
   align-items: end;
   gap: 12px;
