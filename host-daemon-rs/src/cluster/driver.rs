@@ -100,20 +100,23 @@ async fn live_activity_reports(
     let mut wakes = link.member_wakes(&host).await;
     let mut reports = owner.peer_live_activity_reports();
     drop(owner);
-    let mut delivered = false;
+    let mut settled = false;
     let mut delay = REPORT_RETRY_FLOOR;
     loop {
         let report = reports.borrow_and_update().clone();
-        if !delivered && let Some(report) = &report {
+        if !settled && let Some(report) = &report {
             let params = json!(LiveActivityReportParams {
                 protocol: PROTOCOL,
                 projection: report.projection.clone(),
             });
-            delivered = matches!(
-                link.call(&host, "cluster/liveActivity/report", params).await,
-                Ok(reply) if reply["outcome"] == "accepted"
-            );
-            delay = if delivered {
+            settled = match link
+                .call(&host, "cluster/liveActivity/report", params)
+                .await
+            {
+                Ok(reply) => reply["outcome"] == "accepted",
+                Err(error) => error.class == ErrorClass::Unsupported,
+            };
+            delay = if settled {
                 REPORT_RETRY_FLOOR
             } else {
                 (delay * 2).min(REPORT_RETRY_CEILING)
@@ -123,13 +126,13 @@ async fn live_activity_reports(
             _ = stop.cancelled() => break,
             changed = wakes.changed() => {
                 if changed.is_err() { break; }
-                delivered = false;
+                settled = false;
             }
             changed = reports.changed() => {
                 if changed.is_err() { break; }
-                delivered = false;
+                settled = false;
             }
-            _ = tokio::time::sleep(jittered(delay)), if !delivered && report.is_some() => {}
+            _ = tokio::time::sleep(jittered(delay)), if !settled && report.is_some() => {}
         }
     }
     Ok(())

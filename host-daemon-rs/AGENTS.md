@@ -1019,12 +1019,14 @@ blocks startup or provider journal retirement.
   `cluster/` prefix. The receiver keys the report by the authenticated peer
   grant and binds the member to the newest inbound connection id: an older
   connection's report is `stale` and cannot replace or revoke the binding. A
-  close withdraws currency only for its bound connection and is not published
-  while draining. A rejected report (inconsistent, oversized or over the peer
-  cap) withdraws the bound connection's currency and keeps last-known rows.
+  close withdraws currency only for its bound connection, keeps that id as the
+  ordering fence and is not published while draining. A rejected report
+  (undecodable, another protocol, inconsistent, oversized or over the peer cap)
+  withdraws the bound connection's currency and keeps last-known rows.
   Accepting peer sockets close after 45 s without an inbound frame (two ping
   intervals). `cluster/driver.rs` resends after a local change or member wake
-  and retries every non-accepted outcome with jittered 0.5–30 s backoff.
+  and retries every non-accepted outcome with jittered 0.5–30 s backoff,
+  except that a member lacking `liveActivity.v1` waits for its next wake.
 - The local projection is published unchanged through `daemon/liveActivity`
   and `daemon/liveActivity/changed` and to `liveActivity` tokens, the per-host
   activity of released apps. `daemon/liveActivity/fleet {hosts}` (status
@@ -1034,8 +1036,13 @@ blocks startup or provider journal retirement.
   a declared host without a current source is listed in `unavailableHostIDs`
   with its last-known content. Each `fleetActivity` token receives the fleet
   view of its own declared hosts, and End only when every declared host is
-  current and empty. Both kinds are sent to each token that has not yet
-  accepted its current content, so a token registered late still receives
+  current and empty. A publication sends each delivery only while the source
+  revision it captured is current. A running tree's local root resolves
+  through `running_roots` values as well as keys and `ancestry`. Only declared
+  hosts are listed unavailable, and rows over 64 thread-id bytes or 80 title
+  characters, or with control characters, are omitted but counted, keeping
+  the largest state within ActivityKit's 4 KiB. Both kinds are sent to each
+  token that has not yet accepted its current content, so a token registered late still receives
   the latest state. Updates use APNs priority 10 and a five-minute stale date.
   Relevance is 100 for attention, 25 for running-only work and 0 for empty
   content. Initial app content always uses

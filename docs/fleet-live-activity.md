@@ -29,7 +29,9 @@ the existing authenticated cluster link. A small sender owned by the existing
 cluster driver's structured lifetime watches local changes, member wakes and
 membership. It is independent of delegated-job backoff, sends only changed or
 undelivered current state, and retries every outcome other than accepted with
-bounded jittered backoff. No polling subsystem or broker-specific merge is added.
+bounded jittered backoff. A member that lacks the capability is not retried
+until its next wake, such as the reconnect after its upgrade. No polling
+subsystem or broker-specific merge is added.
 Peer identity comes from the authenticated grant; payloads cannot select another
 host. A versioned capability gates the new report protocol.
 
@@ -54,8 +56,10 @@ report is a Connection-lifetime request, so it commits on its socket before that
 socket's close cleanup runs. Each member binds to the newest connection id that
 reported; an older connection's report is stale and cannot replace or revoke a
 newer binding. Closing a socket withdraws currency only when it is still the
-bound one, and a planned drain does not publish those closes. A rejected report
-from the bound connection withdraws its currency and keeps the last-known rows.
+bound one and keeps its connection id as the ordering fence, and a planned drain
+does not publish those closes. A rejected report from the bound connection,
+including one that fails to decode or names another protocol, withdraws its
+currency and keeps the last-known rows.
 Accepting peer sockets close after about two ping intervals without an inbound
 frame, so a silent peer turns unavailable within that bound. A restart has no
 bindings: restored content is last known until each source reports again. No
@@ -64,10 +68,14 @@ durable sequence, incarnation or clock comparison is involved.
 Short source and peer state sits behind its own lock, separate from the
 coordinator's serialized publication, timestamp assignment, APNs delivery and
 cache persistence; a peer report or fleet status read never waits for a broker
-send. The last-known cache is best effort and written outside the source lock; a
-damaged cache starts without last-known content and is replaced. Finished-turn
-state keeps its own durable owner. Token rotation, invalidation, retained state
-and tasks keep their existing owners and bounds. Network calls do not hold the
+send. Each publication captures the source revision with its content and sends
+a delivery only while that revision is still current, so a superseded End
+queued behind the broker never ends an activity that newer state keeps; the
+publication that newer state triggers delivers instead. The last-known cache is
+best effort and written outside the source lock; a damaged cache starts without
+last-known content and is replaced. Finished-turn state keeps its own durable
+owner. Token rotation, invalidation, retained state and tasks keep their
+existing owners and bounds. Network calls do not hold the
 device registry's storage lock.
 
 Old per-host activities on this device are retired when the unified service
@@ -105,7 +113,13 @@ Current Apple guidance: [Live Activities HIG](https://developer.apple.com/design
 [ActivityKit push updates](https://developer.apple.com/documentation/activitykit/starting-and-updating-live-activities-with-activitykit-push-notifications)
 and [ActivityKit lifecycle](https://developer.apple.com/documentation/activitykit/displaying-live-data-with-live-activities).
 Apple recommends one activity for multiple events and updates only when content
-changes. The payload remains within ActivityKit's 4 KiB limit.
+changes. ActivityKit limits static and dynamic data together to 4 KiB, so the
+attributes carry only the coordinator id and coverage is a count of
+unavailable hosts. The fleet view lists only declared hosts as unavailable; an
+unresolved tree owned by an undeclared host marks the host that reported it.
+Rows with a thread id over 64 bytes or a title over 80 characters or with
+control characters are omitted from presentation and still counted, so the
+largest supported state stays well under the limit.
 
 Verify exact row links, device-specific host sets, certified-empty End, unavailable
 and restored sources, stale reports from older connections, token rotation, legacy clients and

@@ -1,10 +1,10 @@
-use super::turn_state::{active_tasks_live_activity_snapshot, text_preview};
+use super::turn_state::active_tasks_live_activity_snapshot;
 use super::{ActiveTasksLiveActivitySnapshot, Gateway};
 use crate::conversation_marks::{Marks, ThreadMarks};
 use crate::providers::claude::{is_claude_thread_id, session_uuid_from_thread_id};
 use crate::push::{
     AttentionReason, AttentionRow, LiveActivityContent, MAX_ATTENTION_ROWS, PeerOutcome,
-    PeerReport, SourceProjection,
+    PeerReport, SourceProjection, attention_title,
 };
 use crate::storage::private_state;
 use crate::wire::cluster::AgentAddress;
@@ -20,7 +20,6 @@ use tracing::warn;
 
 const COALESCE_WINDOW: Duration = Duration::from_millis(250);
 const TITLE_READ_TIMEOUT: Duration = Duration::from_secs(2);
-const MAX_TITLE_CHARS: usize = 80;
 const MAX_FINISHED_TURNS: usize = 32;
 const MAX_REFERENCED_THREADS: usize = 32;
 
@@ -136,7 +135,7 @@ fn header_title(header: &Value) -> Option<String> {
         .filter_map(|field| header[field].as_str())
         .map(str::trim)
         .find(|title| !title.is_empty())
-        .map(|title| text_preview(title, MAX_TITLE_CHARS))
+        .map(attention_title)
 }
 
 fn source_projection(
@@ -257,10 +256,9 @@ impl Gateway {
         &self,
         host: &str,
         client: u64,
-        projection: Option<SourceProjection>,
+        report: Result<Option<SourceProjection>, String>,
     ) -> PeerOutcome {
-        self.apns
-            .receive_peer_live_activity(host, client, projection)
+        self.apns.receive_peer_live_activity(host, client, report)
     }
 
     pub(crate) fn peer_live_activity_closed(&self, host: &str, client: u64) {
@@ -500,7 +498,7 @@ impl Gateway {
                 .threads
                 .get(&row.thread_id)
                 .and_then(|marks| marks.pin_name.as_deref())
-                .map(|pinned| text_preview(pinned, MAX_TITLE_CHARS))
+                .map(attention_title)
                 .or(header);
         }
         Ok(projection)

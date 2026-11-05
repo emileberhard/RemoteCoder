@@ -23,6 +23,7 @@ pub(crate) use broker::{Delivered, DeliveryFailure, DeliveryOutcome};
 pub(crate) use live_activity::{
     AttentionReason, AttentionRow, FleetSnapshot, LiveActivityContent, LiveActivitySnapshot,
     MAX_ATTENTION_ROWS, MAX_FLEET_HOSTS, PeerOutcome, PeerReport, SourceProjection,
+    attention_title,
 };
 
 const PAYLOAD_KEY: &str = "remoteCoder.taskCompletionPayload";
@@ -493,11 +494,11 @@ impl PushService {
         &self,
         host: &str,
         client: u64,
-        projection: Option<SourceProjection>,
+        report: Result<Option<SourceProjection>, String>,
     ) -> PeerOutcome {
         let mut outcome = PeerOutcome::Stale;
         self.change_peers(|sources| {
-            let (received, changed) = sources.receive_peer(host, client, projection);
+            let (received, changed) = sources.receive_peer(host, client, report);
             outcome = received;
             changed
         });
@@ -542,10 +543,15 @@ impl PushService {
         if !is_current() {
             return;
         }
-        let (local, restoring) = {
+        let (local, restoring, revision) = {
             let sources = self.sources();
-            (sources.local_content().cloned(), sources.is_restoring())
+            (
+                sources.local_content().cloned(),
+                sources.is_restoring(),
+                *self.fleet_changes.borrow(),
+            )
         };
+        let is_current = || is_current() && *self.fleet_changes.borrow() == revision;
         match &local {
             None => {
                 self.live_activity_updates
@@ -571,7 +577,7 @@ impl PushService {
             }
         }
         if !restoring {
-            self.deliver_live_activity(&mut publication, changed, local, local_host, is_current)
+            self.deliver_live_activity(&mut publication, changed, local, local_host, &is_current)
                 .await;
         }
         let cache = self.sources().cache();

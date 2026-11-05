@@ -295,7 +295,7 @@ fn fleet_requests(broker: &MockBroker, seed: u8) -> Vec<Value> {
 }
 
 fn peer(service: &PushService, client: u64, projection: Option<SourceProjection>) -> PeerOutcome {
-    service.receive_peer_live_activity(PEER, client, projection)
+    service.receive_peer_live_activity(PEER, client, Ok(projection))
 }
 
 #[tokio::test]
@@ -429,6 +429,32 @@ async fn peer_currency_follows_the_newest_connection_and_restarts_as_last_known(
         PeerOutcome::Accepted
     );
     assert!(fleet(&service, &[PEER]).unavailable_host_ids.is_empty());
+    service.peer_live_activity_closed(PEER, 6);
+    assert_eq!(peer(&service, 5, Some(content(0, &[]))), PeerOutcome::Stale);
+    let closed = fleet(&service, &[PEER]);
+    assert_eq!(closed.content.active_task_count, 2);
+    assert_eq!(closed.unavailable_host_ids, vec![PEER.to_owned()]);
+    assert_eq!(
+        peer(&service, 7, Some(content(2, &[]))),
+        PeerOutcome::Accepted
+    );
+    assert!(fleet(&service, &[PEER]).unavailable_host_ids.is_empty());
+    assert!(matches!(
+        service.receive_peer_live_activity(PEER, 7, Err("unsupported cluster protocol".into())),
+        PeerOutcome::Rejected(_)
+    ));
+    let undecodable = fleet(&service, &[PEER]);
+    assert_eq!(undecodable.content.active_task_count, 2);
+    assert_eq!(undecodable.unavailable_host_ids, vec![PEER.to_owned()]);
+    assert_eq!(
+        service.receive_peer_live_activity(PEER, 6, Err("late".into())),
+        PeerOutcome::Stale
+    );
+    assert_eq!(
+        peer(&service, 8, Some(content(2, &[]))),
+        PeerOutcome::Accepted
+    );
+    assert!(fleet(&service, &[PEER]).unavailable_host_ids.is_empty());
     service
         .report_live_activity(Some(LOCAL), content(0, &[]))
         .await;
@@ -499,7 +525,7 @@ async fn delegated_trees_count_once_under_their_owning_root() {
     let mut idle_middle = delegated(&[], &[("b", third, "c")]);
     idle_middle.ancestry.insert("b".into(), "b".into());
     peer(&service, 1, Some(idle_middle));
-    service.receive_peer_live_activity(third, 2, Some(delegated(&["c"], &[])));
+    service.receive_peer_live_activity(third, 2, Ok(Some(delegated(&["c"], &[]))));
     let nested = fleet(&service, &hosts);
     assert_eq!(nested.content.active_task_count, 1);
     assert!(nested.unavailable_host_ids.is_empty());
@@ -801,4 +827,144 @@ async fn an_unavailable_local_source_blocks_delivery_until_its_fresh_projection_
         vec![json!("update"), json!("update"), json!("end")]
     );
     server.abort();
+}
+
+#[tokio::test]
+async fn a_fleet_delivery_superseded_while_queued_is_never_sent() {
+    let broker = MockBroker::new(Duration::from_millis(500), Vec::new());
+    let (service, server) = service(&broker).await;
+    for seed in 2..=6 {
+        service
+            .devices()
+            .register(fleet_device(seed, &[LOCAL, PEER]))
+            .await
+            .unwrap();
+    }
+    service
+        .report_live_activity(Some(LOCAL), content(0, &[]))
+        .await;
+    peer(&service, 1, Some(content(0, &[])));
+    tokio::join!(service.publish_fleet_live_activity(Some(LOCAL)), async {
+        while broker.in_flight.load(Ordering::SeqCst) < MAX_CONCURRENT_SENDS {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        assert_eq!(
+            peer(&service, 2, Some(content(1, &[]))),
+            PeerOutcome::Accepted
+        );
+    });
+    service.publish_fleet_live_activity(Some(LOCAL)).await;
+    let ends = broker
+        .requests()
+        .into_iter()
+        .filter(|request| request["event"] == "end")
+        .count();
+    assert_eq!(ends, MAX_CONCURRENT_SENDS);
+    for seed in 2..=6 {
+        let last = fleet_requests(&broker, seed).last().unwrap().clone();
+        assert_eq!(last["event"], "update");
+        assert_eq!(last["content_state"]["activeTaskCount"], 1);
+    }
+    server.abort();
+}
+
+#[tokio::test]
+async fn a_running_child_counts_under_its_idle_local_root() {
+    let service = PushService::fixture_disabled(Journal::disabled());
+    let mut local = delegated(&[], &[]);
+    local
+        .running_roots
+        .insert("local-child".into(), "parent".into());
+    local.content.active_task_count = 1;
+    service.report_live_activity(Some(LOCAL), local).await;
+    let mut remote = delegated(&[], &[]);
+    remote
+        .running_roots
+        .insert("peer-child".into(), "peer-root".into());
+    remote.content.active_task_count = 1;
+    peer(&service, 1, Some(remote.clone()));
+    let separate = fleet(&service, &[LOCAL, PEER]);
+    assert_eq!(separate.content.active_task_count, 2);
+    assert!(separate.unavailable_host_ids.is_empty());
+
+    remote.remote_parents.insert(
+        "peer-root".into(),
+        crate::wire::cluster::AgentAddress {
+            host_id: LOCAL.into(),
+            thread_id: "parent".into(),
+        },
+    );
+    peer(&service, 2, Some(remote));
+    let shared = fleet(&service, &[LOCAL, PEER]);
+    assert_eq!(shared.content.active_task_count, 1);
+    assert!(shared.unavailable_host_ids.is_empty());
+}
+
+#[tokio::test]
+async fn unresolved_work_owned_outside_the_declared_hosts_marks_its_reporter() {
+    let service = PushService::fixture_disabled(Journal::disabled());
+    service
+        .report_live_activity(Some(LOCAL), content(0, &[]))
+        .await;
+    peer(
+        &service,
+        1,
+        Some(delegated(&["child"], &[("child", UNJOINED, "parent")])),
+    );
+    let view = fleet(&service, &[LOCAL, PEER]);
+    assert_eq!(view.content.active_task_count, 1);
+    assert_eq!(view.unavailable_host_ids, vec![PEER.to_owned()]);
+}
+
+#[test]
+fn oversized_presentation_rows_are_omitted_but_still_counted() {
+    let service = PushService::fixture_disabled(Journal::disabled());
+    let mut oversized = content(0, &[("t".repeat(65).as_str(), 3), ("long", 2), ("kept", 1)]);
+    oversized.content.attention[1].title = Some("x".repeat(81));
+    oversized.content.attention[2].title = Some(super::attention_title(&"😀\n".repeat(80)));
+    assert_eq!(peer(&service, 1, Some(oversized)), PeerOutcome::Accepted);
+    let view = fleet(&service, &[PEER]);
+    assert_eq!(view.content.attention_count, 3);
+    assert_eq!(
+        view.content
+            .attention
+            .iter()
+            .map(|row| row.thread_id.as_str())
+            .collect::<Vec<_>>(),
+        ["kept"]
+    );
+
+    let mut control = content(0, &[("control", 1)]);
+    control.content.attention[0].title = Some("a\u{1}b".into());
+    assert_eq!(peer(&service, 2, Some(control)), PeerOutcome::Accepted);
+    let view = fleet(&service, &[PEER]);
+    assert_eq!(view.content.attention_count, 1);
+    assert!(view.content.attention.is_empty());
+}
+
+#[test]
+fn the_largest_supported_fleet_state_fits_the_activity_budget() {
+    let host = "ffffffff-ffff-4fff-8fff-ffffffffffff";
+    let title = super::attention_title(&"😀".repeat(200));
+    assert_eq!(title.chars().count(), 80);
+    let row = AttentionRow {
+        host_id: Some(host.into()),
+        thread_id: "\"".repeat(64),
+        title: Some(title),
+        reason: AttentionReason::FinishedUnread {
+            completed_at: i64::MIN,
+        },
+    };
+    let content = super::live_activity::FleetContent {
+        content: LiveActivityContent {
+            active_task_count: usize::MAX,
+            attention: vec![row; MAX_ATTENTION_ROWS],
+            attention_count: usize::MAX,
+        },
+        unavailable_host_ids: vec![host.to_owned(); MAX_FLEET_HOSTS],
+    };
+    let mut state = ActivityPayload::fleet(&content).state;
+    state["updatedAtUnixSeconds"] = Value::from(f64::MAX);
+    let encoded = serde_json::to_vec(&state).unwrap().len();
+    assert!(encoded <= 4096 - 512, "{encoded} bytes");
 }

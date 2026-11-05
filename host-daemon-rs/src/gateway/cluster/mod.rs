@@ -74,15 +74,14 @@ impl Gateway {
                 "this cluster method requires an authenticated member",
             ));
         };
-        let request: LiveActivityReportParams = decode(params)
-            .map_err(|error| cluster_error(ErrorClass::Refused, format!("{error:#}")))?;
-        if request.protocol != PROTOCOL {
-            return Err(cluster_error(
-                ErrorClass::Refused,
-                "unsupported cluster protocol",
-            ));
-        }
-        match self.receive_peer_live_activity(host, client, request.projection) {
+        let report = decode::<LiveActivityReportParams>(params)
+            .map_err(|error| format!("{error:#}"))
+            .and_then(|request| {
+                (request.protocol == PROTOCOL)
+                    .then_some(request.projection)
+                    .ok_or_else(|| "unsupported cluster protocol".to_owned())
+            });
+        match self.receive_peer_live_activity(host, client, report) {
             crate::push::PeerOutcome::Accepted => Ok(json!({"outcome":"accepted"})),
             crate::push::PeerOutcome::Stale => Ok(json!({"outcome":"stale"})),
             crate::push::PeerOutcome::Rejected(error) => {

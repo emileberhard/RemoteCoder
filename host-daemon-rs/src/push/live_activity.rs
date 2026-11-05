@@ -12,6 +12,8 @@ use crate::wire::cluster::AgentAddress;
 
 pub(crate) const MAX_ATTENTION_ROWS: usize = 3;
 pub(crate) const MAX_FLEET_HOSTS: usize = 32;
+const MAX_TITLE_CHARS: usize = 80;
+const MAX_THREAD_ID_BYTES: usize = 64;
 const MAX_STATE_BYTES: u64 = 1024 * 1024;
 const MAX_REPORT_BYTES: usize = 16 * 1024;
 const MAX_PEERS: usize = 32;
@@ -44,6 +46,34 @@ pub(crate) enum AttentionReason {
         )]
         completed_at: Option<i64>,
     },
+}
+
+pub(crate) fn attention_title(text: &str) -> String {
+    let flattened: String = text
+        .chars()
+        .map(|character| {
+            if character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect();
+    if flattened.chars().count() <= MAX_TITLE_CHARS {
+        return flattened;
+    }
+    let truncated: String = flattened.chars().take(MAX_TITLE_CHARS - 1).collect();
+    format!("{truncated}…")
+}
+
+impl AttentionRow {
+    fn is_bounded(&self) -> bool {
+        self.thread_id.len() <= MAX_THREAD_ID_BYTES
+            && !self.thread_id.chars().any(char::is_control)
+            && self.title.as_ref().is_none_or(|title| {
+                title.chars().count() <= MAX_TITLE_CHARS && !title.chars().any(char::is_control)
+            })
+    }
 }
 
 impl AttentionReason {
@@ -185,6 +215,7 @@ impl SourceProjection {
         self.running_roots
             .get(thread)
             .or_else(|| self.ancestry.get(thread))
+            .or_else(|| self.running_roots.values().find(|root| *root == thread))
     }
 }
 
@@ -346,7 +377,7 @@ impl Sources {
         &mut self,
         host: &str,
         client: u64,
-        projection: Option<SourceProjection>,
+        report: Result<Option<SourceProjection>, String>,
     ) -> (PeerOutcome, bool) {
         if self
             .peers
@@ -364,12 +395,16 @@ impl Sources {
         }
         let peer = self.peers.entry(host.to_owned()).or_default();
         let before = (peer.coverage(), peer.projection.clone());
-        let outcome = match projection
-            .as_ref()
-            .map(|projection| projection.validate_report(host))
-            .transpose()
-        {
-            Ok(_) => {
+        let report = report.and_then(|projection| {
+            projection
+                .as_ref()
+                .map(|projection| projection.validate_report(host))
+                .transpose()
+                .map(|_| projection)
+                .map_err(|error| format!("{error:#}"))
+        });
+        let outcome = match report {
+            Ok(projection) => {
                 peer.binding = Some(Binding {
                     client,
                     certifies: projection.is_some(),
@@ -384,7 +419,7 @@ impl Sources {
                     client,
                     certifies: false,
                 });
-                PeerOutcome::Rejected(format!("{error:#}"))
+                PeerOutcome::Rejected(error)
             }
         };
         let changed = before != (peer.coverage(), peer.projection.clone());
@@ -392,14 +427,17 @@ impl Sources {
     }
 
     pub(super) fn peer_connection_closed(&mut self, host: &str, client: u64) -> bool {
-        let Some(peer) = self.peers.get_mut(host) else {
-            return false;
-        };
-        if peer.binding.is_none_or(|binding| binding.client != client) {
-            return false;
+        match self
+            .peers
+            .get_mut(host)
+            .and_then(|peer| peer.binding.as_mut())
+        {
+            Some(binding) if binding.client == client && binding.certifies => {
+                binding.certifies = false;
+                true
+            }
+            _ => false,
         }
-        peer.binding = None;
-        true
     }
 
     pub(super) fn retain_peers(&mut self, members: &BTreeSet<String>) -> bool {
@@ -480,18 +518,30 @@ impl Sources {
                 trees.insert(match self.owning_tree(tree, local_host) {
                     Ok(root) => root,
                     Err(unresolved) => {
-                        if !unavailable_host_ids.contains(&unresolved.host_id) {
-                            unavailable_host_ids.push(unresolved.host_id.clone());
+                        let owner = if hosts.contains(&unresolved.host_id) {
+                            &unresolved.host_id
+                        } else {
+                            host
+                        };
+                        if !unavailable_host_ids.contains(owner) {
+                            unavailable_host_ids.push(owner.clone());
                         }
                         unresolved
                     }
                 });
             }
             attention_count += projection.content.attention_count;
-            attention.extend(projection.content.attention.iter().map(|row| AttentionRow {
-                host_id: Some(host.clone()),
-                ..row.clone()
-            }));
+            attention.extend(
+                projection
+                    .content
+                    .attention
+                    .iter()
+                    .filter(|row| row.is_bounded())
+                    .map(|row| AttentionRow {
+                        host_id: Some(host.clone()),
+                        ..row.clone()
+                    }),
+            );
         }
         attention.sort_by(AttentionRow::attention_order);
         attention.truncate(MAX_ATTENTION_ROWS);
