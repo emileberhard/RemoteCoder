@@ -98,15 +98,19 @@ Entry panel keeps unpinned automation runs out of its limited recents; explicitl
 pinned automations remain eligible. Collapse and Expand All change the currently
 displayed section types, including projects only while in Projects mode.
 
-New service-created conversations receive the existing `automation` purpose
-mark. An automation targeting an exact existing conversation preserves that
-conversation's purpose: a scheduled follow-up alone does not make it a dedicated
-automation chat. When deliberately adopting an existing conversation as a
-dedicated automation assistant, set its purpose explicitly through
-`conversation/marks/update` (`setPurpose`, `purpose: "automation"`). The gateway
-marks document owns this classification; neither client guesses it from titles,
-message content or schedules. Automation run history remains another entry
-point to the exact recorded conversation.
+The automation service owns classification intent. Service-created conversations
+and persistent automation targets receive the existing `automation` purpose
+mark, including an existing thread adopted or replaced with `session: "persistent"`.
+The service reconciles persistent targets through its existing recovery loop.
+Failed classification of a service-created thread remains in its run receipt
+and is retried without executing the agent again; classification health is
+separate from the execution outcome.
+
+An ordinary exact-thread follow-up (`session: "fresh"` with `session_id`)
+preserves the conversation's purpose. Validation and dry runs never change
+marks. The gateway marks document owns stored classification; neither client
+guesses it from titles, message content or schedules. Automation run history
+remains another entry point to the exact recorded conversation.
 
 Automations is reachable through the existing app navigation. Inventory shows
 active/paused/archived state, expiry or completion, trigger, next due time where applicable, and last

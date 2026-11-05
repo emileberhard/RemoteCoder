@@ -243,6 +243,38 @@ impl JobOwner {
             .await
     }
 
+    async fn validate_settings(&self, settings: &ExecutionSettings, new: bool) -> Result<()> {
+        match settings {
+            ExecutionSettings::Codex {
+                model_provider,
+                service_tier,
+                ..
+            } => {
+                ensure!(
+                    model_provider == "openai" || service_tier.is_none(),
+                    "External models have no service tiers"
+                );
+            }
+            ExecutionSettings::Claude {
+                model,
+                effort,
+                fast,
+            } => {
+                self.gateway()?
+                    .job_validate_claude_selection(
+                        &crate::providers::claude::ClaudeSelection {
+                            model: model.clone(),
+                            effort: effort.clone(),
+                            fast: *fast,
+                        },
+                        new,
+                    )
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) async fn start(
         &self,
         request: StartParams,
@@ -299,6 +331,7 @@ impl JobOwner {
                 "working directory must be inside the target host's read-only root"
             );
         }
+        self.validate_settings(&request.spec.settings, true).await?;
         let at_ms = now_ms();
         let job = JobRecord {
             agent_id: request.job_id.as_str().into(),
@@ -526,26 +559,8 @@ impl JobOwner {
             agent.tool_scope.as_ref() == Some(&tool_scope),
             "conversation's permission scope is unresolved or conflicts with its latest job"
         );
-        ensure!(
-            settings.provider() == original_settings.provider(),
-            "Continue cannot change provider"
-        );
-        if let (
-            ExecutionSettings::Codex {
-                model_provider: old,
-                ..
-            },
-            ExecutionSettings::Codex {
-                model_provider: new,
-                ..
-            },
-        ) = (&original_settings, &settings)
-        {
-            ensure!(
-                old == new,
-                "Continue cannot change the conversation's model provider"
-            );
-        }
+        original_settings.validate_continuation(&settings)?;
+        self.validate_settings(&settings, false).await?;
         let recipient = match request.recipient {
             ContinueRecipient::Previous => previous.recipient.clone(),
             ContinueRecipient::Current => recipient(&caller, &request.caller),
