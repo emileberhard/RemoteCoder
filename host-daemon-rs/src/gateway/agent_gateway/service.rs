@@ -1,9 +1,9 @@
 use super::{
-    ActionParams, AgentRef, AgentViewSnapshot, ClassifyParams, ClaudeHistorySnapshot, ListParams,
-    NativeCoverage, NativeExecution, NativeExecutionSnapshot, NativeInventory, ParentSnapshot,
-    decode, native_parent,
+    ActionParams, AgentRef, AgentViewSnapshot, ClassifyParams, ListParams, NativeCoverage,
+    NativeExecution, NativeExecutionSnapshot, NativeInventory, ParentSnapshot, decode,
+    native_parent,
 };
-use crate::agents::{Agent, Capabilities, Output, State, claude};
+use crate::agents::{Agent, Capabilities, Output, State};
 use crate::gateway::Gateway;
 use crate::gateway::agent_gateway::stop::CodexStop;
 use crate::rpc::error::RpcCode;
@@ -316,108 +316,18 @@ impl AgentService<'_> {
         })
     }
 
-    async fn native_claude_agents(&self, root: &str) -> Result<(claude::Projection, Option<u128>)> {
-        let uuid = crate::providers::claude::session_uuid_from_thread_id(root)
-            .context("Invalid Claude parent")?;
-        let path = self
-            .gateway
-            .claude_history
-            .session_path(uuid.into())
-            .await?;
-        let home = self.gateway.claude_settings.claude_home.clone();
-        let owned_root = root.to_owned();
-        let state_path = claude::store::state_path(&home, root)?;
-        let revision_path = path.clone();
-        let revision = tokio::task::spawn_blocking(move || {
-            claude::transcript::history_revision(&revision_path, &state_path)
-        })
-        .await??;
-        let cached = self
-            .gateway
-            .agents
-            .claude_history
-            .lock()
-            .await
-            .iter()
-            .find(|entry| entry.root == root && entry.revision == revision)
-            .map(|entry| entry.projection.clone());
-        let mut stored = if let Some(cached) = cached {
-            cached
-        } else {
-            let projection = tokio::task::spawn_blocking(move || {
-                claude::transcript::history(&home, &owned_root, &path)
-            })
-            .await??;
-            let mut cache = self.gateway.agents.claude_history.lock().await;
-            cache.retain(|entry| entry.root != root);
-            cache.push_back(ClaudeHistorySnapshot {
-                root: root.into(),
-                revision,
-                projection: projection.clone(),
-            });
-            while cache.len() > 16 {
-                cache.pop_front();
-            }
-            projection
-        };
-        for child in stored.children.values_mut() {
-            if child.state.is_running() {
-                child.state = State::Unknown;
-            }
-        }
-        let runtime = self.gateway.claude_agent();
-        let live = if let Some(runtime) = runtime {
-            if let Some((current, generation)) = runtime.child_agents(root).await {
-                stored.overlay(current);
-                Some(generation)
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-        Ok((stored, live))
-    }
-
     async fn native_agents(
         &self,
         root: &str,
         deadline: tokio::time::Instant,
     ) -> Result<NativeInventory> {
-        if !root.starts_with("claude_") {
-            return self.native_codex_agents_until(root, false, deadline).await;
+        if root.starts_with("claude_") {
+            return Ok(NativeInventory {
+                agents: Vec::new(),
+                coverage: NativeCoverage::default(),
+            });
         }
-        ensure!(
-            tokio::time::Instant::now() < deadline,
-            "Native agent inventory timed out"
-        );
-        let (projection, live) = tokio::time::timeout_at(deadline, self.native_claude_agents(root))
-            .await
-            .context("Native agent inventory timed out")??;
-        let coverage = NativeCoverage {
-            history_limited: projection.limited,
-            ..NativeCoverage::default()
-        };
-        let mut agents = projection.agents(
-            root,
-            live.is_some(),
-            &self.gateway.host_identity().await?.host_id,
-        );
-        if let Some(generation) = live {
-            for agent in &mut agents {
-                if let Some(task) = &agent.execution_id {
-                    let revision = projection
-                        .children
-                        .values()
-                        .find(|child| child.public_id(root) == agent.id)
-                        .map(|child| child.execution_revision)
-                        .unwrap_or(0);
-                    agent.execution_id = Some(format!("{generation}:{revision}:{task}"));
-                    agent.capabilities.stop = agent.state.is_running();
-                }
-            }
-        }
-        Ok(NativeInventory { agents, coverage })
+        self.native_codex_agents_until(root, false, deadline).await
     }
 
     pub(in crate::gateway) async fn list_agents(&self, root: &str) -> Result<Value> {
@@ -589,26 +499,6 @@ impl AgentService<'_> {
         if node.source == "runtime" {
             return self.read_runtime_agent(&node).await;
         }
-        if node.provider == "claude" {
-            let (projection, _) = self.native_claude_agents(&node.owner_thread_id).await?;
-            let child = projection
-                .children
-                .values()
-                .find(|child| child.public_id(&node.owner_thread_id) == node.id)
-                .context("Child disappeared")?
-                .clone();
-            let uuid = crate::providers::claude::session_uuid_from_thread_id(&node.owner_thread_id)
-                .context("Invalid parent")?;
-            let path = self
-                .gateway
-                .claude_history
-                .session_path(uuid.into())
-                .await?;
-            return Ok(serde_json::to_value(
-                tokio::task::spawn_blocking(move || claude::transcript::output(&child, &path))
-                    .await??,
-            )?);
-        }
         let thread = node.thread_id.context("Missing native thread")?;
         self.read_thread_output(&thread).await
     }
@@ -676,30 +566,6 @@ impl AgentService<'_> {
         );
         if node.source == "runtime" {
             return self.act_on_runtime_agent(&node, params).await;
-        }
-        if action == "stop" && node.provider == "claude" && node.capabilities.stop {
-            let execution = node
-                .execution_id
-                .as_deref()
-                .context("Missing child execution")?;
-            let (generation, task) = execution
-                .split_once(':')
-                .context("Invalid child execution")?;
-            let (revision, task) = task.split_once(':').context("Invalid child revision")?;
-            let runtime = self
-                .gateway
-                .claude_agent()
-                .context("Claude runtime unavailable")?;
-            runtime
-                .stop_child(
-                    &node.owner_thread_id,
-                    task,
-                    generation.parse()?,
-                    revision.parse()?,
-                )
-                .await
-                .map_err(anyhow::Error::msg)?;
-            return Ok(json!({"delivery":"stopRequested"}));
         }
         if action == "stop" && node.provider == "codex" && node.capabilities.stop {
             let thread = node.thread_id.as_deref().context("Missing native thread")?;

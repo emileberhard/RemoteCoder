@@ -284,7 +284,7 @@ impl ClaudeSupervisor {
         &self,
         thread_id: &str,
         process_group_id: i32,
-        mut runtime: ClaudeRuntime,
+        runtime: ClaudeRuntime,
         status: &str,
         stopped_turn: Option<StoppedTurn>,
     ) {
@@ -310,27 +310,6 @@ impl ClaudeSupervisor {
             status
         };
         self.terminate_group(Pid::from_raw(process_group_id)).await;
-        if status == "interrupted" {
-            runtime.children.stopped();
-        } else {
-            for child in runtime.children.children.values_mut() {
-                if child.state.is_running() {
-                    child.state = crate::agents::State::Unknown;
-                }
-            }
-        }
-        let home = self.settings.claude_home.clone();
-        let owned_thread = thread_id.to_owned();
-        let generation = runtime.children_generation;
-        let snapshot = runtime.children.clone();
-        match tokio::task::spawn_blocking(move || {
-            crate::agents::claude::store::save(&home, &owned_thread, generation, snapshot)
-        })
-        .await
-        {
-            Ok(Ok(())) => {}
-            error => warn!(thread_id, ?error, "Could not persist stopped child state"),
-        }
         let Some(stopped_turn) = stopped_turn else {
             self.record_runtime_stop(thread_id, process_group_id, status, &runtime, None);
             return;

@@ -687,8 +687,6 @@ async fn placeholder_runtime(
         initialized: true,
         active_turn: None,
         background_tasks: Vec::new(),
-        children: crate::agents::claude::Projection::default(),
-        children_generation: 1,
         lifecycle_generation: 1,
         _mcp: None,
         idle: None,

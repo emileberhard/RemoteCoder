@@ -8,83 +8,10 @@ use crate::rpc::error::RpcCode;
 use futures_util::StreamExt;
 use nix::sys::signal::Signal;
 use nix::unistd::Pid;
-use serde_json::{Value, json};
+use serde_json::json;
 use tracing::{error, warn};
 
 impl ClaudeSupervisor {
-    pub(crate) async fn child_agents(
-        &self,
-        thread: &str,
-    ) -> Option<(crate::agents::claude::Projection, u128)> {
-        self.runtimes
-            .lock()
-            .await
-            .get(thread)
-            .map(|r| (r.children.clone(), r.children_generation))
-    }
-
-    pub(crate) async fn stop_child(
-        &self,
-        thread: &str,
-        task: &str,
-        generation: u128,
-        revision: u64,
-    ) -> Result<Value, String> {
-        let _lifecycle = self.lifecycles.lock(thread).await;
-        let group = {
-            let runtimes = self.runtimes.lock().await;
-            let runtime = runtimes
-                .get(thread)
-                .filter(|runtime| runtime.children_generation == generation)
-                .ok_or("Claude execution changed; refresh before stopping")?;
-            if !runtime.children.children.values().any(|child| {
-                child.task_id.as_deref() == Some(task)
-                    && child.execution_revision == revision
-                    && child.state.is_running()
-            }) {
-                return Err("This child task is no longer running".into());
-            }
-            runtime.process_group_id
-        };
-        self.runtime_control(thread, group, json!({"subtype":"stop_task","task_id":task}))
-            .await
-            .map_err(|error| error.message)
-    }
-
-    pub(super) async fn observe_child_agents(&self, thread: &str, group: i32, value: &Value) {
-        if !matches!(
-            value["type"].as_str(),
-            Some("assistant" | "user" | "system")
-        ) {
-            return;
-        }
-        let snapshot = {
-            let mut runtimes = self.runtimes.lock().await;
-            let Some(runtime) = runtimes
-                .get_mut(thread)
-                .filter(|r| r.process_group_id == group)
-            else {
-                return;
-            };
-            runtime
-                .children
-                .ingest(value)
-                .then(|| (runtime.children_generation, runtime.children.clone()))
-        };
-        if let Some((generation, snapshot)) = snapshot {
-            let home = self.settings.claude_home.clone();
-            let owned_thread = thread.to_owned();
-            match tokio::task::spawn_blocking(move || {
-                crate::agents::claude::store::save(&home, &owned_thread, generation, snapshot)
-            })
-            .await
-            {
-                Ok(Ok(())) => {}
-                error => warn!(thread, ?error, "Could not persist Claude child state"),
-            }
-        }
-    }
-
     /// Interrupts the thread's running turn, only when it is or continues
     /// `turn_id`, and retires its warm process. With no process running,
     /// `suspended` lists the turns this account's pending resumes continue; a
