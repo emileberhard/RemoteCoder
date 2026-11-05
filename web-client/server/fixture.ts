@@ -89,6 +89,38 @@ const initialItems = [
       },
     ],
   },
+  {
+    type: "imageView",
+    id: "viewed-image-1",
+    path: "/fixture/vision.svg",
+    rcMedia: [{ path: "/fixture/vision.svg", mimeType: "image/svg+xml", name: "Viewed image" }],
+  },
+  {
+    type: "mcpToolCall",
+    id: "mcp-image-1",
+    server: "computer",
+    tool: "screenshot",
+    status: "completed",
+    arguments: {},
+    result: {
+      content: [{ type: "text", text: "Screenshot captured" }],
+      structuredContent: null,
+      _meta: null,
+    },
+    error: null,
+    rcMedia: [{ path: "/fixture/vision.svg", mimeType: "image/svg+xml", name: "Computer screenshot" }],
+  },
+  {
+    type: "dynamicToolCall",
+    id: "dynamic-image-1",
+    tool: "inspect",
+    namespace: "tools",
+    status: "completed",
+    arguments: {},
+    success: true,
+    contentItems: [{ type: "inputImage", imageUrl: "" }],
+    rcMedia: [{ path: "/fixture/vision.svg", mimeType: "image/svg+xml", name: "Tool image" }],
+  },
 ];
 function database(hostId: string) {
   const existing = databases.get(hostId);

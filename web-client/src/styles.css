@@ -1103,6 +1103,44 @@ button.primary:hover:not(:disabled) {
   object-fit: contain;
   border-radius: 12px;
 }
+.viewed-media {
+  margin: 12px 0;
+  min-width: 0;
+}
+.viewed-media figcaption {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  margin-bottom: 6px;
+}
+.viewed-media figcaption span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.viewed-media-preview {
+  display: block;
+  padding: 0;
+  max-width: 100%;
+  cursor: zoom-in;
+}
+.viewed-media-status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 180px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.viewed-media-full {
+  display: block;
+  max-width: 100%;
+  max-height: 75dvh;
+  margin: auto;
+  object-fit: contain;
+}
 .attachment-link {
   display: inline-flex;
   align-items: center;

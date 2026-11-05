@@ -1,4 +1,4 @@
-import { publishedVisual, type VisualPublication } from "../../../protocol/boundary";
+import { publishedVisual, type ToolMedia, type VisualPublication } from "../../../protocol/boundary";
 import type { Row } from "../../../workspace/conversation-session";
 
 const narrativeTypes = new Set([
@@ -11,6 +11,7 @@ const narrativeTypes = new Set([
 ]);
 export type Segment =
   | { kind: "row"; row: Row; reply: boolean; visual?: VisualPublication }
+  | { kind: "media"; row: Row; media: ToolMedia[] }
   | { kind: "timeline"; rows: Row[]; live: boolean };
 function isTimelineEvent(row: Row) {
   const item = row.entry.item;
@@ -47,6 +48,17 @@ export function timelineSegments(rows: Row[], turnActive: boolean): Segment[] {
       steers.push(row);
       continue;
     }
+    const item = row.entry.item;
+    if (item.type === "imageView") {
+      segments.push({
+        kind: "media",
+        row,
+        media: item.rcMedia?.length
+          ? item.rcMedia.map((media) => ({ ...media, name: media.name ?? item.path.split("/").at(-1) }))
+          : [{ path: item.path, mimeType: "image/*", name: item.path.split("/").at(-1) }],
+      });
+      continue;
+    }
     const last = segments.at(-1);
     if (!isTimelineEvent(row)) segments.push({ kind: "row", row, reply: false });
     else if (last?.kind === "timeline") last.rows.push(row);
@@ -58,6 +70,12 @@ export function timelineSegments(rows: Row[], turnActive: boolean): Segment[] {
       !placements.get(row.entry.turnId)?.has(visual.digest)
     )
       segments.push({ kind: "row", row, reply: false, visual });
+    if ((item.type === "mcpToolCall" || item.type === "dynamicToolCall") && item.rcMedia?.length)
+      segments.push({
+        kind: "media",
+        row,
+        media: item.rcMedia.map((media) => ({ ...media, name: media.name ?? item.tool })),
+      });
   }
   const last = segments.at(-1);
   if (turnActive && last?.kind === "timeline") last.live = true;
