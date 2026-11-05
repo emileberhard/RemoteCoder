@@ -104,10 +104,24 @@ function ViewedImage({
       {error ? (
         <span className="viewed-media-status" role="status">
           <span>{error}</span>
-          <button type="button" onClick={retry}>
+          <button
+            type="button"
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              retry();
+            }}
+          >
             Retry
           </button>
-          <button type="button" onClick={() => run(() => downloadFile(hostId, media.path, cwd))}>
+          <button
+            type="button"
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              run(() => downloadFile(hostId, media.path, cwd));
+            }}
+          >
             Download
           </button>
         </span>
@@ -116,7 +130,11 @@ function ViewedImage({
           type="button"
           className="viewed-media-preview"
           aria-label={`Open ${caption}`}
-          onClick={() => setExpanded(true)}
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            setExpanded(true);
+          }}
         >
           <img
             className="message-image"

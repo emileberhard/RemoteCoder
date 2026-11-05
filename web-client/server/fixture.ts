@@ -99,7 +99,7 @@ const initialItems = [
   },
   agent(
     "artifacts",
-    "Local artifacts: [Source](file:///fixture/example.txt#L1)\n\n![Markdown screenshot](file:///fixture/vision.svg)",
+    "Local artifacts: [Source](file:///fixture/example.txt#L1)\n\n[![Markdown screenshot](file:///fixture/vision.svg)](file:///fixture/vision.svg)",
   ),
   {
     type: "subAgentActivity",
