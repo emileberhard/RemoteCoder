@@ -292,7 +292,9 @@ fn intent_row(intent: &RemoteIntent) -> Result<Agent> {
         .into(),
         source: "remote_intent".into(),
         title: match &intent.request.operation {
-            AdmissionOperation::Start(spec) => spec.display_title().unwrap_or_else(|| "Agent".into()),
+            AdmissionOperation::Start(spec) => {
+                spec.display_title().unwrap_or_else(|| "Agent".into())
+            }
             AdmissionOperation::Continue(_) => "Agent".into(),
         },
         model: None,

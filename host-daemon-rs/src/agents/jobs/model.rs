@@ -274,7 +274,11 @@ pub(crate) struct JobSpec {
 impl JobSpec {
     pub(crate) fn display_title(&self) -> Option<String> {
         self.title.clone().or_else(|| {
-            let line = self.prompt.lines().map(str::trim).find(|line| !line.is_empty())?;
+            let line = self
+                .prompt
+                .lines()
+                .map(str::trim)
+                .find(|line| !line.is_empty())?;
             Some(line.chars().take(120).collect())
         })
     }
@@ -692,10 +696,15 @@ mod display_title_tests {
             Some("Review the branch".into())
         );
         assert_eq!(
-            spec(&"x".repeat(300), None).display_title().map(|title| title.chars().count()),
+            spec(&"x".repeat(300), None)
+                .display_title()
+                .map(|title| title.chars().count()),
             Some(120)
         );
-        assert_eq!(spec("Prompt", Some("Reviewer")).display_title(), Some("Reviewer".into()));
+        assert_eq!(
+            spec("Prompt", Some("Reviewer")).display_title(),
+            Some("Reviewer".into())
+        );
         assert_eq!(spec(" \n ", None).display_title(), None);
     }
 }
