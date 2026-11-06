@@ -68,8 +68,10 @@ To enable the operator integration, configure all four values together:
 - `RC_CODEX_GATEWAY_ROUTER_KEY_FILE`: absolute path to a private host key file.
 - `RC_CODEX_GATEWAY_ROUTER_CODEX_ACCOUNT`: exact router Codex account ID.
 
-A partial configuration fails validation. Both URLs must be HTTP(S) origins
-without credentials, a path, query or fragment. `scripts/install-router-key.zsh`
+A partial configuration fails validation. Optionally,
+`RC_CODEX_GATEWAY_ROUTER_SPEECH_URL` gives the speech relay its own inference
+origin; it defaults to `RC_CODEX_GATEWAY_ROUTER_URL`. Every URL must be an HTTP(S)
+origin without credentials, a path, query or fragment. `scripts/install-router-key.zsh`
 takes inference and accounts origins as arguments and the key on stdin. Never
 place it in argv.
 

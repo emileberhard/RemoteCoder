@@ -360,7 +360,7 @@ impl SpeechRelay {
             }
         };
         let upstream = upstream_url(
-            router.inference_base(),
+            router.speech_base(),
             operation.origin,
             &path,
             uri.query(),

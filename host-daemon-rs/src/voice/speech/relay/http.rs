@@ -127,7 +127,7 @@ impl SpeechRelay {
                             .router
                             .as_ref()
                             .expect("admitted relay has a router")
-                            .inference_base(),
+                            .speech_base(),
                     )
                 } else {
                     value.clone()

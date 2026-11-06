@@ -9,6 +9,7 @@ pub(crate) const ROUTER_BUDGET: Duration = Duration::from_secs(8);
 #[derive(Clone, Debug)]
 pub(crate) struct RouterConfig {
     url: reqwest::Url,
+    speech_url: reqwest::Url,
     accounts_url: reqwest::Url,
     key_file: PathBuf,
     codex_account: String,
@@ -18,6 +19,7 @@ impl RouterConfig {
     pub(crate) fn load(sources: &ConfigSources) -> Result<Option<Self>> {
         if ![
             "RC_CODEX_GATEWAY_ROUTER_URL",
+            "RC_CODEX_GATEWAY_ROUTER_SPEECH_URL",
             "RC_CODEX_GATEWAY_ROUTER_ACCOUNTS_URL",
             "RC_CODEX_GATEWAY_ROUTER_KEY_FILE",
             "RC_CODEX_GATEWAY_ROUTER_CODEX_ACCOUNT",
@@ -45,8 +47,14 @@ impl RouterConfig {
                     .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-'),
             "RC_CODEX_GATEWAY_ROUTER_CODEX_ACCOUNT must be an llm-router Codex account id"
         );
+        let url = listener(sources, "RC_CODEX_GATEWAY_ROUTER_URL")?;
+        let speech_url = match sources.raw("RC_CODEX_GATEWAY_ROUTER_SPEECH_URL") {
+            Some(_) => listener(sources, "RC_CODEX_GATEWAY_ROUTER_SPEECH_URL")?,
+            None => url.clone(),
+        };
         Ok(Some(Self {
-            url: listener(sources, "RC_CODEX_GATEWAY_ROUTER_URL")?,
+            url,
+            speech_url,
             accounts_url: listener(sources, "RC_CODEX_GATEWAY_ROUTER_ACCOUNTS_URL")?,
             key_file,
             codex_account,
@@ -58,6 +66,7 @@ impl RouterConfig {
         let url = reqwest::Url::parse(&format!("http://{address}/")).unwrap();
         Self {
             accounts_url: url.clone(),
+            speech_url: url.clone(),
             url,
             key_file,
             codex_account: "workspace-a".into(),
@@ -80,6 +89,10 @@ impl RouterConfig {
 
     pub(crate) fn inference_base(&self) -> &str {
         self.url.as_str().trim_end_matches('/')
+    }
+
+    pub(crate) fn speech_base(&self) -> &str {
+        self.speech_url.as_str().trim_end_matches('/')
     }
 
     pub(crate) fn key(&self) -> Result<String> {
@@ -403,7 +416,43 @@ mod tests {
         ]));
         let config = RouterConfig::load(&sources).unwrap().unwrap();
         assert_eq!(config.inference_base(), "https://router.example.com:42069");
+        assert_eq!(config.speech_base(), "https://router.example.com:42069");
         assert_eq!(config.codex_account(), "workspace-a");
+        let mut vars: HashMap<String, String> = [
+            (
+                "RC_CODEX_GATEWAY_ROUTER_URL",
+                "https://router.example.com:42069",
+            ),
+            (
+                "RC_CODEX_GATEWAY_ROUTER_ACCOUNTS_URL",
+                "https://router.example.com:42070",
+            ),
+            ("RC_CODEX_GATEWAY_ROUTER_KEY_FILE", "/tmp/key"),
+            ("RC_CODEX_GATEWAY_ROUTER_CODEX_ACCOUNT", "workspace-a"),
+            (
+                "RC_CODEX_GATEWAY_ROUTER_SPEECH_URL",
+                "http://router.tailnet.example:42069",
+            ),
+        ]
+        .into_iter()
+        .map(|(name, value)| (name.into(), value.into()))
+        .collect();
+        let config = RouterConfig::load(&ConfigSources::from_file_vars(vars.clone()))
+            .unwrap()
+            .unwrap();
+        assert_eq!(config.inference_base(), "https://router.example.com:42069");
+        assert_eq!(config.speech_base(), "http://router.tailnet.example:42069");
+        vars.insert(
+            "RC_CODEX_GATEWAY_ROUTER_SPEECH_URL".into(),
+            "http://router.tailnet.example:42069/vendors".into(),
+        );
+        let error = RouterConfig::load(&ConfigSources::from_file_vars(vars)).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("RC_CODEX_GATEWAY_ROUTER_SPEECH_URL"),
+            "{error}"
+        );
         assert!(
             RouterConfig::load(&ConfigSources::from_file_vars(HashMap::new()))
                 .unwrap()

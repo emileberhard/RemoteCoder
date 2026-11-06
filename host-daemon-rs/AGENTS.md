@@ -805,7 +805,11 @@ blocks startup or provider journal retirement.
   no speech-provider key is ever baked into or sent to the app.
 - The caller's gateway bearer authenticates. The gateway forwards to llm-router's
   `/vendors/<vendor>/<path>` with the host's router key in the provider's own
-  auth header; the router owns provider keys. `README.md` (*Speech providers*)
+  auth header; the router owns provider keys. Speech uses
+  `RC_CODEX_GATEWAY_ROUTER_SPEECH_URL` when set, otherwise the inference origin:
+  a proxy in front of the router that buffers request bodies or caps response
+  waits (Cloudflare buffers the first 1 MiB and returns 524 after 125 s) breaks
+  progressive uploads, so operators point it at a direct origin. `README.md` (*Speech providers*)
   owns the vendor mapping.
 - A fixed operation allowlist (`src/voice/speech/routes.rs`) admits only the endpoints SpeechKit
   uses. `RC_CODEX_GATEWAY_SPEECH_CLIENTS` is `all` when unset, or a
