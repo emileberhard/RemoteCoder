@@ -104,10 +104,6 @@ pub(crate) struct SpawnArgs {
     service_tier: Option<String>,
     #[arg(long, conflicts_with = "service_tier")]
     fast: bool,
-    #[arg(long, value_parser = ["full-access", "read-only"])]
-    preset: Option<String>,
-    #[arg(long)]
-    sandbox_root: Option<PathBuf>,
     #[arg(long)]
     cwd: Option<PathBuf>,
     #[arg(long)]
@@ -483,13 +479,9 @@ async fn spawn(endpoint: &Endpoint, arguments: SpawnArgs) -> Result<Value> {
             }
         }
         let historical;
-        let (original_settings, original_scope) = match &source.job.spec {
-            SpecEvidence::Known { spec } => (&spec.settings, &spec.tool_scope),
-            SpecEvidence::Expired {
-                settings,
-                tool_scope,
-                ..
-            } => (settings, tool_scope),
+        let original_settings = match &source.job.spec {
+            SpecEvidence::Known { spec } => &spec.settings,
+            SpecEvidence::Expired { settings, .. } => settings,
             SpecEvidence::Unknown { .. } => {
                 let agent = source
                     .agent
@@ -522,28 +514,9 @@ async fn spawn(endpoint: &Endpoint, arguments: SpawnArgs) -> Result<Value> {
                         .map(str::to_owned),
                     fast: false,
                 };
-                (
-                    &historical,
-                    agent
-                        .tool_scope
-                        .as_ref()
-                        .context("Historical permission scope is unresolved")?,
-                )
+                &historical
             }
         };
-        if let Some(preset) = &arguments.preset {
-            ensure!(
-                matches!(
-                    (preset.as_str(), original_scope),
-                    ("full-access", ToolScope::Full) | ("read-only", ToolScope::ReadOnly { .. })
-                ),
-                "A continuation cannot change the conversation's permission scope"
-            );
-        }
-        ensure!(
-            arguments.sandbox_root.is_none(),
-            "A continuation keeps its recorded sandbox root"
-        );
         let catalog = if (arguments.model_override.is_some()
             || arguments.effort.is_some()
             || tier.is_some())
@@ -605,33 +578,6 @@ async fn spawn(endpoint: &Endpoint, arguments: SpawnArgs) -> Result<Value> {
         ensure!(cwd.is_dir(), "Working directory must be a directory");
         cwd
     };
-    let tool_scope = match arguments.preset.as_deref().unwrap_or("full-access") {
-        "full-access" => {
-            ensure!(
-                arguments.sandbox_root.is_none(),
-                "--sandbox-root requires --preset read-only"
-            );
-            ToolScope::Full
-        }
-        "read-only" => {
-            let requested_root = arguments
-                .sandbox_root
-                .context("Read-only agents require --sandbox-root")?;
-            let root = if endpoint.host.is_some() {
-                requested_root
-            } else {
-                requested_root.canonicalize()?
-            };
-            ensure!(
-                root.is_absolute()
-                    && cwd.starts_with(&root)
-                    && (endpoint.host.is_some() || root.is_dir()),
-                "Working directory must be inside the read-only sandbox root"
-            );
-            ToolScope::ReadOnly { root }
-        }
-        _ => bail!("Unsupported permission preset"),
-    };
     let params = StartParams {
         job_id: new_job_id(provider, arguments.job_id)?,
         spec: JobSpec {
@@ -645,7 +591,7 @@ async fn spawn(endpoint: &Endpoint, arguments: SpawnArgs) -> Result<Value> {
                 tier,
             )
             .await?,
-            tool_scope,
+            tool_scope: ToolScope::Full,
             title: arguments.title,
         },
         caller,

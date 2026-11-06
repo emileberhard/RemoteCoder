@@ -286,7 +286,9 @@ retained provider environments no longer name per-job sockets. Full-access clien
 credential owner for other operations. This preserves the current same-user
 trust boundary, not a hostile same-UID security sandbox.
 
-Local and remote starts share caller proof and scope inheritance. An unrestricted
+Local and remote starts share caller proof and scope inheritance. `spawn_agent`
+has no read-only preset: new launches use full scope, and read-only scope remains
+only on retained conversations launched before its removal. An unrestricted
 native caller uses the existing full-access coordination contract; a managed
 read-only caller's child retains that root and cannot widen its scope on a hop.
 The receiver validates target paths inside that root. Parent tags grant no scope.
