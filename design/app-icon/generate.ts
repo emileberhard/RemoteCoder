@@ -1,6 +1,8 @@
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { execFile } from "node:child_process";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 
 const SIZE = 1024;
 
@@ -14,6 +16,15 @@ type Background =
 interface Layer {
   readonly name: string;
   readonly markup: string;
+  readonly group?: number;
+  readonly blend?: "screen" | "plus-lighter" | "multiply";
+  readonly glass?: boolean;
+  readonly fill?: Background;
+}
+
+interface GroupStyle {
+  readonly translucency?: number;
+  readonly shadow?: number;
 }
 
 interface Variant {
@@ -22,6 +33,7 @@ interface Variant {
   readonly idea: string;
   readonly background: Background;
   readonly layers: readonly Layer[];
+  readonly groups?: readonly GroupStyle[];
 }
 
 const palette = {
@@ -412,86 +424,288 @@ const streck = (): Variant => ({
   ],
 });
 
-const rounds: Readonly<Record<string, readonly Variant[]>> = {
-  "round-1": [klassisk(), mossan(), prompt(), stugan(), pratbubbla(), rost(), spar(), manskara(), stjarnbild(), gnista()],
-  "round-2": [prompt(), streck(), fonstret(), taket(), viska(), dorren(), klotet(), lillaT(), svarm(), vasen()],
+const roundedPolygon = (points: readonly Point[], fill: string, radius: number) =>
+  `<path d="${pointsPath(points)}" fill="${fill}" stroke="${fill}" stroke-width="${radius}" stroke-linejoin="round"/>`;
+
+const solid = (color: string): Background => ({ kind: "solid", color });
+
+const primitiv = (): Variant => ({
+  id: "3-01-primitiv",
+  title: "1 · Primitiv",
+  idea: "The tomte from three primitive shapes: cone, glass nose, beard. Lykta's geometry, on black.",
+  background: solid("#000000"),
+  groups: [{ shadow: 0.5 }, { shadow: 0.5 }],
+  layers: [
+    { name: "beard", group: 1, fill: vertical("#FFFFFF", "#D9E2EE"), markup: `<path d="M300 596 H724 C724 768 626 868 512 868 C398 868 300 768 300 596 Z" fill="#E6ECF5"/>` },
+    { name: "cone", group: 1, fill: vertical("#FFB547", "#FF7A1A"), markup: roundedPolygon([[512, 176], [736, 604], [288, 604]], "#FF9F1C", 56) },
+    { name: "nose", group: 0, glass: true, fill: solid("#FF4F8B"), markup: circle([512, 604], 86, "#FF4F8B") },
+  ],
+});
+
+const promptGlas = (): Variant => ({
+  id: "3-02-prompt-glas",
+  title: "2 · Prompt i glas",
+  idea: "Your favourite C, rebuilt in Liquid Glass with a warm gradient hat.",
+  background: solid("#000000"),
+  groups: [{ shadow: 0.4 }, { translucency: 0.12, shadow: 0.5 }],
+  layers: [
+    { name: "hat", group: 1, glass: true, fill: vertical("#FFC85A", "#FF6A1A"), markup: hat({ at: [512, 640], scale: 3.8 }, palette.ember) },
+    { name: "cursor", group: 0, fill: solid("#FF9F1C"), markup: `<rect x="372" y="744" width="280" height="58" rx="29" fill="${palette.ember}"/>` },
+  ],
+});
+
+const promptBla = (): Variant => ({
+  id: "3-03-prompt-bla",
+  title: "3 · Prompt, natt",
+  idea: "C in a night colourway: amber glass hat, cyan cursor on deep blue. Same idea, calmer.",
+  background: vertical("#122C6B", "#030A1F"),
+  groups: [{ shadow: 0.4 }, { translucency: 0.12, shadow: 0.5 }],
+  layers: [
+    { name: "hat", group: 1, glass: true, fill: vertical("#FFD96E", "#FF9F1C"), markup: hat({ at: [512, 640], scale: 3.8 }, palette.amber) },
+    { name: "cursor", group: 0, fill: solid("#5EE6FF"), markup: `<rect x="372" y="744" width="280" height="58" rx="29" fill="#5EE6FF"/>` },
+  ],
+});
+
+const tomtar = (): Variant => ({
+  id: "3-04-tomtar",
+  title: "4 · Tomtar",
+  idea: "Three hats overlapping: many agents, one household. Lykta's light-blending on black.",
+  background: solid("#000000"),
+  groups: [{ translucency: 0.35, shadow: 0.5 }],
+  layers: [
+    { name: "pink", blend: "screen", markup: hat({ at: [328, 776], scale: 2.6, rotate: -6 }, "#FF4F8B") },
+    { name: "blue", blend: "screen", markup: hat({ at: [706, 770], scale: 2.9, rotate: 5 }, "#3D7BFF") },
+    { name: "amber", blend: "screen", markup: hat({ at: [512, 824], scale: 4.0 }, "#FFB000") },
+  ],
+});
+
+const duo = (): Variant => ({
+  id: "3-05-duo",
+  title: "5 · Duo",
+  idea: "Two shapes, like Papo: the hat and a glass nose. As minimal as a tomte gets.",
+  background: vertical("#43206E", "#1C0B36"),
+  groups: [{ translucency: 0.3, shadow: 0.5 }, { shadow: 0.5 }],
+  layers: [
+    { name: "hat", group: 1, fill: vertical("#FF9A6B", "#FF5A4E"), markup: hat({ at: [512, 700], scale: 4.4 }, "#FF7A59") },
+    { name: "nose", group: 0, glass: true, fill: solid("#FFE3D6"), markup: circle([512, 702], 112, "#FFE3D6") },
+  ],
+});
+
+const pratskagg = (): Variant => ({
+  id: "3-06-pratskagg",
+  title: "6 · Pratskägg",
+  idea: "The beard is a speech bubble pointing down. A tomte that talks, Mumla's sibling.",
+  background: vertical("#4A86FF", "#1B2B8F"),
+  groups: [{ shadow: 0.5 }, { translucency: 0.2, shadow: 0.5 }],
+  layers: [
+    {
+      name: "bubble",
+      group: 1,
+      glass: true,
+      fill: vertical("#FFFFFF", "#DCE6FF"),
+      markup: `<path d="M318 520 H706 Q768 520 768 582 V694 Q768 772 690 772 H578 L512 872 L446 772 H334 Q256 772 256 694 V582 Q256 520 318 520 Z" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="20" stroke-linejoin="round"/>`,
+    },
+    { name: "dots", group: 1, fill: solid("#3D6BFF"), markup: [422, 512, 602].map((x) => circle([x, 650], 30, "#3D6BFF")).join("") },
+    { name: "hat", group: 0, glass: true, fill: vertical("#FFB547", "#FF4F7B"), markup: hat({ at: [512, 556], scale: 3.3 }, "#FF8A3D") },
+  ],
+});
+
+const fonsterGlas = (): Variant => ({
+  id: "3-07-fonster",
+  title: "7 · Fönster",
+  idea: "A tomte's silhouette in a glowing glass window. Night shift, two shapes.",
+  background: vertical("#1C2756", "#070B1E"),
+  groups: [{ shadow: 0.4 }, { translucency: 0.15, shadow: 0.5 }],
+  layers: [
+    { name: "window", group: 1, glass: true, fill: vertical("#FFD86E", "#FF9F1C"), markup: `<rect x="236" y="226" width="552" height="600" rx="96" fill="#FFC34D"/>` },
+    { name: "tomte", group: 0, fill: solid("#151B45"), markup: hat({ at: [500, 828], scale: 3.3, rotate: -3 }, "#151B45") },
+  ],
+});
+
+const fullmane = (): Variant => ({
+  id: "3-08-fullmane",
+  title: "8 · Fullmåne",
+  idea: "The hat against a huge full moon. A poster silhouette: awake while everyone sleeps.",
+  background: vertical("#16306A", "#050B1F"),
+  groups: [{ shadow: 0.5 }, { translucency: 0.15, shadow: 0.4 }],
+  layers: [
+    { name: "moon", group: 1, glass: true, fill: vertical("#FFF3C9", "#FFCF66"), markup: circle([512, 452], 292, "#FFE7A8") },
+    { name: "hat", group: 0, fill: vertical("#FF8A3D", "#FF4F5E"), markup: hat({ at: [512, 906], scale: 4.4 }, "#FF6A3D") },
+  ],
+});
+
+const gnistaGlas = (): Variant => {
+  const placement: HatPlacement = { at: [488, 812], scale: 4.8 };
+  return {
+    id: "3-09-gnista",
+    title: "9 · Gnista",
+    idea: "A glass hat whose drooping tip ends in a spark: tomte meets AI, on C's black.",
+    background: solid("#000000"),
+    groups: [{ shadow: 0.4 }, { translucency: 0.15, shadow: 0.5 }],
+    layers: [
+      { name: "hat", group: 1, glass: true, fill: vertical("#FFB547", "#FF4F7B"), markup: hat(placement, "#FF8A3D") },
+      { name: "spark", group: 0, fill: solid("#FFE07A"), markup: sparkle(hatPoint(placement, HAT_TIP), 104, "#FFE07A") },
+    ],
+  };
 };
 
-const backgroundMarkup = (background: Background) => {
-  if (background.kind === "solid") {
-    return { defs: "", fill: `<rect width="${SIZE}" height="${SIZE}" fill="${background.color}"/>` };
-  }
-  const stops = background.stops.map(([offset, color]) => `<stop offset="${offset}" stop-color="${color}"/>`).join("");
-  const [x1, y1] = background.from;
-  const [x2, y2] = background.to;
+const omlopp = (): Variant => {
+  const center: Point = [512, 512];
+  const orbit = (degrees: number): Point => [center[0] + 340 * Math.cos((degrees * Math.PI) / 180), center[1] + 340 * Math.sin((degrees * Math.PI) / 180)];
   return {
-    defs: `<linearGradient id="bg" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}">${stops}</linearGradient>`,
-    fill: `<rect width="${SIZE}" height="${SIZE}" fill="url(#bg)"/>`,
+    id: "3-10-omlopp",
+    title: "10 · Omlopp",
+    idea: "C's glass hat with agents orbiting it: the tomte runs the fleet. Product and character at once.",
+    background: solid("#000000"),
+    groups: [{ shadow: 0.5 }, { translucency: 0.2, shadow: 0.5 }, { shadow: 0.3 }],
+    layers: [
+      { name: "ring", group: 2, fill: solid("#3A3F55"), markup: `<circle cx="${center[0]}" cy="${center[1]}" r="340" fill="none" stroke="#3A3F55" stroke-width="20"/>` },
+      { name: "hat", group: 1, glass: true, fill: vertical("#FFC85A", "#FF6A1A"), markup: hat({ at: [512, 688], scale: 3.3 }, palette.ember) },
+      { name: "agent-amber", group: 0, fill: solid("#FFC34D"), markup: circle(orbit(-50), 50, "#FFC34D") },
+      { name: "agent-pink", group: 0, fill: solid("#FF4F8B"), markup: circle(orbit(165), 40, "#FF4F8B") },
+      { name: "agent-blue", group: 0, fill: solid("#3D7BFF"), markup: circle(orbit(70), 32, "#3D7BFF") },
+    ],
   };
+};
+
+const rounds: Readonly<Record<string, readonly Variant[]>> = {
+  "round-3": [primitiv(), promptGlas(), promptBla(), tomtar(), duo(), pratskagg(), fonsterGlas(), fullmane(), gnistaGlas(), omlopp()],
+  "round-1": [klassisk(), mossan(), prompt(), stugan(), pratbubbla(), rost(), spar(), manskara(), stjarnbild(), gnista()],
+  "round-2": [prompt(), streck(), fonstret(), taket(), viska(), dorren(), klotet(), lillaT(), svarm(), vasen()],
 };
 
 const svgDocument = (defs: string, body: string) =>
   `<svg xmlns="http://www.w3.org/2000/svg" width="${SIZE}" height="${SIZE}" viewBox="0 0 ${SIZE} ${SIZE}">${defs ? `<defs>${defs}</defs>` : ""}${body}</svg>\n`;
 
-const composite = (variant: Variant) => {
-  const background = backgroundMarkup(variant.background);
-  return svgDocument(background.defs, background.fill + variant.layers.map((layer) => layer.markup).join(""));
+const srgb = (hex: string) => {
+  const value = Number.parseInt(hex.slice(1), 16);
+  const channel = (shift: number) => (((value >> shift) & 255) / 255).toFixed(5);
+  return `srgb:${channel(16)},${channel(8)},${channel(0)},1.00000`;
 };
 
-const dataURI = (svg: string) => `data:image/svg+xml;base64,${Buffer.from(svg).toString("base64")}`;
+const fillValue = (background: Background) =>
+  background.kind === "solid"
+    ? { solid: srgb(background.color) }
+    : {
+        "linear-gradient": background.stops.map(([, color]) => srgb(color)),
+        orientation: {
+          start: { x: background.from[0], y: background.from[1] },
+          stop: { x: background.to[0], y: background.to[1] },
+        },
+      };
 
-const page = (icons: readonly { variant: Variant; uri: string }[]) => {
+const writeIconBundle = (variant: Variant, bundle: string) => {
+  mkdirSync(join(bundle, "Assets"), { recursive: true });
+  const files = variant.layers.map((layer, index) => {
+    const file = `${index + 1}-${layer.name}.svg`;
+    writeFileSync(join(bundle, "Assets", file), svgDocument("", layer.markup));
+    return file;
+  });
+  const groupCount = Math.max(0, ...variant.layers.map((layer) => layer.group ?? 0)) + 1;
+  const groups = Array.from({ length: groupCount }, (_, group) => {
+    const style = variant.groups?.[group] ?? {};
+    const layers = variant.layers
+      .map((layer, index) => ({ layer, file: files[index]! }))
+      .filter(({ layer }) => (layer.group ?? 0) === group)
+      .reverse()
+      .map(({ layer, file }) => ({
+        "image-name": file,
+        name: layer.name,
+        ...(layer.blend ? { "blend-mode": layer.blend } : {}),
+        ...(layer.glass ? { glass: true } : {}),
+        ...(layer.fill ? { "fill-specializations": [{ value: fillValue(layer.fill) }] } : {}),
+      }));
+    return {
+      layers,
+      shadow: { kind: "neutral", opacity: style.shadow ?? 0.5 },
+      translucency: { enabled: style.translucency !== undefined, value: style.translucency ?? 0.5 },
+    };
+  });
+  const document = {
+    "fill-specializations": [{ value: fillValue(variant.background) }],
+    groups,
+    "supported-platforms": { squares: "shared" },
+  };
+  writeFileSync(join(bundle, "icon.json"), `${JSON.stringify(document, null, 2)}\n`);
+};
+
+const root = dirname(fileURLToPath(import.meta.url));
+const xcodeVersion = readFileSync(join(root, "..", "..", ".xcode-version"), "utf8").trim();
+const ictool = `/Applications/Xcode-${xcodeVersion}.app/Contents/Applications/Icon Composer.app/Contents/Executables/ictool`;
+const run = promisify(execFile);
+
+const renderBundle = async (bundle: string, output: string, rendition: "Default" | "Dark", size: number) => {
+  await run(ictool, [bundle, "--export-image", "--output-file", output, "--platform", "iOS", "--rendition", rendition, "--width", `${size}`, "--height", `${size}`, "--scale", "1"]);
+  const preview = output.replace(/\.png$/, ".webp");
+  await run("magick", [output, "-quality", "88", preview]);
+  return `data:image/webp;base64,${readFileSync(preview).toString("base64")}`;
+};
+
+interface RenderedIcon {
+  readonly variant: Variant;
+  readonly uri: string;
+  readonly dark: string;
+}
+
+const page = (icons: readonly RenderedIcon[]) => {
   const cards = icons
     .map(({ variant, uri }) => `<figure><img class="icon" src="${uri}" alt=""><figcaption><b>${variant.title}</b><span>${variant.idea}</span></figcaption></figure>`)
     .join("");
+  const label = (variant: Variant) => variant.title.split(" · ")[0];
   const home = icons
-    .map(({ variant, uri }) => `<div class="app"><img src="${uri}" alt="${variant.title}"><span>${variant.title.slice(0, 1)}</span></div>`)
+    .map(({ variant, uri }) => `<div class="app"><img src="${uri}" alt="${variant.title}"><span>${label(variant)}</span></div>`)
+    .join("");
+  const darkHome = icons
+    .map(({ variant, dark }) => `<div class="app"><img src="${dark}" alt="${variant.title}"><span>${label(variant)}</span></div>`)
     .join("");
   const tiny = icons.map(({ variant, uri }) => `<img src="${uri}" alt="${variant.title}">`).join("");
   return `<style>
 .w{font-family:var(--rc-font-family);color:var(--rc-text);color-scheme:var(--rc-color-scheme);font-size:var(--rc-font-size,1em);line-height:1.35}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:1.1em .8em}
 figure{margin:0}
-.icon{width:100%;max-width:180px;aspect-ratio:1;border-radius:22.4%;display:block;box-shadow:0 0 0 .5px color-mix(in srgb,var(--rc-text) 14%,transparent)}
+.icon{width:100%;max-width:180px;aspect-ratio:1;display:block}
 figcaption{margin-top:.5em;font-size:.86em}
 figcaption b{display:block;font-size:1.05em;margin-bottom:.15em}
 figcaption span{color:var(--rc-secondary-text)}
 h3{font-size:.95em;margin:1.6em 0 .6em}
 .home{border-radius:18px;padding:16px 10px;display:grid;grid-template-columns:repeat(5,1fr);gap:14px 6px;background:linear-gradient(160deg,#5B6FA8,#C98BA8 55%,#F2C29B)}
 .app{display:flex;flex-direction:column;align-items:center;gap:4px}
-.app img{width:58px;height:58px;border-radius:13px}
+.app img{width:58px;height:58px}
 .app span{font-size:11px;color:#fff;text-shadow:0 1px 2px rgba(0,0,0,.35)}
 .tiny{display:flex;flex-wrap:wrap;gap:10px;align-items:center;background:var(--rc-surface);border-radius:12px;padding:10px}
-.tiny img{width:29px;height:29px;border-radius:7px}
+.tiny img{width:29px;height:29px}
+.home.dark{background:linear-gradient(160deg,#1B2340,#3A2340 55%,#4A3226)}
 </style>
 <div class="w">
 <div class="grid">${cards}</div>
 <h3>Home Screen size</h3>
 <div class="home">${home}</div>
+<h3>Dark appearance</h3>
+<div class="home dark">${darkHome}</div>
 <h3>Settings and Spotlight size</h3>
 <div class="tiny">${tiny}</div>
 </div>
 `;
 };
 
-const root = dirname(fileURLToPath(import.meta.url));
 const out = join(root, "out");
-rmSync(out, { recursive: true, force: true });
 
-const render = (variant: Variant) => {
+const render = async (variant: Variant): Promise<RenderedIcon> => {
   const dir = join(out, variant.id);
-  mkdirSync(join(dir, "layers"), { recursive: true });
-  const svg = composite(variant);
-  writeFileSync(join(dir, "icon.svg"), svg);
-  const background = backgroundMarkup(variant.background);
-  writeFileSync(join(dir, "layers", "0-background.svg"), svgDocument(background.defs, background.fill));
-  variant.layers.forEach((layer, index) => {
-    writeFileSync(join(dir, "layers", `${index + 1}-${layer.name}.svg`), svgDocument("", layer.markup));
-  });
-  return { variant, uri: dataURI(svg) };
+  rmSync(dir, { recursive: true, force: true });
+  const bundle = join(dir, "AppIcon.icon");
+  writeIconBundle(variant, bundle);
+  const [uri, dark] = await Promise.all([
+    renderBundle(bundle, join(dir, "default.png"), "Default", 320),
+    renderBundle(bundle, join(dir, "dark.png"), "Dark", 120),
+  ]);
+  return { variant, uri, dark };
 };
 
+const requested = process.argv.slice(2);
 for (const [round, variants] of Object.entries(rounds)) {
-  writeFileSync(join(out, `${round}.html`), page(variants.map(render)));
+  if (requested.length > 0 && !requested.includes(round)) continue;
+  mkdirSync(out, { recursive: true });
+  writeFileSync(join(out, `${round}.html`), page(await Promise.all(variants.map(render))));
   console.log(`${round}: ${variants.length} variants`);
 }
