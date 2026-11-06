@@ -34,7 +34,7 @@ pub(super) struct Harness {
     pub(super) release_stream: Arc<Notify>,
     pub(super) http: reqwest::Client,
     journal: Journal,
-    _directory: tempfile::TempDir,
+    directory: tempfile::TempDir,
 }
 
 impl Harness {
@@ -66,33 +66,29 @@ impl Harness {
             release_stream,
             http: reqwest::Client::new(),
             journal,
-            _directory: directory,
+            directory,
         }
     }
 
     pub(super) async fn relayed(&self) -> Vec<Value> {
-        let directory = self._directory.path().join("journal");
-        for _ in 0..100 {
-            self.journal.drain(Duration::from_secs(5)).await;
-            let records: Vec<Value> = std::fs::read_dir(&directory)
-                .into_iter()
-                .flatten()
-                .flat_map(|file| {
-                    std::fs::read_to_string(file.unwrap().path())
-                        .unwrap_or_default()
-                        .lines()
-                        .map(str::to_owned)
-                        .collect::<Vec<_>>()
-                })
-                .filter_map(|line| serde_json::from_str::<Value>(&line).ok())
-                .filter(|record| record["event"] == "relayed")
-                .collect();
-            if !records.is_empty() {
-                return records;
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-        Vec::new()
+        let tracker = &self.relay.inner.tracker;
+        tracker.close();
+        tokio::time::timeout(Duration::from_secs(5), tracker.wait())
+            .await
+            .expect("every speech relay ends and journals its record");
+        self.journal.drain(Duration::from_secs(5)).await;
+        std::fs::read_dir(self.directory.path().join("journal"))
+            .unwrap()
+            .flat_map(|file| {
+                std::fs::read_to_string(file.unwrap().path())
+                    .unwrap()
+                    .lines()
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>()
+            })
+            .map(|line| serde_json::from_str::<Value>(&line).unwrap())
+            .filter(|record| record["event"] == "relayed")
+            .collect()
     }
 
     pub(super) async fn enroll(&self, id: &str) -> String {

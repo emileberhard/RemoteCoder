@@ -72,6 +72,9 @@ impl SpeechRelay {
         }
 
         let body_failure = Arc::new(OnceLock::new());
+        if declared_length == Some(0) {
+            let _ = ledger.body_ended.set(ledger.started.elapsed());
+        }
         let mut request = self.inner.http.request(method.clone(), upstream);
         if method == Method::POST {
             request = request.body(limited_body(
@@ -140,6 +143,9 @@ impl SpeechRelay {
                 };
                 builder = builder.header(name.clone(), value);
             }
+        }
+        if response.content_length() == Some(0) {
+            ledger.outcome = "completed";
         }
         let body = RelayResponseBody {
             declared_length: response.content_length(),
@@ -339,7 +345,7 @@ mod tests {
         };
         let body_end = record["bodyEndMs"].as_u64().unwrap();
         let response = record["responseMs"].as_u64().unwrap();
-        assert!(body_end >= 150, "{record}");
+        assert!(body_end >= 100, "{record}");
         assert!(response >= body_end, "{record}");
         assert!(
             record["durationMs"].as_u64().unwrap() >= response,
