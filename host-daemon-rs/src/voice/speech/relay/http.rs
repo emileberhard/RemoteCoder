@@ -138,6 +138,7 @@ impl SpeechRelay {
             }
         }
         let body = RelayResponseBody {
+            declared_length: response.content_length(),
             inner: Box::pin(response.bytes_stream()),
             stopped: Box::pin(relay.cancelled_owned()),
             stop,
@@ -205,6 +206,7 @@ fn limited_body(
 }
 
 struct RelayResponseBody {
+    declared_length: Option<u64>,
     inner: Pin<Box<dyn Stream<Item = reqwest::Result<Bytes>> + Send>>,
     stopped: Pin<Box<WaitForCancellationFutureOwned>>,
     stop: Arc<Stop>,
@@ -228,6 +230,9 @@ impl Stream for RelayResponseBody {
         match this.inner.as_mut().poll_next(cx) {
             Poll::Ready(Some(Ok(chunk))) => {
                 this.ledger.bytes_down += chunk.len() as u64;
+                if this.declared_length == Some(this.ledger.bytes_down) {
+                    this.ledger.outcome = "completed";
+                }
                 Poll::Ready(Some(Ok(chunk)))
             }
             Poll::Ready(Some(Err(error))) => {
