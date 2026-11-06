@@ -98,7 +98,7 @@ struct TranscriptionIntegrationTests {
             let library = SharedDictationLibrary(defaults: fixture.defaults, directory: directory)
             library.isEnabled = archived
             library.cancelPublication()
-            defer { library.cancelPublication(); await library.finishPendingCaptures() }
+            defer { library.cancelPublication(); await library.finishArchiving() }
             let screen = try #require(fixture.workspace.selectedScreen)
             try #require(await screen.prepareDraft())
             let recorder = ProgressiveFixtureRecorder()

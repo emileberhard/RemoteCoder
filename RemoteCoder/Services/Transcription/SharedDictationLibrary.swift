@@ -18,6 +18,7 @@ final class SharedDictationLibrary {
     private(set) var modelResolution: String?
     private(set) var profile: DictationProfile?
     private(set) var isSavingSettings = false
+    private(set) var currentAccount: DictationAccountSession?
     var isEnabled: Bool {
         didSet {
             defaults.set(isEnabled, forKey: Self.enabledKey)
@@ -34,8 +35,8 @@ final class SharedDictationLibrary {
     @ObservationIgnored private var settingsTask: Task<Void, Never>?
     @ObservationIgnored private var accountTask: Task<Void, Never>?
     @ObservationIgnored private var profileAccount: DictationAccountSession?
-    @ObservationIgnored private var finalizationTask: Task<Void, Never>?
-    @ObservationIgnored private var finalizationID: UUID?
+    @ObservationIgnored private var archiving: Task<Void, Never>?
+    @ObservationIgnored private var archivingID: UUID?
     @ObservationIgnored private let finalize: @Sendable (DictationCaptureWriter) async throws -> Void
     @ObservationIgnored private var storeTask: Task<DictationLibraryStore, any Error>?
 
@@ -70,6 +71,7 @@ final class SharedDictationLibrary {
             case .unverified, .unavailable: throw DictationLibraryError.accountUnavailable
             }
             guard let confirmedAccount = await store.accountSession() else { throw DictationLibraryError.accountUnavailable }
+            currentAccount = confirmedAccount
             account = confirmedAccount
             plan = try await store.makePlan(context: .chat, capabilities: capabilities)
         } catch is CancellationError {
@@ -106,11 +108,7 @@ final class SharedDictationLibrary {
 
     func finish(_ capture: Capture) {
         guard let writer = capture.writer else { return }
-        let previous = finalizationTask
-        let id = UUID()
-        finalizationID = id
-        finalizationTask = Task(priority: .utility) {
-            await previous?.value
+        enqueueArchiving { [self] in
             do {
                 try await finalize(writer)
                 status = "Saved on this device"
@@ -118,12 +116,34 @@ final class SharedDictationLibrary {
             } catch {
                 status = "Recording retained for recovery: \(error.localizedDescription)"
             }
-            if finalizationID == id { finalizationTask = nil }
         }
     }
 
-    func finishPendingCaptures() async {
-        await finalizationTask?.value
+    func finishArchiving() async {
+        await archiving?.value
+    }
+
+    private func enqueueArchiving(_ work: @escaping @MainActor () async -> Void) {
+        let previous = archiving
+        let id = UUID()
+        archivingID = id
+        archiving = Task(priority: .utility) {
+            await previous?.value
+            await work()
+            if archivingID == id { archiving = nil }
+        }
+    }
+
+    private func archive(_ version: DictationResultVersion) {
+        guard version.plan.archiveEnabled else { requestPublication(); return }
+        enqueueArchiving { [self] in
+            do {
+                try await store().addResult(version)
+                requestPublication()
+            } catch {
+                status = "Original retained · result could not be saved: \(error.localizedDescription)"
+            }
+        }
     }
 
     func model(fallback: TranscriptionModel) -> TranscriptionModel {
@@ -178,32 +198,20 @@ final class SharedDictationLibrary {
         guard let capture = try await store.capture(id: id) else { return nil }
         guard let account else { throw DictationLibraryError.accountUnavailable }
         try await store.validateAccountSession(account)
+        currentAccount = account
         return (capture.plan, account)
     }
 
-    func result(_ text: String, recordingID: UUID, plan: DictationPlan, account: DictationAccountSession?, model: String, access: GatewaySpeechAccess) async throws -> String {
-        let store = try await store()
+    func result(_ text: String, recordingID: UUID, plan: DictationPlan, model: String, access: GatewaySpeechAccess) async throws -> String {
         let raw = DictationResultVersion(id: UUID(), captureID: recordingID, createdAt: .now,
             kind: .providerOutput, text: text, model: model, contextWasUsed: false, parentResultID: nil, plan: plan)
-        if plan.archiveEnabled { try await store.addResult(raw) }
-        if let account {
-            try await store.validateAccountSession(account)
-            if plan.archiveEnabled { try await store.validateCapture(id: recordingID) }
-        }
-        guard plan.cleanupEnabled else {
-            requestPublication()
-            if let account { try await store.validateAccountSession(account) }
-            return text
-        }
+        archive(raw)
+        guard plan.cleanupEnabled else { return text }
         let cleaned = try await DictationCleanup.clean(text: text, plan: plan, access: try await access.access(to: .gemini))
-        if let account {
-            try await store.validateAccountSession(account)
-            if plan.archiveEnabled { try await store.validateCapture(id: recordingID) }
+        if cleaned.kind != .providerOutput {
+            archive(DictationResultVersion(id: UUID(), captureID: recordingID, createdAt: .now,
+                kind: cleaned.kind, text: cleaned.text, model: cleaned.model, contextWasUsed: cleaned.contextWasUsed, parentResultID: raw.id, plan: plan))
         }
-        if plan.archiveEnabled, cleaned.kind != .providerOutput { try await store.addResult(DictationResultVersion(id: UUID(), captureID: recordingID, createdAt: .now,
-            kind: cleaned.kind, text: cleaned.text, model: cleaned.model, contextWasUsed: cleaned.contextWasUsed, parentResultID: raw.id, plan: plan)) }
-        requestPublication()
-        if let account { try await store.validateAccountSession(account) }
         return cleaned.text
     }
 
@@ -268,14 +276,9 @@ final class SharedDictationLibrary {
         }
     }
 
-    func failure(recordingID: UUID, plan: DictationPlan, error: any Error) async {
-        do {
-            try await store().addResult(DictationResultVersion(id: UUID(), captureID: recordingID, createdAt: .now,
-                kind: .failure, text: String(reflecting: type(of: error)), model: plan.effectiveModel, contextWasUsed: false, parentResultID: nil, plan: plan))
-            requestPublication()
-        } catch {
-            status = "Original retained · result could not be saved: \(error.localizedDescription)"
-        }
+    func failure(recordingID: UUID, plan: DictationPlan, error: any Error) {
+        archive(DictationResultVersion(id: UUID(), captureID: recordingID, createdAt: .now,
+            kind: .failure, text: String(reflecting: type(of: error)), model: plan.effectiveModel, contextWasUsed: false, parentResultID: nil, plan: plan))
     }
 
     func accountForConfirmation() async -> DictationAccountSession? {
@@ -311,15 +314,12 @@ final class SharedDictationLibrary {
         }
     }
 
-    func validateAccount(_ account: DictationAccountSession) async throws {
-        try await store().validateAccountSession(account)
+    func validateAccount(_ account: DictationAccountSession) throws {
+        guard currentAccount == account else { throw DictationLibraryError.accountChanged }
     }
 
-    func accountEvents(validating account: DictationAccountSession) async throws -> AsyncStream<DictationAccountSession?> {
-        let store = try await store()
-        let events = await store.accountEvents()
-        try await store.validateAccountSession(account)
-        return events
+    func waitUntilAccountChanges(from account: DictationAccountSession) async {
+        for await session in Observations({ @MainActor [self] in currentAccount }) where session != account { return }
     }
 
     func accountChanged() {
@@ -330,19 +330,26 @@ final class SharedDictationLibrary {
     private func store() async throws -> DictationLibraryStore {
         if let storeTask { return try await storeTask.value }
         let directory = directory
-        let task = Task { try await Self.open(directory: directory) }
-        storeTask = task
-        do {
-            let store = try await task.value
-            accountTask = Task { [weak self] in
-                for await session in await store.accountEvents() {
-                    guard let self else { return }
-                    if session != profileAccount { profile = nil; profileAccount = nil }
-                }
-            }
+        let task = Task {
+            let store = try await Self.open(directory: directory)
+            await followAccount(of: store)
             return store
         }
+        storeTask = task
+        do { return try await task.value }
         catch { storeTask = nil; throw error }
+    }
+
+    private func followAccount(of store: DictationLibraryStore) async {
+        let sessions = await store.accountEvents()
+        currentAccount = await store.accountSession()
+        accountTask = Task { [weak self] in
+            for await session in sessions {
+                guard let self else { return }
+                currentAccount = session
+                if session != profileAccount { profile = nil; profileAccount = nil }
+            }
+        }
     }
 
     deinit { accountTask?.cancel(); settingsTask?.cancel() }

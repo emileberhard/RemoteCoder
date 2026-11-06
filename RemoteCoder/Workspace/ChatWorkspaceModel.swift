@@ -937,7 +937,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         terminationTasks.removeAll()
         var failures: [String] = []
         for model in terminationTargets { failures += await model.flushForTermination() }
-        await dictationLibrary?.finishPendingCaptures()
+        await dictationLibrary?.finishArchiving()
         do { try await htmlVisuals.renderer.flush() }
         catch { failures.append("HTML visuals: " + error.localizedDescription) }
         return failures

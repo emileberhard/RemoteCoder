@@ -21,7 +21,7 @@ struct OriginalDictationCaptureTests {
         }
         library.isEnabled = true
         library.cancelPublication()
-        defer { library.cancelPublication(); await seal.release(); await library.finishPendingCaptures() }
+        defer { library.cancelPublication(); await seal.release(); await library.finishArchiving() }
         let screen = try #require(fixture.workspace.selectedScreen)
         try #require(await screen.prepareDraft())
         let transcriber = ArchiveFixtureTranscriber()
@@ -37,9 +37,11 @@ struct OriginalDictationCaptureTests {
         let id = try #require(transcriber.recordingIDs.first)
         #expect(try await screen.drafts.hasSavedReceipt(for: id))
         #expect(try await recordings.listedIDs().isEmpty)
+        #expect(try archivedResultTexts(in: directory, capture: id).isEmpty)
         await seal.waitUntilStarted()
         await seal.release()
-        await library.finishPendingCaptures()
+        await library.finishArchiving()
+        #expect(try archivedResultTexts(in: directory, capture: id) == ["Synthetic archival dictation"])
         let container = try #require(Bundle.main.object(forInfoDictionaryKey: "RemoteCoderDictationContainer") as? String)
         let archive = try DictationLibraryStore(directory: directory, source: "fixture-inspection", capacityBytes: 536_870_912,
                                                containerIdentifier: container)
@@ -83,6 +85,18 @@ struct OriginalDictationCaptureTests {
         #expect(result.orderValid)
         sink.consume(buffer)
         #expect(observed.withLock { $0.originalFrames } == 4_800)
+    }
+}
+
+private func archivedResultTexts(in directory: URL, capture id: UUID) throws -> [String] {
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .secondsSince1970
+    let partitions = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+    return try partitions.flatMap { partition in
+        let results = partition.appending(path: "\(id.uuidString)/results")
+        guard FileManager.default.fileExists(atPath: results.path) else { return [String]() }
+        return try FileManager.default.contentsOfDirectory(at: results, includingPropertiesForKeys: nil)
+            .map { try decoder.decode(DictationResultVersion.self, from: Data(contentsOf: $0)).text }
     }
 }
 
