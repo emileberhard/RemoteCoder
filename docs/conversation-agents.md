@@ -149,9 +149,9 @@ presentation is a separate owner and must not infer relationships from text.
 Opening a child uses the ordinary conversation switch to its exact host and
 account and retains its question cards. Its header reads "Subagent of" the parent,
 and Back returns to the parent. A child that accepts input keeps the ordinary
-composer, model picker included; its turns use the app's ordinary permissions,
-also for a retained read-only worker, whose recorded scope binds only Continue
-jobs. Input acceptance is the provider's
+composer, model picker included. A retained read-only worker keeps its recorded
+scope on Continue and, on Claude, for app-sent turns; an app-sent Codex turn uses
+the app's ordinary permissions. Input acceptance is the provider's
 `canAcceptDirectInput`: Codex refuses its parent-owned multi-agent v2 children,
 and while that flag is unknown only a Codex thread-spawn child is treated as
 read-only. A gateway parent tag never makes a conversation read-only. A
