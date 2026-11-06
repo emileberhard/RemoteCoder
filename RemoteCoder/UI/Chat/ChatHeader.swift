@@ -15,17 +15,23 @@ struct ChatHeader<Leading: View, Trailing: View>: View {
             HStack(spacing: 12) {
                 leading
 
-                WorkingDirectoryHeader(
-                    path: screen.workingDirectory,
-                    remoteHomePath: screen.target.remoteHomePath,
-                    hostID: screen.hostID,
-                    hostName: hostName,
-                    favorites: favorites,
-                    contextID: contextID,
-                    onActivate: onChooseFolder,
-                    onSelectFavorite: { onSelectFavorite($0, contextID) }
-                )
-                .chromeTransitionSource("directory")
+                Group {
+                    if screen.agentParent != nil {
+                        SubagentHeader(screen: screen)
+                    } else {
+                        WorkingDirectoryHeader(
+                            path: screen.workingDirectory,
+                            remoteHomePath: screen.target.remoteHomePath,
+                            hostID: screen.hostID,
+                            hostName: hostName,
+                            favorites: favorites,
+                            contextID: contextID,
+                            onActivate: onChooseFolder,
+                            onSelectFavorite: { onSelectFavorite($0, contextID) }
+                        )
+                        .chromeTransitionSource("directory")
+                    }
+                }
                 .frame(maxWidth: .infinity)
                 .layoutPriority(1)
 

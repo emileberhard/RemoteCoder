@@ -331,13 +331,6 @@ mod tests {
             last["subtype"], "exit",
             "the process exited through SIGTERM"
         );
-        let children =
-            crate::agents::claude::store::load(&home, suspend_test_support::THREAD).unwrap();
-        assert_eq!(
-            children.children["agent-task"].state,
-            crate::agents::State::Unknown,
-            "a paused agent is not reported as stopped"
-        );
     }
 
     #[tokio::test]

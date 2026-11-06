@@ -365,8 +365,6 @@ struct ClaudeRuntime {
     initialized: bool,
     active_turn: Option<RuntimeTurn>,
     background_tasks: Vec<suspend::BackgroundTask>,
-    children: crate::agents::claude::Projection,
-    children_generation: u128,
     lifecycle_generation: u64,
     stderr_ring: Arc<Mutex<Vec<String>>>,
     _mcp: Option<McpRuntimeAccess>,

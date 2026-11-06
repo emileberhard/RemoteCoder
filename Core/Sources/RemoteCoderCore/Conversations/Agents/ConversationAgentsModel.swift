@@ -3,20 +3,17 @@ import Observation
 
 @Observable @MainActor
 final class ConversationAgentsModel: Identifiable {
-    static let recentWindow: TimeInterval = 12 * 60 * 60
-
     let id = UUID()
     let address: ConversationAddress
     var threadID: String { address.threadID }
     @ObservationIgnored private let gateway: GatewayClient
     private(set) var agents: [ConversationAgent] = []
-    private(set) var sections = ConversationAgentSections.empty
+    private(set) var roster = ConversationAgentRoster.empty
     private(set) var warnings: [String] = []
     private(set) var error: String?
     private(set) var hasLoaded = false
     private(set) var coverage: [ClusterCoverage] = []
-    private(set) var coverageByHost: [UUID: ClusterCoverage] = [:]
-    @ObservationIgnored private var agentsByID: [String: ConversationAgent] = [:]
+    @ObservationIgnored private var coverageByHost: [UUID: ClusterCoverage] = [:]
     @ObservationIgnored var clusterHosts: @MainActor () -> [ConversationAgentsHost] = { [] }
     @ObservationIgnored var knownCoverage: @MainActor () -> [ClusterCoverage] = { [] }
     @ObservationIgnored private var rowsByHost: [UUID: [ConversationAgent]] = [:]
@@ -29,7 +26,6 @@ final class ConversationAgentsModel: Identifiable {
     @ObservationIgnored private var projectionVersion = 0
     @ObservationIgnored private var projectionDirty = false
     @ObservationIgnored private var lastPublication: ContinuousClock.Instant?
-    private(set) var isRefreshing = false
     @ObservationIgnored private var refreshedAt: Date?
     @ObservationIgnored private let now: @Sendable () -> Date
     @ObservationIgnored private var observedChildren: Set<String>?
@@ -37,10 +33,6 @@ final class ConversationAgentsModel: Identifiable {
     @ObservationIgnored private var refreshID: UUID?
     @ObservationIgnored private var refreshTask: Task<Void, Never>?
     @ObservationIgnored private var waiters: [UUID: CheckedContinuation<Void, Never>] = [:]
-
-    var summary: ConversationAgentSummary? {
-        hasLoaded ? ConversationAgentSummary(total: agents.count, recent: sections.recent.count) : nil
-    }
 
     init(address: ConversationAddress, gateway: GatewayClient, now: @escaping @Sendable () -> Date = { .now }) {
         self.address = address
@@ -54,8 +46,6 @@ final class ConversationAgentsModel: Identifiable {
         guard let refreshedAt, error == nil else { return false }
         return (0..<15).contains(now().timeIntervalSince(refreshedAt))
     }
-
-    func agent(for id: String) -> ConversationAgent? { agentsByID[id] }
 
     func invalidate() {
         refreshedAt = nil
@@ -83,16 +73,6 @@ final class ConversationAgentsModel: Identifiable {
         observedChildren = threadIDs
     }
 
-    func output(for agentID: String) async throws -> ConversationAgentOutput {
-        guard let agent = agentsByID[agentID] else { throw ConversationAgentNavigationError.noConversation }
-        let source = clusterHosts().first { $0.id == agent.ownerHostId }
-        if let owner = agent.ownerHostId, owner != address.hostID {
-            guard let source else { throw ConversationAgentNavigationError.hostUnavailable }
-            return try await source.gateway.agentOutput(threadID: agent.ownerThreadId, agentID: agent.id)
-        }
-        return try await gateway.agentOutput(threadID: agent.ownerThreadId, agentID: agent.id)
-    }
-
     func refreshIfNeeded() async {
         guard !isFresh else { return }
         await refresh()
@@ -116,7 +96,6 @@ final class ConversationAgentsModel: Identifiable {
         guard refreshTask == nil else { return }
         let id = UUID()
         refreshID = id
-        isRefreshing = true
         var hosts = clusterHosts()
         if let index = hosts.firstIndex(where: { $0.id == address.hostID }) { hosts.swapAt(0, index) }
         else { hosts.insert(.init(id: address.hostID, name: "Gateway", gateway: gateway, supportsCrossHost: false), at: 0) }
@@ -188,17 +167,15 @@ final class ConversationAgentsModel: Identifiable {
                     self.projectionDirty = false
                     let version = self.projectionVersion
                     let prepared = try await ConversationAgentsProjection.prepare(rowsByHost: self.rowsByHost, warningsByHost: self.warningsByHost,
-                        coverage: self.pendingCoverage, hostOrder: self.hostOrder,
-                        activeSince: Int64(self.now().addingTimeInterval(-Self.recentWindow).timeIntervalSince1970))
+                        coverage: self.pendingCoverage, hostOrder: self.hostOrder)
                     guard self.refreshID == refresh, !Task.isCancelled else { return }
                     guard self.projectionVersion == version else { self.projectionDirty = true; continue }
-                    self.agents = prepared.agents
-                    self.sections = prepared.sections
-                    self.warnings = prepared.warnings
-                    self.coverage = prepared.coverage
+                    if self.agents != prepared.agents { self.agents = prepared.agents }
+                    if self.roster != prepared.roster { self.roster = prepared.roster }
+                    if self.warnings != prepared.warnings { self.warnings = prepared.warnings }
+                    if self.coverage != prepared.coverage { self.coverage = prepared.coverage }
                     self.coverageByHost = prepared.coverageByHost
-                    self.agentsByID = prepared.agentsByID
-                    self.hasLoaded = self.hasLoaded || !self.successfulReads.isEmpty
+                    if !self.hasLoaded, !self.successfulReads.isEmpty { self.hasLoaded = true }
                     self.lastPublication = .now
                 } catch { return }
             }
@@ -214,7 +191,6 @@ final class ConversationAgentsModel: Identifiable {
             return
         }
         refreshID = nil
-        isRefreshing = false
         let completed = waiters.values
         waiters.removeAll()
         for waiter in completed { waiter.resume() }
@@ -230,6 +206,5 @@ final class ConversationAgentsModel: Identifiable {
         projectionTask?.cancel()
         projectionTask = nil
         refreshID = nil
-        isRefreshing = false
     }
 }

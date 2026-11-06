@@ -7,29 +7,10 @@ struct ConversationAgentsPage: Decodable, Sendable {
     var coverage: [ClusterCoverage]? = nil
 }
 
-struct ReportedProvider: RawRepresentable, Decodable, Sendable, Equatable {
-    let rawValue: String
-    init(rawValue: String) { self.rawValue = rawValue }
-
-    init(from decoder: Decoder) throws {
-        rawValue = try decoder.singleValueContainer().decode(String.self)
-    }
-
-    var agentProvider: AgentProvider? { AgentProvider(rawValue: rawValue) }
-
-    var displayName: String {
-        agentProvider?.displayName ?? rawValue
-    }
-}
-
 struct ConversationAgent: Decodable, Sendable, Identifiable, Equatable {
     struct Capabilities: Decodable, Sendable, Equatable {
-        let inspect: Bool
         let openConversation: Bool
-        let message: Bool
-        let continueWork: Bool
         let stop: Bool
-        let askParent: Bool
     }
 
     enum State: String, Decodable, Sendable {
@@ -52,26 +33,20 @@ struct ConversationAgent: Decodable, Sendable, Identifiable, Equatable {
     let parentId: String?
     let ownerThreadId: String
     let threadId: String?
-    let provider: ReportedProvider
-    let source: String
     let title: String
-    let model: String?
     let state: State
     let capabilities: Capabilities
     let executionId: String?
-    let accountId: String?
     let lastActiveAt: Int64?
     var ownerHostId: UUID? = nil
     var jobId: String? = nil
     var parent: ClusterParent? = nil
     var intentState: IntentState? = nil
-    var parentHostID: UUID? = nil
     var isStub: Bool? = nil
 
     private enum CodingKeys: String, CodingKey {
-        case id, parentId, ownerThreadId, threadId, provider, source, title, model, state, capabilities
-        case executionId, accountId, lastActiveAt, ownerHostId, jobId, parent, intentState, kind
-        case parentHostID
+        case id, parentId, ownerThreadId, threadId, title, state, capabilities
+        case executionId, lastActiveAt, ownerHostId, jobId, parent, intentState, kind
     }
 
     var identity: String { ownerHostId.map { "\($0.uuidString)|\(jobId ?? id)" } ?? id }
@@ -95,34 +70,10 @@ extension ConversationAgent {
         parentId = try values.decodeIfPresent(String.self, forKey: .parentId)
         ownerThreadId = try values.decode(String.self, forKey: .ownerThreadId)
         threadId = try values.decodeIfPresent(String.self, forKey: .threadId)
-        provider = try values.decode(ReportedProvider.self, forKey: .provider)
-        source = try values.decode(String.self, forKey: .source)
         title = try values.decode(String.self, forKey: .title)
-        model = try values.decodeIfPresent(String.self, forKey: .model)
         let reportedState = try values.decode(State.self, forKey: .state)
         state = isStub == true && intentState == .removed ? .removed : reportedState
         capabilities = try values.decode(Capabilities.self, forKey: .capabilities)
         executionId = try values.decodeIfPresent(String.self, forKey: .executionId)
-        accountId = try values.decodeIfPresent(String.self, forKey: .accountId)
-        parentHostID = try parent?.hostId ?? values.decodeIfPresent(UUID.self, forKey: .parentHostID)
     }
-}
-
-struct ConversationAgentOutput: Decodable, Sendable {
-    struct Message: Decodable, Sendable {
-        struct Role: RawRepresentable, Decodable, Sendable, Equatable {
-            let rawValue: String
-            init(rawValue: String) { self.rawValue = rawValue }
-            static let user = Self(rawValue: "user")
-
-            init(from decoder: Decoder) throws {
-                rawValue = try decoder.singleValueContainer().decode(String.self)
-            }
-        }
-
-        let role: Role
-        let text: String
-    }
-    let messages: [Message]
-    let truncated: Bool
 }

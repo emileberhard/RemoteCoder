@@ -183,7 +183,7 @@ enum ChatCommand: String, CaseIterable, Hashable, Sendable {
         case .togglePin: actions?.isPinned == true ? "Unpin" : "Pin…"
         case .rename: "Rename…"
         case .copyReference: actions?.conversation.map { $0.codexDesktopLink == nil } == true ? "Copy Thread ID" : "Copy Link"
-        case .showAgents: "Show Agents"
+        case .showAgents: "Show Subagents"
         case .settle: actions?.isConversationSettled == true ? "Unsettle Conversation" : "Settle Conversation"
         case .markUnread: "Mark as Unread"
         case .unreadOnly: "Unread Only"
@@ -250,11 +250,11 @@ struct ChatWindowActionsPublisher: View {
     let reviewChanges: () -> Void
     let focusComposer: () -> Void
     let chooseFolder: () -> Void
-    let returnToParent: (() -> Void)?
+    let returnToParent: () -> Void
     let selectConversation: (ConversationAddress) -> Void
     let fork: (ConversationAddress) -> Void
     let requestPinName: (ConversationPinRequest) -> Void
-    let showAgents: (ConversationAgentsModel) -> Void
+    let toggleAgents: () -> Void
     let attachFile: () -> Void
     let toggleCommandPalette: (ChatWindowActions) -> Void
     @Environment(\.openWindow) private var openWindow
@@ -292,7 +292,7 @@ struct ChatWindowActionsPublisher: View {
             selectConversation: selectConversation,
             fork: fork,
             requestPinName: requestPinName,
-            showAgents: showAgents,
+            toggleAgents: toggleAgents,
             attachFile: attachFile,
             toggleCommandPalette: toggleCommandPalette,
             openWindow: openWindow,
@@ -319,11 +319,11 @@ fileprivate struct ChatWindowActionContext {
     let reviewChanges: () -> Void
     let focusComposer: () -> Void
     let chooseFolder: () -> Void
-    let returnToParent: (() -> Void)?
+    let returnToParent: () -> Void
     let selectConversation: (ConversationAddress) -> Void
     let fork: (ConversationAddress) -> Void
     let requestPinName: (ConversationPinRequest) -> Void
-    let showAgents: (ConversationAgentsModel) -> Void
+    let toggleAgents: () -> Void
     let attachFile: () -> Void
     let toggleCommandPalette: (ChatWindowActions) -> Void
     let openWindow: OpenWindowAction
@@ -345,11 +345,9 @@ fileprivate struct ChatWindowActionContext {
         if screen.composerStopState.readyTurn == nil { enabled.remove(.stop) }
         if !acceptsComposerAttachments { enabled.remove(.attachFile) }
         if fastModel == nil { enabled.remove(.toggleFastMode) }
-        if (screen.conversationAgents?.summary?.total ?? 0) == 0 { enabled.remove(.showAgents) }
+        if (screen.conversationAgents?.roster.count ?? 0) == 0 { enabled.remove(.showAgents) }
         if screen.workingDirectory == nil { enabled.remove(.reviewChanges) }
-        if returnToParent == nil || workspace.agentNavigation.map({ workspace.isShowingConversation(at: $0.child, on: screen) }) != true {
-            enabled.remove(.returnToParent)
-        }
+        if screen.agentParent == nil { enabled.remove(.returnToParent) }
         let canSettle = settlement == .unsettled && conversation.map { workspace.isRunning($0) } == false
         if settlement != .settled && !canSettle { enabled.remove(.settle) }
         return ChatWindowCommandState(
@@ -411,8 +409,8 @@ fileprivate struct ChatWindowActionContext {
         case .copyReference:
             if let address = screen.openAddress { HapticService.shared.copy(address.codexDesktopLink ?? address.threadID) }
         case .showAgents:
-            if let agents = screen.conversationAgents { showAgents(agents) }
-        case .returnToParent: returnToParent?()
+            toggleAgents()
+        case .returnToParent: returnToParent()
         case .settle:
             guard let address = screen.openAddress else { return }
             if conversationSettlement(address) == .settled {
@@ -491,11 +489,4 @@ fileprivate struct ChatWindowActionContext {
         if let performer { toggleCommandPalette(ChatWindowActions(state: commandState, performer: performer)) }
     }
 
-}
-
-private extension ComposerStopState {
-    var readyTurn: RunningTurn? {
-        if case .ready(let turn) = self { return turn }
-        return nil
-    }
 }

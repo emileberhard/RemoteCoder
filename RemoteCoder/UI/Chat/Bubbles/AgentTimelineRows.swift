@@ -88,6 +88,7 @@ struct TimelineEventRow: View {
     @State private var localIsExpanded = false
     @Environment(\.transcriptRowPresentation) private var rowPresentation
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.agentConversationOpener) private var agentOpener
 
     private var isExpanded: Bool {
         get { rowPresentation?.timelineExpanded ?? localIsExpanded }
@@ -106,7 +107,11 @@ struct TimelineEventRow: View {
         let _ = surfaceActivity?.recordBody()
         #endif
         VStack(alignment: .leading, spacing: 8) {
-            if canExpand {
+            if let threadID = linkedAgent, let agentOpener {
+                Button { agentOpener.open(threadID: threadID) } label: { summary }
+                    .buttonStyle(ResponsiveButtonStyle(feedback: nil, pressedScale: 1, pressedOpacity: 0.6))
+                    .accessibilityHint("Opens the agent's conversation")
+            } else if canExpand {
                 Button(action: toggle) {
                     summary
                 }
@@ -142,7 +147,11 @@ struct TimelineEventRow: View {
                 Text(event.title)
                     .scaledFont(.caption.weight(.semibold))
                 Spacer(minLength: 0)
-                if canExpand {
+                if linkedAgent != nil {
+                    Image(systemName: "chevron.right")
+                        .scaledFont(.caption2.weight(.semibold))
+                        .foregroundStyle(.tertiary)
+                } else if canExpand {
                     DisclosureChevron(isExpanded: isExpanded)
                         .foregroundStyle(.tertiary)
                         .animation(reduceMotion ? nil : .spring(response: 0.2, dampingFraction: 0.85), value: isExpanded)
@@ -150,10 +159,13 @@ struct TimelineEventRow: View {
             }
 
             if let subtitle = event.subtitle, subtitle.isEmpty == false {
-                Text(subtitle)
-                    .scaledFont(.caption)
-                    .lineLimit(canExpand && isExpanded == false ? 2 : nil)
-                    .truncationMode(event.kind.isNarrative ? .tail : .middle)
+                HStack(spacing: 5) {
+                    if let linkedAgent { AgentIdentityDot(key: linkedAgent) }
+                    Text(subtitle)
+                        .scaledFont(.caption)
+                        .lineLimit(canExpand && isExpanded == false ? 2 : nil)
+                        .truncationMode(event.kind.isNarrative ? .tail : .middle)
+                }
             }
         }
         .foregroundStyle(.secondary)
@@ -161,6 +173,8 @@ struct TimelineEventRow: View {
         .contentShape(.rect)
         .accessibilityElement(children: .combine)
     }
+
+    private var linkedAgent: String? { agentOpener == nil ? nil : event.agentThreadID }
 
     private var canExpand: Bool {
         event.details.isEmpty == false || (event.subtitle?.utf8.count ?? 0) > Self.fullSubtitleLength

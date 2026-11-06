@@ -258,7 +258,7 @@ impl AgentService<'_> {
             };
             let (title, model, settings_known) = match &view.job.spec {
                 SpecEvidence::Known { spec } => (
-                    spec.title.clone(),
+                    spec.display_title(),
                     Some(settings_model(&spec.settings).to_owned()),
                     true,
                 ),

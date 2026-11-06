@@ -992,12 +992,12 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
     }
 
     func stopTurn(_ turn: RunningTurn) {
-        guard target.acceptsWork, composerStopState == .ready(turn) else { return }
+        guard target.acceptsWork, turnStopState == .ready(turn) else { return }
         let feedback = target.feedbackForCurrentConversation()
-        let followUp = currentDraft.flatMap { draft in
+        let followUp = acceptsConversationInput ? currentDraft.flatMap { draft in
             selectedModel.map { TurnDispatcher.FollowUp(conversationID: currentConversationID, draft: draft,
                                                         settings: turnSettings(model: $0)) }
-        }
+        } : nil
         target.dispatcher.stop(turn, followUp: followUp, feedback: feedback)
     }
 
@@ -1594,6 +1594,22 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
 
     var acceptsConversationInput: Bool { drafts.acceptsInput && activeConversation?.acceptsDirectInput != false }
 
+    var agentParent: ConversationAddress? {
+        guard let conversation = activeConversation, conversation.id == activeSessionID, conversation.isDelegatedAgent else { return nil }
+        return conversation.agentParentAddress(localHostID: hostID)
+    }
+
+    var subagentContext: SubagentContext? {
+        guard let parent = agentParent, let conversation = activeConversation else { return nil }
+        let list = target.conversationList
+        let parentTitle = parent.hostID == hostID ? list.header(id: parent.threadID).map {
+            ConversationSidebarProjection.title(for: $0, pinnedName: list.pinnedName(for: $0.id))
+        } : nil
+        return SubagentContext(threadID: conversation.id,
+            title: ConversationSidebarProjection.title(for: conversation, pinnedName: list.pinnedName(for: conversation.id)),
+            parent: parent, parentTitle: parentTitle)
+    }
+
     var acceptsAttachments: Bool {
         target.acceptsWork && currentDraft != nil && acceptsConversationInput && currentConversationDispatchBlock != .otherClient
     }
@@ -1609,10 +1625,12 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         }
     }
 
-    var composerStopState: ComposerStopState {
-        guard acceptsConversationInput, let turn = runningTurn else { return .hidden }
+    var turnStopState: ComposerStopState {
+        guard let turn = runningTurn else { return .hidden }
         return ComposerStopState(runningTurn: turn, isStopping: target.turnStops.isStopping(turn))
     }
+
+    var composerStopState: ComposerStopState { acceptsConversationInput ? turnStopState : .hidden }
 
     var stopFailure: String? {
         guard let failure = target.turnStops.failure, failure.threadID == activeSessionID else { return nil }

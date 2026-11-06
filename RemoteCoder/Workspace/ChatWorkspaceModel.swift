@@ -75,7 +75,6 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
     func retryDraftRetirement(_ target: ExecutionTarget) { targets.retry(target) }
 
     var notificationRoutingError: String?
-    private(set) var agentNavigation: AgentNavigation?
     @ObservationIgnored private(set) var navigationGeneration = UUID()
     @ObservationIgnored private var notificationSceneGeneration = UUID()
     @ObservationIgnored private let notificationApplicationIsActive: @MainActor () -> Bool
@@ -283,7 +282,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         guard let host = settings.hosts.first(where: { $0.id == hostID })?.configuration else { return }
         guard host.gatewayID != host.id else { return }
         guard !isVerifyingIdentity else { throw GatewayIdentityMigration.MigrationFailure.verificationInProgress }
-        guard let source = model(for: hostID) else { throw ConversationAgentNavigationError.hostUnavailable }
+        guard let source = model(for: hostID) else { throw ConversationAgentError.hostUnavailable }
         isVerifyingIdentity = true
         defer { isVerifyingIdentity = false }
         let identity = try await source.hostServices.routes.identity()
@@ -1417,60 +1416,33 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         screen?.openAddress == address
     }
 
-    func openAgentConversation(_ agent: ConversationAgent, from parent: ConversationAddress) async throws {
-        guard let threadID = agent.threadId, agent.capabilities.openConversation else {
-            throw ConversationAgentNavigationError.noConversation
+    func agentRequestTarget(above parent: ConversationAddress) -> ConversationAddress? {
+        var next: ConversationAddress? = parent
+        var visited: Set<ConversationAddress> = []
+        while let address = next, visited.insert(address).inserted {
+            guard let header = model(for: address.hostID)?.conversationList.header(id: address.threadID) else { return nil }
+            if header.acceptsDirectInput { return address }
+            next = header.agentParentAddress(localHostID: address.hostID)
         }
+        return nil
+    }
+
+    func appendAgentRequest(_ request: String, to address: ConversationAddress) async throws {
+        guard let owner = model(for: address.hostID), owner.acceptsWork else { throw ConversationAgentError.hostUnavailable }
+        guard owner.conversationList.header(id: address.threadID)?.acceptsDirectInput == true,
+              let draft = await owner.drafts.draft(for: .thread(address.threadID)), !owner.isRetired
+        else { throw CancellationError() }
+        let document = owner.drafts.document(for: draft)
+        try await document.apply(.append(.init(runs: [.text((document.isEmpty ? "" : "\n\n") + request)])))
+    }
+
+    func stopAgent(_ agent: ConversationAgent, in parent: ConversationAddress) async throws {
         let owner = try activeOwner(hostID: agent.ownerHostId ?? parent.hostID)
-        supersedePendingNavigation()
-        let generation = navigationGeneration
-        let header: ConversationHeader
-        do {
-            header = try await agentThreadHeader(threadID, on: owner.target)
-        } catch {
-            guard navigationIsCurrent(generation) else { return }
-            throw error
-        }
-        guard navigationIsCurrent(generation) else { return }
-        guard !owner.isRetired else { throw CancellationError() }
-        let child = ConversationAddress(hostID: agent.ownerHostId ?? parent.hostID, threadID: threadID)
-        owner.resumeConversation(header)
-        select(target: child.target)
-        agentNavigation = AgentNavigation(parent: parent, child: child)
-    }
-
-    func returnToAgentParent() async throws {
-        guard let navigation = agentNavigation else { return }
-        let owner = try activeOwner(hostID: navigation.parent.hostID)
-        let header = try await agentThreadHeader(navigation.parent.threadID, on: owner.target)
-        guard !owner.isRetired, isShowingConversation(at: navigation.child, on: selectedScreen) else { return }
-        owner.resumeConversation(header)
-        select(target: navigation.parent.target)
-        agentNavigation = nil
-    }
-
-    func sendToAgentParent(_ request: String, from parent: ConversationAddress) async throws {
-        let owner = try activeOwner(hostID: parent.hostID)
-        if owner.activeSessionID != parent.threadID {
-            let header = try await agentThreadHeader(parent.threadID, on: owner.target)
-            guard !owner.isRetired else { throw CancellationError() }
-            owner.resumeConversation(header)
-        }
-        select(target: parent.target)
-        if let document = owner.composerDocument {
-            let text = (document.isEmpty ? "" : "\n\n") + request
-            try await document.apply(.append(.init(runs: [.text(text)])))
-        }
-    }
-
-    func performAgentAction(_ action: ConversationAgentAction, on agent: ConversationAgent, in parent: ConversationAddress, text: String, mutationID: UUID) async throws {
-        let owner = try activeOwner(hostID: agent.ownerHostId ?? parent.hostID)
-        let threadID = agent.ownerThreadId
-        try await owner.target.gatewayClient.agentAction(threadID: threadID, agent: agent, action: action, text: text, mutationID: mutationID)
+        try await owner.target.gatewayClient.stopAgent(threadID: agent.ownerThreadId, agent: agent, mutationID: UUID())
     }
 
     func moveAgent(_ address: ConversationAddress, under parent: ConversationAddress?) async throws {
-        guard let owner = model(for: address.hostID), owner.acceptsWork else { throw ConversationAgentNavigationError.hostUnavailable }
+        guard let owner = model(for: address.hostID), owner.acceptsWork else { throw ConversationAgentError.hostUnavailable }
         try await owner.gatewayClient.setAgentParent(agent: .init(hostId: address.hostID, threadId: address.threadID),
             parent: parent.map { .init(hostId: $0.hostID, threadId: $0.threadID) })
         try Task.checkCancellation()
@@ -1501,15 +1473,9 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
 
     private func activeOwner(hostID: UUID) throws -> ChatScreenModel {
         guard let owner = screen(for: hostID), !owner.isRetired else {
-            throw ConversationAgentNavigationError.hostUnavailable
+            throw ConversationAgentError.hostUnavailable
         }
         return owner
-    }
-
-    private func agentThreadHeader(_ threadID: String, on owner: ChatTargetModel) async throws -> ConversationHeader {
-        let header = try await ConversationHeader.prepare(owner.gatewayClient.readThread(threadID: threadID, includeTurns: false).thread)
-        try Task.checkCancellation()
-        return header
     }
 
     @discardableResult

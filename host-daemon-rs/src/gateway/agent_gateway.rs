@@ -1,5 +1,5 @@
 use super::Gateway;
-use crate::agents::{Agent, State, claude};
+use crate::agents::{Agent, State};
 use crate::rpc::RpcError;
 use crate::rpc::error::RpcCode;
 use anyhow::{Context, Result, ensure};
@@ -17,7 +17,6 @@ pub(super) use stop::CodexStop;
 #[derive(Default)]
 pub(super) struct Runtime {
     pub(super) parents: Mutex<HashMap<String, ParentSnapshot>>,
-    claude_history: Mutex<VecDeque<ClaudeHistorySnapshot>>,
     native_executions: Mutex<VecDeque<NativeExecutionSnapshot>>,
     views: Mutex<VecDeque<AgentViewSnapshot>>,
 }
@@ -103,12 +102,6 @@ struct NativeExecution {
     execution_id: Option<String>,
 }
 
-struct ClaudeHistorySnapshot {
-    root: String,
-    revision: Vec<(PathBuf, Option<crate::storage::file_revision::FileRevision>)>,
-    projection: claude::Projection,
-}
-
 struct AgentViewSnapshot {
     root: String,
     at: Instant,
@@ -127,7 +120,6 @@ pub(super) struct ParentSnapshot {
 pub(super) struct NativeCoverage {
     truncated: bool,
     pub(super) unreadable: Vec<String>,
-    history_limited: bool,
 }
 
 impl NativeCoverage {
@@ -143,9 +135,6 @@ impl NativeCoverage {
             .collect::<Vec<_>>();
         if self.truncated {
             warnings.push(TRUNCATED_NATIVE_AGENTS.into());
-        }
-        if self.history_limited {
-            warnings.push("Some Claude agent history is outside the read window".into());
         }
         warnings
     }

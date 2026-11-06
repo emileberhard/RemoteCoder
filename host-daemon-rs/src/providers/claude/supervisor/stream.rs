@@ -334,9 +334,6 @@ impl ClaudeSupervisor {
                 return;
             }
 
-            self.observe_child_agents(&thread_id, process_group_id, &value)
-                .await;
-
             if is_background_tasks_change(&value) {
                 self.track_background_tasks(&thread_id, process_group_id, &value)
                     .await;

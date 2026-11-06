@@ -9,24 +9,31 @@ struct ConversationTranscriptView: View {
     private var retainedSurfaces: TranscriptSurfaceRetention? { nil }
     #endif
     let screen: ChatScreenModel
+    let workspace: ChatWorkspaceModel
     let focus: ComposerFocus
     let onDismissComposerFocus: () -> Void
-    let onShowAgents: (ConversationAgentsModel) -> Void
+    @Binding var showsAgents: Bool
+    let onOpenAgent: (ConversationAddress) -> Void
     let onReviewChanges: () -> Void
     @State private var openURLAction: OpenURLAction
+    @State private var agentOpener: AgentConversationOpener
 
-    init(screen: ChatScreenModel, focus: ComposerFocus,
+    init(screen: ChatScreenModel, workspace: ChatWorkspaceModel, focus: ComposerFocus,
          onDismissComposerFocus: @escaping () -> Void,
-         onShowAgents: @escaping (ConversationAgentsModel) -> Void,
+         showsAgents: Binding<Bool>,
+         onOpenAgent: @escaping (ConversationAddress) -> Void,
          onReviewChanges: @escaping () -> Void) {
         self.screen = screen
+        self.workspace = workspace
         self.focus = focus
         self.onDismissComposerFocus = onDismissComposerFocus
-        self.onShowAgents = onShowAgents
+        _showsAgents = showsAgents
+        self.onOpenAgent = onOpenAgent
         self.onReviewChanges = onReviewChanges
         _openURLAction = State(initialValue: OpenURLAction { [weak screen] url in
             screen?.openFileURL(url, transition: nil, presentationScope: nil) ?? .discarded
         })
+        _agentOpener = State(initialValue: AgentConversationOpener(hostID: screen.hostID, action: onOpenAgent))
     }
     private let logger = AppLogger(category: "ChatScreen")
 
@@ -43,6 +50,7 @@ struct ConversationTranscriptView: View {
                 .transcriptConversationTransition()
         }
         .environment(\.openURL, openURLAction)
+        .environment(\.agentConversationOpener, agentOpener)
         .htmlVisualEnvironment()
         .environment(\.htmlVisualCaptureAllowed, !screen.isCurrentConversationBusy)
         .environment(\.chatImageSource, ChatImageSource(screen: screen))
@@ -52,6 +60,7 @@ struct ConversationTranscriptView: View {
             openURLAction = OpenURLAction { [weak screen] url in
                 screen?.openFileURL(url, transition: nil, presentationScope: nil) ?? .discarded
             }
+            agentOpener.hostID = screen.hostID
         }
         .transcriptConversationAnimation(identity: transcriptIdentity)
         .onAppear {
@@ -67,6 +76,10 @@ struct ConversationTranscriptView: View {
         #endif
         .onChange(of: transcriptIdentity, initial: true) { _, identity in
             logger.notice("transcript presents identity=\(identity)")
+            showsAgents = false
+        }
+        .onChange(of: hasAgents) { _, hasAgents in
+            if !hasAgents { showsAgents = false }
         }
     }
 
@@ -117,11 +130,14 @@ struct ConversationTranscriptView: View {
         )
     }
 
+    private var hasAgents: Bool { (screen.conversationAgents?.roster.count ?? 0) > 0 }
+
     private var statusPills: ConversationStatusPills? {
         let changes = screen.changeSummary.flatMap { $0.isVisible ? $0 : nil }
-        let agents = screen.conversationAgents.flatMap { ($0.summary?.total ?? 0) > 0 ? $0 : nil }
+        let agents = hasAgents ? screen.conversationAgents : nil
         guard changes != nil || agents != nil else { return nil }
-        return ConversationStatusPills(changes: changes, agents: agents, onReviewChanges: onReviewChanges, onShowAgents: onShowAgents)
+        return ConversationStatusPills(changes: changes, agents: agents, workspace: workspace, showsAgents: $showsAgents,
+                                       onReviewChanges: onReviewChanges, onOpenAgent: onOpenAgent)
     }
 
     private var transcriptIdentity: String {

@@ -1,15 +1,6 @@
 import Foundation
 
-enum ConversationAgentAction: String, Sendable {
-    case message, `continue`, stop
-}
-
-struct AgentNavigation: Equatable, Sendable {
-    let parent: ConversationAddress
-    let child: ConversationAddress
-}
-
-enum ConversationAgentNavigationError: LocalizedError {
+enum ConversationAgentError: LocalizedError {
     case hostUnavailable
     case noConversation
 

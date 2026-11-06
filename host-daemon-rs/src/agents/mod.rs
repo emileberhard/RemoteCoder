@@ -1,4 +1,3 @@
-pub mod claude;
 pub(crate) mod client;
 mod conversation;
 pub(crate) use conversation::conversation_from_header;

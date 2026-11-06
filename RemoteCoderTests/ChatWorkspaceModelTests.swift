@@ -606,58 +606,6 @@ struct ChatWorkspaceModelTests {
         #expect(source.attachments == [file])
     }
 
-    @Test(.timeLimit(.minutes(1))) func aLaterRowChoiceSupersedesAnAgentChildHeader() async throws {
-        let gateway = try FakeGatewayServer(threadID: "claude_child")
-        await gateway.holdThreadRead()
-        let fixture = await WorkspaceFixture(miniGatewayPort: try await gateway.start())
-        defer { await gateway.releaseHeldThreadRead(); await fixture.cleanUp(); await gateway.stop() }
-        let workspace = fixture.workspace
-        let screen = try #require(workspace.selectedScreen)
-        screen.activeConversation = try fixture.thread("claude_parent", updatedAt: 1)
-        let latest = try fixture.thread("claude_latest", updatedAt: 2)
-        await screen.target.conversationList.record(latest)
-        let parent = ConversationAddress(hostID: screen.hostID, threadID: "claude_parent")
-        let destination = ConversationAddress(hostID: screen.hostID, threadID: latest.id)
-        let agent = ConversationAgent(id: "fixture-agent", parentId: nil, ownerThreadId: parent.threadID,
-            threadId: "claude_child", provider: .init(rawValue: "claude"), source: "native", title: "Child",
-            model: nil, state: .completed, capabilities: .init(inspect: true, openConversation: true,
-                message: false, continueWork: false, stop: false, askParent: false),
-            executionId: nil, accountId: nil, lastActiveAt: nil)
-        let opening = Task { try await workspace.openAgentConversation(agent, from: parent) }
-        await gateway.waitForHeldThreadRead()
-
-        #expect(workspace.switchConversation(to: destination) == .changed)
-        await gateway.releaseHeldThreadRead()
-        try await opening.value
-
-        #expect(await waitUntil { workspace.isShowingConversation(at: destination, on: workspace.selectedScreen) })
-        #expect(workspace.agentNavigation == nil)
-    }
-
-    @Test(.timeLimit(.minutes(1))) func anAgentChildHeaderCommitsWhenItsIntentIsCurrent() async throws {
-        let gateway = try FakeGatewayServer(threadID: "claude_child")
-        await gateway.holdThreadRead()
-        let fixture = await WorkspaceFixture(miniGatewayPort: try await gateway.start())
-        defer { await gateway.releaseHeldThreadRead(); await fixture.cleanUp(); await gateway.stop() }
-        let workspace = fixture.workspace
-        let screen = try #require(workspace.selectedScreen)
-        screen.activeConversation = try fixture.thread("claude_parent", updatedAt: 1)
-        let parent = ConversationAddress(hostID: screen.hostID, threadID: "claude_parent")
-        let child = ConversationAddress(hostID: screen.hostID, threadID: "claude_child")
-        let agent = ConversationAgent(id: "fixture-agent", parentId: nil, ownerThreadId: parent.threadID,
-            threadId: child.threadID, provider: .init(rawValue: "claude"), source: "native", title: "Child",
-            model: nil, state: .completed, capabilities: .init(inspect: true, openConversation: true,
-                message: false, continueWork: false, stop: false, askParent: false),
-            executionId: nil, accountId: nil, lastActiveAt: nil)
-        let opening = Task { try await workspace.openAgentConversation(agent, from: parent) }
-        await gateway.waitForHeldThreadRead()
-        await gateway.releaseHeldThreadRead()
-        try await opening.value
-
-        #expect(workspace.isShowingConversation(at: child, on: workspace.selectedScreen))
-        #expect(workspace.agentNavigation == AgentNavigation(parent: parent, child: child))
-    }
-
     @Test func sidebarRowsCarryHostQualifiedAddressesForBothHosts() async throws {
         let fixture = await WorkspaceFixture()
         defer { await fixture.cleanUp() }

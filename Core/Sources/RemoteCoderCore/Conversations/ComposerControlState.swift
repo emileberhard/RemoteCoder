@@ -33,4 +33,9 @@ enum ComposerStopState: Equatable {
         guard let runningTurn else { self = .hidden; return }
         self = isStopping ? .stopping : .ready(runningTurn)
     }
+
+    var readyTurn: RunningTurn? {
+        if case .ready(let turn) = self { return turn }
+        return nil
+    }
 }

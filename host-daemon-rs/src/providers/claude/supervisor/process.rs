@@ -16,7 +16,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::process::{ChildStderr, ChildStdin, ChildStdout};
 use tokio::sync::Mutex;
 use tracing::warn;
@@ -344,11 +343,6 @@ impl ClaudeSupervisor {
                 initialized: false,
                 active_turn: None,
                 background_tasks: Vec::new(),
-                children: crate::agents::claude::Projection::default(),
-                children_generation: SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_nanos(),
                 lifecycle_generation: 1,
                 stderr_ring,
                 _mcp: mcp,
