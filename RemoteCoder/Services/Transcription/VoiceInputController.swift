@@ -34,6 +34,7 @@ final class VoiceInputController {
         let live: LiveTranscription?
         let configuration: TranscriptionConfiguration
         let archive: SharedDictationLibrary.Capture?
+        let started: ContinuousClock.Instant
     }
 
     private enum SavedAudio {
@@ -55,6 +56,8 @@ final class VoiceInputController {
         let live: LiveTranscription?
         let configuration: TranscriptionConfiguration
         let archive: SharedDictationLibrary.Capture?
+        let captured: Duration
+        let stopRequested: ContinuousClock.Instant
     }
 
     private let access: GatewaySpeechAccess
@@ -156,6 +159,7 @@ final class VoiceInputController {
     }
 
     private func stopCapture(onCaptureEnded: (() -> Void)?) async throws {
+        let stopRequested = ContinuousClock.now
         VoiceModeDiagnostics.log("recording stop requested")
         if let starting {
             starting.cancel()
@@ -191,7 +195,8 @@ final class VoiceInputController {
         if released { onCaptureEnded?() }
         isRecording = false
         recordingStartTime = nil
-        stopped = StoppedDictation(recordingID: active.writer.id, audio: audio, live: active.live, configuration: active.configuration, archive: active.archive)
+        stopped = StoppedDictation(recordingID: active.writer.id, audio: audio, live: active.live, configuration: active.configuration,
+                                   archive: active.archive, captured: stopRequested - active.started, stopRequested: stopRequested)
         VoiceModeDiagnostics.log("recording segment stopped")
     }
 
@@ -246,8 +251,9 @@ final class VoiceInputController {
         if let live = stopped.live {
             do {
                 let raw = try await live.dictation.finish()
-                let text = try await archiveResult(raw, recordingID: stopped.recordingID, plan: stopped.archive?.plan, account: stopped.archive?.account, model: stopped.configuration.model.libraryID)
-                VoiceModeDiagnostics.log("transcription completed characters=\(text.count)")
+                let model = stopped.configuration.model.libraryID
+                let text = try await archiveResult(raw, recordingID: stopped.recordingID, plan: stopped.archive?.plan, account: stopped.archive?.account, model: model)
+                Self.logTranscribed(stopped, route: "realtime", model: model, characters: text.count)
                 return Dictation(text: text, recordingID: stopped.recordingID, recording: stopped.audio.recording)
             } catch let error as RealtimeDictationError {
                 let explained = access.explain(error, provider: live.provider)
@@ -260,8 +266,19 @@ final class VoiceInputController {
         case .partial(_, let error), .unsaved(let error): throw DictationError.recordingNotSaved(error)
         }
         let raw = try await transcribe(recording, configuration: stopped.configuration)
-        let text = try await archiveResult(raw, recordingID: recording.id, plan: stopped.archive?.plan, account: stopped.archive?.account, model: stopped.configuration.model.batchLibraryID)
+        let model = stopped.configuration.model.batchLibraryID
+        let text = try await archiveResult(raw, recordingID: recording.id, plan: stopped.archive?.plan, account: stopped.archive?.account, model: model)
+        Self.logTranscribed(stopped, route: "saved", model: model, characters: text.count)
         return Dictation(text: text, recordingID: recording.id, recording: recording)
+    }
+
+    private static func logTranscribed(_ stopped: StoppedDictation, route: StaticString, model: String, characters: Int) {
+        let stopToText = ContinuousClock.now - stopped.stopRequested
+        VoiceModeDiagnostics.log("dictation transcribed route=\(route) model=\(model) audio_ms=\(milliseconds(stopped.captured)) stop_to_text_ms=\(milliseconds(stopToText)) characters=\(characters)")
+    }
+
+    private static func milliseconds(_ duration: Duration) -> Int {
+        Int((duration / .milliseconds(1)).rounded())
     }
 
     /// Archived recordings retain their frozen plan; older recovery recordings
@@ -272,17 +289,16 @@ final class VoiceInputController {
         let configuration = try resolved.map { try TranscriptionConfiguration(plan: $0.plan, local: local) } ?? local
         return try await withAccount(resolved?.account) { [self] in
             let raw = try await transcribe(recording, configuration: configuration)
-            return try await archiveResult(raw, recordingID: recording.id, plan: resolved?.plan, account: resolved?.account, model: configuration.model.batchLibraryID)
+            let text = try await archiveResult(raw, recordingID: recording.id, plan: resolved?.plan, account: resolved?.account, model: configuration.model.batchLibraryID)
+            VoiceModeDiagnostics.log("saved recording transcribed characters=\(text.count)")
+            return text
         }
     }
 
     private func transcribe(_ recording: DictationRecording<ExecutionTarget>, configuration: TranscriptionConfiguration) async throws -> String {
         do {
-            let text = try await transcriber.transcribe(recording, configuration: configuration)
-            VoiceModeDiagnostics.log("transcription completed characters=\(text.count)")
-            return text
+            return try await transcriber.transcribe(recording, configuration: configuration)
         } catch RemoteCoderTranscriptionService.ServiceError.emptyResponse {
-            VoiceModeDiagnostics.log("transcription completed characters=0")
             return ""
         } catch {
             VoiceModeDiagnostics.log("transcription failed error=\(error.localizedDescription)")
@@ -353,7 +369,7 @@ final class VoiceInputController {
             }
             try await recorder.start(output: output)
             if let account = archive?.account { try await library?.validateAccount(account) }
-            active = ActiveDictation(writer: writer, live: live, configuration: configuration, archive: archive)
+            active = ActiveDictation(writer: writer, live: live, configuration: configuration, archive: archive, started: .now)
             inFlightRecordingID = writer.id
         } catch {
             recorder.stop()
