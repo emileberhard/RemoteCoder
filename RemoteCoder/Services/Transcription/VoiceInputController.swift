@@ -34,7 +34,6 @@ final class VoiceInputController {
         let live: LiveTranscription?
         let configuration: TranscriptionConfiguration
         let archive: SharedDictationLibrary.Capture?
-        let started: ContinuousClock.Instant
     }
 
     private enum SavedAudio {
@@ -56,7 +55,6 @@ final class VoiceInputController {
         let live: LiveTranscription?
         let configuration: TranscriptionConfiguration
         let archive: SharedDictationLibrary.Capture?
-        let captured: Duration
         let stopRequested: ContinuousClock.Instant
     }
 
@@ -196,7 +194,7 @@ final class VoiceInputController {
         isRecording = false
         recordingStartTime = nil
         stopped = StoppedDictation(recordingID: active.writer.id, audio: audio, live: active.live, configuration: active.configuration,
-                                   archive: active.archive, captured: stopRequested - active.started, stopRequested: stopRequested)
+                                   archive: active.archive, stopRequested: stopRequested)
         VoiceModeDiagnostics.log("recording segment stopped")
     }
 
@@ -260,6 +258,7 @@ final class VoiceInputController {
                 VoiceModeDiagnostics.log("realtime transcription failed; transcribing the saved recording error=\(explained.localizedDescription)")
             }
         }
+        let route: StaticString = stopped.live == nil ? "saved" : "fallback"
         let recording: DictationRecording<ExecutionTarget>
         switch stopped.audio {
         case .complete(let saved): recording = saved
@@ -268,13 +267,14 @@ final class VoiceInputController {
         let raw = try await transcribe(recording, configuration: stopped.configuration)
         let model = stopped.configuration.model.batchLibraryID
         let text = try await archiveResult(raw, recordingID: recording.id, plan: stopped.archive?.plan, account: stopped.archive?.account, model: model)
-        Self.logTranscribed(stopped, route: "saved", model: model, characters: text.count)
+        Self.logTranscribed(stopped, route: route, model: model, characters: text.count)
         return Dictation(text: text, recordingID: recording.id, recording: recording)
     }
 
     private static func logTranscribed(_ stopped: StoppedDictation, route: StaticString, model: String, characters: Int) {
         let stopToText = ContinuousClock.now - stopped.stopRequested
-        VoiceModeDiagnostics.log("dictation transcribed route=\(route) model=\(model) audio_ms=\(milliseconds(stopped.captured)) stop_to_text_ms=\(milliseconds(stopToText)) characters=\(characters)")
+        let audio = stopped.audio.recording.map { "\(milliseconds($0.duration))" } ?? "unknown"
+        VoiceModeDiagnostics.log("dictation transcribed route=\(route) model=\(model) audio_ms=\(audio) stop_to_text_ms=\(milliseconds(stopToText)) characters=\(characters)")
     }
 
     private static func milliseconds(_ duration: Duration) -> Int {
@@ -369,7 +369,7 @@ final class VoiceInputController {
             }
             try await recorder.start(output: output)
             if let account = archive?.account { try await library?.validateAccount(account) }
-            active = ActiveDictation(writer: writer, live: live, configuration: configuration, archive: archive, started: .now)
+            active = ActiveDictation(writer: writer, live: live, configuration: configuration, archive: archive)
             inFlightRecordingID = writer.id
         } catch {
             recorder.stop()
