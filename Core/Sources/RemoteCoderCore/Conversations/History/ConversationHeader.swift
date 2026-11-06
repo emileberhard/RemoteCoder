@@ -168,7 +168,7 @@ struct ConversationHeader: Codable, Identifiable, Equatable, Sendable {
         agentParentThreadID.map { .init(hostID: agentRelation?.parentHostID ?? localHostID, threadID: $0) }
     }
 
-    var acceptsDirectInput: Bool { !isNativeAgent && canAcceptDirectInput != false }
+    var acceptsDirectInput: Bool { canAcceptDirectInput ?? !spawnedAsSubAgent }
 
     var displayTitle: String {
         if let name, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return name }
