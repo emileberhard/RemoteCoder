@@ -276,9 +276,146 @@ const gnista = (): Variant => {
   };
 };
 
-const variants: readonly Variant[] = [
-  klassisk(), mossan(), prompt(), stugan(), pratbubbla(), rost(), spar(), manskara(), stjarnbild(), gnista(),
-];
+const fonstret = (): Variant => {
+  const pane = (x: number, y: number, fill: string) => `<rect x="${x}" y="${y}" width="170" height="210" rx="14" fill="${fill}"/>`;
+  return {
+    id: "k-fonstret",
+    title: "K · Fönstret",
+    idea: "One window lit in a dark house: someone is awake and working. No character at all.",
+    background: vertical("#14234D", "#0A1430"),
+    layers: [
+      {
+        name: "frame",
+        markup: `<rect x="292" y="252" width="440" height="520" rx="36" fill="#E9EEF7"/><rect x="252" y="772" width="520" height="44" rx="22" fill="#E9EEF7"/>`,
+      },
+      { name: "panes", markup: [pane(328, 288, "#24386F"), pane(526, 288, "#24386F"), pane(328, 526, "#24386F")].join("") },
+      { name: "light", markup: pane(526, 526, palette.amber) },
+    ],
+  };
+};
+
+const taket = (): Variant => ({
+  id: "l-taket",
+  title: "L · Taket",
+  idea: "A roof over a prompt: a home for your agents. Developer DNA, no folklore.",
+  background: vertical("#11493A", "#0A2D24"),
+  layers: [
+    { name: "roof", markup: `<path d="M262 476 L512 266 L762 476" fill="none" stroke="#BFF0D6" stroke-width="66" stroke-linecap="round" stroke-linejoin="round"/>` },
+    {
+      name: "prompt",
+      markup: `<path d="M360 566 L452 648 L360 730" fill="none" stroke="#BFF0D6" stroke-width="54" stroke-linecap="round" stroke-linejoin="round"/><rect x="502" y="704" width="170" height="54" rx="27" fill="#BFF0D6"/>`,
+    },
+  ],
+});
+
+const viska = (): Variant => ({
+  id: "m-viska",
+  title: "M · Viska",
+  idea: "One shape: a chat bubble whose top is the tomte's pointed hood. Chat first, tomte second.",
+  background: vertical("#F1ECFF", "#D7C9FF"),
+  layers: [
+    {
+      name: "bubble",
+      markup: `<path d="M270 860 L330 770 C282 740 262 692 262 640 L262 560 C262 470 330 330 470 222 C540 166 640 160 700 222 C730 252 746 288 750 326 C722 304 692 294 668 300 C722 382 764 470 764 560 L764 640 C764 730 690 800 600 800 L420 800 Z" fill="#5B3FD9" stroke="#5B3FD9" stroke-width="20" stroke-linejoin="round"/>`,
+    },
+    { name: "dots", markup: [420, 512, 604].map((x) => circle([x, 620], 30, palette.snow)).join("") },
+  ],
+});
+
+const dorren = (): Variant => ({
+  id: "n-dorren",
+  title: "N · Dörren",
+  idea: "A little door left ajar with warm light inside: the helper's home, open for you.",
+  background: vertical("#4C6E3D", "#22371B"),
+  layers: [
+    { name: "spill", markup: `<path d="M372 800 L652 800 L780 1024 L244 1024 Z" fill="${palette.amber}" opacity="0.28"/>` },
+    { name: "doorway", markup: `<path d="M372 800 V470 A140 140 0 0 1 652 470 V800 Z" fill="${palette.amber}"/>` },
+    {
+      name: "door",
+      markup: `<path d="M652 800 L652 470 Q676 384 752 394 L752 852 Z" fill="#6B4226" stroke="#6B4226" stroke-width="14" stroke-linejoin="round"/>${circle([726, 640], 16, palette.amber)}`,
+    },
+  ],
+});
+
+const klotet = (): Variant => ({
+  id: "o-klotet",
+  title: "O · Klotet",
+  idea: "A glowing AI orb wearing a tiny dark hat. Modern and playful, wink-level folklore.",
+  background: vertical("#F6F8FC", "#E0E6F3"),
+  layers: [
+    {
+      name: "orb",
+      markup: `<defs><radialGradient id="orb" cx="0.36" cy="0.3" r="0.85"><stop offset="0" stop-color="#A6ECFF"/><stop offset="0.5" stop-color="#6E6BFF"/><stop offset="1" stop-color="#D86BFF"/></radialGradient></defs>${circle([512, 560], 300, "url(#orb)")}`,
+    },
+    { name: "hat", markup: hat({ at: [560, 322], scale: 1.8, rotate: 16 }, "#1F2436") },
+  ],
+});
+
+const lillaT = (): Variant => ({
+  id: "p-lilla-t",
+  title: "P · Lilla t",
+  idea: "A lowercase t whose top comes to a point, a quiet hat nod. A wordmark-grade logo.",
+  background: diagonal("#3C66FF", "#1634C4"),
+  layers: [
+    {
+      name: "t",
+      markup: `<path d="M512 176 L572 292 L572 650 C572 700 596 716 640 716 L676 716 L676 822 L630 822 C520 822 452 772 452 662 L452 292 Z" fill="${palette.snow}" stroke="${palette.snow}" stroke-width="24" stroke-linejoin="round"/><rect x="346" y="392" width="332" height="104" rx="52" fill="${palette.snow}"/>`,
+    },
+  ],
+});
+
+const svarm = (): Variant => {
+  const center: Point = [512, 540];
+  const orbit = (degrees: number): Point => [center[0] + 300 * Math.cos((degrees * Math.PI) / 180), center[1] + 300 * Math.sin((degrees * Math.PI) / 180)];
+  return {
+    id: "q-svarm",
+    title: "Q · Svärm",
+    idea: "Your agents orbiting home base. The product in one picture: many workers, one place.",
+    background: vertical("#0D4A58", "#06222A"),
+    layers: [
+      { name: "orbit", markup: `<circle cx="${center[0]}" cy="${center[1]}" r="300" fill="none" stroke="#7EE0D2" stroke-opacity="0.35" stroke-width="18"/>` },
+      { name: "home", markup: `<path d="M512 388 L640 488 L640 670 L384 670 L384 488 Z" fill="${palette.snow}" stroke="${palette.snow}" stroke-width="36" stroke-linejoin="round"/><rect x="482" y="560" width="60" height="110" rx="10" fill="${palette.amber}"/>` },
+      { name: "agents", markup: [circle(orbit(-58), 48, palette.amber), circle(orbit(162), 38, "#7EE0D2"), circle(orbit(62), 30, palette.snow)].join("") },
+    ],
+  };
+};
+
+const vasen = (): Variant => ({
+  id: "r-vasen",
+  title: "R · Väsen",
+  idea: "A round little helper with a floppy cap: a mascot, not a tomte portrait.",
+  background: vertical("#FFE6CF", "#FFC79E"),
+  layers: [
+    {
+      name: "body",
+      markup: `<path d="M512 400 C680 400 772 520 772 668 C772 790 690 836 512 836 C334 836 252 790 252 668 C252 520 344 400 512 400 Z" fill="#3B3F99"/>`,
+    },
+    { name: "cap", markup: hat({ at: [520, 452], scale: 2.6, rotate: 6 }, palette.ember) },
+    {
+      name: "face",
+      markup: `<ellipse cx="440" cy="640" rx="34" ry="44" fill="${palette.snow}"/><ellipse cx="584" cy="640" rx="34" ry="44" fill="${palette.snow}"/>${circle([448, 652], 17, "#1A1C47")}${circle([592, 652], 17, "#1A1C47")}${circle([382, 724], 26, "#F59AA8", ' opacity="0.8"')}${circle([642, 724], 26, "#F59AA8", ' opacity="0.8"')}`,
+    },
+  ],
+});
+
+const streck = (): Variant => ({
+  id: "s-streck",
+  title: "S · Streck",
+  idea: "C drawn as line art in the old icon's rounded-stroke style. Lighter, more \"developer tool\".",
+  background: { kind: "solid", color: "#000000" },
+  layers: [
+    {
+      name: "hat",
+      markup: `<g transform="${hatTransform({ at: [512, 612], scale: 3.7 })}"><path d="M0 112 C10 80 28 34 54 6 C72 -4 96 12 104 50 M77 34 C86 58 95 86 100 112 Q50 124 0 112" fill="none" stroke="${palette.ember}" stroke-width="${60 / 3.7}" stroke-linecap="round" stroke-linejoin="round"/></g>`,
+    },
+    { name: "cursor", markup: `<rect x="372" y="728" width="280" height="62" rx="31" fill="${palette.ember}"/>` },
+  ],
+});
+
+const rounds: Readonly<Record<string, readonly Variant[]>> = {
+  "round-1": [klassisk(), mossan(), prompt(), stugan(), pratbubbla(), rost(), spar(), manskara(), stjarnbild(), gnista()],
+  "round-2": [prompt(), streck(), fonstret(), taket(), viska(), dorren(), klotet(), lillaT(), svarm(), vasen()],
+};
 
 const backgroundMarkup = (background: Background) => {
   if (background.kind === "solid") {
@@ -341,7 +478,7 @@ const root = dirname(fileURLToPath(import.meta.url));
 const out = join(root, "out");
 rmSync(out, { recursive: true, force: true });
 
-const icons = variants.map((variant) => {
+const render = (variant: Variant) => {
   const dir = join(out, variant.id);
   mkdirSync(join(dir, "layers"), { recursive: true });
   const svg = composite(variant);
@@ -352,7 +489,9 @@ const icons = variants.map((variant) => {
     writeFileSync(join(dir, "layers", `${index + 1}-${layer.name}.svg`), svgDocument("", layer.markup));
   });
   return { variant, uri: dataURI(svg) };
-});
+};
 
-writeFileSync(join(out, "index.html"), page(icons));
-console.log(`${icons.length} variants → ${out}`);
+for (const [round, variants] of Object.entries(rounds)) {
+  writeFileSync(join(out, `${round}.html`), page(variants.map(render)));
+  console.log(`${round}: ${variants.length} variants`);
+}
