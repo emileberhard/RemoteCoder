@@ -88,7 +88,7 @@ struct AgentRoster: View {
     private func modelName(of agent: ConversationAgent) -> String? {
         guard let id = agent.model else { return nil }
         let catalog = workspace.screen(for: agent.ownerHostId ?? model.address.hostID)?.target.modelCatalog
-        return catalog?.option(id: id, threadID: agent.threadId ?? "", modelProvider: nil, effort: nil, fastMode: false)?.displayName ?? id
+        return catalog?.configured(id: id).model?.displayName ?? id
     }
 
     @ViewBuilder
