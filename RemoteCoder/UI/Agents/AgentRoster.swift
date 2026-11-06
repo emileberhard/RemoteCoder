@@ -75,7 +75,8 @@ struct AgentRoster: View {
                 .padding(.bottom, 2)
                 .accessibilityAddTraits(.isHeader)
             ForEach(agents, id: \.identity) { agent in
-                let address = agent.capabilities.openConversation ? agent.address(localHostID: model.address.hostID) : nil
+                let address = agent.capabilities.openConversation ? agent.address(localHostID: model.address.hostID)
+                    .flatMap { workspace.screen(for: $0.hostID) == nil ? nil : $0 } : nil
                 AgentRosterRow(agent: agent, isOpenable: address != nil) {
                     if let address { onOpen(address) }
                 }
@@ -161,7 +162,7 @@ private struct AgentRosterRow: View {
             .padding(.vertical, 8)
             .contentShape(.rect)
         }
-        .buttonStyle(ResponsiveButtonStyle(feedback: .selection, pressedScale: 0.99, pressedOpacity: 0.7))
+        .buttonStyle(ResponsiveButtonStyle(feedback: nil, pressedScale: 0.99, pressedOpacity: 0.7))
         .disabled(!isOpenable)
         .accessibilityElement(children: .combine)
         .accessibilityHint(isOpenable ? "Opens the subagent's conversation" : "")
@@ -235,7 +236,7 @@ struct AgentNote: View {
 
 @MainActor
 final class AgentConversationOpener {
-    private let hostID: UUID
+    var hostID: UUID
     private let action: (ConversationAddress) -> Void
 
     init(hostID: UUID, action: @escaping (ConversationAddress) -> Void) {

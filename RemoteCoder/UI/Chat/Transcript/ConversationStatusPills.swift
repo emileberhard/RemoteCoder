@@ -30,7 +30,7 @@ struct ConversationStatusPills: View {
                     if showsAgents, let agents {
                         AgentRoster(model: agents, workspace: workspace, onOpen: onOpenAgent)
                             .padding(.horizontal, 12)
-                            .padding(.bottom, rosterGap)
+                            .padding(.bottom, rosterGap - StatusPillShape.hitMargin)
                             .transition(rosterTransition)
                     }
                 }

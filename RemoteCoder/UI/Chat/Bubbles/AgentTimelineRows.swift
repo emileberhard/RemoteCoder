@@ -109,7 +109,7 @@ struct TimelineEventRow: View {
         VStack(alignment: .leading, spacing: 8) {
             if let threadID = linkedAgent, let agentOpener {
                 Button { agentOpener.open(threadID: threadID) } label: { summary }
-                    .buttonStyle(ResponsiveButtonStyle(feedback: .selection, pressedScale: 1, pressedOpacity: 0.6))
+                    .buttonStyle(ResponsiveButtonStyle(feedback: nil, pressedScale: 1, pressedOpacity: 0.6))
                     .accessibilityHint("Opens the agent's conversation")
             } else if canExpand {
                 Button(action: toggle) {

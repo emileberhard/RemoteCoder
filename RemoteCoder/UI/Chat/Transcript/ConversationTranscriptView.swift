@@ -60,7 +60,7 @@ struct ConversationTranscriptView: View {
             openURLAction = OpenURLAction { [weak screen] url in
                 screen?.openFileURL(url, transition: nil, presentationScope: nil) ?? .discarded
             }
-            agentOpener = AgentConversationOpener(hostID: screen.hostID, action: onOpenAgent)
+            agentOpener.hostID = screen.hostID
         }
         .transcriptConversationAnimation(identity: transcriptIdentity)
         .onAppear {
@@ -77,6 +77,9 @@ struct ConversationTranscriptView: View {
         .onChange(of: transcriptIdentity, initial: true) { _, identity in
             logger.notice("transcript presents identity=\(identity)")
             showsAgents = false
+        }
+        .onChange(of: hasAgents) { _, hasAgents in
+            if !hasAgents { showsAgents = false }
         }
     }
 
@@ -127,9 +130,11 @@ struct ConversationTranscriptView: View {
         )
     }
 
+    private var hasAgents: Bool { (screen.conversationAgents?.roster.count ?? 0) > 0 }
+
     private var statusPills: ConversationStatusPills? {
         let changes = screen.changeSummary.flatMap { $0.isVisible ? $0 : nil }
-        let agents = screen.conversationAgents.flatMap { $0.roster.count > 0 ? $0 : nil }
+        let agents = hasAgents ? screen.conversationAgents : nil
         guard changes != nil || agents != nil else { return nil }
         return ConversationStatusPills(changes: changes, agents: agents, workspace: workspace, showsAgents: $showsAgents,
                                        onReviewChanges: onReviewChanges, onOpenAgent: onOpenAgent)
