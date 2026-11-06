@@ -279,7 +279,10 @@ kind-specific fields.
   (`operator` or the installation ID), `outcome` (`completed`, `clientClosed`
   including a client that stopped answering pings, or the rejection kind that
   stopped it), the upstream HTTP `status`, the WebSocket
-  `closeCode`, `bytesUp`, `bytesDown` and `durationMs`; or `rejected` with the
+  `closeCode`, `bytesUp`, `bytesDown` and `durationMs`, plus for HTTP relays
+  `bodyEndMs` (when the client's request body ended) and `responseMs` (when the
+  router's response headers arrived), both from relay start and null when that
+  point was never reached; or `rejected` with the
   `rejection` kind for a request refused after authentication. Failed authentication is not
   journalled. Never keys, URLs, query strings, audio or transcripts.
 - `app_logs` — `cap_evicted` when the uploaded app-log store went over its

@@ -33,7 +33,8 @@ pub(super) struct Harness {
     pub(super) installations: InstallationCredentials,
     pub(super) release_stream: Arc<Notify>,
     pub(super) http: reqwest::Client,
-    pub(super) _directory: tempfile::TempDir,
+    journal: Journal,
+    _directory: tempfile::TempDir,
 }
 
 impl Harness {
@@ -48,12 +49,13 @@ impl Harness {
         );
         let release_stream = Arc::new(Notify::new());
         let router = serve(mock_router(Arc::clone(&release_stream))).await;
+        let journal = Journal::open_in(directory.path().join("journal"), 1);
         let relay = SpeechRelay::new(
             OPERATOR.to_owned(),
             installations.clone(),
             Some(RouterConfig::local_for_test(router, key_file)),
             clients,
-            Journal::disabled(),
+            journal.clone(),
         )
         .unwrap();
         let address = serve(relay.router()).await;
@@ -63,8 +65,34 @@ impl Harness {
             installations,
             release_stream,
             http: reqwest::Client::new(),
+            journal,
             _directory: directory,
         }
+    }
+
+    pub(super) async fn relayed(&self) -> Vec<Value> {
+        let directory = self._directory.path().join("journal");
+        for _ in 0..100 {
+            self.journal.drain(Duration::from_secs(5)).await;
+            let records: Vec<Value> = std::fs::read_dir(&directory)
+                .into_iter()
+                .flatten()
+                .flat_map(|file| {
+                    std::fs::read_to_string(file.unwrap().path())
+                        .unwrap_or_default()
+                        .lines()
+                        .map(str::to_owned)
+                        .collect::<Vec<_>>()
+                })
+                .filter_map(|line| serde_json::from_str::<Value>(&line).ok())
+                .filter(|record| record["event"] == "relayed")
+                .collect();
+            if !records.is_empty() {
+                return records;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        Vec::new()
     }
 
     pub(super) async fn enroll(&self, id: &str) -> String {

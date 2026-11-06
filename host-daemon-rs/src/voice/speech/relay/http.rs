@@ -3,7 +3,7 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::task::{Context, Poll};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use axum::body::{Body, Bytes};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, header};
@@ -78,6 +78,7 @@ impl SpeechRelay {
                 body,
                 Arc::clone(&ledger.bytes_up),
                 Arc::clone(&body_failure),
+                (ledger.started, Arc::clone(&ledger.body_ended)),
             ));
         }
         for name in FORWARDED_REQUEST_HEADERS {
@@ -117,6 +118,7 @@ impl SpeechRelay {
         };
 
         ledger.status = Some(response.status().as_u16());
+        ledger.responded = Some(ledger.started.elapsed());
         let mut builder = Response::builder().status(response.status());
         for name in FORWARDED_RESPONSE_HEADERS {
             for value in response.headers().get_all(&name) {
@@ -161,35 +163,43 @@ fn limited_body(
     body: Body,
     bytes_up: Arc<AtomicU64>,
     failure: Arc<OnceLock<Rejection>>,
+    (started, ended): (Instant, Arc<OnceLock<Duration>>),
 ) -> reqwest::Body {
     let state = (body.into_data_stream(), bytes_up, failure);
     reqwest::Body::wrap_stream(futures_util::stream::unfold(
         state,
-        |(mut chunks, bytes_up, failure)| async move {
-            let item = match tokio::time::timeout(REQUEST_BODY_IDLE_TIMEOUT, chunks.next()).await {
-                Ok(None) => return None,
-                Ok(Some(Err(error))) => Err(std::io::Error::other(error)),
-                Ok(Some(Ok(chunk))) => {
-                    let length = chunk.len() as u64;
-                    if bytes_up.fetch_add(length, Ordering::Relaxed) + length
-                        > MAX_REQUEST_BODY_BYTES
-                    {
-                        let _ = failure.set(Rejection::RequestTooLarge);
-                        Err(std::io::Error::other(
-                            "speech request exceeds the relay limit",
-                        ))
-                    } else {
-                        Ok(chunk)
-                    }
-                }
-                Err(_) => {
-                    let _ = failure.set(Rejection::ClientStalled);
-                    Err(std::io::Error::other(
-                        "speech client stopped sending its request",
-                    ))
-                }
-            };
-            Some((item, (chunks, bytes_up, failure)))
+        move |(mut chunks, bytes_up, failure)| {
+            let ended = Arc::clone(&ended);
+            async move {
+                let item =
+                    match tokio::time::timeout(REQUEST_BODY_IDLE_TIMEOUT, chunks.next()).await {
+                        Ok(None) => {
+                            let _ = ended.set(started.elapsed());
+                            return None;
+                        }
+                        Ok(Some(Err(error))) => Err(std::io::Error::other(error)),
+                        Ok(Some(Ok(chunk))) => {
+                            let length = chunk.len() as u64;
+                            if bytes_up.fetch_add(length, Ordering::Relaxed) + length
+                                > MAX_REQUEST_BODY_BYTES
+                            {
+                                let _ = failure.set(Rejection::RequestTooLarge);
+                                Err(std::io::Error::other(
+                                    "speech request exceeds the relay limit",
+                                ))
+                            } else {
+                                Ok(chunk)
+                            }
+                        }
+                        Err(_) => {
+                            let _ = failure.set(Rejection::ClientStalled);
+                            Err(std::io::Error::other(
+                                "speech client stopped sending its request",
+                            ))
+                        }
+                    };
+                Some((item, (chunks, bytes_up, failure)))
+            }
         },
     ))
 }
@@ -282,6 +292,41 @@ mod tests {
         assert!(response.headers().get(REJECTION_HEADER).is_none());
         let body: Value = response.json().await.unwrap();
         assert_eq!(body, json!({"detail": "bad audio", "key": ROUTER_KEY}));
+    }
+
+    #[tokio::test]
+    async fn http_relay_records_when_the_upload_ended_and_the_router_answered() {
+        let harness = Harness::start(SpeechClients::All).await;
+        let paced = futures_util::stream::iter(["first ", "second"]).then(|chunk| async move {
+            if chunk == "second" {
+                tokio::time::sleep(Duration::from_millis(150)).await;
+            }
+            Ok::<_, std::io::Error>(Bytes::from_static(chunk.as_bytes()))
+        });
+        let response = harness
+            .post("/speech/openai/v1/audio/transcriptions", OPERATOR)
+            .header("content-type", "audio/wav")
+            .body(reqwest::Body::wrap_stream(paced))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let echoed: Value = response.json().await.unwrap();
+        assert_eq!(echoed["body"], "first second");
+
+        let records = harness.relayed().await;
+        let [record] = records.as_slice() else {
+            panic!("expected one relayed record, got {records:?}");
+        };
+        let body_end = record["bodyEndMs"].as_u64().unwrap();
+        let response = record["responseMs"].as_u64().unwrap();
+        assert!(body_end >= 150, "{record}");
+        assert!(response >= body_end, "{record}");
+        assert!(
+            record["durationMs"].as_u64().unwrap() >= response,
+            "{record}"
+        );
+        assert_eq!(record["outcome"], "completed");
     }
 
     #[tokio::test]

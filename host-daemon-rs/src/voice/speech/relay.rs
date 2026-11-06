@@ -198,6 +198,8 @@ struct Ledger {
     transport: Transport,
     principal: String,
     started: Instant,
+    body_ended: Arc<OnceLock<Duration>>,
+    responded: Option<Duration>,
     bytes_up: Arc<AtomicU64>,
     bytes_down: u64,
     status: Option<u16>,
@@ -225,6 +227,10 @@ impl Ledger {
     }
 }
 
+fn milliseconds(elapsed: Duration) -> u64 {
+    u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
+}
+
 impl Drop for Ledger {
     fn drop(&mut self) {
         self.journal.speech(
@@ -239,7 +245,9 @@ impl Drop for Ledger {
                 "closeCode": self.close_code,
                 "bytesUp": self.bytes_up.load(Ordering::Relaxed),
                 "bytesDown": self.bytes_down,
-                "durationMs": u64::try_from(self.started.elapsed().as_millis()).unwrap_or(u64::MAX),
+                "bodyEndMs": self.body_ended.get().map(|elapsed| milliseconds(*elapsed)),
+                "responseMs": self.responded.map(milliseconds),
+                "durationMs": milliseconds(self.started.elapsed()),
             }),
         );
     }
@@ -386,6 +394,8 @@ impl SpeechRelay {
                 transport,
                 principal,
                 started: Instant::now(),
+                body_ended: Arc::new(OnceLock::new()),
+                responded: None,
                 bytes_up: Arc::new(AtomicU64::new(0)),
                 bytes_down: 0,
                 status: None,
