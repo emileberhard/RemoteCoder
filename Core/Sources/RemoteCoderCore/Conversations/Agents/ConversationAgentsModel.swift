@@ -13,7 +13,7 @@ final class ConversationAgentsModel: Identifiable {
     private(set) var error: String?
     private(set) var hasLoaded = false
     private(set) var coverage: [ClusterCoverage] = []
-    private(set) var coverageByHost: [UUID: ClusterCoverage] = [:]
+    @ObservationIgnored private var coverageByHost: [UUID: ClusterCoverage] = [:]
     @ObservationIgnored var clusterHosts: @MainActor () -> [ConversationAgentsHost] = { [] }
     @ObservationIgnored var knownCoverage: @MainActor () -> [ClusterCoverage] = { [] }
     @ObservationIgnored private var rowsByHost: [UUID: [ConversationAgent]] = [:]
@@ -26,7 +26,6 @@ final class ConversationAgentsModel: Identifiable {
     @ObservationIgnored private var projectionVersion = 0
     @ObservationIgnored private var projectionDirty = false
     @ObservationIgnored private var lastPublication: ContinuousClock.Instant?
-    private(set) var isRefreshing = false
     @ObservationIgnored private var refreshedAt: Date?
     @ObservationIgnored private let now: @Sendable () -> Date
     @ObservationIgnored private var observedChildren: Set<String>?
@@ -97,7 +96,6 @@ final class ConversationAgentsModel: Identifiable {
         guard refreshTask == nil else { return }
         let id = UUID()
         refreshID = id
-        isRefreshing = true
         var hosts = clusterHosts()
         if let index = hosts.firstIndex(where: { $0.id == address.hostID }) { hosts.swapAt(0, index) }
         else { hosts.insert(.init(id: address.hostID, name: "Gateway", gateway: gateway, supportsCrossHost: false), at: 0) }
@@ -193,7 +191,6 @@ final class ConversationAgentsModel: Identifiable {
             return
         }
         refreshID = nil
-        isRefreshing = false
         let completed = waiters.values
         waiters.removeAll()
         for waiter in completed { waiter.resume() }
@@ -209,6 +206,5 @@ final class ConversationAgentsModel: Identifiable {
         projectionTask?.cancel()
         projectionTask = nil
         refreshID = nil
-        isRefreshing = false
     }
 }

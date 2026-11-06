@@ -4,9 +4,8 @@ import Testing
 
 struct ConversationAgentRosterTests {
     private func agent(_ id: String, parent: String? = nil, state: String, activeAt: Int64?) throws -> ConversationAgent {
-        var fields: [String: Any] = ["id": id, "ownerThreadId": "root", "threadId": id, "provider": "codex", "source": "native",
-            "title": id, "state": state, "capabilities": ["inspect": true, "openConversation": true, "message": false,
-                "continueWork": false, "stop": false, "askParent": true]]
+        var fields: [String: Any] = ["id": id, "ownerThreadId": "root", "threadId": id, "title": id, "state": state,
+            "capabilities": ["openConversation": true, "stop": false]]
         fields["parentId"] = parent
         fields["lastActiveAt"] = activeAt
         return try JSONDecoder().decode(ConversationAgent.self, from: JSONSerialization.data(withJSONObject: fields))

@@ -47,7 +47,6 @@ struct ConversationAgentsTests {
          "capabilities": {"inspect": true, "openConversation": false, "message": false, "continueWork": false, "stop": false, "askParent": false}}
         """#.utf8)
         let agent = try JSONDecoder().decode(ConversationAgent.self, from: agentJSON)
-        #expect(agent.provider.displayName == "gemini")
         #expect(agent.state == .unknown)
     }
 }
