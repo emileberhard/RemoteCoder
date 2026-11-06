@@ -129,7 +129,7 @@ final class ConversationList {
         else { header = try await service.readHeader(threadID: threadID) }
         try Task.checkCancellation()
         guard !headerReadsRetired else { throw CancellationError() }
-        guard header.id == threadID else { throw ConversationAgentNavigationError.noConversation }
+        guard header.id == threadID else { throw ConversationAgentError.noConversation }
         header.agentClassification = parent.map {
             .child(.init(parentHostID: $0.hostID, parentThreadId: $0.threadID, parentAccountId: nil, agentId: threadID))
         } ?? .root

@@ -20,7 +20,7 @@ struct ChatScreenChrome: ViewModifier {
             .navigationSubtitle(subtitle)
             .toolbar(id: "chat") {
                 ToolbarItem(id: "return-to-parent", placement: .navigation) { returnToParentButton }
-                    .hidden(screen.subagentContext == nil)
+                    .hidden(screen.agentParent == nil)
                 ToolbarItem(id: "folder", placement: .primaryAction) { folderMenu }
                 ToolbarSpacer(.fixed, placement: .primaryAction)
                 ToolbarItem(id: "stop", placement: .primaryAction) { stopButton }

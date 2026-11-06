@@ -1,6 +1,6 @@
 import Foundation
 
-enum ConversationAgentNavigationError: LocalizedError {
+enum ConversationAgentError: LocalizedError {
     case hostUnavailable
     case noConversation
 
@@ -10,11 +10,4 @@ enum ConversationAgentNavigationError: LocalizedError {
         case .noConversation: "This agent does not expose a separate conversation."
         }
     }
-}
-
-struct SubagentContext: Equatable, Sendable {
-    let threadID: String
-    let title: String
-    let parent: ConversationAddress
-    let parentTitle: String?
 }

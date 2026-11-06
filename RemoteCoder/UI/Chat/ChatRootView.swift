@@ -651,13 +651,8 @@ private struct ChatScreen: View {
                     fileImportRequest: fileImportRequest
                 )
             } else if screen.activeConversation?.acceptsDirectInput == false {
-                SubagentControls(
-                    canStop: screen.composerStopState.readyTurn != nil,
-                    hasQuestion: screen.pendingQuestion != nil,
-                    onViewQuestion: { if let question = screen.pendingQuestion { reveal(question: question) } },
-                    onAskParent: screen.subagentContext.map { context in { askAgentParent(context) } },
-                    onStop: { if let turn = screen.composerStopState.readyTurn { screen.stopTurn(turn) } }
-                )
+                SubagentControls(screen: screen, workspace: workspace, onViewQuestion: reveal(question:),
+                                 onAskParent: askAgentParent(at:))
             }
         }
         .padding(.horizontal, 12)
@@ -750,17 +745,18 @@ private struct ChatScreen: View {
     }
 
     private func returnToAgentParent() {
-        guard let parent = screen.subagentContext?.parent else { return }
+        guard let parent = screen.agentParent else { return }
         _ = selectConversation(parent)
     }
 
-    private func askAgentParent(_ context: SubagentContext) {
+    private func askAgentParent(at target: ConversationAddress) {
+        guard let request = screen.subagentContext?.parentRequest else { return }
         let source = screen
+        guard selectConversation(target) != .refusedWhileDictating else { return }
         Task {
             do {
-                try await workspace.sendToAgentParent(AgentPrompts.parentRequest(title: context.title, threadID: context.threadID),
-                                                      from: context.parent)
-                inputFocused = true
+                try await workspace.appendAgentRequest(request, to: target)
+                if workspace.isShowingConversation(at: target, on: window.selectedScreen) { inputFocused = true }
             } catch is CancellationError {
             } catch {
                 source.present(.conversation(error.localizedDescription))

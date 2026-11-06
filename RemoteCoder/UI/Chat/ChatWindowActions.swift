@@ -347,7 +347,7 @@ fileprivate struct ChatWindowActionContext {
         if fastModel == nil { enabled.remove(.toggleFastMode) }
         if (screen.conversationAgents?.roster.count ?? 0) == 0 { enabled.remove(.showAgents) }
         if screen.workingDirectory == nil { enabled.remove(.reviewChanges) }
-        if screen.subagentContext == nil { enabled.remove(.returnToParent) }
+        if screen.agentParent == nil { enabled.remove(.returnToParent) }
         let canSettle = settlement == .unsettled && conversation.map { workspace.isRunning($0) } == false
         if settlement != .settled && !canSettle { enabled.remove(.settle) }
         return ChatWindowCommandState(

@@ -282,7 +282,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         guard let host = settings.hosts.first(where: { $0.id == hostID })?.configuration else { return }
         guard host.gatewayID != host.id else { return }
         guard !isVerifyingIdentity else { throw GatewayIdentityMigration.MigrationFailure.verificationInProgress }
-        guard let source = model(for: hostID) else { throw ConversationAgentNavigationError.hostUnavailable }
+        guard let source = model(for: hostID) else { throw ConversationAgentError.hostUnavailable }
         isVerifyingIdentity = true
         defer { isVerifyingIdentity = false }
         let identity = try await source.hostServices.routes.identity()
@@ -1416,18 +1416,24 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         screen?.openAddress == address
     }
 
-    func sendToAgentParent(_ request: String, from parent: ConversationAddress) async throws {
-        let owner = try activeOwner(hostID: parent.hostID)
-        if owner.activeSessionID != parent.threadID {
-            let header = try await agentThreadHeader(parent.threadID, on: owner.target)
-            guard !owner.isRetired else { throw CancellationError() }
-            owner.resumeConversation(header)
+    func agentRequestTarget(above parent: ConversationAddress) -> ConversationAddress? {
+        var next: ConversationAddress? = parent
+        var visited: Set<ConversationAddress> = []
+        while let address = next, visited.insert(address).inserted {
+            guard let header = model(for: address.hostID)?.conversationList.header(id: address.threadID) else { return nil }
+            if header.acceptsDirectInput { return address }
+            next = header.agentParentAddress(localHostID: address.hostID)
         }
-        select(target: parent.target)
-        if let document = owner.composerDocument {
-            let text = (document.isEmpty ? "" : "\n\n") + request
-            try await document.apply(.append(.init(runs: [.text(text)])))
-        }
+        return nil
+    }
+
+    func appendAgentRequest(_ request: String, to address: ConversationAddress) async throws {
+        guard let owner = model(for: address.hostID), owner.acceptsWork else { throw ConversationAgentError.hostUnavailable }
+        guard owner.conversationList.header(id: address.threadID)?.acceptsDirectInput == true,
+              let draft = await owner.drafts.draft(for: .thread(address.threadID)), !owner.isRetired
+        else { throw CancellationError() }
+        let document = owner.drafts.document(for: draft)
+        try await document.apply(.append(.init(runs: [.text((document.isEmpty ? "" : "\n\n") + request)])))
     }
 
     func stopAgent(_ agent: ConversationAgent, in parent: ConversationAddress) async throws {
@@ -1436,7 +1442,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
     }
 
     func moveAgent(_ address: ConversationAddress, under parent: ConversationAddress?) async throws {
-        guard let owner = model(for: address.hostID), owner.acceptsWork else { throw ConversationAgentNavigationError.hostUnavailable }
+        guard let owner = model(for: address.hostID), owner.acceptsWork else { throw ConversationAgentError.hostUnavailable }
         try await owner.gatewayClient.setAgentParent(agent: .init(hostId: address.hostID, threadId: address.threadID),
             parent: parent.map { .init(hostId: $0.hostID, threadId: $0.threadID) })
         try Task.checkCancellation()
@@ -1467,15 +1473,9 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
 
     private func activeOwner(hostID: UUID) throws -> ChatScreenModel {
         guard let owner = screen(for: hostID), !owner.isRetired else {
-            throw ConversationAgentNavigationError.hostUnavailable
+            throw ConversationAgentError.hostUnavailable
         }
         return owner
-    }
-
-    private func agentThreadHeader(_ threadID: String, on owner: ChatTargetModel) async throws -> ConversationHeader {
-        let header = try await ConversationHeader.prepare(owner.gatewayClient.readThread(threadID: threadID, includeTurns: false).thread)
-        try Task.checkCancellation()
-        return header
     }
 
     @discardableResult

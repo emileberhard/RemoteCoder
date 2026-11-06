@@ -43,5 +43,5 @@ struct ChatScreenToolbar: View {
         .accessibilityIdentifier(returnsToParent ? "return-to-parent" : "open-conversations")
     }
 
-    private var returnsToParent: Bool { screen.subagentContext != nil }
+    private var returnsToParent: Bool { screen.agentParent != nil }
 }

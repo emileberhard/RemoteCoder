@@ -25,11 +25,10 @@ struct SubagentHeader: View {
 }
 
 struct SubagentControls: View {
-    let canStop: Bool
-    let hasQuestion: Bool
-    let onViewQuestion: () -> Void
-    let onAskParent: (() -> Void)?
-    let onStop: () -> Void
+    let screen: ChatScreenModel
+    let workspace: ChatWorkspaceModel
+    let onViewQuestion: (QuestionPrompt) -> Void
+    let onAskParent: (ConversationAddress) -> Void
 
     var body: some View {
         HStack(spacing: 12) {
@@ -37,14 +36,14 @@ struct SubagentControls: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
             Spacer(minLength: 0)
-            if hasQuestion {
-                Button("View Question", action: onViewQuestion)
+            if let question = screen.pendingQuestion {
+                Button("View Question") { onViewQuestion(question) }
             }
-            if let onAskParent {
-                Button("Ask Parent", action: onAskParent)
+            if let parent = screen.agentParent, let target = workspace.agentRequestTarget(above: parent) {
+                Button("Ask Parent") { onAskParent(target) }
             }
-            if canStop {
-                Button("Stop", role: .destructive, action: onStop)
+            if let turn = screen.turnStopState.readyTurn {
+                Button("Stop", role: .destructive) { screen.stopTurn(turn) }
                     .accessibilityIdentifier("subagent-stop")
             }
         }
