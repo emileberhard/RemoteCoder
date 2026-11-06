@@ -37,11 +37,10 @@ struct OriginalDictationCaptureTests {
         let id = try #require(transcriber.recordingIDs.first)
         #expect(try await screen.drafts.hasSavedReceipt(for: id))
         #expect(try await recordings.listedIDs().isEmpty)
-        #expect(try archivedResultTexts(in: directory, capture: id).isEmpty)
         await seal.waitUntilStarted()
+        #expect(try await waitUntil { try archivedResultTexts(in: directory, capture: id) == ["Synthetic archival dictation"] })
         await seal.release()
         await library.finishArchiving()
-        #expect(try archivedResultTexts(in: directory, capture: id) == ["Synthetic archival dictation"])
         let container = try #require(Bundle.main.object(forInfoDictionaryKey: "RemoteCoderDictationContainer") as? String)
         let archive = try DictationLibraryStore(directory: directory, source: "fixture-inspection", capacityBytes: 536_870_912,
                                                containerIdentifier: container)
@@ -96,6 +95,7 @@ private func archivedResultTexts(in directory: URL, capture id: UUID) throws -> 
         let results = partition.appending(path: "\(id.uuidString)/results")
         guard FileManager.default.fileExists(atPath: results.path) else { return [String]() }
         return try FileManager.default.contentsOfDirectory(at: results, includingPropertiesForKeys: nil)
+            .filter { $0.pathExtension == "json" }
             .map { try decoder.decode(DictationResultVersion.self, from: Data(contentsOf: $0)).text }
     }
 }

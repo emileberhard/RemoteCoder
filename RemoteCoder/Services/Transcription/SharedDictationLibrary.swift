@@ -18,7 +18,6 @@ final class SharedDictationLibrary {
     private(set) var modelResolution: String?
     private(set) var profile: DictationProfile?
     private(set) var isSavingSettings = false
-    private(set) var currentAccount: DictationAccountSession?
     var isEnabled: Bool {
         didSet {
             defaults.set(isEnabled, forKey: Self.enabledKey)
@@ -35,8 +34,10 @@ final class SharedDictationLibrary {
     @ObservationIgnored private var settingsTask: Task<Void, Never>?
     @ObservationIgnored private var accountTask: Task<Void, Never>?
     @ObservationIgnored private var profileAccount: DictationAccountSession?
-    @ObservationIgnored private var archiving: Task<Void, Never>?
-    @ObservationIgnored private var archivingID: UUID?
+    @ObservationIgnored private var archiving: [UUID: Task<Void, Never>] = [:]
+    @ObservationIgnored private var unsavedResults: [UUID: DictationResultVersion] = [:]
+    @ObservationIgnored private let logger = AppLogger(category: "DictationLibrary")
+    private var accountRevision = 0
     @ObservationIgnored private let finalize: @Sendable (DictationCaptureWriter) async throws -> Void
     @ObservationIgnored private var storeTask: Task<DictationLibraryStore, any Error>?
 
@@ -70,10 +71,8 @@ final class SharedDictationLibrary {
                 return nil
             case .unverified, .unavailable: throw DictationLibraryError.accountUnavailable
             }
-            guard let confirmedAccount = await store.accountSession() else { throw DictationLibraryError.accountUnavailable }
-            currentAccount = confirmedAccount
-            account = confirmedAccount
             plan = try await store.makePlan(context: .chat, capabilities: capabilities)
+            account = plan.accountSession
         } catch is CancellationError {
             throw CancellationError()
         } catch {
@@ -108,10 +107,10 @@ final class SharedDictationLibrary {
 
     func finish(_ capture: Capture) {
         guard let writer = capture.writer else { return }
-        enqueueArchiving { [self] in
+        startArchiving { [self] in
             do {
                 try await finalize(writer)
-                status = "Saved on this device"
+                status = unsavedResults.isEmpty ? "Saved on this device" : unsavedResultsStatus
                 requestPublication()
             } catch {
                 status = "Recording retained for recovery: \(error.localizedDescription)"
@@ -120,30 +119,47 @@ final class SharedDictationLibrary {
     }
 
     func finishArchiving() async {
-        await archiving?.value
+        while let task = archiving.values.first { await task.value }
     }
 
-    private func enqueueArchiving(_ work: @escaping @MainActor () async -> Void) {
-        let previous = archiving
+    private func startArchiving(_ work: @escaping @MainActor () async -> Void) {
         let id = UUID()
-        archivingID = id
-        archiving = Task(priority: .utility) {
-            await previous?.value
+        archiving[id] = Task(priority: .utility) { [self] in
             await work()
-            if archivingID == id { archiving = nil }
+            archiving[id] = nil
         }
     }
 
     private func archive(_ version: DictationResultVersion) {
         guard version.plan.archiveEnabled else { requestPublication(); return }
-        enqueueArchiving { [self] in
-            do {
-                try await store().addResult(version)
-                requestPublication()
-            } catch {
-                status = "Original retained · result could not be saved: \(error.localizedDescription)"
+        startArchiving { [self] in
+            if await save(version) { requestPublication() }
+        }
+    }
+
+    @discardableResult private func save(_ version: DictationResultVersion) async -> Bool {
+        do {
+            try await store().addResult(version)
+            unsavedResults[version.id] = nil
+            return true
+        } catch {
+            switch error {
+            case DictationLibraryError.invalidCapture(_), DictationLibraryError.contentConflict(_):
+                unsavedResults[version.id] = nil
+                status = "Original retained · a transcript could not be saved to the library"
+                logger.error("dictation result cannot be saved: \(String(reflecting: error))")
+            default:
+                if unsavedResults.updateValue(version, forKey: version.id) == nil {
+                    logger.error("dictation result not saved; retained for retry: \(error.localizedDescription)")
+                }
+                status = unsavedResultsStatus
             }
         }
+        return false
+    }
+
+    private var unsavedResultsStatus: String {
+        "Original retained · \(unsavedResults.count) transcripts not yet saved to the library"
     }
 
     func model(fallback: TranscriptionModel) -> TranscriptionModel {
@@ -166,15 +182,15 @@ final class SharedDictationLibrary {
             defer { isSavingSettings = false; settingsTask = nil }
             do {
                 let store = try await store()
-                try await store.validateAccountSession(account)
+                try store.validateAccountSession(account)
                 guard let snapshot = try await store.refresh(), snapshot.accountIdentifier == account.accountIdentifier else {
                     throw DictationLibraryError.profileUnavailable
                 }
-                try await store.validateAccountSession(account)
+                try store.validateAccountSession(account)
                 var value = snapshot.profile
                 update(&value)
                 try await store.saveProfile(value, session: account)
-                try await store.validateAccountSession(account)
+                try store.validateAccountSession(account)
                 guard isEnabled else { return }
                 profileAccount = account
                 profile = value
@@ -194,11 +210,10 @@ final class SharedDictationLibrary {
     }
 
     private func verifiedPlan(for id: UUID, store: DictationLibraryStore) async throws -> (plan: DictationPlan, account: DictationAccountSession)? {
-        let account = await store.accountSession()
+        let account = store.accountSession()
         guard let capture = try await store.capture(id: id) else { return nil }
         guard let account else { throw DictationLibraryError.accountUnavailable }
-        try await store.validateAccountSession(account)
-        currentAccount = account
+        try store.validateAccountSession(account)
         return (capture.plan, account)
     }
 
@@ -246,18 +261,20 @@ final class SharedDictationLibrary {
         guard isEnabled else { return }
         do {
             let store = try await store()
+            for version in unsavedResults.values { await save(version) }
             _ = try await store.recoverInterruptedCaptures()
             _ = try await store.refresh()
             let profile = await store.profileState()
-            let account = await store.accountSession()
-            if let account { try await store.validateAccountSession(account) }
+            let account = store.accountSession()
             if case .ready(let snapshot) = profile, snapshot.accountIdentifier == account?.accountIdentifier {
                 profileAccount = account
                 self.profile = snapshot.profile
             } else { self.profile = nil }
             let pending = try await store.publishPending()
             unassignedCaptureCount = pending.unverifiedCaptureCount
-            if let failure = pending.failures.first {
+            if !unsavedResults.isEmpty {
+                status = unsavedResultsStatus
+            } else if let failure = pending.failures.first {
                 status = "\(pending.failures.count) recordings need attention: \(failure.message)"
             } else if pending.heldCaptureCount > 0 {
                 status = "\(pending.heldCaptureCount) recordings held for account reconciliation"
@@ -272,7 +289,7 @@ final class SharedDictationLibrary {
             }
         } catch is CancellationError {
         } catch {
-            status = "Saved on this device · upload pending: \(error.localizedDescription)"
+            status = unsavedResults.isEmpty ? "Saved on this device · upload pending: \(error.localizedDescription)" : unsavedResultsStatus
         }
     }
 
@@ -285,7 +302,7 @@ final class SharedDictationLibrary {
         do {
             let store = try await store()
             _ = try await store.refresh()
-            guard let account = await store.accountSession() else { throw DictationLibraryError.accountUnavailable }
+            guard let account = store.accountSession() else { throw DictationLibraryError.accountUnavailable }
             return account
         } catch {
             status = "Local audio retained: \(error.localizedDescription)"
@@ -314,12 +331,14 @@ final class SharedDictationLibrary {
         }
     }
 
-    func validateAccount(_ account: DictationAccountSession) throws {
-        guard currentAccount == account else { throw DictationLibraryError.accountChanged }
+    func validateAccount(_ account: DictationAccountSession) async throws {
+        try await store().validateAccountSession(account)
     }
 
-    func waitUntilAccountChanges(from account: DictationAccountSession) async {
-        for await session in Observations({ @MainActor [self] in currentAccount }) where session != account { return }
+    func waitForAccountChange(from account: DictationAccountSession) async throws {
+        let store = try await store()
+        for await _ in Observations({ @MainActor [self] in accountRevision }) where store.accountSession() != account { return }
+        throw CancellationError()
     }
 
     func accountChanged() {
@@ -342,11 +361,10 @@ final class SharedDictationLibrary {
 
     private func followAccount(of store: DictationLibraryStore) async {
         let sessions = await store.accountEvents()
-        currentAccount = await store.accountSession()
         accountTask = Task { [weak self] in
             for await session in sessions {
                 guard let self else { return }
-                currentAccount = session
+                accountRevision &+= 1
                 if session != profileAccount { profile = nil; profileAccount = nil }
             }
         }

@@ -1770,7 +1770,7 @@ The gateway side is in `host-daemon-rs/AGENTS.md`; both paths are in
     WebRTC.
 - **Shared library opt-in.** The workspace owns `SharedDictationLibrary`; the
   device-local choice is off by default. It freezes a shared chat plan and
-  journals original microphone buffers before provider resampling. Connected model/language controls edit the shared profile; composer UI contains no library status. The workspace owns and drains utility-priority original sealing and result writes independently of stop-to-text delivery, which checks the account against the library's main-actor copy and never waits on the store. The shared
+  journals original microphone buffers before provider resampling. Connected model/language controls edit the shared profile; composer UI contains no library status. The workspace owns and drains utility-priority original sealing and result writes independently of each other and of stop-to-text delivery, which checks the account through the store's synchronous session snapshot and never waits on the store actor. Failed result writes stay queued for the next publication pass and keep their status visible. The shared
   capture and provider recovery recording use one UUID but separate lifetimes:
   draft receipts never authorize archival deletion. Unconfirmed owners remain
   held; recovery of a known other-account capture is fenced. The 512 MiB spool
@@ -1788,9 +1788,11 @@ The gateway side is in `host-daemon-rs/AGENTS.md`; both paths are in
   - The writer opens, capture starts and the `RealtimeDictation` starts
     connecting, with nothing waiting on the network. Each chunk goes to the
     writer, then to the dictation, so an offline dictation still records.
-  - At stop, `RealtimeDictation.finish()` starts as soon as the recovery writer
-    finishes, before the audio session is released, and succeeds only once the
-    provider finalizes the final commit. Any `RealtimeDictationError`, including a failed
+  - At stop, `RealtimeDictation.endInput()` runs as soon as the recovery writer
+    finishes, before the audio session is released, so the provider finalizes
+    while the session winds down; `finish()` succeeds only once the provider
+    finalizes the final commit. Termination and account-change stops cancel the
+    dictation first, so they never commit audio that would be discarded. Any `RealtimeDictationError`, including a failed
     connect, an early stream end and a finalization timeout, makes
     `VoiceInputController` transcribe the saved recording once with the
     provider's batch model before reporting the failure. A cancellation keeps

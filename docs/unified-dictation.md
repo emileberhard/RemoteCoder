@@ -70,20 +70,25 @@ live simulator test; ordinary test, macOS build and archive snapshots exclude it
 
 ## Stop latency
 
-The workspace-owned library serializes original sealing and result versions at
-utility priority and retains every queued task. Recording stop admits that work
-without awaiting Opus encoding, result writes or cloud publication. Text delivery
-never waits on `DictationLibraryStore`: its account checks read the library's
-main-actor copy of the store's account events, and a store busy with publication
-cannot delay them. The live upload finishes as soon as the recovery writer has
-finished, before the audio session is released. Provider recovery audio and its
-durable draft receipt remain independent. Termination drains the queue; a process
-kill leaves the microphone-rate PCM journal recoverable, and a failed result
-write shows in the library status without failing the dictation.
+The workspace-owned library runs original sealing and each result write as its
+own utility-priority task and retains them until they finish, so a result never
+waits for Opus encoding. Recording stop admits that work without awaiting
+encoding, result writes or cloud publication. Stop-to-text delivery never waits
+on the `DictationLibraryStore` actor: account checks read the store's synchronous
+session snapshot, and account monitors wake on the library's observed account
+events, so a store busy with publication cannot delay them. The live upload ends
+its input as soon as the recovery writer has finished, before the audio session
+is released. Provider recovery audio and its durable draft receipt remain
+independent. Termination drains the tasks. A process kill leaves the
+microphone-rate PCM journal recoverable but loses a result not yet written, so
+that original stays in the library without its transcript. A failed result
+write stays queued in memory for the next publication pass, and its count stays
+in the library status without failing the dictation; a write that can never
+succeed, for a missing capture or a conflicting version, is logged and dropped.
 
 The blocked-encoder regression test delivers and durably receipts composer text
-while original sealing and the result write wait behind it, then checks the
-retained original and its provider result. The live
+and writes its provider result while original sealing is still blocked, then
+checks the retained original. The live
 Azure test drives the actual composer start/stop path, production factory,
 progressive upload, result and draft persistence with identical synthetic audio.
 Its measured exit includes draft flushing; audio hardware is injected separately.
