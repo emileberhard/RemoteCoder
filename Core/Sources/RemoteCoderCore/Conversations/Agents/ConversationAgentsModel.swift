@@ -170,12 +170,12 @@ final class ConversationAgentsModel: Identifiable {
                         coverage: self.pendingCoverage, hostOrder: self.hostOrder)
                     guard self.refreshID == refresh, !Task.isCancelled else { return }
                     guard self.projectionVersion == version else { self.projectionDirty = true; continue }
-                    self.agents = prepared.agents
-                    self.roster = prepared.roster
-                    self.warnings = prepared.warnings
-                    self.coverage = prepared.coverage
+                    if self.agents != prepared.agents { self.agents = prepared.agents }
+                    if self.roster != prepared.roster { self.roster = prepared.roster }
+                    if self.warnings != prepared.warnings { self.warnings = prepared.warnings }
+                    if self.coverage != prepared.coverage { self.coverage = prepared.coverage }
                     self.coverageByHost = prepared.coverageByHost
-                    self.hasLoaded = self.hasLoaded || !self.successfulReads.isEmpty
+                    if !self.hasLoaded, !self.successfulReads.isEmpty { self.hasLoaded = true }
                     self.lastPublication = .now
                 } catch { return }
             }

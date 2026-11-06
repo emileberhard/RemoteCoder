@@ -1,9 +1,13 @@
 import SwiftUI
 
 struct SubagentHeader: View {
-    let context: SubagentContext
+    let screen: ChatScreenModel
 
     var body: some View {
+        if let context = screen.subagentContext { header(context) }
+    }
+
+    private func header(_ context: SubagentContext) -> some View {
         VStack(spacing: 1) {
             HStack(spacing: 6) {
                 AgentIdentityDot(key: context.threadID)

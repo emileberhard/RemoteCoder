@@ -16,8 +16,8 @@ struct ChatHeader<Leading: View, Trailing: View>: View {
                 leading
 
                 Group {
-                    if let subagent = screen.subagentContext {
-                        SubagentHeader(context: subagent)
+                    if screen.agentParent != nil {
+                        SubagentHeader(screen: screen)
                     } else {
                         WorkingDirectoryHeader(
                             path: screen.workingDirectory,
