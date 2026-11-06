@@ -82,7 +82,7 @@ struct RemoteCoderTranscriptionService: TranscriptionService {
         case .assemblyAIUniversal35Pro, .assemblyAIUniversal35ProRealtime:
             let configuration = try AssemblyAIProviderConfiguration(
                 access: try await access.access(to: .assemblyAI),
-                pollIntervalSeconds: 1
+                pollInterval: .seconds(1)
             )
             return TranscriptionEngine(provider: AssemblyAITranscriptionProvider(configuration: configuration))
         case .azureMAITranscribe2:
