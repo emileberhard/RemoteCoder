@@ -976,8 +976,10 @@ entrypoint linked above.
   the agent's conversation through the ordinary conversation switch, as do
   agent events in the parent's timeline through `agentConversationOpener`. A
   child conversation shows `SubagentHeader` ("Subagent of" its parent) in place
-  of the folder header, Back returns to the parent, and a read-only child shows
-  `SubagentControls` in place of the composer. Ask Parent switches to the
+  of the folder header and Back returns to the parent. A child that accepts
+  input (`ConversationHeader.acceptsDirectInput`) keeps the ordinary composer; a
+  read-only child shows `SubagentControls`, with its model, in place of it.
+  Roster rows show each agent's model. Ask Parent switches to the
   nearest ancestor that accepts input and appends to that thread's draft in
   `ComposerDraftStore`, never to a read-only conversation. There is no separate
   agent navigation state or detail page.

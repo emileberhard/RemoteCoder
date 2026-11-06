@@ -34,6 +34,7 @@ struct ConversationAgent: Decodable, Sendable, Identifiable, Equatable {
     let ownerThreadId: String
     let threadId: String?
     let title: String
+    let model: String?
     let state: State
     let capabilities: Capabilities
     let executionId: String?
@@ -45,7 +46,7 @@ struct ConversationAgent: Decodable, Sendable, Identifiable, Equatable {
     var isStub: Bool? = nil
 
     private enum CodingKeys: String, CodingKey {
-        case id, parentId, ownerThreadId, threadId, title, state, capabilities
+        case id, parentId, ownerThreadId, threadId, title, model, state, capabilities
         case executionId, lastActiveAt, ownerHostId, jobId, parent, intentState, kind
     }
 
@@ -71,6 +72,7 @@ extension ConversationAgent {
         ownerThreadId = try values.decode(String.self, forKey: .ownerThreadId)
         threadId = try values.decodeIfPresent(String.self, forKey: .threadId)
         title = try values.decode(String.self, forKey: .title)
+        model = try values.decodeIfPresent(String.self, forKey: .model)
         let reportedState = try values.decode(State.self, forKey: .state)
         state = isStub == true && intentState == .removed ? .removed : reportedState
         capabilities = try values.decode(Capabilities.self, forKey: .capabilities)

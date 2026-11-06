@@ -126,8 +126,8 @@ Native v2 `subAgentActivity` records and single-receiver collaboration calls
 preserve the child identity in the parent's timeline, and tapping one opens the
 child's conversation. The roster lists the conversation's direct agents, newest
 first, under Active (working, waiting or unknown) and Done (completed,
-interrupted or failed). Each agent's own agents appear in its own conversation's
-roster. A row's context menu moves the agent or stops it.
+interrupted or failed), each with its status and model. Each agent's own agents
+appear in its own conversation's roster. A row's context menu moves the agent or stops it.
 
 `daemon/activeTurns` retains detailed execution inventory and adds `agentOwners`
 for same-account root activity grouping. Each completed ownership observation
@@ -148,9 +148,13 @@ presentation is a separate owner and must not infer relationships from text.
 
 Opening a child uses the ordinary conversation switch to its exact host and
 account and retains its question cards. Its header reads "Subagent of" the parent,
-and Back returns to the parent. Native Codex child conversations are read-only:
-a bar with Ask Parent and Stop replaces the composer. External workers keep the
-composer when the gateway accepts their input.
+and Back returns to the parent. A child that accepts input keeps the ordinary
+composer, model picker included. Input acceptance is the provider's
+`canAcceptDirectInput`: Codex refuses its parent-owned multi-agent v2 children,
+and while that flag is unknown only a Codex thread-spawn child is treated as
+read-only. A gateway parent tag never makes a conversation read-only. A
+read-only child shows its model with Ask Parent and Stop in place of the
+composer.
 A native Codex child's completion does not wake an idle root: upstream delivers
 it with `trigger_turn: false`, so the root reads it on its next turn. The gateway
 forwards any turn the app-server starts itself, so a missing wake is upstream

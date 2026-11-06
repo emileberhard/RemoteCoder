@@ -36,9 +36,10 @@ struct SubagentControls: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Label("Read-only subagent", systemImage: "eye")
+            Label(screen.selectedModel?.displayName ?? "Read-only subagent", systemImage: "eye")
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
+                .accessibilityLabel(screen.selectedModel.map { "Read-only subagent, \($0.displayName)" } ?? "Read-only subagent")
             Spacer(minLength: 0)
             if let question = screen.pendingQuestion {
                 Button("View Question") { onViewQuestion(question) }

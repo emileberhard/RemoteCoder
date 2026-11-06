@@ -77,12 +77,18 @@ struct AgentRoster: View {
             ForEach(agents, id: \.identity) { agent in
                 let address = agent.capabilities.openConversation ? agent.address(localHostID: model.address.hostID)
                     .flatMap { workspace.screen(for: $0.hostID) == nil ? nil : $0 } : nil
-                AgentRosterRow(agent: agent, isOpenable: address != nil) {
+                AgentRosterRow(agent: agent, modelName: modelName(of: agent), isOpenable: address != nil) {
                     if let address { onOpen(address) }
                 }
                 .contextMenu { menu(for: agent) }
             }
         }
+    }
+
+    private func modelName(of agent: ConversationAgent) -> String? {
+        guard let id = agent.model else { return nil }
+        let catalog = workspace.screen(for: agent.ownerHostId ?? model.address.hostID)?.target.modelCatalog
+        return catalog?.option(id: id, threadID: agent.threadId ?? "", modelProvider: nil, effort: nil, fastMode: false)?.displayName ?? id
     }
 
     @ViewBuilder
@@ -131,6 +137,7 @@ struct AgentRoster: View {
 
 private struct AgentRosterRow: View {
     let agent: ConversationAgent
+    let modelName: String?
     let isOpenable: Bool
     let onOpen: () -> Void
 
@@ -143,7 +150,7 @@ private struct AgentRosterRow: View {
                         .scaledFont(.subheadline.weight(.semibold))
                         .foregroundStyle(.primary)
                         .lineLimit(1)
-                    AgentStatusLabel(agent: agent)
+                    AgentStatusLabel(agent: agent, modelName: modelName)
                 }
                 Spacer(minLength: 8)
                 if let finished {
@@ -177,6 +184,7 @@ private struct AgentRosterRow: View {
 
 private struct AgentStatusLabel: View {
     let agent: ConversationAgent
+    let modelName: String?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.appEnergyPolicy) private var energyPolicy
@@ -190,6 +198,11 @@ private struct AgentStatusLabel: View {
                         visible: surfaceVisibility.isVisible, reduceMotion: reduceMotion))
             }
             Text(agent.intentState.map(\.title) ?? agent.state.title)
+            if let modelName {
+                Text("· \(modelName)")
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel(modelName)
+            }
         }
         .scaledFont(.caption)
         .foregroundStyle(tint)
