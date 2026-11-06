@@ -756,7 +756,11 @@ private struct ChatScreen: View {
         Task {
             do {
                 try await workspace.appendAgentRequest(request, to: target)
-                if workspace.isShowingConversation(at: target, on: window.selectedScreen) { inputFocused = true }
+                guard let destination = window.selectedScreen, workspace.isShowingConversation(at: target, on: destination) else { return }
+                window.requestComposerFocus(for: destination) {
+                    guard !blocksComposerFocus else { return }
+                    inputFocused = true
+                }
             } catch is CancellationError {
             } catch {
                 source.present(.conversation(error.localizedDescription))
