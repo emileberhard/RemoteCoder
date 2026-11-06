@@ -247,7 +247,7 @@ enum ConversationItemPresentation {
                 sequence: sequence,
                 kind: kind,
                 title: status == .failed ? "\(title) failed" : title,
-                subtitle: prompt.map { clamp($0, limit: 2400) },
+                subtitle: prompt.map { clamp($0, limit: 2400) } ?? (receiverThreadIds.count > 1 ? "\(receiverThreadIds.count) agents" : nil),
                 timestamp: timestamp,
                 details: [],
                 agentThreadID: receiverThreadIds.count == 1 ? receiverThreadIds.first : nil
