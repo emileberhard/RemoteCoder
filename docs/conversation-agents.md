@@ -20,9 +20,10 @@ job without changing origin or provider scope. Exact identities include the
 provider home; historical missing or conflicting evidence stays unknown.
 [Delegated jobs](delegated-jobs.md) defines the execution and cutover contracts.
 
-Claude Code's native subagents have no conversation of their own, so they are
-not listed; the maintainer's Claude configuration switches them off. A Claude
-conversation's agents are its external workers.
+Claude Code's native Task subagents run inside their parent's turn and have no
+conversation of their own, so the roster never lists them: they appear only as
+the parent's Agent tool item. A Claude conversation's agents are its external
+workers.
 
 ## Gateway interface
 
@@ -32,7 +33,7 @@ All operations use the existing authenticated, account-scoped WebSocket.
 | --- | --- | --- |
 | `conversation/agents/list` | `threadId` | `agents`, content `revision`, coverage `warnings` |
 | `conversation/agents/classify` | up to 200 `threadIds` | verified `relations` keyed by thread, explicit `knownRoots`, coverage `warnings` |
-| `conversation/agents/read` | root `threadId`, `agentId` | bounded text `messages`, `truncated`; kept for older apps, which show a detail page |
+| `conversation/agents/read` | root `threadId`, `agentId` | bounded text `messages`, `truncated`; read by the web bridge's agents panel and older apps |
 | `conversation/agents/action` | root `threadId`, `agentId`, current `executionId`, `action`, `mutationId`, and text when required | owner admission receipt |
 
 An agent exposes its stable ID, direct parent ID, owning provider thread,
@@ -72,7 +73,7 @@ read returns: the history list does not keep finished agent threads, so it
 cannot count them. One model coalesces the selection probe, roster and warmer
 into one refresh and reuses successful reads
 for 15 seconds. Freshness controls reads, never elapsed-time notices or empty-state
-labels. Explicit refresh and agent actions bypass freshness; a changed
+labels. A roster Stop or a placement change bypasses freshness; a changed
 set of child threads invalidates it. The last cancelled caller stops the RPC,
 while other callers keep their shared read, including its bounded capacity
 recovery through `GatewayRequestRecovery` within one RPC deadline. Confirmed
@@ -90,9 +91,9 @@ arrival never moves a top-anchored turn.
 | Operation | Owner |
 | --- | --- |
 | Native Codex Stop | Exact current `turn/interrupt` through `CodexStop`, the path the parent's Stop uses: it also interrupts the child's running descendants and ends their background terminals |
-| Native follow-up | Ask Parent in the child returns to the parent with an explicit agent reference in its composer draft |
-| External Send | Gateway delivery to the exact current running job |
-| External Continue | Durable new job in the same exact provider conversation |
+| Native follow-up | Ask Parent opens the nearest ancestor that accepts input and appends an explicit agent reference to its composer draft; it is hidden while no such ancestor is known |
+| External Send (web bridge) | Gateway delivery to the exact current running job |
+| External Continue (web bridge) | Durable new job in the same exact provider conversation |
 | External Stop | Persisted job Stop, then the existing exact provider interrupt/cleanup owner |
 
 The conversation's own Stop on a Codex parent, once the gateway confirms it

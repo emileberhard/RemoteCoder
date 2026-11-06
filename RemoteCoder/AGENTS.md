@@ -710,7 +710,7 @@ entrypoint linked above.
   caption-scale type.
 - `ConversationAgentsModel` owns one shared refresh for each retained conversation.
   Selection, the roster and warmer share it and reuse successful reads for
-  15 s; explicit refresh and agent actions bypass freshness. Up to 32 callers
+  15 s; a roster Stop or placement change bypasses freshness. Up to 32 callers
   can await that refresh; further callers reuse its eventual published state.
   All waiters share that RPC's capacity recovery within its original request
   deadline, and the RPC is cancelled when its last waiter leaves.
@@ -977,8 +977,10 @@ entrypoint linked above.
   agent events in the parent's timeline through `agentConversationOpener`. A
   child conversation shows `SubagentHeader` ("Subagent of" its parent) in place
   of the folder header, Back returns to the parent, and a read-only child shows
-  `SubagentControls` in place of the composer. There is no separate agent
-  navigation state or detail page.
+  `SubagentControls` in place of the composer. Ask Parent switches to the
+  nearest ancestor that accepts input and appends to that thread's draft in
+  `ComposerDraftStore`, never to a read-only conversation. There is no separate
+  agent navigation state or detail page.
 - **Status pills.** `ConversationStatusPills` is the transcript's bottom bar
   above the composer, on both platforms: the changes pill (`review-changes`)
   before the subagents pill (`open-agents`), each shown only while it has

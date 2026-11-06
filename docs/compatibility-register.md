@@ -104,6 +104,7 @@ an old backup keeps its item until the check passes.
 | Claude minted-session record in its own `.minted` file | `providers/claude/conversation_index.rs` | Older gateways reject unknown records in the identity index, so a rollback must still read it | Rollback to a gateway before the record is no longer supported |
 | Synthetic turn id `claude-turn-<n>` for history rows without an index identity | `providers/claude/projection.rs` | Sessions recorded before the identity index | No indexed session lacks row identities, or those sessions are re-indexed |
 | Transcript reader accepts `parent_tool_use_id` as well as `parentToolUseID` | `activity/external/claude.rs` | Claude CLI versions write either spelling | The supported CLI range writes one |
+| Claude native-subagent stores `<claude home>/remotecoder-agents/*.json` and their `.lock` files | None: nothing reads them; the install backup (`runtime/install/claude_state.rs`) and the applied profile migration (`accounts/claude_migration.rs`) still copy them | Gateways before 4.7.0 projected Claude Task subagents from them, so a rollback gateway still reads them | No supported rollback gateway predates 4.7.0; then delete the directory on each host |
 
 ## Tools and other repositories
 
