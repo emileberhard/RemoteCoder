@@ -22,7 +22,7 @@
     },
     {
       "path": "attachments/pasted-text-v2-cases.json",
-      "contract": "Length-delimited inline pastes and escaped literal text preserve UTF-8 payloads and composed order, including nested reserved tags; malformed markers remain ordinary text. Swift projection, Claude headers and APNs summaries agree.",
+      "contract": "Length-delimited inline pastes, escaped literal text and HTML visual replies preserve UTF-8 payloads and composed order, including nested reserved tags and steers merged after a Stop; malformed markers remain ordinary text. Swift projection, Claude headers and APNs summaries agree.",
       "consumers": ["Core/Tests/RemoteCoderCoreTests/Conversations/InlinePastedTextTests.swift", "host-daemon-rs/src/providers/claude/history.rs", "host-daemon-rs/src/gateway/tests.rs"]
     },
     {

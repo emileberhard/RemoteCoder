@@ -9,7 +9,7 @@ struct HTMLVisualReference: Hashable, Sendable {
         let value = url.absoluteString
         guard value.hasPrefix("rc-visual:"), value.utf8.count == 74 else { return nil }
         let digest = String(value.dropFirst(10))
-        guard digest.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) else { return nil }
+        guard Self.isDigest(digest) else { return nil }
         self.url = url
         self.digest = digest
     }
@@ -23,6 +23,10 @@ struct HTMLVisualReference: Hashable, Sendable {
     }
 
     static let maximumBytes = 2 << 20
+
+    static func isDigest(_ value: String) -> Bool {
+        value.utf8.count == 64 && value.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
+    }
 }
 
 enum HTMLVisualPreparationOutcome: Equatable, Sendable {

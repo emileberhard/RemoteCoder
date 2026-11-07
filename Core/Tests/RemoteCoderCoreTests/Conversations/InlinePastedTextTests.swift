@@ -22,7 +22,7 @@ struct InlinePastedTextTests {
             let document = ComposerDocumentContent(runs: [.text(prefix), .paste(.init(id: id, text: "界 e\u{301}\n👩🏽‍💻")), .text(" fin")])
             let prompt = document.prompt
             for input in [prompt, NSString(string: prompt) as String] {
-                #expect(InlinePastedText.parse(input) == document)
+                #expect(InlinePastedText.parse(input)?.content == document)
                 let withFile = AttachedFilesPromptBlock.append(to: input, paths: ["/host/界.txt"])
                 let prepared = UserMessageText(withFile)
                 #expect(prepared.inline == document)
@@ -59,18 +59,22 @@ struct InlinePastedTextTests {
             from: ProtocolFixtures.data(at: "attachments/pasted-text-v2-cases.json"))
         for fixture in fixtures {
             let parsed = InlinePastedText.parse(fixture.prompt)
-            if fixture.entries.isEmpty && fixture.literal != true {
+            if fixture.entries.isEmpty && fixture.literal != true && fixture.visualReplies == nil {
                 #expect(parsed == nil, "\(fixture.name)")
                 #expect(UserMessageText(fixture.prompt).body == fixture.prompt, "\(fixture.name)")
             } else {
-                let document = try #require(parsed, "\(fixture.name)")
+                let document = try #require(parsed?.content, "\(fixture.name)")
                 #expect(document.expandedText == fixture.expanded, "\(fixture.name)")
                 #expect(document.summary == fixture.summary, "\(fixture.name)")
                 #expect(document.pasted == fixture.entries, "\(fixture.name)")
-                #expect(InlinePastedText.parse(document.prompt) == document, "\(fixture.name)")
+                #expect(parsed?.visualReplies == fixture.visualReplies ?? [], "\(fixture.name)")
+                #expect(UserMessageText(fixture.prompt).visualReplies == fixture.visualReplies ?? [], "\(fixture.name)")
+                if fixture.visualReplies == nil {
+                    #expect(InlinePastedText.parse(document.prompt)?.content == document, "\(fixture.name)")
+                }
             }
             let original = fixture.runs.map { ComposerDocumentContent(runs: $0) }
-                ?? parsed ?? ComposerDocumentContent(runs: [.text(fixture.prompt)])
+                ?? parsed?.content ?? ComposerDocumentContent(runs: [.text(fixture.prompt)])
             if fixture.runs != nil { #expect(original.prompt == fixture.prompt, "\(fixture.name)") }
             let presented = UserMessageText(original.prompt)
             let restored = presented.inline ?? ComposerDocumentContent(runs: [.text(presented.body)])
@@ -87,5 +91,6 @@ struct InlinePastedTextTests {
         let entries: [PastedTextPromptBlock.Entry]
         let literal: Bool?
         let runs: [ComposerDocumentContent.Run]?
+        let visualReplies: [HTMLVisualReply]?
     }
 }

@@ -97,17 +97,29 @@ enum InlinePastedText {
     static let end = "\n</remotecoder_pasted_text_v2>"
     static let literalStart = "<remotecoder_literal_text_v2 bytes=\""
     static let literalEnd = "\n</remotecoder_literal_text_v2>"
+    static let visualReplyStart = "<remotecoder_visual_reply_v1 turn=\""
+    static let visualReplyEnd = "\n</remotecoder_visual_reply_v1>"
+
+    struct Parsed: Equatable {
+        let content: ComposerDocumentContent
+        let visualReplies: [HTMLVisualReply]
+    }
 
     fileprivate static func encodeText(_ text: String) -> String {
         guard ["<remotecoder_pasted_text_v1>", "<remotecoder_pasted_text_v2", "<remotecoder_literal_text_v2",
-               AttachedFilesPromptBlock.render([])].contains(where: text.contains) else { return text }
+               "<remotecoder_visual_reply_v1", AttachedFilesPromptBlock.render([])].contains(where: text.contains) else { return text }
         return "\(literalStart)\(text.utf8.count)\">\n\(text)\(literalEnd)"
     }
 
-    static func parse(_ text: String) -> ComposerDocumentContent? {
+    static func visualReply(_ reply: HTMLVisualReply) -> String {
+        "\(visualReplyStart)\(reply.key.turnID)\" visual=\"\(reply.key.digest)\" bytes=\"\(reply.text.utf8.count)\">\n\(reply.text)\(visualReplyEnd)"
+    }
+
+    static func parse(_ text: String) -> Parsed? {
         var cursor = text.startIndex
         var search = cursor
         var runs: [ComposerDocumentContent.Run] = []
+        var visualReplies: [HTMLVisualReply] = []
         var ids: Set<UUID> = []
         var recognized = false
         let byteCount = text.utf8.count
@@ -127,6 +139,12 @@ enum InlinePastedText {
                 guard let (literal, end) = parseLiteral(in: text, after: header, byteCount: byteCount) else { continue }
                 run = .text(literal)
                 next = end
+            } else if tail.hasPrefix(visualReplyStart) {
+                let header = text.index(marker.lowerBound, offsetBy: visualReplyStart.count)
+                guard let (reply, end) = parseVisualReply(in: text, after: header, byteCount: byteCount) else { continue }
+                visualReplies.append(reply)
+                run = .text(reply.text)
+                next = end
             } else { continue }
             if cursor < marker.lowerBound { runs.append(.text(String(text[cursor..<marker.lowerBound]))) }
             runs.append(run)
@@ -136,7 +154,20 @@ enum InlinePastedText {
         }
         guard recognized else { return nil }
         if cursor < text.endIndex { runs.append(.text(String(text[cursor...]))) }
-        return ComposerDocumentContent(runs: runs)
+        return Parsed(content: ComposerDocumentContent(runs: runs), visualReplies: visualReplies)
+    }
+
+    private static func parseVisualReply(in text: String, after start: String.Index, byteCount: Int) -> (HTMLVisualReply, String.Index)? {
+        let header = text[start...].prefix(HTMLVisualReplyKey.maximumTurnIDBytes + 100)
+        guard let visual = header.range(of: "\" visual=\""),
+              let bytes = header[visual.upperBound...].range(of: "\" bytes=\""),
+              let headerEnd = header[bytes.upperBound...].range(of: "\">\n"),
+              let key = HTMLVisualReplyKey(turnID: String(header[..<visual.lowerBound]),
+                                           digest: String(header[visual.upperBound..<bytes.lowerBound])),
+              let (payload, next) = parsePayload(in: text, start: headerEnd.upperBound,
+                  lengthText: String(header[bytes.upperBound..<headerEnd.lowerBound]), end: visualReplyEnd, byteCount: byteCount),
+              let reply = HTMLVisualReply(key: key, text: payload) else { return nil }
+        return (reply, next)
     }
 
     private static func parseLiteral(in text: String, after start: String.Index, byteCount: Int) -> (String, String.Index)? {

@@ -108,16 +108,19 @@ struct UserMessageText: Sendable {
     let pasted: [PastedTextPromptBlock.Entry]
     let filePaths: [String]
     let inline: ComposerDocumentContent?
+    let visualReplies: [HTMLVisualReply]
 
     init(_ text: String) {
         let files = AttachedFilesPromptBlock.parse(text)
         let remaining = files?.body ?? text
-        let decoded = InlinePastedText.parse(remaining)
+        let parsed = InlinePastedText.parse(remaining)
+        let decoded = parsed?.content
         inline = decoded.flatMap { $0.pasted.isEmpty ? nil : $0 }
         let paste = decoded == nil ? PastedTextPromptBlock.parse(remaining) : nil
         body = decoded?.runs.compactMap { if case .text(let text) = $0 { text } else { nil } }.joined() ?? paste?.body ?? remaining
         pasted = decoded?.pasted ?? paste?.entries ?? []
         filePaths = files?.paths ?? []
+        visualReplies = parsed?.visualReplies ?? []
     }
 
     var preview: String {

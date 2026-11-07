@@ -4581,5 +4581,81 @@
         }
       }
     ]
+  },
+  {
+    "name": "visual reply only",
+    "prompt": "<remotecoder_visual_reply_v1 turn=\"019a5f2e-7c1d-7b3a-9f00-0123456789ab\" visual=\"9d98ce221dd52eccf27cad6a01bcd49b14d3d718a9eeeb3be94f0e231a5787ae\" bytes=\"19\">\nQuiz: 1 B, 2 D 🎯\n</remotecoder_visual_reply_v1>",
+    "expanded": "Quiz: 1 B, 2 D 🎯",
+    "summary": "Quiz: 1 B, 2 D 🎯",
+    "entries": [],
+    "visualReplies": [
+      {
+        "key": {
+          "turnID": "019a5f2e-7c1d-7b3a-9f00-0123456789ab",
+          "digest": "9d98ce221dd52eccf27cad6a01bcd49b14d3d718a9eeeb3be94f0e231a5787ae"
+        },
+        "text": "Quiz: 1 B, 2 D 🎯"
+      }
+    ]
+  },
+  {
+    "name": "visual reply merged with a typed steer",
+    "prompt": "<remotecoder_visual_reply_v1 turn=\"019a5f2e-7c1d-7b3a-9f00-0123456789ab\" visual=\"9d98ce221dd52eccf27cad6a01bcd49b14d3d718a9eeeb3be94f0e231a5787ae\" bytes=\"19\">\nQuiz: 1 B, 2 D 🎯\n</remotecoder_visual_reply_v1>\nAlso check the README",
+    "expanded": "Quiz: 1 B, 2 D 🎯\nAlso check the README",
+    "summary": "Quiz: 1 B, 2 D 🎯\nAlso check the README",
+    "entries": [],
+    "visualReplies": [
+      {
+        "key": {
+          "turnID": "019a5f2e-7c1d-7b3a-9f00-0123456789ab",
+          "digest": "9d98ce221dd52eccf27cad6a01bcd49b14d3d718a9eeeb3be94f0e231a5787ae"
+        },
+        "text": "Quiz: 1 B, 2 D 🎯"
+      }
+    ]
+  },
+  {
+    "name": "visual reply carrying reserved tags",
+    "prompt": "<remotecoder_visual_reply_v1 turn=\"019a5f2e-7c1d-7b3a-9f00-0123456789ab\" visual=\"9d98ce221dd52eccf27cad6a01bcd49b14d3d718a9eeeb3be94f0e231a5787ae\" bytes=\"128\">\nKeep <remotecoder_pasted_text_v2 id=\"77777777-2222-3333-4444-555555555555\" bytes=\"3\">\nabc\n</remotecoder_pasted_text_v2> as typed\n</remotecoder_visual_reply_v1>",
+    "expanded": "Keep <remotecoder_pasted_text_v2 id=\"77777777-2222-3333-4444-555555555555\" bytes=\"3\">\nabc\n</remotecoder_pasted_text_v2> as typed",
+    "summary": "Keep <remotecoder_pasted_text_v2 id=\"77777777-2222-3333-4444-555555555555\" bytes=\"3\">\nabc\n</remotecoder_pasted_text_v2> as typed",
+    "entries": [],
+    "visualReplies": [
+      {
+        "key": {
+          "turnID": "019a5f2e-7c1d-7b3a-9f00-0123456789ab",
+          "digest": "9d98ce221dd52eccf27cad6a01bcd49b14d3d718a9eeeb3be94f0e231a5787ae"
+        },
+        "text": "Keep <remotecoder_pasted_text_v2 id=\"77777777-2222-3333-4444-555555555555\" bytes=\"3\">\nabc\n</remotecoder_pasted_text_v2> as typed"
+      }
+    ]
+  },
+  {
+    "name": "visual reply with an invalid digest",
+    "prompt": "<remotecoder_visual_reply_v1 turn=\"019a5f2e-7c1d-7b3a-9f00-0123456789ab\" visual=\"9D98CE221DD52ECCF27CAD6A01BCD49B14D3D718A9EEEB3BE94F0E231A5787AE\" bytes=\"19\">\nQuiz: 1 B, 2 D 🎯\n</remotecoder_visual_reply_v1>",
+    "expanded": "<remotecoder_visual_reply_v1 turn=\"019a5f2e-7c1d-7b3a-9f00-0123456789ab\" visual=\"9D98CE221DD52ECCF27CAD6A01BCD49B14D3D718A9EEEB3BE94F0E231A5787AE\" bytes=\"19\">\nQuiz: 1 B, 2 D 🎯\n</remotecoder_visual_reply_v1>",
+    "summary": "<remotecoder_visual_reply_v1 turn=\"019a5f2e-7c1d-7b3a-9f00-0123456789ab\" visual=\"9D98CE221DD52ECCF27CAD6A01BCD49B14D3D718A9EEEB3BE94F0E231A5787AE\" bytes=\"19\">\nQuiz: 1 B, 2 D 🎯\n</remotecoder_visual_reply_v1>",
+    "entries": []
+  },
+  {
+    "name": "visual reply with a quote in its turn",
+    "prompt": "<remotecoder_visual_reply_v1 turn=\"a\"b\" visual=\"9d98ce221dd52eccf27cad6a01bcd49b14d3d718a9eeeb3be94f0e231a5787ae\" bytes=\"19\">\nQuiz: 1 B, 2 D 🎯\n</remotecoder_visual_reply_v1>",
+    "expanded": "<remotecoder_visual_reply_v1 turn=\"a\"b\" visual=\"9d98ce221dd52eccf27cad6a01bcd49b14d3d718a9eeeb3be94f0e231a5787ae\" bytes=\"19\">\nQuiz: 1 B, 2 D 🎯\n</remotecoder_visual_reply_v1>",
+    "summary": "<remotecoder_visual_reply_v1 turn=\"a\"b\" visual=\"9d98ce221dd52eccf27cad6a01bcd49b14d3d718a9eeeb3be94f0e231a5787ae\" bytes=\"19\">\nQuiz: 1 B, 2 D 🎯\n</remotecoder_visual_reply_v1>",
+    "entries": []
+  },
+  {
+    "name": "visual reply with a wrong length",
+    "prompt": "<remotecoder_visual_reply_v1 turn=\"019a5f2e-7c1d-7b3a-9f00-0123456789ab\" visual=\"9d98ce221dd52eccf27cad6a01bcd49b14d3d718a9eeeb3be94f0e231a5787ae\" bytes=\"18\">\nQuiz: 1 B, 2 D 🎯\n</remotecoder_visual_reply_v1>",
+    "expanded": "<remotecoder_visual_reply_v1 turn=\"019a5f2e-7c1d-7b3a-9f00-0123456789ab\" visual=\"9d98ce221dd52eccf27cad6a01bcd49b14d3d718a9eeeb3be94f0e231a5787ae\" bytes=\"18\">\nQuiz: 1 B, 2 D 🎯\n</remotecoder_visual_reply_v1>",
+    "summary": "<remotecoder_visual_reply_v1 turn=\"019a5f2e-7c1d-7b3a-9f00-0123456789ab\" visual=\"9d98ce221dd52eccf27cad6a01bcd49b14d3d718a9eeeb3be94f0e231a5787ae\" bytes=\"18\">\nQuiz: 1 B, 2 D 🎯\n</remotecoder_visual_reply_v1>",
+    "entries": []
+  },
+  {
+    "name": "visual reply with only whitespace",
+    "prompt": "<remotecoder_visual_reply_v1 turn=\"019a5f2e-7c1d-7b3a-9f00-0123456789ab\" visual=\"9d98ce221dd52eccf27cad6a01bcd49b14d3d718a9eeeb3be94f0e231a5787ae\" bytes=\"4\">\n  \n \n</remotecoder_visual_reply_v1>",
+    "expanded": "<remotecoder_visual_reply_v1 turn=\"019a5f2e-7c1d-7b3a-9f00-0123456789ab\" visual=\"9d98ce221dd52eccf27cad6a01bcd49b14d3d718a9eeeb3be94f0e231a5787ae\" bytes=\"4\">\n  \n \n</remotecoder_visual_reply_v1>",
+    "summary": "<remotecoder_visual_reply_v1 turn=\"019a5f2e-7c1d-7b3a-9f00-0123456789ab\" visual=\"9d98ce221dd52eccf27cad6a01bcd49b14d3d718a9eeeb3be94f0e231a5787ae\" bytes=\"4\">\n  \n \n</remotecoder_visual_reply_v1>",
+    "entries": []
   }
 ]

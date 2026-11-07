@@ -83,6 +83,7 @@ fn inline_summary(text: &str) -> Option<String> {
     const START: &str = "<remotecoder_pasted_text_v2 id=\"";
     const LITERAL: &str = "<remotecoder_literal_text_v2 bytes=\"";
     const LITERAL_END: &str = "\n</remotecoder_literal_text_v2>";
+    const VISUAL_REPLY: &str = "<remotecoder_visual_reply_v1 turn=\"";
     let mut literal = 0;
     let mut search = 0;
     let mut summary = String::new();
@@ -105,6 +106,11 @@ fn inline_summary(text: &str) -> Option<String> {
                 continue;
             };
             (literal, start + LITERAL.len() + end)
+        } else if let Some(marked) = marked.strip_prefix(VISUAL_REPLY) {
+            let Some((reply, end)) = visual_reply(marked) else {
+                continue;
+            };
+            (reply, start + VISUAL_REPLY.len() + end)
         } else {
             continue;
         };
@@ -119,6 +125,39 @@ fn inline_summary(text: &str) -> Option<String> {
     }
     summary.push_str(&text[literal..]);
     Some(summary.trim().to_owned())
+}
+
+fn visual_reply(marked: &str) -> Option<(&str, usize)> {
+    const END: &str = "\n</remotecoder_visual_reply_v1>";
+    const MAXIMUM_TURN_BYTES: usize = 128;
+    const MAXIMUM_REPLY_BYTES: usize = 16 * 1024;
+    let quote = marked
+        .as_bytes()
+        .iter()
+        .take(MAXIMUM_TURN_BYTES + 1)
+        .position(|byte| *byte == b'"')?;
+    let turn = &marked.as_bytes()[..quote];
+    if turn.is_empty()
+        || !turn
+            .iter()
+            .all(|byte| (0x21..0x7f).contains(byte) && *byte != b'<' && *byte != b'>')
+    {
+        return None;
+    }
+    let rest = marked[quote..].strip_prefix("\" visual=\"")?;
+    let digest = rest.get(..64)?;
+    if !digest
+        .bytes()
+        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return None;
+    }
+    let attributes = rest[64..].strip_prefix("\" bytes=\"")?;
+    let (payload, end) = inline_payload(attributes, END)?;
+    if payload.trim().is_empty() || payload.len() > MAXIMUM_REPLY_BYTES {
+        return None;
+    }
+    Some((payload, marked.len() - attributes.len() + end))
 }
 
 fn inline_paste_end(marked: &str) -> Option<(crate::ids::UuidBytes, usize)> {

@@ -17,6 +17,7 @@ import { memo } from "react";
 import type { Address, QuestionRecord, VisualPublication } from "../../../protocol/boundary";
 import { parseAttachedFiles } from "../../../workspace/attached-files";
 import type { Row } from "../../../workspace/conversation-session";
+import { visualReplyText } from "../../../workspace/visual-replies";
 import { downloadFile } from "../../files/download";
 import { basename } from "../../formatting";
 import { useRun, useWorkspace } from "../../workspace-context";
@@ -351,7 +352,9 @@ function UserText({ text, hostId, cwd }: { text: string; hostId: string; cwd: st
     <div>
       {body && (
         <p>
-          {body.startsWith("<send_user_message_question_reply>") ? "Answered the agent’s question" : body}
+          {body.startsWith("<send_user_message_question_reply>")
+            ? "Answered the agent’s question"
+            : visualReplyText(body)}
         </p>
       )}
       {paths.map((path) => (
