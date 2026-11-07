@@ -315,6 +315,7 @@ struct HTMLVisualWebKitTests {
     func repliesShareSentStateAndRefuseSendsWithoutATap() async throws {
         let source = """
             <body><form id="form"><input type="checkbox" id="box"><button>Go</button></form>
+            <label id="label"><input type="checkbox" id="labelled"></label><button id="button" type="button">Send</button>
             <script>
                 const data = document.body.dataset, form = document.getElementById('form');
                 data.events = '0';
@@ -322,6 +323,8 @@ struct HTMLVisualWebKitTests {
                 const attempt = name => remotecoder.send(name).then(() => data[name] = 'sent', error => data[name] = error.message);
                 form.addEventListener('submit', () => attempt('submit'));
                 document.getElementById('box').addEventListener('change', () => attempt('change'));
+                document.getElementById('labelled').addEventListener('click', () => attempt('label'));
+                document.getElementById('button').addEventListener('click', () => attempt('button'));
                 attempt('load');
                 remotecoder.send(42).catch(error => data.type = error.name);
                 try { window.remotecoder = null; } catch {}
@@ -338,13 +341,18 @@ struct HTMLVisualWebKitTests {
         let state = { try await page.callJavaScript("return {...document.body.dataset, sent: JSON.stringify(window.remotecoder.sent)};",
                                                     contentWorld: .page) as? [String: String] ?? [:] }
         try await wait { let observed = try await state(); return observed["load"] != nil && observed["type"] != nil }
-        try await page.callJavaScript("document.getElementById('box').click(); document.getElementById('form').requestSubmit();", contentWorld: .page)
-        try await wait { let observed = try await state(); return observed["change"] != nil && observed["submit"] != nil }
+        try await page.callJavaScript("""
+            document.getElementById('box').click();
+            document.getElementById('form').requestSubmit();
+            document.getElementById('label').click();
+            document.getElementById('button').click();
+            """, contentWorld: .page)
+        let attempts = ["load", "change", "submit", "label", "button"]
+        try await wait { let observed = try await state(); return attempts.allSatisfy { observed[$0] != nil } }
         try await HTMLVisualWebContent.update(page, sent: ["first", "second"])
         try await wait { try await state()["events"] == "1" }
         let observed = try await state()
-        #expect(observed["load"] == "Sending needs a tap." && observed["change"] == "Sending needs a tap."
-                && observed["submit"] == "Sending needs a tap.", "\(observed)")
+        #expect(attempts.allSatisfy { observed[$0] == "Sending needs a tap." }, "\(observed)")
         #expect(observed["type"] == "TypeError")
         #expect(observed["sent"] == #"["first","second"]"#)
         #expect(sends.isEmpty)

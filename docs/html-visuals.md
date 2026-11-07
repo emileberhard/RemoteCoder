@@ -415,12 +415,13 @@ that also stop an answered question reject the send with an error the page
 receives.
 
 In WebKit, the isolated reply script owns `sent` and the gesture gate. A trusted
-HTML user-activation event in the main frame, a mouse `pointerdown`, any
-`pointerup` or a `keydown` other than Escape, allows one send within five
-seconds, and each page has at most one send in flight. Other events do not
-count: a touch `pointerdown` also starts every scroll, and WebKit marks the
-`change` from a scripted `click()` on a checkbox and the `submit` from
-`requestSubmit()` as trusted. The page-world shim defines a frozen
+mouse `pointerdown`, `click` or `keydown` other than Escape in the main frame
+allows one send within five seconds, and each page has at most one send in
+flight. WebKit fires no `click` after a pan, and a scripted `click()`, including
+the one a label forwards, is untrusted. Other events do not count: a drag of
+the transcript that starts on a visual delivers a touch `pointerdown` and
+`pointerup` to the page, and WebKit marks the `change` from a scripted
+`click()` on a checkbox and the `submit` from `requestSubmit()` as trusted. The page-world shim defines a frozen
 `window.remotecoder`, rejects a non-string `send` with a `TypeError` and talks
 to the isolated script through `CustomEvent` string details, so the page never
 holds a `webkit.messageHandlers` reference. The native bridge implements

@@ -177,7 +177,7 @@ final class HTMLVisualWebContent {
                 let gesture = -Infinity, sending = false;
                 const announce = () => document.dispatchEvent(new CustomEvent('rcvisualsent',{detail:JSON.stringify(sent)}));
                 globalThis.rcVisualSetSent = value => { sent = value; announce(); };
-                const activates = {pointerdown: event => event.pointerType === 'mouse', pointerup: () => true,
+                const activates = {pointerdown: event => event.pointerType === 'mouse', click: () => true,
                                    keydown: event => event.key !== 'Escape'};
                 for (const [type,counts] of Object.entries(activates))
                     addEventListener(type,event => { if (event.isTrusted && counts(event)) gesture = performance.now(); },true);
