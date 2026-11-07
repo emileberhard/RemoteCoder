@@ -401,28 +401,32 @@ the agent receives the marker, so it knows which visual answered.
 valid and malformed cases for Swift, the gateway and the web client.
 
 `ConversationProjection` derives `HTMLVisualReplyIndex` from the projected user
-messages, excluding those that were not sent. It is known only when the history
-window includes the newest page, because an older-only window cannot prove
-what was sent since. A publication row carries its turn id in
+messages, excluding those that were not sent. It is known only after a gateway
+read verified the newest history page (`ConversationState.hasVerifiedNewestHistory`,
+which token usage also requires), because an older-only window or a tail
+restored from a checkpoint cannot prove what was sent since. A publication row carries its turn id in
 `PublishedVisual.turnID`, and an assistant message's embeds take
 `ChatMessage.canonicalTurnID` through the `htmlVisualTurnID` environment value;
 a local turn id has no key. `ChatScreenModel` owns one `HTMLVisualReplies`,
 which publishes the index, binds each page's channel to the conversation that
 created it and dispatches through `answerVisual`. A channel that outlives its
-conversation, a read-only conversation or a busy composer rejects the send
-with an error the page receives.
+conversation, a read-only conversation, unready settings or the dispatch blocks
+that also stop an answered question reject the send with an error the page
+receives.
 
 In WebKit, the isolated reply script owns `sent` and the gesture gate. A trusted
-`pointerdown`, `pointerup` or `keydown` in the main frame allows one send within
-five seconds, and each page has at most one send in flight. Only those events
-count because a script cannot produce them: WebKit marks the `change` from a
-scripted `click()` on a checkbox and the `submit` from `requestSubmit()` as
-trusted. The page-world shim defines a frozen `window.remotecoder` and talks to
-the isolated script through `CustomEvent` string details, so the page never
+HTML user-activation event in the main frame, a mouse `pointerdown`, any
+`pointerup` or a `keydown` other than Escape, allows one send within five
+seconds, and each page has at most one send in flight. Other events do not
+count: a touch `pointerdown` also starts every scroll, and WebKit marks the
+`change` from a scripted `click()` on a checkbox and the `submit` from
+`requestSubmit()` as trusted. The page-world shim defines a frozen
+`window.remotecoder`, rejects a non-string `send` with a `TypeError` and talks
+to the isolated script through `CustomEvent` string details, so the page never
 holds a `webkit.messageHandlers` reference. The native bridge implements
-`WKScriptMessageHandlerWithReply` and validates the text again; the promise
-resolves once the message was accepted for dispatch and rejects with the
-failure. Background preparation pages have `sent` unknown and refuse sends; the
+`WKScriptMessageHandlerWithReply`, and `HTMLVisualReply` validates the text; the
+promise resolves once the message was accepted for dispatch and rejects with
+the failure. Background preparation pages have `sent` unknown and refuse sends; the
 gateway preview reports `sent` as empty and refuses sends.
 
 Decision (2026-11-07). Goal: model-made interactive UI, such as a quiz whose
@@ -434,7 +438,12 @@ declarations for no capability; a page-to-agent RPC or tool-call return, which
 needs a live turn and a host round trip per interaction; and app-persisted
 answer state, a second owner that drifts from history. Gesture gating keeps a
 page from sending on load or in a loop, and the user sees every sent text as
-their own message. If agents need richer state than sent texts, or other
+their own message. Accepted risk: any script the page runs, including one it
+loads from a CDN, can send within five seconds of a tap, and the text reaches
+the agent as the user's message and steers a running turn at once. Rejected
+mitigations: a confirmation showing the text before every send, as T3 Code's
+MCP Apps host does, and a consent prompt, as Claude's iOS app has, which both add a
+step to every answer for pages the agent wrote itself. If agents need richer state than sent texts, or other
 clients gain the API, the envelope's version and the index are the places that
 change.
 
