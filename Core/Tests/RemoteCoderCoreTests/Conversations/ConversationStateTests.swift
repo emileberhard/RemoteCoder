@@ -481,10 +481,14 @@ struct ConversationStateTests: ConversationHistoryFixtures {
         state.submit(unconfirmedOriginal)
         state.accepted(unconfirmedOriginal.id, turnID: "turn")
         let pasted = MessageAttachment(id: UUID(), content: .text("pasted log"))
-        func steer(_ text: String, attachments: [MessageAttachment] = []) -> ChatMessage {
-            ChatMessage(role: .user, text: text, attachments: attachments, wasSteered: true, canonicalTurnID: "turn")
+        let visualReply = try #require(HTMLVisualReplyKey(turnID: "turn", digest: String(repeating: "a", count: 64))
+            .flatMap { HTMLVisualReply(key: $0, text: "on TV") })
+        func steer(_ text: String, attachments: [MessageAttachment] = [], visualReplies: [HTMLVisualReply]? = nil) -> ChatMessage {
+            ChatMessage(role: .user, text: text, attachments: attachments, wasSteered: true, canonicalTurnID: "turn",
+                        visualReplies: visualReplies)
         }
-        let taken = steer("Taken"), first = steer("wait lower volume!", attachments: [pasted]), second = steer("on TV")
+        let taken = steer("Taken"), first = steer("wait lower volume!", attachments: [pasted])
+        let second = steer("on TV", visualReplies: [visualReply])
         let inFlight = steer("In flight")
         for message in [taken, first, second, inFlight] { state.submit(message, input: "prompt: \(message.text)") }
         for message in [taken, first, second] { state.accepted(message.id, turnID: "turn") }
@@ -499,6 +503,7 @@ struct ConversationStateTests: ConversationHistoryFixtures {
         #expect(merged.input == "prompt: wait lower volume!\nprompt: on TV")
         #expect(merged.message.text == "wait lower volume!\non TV")
         #expect(merged.message.attachments.map(\.id) == [pasted.id])
+        #expect(merged.message.visualReplies == [visualReply])
         #expect(merged.status == .submitting)
         let ids = Set(ConversationProjection.project(state).messages.map(\.id))
         #expect(ids.isSuperset(of: [unconfirmedOriginal.id, taken.id, inFlight.id, merged.message.id]))

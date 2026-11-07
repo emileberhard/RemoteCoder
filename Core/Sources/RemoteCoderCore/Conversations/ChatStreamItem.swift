@@ -51,6 +51,7 @@ struct ViewedMedia: Sendable, Equatable {
 
 struct PublishedVisual: Sendable, Equatable {
     let itemID: String
+    let turnID: String?
     let publication: HTMLVisualPublication
 
     var rowID: String { "published-visual-\(itemID)" }

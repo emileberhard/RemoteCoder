@@ -24,6 +24,7 @@ struct ChatMessage: Identifiable, Sendable, Equatable, Codable {
     /// Set when this user message is a reply envelope to a model question; the
     /// bubble then shows each question with its answer instead of the raw text.
     var questionReplies: [QuestionReply]?
+    var visualReplies: [HTMLVisualReply]?
 
     init(
         id: UUID = UUID(),
@@ -37,6 +38,7 @@ struct ChatMessage: Identifiable, Sendable, Equatable, Codable {
         canonicalTurnID: String? = nil,
         canonicalItemID: String? = nil,
         questionReplies: [QuestionReply]? = nil,
+        visualReplies: [HTMLVisualReply]? = nil,
         isStreaming: Bool = false
     ) {
         self.id = id
@@ -50,6 +52,7 @@ struct ChatMessage: Identifiable, Sendable, Equatable, Codable {
         self.canonicalTurnID = canonicalTurnID
         self.canonicalItemID = canonicalItemID
         self.questionReplies = questionReplies
+        self.visualReplies = visualReplies
     }
 
     func markdownSource(renderedText: String?) -> String {
@@ -58,7 +61,7 @@ struct ChatMessage: Identifiable, Sendable, Equatable, Codable {
 
     private enum CodingKeys: String, CodingKey {
         case id, role, text, bodyText, attachments, attachmentOrder, inlineContent, date, wasSteered
-        case canonicalTurnID, canonicalItemID, questionReplies, isStreaming
+        case canonicalTurnID, canonicalItemID, questionReplies, visualReplies, isStreaming
     }
 
     private enum LegacyCodingKeys: String, CodingKey { case imageAttachments, fileAttachments }
@@ -86,6 +89,7 @@ struct ChatMessage: Identifiable, Sendable, Equatable, Codable {
         canonicalTurnID = try values.decodeIfPresent(String.self, forKey: .canonicalTurnID)
         canonicalItemID = try values.decodeIfPresent(String.self, forKey: .canonicalItemID)
         questionReplies = try values.decodeIfPresent([QuestionReply].self, forKey: .questionReplies)
+        visualReplies = try values.decodeIfPresent([HTMLVisualReply].self, forKey: .visualReplies)
         isStreaming = try values.decodeIfPresent(Bool.self, forKey: .isStreaming) ?? false
     }
 
@@ -125,6 +129,7 @@ struct ChatMessage: Identifiable, Sendable, Equatable, Codable {
         try values.encodeIfPresent(canonicalTurnID, forKey: .canonicalTurnID)
         try values.encodeIfPresent(canonicalItemID, forKey: .canonicalItemID)
         try values.encodeIfPresent(questionReplies, forKey: .questionReplies)
+        try values.encodeIfPresent(visualReplies, forKey: .visualReplies)
         try values.encode(isStreaming, forKey: .isStreaming)
     }
 

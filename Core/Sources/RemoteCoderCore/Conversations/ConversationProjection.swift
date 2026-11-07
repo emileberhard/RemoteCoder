@@ -16,6 +16,7 @@ struct ConversationSnapshot: Sendable {
     /// Derived from the host replica and local delivery receipts, never a viewport.
     var pendingQuestion: QuestionPrompt? = nil
     var compaction: ConversationCompaction? = nil
+    var visualReplies = HTMLVisualReplyIndex.unknown
     var canPrefetchOlder = false
     var presentationRows = TranscriptPresentationRows(rowIDs: [])
 }
@@ -62,6 +63,7 @@ enum ConversationProjection {
             let attachments: [MessageAttachment]
             let inline: InlineMessageContent?
             let replies: [QuestionReply]?
+            let visualReplies: [HTMLVisualReply]
         }
 
         fileprivate var revision: UInt64?
@@ -200,6 +202,7 @@ enum ConversationProjection {
                                     revision: state.revision, messages: messages, timelines: timelines, items: rows,
                                     lastTurnCompletedAt: state.lastTurnCompletedAt,
                                     forkableMessageIDs: forkableMessageIDs, questionPrompts: prompts, questionCoverage: state.questions?.coverage ?? .unavailable, pendingQuestion: pendingQuestion, compaction: state.compaction,
+                                    visualReplies: HTMLVisualReplyIndex(messages: messages, includesNewest: state.window?.newer == nil),
                                     canPrefetchOlder: state.window.map { $0.olderEdge != nil && $0.hasRoomToPrefetch } ?? false,
                                     presentationRows: presentationRows)
     }
@@ -331,7 +334,8 @@ enum ConversationProjection {
                     hasReply = true
                     if latestPublication[publication.title] == id, !placedVisuals.contains(publication.reference) {
                         flush(before: record.date, terminal: false)
-                        let visual = PublishedVisual(itemID: record.value.id, publication: publication)
+                        let visual = PublishedVisual(itemID: record.value.id,
+                            turnID: ConversationState.isLocalTurnID(turnID) ? nil : turnID, publication: publication)
                         rows.append(.publishedVisual(visual))
                         precedingBoundary = (visual.rowID, record.date ?? .distantPast)
                     }
@@ -450,7 +454,8 @@ enum ConversationProjection {
             replies = entries.map(\.reply)
             text = QuestionReply.displayText(entries.map(\.reply))
         }
-        let result = Memo.UserContent(source: content, parsesVoice: parsesVoice, text: text, attachments: attachments, inline: prepared.inline.map(InlineMessageContent.init), replies: replies)
+        let result = Memo.UserContent(source: content, parsesVoice: parsesVoice, text: text, attachments: attachments,
+            inline: prepared.inline.map(InlineMessageContent.init), replies: replies, visualReplies: prepared.visualReplies)
         cache[id] = result
         return result
     }
@@ -462,6 +467,7 @@ enum ConversationProjection {
         let clientID: UUID?
         let attachments: [MessageAttachment]
         let questionReplies: [QuestionReply]?
+        let visualReplies: [HTMLVisualReply]?
         let inline: InlineMessageContent?
         switch record.value {
         case .userMessage(_, let content, let clientId):
@@ -480,6 +486,7 @@ enum ConversationProjection {
                 }
                 inline = local.inlineContent
                 questionReplies = local.questionReplies
+                visualReplies = local.visualReplies
             } else {
                 let prepared = userContent(content, id: record.value.id, parsesVoice: record.localMessage == nil && clientId == nil,
                                            cache: &userContents)
@@ -487,6 +494,7 @@ enum ConversationProjection {
                 attachments = prepared.attachments
                 inline = prepared.inline
                 questionReplies = prepared.replies
+                visualReplies = prepared.visualReplies.isEmpty ? nil : prepared.visualReplies
             }
         case .agentMessage(_, let value, _, _, _):
             role = .codex
@@ -495,6 +503,7 @@ enum ConversationProjection {
             attachments = []
             inline = nil
             questionReplies = nil
+            visualReplies = nil
         default: return nil
         }
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty else { return nil }
@@ -507,6 +516,7 @@ enum ConversationProjection {
                            canonicalTurnID: ConversationState.isLocalTurnID(turnID) ? nil : turnID,
                            canonicalItemID: record.completed ? record.value.id : nil,
                            questionReplies: questionReplies,
+                           visualReplies: visualReplies,
                            isStreaming: role == .codex && !record.completed)
     }
 }

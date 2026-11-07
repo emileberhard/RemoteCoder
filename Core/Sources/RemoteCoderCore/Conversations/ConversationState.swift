@@ -601,8 +601,10 @@ struct ConversationState: Sendable {
         let steers = turns[turnID]?.order.compactMap { UUID(uuidString: $0).flatMap { submissions[$0] } }
             .filter { $0.message.wasSteered && $0.status == .accepted && $0.turnID == turnID } ?? []
         guard steers.count > 1 else { return steers.first }
+        let visualReplies = steers.flatMap { $0.message.visualReplies ?? [] }
         let message = ChatMessage(role: .user, text: steers.map(\.message.text).joined(separator: "\n"),
-                                  attachments: steers.flatMap(\.message.attachments))
+                                  attachments: steers.flatMap(\.message.attachments),
+                                  visualReplies: visualReplies.isEmpty ? nil : visualReplies)
         for steer in steers { submissionNotDispatched(steer.message.id) }
         submit(message, input: steers.map(\.input).joined(separator: "\n"))
         return submissions[message.id]
