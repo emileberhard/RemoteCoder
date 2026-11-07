@@ -87,7 +87,7 @@ impl JobStore {
                 let entry = entry?;
                 if entry.path().extension().is_none_or(|extension| extension != "json") { continue; }
                 let evidence: ImportedUncertainty = read(&entry.path(), MAX_AGENT_BYTES)?;
-                ensure!(!evidence.evidence_id.is_empty() && evidence.evidence_id.len() <= 512 && !evidence.thread_id.is_empty(), "invalid historical uncertainty identity");
+                ensure!(!evidence.evidence_id.is_empty() && evidence.evidence_id.len() <= 512, "invalid historical uncertainty identity");
                 ensure!(entry.path().file_stem().and_then(|name| name.to_str()) == Some(fingerprint(evidence.evidence_id.as_bytes()).as_str()), "historical uncertainty filename differs from its identity");
                 inner.uncertainties.push(evidence);
             }

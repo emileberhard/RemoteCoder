@@ -51,12 +51,13 @@ The list is capped at 512 agents. Native subtree expansion retains its existing
 bounded reads. External descendant selection includes at most 32 native roots,
 reads at most 256 jobs per root, deduplicates agents and reports omitted pages.
 Exact canonical origins are checked before provider ancestry; historical
-uncertainty about an exact thread cannot silently become root. Classification reads the in-process
-job owner and provider headers, never an external launcher or a second cache of
-launcher projections. The whole list shares a two-second deadline; already
-collected native headers survive optional execution-enrichment failure, with
-unfinished state reported as unknown. A missing agent in an incomplete list
-returns retryable `agentDiscoveryIncomplete`, not proof that it is gone.
+uncertainty about an exact thread cannot silently become root. Classification
+reads the in-process job owner and provider headers, never an external launcher
+or a second cache of launcher projections. The whole list shares a two-second
+deadline; already collected native headers survive optional execution-enrichment
+failure, with unfinished state reported as unknown. A missing agent in an
+incomplete list returns retryable `agentDiscoveryIncomplete`, not proof that it
+is gone.
 
 Native child execution snapshots retain at most 16
 roots and reuse terminal results for up to 30 seconds while the provider's

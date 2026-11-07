@@ -875,7 +875,7 @@ blocks startup or provider journal retirement.
   execution error. The job owner's exact Agent origin is authoritative for
   external workers. Native provider ancestry and typed Claude creation records
   supply other roots; imported uncertainty about an exact thread remains unknown,
-  and the store rejects imported uncertainty that names no thread. A delegated
+  and the job store refuses to open while a record names no thread. A delegated
   Claude creation is `SessionOrigin::Job`, never a root-producing bare marker.
   Reads call this in-process owner, not an agent-work CLI or periodic ancestry
   preflight. Display caches, parent routability and message text never establish

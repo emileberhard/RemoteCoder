@@ -326,9 +326,10 @@ then convert immutable copied evidence once. The candidate gateway reads the
 staged canonical records before activation. Unknown outcomes, timestamps,
 ancestry and delivery certainty remain unknown. Imported ancestry uncertainty
 names its exact provider thread; doubt without a thread is evidence about no
-conversation, so the store rejects it. No runtime legacy reader,
-second registry or import RPC remains. Provider history and rollback snapshots
-are retained data, not an alternative execution path.
+conversation, so the job store refuses to open while such a record is present,
+failing every job, message and ancestry lookup on that host. No runtime legacy
+reader, second registry or import RPC remains. Provider history and rollback
+snapshots are retained data, not an alternative execution path.
 
 Explicit Continue can start a new job after an imported Claude record whose old
 outcome remains unknown. Admission requires the recorded exact conversation and
