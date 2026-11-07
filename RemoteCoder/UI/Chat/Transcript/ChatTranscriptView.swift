@@ -398,6 +398,7 @@ private struct TranscriptContentView<QuestionContent: View, BottomBar: View>: Vi
                     visibility.setReadingEdge(bottom: state.readingBottom, height: state.readingHeight)
                 }
                 .onScrollGeometryChange(for: Bool.self, of: { $0.distanceToBottom <= 1 }) { _, atBottom in
+                    scrollPhase.isAtBottom = atBottom
                     if !position.isRestoring { follow.userScrollMoved(atBottom: atBottom) }
                 }
         }
@@ -487,12 +488,13 @@ private struct TranscriptContentView<QuestionContent: View, BottomBar: View>: Vi
         #endif
         #if os(iOS)
         scrollPhase.changed(to: phase)
+        scrollPhase.isAtBottom = atBottom
         htmlVisualSource?.preparation.setInteracting(phase != .idle)
         animatedScrollEnd?.cancel()
-        animatedScrollEnd = phase == .animating ? Task {
+        animatedScrollEnd = phase == .animating ? Task { [scrollPhase] in
             try? await Task.sleep(for: TranscriptScrollPhase.animationSettle)
             guard !Task.isCancelled else { return }
-            phaseChanged(.idle, atBottom: false)
+            phaseChanged(.idle, atBottom: scrollPhase.isAtBottom)
         } : nil
         #endif
         visibility.setScrollPhase(phase)
@@ -1043,6 +1045,7 @@ private struct TranscriptViewportState: Equatable {
 private final class TranscriptScrollPhase {
     static let animationSettle = Duration.milliseconds(1_500)
     private(set) var value = ScrollPhase.idle
+    var isAtBottom = true
 
     func changed(to phase: ScrollPhase) {
         guard phase != value else { return }
