@@ -24,7 +24,7 @@ struct ChatMessage: Identifiable, Sendable, Equatable, Codable {
     /// Set when this user message is a reply envelope to a model question; the
     /// bubble then shows each question with its answer instead of the raw text.
     var questionReplies: [QuestionReply]?
-    var visualReplies: [HTMLVisualReply]?
+    var visualReplies: [HTMLVisualReply]
 
     init(
         id: UUID = UUID(),
@@ -38,7 +38,7 @@ struct ChatMessage: Identifiable, Sendable, Equatable, Codable {
         canonicalTurnID: String? = nil,
         canonicalItemID: String? = nil,
         questionReplies: [QuestionReply]? = nil,
-        visualReplies: [HTMLVisualReply]? = nil,
+        visualReplies: [HTMLVisualReply] = [],
         isStreaming: Bool = false
     ) {
         self.id = id
@@ -89,7 +89,7 @@ struct ChatMessage: Identifiable, Sendable, Equatable, Codable {
         canonicalTurnID = try values.decodeIfPresent(String.self, forKey: .canonicalTurnID)
         canonicalItemID = try values.decodeIfPresent(String.self, forKey: .canonicalItemID)
         questionReplies = try values.decodeIfPresent([QuestionReply].self, forKey: .questionReplies)
-        visualReplies = try values.decodeIfPresent([HTMLVisualReply].self, forKey: .visualReplies)
+        visualReplies = try values.decodeIfPresent([HTMLVisualReply].self, forKey: .visualReplies) ?? []
         isStreaming = try values.decodeIfPresent(Bool.self, forKey: .isStreaming) ?? false
     }
 
@@ -129,7 +129,7 @@ struct ChatMessage: Identifiable, Sendable, Equatable, Codable {
         try values.encodeIfPresent(canonicalTurnID, forKey: .canonicalTurnID)
         try values.encodeIfPresent(canonicalItemID, forKey: .canonicalItemID)
         try values.encodeIfPresent(questionReplies, forKey: .questionReplies)
-        try values.encodeIfPresent(visualReplies, forKey: .visualReplies)
+        if !visualReplies.isEmpty { try values.encode(visualReplies, forKey: .visualReplies) }
         try values.encode(isStreaming, forKey: .isStreaming)
     }
 

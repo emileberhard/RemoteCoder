@@ -202,7 +202,7 @@ enum ConversationProjection {
                                     revision: state.revision, messages: messages, timelines: timelines, items: rows,
                                     lastTurnCompletedAt: state.lastTurnCompletedAt,
                                     forkableMessageIDs: forkableMessageIDs, questionPrompts: prompts, questionCoverage: state.questions?.coverage ?? .unavailable, pendingQuestion: pendingQuestion, compaction: state.compaction,
-                                    visualReplies: HTMLVisualReplyIndex(messages: messages, includesNewest: state.window?.newer == nil),
+                                    visualReplies: HTMLVisualReplyIndex(messages: messages, includesNewest: state.hasVerifiedNewestHistory),
                                     canPrefetchOlder: state.window.map { $0.olderEdge != nil && $0.hasRoomToPrefetch } ?? false,
                                     presentationRows: presentationRows)
     }
@@ -467,7 +467,7 @@ enum ConversationProjection {
         let clientID: UUID?
         let attachments: [MessageAttachment]
         let questionReplies: [QuestionReply]?
-        let visualReplies: [HTMLVisualReply]?
+        let visualReplies: [HTMLVisualReply]
         let inline: InlineMessageContent?
         switch record.value {
         case .userMessage(_, let content, let clientId):
@@ -494,7 +494,7 @@ enum ConversationProjection {
                 attachments = prepared.attachments
                 inline = prepared.inline
                 questionReplies = prepared.replies
-                visualReplies = prepared.visualReplies.isEmpty ? nil : prepared.visualReplies
+                visualReplies = prepared.visualReplies
             }
         case .agentMessage(_, let value, _, _, _):
             role = .codex
@@ -503,7 +503,7 @@ enum ConversationProjection {
             attachments = []
             inline = nil
             questionReplies = nil
-            visualReplies = nil
+            visualReplies = []
         default: return nil
         }
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty else { return nil }

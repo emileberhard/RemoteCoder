@@ -16,7 +16,7 @@ struct HTMLVisualReplyIndex: Sendable, Equatable {
         }
         var replies: [HTMLVisualReplyKey: [String]] = [:]
         for message in messages where message.role == .user && message.delivery != .notSent {
-            for reply in message.visualReplies ?? [] { replies[reply.key, default: []].append(reply.text) }
+            for reply in message.visualReplies { replies[reply.key, default: []].append(reply.text) }
         }
         self.init(replies: replies)
     }

@@ -601,10 +601,10 @@ struct ConversationState: Sendable {
         let steers = turns[turnID]?.order.compactMap { UUID(uuidString: $0).flatMap { submissions[$0] } }
             .filter { $0.message.wasSteered && $0.status == .accepted && $0.turnID == turnID } ?? []
         guard steers.count > 1 else { return steers.first }
-        let visualReplies = steers.flatMap { $0.message.visualReplies ?? [] }
+        let visualReplies = steers.flatMap(\.message.visualReplies)
         let message = ChatMessage(role: .user, text: steers.map(\.message.text).joined(separator: "\n"),
                                   attachments: steers.flatMap(\.message.attachments),
-                                  visualReplies: visualReplies.isEmpty ? nil : visualReplies)
+                                  visualReplies: visualReplies)
         for steer in steers { submissionNotDispatched(steer.message.id) }
         submit(message, input: steers.map(\.input).joined(separator: "\n"))
         return submissions[message.id]
@@ -1165,8 +1165,13 @@ struct ConversationState: Sendable {
         persistenceRevision += 1
     }
 
+    var hasVerifiedNewestHistory: Bool {
+        guard let window else { return false }
+        return hasVerifiedTail && window.isLoaded && window.newer == nil
+    }
+
     var validTokenUsage: CodexAppServerV2.ThreadTokenUsage? {
-        guard let tokenUsage, hasVerifiedTail, let window, window.isLoaded, window.newer == nil,
+        guard let tokenUsage, hasVerifiedNewestHistory, let window,
               let newest = window.turns.last, let metadata = newest.metadata, metadata.status != .inProgress,
               GatewayNotificationRouting.normalizeTurnID(newest.id) == GatewayNotificationRouting.normalizeTurnID(tokenUsage.turnID),
               order.last == resolvedTurnID(newest.id) else { return nil }

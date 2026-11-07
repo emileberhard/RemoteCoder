@@ -483,7 +483,7 @@ struct ConversationStateTests: ConversationHistoryFixtures {
         let pasted = MessageAttachment(id: UUID(), content: .text("pasted log"))
         let visualReply = try #require(HTMLVisualReplyKey(turnID: "turn", digest: String(repeating: "a", count: 64))
             .flatMap { HTMLVisualReply(key: $0, text: "on TV") })
-        func steer(_ text: String, attachments: [MessageAttachment] = [], visualReplies: [HTMLVisualReply]? = nil) -> ChatMessage {
+        func steer(_ text: String, attachments: [MessageAttachment] = [], visualReplies: [HTMLVisualReply] = []) -> ChatMessage {
             ChatMessage(role: .user, text: text, attachments: attachments, wasSteered: true, canonicalTurnID: "turn",
                         visualReplies: visualReplies)
         }

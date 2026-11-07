@@ -961,13 +961,13 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
     @concurrent
     private static func prepareDispatch(_ resolved: ResolvedDispatchMessage) async -> (text: String, body: String,
         attachments: [MessageAttachment], inline: InlineMessageContent?, questionReplies: [QuestionReply]?,
-        visualReplies: [HTMLVisualReply]?) {
+        visualReplies: [HTMLVisualReply]) {
         let prompt: String
         let body: String
         var pasted: [MessageAttachment] = []
         var inline: InlineMessageContent?
         var questionReplies: [QuestionReply]?
-        var visualReplies: [HTMLVisualReply]?
+        var visualReplies: [HTMLVisualReply] = []
         switch resolved.content {
         case .composed(let content):
             prompt = content.prompt

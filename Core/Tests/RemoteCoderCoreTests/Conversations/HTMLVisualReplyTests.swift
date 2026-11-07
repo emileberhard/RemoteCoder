@@ -19,7 +19,7 @@ struct HTMLVisualReplyTests: ConversationHistoryFixtures {
         return try JSONDecoder().decode(CodexAppServerV2.ThreadItem.self, from: Data(json.utf8))
     }
 
-    @Test func historyRepliesAreKnownForTheirPublicationTurnAndVisual() throws {
+    @Test func gatewayHistoryRepliesAreKnownForTheirPublicationTurnAndVisual() throws {
         let answer = try reply("Quiz: 1 B")
         let user = CodexAppServerV2.ThreadItem.userMessage(id: "user", content: [
             .text(text: InlinePastedText.visualReply(answer), textElements: [])])
@@ -31,6 +31,10 @@ struct HTMLVisualReplyTests: ConversationHistoryFixtures {
         #expect(snapshot.visualReplies.sent(for: answer.key) == ["Quiz: 1 B"])
         #expect(snapshot.visualReplies.sent(for: try reply("x", turnID: "other").key) == [])
         #expect(snapshot.messages.first { $0.role == .user }?.text == "Quiz: 1 B")
+        var restored = ConversationState(conversationID: UUID(), threadID: "thread")
+        restored.merge(.fixture(wire: entries([try publication(), user], turnID: "turn"),
+                                turns: [summary("turn", status: .completed)], source: .storedTail))
+        #expect(ConversationProjection.project(restored).visualReplies.sent(for: answer.key) == nil)
     }
 
     @Test func sentRepliesAreUnknownWithoutTheNewestHistoryAndExcludeUnsentMessages() throws {
