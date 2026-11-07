@@ -1,32 +1,54 @@
-const start = '<remotecoder_visual_reply_v1 turn="';
-const end = "\n</remotecoder_visual_reply_v1>";
-const header = /^[!#-;=?-~]{1,128}" visual="[0-9a-f]{64}" bytes="([1-9][0-9]{0,9})">\n/;
-const maximumBytes = 16 * 1024;
+const replyStart = '<remotecoder_visual_reply_v1 turn="';
+const replyHeader = /^[!#-;=?-~]{1,128}" visual="[0-9a-f]{64}" bytes="([1-9][0-9]{0,9})">\n/;
+const replyEnd = "\n</remotecoder_visual_reply_v1>";
+const literalStart = '<remotecoder_literal_text_v2 bytes="';
+const literalHeader = /^([1-9][0-9]{0,9})">\n/;
+const literalEnd = "\n</remotecoder_literal_text_v2>";
+const maximumReplyBytes = 16 * 1024;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder("utf-8", { fatal: true });
-const endBytes = encoder.encode(end);
 
 export function visualReplyText(text: string) {
   let result = "";
   let cursor = 0;
-  let search = text.indexOf(start);
+  let search = nextMarker(text, 0);
   while (search >= 0) {
-    const reply = parseReply(text, search + start.length);
-    if (reply) {
-      result += text.slice(cursor, search) + reply.text;
-      cursor = reply.next;
+    if (text.startsWith(literalStart, search)) {
+      const literal = parsePayload(text, search + literalStart.length, literalHeader, literalEnd);
+      search = nextMarker(text, literal ? literal.next : search + 1);
+      continue;
     }
-    search = text.indexOf(start, reply ? reply.next : search + 1);
+    const reply = parsePayload(text, search + replyStart.length, replyHeader, replyEnd, maximumReplyBytes);
+    const accepted = reply?.text.trim() ? reply : undefined;
+    if (accepted) {
+      result += text.slice(cursor, search) + accepted.text;
+      cursor = accepted.next;
+    }
+    search = nextMarker(text, accepted ? accepted.next : search + 1);
   }
   return result + text.slice(cursor);
 }
 
-function parseReply(text: string, headerStart: number) {
+function nextMarker(text: string, from: number) {
+  const reply = text.indexOf(replyStart, from);
+  const literal = text.indexOf(literalStart, from);
+  if (reply < 0) return literal;
+  return literal < 0 ? reply : Math.min(reply, literal);
+}
+
+function parsePayload(
+  text: string,
+  headerStart: number,
+  header: RegExp,
+  end: string,
+  maximumBytes = Infinity,
+) {
   const match = header.exec(text.slice(headerStart, headerStart + 256));
   if (!match) return undefined;
   const length = Number(match[1]);
   if (length > maximumBytes) return undefined;
   const payloadStart = headerStart + match[0].length;
+  const endBytes = encoder.encode(end);
   const window = encoder.encode(text.slice(payloadStart, payloadStart + length + end.length));
   if (
     window.length < length + endBytes.length ||
@@ -39,5 +61,5 @@ function parseReply(text: string, headerStart: number) {
   } catch {
     return undefined;
   }
-  return payload.trim() ? { text: payload, next: payloadStart + payload.length + end.length } : undefined;
+  return { text: payload, next: payloadStart + payload.length + end.length };
 }

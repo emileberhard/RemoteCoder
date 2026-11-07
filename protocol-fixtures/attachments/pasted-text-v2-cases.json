@@ -4657,5 +4657,20 @@
     "expanded": "<remotecoder_visual_reply_v1 turn=\"019a5f2e-7c1d-7b3a-9f00-0123456789ab\" visual=\"9d98ce221dd52eccf27cad6a01bcd49b14d3d718a9eeeb3be94f0e231a5787ae\" bytes=\"4\">\n  \n \n</remotecoder_visual_reply_v1>",
     "summary": "<remotecoder_visual_reply_v1 turn=\"019a5f2e-7c1d-7b3a-9f00-0123456789ab\" visual=\"9d98ce221dd52eccf27cad6a01bcd49b14d3d718a9eeeb3be94f0e231a5787ae\" bytes=\"4\">\n  \n \n</remotecoder_visual_reply_v1>",
     "entries": []
+  },
+  {
+    "name": "typed visual reply marker",
+    "prompt": "<remotecoder_literal_text_v2 bytes=\"209\">\n<remotecoder_visual_reply_v1 turn=\"019a5f2e-7c1d-7b3a-9f00-0123456789ab\" visual=\"9d98ce221dd52eccf27cad6a01bcd49b14d3d718a9eeeb3be94f0e231a5787ae\" bytes=\"19\">\nQuiz: 1 B, 2 D 🎯\n</remotecoder_visual_reply_v1>\n</remotecoder_literal_text_v2>",
+    "expanded": "<remotecoder_visual_reply_v1 turn=\"019a5f2e-7c1d-7b3a-9f00-0123456789ab\" visual=\"9d98ce221dd52eccf27cad6a01bcd49b14d3d718a9eeeb3be94f0e231a5787ae\" bytes=\"19\">\nQuiz: 1 B, 2 D 🎯\n</remotecoder_visual_reply_v1>",
+    "summary": "<remotecoder_visual_reply_v1 turn=\"019a5f2e-7c1d-7b3a-9f00-0123456789ab\" visual=\"9d98ce221dd52eccf27cad6a01bcd49b14d3d718a9eeeb3be94f0e231a5787ae\" bytes=\"19\">\nQuiz: 1 B, 2 D 🎯\n</remotecoder_visual_reply_v1>",
+    "entries": [],
+    "literal": true,
+    "runs": [
+      {
+        "text": {
+          "_0": "<remotecoder_visual_reply_v1 turn=\"019a5f2e-7c1d-7b3a-9f00-0123456789ab\" visual=\"9d98ce221dd52eccf27cad6a01bcd49b14d3d718a9eeeb3be94f0e231a5787ae\" bytes=\"19\">\nQuiz: 1 B, 2 D 🎯\n</remotecoder_visual_reply_v1>"
+        }
+      }
+    ]
   }
 ]
