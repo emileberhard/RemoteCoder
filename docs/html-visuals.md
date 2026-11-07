@@ -303,7 +303,7 @@ work; cancelled queue entries remain bounded until they drain.
 response API at `https://<digest>.rc-visual.invalid/`. It shares one app-owned
 nonpersistent website data store to avoid independent WebKit process lifetimes
 for every transient page. The response-header CSP sets `sandbox allow-scripts
-allow-same-origin`, so each visual runs in its own per-digest origin, which is
+allow-same-origin allow-forms`, so each visual runs in its own per-digest origin, which is
 same-origin with nothing else. Visuals get cookies, local and session storage,
 IndexedDB and the Cache API, keyed to that digest and kept in memory. The
 renderer discards that storage whenever its last live page is released, so
@@ -319,7 +319,9 @@ Live data, CDN libraries, map tiles, frames, secure WebSockets, WebRTC, workers,
 block active `http:` and `ws:` loads as mixed content, loopback included, while
 passive images still load. Frames inherit the sandbox flags, so an embed runs
 in its own origin without popups. The response CSP still denies
-objects, base URLs and form submissions. The shared nonpersistent store keeps
+objects, base URLs and form navigation: `allow-forms` only lets a form fire its
+`submit` event and run its validation, so a quiz can use ordinary form
+controls, while `form-action 'none'` keeps the submission from leaving the page. The shared nonpersistent store keeps
 cookies and storage only in memory
 for the app session, sharing nothing with Safari or the app's other web views.
 The page has no remote-file resource adapter or credential-bearing gateway
@@ -359,10 +361,80 @@ and link previews are disabled.
 The layout, interaction and link bridge lives in WebKit's isolated
 `defaultClient` content world. Native handling checks the main frame and
 synthetic origin and validates each bounded payload. Page-authored JavaScript
-does not receive an app RPC or arbitrary native-operation bridge.
+receives only the reply API described in [Replies](#replies), never an app RPC
+or arbitrary native-operation bridge.
 The content controller strongly retains that bridge, so link callbacks capture
 only the open-URL action, file source, frame anchor and presentation scope;
 they never capture a view value or its raster state.
+
+## Replies
+
+A visual can send input back to the agent: a quiz answer, a choice or a filled
+form. The page calls `await remotecoder.send(text)` from a tap handler, and the
+text becomes the user's next message in the visual's conversation through the
+same dispatch as an answered question: it steers a running turn and otherwise
+starts one. `remotecoder.sent` lists the texts this visual already sent, oldest
+first, so a reopened quiz can show its answered state; it is `null` while that
+is unknown. A `remotecodersent` event on `window` fires whenever it changes, for
+example when history arrives after the page loaded or another device answered.
+Pages feature-detect `window.remotecoder`, which is absent in other clients. The
+`publish_visual` description teaches this in three sentences.
+
+The text travels in an inline marker of the pasted-text family:
+
+```
+<remotecoder_visual_reply_v1 turn="T" visual="<64 hex>" bytes="N">
+TEXT
+</remotecoder_visual_reply_v1>
+```
+
+`turn` is the turn that published the visual, 1–128 bytes of printable ASCII
+without space, `"`, `<` or `>`; `visual` is its digest; `bytes` is the UTF-8
+length of the nonblank `TEXT`, at most 16 KiB. `HTMLVisualReplyKey` and
+`HTMLVisualReply` own those rules, and `InlinePastedText` encodes and parses the
+marker beside pasted text, so typed text containing the marker is escaped as a
+literal and a byte length keeps the payload opaque. Merged steers keep every
+reply, because the parser finds markers anywhere in the joined text. The
+transcript, notifications, history headers and the web client show only `TEXT`;
+the agent receives the marker, so it knows which visual answered.
+`protocol-fixtures/attachments/pasted-text-v2-cases.json` holds the shared
+valid and malformed cases for Swift, the gateway and the web client.
+
+`ConversationProjection` derives `HTMLVisualReplyIndex` from the projected user
+messages, excluding those that were not sent. It is known only when the history
+window includes the newest page, because an older-only window cannot prove
+what was sent since. A publication row carries its turn id in
+`PublishedVisual.turnID`, and an assistant message's embeds take
+`ChatMessage.canonicalTurnID` through the `htmlVisualTurnID` environment value;
+a local turn id has no key. `ChatScreenModel` owns one `HTMLVisualReplies`,
+which publishes the index, binds each page's channel to the conversation that
+created it and dispatches through `answerVisual`. A channel that outlives its
+conversation, a read-only conversation or a busy composer rejects the send
+with an error the page receives.
+
+In WebKit, the isolated reply script owns `sent` and the gesture gate. A trusted
+`pointerdown`, `pointerup`, `click`, `keydown`, `change` or `submit` in the main
+frame allows one send within five seconds, and each page has at most one send in
+flight. The page-world shim defines a frozen `window.remotecoder` and talks to
+the isolated script through `CustomEvent` string details, so the page never
+holds a `webkit.messageHandlers` reference. The native bridge implements
+`WKScriptMessageHandlerWithReply` and validates the text again; the promise
+resolves once the message was accepted for dispatch and rejects with the
+failure. Background preparation pages have `sent` unknown and refuse sends; the
+gateway preview reports `sent` as empty and refuses sends.
+
+Decision (2026-11-07). Goal: model-made interactive UI, such as a quiz whose
+answers the agent sees, without a second visual feature. Chosen: extend
+`publish_visual` with a one-way send that reuses the question-reply dispatch,
+and derive answered state from history so it survives reinstalls, other devices
+and checkpoint loss. Rejected: a renamed tool, which breaks resumed threads'
+declarations for no capability; a page-to-agent RPC or tool-call return, which
+needs a live turn and a host round trip per interaction; and app-persisted
+answer state, a second owner that drifts from history. Gesture gating keeps a
+page from sending on load or in a loop, and the user sees every sent text as
+their own message. If agents need richer state than sent texts, or other
+clients gain the API, the envelope's version and the index are the places that
+change.
 
 ## Visibility, interaction and cached geometry
 
