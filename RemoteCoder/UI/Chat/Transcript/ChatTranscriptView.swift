@@ -1045,7 +1045,7 @@ private struct TranscriptViewportState: Equatable {
 private final class TranscriptScrollPhase {
     static let animationSettle = Duration.milliseconds(1_500)
     private(set) var value = ScrollPhase.idle
-    var isAtBottom = true
+    @ObservationIgnored var isAtBottom = true
 
     func changed(to phase: ScrollPhase) {
         guard phase != value else { return }

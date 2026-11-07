@@ -4672,5 +4672,17 @@
         }
       }
     ]
+  },
+  {
+    "name": "pasted visual reply marker",
+    "prompt": "<remotecoder_pasted_text_v2 id=\"77777777-2222-3333-4444-666666666666\" bytes=\"209\">\n<remotecoder_visual_reply_v1 turn=\"019a5f2e-7c1d-7b3a-9f00-0123456789ab\" visual=\"9d98ce221dd52eccf27cad6a01bcd49b14d3d718a9eeeb3be94f0e231a5787ae\" bytes=\"19\">\nQuiz: 1 B, 2 D 🎯\n</remotecoder_visual_reply_v1>\n</remotecoder_pasted_text_v2>",
+    "expanded": "<remotecoder_visual_reply_v1 turn=\"019a5f2e-7c1d-7b3a-9f00-0123456789ab\" visual=\"9d98ce221dd52eccf27cad6a01bcd49b14d3d718a9eeeb3be94f0e231a5787ae\" bytes=\"19\">\nQuiz: 1 B, 2 D 🎯\n</remotecoder_visual_reply_v1>",
+    "summary": "[Pasted text]",
+    "entries": [
+      {
+        "id": "77777777-2222-3333-4444-666666666666",
+        "text": "<remotecoder_visual_reply_v1 turn=\"019a5f2e-7c1d-7b3a-9f00-0123456789ab\" visual=\"9d98ce221dd52eccf27cad6a01bcd49b14d3d718a9eeeb3be94f0e231a5787ae\" bytes=\"19\">\nQuiz: 1 B, 2 D 🎯\n</remotecoder_visual_reply_v1>"
+      }
+    ]
   }
 ]
