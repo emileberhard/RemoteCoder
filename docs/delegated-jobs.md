@@ -324,7 +324,9 @@ retries without an interim notice.
 Private operations freeze old admission, drain existing writers and callbacks,
 then convert immutable copied evidence once. The candidate gateway reads the
 staged canonical records before activation. Unknown outcomes, timestamps,
-ancestry and delivery certainty remain unknown. No runtime legacy reader,
+ancestry and delivery certainty remain unknown. Imported ancestry uncertainty
+names its exact provider thread; doubt without a thread is evidence about no
+conversation, so the store rejects it. No runtime legacy reader,
 second registry or import RPC remains. Provider history and rollback snapshots
 are retained data, not an alternative execution path.
 

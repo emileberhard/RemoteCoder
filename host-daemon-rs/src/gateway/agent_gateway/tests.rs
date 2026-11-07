@@ -1288,3 +1288,47 @@ async fn cluster_parent_cycles_are_bounded_and_each_affected_thread_is_a_root() 
         ])
     );
 }
+
+#[tokio::test]
+async fn claude_ancestry_needs_a_transcript_and_rejects_recorded_job_sessions() {
+    use crate::agents::jobs::model::JobId;
+    use crate::agents::mcp::McpTokens;
+    use crate::providers::claude::ClaudeSupervisor;
+    use crate::providers::claude::conversation_index::Store;
+    let gateway = gateway();
+    let home = gateway.claude_settings.claude_home.clone();
+    let [root, missing, job] =
+        std::array::from_fn(|_| format!("claude_{}", crate::ids::new_session_uuid()));
+    let project = home.join("projects").join("fixture");
+    std::fs::create_dir_all(&project).unwrap();
+    for thread in [&root, &job] {
+        let uuid = thread.strip_prefix("claude_").unwrap();
+        let record = json!({"type":"user","uuid":"prompt","timestamp":"2026-09-19T14:10:49Z","cwd":"/tmp","message":{"role":"user","content":"Hello"}});
+        std::fs::write(project.join(format!("{uuid}.jsonl")), format!("{record}\n")).unwrap();
+    }
+    Store::new(home)
+        .record_job_session(
+            &job,
+            &JobId::try_from("agent-claude-1793127141860775000-00000001".to_owned()).unwrap(),
+        )
+        .await
+        .unwrap();
+    let (sender, _receiver) = mpsc::channel(16);
+    gateway.set_claude_agent(ClaudeSupervisor::new(
+        gateway.claude_settings.clone(),
+        sender,
+        Journal::disabled(),
+        McpTokens::new(),
+    ));
+    let service = gateway.agent_service();
+    assert!(matches!(
+        service.thread_relation(&root).await.unwrap(),
+        ThreadRelation::Root
+    ));
+    assert!(service.thread_relation(&missing).await.is_err());
+    let error = service.thread_relation(&job).await.err().unwrap();
+    assert!(
+        error.to_string().contains("no resolved runtime origin"),
+        "{error:#}"
+    );
+}

@@ -874,7 +874,8 @@ blocks startup or provider journal retirement.
   suppress delivery with fixed journal reasons, never a guessed root or raw
   execution error. The job owner's exact Agent origin is authoritative for
   external workers. Native provider ancestry and typed Claude creation records
-  supply other roots; scoped imported uncertainty remains unknown. A delegated
+  supply other roots; imported uncertainty about an exact thread remains unknown,
+  and the store rejects imported uncertainty that names no thread. A delegated
   Claude creation is `SessionOrigin::Job`, never a root-producing bare marker.
   Reads call this in-process owner, not an agent-work CLI or periodic ancestry
   preflight. Display caches, parent routability and message text never establish

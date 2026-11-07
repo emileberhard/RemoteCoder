@@ -50,8 +50,8 @@ job resolve current execution without ordering jobs by timestamps.
 The list is capped at 512 agents. Native subtree expansion retains its existing
 bounded reads. External descendant selection includes at most 32 native roots,
 reads at most 256 jobs per root, deduplicates agents and reports omitted pages.
-Exact canonical origins are checked before provider ancestry; scoped historical
-uncertainty cannot silently become root. Classification reads the in-process
+Exact canonical origins are checked before provider ancestry; historical
+uncertainty about an exact thread cannot silently become root. Classification reads the in-process
 job owner and provider headers, never an external launcher or a second cache of
 launcher projections. The whole list shares a two-second deadline; already
 collected native headers survive optional execution-enrichment failure, with

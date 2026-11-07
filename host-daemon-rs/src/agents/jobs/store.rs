@@ -87,7 +87,7 @@ impl JobStore {
                 let entry = entry?;
                 if entry.path().extension().is_none_or(|extension| extension != "json") { continue; }
                 let evidence: ImportedUncertainty = read(&entry.path(), MAX_AGENT_BYTES)?;
-                ensure!(!evidence.evidence_id.is_empty() && evidence.evidence_id.len() <= 512, "invalid historical uncertainty identity");
+                ensure!(!evidence.evidence_id.is_empty() && evidence.evidence_id.len() <= 512 && !evidence.thread_id.is_empty(), "invalid historical uncertainty identity");
                 ensure!(entry.path().file_stem().and_then(|name| name.to_str()) == Some(fingerprint(evidence.evidence_id.as_bytes()).as_str()), "historical uncertainty filename differs from its identity");
                 inner.uncertainties.push(evidence);
             }
@@ -183,7 +183,6 @@ impl JobStore {
     pub(crate) async fn classify(
         &self,
         conversation: ConversationIdentity,
-        creation: Creation,
     ) -> Result<Option<Origin>> {
         self.access(move |inner| {
             let mut found = inner.agents.values().filter(|agent| matches!(&agent.conversation, ConversationBinding::Known { conversation: known } if known == &conversation));
@@ -196,11 +195,7 @@ impl JobStore {
             if let Some(evidence) = inner.uncertainties.iter().find(|evidence| {
                 evidence.provider.is_none_or(|provider| provider == conversation.provider)
                     && evidence.provider_home.as_ref().is_none_or(|home| matches!(&conversation.provider_home, ProviderHome::Known { path } if path == home))
-                    && evidence.thread_id.as_ref().is_none_or(|thread| thread == &conversation.thread_id)
-                    && (evidence.thread_id.is_some() || match creation {
-                        Creation::RecordedByGateway => false,
-                        Creation::ReportedByProvider { at_ms } => at_ms.zip(evidence.latest_possible_creation_ms).is_none_or(|(created, latest)| created <= latest),
-                    })
+                    && evidence.thread_id == conversation.thread_id
             }) {
                 return Ok(Some(Origin::Unknown { reason: format!("historical ancestry of run {} is unresolved: {}", evidence.source_run_id, evidence.reason) }));
             }

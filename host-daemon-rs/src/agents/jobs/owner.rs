@@ -177,12 +177,8 @@ impl JobOwner {
     pub(crate) async fn classify(
         &self,
         conversation: &ConversationIdentity,
-        creation: Creation,
     ) -> Result<Option<Origin>> {
-        self.store()
-            .await?
-            .classify(conversation.clone(), creation)
-            .await
+        self.store().await?.classify(conversation.clone()).await
     }
 
     pub(crate) async fn list(&self, request: ListParams) -> Result<ListPage> {

@@ -755,8 +755,34 @@ async fn explicit_continuation_preserves_imported_unknown_outcome_and_origin() {
     assert_eq!(continued.latest_job_id, Some(continuation.job_id));
 }
 
+fn write_uncertainty(directory: &std::path::Path, evidence: &serde_json::Value) {
+    let identity = evidence["evidenceId"].as_str().unwrap();
+    std::fs::write(
+        directory.join("uncertainties").join(format!(
+            "{}.json",
+            super::store::fingerprint(identity.as_bytes())
+        )),
+        serde_json::to_vec(evidence).unwrap(),
+    )
+    .unwrap();
+}
+
+fn uncertainty(source: &JobId, thread: &str) -> ImportedUncertainty {
+    ImportedUncertainty {
+        evidence_id: format!("fixture-host:{}:{thread}", source.as_str()),
+        source_run_id: source.as_str().into(),
+        provider: Some(Provider::Codex),
+        provider_home: Some("/tmp/job-fixture/codex".into()),
+        thread_id: thread.into(),
+        parent_home: None,
+        parent_thread_id: None,
+        latest_possible_creation_ms: Some(1_000),
+        reason: "identityPending".into(),
+    }
+}
+
 #[tokio::test]
-async fn historical_uncertainty_spares_only_conversations_the_gateway_created() {
+async fn historical_uncertainty_marks_only_its_exact_thread_unknown() {
     let directory = tempfile::tempdir().unwrap();
     drop(JobStore::open(directory.path().into()).await.unwrap());
     let mut imported = job(91);
@@ -774,54 +800,47 @@ async fn historical_uncertainty_spares_only_conversations_the_gateway_created() 
         serde_json::to_vec(&imported).unwrap(),
     )
     .unwrap();
-    for thread in [None, Some("thread-named")] {
-        let evidence = ImportedUncertainty {
-            evidence_id: format!(
-                "fixture-host:{}:{}",
-                imported.job_id.as_str(),
-                thread.unwrap_or_default()
-            ),
-            source_run_id: imported.job_id.as_str().into(),
-            provider: Some(Provider::Codex),
-            provider_home: Some("/tmp/job-fixture/codex".into()),
-            thread_id: thread.map(Into::into),
-            parent_home: None,
-            parent_thread_id: None,
-            latest_possible_creation_ms: None,
-            reason: "identityPending".into(),
-        };
-        std::fs::write(
-            directory.path().join("uncertainties").join(format!(
-                "{}.json",
-                super::store::fingerprint(evidence.evidence_id.as_bytes())
-            )),
-            serde_json::to_vec(&evidence).unwrap(),
-        )
-        .unwrap();
-    }
+    write_uncertainty(
+        directory.path(),
+        &serde_json::to_value(uncertainty(&imported.job_id, "thread-named")).unwrap(),
+    );
     let store = JobStore::open(directory.path().into()).await.unwrap();
-    for (thread, creation, unknown) in [
-        (
-            "thread-root",
-            Creation::ReportedByProvider { at_ms: Some(200) },
-            true,
-        ),
-        ("thread-root", Creation::RecordedByGateway, false),
-        ("thread-named", Creation::RecordedByGateway, true),
+    for (thread, expected) in [
+        ("thread-named", Some(imported.job_id.as_str())),
+        ("thread-fixture", Some("recorded job ancestry")),
+        ("thread-root", None),
     ] {
-        let conversation = ConversationIdentity {
-            thread_id: thread.into(),
-            ..conversation()
-        };
-        let origin = store.classify(conversation, creation).await.unwrap();
-        match origin {
-            Some(Origin::Unknown { reason }) if unknown => {
-                assert!(reason.contains(imported.job_id.as_str()))
+        let origin = store
+            .classify(ConversationIdentity {
+                thread_id: thread.into(),
+                ..conversation()
+            })
+            .await
+            .unwrap();
+        match (origin, expected) {
+            (Some(Origin::Unknown { reason }), Some(expected)) => {
+                assert!(reason.contains(expected), "{thread}: {reason}")
             }
-            None if !unknown => {}
-            other => panic!("{thread} created as {creation:?} classified as {other:?}"),
+            (None, None) => {}
+            (other, _) => panic!("{thread} classified as {other:?}"),
         }
     }
+}
+
+#[tokio::test]
+async fn store_rejects_historical_uncertainty_without_an_exact_thread() {
+    let directory = tempfile::tempdir().unwrap();
+    drop(JobStore::open(directory.path().into()).await.unwrap());
+    let mut evidence = serde_json::to_value(uncertainty(&job(92).job_id, "thread-named")).unwrap();
+    evidence["threadId"] = serde_json::Value::Null;
+    write_uncertainty(directory.path(), &evidence);
+    let Err(error) = JobStore::open(directory.path().into()).await else {
+        panic!("thread-less historical uncertainty loaded");
+    };
+    assert!(
+        format!("{error:#}").contains("invalid delegated-job record"),
+        "{error:#}"
+    );
 }
 
 #[tokio::test]

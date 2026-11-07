@@ -6,8 +6,8 @@ use serde_json::{Value, json};
 
 use super::{ActionParams, AgentService};
 use crate::agents::jobs::model::{
-    ConversationBinding, Creation, ExecutionState, JobId, JobOutcome, Origin, Provider,
-    ResultEvidence, SpecEvidence,
+    ConversationBinding, ExecutionState, JobId, JobOutcome, Origin, Provider, ResultEvidence,
+    SpecEvidence,
 };
 use crate::agents::{Agent, Capabilities, Output, State};
 use crate::wire::agent_jobs::{
@@ -99,13 +99,7 @@ impl AgentService<'_> {
                 Some(runtime) => runtime.creation_origin(thread)?,
                 None => None,
             };
-            let creation = match recorded {
-                Some(_) => Creation::RecordedByGateway,
-                None => Creation::ReportedByProvider {
-                    at_ms: created_at_ms(&header),
-                },
-            };
-            if let Some(origin) = self.gateway.jobs.classify(&identity, creation).await? {
+            if let Some(origin) = self.gateway.jobs.classify(&identity).await? {
                 return origin_relation(origin, &host);
             }
             use crate::providers::claude::conversation_index::SessionOrigin;
@@ -123,17 +117,7 @@ impl AgentService<'_> {
                 json!({"threadId":thread,"includeTurns":false}),
             )
             .await?;
-        if let Some(origin) = self
-            .gateway
-            .jobs
-            .classify(
-                &identity,
-                Creation::ReportedByProvider {
-                    at_ms: created_at_ms(&header["thread"]),
-                },
-            )
-            .await?
-        {
+        if let Some(origin) = self.gateway.jobs.classify(&identity).await? {
             return origin_relation(origin, &host);
         }
         if super::super::native_agent_relation(&header, thread)? {
@@ -457,13 +441,6 @@ fn state(execution: &ExecutionState) -> State {
         },
         _ => State::Working,
     }
-}
-
-fn created_at_ms(header: &Value) -> Option<i64> {
-    header
-        .get("createdAt")
-        .and_then(Value::as_i64)
-        .and_then(|seconds| seconds.checked_mul(1000))
 }
 
 fn origin_relation(origin: Origin, host: &str) -> Result<ThreadRelation> {
