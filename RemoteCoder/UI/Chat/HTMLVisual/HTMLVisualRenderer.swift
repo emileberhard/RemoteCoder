@@ -682,6 +682,7 @@ final class HTMLVisualRenderer {
         try Task.checkCancellation()
         while let latest = instance.key {
             try await HTMLVisualWebContent.apply(page, theme: latest.theme, scrolling: instance.surface == .expanded)
+            try await HTMLVisualWebContent.awaitPaint(page)
             try Task.checkCancellation()
             if instance.key == latest { break }
         }

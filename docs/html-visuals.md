@@ -445,7 +445,10 @@ including when the resulting height stays the same. Native code accepts integral
 heights from 0 through 20,000 CSS pixels, including shrinkage; larger document
 heights are clamped to that bridge limit. It starts with
 a persisted height estimate, or 180 points on a cold miss, and reveals the live
-page after a measurement. Until an occurrence can draw a decoded snapshot or a
+page after a measurement and once WebKit has painted the themed page: two
+animation frames, bounded at 250 ms. The snapshot and the live page swap
+opacity in one transaction, and revealing a page WebKit had not yet painted
+showed one transparent frame. Until an occurrence can draw a decoded snapshot or a
 measured live page, its reserved block shows a loading placeholder (the chat
 image placeholder's fill, with a system progress indicator only while the row
 is visible), or the failure with Try again, or Load while admission queues it.

@@ -130,6 +130,15 @@ final class HTMLVisualWebContent {
             """, arguments: ["variables": variables, "scrolling": scrolling], contentWorld: .defaultClient)
     }
 
+    static func awaitPaint(_ page: WebPage) async throws {
+        try await page.callJavaScript("""
+            await new Promise(resolve => {
+                requestAnimationFrame(() => requestAnimationFrame(resolve));
+                setTimeout(resolve, 250);
+            });
+            """, contentWorld: .defaultClient)
+    }
+
     @concurrent
     private static func prepareVariables(_ theme: HTMLVisualTheme) async -> [String: String] {
         theme.variables
