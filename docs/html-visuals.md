@@ -439,16 +439,17 @@ snapshot.
 
 After the bounded reveal wait, the loader requests the first root layout
 through the isolated bridge when its layout script has run, so a hidden page
-does not wait for animation frames before it can be revealed. Root resize reports coalesce into
+does not wait for animation frames before it is measured. Root resize reports coalesce into
 microtasks; appearance and width changes explicitly refresh the measurement,
 including when the resulting height stays the same. Native code accepts integral
 heights from 0 through 20,000 CSS pixels, including shrinkage; larger document
 heights are clamped to that bridge limit. It starts with
 a persisted height estimate, or 180 points on a cold miss, and reveals the live
-page after a measurement and once WebKit has painted the themed page: two
-animation frames, bounded at 250 ms. The snapshot and the live page swap
-opacity in one transaction, and revealing a page WebKit had not yet painted
-showed one transparent frame. Until an occurrence can draw a decoded snapshot or a
+page after a measurement and once WebKit has painted the themed page: inline
+and expanded pages wait two animation frames, or 250 ms when WebKit sends none,
+which reveals the page unpainted. The snapshot and the live page swap opacity
+in one transaction, and revealing a page WebKit had not yet painted showed one
+transparent frame. Preparation reveals nothing and skips the wait. Until an occurrence can draw a decoded snapshot or a
 measured live page, its reserved block shows a loading placeholder (the chat
 image placeholder's fill, with a system progress indicator only while the row
 is visible), or the failure with Try again, or Load while admission queues it.
