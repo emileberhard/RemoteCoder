@@ -355,7 +355,7 @@ private final class HTMLVisualBridge: NSObject, WKScriptMessageHandlerWithReply 
             receive(kind, value)
             return replyHandler(nil, nil)
         }
-        guard let text = value["text"] as? String else { return replyHandler(nil, HTMLVisualReplyError.invalidText.errorDescription) }
+        guard let text = value["text"] as? String else { return replyHandler(nil, "A visual can send only text.") }
         Task { [send] in
             do {
                 try await send(text)
