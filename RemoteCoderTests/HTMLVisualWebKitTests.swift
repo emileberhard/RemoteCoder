@@ -311,6 +311,44 @@ struct HTMLVisualWebKitTests {
         #expect(error?.contains("missingFunction") == true && error?.hasSuffix("@4") == true, "\(error ?? "none")")
     }
 
+    @Test(.timeLimit(.minutes(1)))
+    func repliesShareSentStateAndRefuseSendsWithoutATap() async throws {
+        let source = """
+            <body><form id="form"><input type="checkbox" id="box"><button>Go</button></form>
+            <script>
+                const data = document.body.dataset, form = document.getElementById('form');
+                data.events = '0';
+                addEventListener('remotecodersent', () => data.events = String(Number(data.events) + 1));
+                const attempt = name => remotecoder.send(name).then(() => data[name] = 'sent', error => data[name] = error.message);
+                form.addEventListener('submit', () => attempt('submit'));
+                document.getElementById('box').addEventListener('change', () => attempt('change'));
+                attempt('load');
+                try { window.remotecoder = null; } catch {}
+            </script></body>
+            """
+        var sends: [String] = []
+        let reference = try reference(source)
+        let page = try await webContent.make(reference: reference, theme: theme,
+                                             replies: HTMLVisualReplyChannel(sent: { ["first"] }, send: { sends.append($0) }),
+                                             onEvent: { _ in }, open: { _ in })
+        let hosted = try await host(page, opacity: 1)
+        defer { hosted.close(); page.stopLoading() }
+        try await HTMLVisualWebContent.load(page, html: source, reference: reference)
+        let state = { try await page.callJavaScript("return {...document.body.dataset, sent: JSON.stringify(window.remotecoder.sent)};",
+                                                    contentWorld: .page) as? [String: String] ?? [:] }
+        try await wait { try await state()["load"] != nil }
+        try await page.callJavaScript("document.getElementById('box').click(); document.getElementById('form').requestSubmit();", contentWorld: .page)
+        try await wait { let observed = try await state(); return observed["change"] != nil && observed["submit"] != nil }
+        try await HTMLVisualWebContent.update(page, sent: ["first", "second"])
+        try await wait { try await state()["events"] == "1" }
+        let observed = try await state()
+        #expect(observed["load"] == "Sending needs a tap." && observed["change"] == "Sending needs a tap."
+                && observed["submit"] == "Sending needs a tap.", "\(observed)")
+        #expect(observed["sent"] == #"["first","second"]"#)
+        #expect(sends.isEmpty)
+        #expect(page.url == (try HTMLVisualWebContent.baseURL(for: reference)))
+    }
+
     private func reference(_ source: String) throws -> HTMLVisualReference {
         let digest = SHA256.hash(data: Data(source.utf8)).map { String(format: "%02x", $0) }.joined()
         let url = try #require(URL(string: "rc-visual:" + digest))
