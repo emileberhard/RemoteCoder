@@ -177,8 +177,10 @@ final class HTMLVisualWebContent {
                 let gesture = -Infinity, sending = false;
                 const announce = () => document.dispatchEvent(new CustomEvent('rcvisualsent',{detail:JSON.stringify(sent)}));
                 globalThis.rcVisualSetSent = value => { sent = value; announce(); };
-                for (const type of ['pointerdown','pointerup','keydown'])
-                    addEventListener(type,event => { if (event.isTrusted) gesture = performance.now(); },true);
+                const activates = {pointerdown: event => event.pointerType === 'mouse', pointerup: () => true,
+                                   keydown: event => event.key !== 'Escape'};
+                for (const [type,counts] of Object.entries(activates))
+                    addEventListener(type,event => { if (event.isTrusted && counts(event)) gesture = performance.now(); },true);
                 document.addEventListener('rcvisualsentrequest',announce);
                 document.addEventListener('rcvisualsend',async event => {
                     let request;
@@ -223,10 +225,11 @@ final class HTMLVisualWebContent {
             });
             const remotecoder = Object.freeze({
                 send(text) {
+                    if (typeof text !== 'string') return Promise.reject(new TypeError('remotecoder.send takes a string.'));
                     return new Promise((resolve,reject) => {
                         const id = ++sequence;
                         pending.set(id,error => error ? reject(new Error(error)) : resolve());
-                        document.dispatchEvent(new CustomEvent('rcvisualsend',{detail:JSON.stringify({id,text:String(text)})}));
+                        document.dispatchEvent(new CustomEvent('rcvisualsend',{detail:JSON.stringify({id,text})}));
                     });
                 },
                 get sent() { return sent && [...sent]; }
@@ -352,8 +355,7 @@ private final class HTMLVisualBridge: NSObject, WKScriptMessageHandlerWithReply 
             receive(kind, value)
             return replyHandler(nil, nil)
         }
-        guard let text = value["text"] as? String, text.utf8.count <= HTMLVisualReply.maximumBytes,
-              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return replyHandler(nil, "There is nothing to send.") }
+        guard let text = value["text"] as? String else { return replyHandler(nil, HTMLVisualReplyError.invalidText.errorDescription) }
         Task { [send] in
             do {
                 try await send(text)

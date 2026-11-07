@@ -323,6 +323,7 @@ struct HTMLVisualWebKitTests {
                 form.addEventListener('submit', () => attempt('submit'));
                 document.getElementById('box').addEventListener('change', () => attempt('change'));
                 attempt('load');
+                remotecoder.send(42).catch(error => data.type = error.name);
                 try { window.remotecoder = null; } catch {}
             </script></body>
             """
@@ -336,7 +337,7 @@ struct HTMLVisualWebKitTests {
         try await HTMLVisualWebContent.load(page, html: source, reference: reference)
         let state = { try await page.callJavaScript("return {...document.body.dataset, sent: JSON.stringify(window.remotecoder.sent)};",
                                                     contentWorld: .page) as? [String: String] ?? [:] }
-        try await wait { try await state()["load"] != nil }
+        try await wait { let observed = try await state(); return observed["load"] != nil && observed["type"] != nil }
         try await page.callJavaScript("document.getElementById('box').click(); document.getElementById('form').requestSubmit();", contentWorld: .page)
         try await wait { let observed = try await state(); return observed["change"] != nil && observed["submit"] != nil }
         try await HTMLVisualWebContent.update(page, sent: ["first", "second"])
@@ -344,6 +345,7 @@ struct HTMLVisualWebKitTests {
         let observed = try await state()
         #expect(observed["load"] == "Sending needs a tap." && observed["change"] == "Sending needs a tap."
                 && observed["submit"] == "Sending needs a tap.", "\(observed)")
+        #expect(observed["type"] == "TypeError")
         #expect(observed["sent"] == #"["first","second"]"#)
         #expect(sends.isEmpty)
         #expect(page.url == (try HTMLVisualWebContent.baseURL(for: reference)))

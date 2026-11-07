@@ -29,21 +29,21 @@ final class HTMLVisualReplies {
                 return index.sent(for: key)
             },
             send: { [weak self] text in
-                guard let self, self.threadID == threadID, let reply = HTMLVisualReply(key: key, text: text) else {
-                    throw HTMLVisualReplyChannel.Unavailable()
-                }
+                guard let self, self.threadID == threadID else { throw HTMLVisualReplyChannel.Unavailable() }
+                guard let reply = HTMLVisualReply(key: key, text: text) else { throw HTMLVisualReplyError.invalidText }
                 try await send(reply, threadID)
             })
     }
 }
 
 enum HTMLVisualReplyError: LocalizedError {
-    case otherConversation, readOnly
+    case otherConversation, readOnly, invalidText
 
     var errorDescription: String? {
         switch self {
         case .otherConversation: "This visual belongs to another conversation."
         case .readOnly: "This conversation can't receive messages."
+        case .invalidText: "A visual can send only nonblank text up to 16 KB."
         }
     }
 }
