@@ -413,9 +413,11 @@ conversation, a read-only conversation or a busy composer rejects the send
 with an error the page receives.
 
 In WebKit, the isolated reply script owns `sent` and the gesture gate. A trusted
-`pointerdown`, `pointerup`, `click`, `keydown`, `change` or `submit` in the main
-frame allows one send within five seconds, and each page has at most one send in
-flight. The page-world shim defines a frozen `window.remotecoder` and talks to
+`pointerdown`, `pointerup` or `keydown` in the main frame allows one send within
+five seconds, and each page has at most one send in flight. Only those events
+count because a script cannot produce them: WebKit marks the `change` from a
+scripted `click()` on a checkbox and the `submit` from `requestSubmit()` as
+trusted. The page-world shim defines a frozen `window.remotecoder` and talks to
 the isolated script through `CustomEvent` string details, so the page never
 holds a `webkit.messageHandlers` reference. The native bridge implements
 `WKScriptMessageHandlerWithReply` and validates the text again; the promise

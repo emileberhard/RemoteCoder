@@ -177,7 +177,7 @@ final class HTMLVisualWebContent {
                 let gesture = -Infinity, sending = false;
                 const announce = () => document.dispatchEvent(new CustomEvent('rcvisualsent',{detail:JSON.stringify(sent)}));
                 globalThis.rcVisualSetSent = value => { sent = value; announce(); };
-                for (const type of ['pointerdown','pointerup','click','keydown','change','submit'])
+                for (const type of ['pointerdown','pointerup','keydown'])
                     addEventListener(type,event => { if (event.isTrusted) gesture = performance.now(); },true);
                 document.addEventListener('rcvisualsentrequest',announce);
                 document.addEventListener('rcvisualsend',async event => {
