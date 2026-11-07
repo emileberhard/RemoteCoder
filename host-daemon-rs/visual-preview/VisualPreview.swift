@@ -101,7 +101,7 @@ private struct PreviewRun {
     private func render(_ theme: (value: HTMLVisualTheme, backdrop: CGColor)) async throws -> Render {
         let recorder = ProblemRecorder()
         let page = try await HTMLVisualWebContent().make(reference: reference, theme: theme.value,
-            onEvent: { _ in }, open: { _ in }) { controller in
+            replies: .detached(sent: []), onEvent: { _ in }, open: { _ in }) { controller in
             controller.add(recorder, contentWorld: .page, name: "rcPreview")
             controller.addUserScript(WKUserScript(source: Self.problemScript, injectionTime: .atDocumentStart,
                 forMainFrameOnly: true, in: .page))

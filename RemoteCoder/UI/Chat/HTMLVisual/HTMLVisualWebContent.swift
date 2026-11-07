@@ -12,11 +12,24 @@ enum HTMLVisualOpenRequest {
     case embedded(EmbeddedFileRequest, frame: CGRect)
 }
 
+struct HTMLVisualReplyChannel {
+    let sent: @MainActor () -> [String]?
+    let send: @MainActor (String) async throws -> Void
+
+    static func detached(sent: [String]?) -> Self {
+        Self(sent: { sent }, send: { _ in throw Unavailable() })
+    }
+
+    struct Unavailable: LocalizedError {
+        var errorDescription: String? { "This visual can't send messages here." }
+    }
+}
+
 @MainActor
 final class HTMLVisualWebContent {
     private let websiteDataStore = WKWebsiteDataStore.nonPersistent()
 
-    func make(reference: HTMLVisualReference, theme: HTMLVisualTheme,
+    func make(reference: HTMLVisualReference, theme: HTMLVisualTheme, replies: HTMLVisualReplyChannel,
               onEvent: @escaping @MainActor (HTMLVisualEvent) -> Void,
               open: @escaping @MainActor (HTMLVisualOpenRequest) -> Void,
               onRegistration: (WKUserContentController) -> Void = { _ in }) async throws -> WebPage {
@@ -35,14 +48,19 @@ final class HTMLVisualWebContent {
         configuration.mediaPlaybackBehavior = .allowsInlinePlayback
         #endif
         let controller = configuration.userContentController
-        let bridge = HTMLVisualBridge(origin: origin, onEvent: onEvent, open: open)
-        controller.add(bridge, contentWorld: .defaultClient, name: "rcVisual")
+        let bridge = HTMLVisualBridge(origin: origin, onEvent: onEvent, open: open, send: replies.send)
+        controller.addScriptMessageHandler(bridge, contentWorld: .defaultClient, name: "rcVisual")
         onRegistration(controller)
         do {
             let themeScript = try await Self.prepareThemeScript(theme)
+            let replyScript = try Self.replyScript(sent: replies.sent())
             try Task.checkCancellation()
             controller.addUserScript(WKUserScript(source: themeScript,
                 injectionTime: .atDocumentStart, forMainFrameOnly: true, in: .defaultClient))
+            controller.addUserScript(WKUserScript(source: replyScript,
+                injectionTime: .atDocumentStart, forMainFrameOnly: true, in: .defaultClient))
+            controller.addUserScript(WKUserScript(source: Self.pageScript,
+                injectionTime: .atDocumentStart, forMainFrameOnly: true, in: .page))
             controller.addUserScript(WKUserScript(source: Self.layoutScript,
                 injectionTime: .atDocumentEnd, forMainFrameOnly: true, in: .defaultClient))
             return WebPage(configuration: configuration, navigationDecider: HTMLVisualNavigation(origin: origin),
@@ -130,6 +148,11 @@ final class HTMLVisualWebContent {
             """, arguments: ["variables": variables, "scrolling": scrolling], contentWorld: .defaultClient)
     }
 
+    static func update(_ page: WebPage, sent: [String]?) async throws {
+        try await page.callJavaScript("globalThis.rcVisualSetSent?.(sent)", arguments: ["sent": sent ?? NSNull()],
+                                      contentWorld: .defaultClient)
+    }
+
     static func awaitPaint(_ page: WebPage) async throws {
         try await page.callJavaScript("""
             await new Promise(resolve => {
@@ -144,7 +167,74 @@ final class HTMLVisualWebContent {
         theme.variables
     }
 
-    private static let contentSecurityPolicy = "sandbox allow-scripts allow-same-origin; default-src * wss: data: blob: 'unsafe-inline' 'unsafe-eval'; object-src 'none'; base-uri 'none'; form-action 'none'"
+    private static let contentSecurityPolicy = "sandbox allow-scripts allow-same-origin allow-forms; default-src * wss: data: blob: 'unsafe-inline' 'unsafe-eval'; object-src 'none'; base-uri 'none'; form-action 'none'"
+
+    private static func replyScript(sent: [String]?) throws -> String {
+        guard let initial = String(data: try JSONEncoder().encode(sent), encoding: .utf8) else { throw URLError(.cannotDecodeContentData) }
+        return """
+            (() => {
+                let sent = \(initial);
+                let gesture = -Infinity, sending = false;
+                const announce = () => document.dispatchEvent(new CustomEvent('rcvisualsent',{detail:JSON.stringify(sent)}));
+                globalThis.rcVisualSetSent = value => { sent = value; announce(); };
+                for (const type of ['pointerdown','pointerup','click','keydown','change','submit'])
+                    addEventListener(type,event => { if (event.isTrusted) gesture = performance.now(); },true);
+                document.addEventListener('rcvisualsentrequest',announce);
+                document.addEventListener('rcvisualsend',async event => {
+                    let request;
+                    try { request = JSON.parse(event.detail); } catch { return; }
+                    if (!Number.isSafeInteger(request?.id)) return;
+                    const finish = error => document.dispatchEvent(new CustomEvent('rcvisualsendresult',{detail:JSON.stringify({id:request.id,error})}));
+                    const text = typeof request.text === 'string' ? request.text : '';
+                    if (!text.trim()) return finish('There is nothing to send.');
+                    if (new TextEncoder().encode(text).length > \(HTMLVisualReply.maximumBytes)) return finish('The message is longer than 16 KB.');
+                    if (performance.now() - gesture > 5000) return finish('Sending needs a tap.');
+                    if (sending) return finish('This visual is still sending a message.');
+                    gesture = -Infinity;
+                    sending = true;
+                    try { await window.webkit.messageHandlers.rcVisual.postMessage({kind:'send',text}); finish(null); }
+                    catch (error) { finish(String(error?.message ?? error)); }
+                    finally { sending = false; }
+                });
+                announce();
+            })();
+            """
+    }
+
+    private static let pageScript = """
+        (() => {
+            let sent = null, sentJSON = 'null', sequence = 0;
+            const pending = new Map();
+            document.addEventListener('rcvisualsent',event => {
+                let value;
+                try { value = JSON.parse(event.detail); } catch { return; }
+                if (value !== null && !Array.isArray(value) || event.detail === sentJSON) return;
+                sent = value;
+                sentJSON = event.detail;
+                dispatchEvent(new Event('remotecodersent'));
+            });
+            document.addEventListener('rcvisualsendresult',event => {
+                let result;
+                try { result = JSON.parse(event.detail); } catch { return; }
+                const settle = pending.get(result?.id);
+                if (!settle) return;
+                pending.delete(result.id);
+                settle(result.error);
+            });
+            const remotecoder = Object.freeze({
+                send(text) {
+                    return new Promise((resolve,reject) => {
+                        const id = ++sequence;
+                        pending.set(id,error => error ? reject(new Error(error)) : resolve());
+                        document.dispatchEvent(new CustomEvent('rcvisualsend',{detail:JSON.stringify({id,text:String(text)})}));
+                    });
+                },
+                get sent() { return sent && [...sent]; }
+            });
+            Object.defineProperty(window,'remotecoder',{value:remotecoder});
+            document.dispatchEvent(new Event('rcvisualsentrequest'));
+        })();
+        """
 
     private static let layoutScript = """
         (() => {
@@ -237,23 +327,44 @@ final class HTMLVisualWebContent {
 }
 
 @MainActor
-private final class HTMLVisualBridge: NSObject, WKScriptMessageHandler {
+private final class HTMLVisualBridge: NSObject, WKScriptMessageHandlerWithReply {
     private let origin: URL
     private let onEvent: @MainActor (HTMLVisualEvent) -> Void
     private let open: @MainActor (HTMLVisualOpenRequest) -> Void
+    private let send: @MainActor (String) async throws -> Void
     private var lastInteraction = false
 
     init(origin: URL, onEvent: @escaping @MainActor (HTMLVisualEvent) -> Void,
-         open: @escaping @MainActor (HTMLVisualOpenRequest) -> Void) {
+         open: @escaping @MainActor (HTMLVisualOpenRequest) -> Void,
+         send: @escaping @MainActor (String) async throws -> Void) {
         self.origin = origin
         self.onEvent = onEvent
         self.open = open
+        self.send = send
     }
 
-    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage,
+                               replyHandler: @escaping @MainActor (Any?, String?) -> Void) {
         guard message.frameInfo.isMainFrame, message.frameInfo.request.url?.host == origin.host,
               let value = message.body as? [String: Any], value.count <= 4,
-              let kind = value["kind"] as? String else { return }
+              let kind = value["kind"] as? String else { return replyHandler(nil, nil) }
+        guard kind == "send" else {
+            receive(kind, value)
+            return replyHandler(nil, nil)
+        }
+        guard let text = value["text"] as? String, text.utf8.count <= HTMLVisualReply.maximumBytes,
+              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return replyHandler(nil, "There is nothing to send.") }
+        Task { [send] in
+            do {
+                try await send(text)
+                replyHandler(nil, nil)
+            } catch {
+                replyHandler(nil, error.localizedDescription)
+            }
+        }
+    }
+
+    private func receive(_ kind: String, _ value: [String: Any]) {
         switch kind {
         case "layout":
             guard let height = value["height"] as? Double, height.isFinite, height >= 0,

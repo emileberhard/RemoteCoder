@@ -869,6 +869,12 @@ entrypoint linked above.
   - A `WebPage` backs at most one `WebView`. Only the host that claimed a
     preparation surface renders it; never render a shared page from a second
     view.
+  - Replies (`remotecoder.send`) have one owner per screen, `HTMLVisualReplies`
+    on `ChatScreenModel`, and dispatch like question replies. Answered state is
+    `HTMLVisualReplyIndex`, derived from projected history and unknown without
+    the newest page; never persist it separately. A reply key needs the
+    publishing turn id: publication rows carry it, and message embeds read the
+    `htmlVisualTurnID` environment value set by their bubble.
   - Each instance owns its user content controller from `rcVisual` registration.
     Page retirement removes that handler before clearing the page; failed creation
     also unregisters it. Bridge callbacks capture capabilities, never view values

@@ -37,7 +37,7 @@ struct HTMLVisualWebKitTests {
             </script></body>
             """
         let reference = try reference(source)
-        let page = try await webContent.make(reference: reference, theme: theme, onEvent: { _ in }, open: { _ in Issue.record("Resource loading must never open a native link") })
+        let page = try await webContent.make(reference: reference, theme: theme, replies: .detached(sent: nil), onEvent: { _ in }, open: { _ in Issue.record("Resource loading must never open a native link") })
         let hosted = try await host(page, opacity: 1)
         defer { hosted.close(); page.stopLoading() }
         try await HTMLVisualWebContent.load(page, html: source, reference: reference)
@@ -66,7 +66,7 @@ struct HTMLVisualWebKitTests {
             <body><p>Readable now</p><img id="late" width="40" height="40" src="http://127.0.0.1:\(server.port)/slow-image"></body>
             """
         let reference = try reference(source)
-        let page = try await webContent.make(reference: reference, theme: theme, onEvent: { _ in }, open: { _ in })
+        let page = try await webContent.make(reference: reference, theme: theme, replies: .detached(sent: nil), onEvent: { _ in }, open: { _ in })
         let hosted = try await host(page, opacity: 1)
         defer { hosted.close(); page.stopLoading() }
         try await HTMLVisualWebContent.load(page, html: source, reference: reference)
@@ -95,7 +95,7 @@ struct HTMLVisualWebKitTests {
             """
         var links: [HTMLVisualOpenRequest] = []
         let reference = try reference(source)
-        let page = try await webContent.make(reference: reference, theme: theme, onEvent: { _ in }, open: { links.append($0) })
+        let page = try await webContent.make(reference: reference, theme: theme, replies: .detached(sent: nil), onEvent: { _ in }, open: { links.append($0) })
         let hosted = try await host(page, opacity: 1)
         defer { hosted.close(); page.stopLoading() }
         try await HTMLVisualWebContent.load(page, html: source, reference: reference)
@@ -131,7 +131,7 @@ struct HTMLVisualWebKitTests {
             """
         var requests: [HTMLVisualOpenRequest] = []
         let reference = try reference(source)
-        let page = try await webContent.make(reference: reference, theme: theme, onEvent: { _ in }, open: { requests.append($0) })
+        let page = try await webContent.make(reference: reference, theme: theme, replies: .detached(sent: nil), onEvent: { _ in }, open: { requests.append($0) })
         let hosted = try await host(page, opacity: 1)
         defer { hosted.close(); page.stopLoading() }
         try await HTMLVisualWebContent.load(page, html: source, reference: reference)
@@ -164,7 +164,7 @@ struct HTMLVisualWebKitTests {
         var heights: [Double] = []
         var interaction: [Bool] = []
         var settled = 0
-        let page = try await webContent.make(reference: reference, theme: theme, onEvent: {
+        let page = try await webContent.make(reference: reference, theme: theme, replies: .detached(sent: nil), onEvent: {
             switch $0 {
             case .layout(let height): heights.append(height)
             case .interaction(let active): interaction.append(active)
@@ -211,7 +211,7 @@ struct HTMLVisualWebKitTests {
         let reference = try reference(source)
         var height: Double?
         var reports = 0
-        let page = try await webContent.make(reference: reference, theme: theme, onEvent: {
+        let page = try await webContent.make(reference: reference, theme: theme, replies: .detached(sent: nil), onEvent: {
             if case .layout(let measured) = $0 { height = measured; reports += 1 }
         }, open: { _ in })
         let hosted = try await host(page, opacity: 0)
@@ -232,7 +232,7 @@ struct HTMLVisualWebKitTests {
     func inlineWebViewClipsTallContentAndExpansionRestoresScrolling() async throws {
         let source = "<body><div style='height:2000px'>Tall content</div></body>"
         let reference = try reference(source)
-        let page = try await webContent.make(reference: reference, theme: theme, onEvent: { _ in }, open: { _ in })
+        let page = try await webContent.make(reference: reference, theme: theme, replies: .detached(sent: nil), onEvent: { _ in }, open: { _ in })
         let scene = try #require(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let window = HostedWindow(scene: scene)
         let controller = UIHostingController(rootView: WebView(page).frame(width: 320, height: 600))
@@ -255,7 +255,7 @@ struct HTMLVisualWebKitTests {
     func keepsDiscardableBrowserStoragePerVisualAndPreservesInlineCanvasResources() async throws {
         let source = "<body>Storing visual</body>"
         let reference = try reference(source)
-        let page = try await webContent.make(reference: reference, theme: theme, onEvent: { _ in }, open: { _ in })
+        let page = try await webContent.make(reference: reference, theme: theme, replies: .detached(sent: nil), onEvent: { _ in }, open: { _ in })
         defer { page.stopLoading() }
         try await HTMLVisualWebContent.load(page, html: source, reference: reference)
         let values = try #require(try await page.callJavaScript("""
@@ -288,13 +288,13 @@ struct HTMLVisualWebKitTests {
 
         let otherSource = "<body>Other visual</body>"
         let otherReference = try self.reference(otherSource)
-        let other = try await webContent.make(reference: otherReference, theme: theme, onEvent: { _ in }, open: { _ in })
+        let other = try await webContent.make(reference: otherReference, theme: theme, replies: .detached(sent: nil), onEvent: { _ in }, open: { _ in })
         defer { other.stopLoading() }
         try await HTMLVisualWebContent.load(other, html: otherSource, reference: otherReference)
         #expect(try await other.callJavaScript("return localStorage.getItem('visual-test') === null;", contentWorld: .page) as? Bool == true)
 
         await webContent.discardStorage()
-        let reopened = try await webContent.make(reference: reference, theme: theme, onEvent: { _ in }, open: { _ in })
+        let reopened = try await webContent.make(reference: reference, theme: theme, replies: .detached(sent: nil), onEvent: { _ in }, open: { _ in })
         defer { reopened.stopLoading() }
         try await HTMLVisualWebContent.load(reopened, html: source, reference: reference)
         #expect(try await reopened.callJavaScript("return localStorage.getItem('visual-test') === null;", contentWorld: .page) as? Bool == true)
@@ -304,7 +304,7 @@ struct HTMLVisualWebKitTests {
     func reportsScriptErrorsWithTheirMessageAndSourceLine() async throws {
         let source = "<body>\n<script>\naddEventListener('error',event=>document.body.dataset.error=event.message+'@'+event.lineno);\nmissingFunction();\n</script></body>"
         let reference = try reference(source)
-        let page = try await webContent.make(reference: reference, theme: theme, onEvent: { _ in }, open: { _ in })
+        let page = try await webContent.make(reference: reference, theme: theme, replies: .detached(sent: nil), onEvent: { _ in }, open: { _ in })
         defer { page.stopLoading() }
         try await HTMLVisualWebContent.load(page, html: source, reference: reference)
         let error = try await page.callJavaScript("return document.body.dataset.error;", contentWorld: .page) as? String

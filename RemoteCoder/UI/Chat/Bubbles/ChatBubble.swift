@@ -99,6 +99,7 @@ private extension ChatBubble {
             } else if message.role == .codex {
                 PreparedAssistantContent(messageID: message.id, renderedMessages: renderedMessages)
                     .equatable()
+                    .environment(\.htmlVisualTurnID, message.canonicalTurnID)
             } else {
                 userContent
             }

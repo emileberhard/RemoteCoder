@@ -20,6 +20,7 @@ struct TranscriptHostEnvironment: Equatable {
     let isEnabled: Bool
     let imageSource: ChatImageSource?
     let htmlVisualSource: HTMLVisualSource?
+    let htmlVisualReplies: ObjectIdentifier?
     let htmlVisualTheme: HTMLVisualTheme?
     let htmlVisualCaptureAllowed: Bool
     let htmlVisualSnapshotsOnly: Bool
@@ -45,6 +46,7 @@ struct TranscriptHostEnvironment: Equatable {
         isEnabled = environment.isEnabled
         imageSource = environment.chatImageSource
         htmlVisualSource = environment.htmlVisualSource
+        htmlVisualReplies = environment.htmlVisualReplies.map(ObjectIdentifier.init)
         htmlVisualTheme = environment.htmlVisualTheme
         htmlVisualCaptureAllowed = environment.htmlVisualCaptureAllowed
         htmlVisualSnapshotsOnly = environment.htmlVisualSnapshotsOnly

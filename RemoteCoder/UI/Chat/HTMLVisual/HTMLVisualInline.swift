@@ -34,6 +34,8 @@ struct HTMLVisualInline: View {
     let url: URL
     let title: String
     @Environment(\.htmlVisualSource) private var source
+    @Environment(\.htmlVisualReplies) private var replies
+    @Environment(\.htmlVisualTurnID) private var turnID
     @Environment(\.htmlVisualTheme) private var theme
     @Environment(\.htmlVisualCaptureAllowed) private var captureAllowed
     @Environment(\.htmlVisualSnapshotsOnly) private var snapshotsOnly
@@ -81,6 +83,10 @@ struct HTMLVisualInline: View {
     }
 
     private var reference: HTMLVisualReference? { HTMLVisualReference(url: url) }
+    private var replyKey: HTMLVisualReplyKey? {
+        guard let turnID, let reference else { return nil }
+        return HTMLVisualReplyKey(turnID: turnID, digest: reference.digest)
+    }
     private var visible: Bool { surfaceVisibility.isVisible }
     private var key: HTMLVisualLayoutKey? {
         guard let reference, let theme, let width = layoutWidth ?? source?.preparation.layoutContext.width else { return nil }
@@ -310,6 +316,10 @@ struct HTMLVisualInline: View {
             source?.renderer.update(instance, key: value)
             if let expansion { source?.renderer.update(expansion, key: value) }
         }
+        .onChange(of: replies?.sent(for: replyKey)) { _, _ in
+            source?.renderer.refreshSent(instance)
+            if let expansion { source?.renderer.refreshSent(expansion) }
+        }
         .onChange(of: instance.snapshot.map(ObjectIdentifier.init)) { _, _ in
             if instance.key == key { inlineSnapshot = instance.snapshot }
         }
@@ -321,6 +331,7 @@ struct HTMLVisualInline: View {
             let index = blockIndex
             await source.renderer.run(instance, reference: reference, key: key,
                 document: { try await source.documents.document(reference) },
+                replies: replies?.channel(for: replyKey) ?? .detached(sent: nil),
                 open: { [inlineAnchor, files, openURL] in
                     Self.open($0, files: files, openURL: openURL, anchor: inlineAnchor, scope: nil)
                 },
@@ -333,6 +344,7 @@ struct HTMLVisualInline: View {
             guard visible, scenePhase == .active, let expansion, let reference, let key, let source else { return }
             await source.renderer.run(expansion, reference: reference, key: key,
                 document: { try await source.documents.document(reference) },
+                replies: replies?.channel(for: replyKey) ?? .detached(sent: nil),
                 open: { [expandedAnchor, expandedScope, files, openURL] in
                     Self.open($0, files: files, openURL: openURL, anchor: expandedAnchor, scope: expandedScope)
                 },

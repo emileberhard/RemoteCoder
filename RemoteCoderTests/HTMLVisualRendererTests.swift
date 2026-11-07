@@ -1283,7 +1283,7 @@ struct HTMLVisualRendererTests {
                 preparation: HTMLVisualPreparation(renderer: fixture.renderer))
             let message = ChatMessage(role: .codex, text: "![Compact visual](\(fixture.url.absoluteString))")
             let items = published
-                ? [ChatStreamItem.publishedVisual(PublishedVisual(itemID: "publication",
+                ? [ChatStreamItem.publishedVisual(PublishedVisual(itemID: "publication", turnID: nil,
                     publication: HTMLVisualPublication(reference: fixture.reference, title: "Compact visual")))]
                 : [ChatStreamItem.message(message)]
             let conversationID = UUID()
@@ -1669,7 +1669,7 @@ private final class RendererLifecycleFixture {
         let identity = ObjectIdentifier(instance)
         tasks[identity] = Task { [renderer, reference, key, weak self] in
             await renderer.run(instance, reference: reference, key: key, document: document,
-                open: { _ in Issue.record("Renderer fixture must not open links") },
+                replies: .detached(sent: nil), open: { _ in Issue.record("Renderer fixture must not open links") },
                 onPinChange: { [weak self] active in self?.pins[identity, default: []].append(active) })
         }
     }

@@ -56,6 +56,7 @@ struct ConversationTranscriptView: View {
         .environment(\.chatImageSource, ChatImageSource(screen: screen))
             .environment(\.htmlVisualSource, HTMLVisualSource(hostID: screen.hostID, documents: screen.htmlVisualDocuments,
                 renderer: screen.htmlVisualRenderer, preparation: screen.htmlVisualPreparation))
+            .environment(\.htmlVisualReplies, screen.htmlVisualReplies)
         .onChange(of: ObjectIdentifier(screen)) { [screen] _, _ in
             openURLAction = OpenURLAction { [weak screen] url in
                 screen?.openFileURL(url, transition: nil, presentationScope: nil) ?? .discarded

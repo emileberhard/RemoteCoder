@@ -11,7 +11,7 @@ optimized := "true"
 compilation := "incremental"
 delivery := "auto"
 e2e_thread := ""
-visual_preview_swiftc := "xcrun swiftc -parse-as-library -swift-version 6 -target arm64-apple-macos27.0 -enable-upcoming-feature NonisolatedNonsendingByDefault -enable-upcoming-feature InferIsolatedConformances -enable-upcoming-feature MemberImportVisibility -module-name RemoteCoderVisualPreview host-daemon-rs/visual-preview/VisualPreview.swift RemoteCoder/UI/Chat/HTMLVisual/HTMLVisualWebContent.swift RemoteCoder/UI/Chat/HTMLVisual/HTMLVisualTheme.swift Core/Sources/RemoteCoderCore/Files/HTMLVisualLayoutKey.swift Core/Sources/RemoteCoderCore/Files/HTMLVisualReference.swift Core/Sources/RemoteCoderCore/Files/EmbeddedFile.swift"
+visual_preview_swiftc := "xcrun swiftc -parse-as-library -swift-version 6 -target arm64-apple-macos27.0 -enable-upcoming-feature NonisolatedNonsendingByDefault -enable-upcoming-feature InferIsolatedConformances -enable-upcoming-feature MemberImportVisibility -module-name RemoteCoderVisualPreview host-daemon-rs/visual-preview/VisualPreview.swift RemoteCoder/UI/Chat/HTMLVisual/HTMLVisualWebContent.swift RemoteCoder/UI/Chat/HTMLVisual/HTMLVisualTheme.swift Core/Sources/RemoteCoderCore/Files/HTMLVisualLayoutKey.swift Core/Sources/RemoteCoderCore/Files/HTMLVisualReference.swift Core/Sources/RemoteCoderCore/Files/HTMLVisualReply.swift Core/Sources/RemoteCoderCore/Files/EmbeddedFile.swift"
 
 [private]
 default:

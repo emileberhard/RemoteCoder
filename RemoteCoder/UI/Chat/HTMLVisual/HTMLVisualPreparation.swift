@@ -398,7 +398,8 @@ final class HTMLVisualPreparation {
         let started = ContinuousClock.now
         let run = Task {
             await renderer.run(instance, reference: request.reference, key: key,
-                document: { try await request.documents.document(request.reference) }, open: { _ in }, onPinChange: { _ in })
+                document: { try await request.documents.document(request.reference) }, replies: .detached(sent: nil),
+                open: { _ in }, onPinChange: { _ in })
             continuation.finish()
         }
         await withTaskGroup(of: Void.self) { group in

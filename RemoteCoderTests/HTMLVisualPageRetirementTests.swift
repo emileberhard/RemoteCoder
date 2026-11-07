@@ -19,7 +19,7 @@ struct HTMLVisualPageRetirementTests {
             let capture = OpenCapture()
             retained = capture
             let creation = Task {
-                try await webContent.make(reference: reference, theme: theme, onEvent: { _ in },
+                try await webContent.make(reference: reference, theme: theme, replies: .detached(sent: nil), onEvent: { _ in },
                     open: { _ in capture.count += 1 }, onRegistration: { controller = $0 })
             }
             creation.cancel()
@@ -37,7 +37,7 @@ struct HTMLVisualPageRetirementTests {
         do {
             let capture = OpenCapture()
             retained = capture
-            instance.page = try await webContent.make(reference: reference(), theme: theme, onEvent: { _ in },
+            instance.page = try await webContent.make(reference: reference(), theme: theme, replies: .detached(sent: nil), onEvent: { _ in },
                 open: { _ in capture.count += 1 }, onRegistration: {
                     controller = $0
                     instance.userContentController = $0

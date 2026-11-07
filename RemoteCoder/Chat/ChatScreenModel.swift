@@ -90,6 +90,10 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
     @ObservationIgnored private let conversations: ConversationSessions
     @ObservationIgnored private let renderedMessages: RenderedMessageStore
     @ObservationIgnored let htmlVisualPreparation: HTMLVisualPreparation
+    @ObservationIgnored private(set) lazy var htmlVisualReplies = HTMLVisualReplies { [weak self] reply, threadID in
+        guard let self else { throw HTMLVisualReplyChannel.Unavailable() }
+        try await answerVisual(reply, threadID: threadID)
+    }
     @ObservationIgnored private let fileOpener: HostFileOpener
     @ObservationIgnored private let historyService: GatewayHistoryService
     @ObservationIgnored private let logger = AppLogger(category: "ChatScreen")
@@ -302,6 +306,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
 
     func resetRendering() {
         htmlVisualPreparation.cancelDemand()
+        htmlVisualReplies.update(.unknown, threadID: nil)
         compaction = nil
         pendingTranscriptRequest = nil
         messages = []
@@ -324,6 +329,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         messages = presentation.messages
         forkableMessageIDs = presentation.forkableMessageIDs
         streamItems = presentation.items
+        htmlVisualReplies.update(.unknown, threadID: threadID)
         renderedMessages.ensureRendered(presentation.messages)
         showsRecentPresentation = true
     }
@@ -389,6 +395,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         messages = snapshot.messages
         forkableMessageIDs = snapshot.forkableMessageIDs
         streamItems = snapshot.items
+        htmlVisualReplies.update(snapshot.visualReplies, threadID: snapshot.threadID)
         canPrefetchOlderHistory = snapshot.canPrefetchOlder
         renderedMessages.ensureRendered(snapshot.messages)
         presentedCompletionAt = snapshot.lastTurnCompletedAt
@@ -639,7 +646,8 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
     struct ResolvedDispatchMessage: Sendable {
         enum Content: Sendable {
             case composed(ComposerDocumentContent)
-            case question(text: String, display: String)
+            case questionReply([QuestionReplyEnvelope.Entry])
+            case visualReply(HTMLVisualReply)
         }
         let content: Content
         let fileAttachments: [UploadedFile]
@@ -858,8 +866,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         guard let admission = drafts.reserveSubmission(of: draft) else { return false }
         defer { drafts.releaseSubmission(admission) }
         do {
-            try await dispatch(resolved, draft: draft, questionReplies: nil,
-                               interactionMode: interactionMode)
+            try await dispatch(resolved, draft: draft, interactionMode: interactionMode)
         } catch {
             present(.draft(error.localizedDescription))
             if !(error is CancellationError) { feedback(.error) }
@@ -869,10 +876,9 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
     }
 
     /// Shows the local user row at once, saves it, then hands the message to
-    /// the running turn or a new turn. Question replies preserve the composer draft.
+    /// the running turn or a new turn. Only composed messages consume the composer draft.
     @discardableResult
     func dispatch(_ resolved: ResolvedDispatchMessage, draft: ComposerDraft,
-                  questionReplies: [QuestionReply]?,
                   interactionMode: CodexInteractionMode, expectedQuestionVersion: QuestionVersion? = nil) async throws -> UUID {
         let started = ContinuousClock.now
         refreshReasoningVisibility()
@@ -890,7 +896,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         }
         let isSteering = steering != nil
         var outgoing: ComposerDraftStore.OutgoingMessage?
-        if questionReplies == nil {
+        if case .composed = resolved.content {
             guard let message = drafts.beginSending(draft) else { throw CancellationError() }
             outgoing = message
             composerSends += 1
@@ -905,7 +911,8 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
             inlineContent: prepared.inline,
             wasSteered: isSteering,
             canonicalTurnID: steering?.turn.turnID,
-            questionReplies: questionReplies
+            questionReplies: prepared.questionReplies,
+            visualReplies: prepared.visualReplies
         )
         let session = await conversations.session(conversationID: conversationID, threadID: sessionID)
         try Task.checkCancellation()
@@ -952,28 +959,36 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
     }
 
     @concurrent
-    private static func prepareDispatch(_ resolved: ResolvedDispatchMessage) async -> (text: String, body: String, attachments: [MessageAttachment], inline: InlineMessageContent?) {
+    private static func prepareDispatch(_ resolved: ResolvedDispatchMessage) async -> (text: String, body: String,
+        attachments: [MessageAttachment], inline: InlineMessageContent?, questionReplies: [QuestionReply]?,
+        visualReplies: [HTMLVisualReply]?) {
         let prompt: String
         let body: String
-        let pasted: [MessageAttachment]
-        let inline: InlineMessageContent?
+        var pasted: [MessageAttachment] = []
+        var inline: InlineMessageContent?
+        var questionReplies: [QuestionReply]?
+        var visualReplies: [HTMLVisualReply]?
         switch resolved.content {
         case .composed(let content):
             prompt = content.prompt
             body = content.runs.compactMap { if case .text(let text) = $0 { text } else { nil } }.joined()
             pasted = content.pasted.map { MessageAttachment(id: $0.id, content: .text($0.text)) }
             inline = pasted.isEmpty ? nil : InlineMessageContent(content)
-        case .question(let text, let display):
-            prompt = text
-            body = display
-            pasted = []
-            inline = nil
+        case .questionReply(let entries):
+            let replies = entries.map(\.reply)
+            prompt = QuestionReplyEnvelope.text(entries: entries)
+            body = QuestionReply.displayText(replies)
+            questionReplies = replies
+        case .visualReply(let reply):
+            prompt = InlinePastedText.visualReply(reply)
+            body = reply.text
+            visualReplies = [reply]
         }
         let text = AttachedFilesPromptBlock.append(to: prompt, paths: resolved.fileAttachments.map(\.path))
         let attachments = pasted + resolved.fileAttachments.map {
                 MessageAttachment(id: ChatMessage.deterministicID(for: "file:\($0.path)"), content: .file($0))
             }
-        return (text, body, attachments, inline)
+        return (text, body, attachments, inline, questionReplies, visualReplies)
     }
 
     private func isDispatchable(_ resolved: ResolvedDispatchMessage) -> Bool {
@@ -986,7 +1001,8 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
                 case .paste: true
                 }
             }
-        case .question(let text, _): hasText = !text.isEmpty
+        case .questionReply(let entries): hasText = !entries.isEmpty
+        case .visualReply: hasText = true
         }
         return hasText || !resolved.fileAttachments.isEmpty
     }
@@ -2310,11 +2326,25 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         }
         guard target.acceptsWork, areConversationSettingsReady, let draft = currentDraft else { throw ConversationState.QuestionSubmissionError.notReady }
         if let block = currentConversationDispatchBlock { throw block }
-        let replies = entries.map(\.reply)
-        let resolved = ResolvedDispatchMessage(content: .question(text: QuestionReplyEnvelope.text(entries: entries),
-            display: QuestionReply.displayText(replies)), fileAttachments: [])
-        return try await dispatch(resolved, draft: draft, questionReplies: replies, interactionMode: .text,
-                           expectedQuestionVersion: version)
+        let resolved = ResolvedDispatchMessage(content: .questionReply(entries), fileAttachments: [])
+        return try await dispatch(resolved, draft: draft, interactionMode: .text, expectedQuestionVersion: version)
+    }
+
+    func answerVisual(_ reply: HTMLVisualReply, threadID: String) async throws {
+        let feedback = target.feedbackForCurrentConversation()
+        do {
+            guard threadID == activeSessionID else { throw HTMLVisualReplyError.otherConversation }
+            guard acceptsConversationInput else { throw HTMLVisualReplyError.readOnly }
+            guard target.acceptsWork, areConversationSettingsReady, let draft = currentDraft else {
+                throw ConversationState.QuestionSubmissionError.notReady
+            }
+            if let block = currentConversationDispatchBlock { throw block }
+            try await dispatch(ResolvedDispatchMessage(content: .visualReply(reply), fileAttachments: []),
+                               draft: draft, interactionMode: .text)
+        } catch {
+            if !(error is CancellationError) { feedback(.error) }
+            throw error
+        }
     }
 }
 

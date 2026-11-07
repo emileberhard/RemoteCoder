@@ -68,6 +68,7 @@ final class HTMLVisualInstance: Identifiable {
     @ObservationIgnored var onCaptureFinished: () -> Void = {}
     @ObservationIgnored var captureAllowed = false
     @ObservationIgnored var onPinChange: (Bool) -> Void = { _ in }
+    @ObservationIgnored var replies: HTMLVisualReplyChannel?
     @ObservationIgnored var admissionDemand: AdmissionDemand?
     @ObservationIgnored var activity: HTMLVisualPageActivity?
 
@@ -443,6 +444,7 @@ final class HTMLVisualRenderer {
 
     func run(_ instance: HTMLVisualInstance, reference: HTMLVisualReference, key: HTMLVisualLayoutKey,
              document: @escaping @MainActor () async throws -> String,
+             replies: HTMLVisualReplyChannel,
              open: @escaping @MainActor (HTMLVisualOpenRequest) -> Void,
              onPinChange: @escaping @MainActor (Bool) -> Void) async {
         instance.operationGeneration += 1
@@ -454,7 +456,7 @@ final class HTMLVisualRenderer {
         guard !Task.isCancelled, instance.operationGeneration == generation else { return }
         let operation = Task {
             await performRun(instance, reference: reference, key: key, document: document,
-                             open: open, onPinChange: onPinChange)
+                             replies: replies, open: open, onPinChange: onPinChange)
         }
         instance.operation = operation
         await withTaskCancellationHandler { await operation.value } onCancel: { operation.cancel() }
@@ -463,11 +465,13 @@ final class HTMLVisualRenderer {
 
     private func performRun(_ instance: HTMLVisualInstance, reference: HTMLVisualReference, key: HTMLVisualLayoutKey,
                             document: @escaping @MainActor () async throws -> String,
+                            replies: HTMLVisualReplyChannel,
                             open: @escaping @MainActor (HTMLVisualOpenRequest) -> Void,
                             onPinChange: @escaping @MainActor (Bool) -> Void) async {
         let key = instance.key ?? key
         guard key.digest == reference.digest else { return }
         instance.onPinChange = onPinChange
+        instance.replies = replies
         let id = UUID()
         instance.requestID = id
         instance.pendingHeight = nil
@@ -526,6 +530,7 @@ final class HTMLVisualRenderer {
             if instance.failure == nil { instance.status = .suspended }
             instance.onPinChange(instance.pinned)
             instance.onPinChange = { _ in }
+            instance.replies = nil
             instance.activity = nil
         }
         release(id)
@@ -539,6 +544,12 @@ final class HTMLVisualRenderer {
         instance.capturedImage = nil
         instance.snapshot = snapshot(for: key)
         refresh(instance)
+    }
+
+    func refreshSent(_ instance: HTMLVisualInstance) {
+        guard let page = instance.page, let replies = instance.replies else { return }
+        let sent = replies.sent()
+        Task { try? await HTMLVisualWebContent.update(page, sent: sent) }
     }
 
     func beginResize(_ instance: HTMLVisualInstance) {
@@ -650,8 +661,14 @@ final class HTMLVisualRenderer {
         defer { signposter.endInterval("HTMLVisualPageStartup", interval) }
         let html = try await document()
         try Task.checkCancellation()
-        guard let key = instance.key else { throw CancellationError() }
+        guard let key = instance.key, let replies = instance.replies else { throw CancellationError() }
         let page = try await webContent.make(reference: reference, theme: key.theme,
+            replies: HTMLVisualReplyChannel(sent: replies.sent, send: { [weak instance] text in
+                guard let instance, instance.requestID == requestID, instance.page != nil else {
+                    throw HTMLVisualReplyChannel.Unavailable()
+                }
+                try await replies.send(text)
+            }),
             onEvent: { [weak self, weak instance] event in
                 guard let self, let instance, instance.requestID == requestID, instance.page != nil else { return }
                 switch event {
@@ -674,8 +691,10 @@ final class HTMLVisualRenderer {
             }, onRegistration: { instance.userContentController = $0 })
         try Task.checkCancellation()
         instance.page = page
-        do { try await HTMLVisualWebContent.load(page, html: html, reference: reference) }
-        catch {
+        do {
+            try await HTMLVisualWebContent.load(page, html: html, reference: reference)
+            try await HTMLVisualWebContent.update(page, sent: replies.sent())
+        } catch {
             page.stopLoading()
             throw error
         }

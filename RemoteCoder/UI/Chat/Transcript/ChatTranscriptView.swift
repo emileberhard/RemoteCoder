@@ -920,6 +920,7 @@ private struct TranscriptContentView<QuestionContent: View, BottomBar: View>: Vi
         case .publishedVisual(let visual):
             HTMLVisualInline(url: visual.publication.reference.url, title: visual.publication.title)
                 .environment(\.transcriptBlockIndex, 0)
+                .environment(\.htmlVisualTurnID, visual.turnID)
                 .frame(maxWidth: .infinity, alignment: .leading)
         case .compaction(let marker):
             #if os(macOS)

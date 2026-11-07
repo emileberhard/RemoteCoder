@@ -6,7 +6,7 @@ import { isAbsolute, join, resolve } from "node:path";
 import { IsolatedGateway } from "./isolated-gateway.mjs";
 
 if (process.argv[2] === "--help") {
-    console.log("Usage: bun dev-tools/probes/html-visuals.mjs CANDIDATE_BINARY ABSOLUTE_EVIDENCE_DIRECTORY [COMMA_SEPARATED_CASE_IDS]\nRuns 12 fresh cases each through Claude Opus 5.5 and Codex GPT-6.1 Sol using an owned isolated gateway/daemon and the host router. Production stays unchanged.");
+    console.log("Usage: bun dev-tools/probes/html-visuals.mjs CANDIDATE_BINARY ABSOLUTE_EVIDENCE_DIRECTORY [COMMA_SEPARATED_CASE_IDS]\nRuns 13 fresh cases each through Claude Opus 5.5 and Codex GPT-6.1 Sol using an owned isolated gateway/daemon and the host router. Production stays unchanged.");
     process.exit(0);
 }
 const [binary, evidence, selectedCases] = process.argv.slice(2);
@@ -24,6 +24,7 @@ const cases = [
     { id: "local-images", useful: true, images: true, prompt: "photo.heic and screen.png in the current directory are two images I want to compare. Show them side by side with each one's pixel dimensions underneath, and tell me in a sentence which is larger." },
     { id: "tradeoffs", useful: true, prompt: "Compare SQLite and PostgreSQL for a small single-server web app on setup, concurrency, backups and scaling, then recommend one." },
     { id: "animation", useful: true, prompt: "Animate bubble sort on [5, 1, 4, 2, 8] so I can watch each comparison and swap happen." },
+    { id: "quiz", useful: true, replies: true, prompt: "Quiz me with three multiple-choice questions about the solar system. I want to answer by tapping, then have you grade my answers." },
     { id: "fact", useful: false, prompt: "What is the capital of Sweden? One sentence." },
     { id: "command", useful: false, prompt: "Give me the rg command to find files containing TODO under src, with filenames and line numbers. I need to copy the command." },
     { id: "sequence", useful: true, prompt: "Show the standard sequence of browser sending GET /profile, API reading the user from the database, database returning the user, and API returning JSON to the browser. Use a simple sequence diagram." },
@@ -176,7 +177,7 @@ async function evaluate(provider, model) {
                 const fixture = join(evidence, `${id}-${hash}.html`);
                 await writeFile(fixture, bytes, { mode: 0o600 });
                 const html = bytes.toString("utf8");
-                fixtures.push({ hash, fixture, bytes: bytes.length, embeddedImages: (html.match(/data:image\/(?:png|jpeg|gif);base64,/g) ?? []).length, referencesCwd: html.includes(cwd), downloadVerified: true, serverMaximumBytes: 2097152, embed, exactLine: messages.filter(message => message.phase !== "commentary").some(message => visibleEmbedLine(message.text, embed)) });
+                fixtures.push({ hash, fixture, bytes: bytes.length, embeddedImages: (html.match(/data:image\/(?:png|jpeg|gif);base64,/g) ?? []).length, referencesCwd: html.includes(cwd), sendsReplies: html.includes("remotecoder.send("), downloadVerified: true, serverMaximumBytes: 2097152, embed, exactLine: messages.filter(message => message.phase !== "commentary").some(message => visibleEmbedLine(message.text, embed)) });
             }
             const streamed = events.filter(event => event.method === "item/completed").map(event => event.params?.item).filter(Boolean);
             const automaticMetadata = fixtures.every(fixture => calls.some(call => call.rcVisual?.digest === fixture.hash && call.rcVisual?.title === call.arguments?.title));
@@ -184,7 +185,7 @@ async function evaluate(provider, model) {
             const omittedEmbed = !assistant.includes("rc-visual:");
             const observedModels = await modelEvidence(provider, cwd, threadId, events);
             const publications = await publicationDetails(threadId);
-            const result = { id, provider, requestedModel: model, observedModels, threadId, exitCode, expectedPublish: test.useful, calls: calls.length, successfulEmbeds: embeds.length, messages, fixtures, publications, decisionPassed: test.useful ? fixtures.length > 0 && (!test.images || fixtures.some(fixture => fixture.embeddedImages >= 2 && !fixture.referencesCwd) && publications.some(detail => detail.outcome === "ok" && detail.images >= 2 && detail.converted >= 1)) : calls.length === 0, automaticMetadata, liveMetadataMatches, omittedEmbed, placementPassed: automaticMetadata && liveMetadataMatches && (!test.omitEmbed || omittedEmbed), hasTextSummary: assistant.split("\n").some(line => line.trim() && !line.includes("rc-visual:")), evidenceDirectory: evidence };
+            const result = { id, provider, requestedModel: model, observedModels, threadId, exitCode, expectedPublish: test.useful, calls: calls.length, successfulEmbeds: embeds.length, messages, fixtures, publications, decisionPassed: test.useful ? fixtures.length > 0 && (!test.replies || fixtures.some(fixture => fixture.sendsReplies)) && (!test.images || fixtures.some(fixture => fixture.embeddedImages >= 2 && !fixture.referencesCwd) && publications.some(detail => detail.outcome === "ok" && detail.images >= 2 && detail.converted >= 1)) : calls.length === 0, automaticMetadata, liveMetadataMatches, omittedEmbed, placementPassed: automaticMetadata && liveMetadataMatches && (!test.omitEmbed || omittedEmbed), hasTextSummary: assistant.split("\n").some(line => line.trim() && !line.includes("rc-visual:")), evidenceDirectory: evidence };
             results.push(result);
             await writeFile(join(evidence, "results.json"), JSON.stringify(results, null, 2), { mode: 0o600 });
             console.log(JSON.stringify({ ...result, messages: undefined }));
