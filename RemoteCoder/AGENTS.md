@@ -776,6 +776,11 @@ entrypoint linked above.
     size-change follow and canonical-row restoration after layout. Its index
     and offsets remain unobserved. Composer paging uses `TranscriptScrollHalt`
     to reach that same container and notify policy once before moving.
+  - On iOS, SwiftUI can report `.animating` for an interrupted programmatic
+    scroll and never report `.idle`, which leaves every row "scrolling" and
+    blocks HTML visual admission. `phaseChanged` ends an unanswered
+    `.animating` after `TranscriptScrollPhase.animationSettle`; keep it until
+    [tracker #794](https://github.com/emileberhard/tracker/issues/794) is resolved.
   - Visibility has one owner per platform: one `onScrollTargetVisibilityChange`
     on iOS, and the container's bounded row index on Mac. iOS retains its four
     scroll-geometry projections and reading-row/latest-edge observers.

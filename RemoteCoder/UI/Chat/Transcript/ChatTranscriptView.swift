@@ -129,6 +129,7 @@ private struct TranscriptContentView<QuestionContent: View, BottomBar: View>: Vi
     @State private var mounting: TranscriptMounting
     @State private var batchFloorRowID: String?
     @State private var scrollPhase = TranscriptScrollPhase()
+    @State private var animatedScrollEnd: Task<Void, Never>?
     #endif
     @Environment(\.htmlVisualSource) private var htmlVisualSource
     @State private var isNearTop = false
@@ -411,6 +412,7 @@ private struct TranscriptContentView<QuestionContent: View, BottomBar: View>: Vi
             visibility.attachReadingPosition(readingPosition, source: rowPresentations, scope: readingScope, follow: follow, mounting: mounting)
         }
         .onDisappear {
+            animatedScrollEnd?.cancel()
             visibility.detachReadingPosition()
             visibility.setScrollPhase(.idle)
         }
@@ -486,6 +488,12 @@ private struct TranscriptContentView<QuestionContent: View, BottomBar: View>: Vi
         #if os(iOS)
         scrollPhase.changed(to: phase)
         htmlVisualSource?.preparation.setInteracting(phase != .idle)
+        animatedScrollEnd?.cancel()
+        animatedScrollEnd = phase == .animating ? Task {
+            try? await Task.sleep(for: TranscriptScrollPhase.animationSettle)
+            guard !Task.isCancelled else { return }
+            phaseChanged(.idle, atBottom: false)
+        } : nil
         #endif
         visibility.setScrollPhase(phase)
         switch phase {
@@ -1033,6 +1041,7 @@ private struct TranscriptViewportState: Equatable {
 @MainActor
 @Observable
 private final class TranscriptScrollPhase {
+    static let animationSettle = Duration.milliseconds(1_500)
     private(set) var value = ScrollPhase.idle
 
     func changed(to phase: ScrollPhase) {
