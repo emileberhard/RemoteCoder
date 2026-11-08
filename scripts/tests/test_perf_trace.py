@@ -185,6 +185,56 @@ class RenderMetricsTests(unittest.TestCase):
         self.assertIn("Power Profiler", trace.selected_instruments("Time Profiler", False, ["Power Profiler"], False))
 
 
+class SliceTests(unittest.TestCase):
+    def test_slices_attribute_display_frames_to_the_innermost_app_frame(self):
+        import xml.etree.ElementTree as ET
+        from collections import Counter
+
+        def value(tag, text, **attributes):
+            element = ET.Element(tag, **attributes)
+            element.text = str(text)
+            return element
+
+        app = ET.Element("process", fmt="RemoteCoder (12)")
+        binary = trace.Binary("RemoteCoder", "A", "arm64", 0, "/private/RemoteCoder.app/RemoteCoder")
+        swiftui = trace.Binary("SwiftUICore", "B", "arm64", 0, "/System/SwiftUICore")
+        entry, body = trace.Frame(1, binary, "main"), trace.Frame(2, binary, "ChatScreen.body.getter")
+        flush, leaf = trace.Frame(3, swiftui, "GraphHost.flushTransactions()"), trace.Frame(4, swiftui, "AG::Graph::update")
+        ms = 1_000_000
+
+        def interval(name, start, end):
+            return {"name": value("name", name), "subsystem": value("subsystem", "RemoteCoder"), "process": app,
+                    "start": value("start", start * ms), "duration": value("duration", (end - start) * ms)}
+
+        rows = {
+            "OSSignpostIntervals": [interval("ConversationSwitch", 10, 30), interval("DrawerMovement", 20, 60)],
+            "display-vsyncs-interval": [{"timestamp": value("time", t * ms), "display-name": value("display-name", "Built-In"),
+                                         "event": value("event", "VSYNC")} for t in (0, 20, 40, 80)],
+            "hitches": [{"process": app, "start": value("start", 45 * ms), "duration": value("duration", 33 * ms)}],
+        }
+        samples = [trace.Sample(12 * ms, "main", 5, (leaf, body, flush, entry), False),
+                   trace.Sample(25 * ms, "main", 7, (leaf, flush, entry), False),
+                   trace.Sample(26 * ms, "worker", 40, (leaf, body), False),
+                   trace.Sample(70 * ms, "main", 9, (leaf, body, flush, entry), False)]
+        run = trace.Run(1, trace.TRACE_COMPLETE, "iOS", frozenset({"time-profile", *rows}), "")
+        with (patch.object(trace, "recorded_run", return_value=run),
+              patch.object(trace, "table_rows", side_effect=lambda _trace, schema, _columns: iter(rows[schema])),
+              patch.object(trace, "time_profile", return_value=(Counter(), Counter(), samples, Counter(), [])),
+              patch.object(trace, "symbolicate", side_effect=lambda frames, _apps: ({frame: (frame.name,) for frame in frames}, {}))):
+            result = trace.slice_trace("trace", "ConversationSwitch", "DrawerMovement", 0, False, [], 5, 2)
+            from_end = trace.slice_trace("trace", "ConversationSwitch", "DrawerMovement", 0, True, [], 5, 2)
+
+        cut = result["slices"][0]
+        self.assertEqual((cut["durationMs"], cut["until"], cut["mainBusyMs"], cut["hitchMs"]),
+                         (20, {"startMs": 10, "endMs": 50}, 12, 33))
+        self.assertEqual([(frame["offsetMs"], frame["frameMs"], frame["mainBusyMs"], frame["hitchMs"]) for frame in cut["frames"]],
+                         [(0, 10, 5, None), (10, 20, 7, None), (30, 20, 0, 33)])
+        self.assertEqual([frame["nearestApp"] for frame in cut["frames"]],
+                         [{"ChatScreen.body.getter": 5}, {"<system only>": 7}, {}])
+        self.assertEqual(result["phases"], {"SwiftUI transaction flush": 12})
+        self.assertEqual([frame["offsetMs"] for frame in from_end["slices"][0]["frames"]], [0, 10])
+
+
 class ExplicitSymbolsTests(unittest.TestCase):
     def test_dsym_and_direct_binary(self):
         with tempfile.TemporaryDirectory() as directory:

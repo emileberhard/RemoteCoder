@@ -22,6 +22,10 @@ idle time around it. Samples whose stacks run in XCTest's automation frameworks
 accessibility tree on its main thread) are attributed separately, and their CPU shares stay visible. A trace is rejected when automation exceeds
 1% of app CPU or main-thread CPU, or an observed automation share is unknown.
 
+The slice command reads an existing trace and breaks the main thread down per
+display frame inside each occurrence of a Points of Interest interval, so the
+frame where an interaction's work lands is visible instead of a whole-trace total.
+
 Every xctrace process stops at a quarter of the host's memory for xctrace and
 Python combined, counting both resident memory and physical footprint. Recording
 post-processing and exports stop after 120 seconds. Each process owns and removes
@@ -1413,6 +1417,142 @@ def summarize(trace: str, frames: int, callers: list[str], apps: list[Path], win
     }
 
 
+def signpost_occurrences(trace: str, schemas: frozenset[str], names: set[str]) -> dict[str, list[tuple[float, float]]]:
+    if "OSSignpostIntervals" not in schemas:
+        sys.exit(f"{trace} has no Points of Interest intervals to slice")
+    found = {name: [] for name in names}
+    for row in table_rows(trace, "OSSignpostIntervals", {"start", "duration", "name", "subsystem", "process"}):
+        name = element_text(row.get("name"))
+        if (name in found and process_name(row.get("process")) == APP
+                and element_text(row.get("subsystem")) == SIGNPOST_SUBSYSTEM):
+            start, duration = trace_number(row.get("start")), trace_number(row.get("duration"))
+            if start is not None and duration is not None and duration >= 0:
+                found[name].append((start, start + duration))
+    return {name: sorted(set(spans)) for name, spans in found.items()}
+
+
+def display_frames(trace: str, schemas: frozenset[str], windows: list[tuple[float, float]]) -> list[tuple[float, float]] | None:
+    if "display-vsyncs-interval" not in schemas:
+        return None
+    by_display = defaultdict(list)
+    for row in table_rows(trace, "display-vsyncs-interval", {"timestamp", "display-name", "event"}):
+        display, timestamp = element_text(row.get("display-name")), trace_number(row.get("timestamp"))
+        if display is not None and timestamp is not None and element_text(row.get("event")) == "VSYNC":
+            by_display[display].append(timestamp)
+    if not by_display:
+        return None
+    ticks = sorted(max(by_display.values(), key=len))
+    spans = list(zip(ticks, ticks[1:]))
+    if not spans:
+        return None
+    period = median(right - left for left, right in spans)
+    frames = []
+    for left, right in spans:
+        steps = max(1, round((right - left) / period))
+        frames.extend((left + (right - left) * index / steps, left + (right - left) * (index + 1) / steps) for index in range(steps))
+    return [(left, right) for left, right in frames if overlap_ns(windows, left, right) > 0]
+
+
+def slice_trace(trace: str, signpost: str, until: str | None, tail_ms: float, from_end: bool, apps: list[Path], top: int, frame_top: int) -> dict:
+    run = recorded_run(trace)
+    if "time-profile" not in run.schemas:
+        sys.exit(f"{trace} has no time profile to slice")
+    occurrences = signpost_occurrences(trace, run.schemas, {signpost} | ({until} if until else set()))
+    if not occurrences[signpost]:
+        sys.exit(f"{trace} has no {signpost} interval from {APP}")
+    slices = []
+    for start, end in occurrences[signpost]:
+        follow = next(((s, e) for s, e in occurrences.get(until, []) if s >= start), None) if until else None
+        stop = max(end, follow[1] if follow else end) + tail_ms * 1e6
+        slices.append((end if from_end else start, start, end, follow, stop))
+    windows = [(anchor, stop) for anchor, _, _, _, stop in slices]
+    _, _, samples, _, _ = time_profile(trace)
+    contains = within(sorted(windows))
+    main = sorted((sample for sample in samples if sample.thread == "main" and sample.time_ns is not None and contains(sample.time_ns)),
+                  key=lambda sample: sample.time_ns)
+    names, _ = symbolicate({frame for sample in main for frame in sample.stack}, apps)
+    roots = app_bundle_roots(frame for sample in main for frame in sample.stack)
+    entry = re.compile(r"(^main$|\$main\b|App\.main\(|^runApp)")
+
+    def nearest_app(sample: Sample) -> str:
+        for frame in sample.stack:
+            if frame_owner(frame, roots) == "app":
+                label = next((name for name in names.get(frame, ()) if not entry.search(name)), None)
+                if label:
+                    return label
+        return "<system only>"
+
+    phases = [(re.compile(pattern), label) for pattern, label in (
+        (r"ViewGraphDisplayLink\.displayLinkTimer", "SwiftUI animation tick"),
+        (r"GraphHost\.flushTransactions|UpdateGroup\.dispatchImmediately", "SwiftUI transaction flush"),
+        (r"CA::Transaction::commit|_UIApplicationFlushCATransaction", "Core Animation commit and layout"),
+        (r"CA::Display::DisplayLink::dispatch", "display link callback"),
+        (r"__handleEventQueue|_UIApplicationHandleEvent|UIGestureEnvironment", "touch and gesture handling"),
+        (r"swift_job_run|runJobInEstablishedExecutorContext", "main-actor task"),
+    )]
+
+    def phase(sample: Sample) -> str:
+        for frame in reversed(sample.stack):
+            for name in names.get(frame, ()):
+                if label := next((label for pattern, label in phases if pattern.search(name)), None):
+                    return label
+        return "other"
+
+    hitch_rows = [row for row in app_hitch_rows(trace, run.schemas) or [] if row.start_ns is not None]
+    frames = display_frames(trace, run.schemas, windows)
+    times = [sample.time_ns for sample in main]
+    totals = Counter()
+    phase_totals = Counter()
+    report_slices = []
+    for anchor, start, end, follow, stop in slices:
+        spans = [(max(left, anchor), min(right, stop)) for left, right in frames if left < stop and right > anchor] if frames else [
+            (left, min(left + 1e9 / 60, stop)) for left in [anchor + index * 1e9 / 60 for index in range(math.ceil((stop - anchor) / (1e9 / 60)))]]
+        timeline = []
+        for left, right in spans:
+            chunk = main[bisect.bisect_left(times, left):bisect.bisect_left(times, right)]
+            attribution, mechanism = Counter(), Counter()
+            for sample in chunk:
+                attribution[nearest_app(sample)] += sample.weight_ms
+                mechanism[phase(sample)] += sample.weight_ms
+            totals.update(attribution)
+            phase_totals.update(mechanism)
+            hitch = sum((row.duration_ns or 0) / 1e6 for row in hitch_rows if left <= row.start_ns < right)
+            timeline.append({"offsetMs": round((left - anchor) / 1e6, 1), "frameMs": round((right - left) / 1e6, 1),
+                             "mainBusyMs": round(sum(attribution.values()), 1), "hitchMs": round(hitch, 1) if hitch else None,
+                             "phases": {name: round(ms, 1) for name, ms in mechanism.most_common(2)},
+                             "nearestApp": {name: round(ms, 1) for name, ms in attribution.most_common(frame_top)}})
+        report_slices.append({
+            "startSeconds": round(start / 1e9, 4), "durationMs": round((end - start) / 1e6, 1),
+            "until": {"startMs": round((follow[0] - start) / 1e6, 1), "endMs": round((follow[1] - start) / 1e6, 1)} if follow else None,
+            "mainBusyMs": round(sum(frame["mainBusyMs"] for frame in timeline), 1),
+            "hitchMs": round(sum(frame["hitchMs"] or 0 for frame in timeline), 1),
+            "frames": timeline,
+        })
+    swiftui = None
+    if SWIFTUI_UPDATES in run.schemas:
+        swiftui = [Counter() for _ in slices]
+        for row in table_rows(trace, SWIFTUI_UPDATES, {"process", "start", "duration", "update-type", "description", "view-name"}):
+            begin, duration = trace_number(row.get("start")), trace_number(row.get("duration"))
+            if process_name(row.get("process")) != APP or begin is None or duration is None or duration < 0:
+                continue
+            label = " | ".join(filter(None, (element_text(row.get(key)) for key in ("update-type", "view-name", "description"))))
+            for index, (anchor, _, _, _, stop) in enumerate(slices):
+                if anchor <= begin < stop:
+                    swiftui[index][label] += duration / 1e6
+        for report_slice, updates in zip(report_slices, swiftui):
+            report_slice["swiftUIUpdateMs"] = {label: round(ms, 2) for label, ms in updates.most_common(frame_top * 4)}
+    _, inclusive, _ = frame_statistics(main, names)
+    return {"trace": trace, "signpost": signpost, "until": until, "tailMs": tail_ms, "from": "end" if from_end else "start",
+            "frameSource": "display VSYNC intervals" if frames else "fixed 60 Hz buckets; the trace has no display-vsyncs-interval",
+            "attribution": "each main-thread sample is assigned to its innermost app frame, so system work counts toward the app code that caused it",
+            "slices": report_slices,
+            "phases": {name: round(ms, 1) for name, ms in phase_totals.most_common()},
+            "nearestApp": {name: round(ms, 1) for name, ms in totals.most_common(top)},
+            "swiftUIUpdateMs": None if swiftui is None else {label: round(ms, 2) for label, ms in sum(swiftui, Counter()).most_common(top)},
+            "swiftUIUpdateNote": None if swiftui is None else "inclusive durations; nested updates overlap, so they do not add up to main-thread time",
+            "heaviestSystem": heaviest(inclusive["system"], top).get("main", {})}
+
+
 def remote(host: str, arguments: list[str]) -> int:
     script = Path(__file__).read_text()
     source = (Path(__file__).resolve().parent.parent / "dev-tools/mac-scroll-driver.swift").read_text()
@@ -1656,6 +1796,15 @@ def main() -> None:
     summarize_parser.add_argument("trace")
     summarize_parser.add_argument("--window", nargs=2, type=float, metavar=("START", "END"),
                                   help="trace-relative window bounds in seconds")
+    slice_parser = commands.add_parser("slice", help="break the main thread down frame by frame inside each occurrence of a signpost")
+    slice_parser.add_argument("trace")
+    slice_parser.add_argument("--signpost", required=True, help=f"{APP} Points of Interest interval to slice, e.g. ConversationSwitch")
+    slice_parser.add_argument("--until", help="extend each slice to the end of the first interval of this name that starts inside it or after it")
+    slice_parser.add_argument("--tail-ms", type=float, default=0, help="also cover this long after each slice ends, for work that follows motion")
+    slice_parser.add_argument("--from", dest="anchor", choices=("start", "end"), default="start",
+                              help="begin each slice where the interval starts, or where it ends to isolate the work that follows it")
+    slice_parser.add_argument("--top", type=int, default=25, help="entries in the whole-slice attribution lists")
+    slice_parser.add_argument("--frame-top", type=int, default=3, help="nearest app frames listed per display frame")
     args = parser.parse_args()
 
     if args.command == "record":
@@ -1681,7 +1830,9 @@ def main() -> None:
         forwarded = [*sys.argv[1:split], "--host", "local", *sys.argv[split:]]
         sys.exit(remote(host, forwarded))
     with exclusive_host():
-        if args.command == "summarize":
+        if args.command == "slice":
+            print(json.dumps(slice_trace(args.trace, args.signpost, args.until, args.tail_ms, args.anchor == "end", args.symbols, args.top, args.frame_top), indent=2))
+        elif args.command == "summarize":
             summary = summarize(args.trace, args.frames, args.callers, args.symbols, tuple(args.window) if args.window else None, args.motion_signpost)
             print(json.dumps(summary, indent=2))
             reject_automation(summary)
