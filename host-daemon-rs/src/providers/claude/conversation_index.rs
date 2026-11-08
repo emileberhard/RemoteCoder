@@ -274,10 +274,17 @@ impl Index {
     }
 }
 
-fn path(home: &Path, thread_id: &str) -> PathBuf {
-    let key = crate::ids::sha256_hex(thread_id.as_bytes());
+pub(crate) fn history_directory(home: &Path) -> PathBuf {
     home.join("remotecoder-history")
-        .join(format!("{key}.jsonl"))
+}
+
+fn path(home: &Path, thread_id: &str) -> PathBuf {
+    side_path(home, thread_id, "jsonl")
+}
+
+pub(crate) fn side_path(home: &Path, thread_id: &str, extension: &str) -> PathBuf {
+    let key = crate::ids::sha256_hex(thread_id.as_bytes());
+    history_directory(home).join(format!("{key}.{extension}"))
 }
 
 fn minted_path(home: &Path, thread_id: &str) -> PathBuf {
@@ -589,9 +596,56 @@ impl Store {
         thread_id: &str,
         turn_id: &str,
     ) -> Result<Option<TurnIdentity>> {
+        let turn_id = turn_id.to_owned();
+        self.read_index(thread_id, move |index| index.turns.get(&turn_id).cloned())
+            .await
+    }
+
+    pub(crate) async fn has_client_id(&self, thread_id: &str, client_id: &str) -> Result<bool> {
+        let client_id = client_id.to_owned();
+        self.read_index(thread_id, move |index| {
+            index
+                .items
+                .values()
+                .any(|item| item.client_id.as_deref() == Some(client_id.as_str()))
+        })
+        .await
+    }
+
+    pub(crate) async fn user_turn_since(
+        &self,
+        thread_id: &str,
+        since_ms: i64,
+        excluded: HashSet<String>,
+    ) -> Result<bool> {
+        self.read_index(thread_id, move |index| {
+            let continuations = index
+                .turns
+                .values()
+                .filter_map(|turn| match &turn.recovery {
+                    Some(TurnRecovery::Continued { turn_id }) => Some(turn_id.as_str()),
+                    _ => None,
+                })
+                .collect::<HashSet<_>>();
+            index.items.values().any(|item| {
+                item.client_id
+                    .as_ref()
+                    .is_some_and(|client_id| !excluded.contains(client_id))
+                    && index.turns.get(&item.turn_id).is_some_and(|turn| {
+                        turn.started_at_ms > since_ms && !continuations.contains(turn.id.as_str())
+                    })
+            })
+        })
+        .await
+    }
+
+    async fn read_index<T: Send + 'static>(
+        &self,
+        thread_id: &str,
+        read: impl FnOnce(&Index) -> T + Send + 'static,
+    ) -> Result<T> {
         let thread = self.thread(thread_id).await.lock_owned().await;
         let file = path(&self.home, thread_id);
-        let turn_id = turn_id.to_owned();
         under_guards(thread, move |cached| {
             if cached.is_none() {
                 **cached = Some(match read_record(&file, MAX_EXECUTION_INDEX_BYTES)? {
@@ -599,10 +653,7 @@ impl Store {
                     None => Index::default(),
                 });
             }
-            Ok(cached
-                .as_ref()
-                .and_then(|index| index.turns.get(&turn_id))
-                .cloned())
+            Ok(read(cached.as_ref().expect("loaded above")))
         })
         .await?
     }

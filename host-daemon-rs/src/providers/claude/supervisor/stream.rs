@@ -439,6 +439,7 @@ impl ClaudeSupervisor {
 
         self.fail_runtime(&thread_id, process_group_id, "failed", Some(stream_failure))
             .await;
+        self.request_queue_drain(&thread_id);
     }
 
     async fn emit_capacity_failure(&self, thread_id: &str, capacity: &CapacityExceeded) {
@@ -589,6 +590,9 @@ impl ClaudeSupervisor {
         }
 
         self.publish(completed).await;
+        if settled.is_some() {
+            self.request_queue_drain(thread_id);
+        }
         if let Some((None, _, lifecycle_generation)) = settled {
             self.schedule_runtime_idle_timeout(
                 thread_id.to_string(),

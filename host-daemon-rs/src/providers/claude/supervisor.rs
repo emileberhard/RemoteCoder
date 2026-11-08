@@ -36,6 +36,7 @@ mod jobs;
 mod lifecycle;
 mod messages;
 mod process;
+mod queue;
 mod restart_capture;
 mod settings;
 mod side_question;
@@ -45,6 +46,7 @@ mod turns;
 
 pub(crate) use jobs::ClaudeJobInspection;
 pub(crate) use messages::ParentMessage;
+pub(crate) use queue::{QueueAddError, QueuedOutcome, QueuedStart};
 pub(crate) use restart_capture::ResumeDelivery;
 
 const STOP_GRACE_PERIOD: Duration = Duration::from_secs(5);
@@ -231,6 +233,7 @@ pub(crate) enum SessionRename {
 #[derive(Clone, Copy)]
 enum TurnOrigin {
     Dispatched,
+    Queued,
     Callback { stop_generation: u64 },
 }
 
@@ -239,6 +242,7 @@ struct RuntimeTurn {
     /// Opened by the stream itself — a peer message, a background-subagent
     /// completion, a scheduled wake — rather than by gateway dispatch.
     agent_initiated: bool,
+    input: Option<String>,
     awaiting_input: Option<String>,
     continues: Option<String>,
     phase: TurnPhase,
@@ -261,6 +265,7 @@ impl RuntimeTurn {
         Self {
             translator,
             agent_initiated,
+            input: awaiting_input.clone(),
             awaiting_input,
             continues: None,
             phase: TurnPhase::Running,
@@ -494,6 +499,8 @@ pub(crate) struct ClaudeSupervisor {
     live_prefix_budget: Arc<crate::providers::claude::translate::live::LivePrefixBudget>,
     turn_settled: tokio::sync::Notify,
     conversation_index: crate::providers::claude::conversation_index::Store,
+    queued_messages: Arc<crate::providers::claude::queued_messages::QueuedMessages>,
+    queue_drains: queue::DrainRequests,
     job_changes: tokio::sync::watch::Sender<()>,
 }
 
@@ -513,6 +520,12 @@ impl ClaudeSupervisor {
             conversation_index: crate::providers::claude::conversation_index::Store::new(
                 settings.claude_home.clone(),
             ),
+            queued_messages: Arc::new(
+                crate::providers::claude::queued_messages::QueuedMessages::open(
+                    settings.claude_home.clone(),
+                ),
+            ),
+            queue_drains: queue::DrainRequests::default(),
             settings,
             notifications,
             journal,
@@ -661,6 +674,13 @@ impl ClaudeSupervisor {
         thread_id: &str,
     ) -> Result<Option<ClaudeSelection>, String> {
         let _lifecycle = self.lifecycles.lock(thread_id).await;
+        self.observed_runtime_settings(thread_id).await
+    }
+
+    async fn observed_runtime_settings(
+        &self,
+        thread_id: &str,
+    ) -> Result<Option<ClaudeSelection>, String> {
         let pid = {
             let runtimes = self.runtimes.lock().await;
             let Some(runtime) = runtimes.get(thread_id) else {

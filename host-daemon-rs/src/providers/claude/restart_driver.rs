@@ -81,6 +81,33 @@ impl ClaudeRestartDriver {
         )
     }
 
+    pub(crate) async fn has_pending_for(&self, thread_id: &str) -> Result<bool> {
+        Ok(self.pending_items(thread_id).await?.next().is_some())
+    }
+
+    pub(crate) async fn carries_input(&self, thread_id: &str, input_id: &str) -> Result<bool> {
+        Ok(self.pending_items(thread_id).await?.any(|item| {
+            item.queued_inputs
+                .iter()
+                .any(|input| input.client_id.as_deref() == Some(input_id))
+        }))
+    }
+
+    async fn pending_items(&self, thread_id: &str) -> Result<impl Iterator<Item = Item>> {
+        let journal = match self.store {
+            Some(_) => self
+                .with_store(|store| store.load())
+                .await
+                .context("Claude restart recovery journal cannot be read")?,
+            None => None,
+        };
+        let thread_id = thread_id.to_owned();
+        Ok(journal
+            .into_iter()
+            .flat_map(|journal| journal.items)
+            .filter(move |item| item.thread_id == thread_id && item.status.is_pending()))
+    }
+
     pub(crate) async fn suspended_turns(
         &self,
         thread_id: &str,

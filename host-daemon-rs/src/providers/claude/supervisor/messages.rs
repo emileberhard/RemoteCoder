@@ -97,7 +97,7 @@ impl ClaudeSupervisor {
             effort: request.selection.effort.clone(),
             fast: request.selection.fast,
         };
-        let user_turn = matches!(origin, TurnOrigin::Dispatched);
+        let user_turn = matches!(origin, TurnOrigin::Dispatched | TurnOrigin::Queued);
         self.update_parent(&request.thread_id, move |parent| {
             if parent.stop_generation != stop_generation {
                 return;
@@ -109,6 +109,9 @@ impl ClaudeSupervisor {
             }
         })
         .await;
+        if user_turn {
+            self.release_queue_hold(&request.thread_id).await;
+        }
     }
 
     pub(super) async fn remember_parent_settings(

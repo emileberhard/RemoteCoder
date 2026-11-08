@@ -5,7 +5,9 @@ use super::{
 };
 use crate::ids::new_session_uuid;
 use crate::providers::claude::translate::TurnTranslator;
-use crate::providers::claude::{ClaudeTurnRequest, ClaudeUserInput, claude_thread_id};
+use crate::providers::claude::{
+    ClaudeSelection, ClaudeTurnRequest, ClaudeUserInput, claude_thread_id,
+};
 use crate::rpc::error::RpcCode;
 use nix::unistd::Pid;
 use std::collections::{HashMap, HashSet};
@@ -39,16 +41,7 @@ impl ClaudeSupervisor {
         let _guard = self.lifecycles.lock(&request.thread_id).await;
         self.wait_for_finishing_turn(&request.thread_id).await;
         let reservation = self.reserve_start(&request).await?;
-        // Preserve the effective warm selection, including an acknowledged setting
-        // change that has not yet appeared in an assistant transcript record.
-        if let Some(runtime) = self.runtimes.lock().await.get(&request.thread_id) {
-            let settings = runtime.settings.as_ref().ok_or_else(|| TurnStartError {
-                data: None,
-                code: RpcCode::Unavailable,
-                message: "Claude settings are unavailable; retry after reconnecting".into(),
-            })?;
-            request.selection = settings.effective().clone();
-        } else if let Some(selection) = self.parent_selection(&request.thread_id).await {
+        if let Some((selection, _)) = self.recorded_selection(&request.thread_id).await? {
             request.selection = selection;
         }
         drop(reservation);
@@ -61,29 +54,44 @@ impl ClaudeSupervisor {
         mut request: ClaudeTurnRequest,
     ) -> Result<String, TurnStartError> {
         let _start_guard = self.lifecycles.lock(&request.thread_id).await;
-        if let Some(runtime) = self.runtimes.lock().await.get(&request.thread_id) {
-            let settings = runtime.settings.as_ref().ok_or_else(|| TurnStartError {
-                data: None,
-                code: RpcCode::Internal,
-                message: "Claude settings could not be confirmed; retry the settings change"
-                    .to_string(),
-            })?;
-            request.selection = settings.effective().clone();
-        } else if let Some(selection) = self
+        if let Some((selection, _)) = self.recorded_selection(&request.thread_id).await? {
+            request.selection = selection;
+        }
+        self.start_turn_locked(request, TurnOrigin::Dispatched)
+            .await
+    }
+
+    pub(super) async fn recorded_selection(
+        &self,
+        thread_id: &str,
+    ) -> Result<Option<(ClaudeSelection, String)>, TurnStartError> {
+        let cwd = self
+            .runtimes
+            .lock()
+            .await
+            .get(thread_id)
+            .map(|runtime| runtime.cwd.clone());
+        if let Some(cwd) = cwd
+            && let Some(selection) = self
+                .observed_runtime_settings(thread_id)
+                .await
+                .map_err(TurnStartError::unresponsive)?
+        {
+            return Ok(Some((selection, cwd)));
+        }
+        let parent = self
             .conversation_index
-            .parent(&request.thread_id)
+            .parent(thread_id)
             .await
             .map_err(|error| TurnStartError {
                 data: None,
                 code: RpcCode::Unavailable,
                 message: format!("Claude selection could not be read: {error:#}"),
-            })?
-            .selection
-        {
-            request.selection = selection.selection();
-        }
-        self.start_turn_locked(request, TurnOrigin::Dispatched)
-            .await
+            })?;
+        Ok(parent.selection.map(|selection| {
+            let cwd = selection.cwd.clone();
+            (selection.selection(), cwd)
+        }))
     }
 
     pub(super) async fn start_turn_locked(
@@ -174,7 +182,7 @@ impl ClaudeSupervisor {
                 runtime.settings = None;
             }
         }
-        if request.input.text != "/compact" {
+        if request.input.text != "/compact" && !matches!(origin, TurnOrigin::Queued) {
             let folded = self
                 .fold_into_agent_initiated_turn(&request, &prepared, origin, &policy)
                 .await;
@@ -247,6 +255,9 @@ impl ClaudeSupervisor {
                         "the Claude runtime changed while this turn was starting; send it again",
                     ));
                 };
+                if let Some(active) = &runtime.active_turn {
+                    return Err(busy(&request.thread_id, active));
+                }
                 runtime.idle = None;
                 runtime.lifecycle_generation = runtime.lifecycle_generation.wrapping_add(1);
                 runtime.active_turn = Some(RuntimeTurn::new(
@@ -708,7 +719,7 @@ impl ClaudeSupervisor {
         }
     }
 
-    fn refuse_while_closing(&self) -> Result<(), TurnStartError> {
+    pub(super) fn refuse_while_closing(&self) -> Result<(), TurnStartError> {
         if self
             .process_registry
             .lock()
@@ -744,15 +755,7 @@ impl ClaudeSupervisor {
             .get(&request.thread_id)
             .and_then(|runtime| runtime.active_turn.as_ref())
         {
-            return Err(TurnStartError {
-                data: None,
-                code: RpcCode::ServerBusy,
-                message: format!(
-                    "thread {} already has turn {} running",
-                    request.thread_id,
-                    active.translator.turn_id()
-                ),
-            });
+            return Err(busy(&request.thread_id, active));
         }
         let mut starts = self
             .starting
@@ -829,5 +832,16 @@ impl ClaudeSupervisor {
         )
         .ok()
         .flatten()
+    }
+}
+
+fn busy(thread_id: &str, active: &RuntimeTurn) -> TurnStartError {
+    TurnStartError {
+        data: None,
+        code: RpcCode::ServerBusy,
+        message: format!(
+            "thread {thread_id} already has turn {} running",
+            active.translator.turn_id()
+        ),
     }
 }

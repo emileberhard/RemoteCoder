@@ -92,6 +92,23 @@ impl UnconsumedInputs {
             .collect()
     }
 
+    pub(super) fn holds(&self, id: &str) -> bool {
+        self.0
+            .lock()
+            .expect("Claude input record poisoned")
+            .inputs
+            .iter()
+            .any(|input| input.client_id.as_deref() == Some(id))
+    }
+
+    pub(super) fn is_empty(&self) -> bool {
+        self.0
+            .lock()
+            .expect("Claude input record poisoned")
+            .inputs
+            .is_empty()
+    }
+
     pub(super) fn pending(&self) -> Vec<ClaudeUserInput> {
         self.0
             .lock()

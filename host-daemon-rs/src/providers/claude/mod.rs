@@ -9,6 +9,7 @@ mod input;
 pub(crate) mod native_parent;
 pub(crate) mod notification_hook;
 pub(crate) mod projection;
+pub(crate) mod queued_messages;
 pub(crate) mod records;
 pub(crate) mod restart;
 pub(crate) mod restart_driver;
@@ -24,8 +25,8 @@ pub(crate) mod wake_hold;
 pub(crate) use capacity::CapacityExceeded;
 pub(crate) use input::{ClaudeSelection, ClaudeTurnRequest, ClaudeUserInput};
 pub(crate) use supervisor::{
-    ClaudeJobInspection, ClaudeNotification, ClaudeSupervisor, ParentMessage, ResumeDelivery,
-    SessionRename, TurnControlError,
+    ClaudeJobInspection, ClaudeNotification, ClaudeSupervisor, ParentMessage, QueueAddError,
+    QueuedOutcome, QueuedStart, ResumeDelivery, SessionRename, TurnControlError, TurnStartError,
 };
 
 /// Claude thread ids are prefixed so daemon routing is a pure string test.

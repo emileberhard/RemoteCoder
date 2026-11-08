@@ -3555,3 +3555,434 @@ async fn input_control_capacity_refusal_preserves_the_active_process_turn_and_se
         json!({"kind":"capacity", "retryable":false, "resource":"input frame bytes", "limit":crate::providers::codex::daemon::MAX_WEBSOCKET_BYTES})
     );
 }
+
+const QUEUE_THREAD: &str = "claude_11111111-2222-4333-8444-555555555555";
+
+async fn queue_agent() -> (
+    ClaudeTestSettings,
+    Arc<ClaudeSupervisor>,
+    mpsc::Receiver<crate::providers::claude::ClaudeNotification>,
+    i32,
+    tokio::process::Child,
+) {
+    let (tx, rx) = mpsc::channel(256);
+    let (home, agent) = isolated_agent(tx);
+    let (runtime, child) = placeholder_runtime(&request(QUEUE_THREAD, false)).await;
+    let group = runtime.process_group_id;
+    agent
+        .runtimes
+        .lock()
+        .await
+        .insert(QUEUE_THREAD.to_owned(), runtime);
+    (home, agent, rx, group, child)
+}
+
+async fn queue(agent: &ClaudeSupervisor, id: &str) {
+    agent
+        .queue_add(
+            QUEUE_THREAD,
+            id,
+            json!([{"type":"text","text":format!("queued {id}")}]),
+        )
+        .await
+        .unwrap();
+}
+
+async fn queued_ids(agent: &ClaudeSupervisor) -> Vec<String> {
+    agent
+        .queued_messages(QUEUE_THREAD)
+        .await
+        .unwrap()
+        .entries
+        .into_iter()
+        .map(|entry| entry.id)
+        .collect()
+}
+
+async fn active_input(agent: &ClaudeSupervisor) -> Option<String> {
+    agent
+        .runtimes
+        .lock()
+        .await
+        .get(QUEUE_THREAD)
+        .and_then(|runtime| runtime.active_turn.as_ref())
+        .and_then(|turn| turn.input.clone())
+}
+
+async fn echo_and_finish(agent: &Arc<ClaudeSupervisor>, group: i32, input: &str) {
+    agent
+        .runtimes
+        .lock()
+        .await
+        .get(QUEUE_THREAD)
+        .unwrap()
+        .input
+        .unconsumed()
+        .take(&[input]);
+    agent
+        .finish_turn(
+            QUEUE_THREAD,
+            group,
+            TurnResult {
+                status: "completed".into(),
+                error_message: None,
+                error_info: None,
+            },
+        )
+        .await;
+}
+
+#[tokio::test]
+async fn queued_messages_start_in_order_as_their_own_turns_after_the_running_one() {
+    use super::queue::{QueuedOutcome, QueuedStart};
+    let (_home, agent, _events, group, mut child) = queue_agent().await;
+    queue(&agent, "first").await;
+    queue(&agent, "second").await;
+    assert_eq!(
+        agent.queue_drain_requests().await,
+        vec![QUEUE_THREAD.to_owned()]
+    );
+
+    agent
+        .runtimes
+        .lock()
+        .await
+        .get_mut(QUEUE_THREAD)
+        .unwrap()
+        .active_turn = Some(wake_turn("wake-turn"));
+    assert_eq!(
+        agent
+            .start_queued(QUEUE_THREAD, QueuedStart::Next("first".into()))
+            .await
+            .unwrap(),
+        QueuedOutcome::Waiting,
+        "a queued message never folds into a running agent-initiated turn"
+    );
+    agent
+        .runtimes
+        .lock()
+        .await
+        .get_mut(QUEUE_THREAD)
+        .unwrap()
+        .active_turn = None;
+    assert_eq!(
+        agent
+            .start_queued(QUEUE_THREAD, QueuedStart::Next("second".into()))
+            .await
+            .unwrap(),
+        QueuedOutcome::Changed
+    );
+
+    let QueuedOutcome::Started(first_turn) = agent
+        .start_queued(QUEUE_THREAD, QueuedStart::Next("first".into()))
+        .await
+        .unwrap()
+    else {
+        panic!("the idle head starts")
+    };
+    assert_eq!(active_input(&agent).await.as_deref(), Some("first"));
+    assert_eq!(queued_ids(&agent).await, vec!["second".to_owned()]);
+    assert_eq!(
+        agent
+            .start_queued(QUEUE_THREAD, QueuedStart::Next("second".into()))
+            .await
+            .unwrap(),
+        QueuedOutcome::Waiting
+    );
+    assert!(matches!(
+        agent
+            .queue_add(
+                QUEUE_THREAD,
+                "first",
+                json!([{"type":"text","text":"queued first"}])
+            )
+            .await,
+        Err(super::queue::QueueAddError::Started)
+    ));
+
+    echo_and_finish(&agent, group, "first").await;
+    assert_eq!(
+        agent.queue_drain_requests().await,
+        vec![QUEUE_THREAD.to_owned()]
+    );
+    let QueuedOutcome::Started(second_turn) = agent
+        .start_queued(QUEUE_THREAD, QueuedStart::Next("second".into()))
+        .await
+        .unwrap()
+    else {
+        panic!("the next message starts after the turn ends")
+    };
+    assert_ne!(first_turn, second_turn);
+    assert_eq!(active_input(&agent).await.as_deref(), Some("second"));
+    assert!(queued_ids(&agent).await.is_empty());
+    assert!(!agent.queued_messages.has(QUEUE_THREAD));
+    agent.runtimes.lock().await.clear();
+    let _ = child.kill().await;
+}
+
+#[tokio::test]
+async fn stop_and_refusal_holds_pause_the_queue_until_send_now_or_a_user_turn() {
+    use super::queue::{QueuedOutcome, QueuedStart};
+    use crate::providers::claude::queued_messages::HoldReason;
+    let (_home, agent, _events, _, mut stopped) = queue_agent().await;
+    queue(&agent, "first").await;
+    queue(&agent, "second").await;
+    agent.stop_parent(QUEUE_THREAD).await.unwrap();
+    let (runtime, mut child) = placeholder_runtime(&request(QUEUE_THREAD, false)).await;
+    let group = runtime.process_group_id;
+    agent
+        .runtimes
+        .lock()
+        .await
+        .insert(QUEUE_THREAD.to_owned(), runtime);
+    let _ = stopped.kill().await;
+    assert!(!agent.queue_has_pending_work(QUEUE_THREAD).await.unwrap());
+    assert_eq!(
+        agent
+            .start_queued(QUEUE_THREAD, QueuedStart::Next("first".into()))
+            .await
+            .unwrap(),
+        QueuedOutcome::Waiting
+    );
+    let QueuedOutcome::Started(_) = agent
+        .start_queued(QUEUE_THREAD, QueuedStart::Now(Some("second".into())))
+        .await
+        .unwrap()
+    else {
+        panic!("Send Now starts the named message despite the Stop")
+    };
+    assert!(
+        !agent
+            .conversation_index
+            .parent(QUEUE_THREAD)
+            .await
+            .unwrap()
+            .stopped
+    );
+    assert_eq!(queued_ids(&agent).await, vec!["first".to_owned()]);
+    assert!(
+        agent
+            .start_queued(QUEUE_THREAD, QueuedStart::Now(None))
+            .await
+            .unwrap_err()
+            .code
+            == RpcCode::InvalidRequest,
+        "Send Now waits for an idle thread"
+    );
+    echo_and_finish(&agent, group, "second").await;
+
+    assert!(
+        agent
+            .hold_queue(QUEUE_THREAD, HoldReason::Refused, "cwd is gone")
+            .await
+            .unwrap()
+    );
+    assert!(
+        !agent
+            .hold_queue(QUEUE_THREAD, HoldReason::Refused, "again")
+            .await
+            .unwrap(),
+        "an existing hold is not reported twice"
+    );
+    assert_eq!(
+        agent
+            .queued_messages(QUEUE_THREAD)
+            .await
+            .unwrap()
+            .hold
+            .unwrap()
+            .message,
+        "cwd is gone"
+    );
+    assert!(agent.queue_ready(QUEUE_THREAD).await.unwrap().is_none());
+    let mut user_turn = request(QUEUE_THREAD, false);
+    user_turn.input.client_id = Some("typed".into());
+    agent.start_turn(user_turn).await.unwrap();
+    assert!(
+        agent
+            .queued_messages(QUEUE_THREAD)
+            .await
+            .unwrap()
+            .hold
+            .is_none()
+    );
+    echo_and_finish(&agent, group, "typed").await;
+    assert_eq!(
+        agent
+            .queue_ready(QUEUE_THREAD)
+            .await
+            .unwrap()
+            .map(|entry| entry.id),
+        Some("first".to_owned())
+    );
+    agent.runtimes.lock().await.clear();
+    let _ = child.kill().await;
+}
+
+#[tokio::test]
+async fn a_stale_starting_entry_is_dropped_only_with_delivery_evidence() {
+    use super::queue::{QueuedOutcome, QueuedStart};
+    let (home, agent, _events, _group, mut child) = queue_agent().await;
+    queue(&agent, "delivered").await;
+    queue(&agent, "lost").await;
+    agent
+        .queued_messages
+        .update(QUEUE_THREAD, |queue| {
+            for entry in &mut queue.entries {
+                entry.starting = true;
+            }
+            Ok(())
+        })
+        .unwrap();
+    assert!(
+        !agent.queue_delete(QUEUE_THREAD, "lost").await.unwrap(),
+        "a starting message cannot be removed"
+    );
+    let transcript = crate::providers::claude::timeline::session_path_for_cwd(
+        &home.settings.claude_home,
+        "/tmp",
+        "11111111-2222-4333-8444-555555555555",
+    );
+    fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+    fs::write(
+        &transcript,
+        format!(
+            "{}\n",
+            json!({"type":"user","uuid":"delivered","message":{"role":"user","content":"queued delivered"}})
+        ),
+    )
+    .unwrap();
+
+    assert_eq!(
+        agent
+            .start_queued(QUEUE_THREAD, QueuedStart::Next("delivered".into()))
+            .await
+            .unwrap(),
+        QueuedOutcome::Changed
+    );
+    assert_eq!(queued_ids(&agent).await, vec!["lost".to_owned()]);
+    assert!(
+        !agent.queued_messages(QUEUE_THREAD).await.unwrap().entries[0].starting,
+        "an unrecorded message returns to the queue"
+    );
+    assert!(matches!(
+        agent
+            .start_queued(QUEUE_THREAD, QueuedStart::Next("lost".into()))
+            .await
+            .unwrap(),
+        QueuedOutcome::Started(_)
+    ));
+    assert_eq!(active_input(&agent).await.as_deref(), Some("lost"));
+    agent.runtimes.lock().await.clear();
+    let _ = child.kill().await;
+}
+
+#[tokio::test]
+async fn adds_are_idempotent_by_client_id_and_refuse_ids_the_conversation_already_ran() {
+    let (_home, agent, _events, _group, mut child) = queue_agent().await;
+    let input = json!([{"type":"text","text":"same"}]);
+    let first = agent
+        .queue_add(QUEUE_THREAD, "m", input.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        agent.queue_add(QUEUE_THREAD, "m", input).await.unwrap(),
+        first
+    );
+    assert!(matches!(
+        agent
+            .queue_add(QUEUE_THREAD, "m", json!([{"type":"text","text":"other"}]))
+            .await,
+        Err(super::queue::QueueAddError::Conflict)
+    ));
+    assert!(matches!(
+        agent.queue_add(QUEUE_THREAD, "empty", json!([])).await,
+        Err(super::queue::QueueAddError::Invalid(_))
+    ));
+    let mut recorded = json!({"method":"item/completed","params":{
+        "threadId":QUEUE_THREAD,"turnId":"turn-1","completedAtMs":1,
+        "item":{"type":"userMessage","id":"ran","clientId":"ran","content":[]}}});
+    agent
+        .conversation_index
+        .record(&mut recorded)
+        .await
+        .unwrap();
+    assert!(matches!(
+        agent
+            .queue_add(QUEUE_THREAD, "ran", json!([{"type":"text","text":"again"}]))
+            .await,
+        Err(super::queue::QueueAddError::Started)
+    ));
+    agent.runtimes.lock().await.clear();
+    let _ = child.kill().await;
+}
+
+#[tokio::test]
+async fn a_persistent_refusal_leaves_the_message_queued_and_holds_the_queue() {
+    use super::queue::QueuedStart;
+    let (tx, _rx) = mpsc::channel(16);
+    let (_home, agent) = isolated_agent(tx);
+    queue(&agent, "first").await;
+    let error = agent
+        .start_queued(QUEUE_THREAD, QueuedStart::Next("first".into()))
+        .await
+        .unwrap_err();
+    assert!(error.holds_queue(), "{error}");
+    let queued = agent.queued_messages(QUEUE_THREAD).await.unwrap();
+    assert_eq!(queued.entries.len(), 1);
+    assert!(!queued.entries[0].starting);
+}
+
+#[tokio::test]
+async fn newer_user_turns_hold_messages_queued_before_them() {
+    let (_home, agent, _events, _group, mut child) = queue_agent().await;
+    queue(&agent, "queued").await;
+    let enqueued = agent.queued_messages(QUEUE_THREAD).await.unwrap().entries[0].enqueued_at_ms;
+    assert!(!agent.hold_if_newer_turns(QUEUE_THREAD).await.unwrap());
+    for mut notification in [
+        json!({"method":"turn/started","params":{"threadId":QUEUE_THREAD,
+            "turn":{"id":"resumed","startedAtMs":enqueued + 5,"status":"inProgress"}}}),
+        json!({"method":"turn/completed","params":{"threadId":QUEUE_THREAD,
+            "turn":{"id":"older","startedAtMs":enqueued - 5,"status":"completed"}}}),
+        json!({"method":"item/completed","params":{"threadId":QUEUE_THREAD,"turnId":"older",
+            "completedAtMs":enqueued + 6,
+            "item":{"type":"userMessage","id":"steer","clientId":"steer","content":[]}}}),
+    ] {
+        agent
+            .conversation_index
+            .record(&mut notification)
+            .await
+            .unwrap();
+    }
+    assert!(
+        !agent.hold_if_newer_turns(QUEUE_THREAD).await.unwrap(),
+        "a steer into the turn that was running does not hold the queue"
+    );
+    let mut newer = json!({"method":"item/completed","params":{"threadId":QUEUE_THREAD,
+        "turnId":"resumed","completedAtMs":enqueued + 7,
+        "item":{"type":"userMessage","id":"typed","clientId":"typed","content":[]}}});
+    agent.conversation_index.record(&mut newer).await.unwrap();
+    assert!(agent.hold_if_newer_turns(QUEUE_THREAD).await.unwrap());
+    assert!(agent.queue_ready(QUEUE_THREAD).await.unwrap().is_none());
+    agent.runtimes.lock().await.clear();
+    let _ = child.kill().await;
+}
+
+#[tokio::test]
+async fn a_job_thread_with_an_unheld_queue_still_has_pending_work() {
+    let (_home, agent, _events, _group, mut child) = queue_agent().await;
+    assert!(!agent.queue_has_pending_work(QUEUE_THREAD).await.unwrap());
+    queue(&agent, "next").await;
+    assert!(agent.queue_has_pending_work(QUEUE_THREAD).await.unwrap());
+    agent
+        .hold_queue(
+            QUEUE_THREAD,
+            crate::providers::claude::queued_messages::HoldReason::Refused,
+            "held",
+        )
+        .await
+        .unwrap();
+    assert!(!agent.queue_has_pending_work(QUEUE_THREAD).await.unwrap());
+    agent.runtimes.lock().await.clear();
+    let _ = child.kill().await;
+}

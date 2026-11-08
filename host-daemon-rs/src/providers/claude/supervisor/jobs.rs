@@ -1001,6 +1001,9 @@ impl ClaudeSupervisor {
         if !matches!(evidence.phase, JobPhase::Executing) || !evidence.eligible() {
             return Ok(false);
         }
+        if self.queue_has_pending_work(thread).await? {
+            return Ok(false);
+        }
         let wakes = self.refresh_wakes(thread, group).await;
         let input = {
             let runtimes = self.runtimes.lock().await;
