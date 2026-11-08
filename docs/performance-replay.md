@@ -137,6 +137,12 @@ dev-tools/perf-sim --device <test-ipad-udid> scenario \
   --log "$HOME/perf-traces/remotecoder/before.jsonl"
 ```
 
+`--compilation singlefile`, given before the command, builds and runs with
+optimized incremental Swift for a fast A/B loop; the default `wholemodule` is
+for the final comparison. Each mode keeps its own build folder, so alternating
+between them does not rebuild from scratch, and every command uses the build of
+the mode it names.
+
 Capture is read-only and requires authoritative idle coverage before and after
 reading a history. It uses native paginated item/turn reads, never an unbounded
 `thread/read includeTurns=true`. Active, oversized and unavailable candidates

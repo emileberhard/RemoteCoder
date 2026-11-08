@@ -184,14 +184,13 @@ class Device:
     and notifications cost device work, so result polling backs off during a
     measured window."""
 
-    derived = ROOT / "build/perf-device-derived"
-    app = derived / "Build/Products/Release-iphoneos/RemoteCoder.app"
-
     def __init__(self, name: str, launch_arguments: list[str], signing: str, compilation: str) -> None:
         self.udid = self.resolve(name)
         self.launch_arguments = launch_arguments
         self.signing = signing
         self.compilation = compilation
+        self.derived = ROOT / ("build/perf-device-derived" if compilation == "wholemodule" else f"build/perf-device-derived-{compilation}")
+        self.app = self.derived / "Build/Products/Release-iphoneos/RemoteCoder.app"
 
     @staticmethod
     def resolve(name: str) -> str:
@@ -307,7 +306,7 @@ def target(args) -> Simulator | Device:
     launch_arguments = ["-rcPerfDisable", args.disable] if args.disable else []
     if getattr(args, "command", None) in ("scenario", "footprint", "drawer"):
         launch_arguments += ["-rcPerfOffline"]
-    return (Device(args.device, launch_arguments, getattr(args, "signing", "distribution"), getattr(args, "compilation", "wholemodule"))
+    return (Device(args.device, launch_arguments, getattr(args, "signing", "distribution"), args.compilation)
             if args.device else Simulator(launch_arguments))
 
 
@@ -1214,6 +1213,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--device", help="exact physical test UDID from maintainer testDeviceUDIDs instead of the perf simulator")
     parser.add_argument("--disable", help="comma-separated costs the harness build switches off for an A/B run, e.g. reveal")
+    parser.add_argument("--compilation", choices=["wholemodule", "singlefile"], default="wholemodule",
+                        help="device Swift compilation mode; singlefile keeps -O but rebuilds only changed files, for "
+                             "iteration loops whose final comparison uses wholemodule. Each mode keeps its own build, "
+                             "and every command uses the build of the mode it names")
     commands = parser.add_subparsers(dest="command", required=True)
     from .config import add_connection_arguments
     from .perf_replay import capture_command, compare
@@ -1248,9 +1251,6 @@ def main() -> None:
     build_parser = commands.add_parser("build")
     build_parser.add_argument("--signing", choices=["distribution", "development"], default="distribution",
                               help="development keeps Release optimization and permits allocation profiling")
-    build_parser.add_argument("--compilation", choices=["wholemodule", "singlefile"], default="wholemodule",
-                              help="device Swift compilation mode; singlefile keeps -O but rebuilds only changed files, "
-                                   "for iteration loops whose final comparison uses wholemodule")
     build_parser.set_defaults(func=build)
     commands.add_parser("install").set_defaults(func=install)
     launch_parser = commands.add_parser("launch")
