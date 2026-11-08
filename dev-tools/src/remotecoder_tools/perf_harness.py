@@ -667,6 +667,51 @@ def finish_trace(recorder: subprocess.Popen, path: str, window: dict | None = No
 
 
 @leased
+def drawer(args, device: Simulator | Device) -> None:
+    from .perf_replay import private_destination
+    trace_path = private_destination(Path(args.trace_dir) / f"{args.label}.trace")
+    if trace_path.exists():
+        raise SystemExit(f"{trace_path} already exists; choose another label")
+    identity = json.loads((device.derived / "perf-build-identity.json").read_text())
+    fixture_path = Path(args.fixture).expanduser()
+    first, second = args.threads
+    verify_scenario_artifact(device, identity)
+    try:
+        fresh_launch(device)
+        stage_scenario(device, fixture_path, json.loads(fixture_path.read_text()))
+        completed(device, {"cmd": "scenario-load"}, 600)
+        host = completed(device, {"cmd": "status"}, 30)["status"]["hosts"][0]["id"]
+        for thread in (second, first):
+            completed(device, {"cmd": "open", "host": host, "thread": thread}, 60)
+        for travel in (0.8, -0.8):
+            completed(device, {"cmd": "drawer-drag", "travel": travel, "seconds": 0.25, "velocity": travel * 2.5}, 30)
+        verify_scenario_artifact(device, identity)
+        with tracing(device, "Time Profiler", None, args.seconds, str(trace_path)) as recorder:
+            journey = completed(device, {"cmd": "drawer-journey", "host": host, "threads": [second, first]},
+                                args.seconds, quiet_seconds=7)
+            finish_trace(recorder, str(trace_path))
+    finally:
+        send(device, {"cmd": "scenario-stop"}, 120)
+        device.terminate()
+    symbols = device.derived / "Build/Products/Release-iphoneos/RemoteCoder.app.dSYM"
+    summary = json.loads(output(["python3", str(ROOT / "scripts/perf-trace"), "--motion-signpost", "DrawerMovement",
+                                 "--frames", "15", "--symbols", str(symbols), "summarize", str(trace_path)]))
+    result = {"label": args.label, "artifact": identity, "steps": journey["steps"], "summary": summary}
+    with private_open(trace_path.with_suffix(".drawer.json"), "w") as handle:
+        handle.write(json.dumps(result, indent=2))
+    drags = [step for step in journey["steps"] if "travel" in step]
+    motion, frames = summary["motion"], summary["motionFrameWork"]
+    print(json.dumps({
+        "trace": str(trace_path),
+        "openLatenessMs": [round(step["maximumInputLatenessMs"]) for step in drags if step["travel"] > 0],
+        "closeLatenessMs": [round(step["maximumInputLatenessMs"]) for step in drags if step["travel"] < 0],
+        "motion": {key: motion.get(key) for key in ("intervals", "seconds", "mainThreadCpuMs", "mainThreadBusyShare", "hitches")},
+        "mainThreadPerFrame": next(iter(frames["displays"].values()))["mainThreadCpu"] if frames else None,
+        "app": {key: summary["app"].get(key) for key in ("mainThreadCpuMs", "hitches", "hitchMs")},
+    }, indent=2))
+
+
+@leased
 def trace(args, device: Simulator | Device) -> None:
     with tracing(device, args.template, args.instrument, args.seconds, args.out) as recorder:
         time.sleep(args.warmup)
@@ -690,11 +735,16 @@ def fresh_launch(device: Simulator | Device) -> dict:
             raise SystemExit("the harness did not start")
 
 
+def completed(device: Simulator | Device, command: dict, timeout: float, quiet_seconds: float = 0) -> dict:
+    result = send(device, command, timeout, quiet_seconds=quiet_seconds)
+    if result is None or "error" in result:
+        raise SystemExit(f"{command['cmd']} failed: {result['error'] if result else 'timed out'}")
+    return result
+
+
 def fresh_open(device: Simulator | Device, host: str, thread: str, settle: float) -> None:
     fresh_launch(device)
-    opened = send(device, {"cmd": "open", "host": host, "thread": thread}, 35)
-    if opened is None or "error" in opened:
-        raise SystemExit(f"open failed: {opened['error'] if opened else 'timed out'}")
+    completed(device, {"cmd": "open", "host": host, "thread": thread}, 35)
     time.sleep(settle)
 
 
@@ -1212,6 +1262,16 @@ def main() -> None:
     trace_parser.add_argument("--out", required=True)
     trace_parser.add_argument("--scenario", help="shell command run while recording")
     trace_parser.set_defaults(func=trace)
+    drawer_parser = commands.add_parser(
+        "drawer", help="offline fixture, then trace one in-process drawer journey: a swipe open and close, then a swipe "
+                       "open and row switch to each thread")
+    drawer_parser.add_argument("--fixture", required=True)
+    drawer_parser.add_argument("--threads", nargs=2, required=True, metavar=("FIRST", "SECOND"),
+                               help="two prepared fixture threads; the journey starts on FIRST and switches to SECOND, then back")
+    drawer_parser.add_argument("--label", required=True)
+    drawer_parser.add_argument("--seconds", type=positive(int), default=12)
+    drawer_parser.add_argument("--trace-dir", default=str(TRACE_DIR))
+    drawer_parser.set_defaults(func=drawer)
     stream_parser = commands.add_parser("stream", help="fresh install, open a thread, replay a recording; repeat")
     stream_parser.add_argument("--recording", required=True)
     stream_parser.add_argument("--host", required=True)

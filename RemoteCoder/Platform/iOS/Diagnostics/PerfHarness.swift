@@ -106,6 +106,8 @@ final class PerfHarness {
             setSidebarOpen(command["open"] as? Bool, commandID: id)
         case "drawer-drag":
             dragDrawer(command, commandID: id)
+        case "drawer-journey":
+            drawerJourney(command, commandID: id)
         case "select-row":
             selectRow(address(command), commandID: id)
         case "drawer-switch":
@@ -291,39 +293,64 @@ final class PerfHarness {
             return
         }
         runJourney("drawer-drag", id: commandID) {
-            guard let view = self.drawer, view.window != nil, view.motion.isAtRest else {
-                throw JourneyFailure.unavailableDrawer
-            }
-            let initial = view.motion.progress
-            view.begin(view)
-            let clock = ContinuousClock()
-            let start = clock.now
-            let steps = Int(ceil(seconds * 120))
-            var maximumLateness = 0.0
-            var step = 1
-            var delivered = 0
-            while step <= steps {
-                let deadline = start + .seconds(seconds * Double(step) / Double(steps))
-                try await clock.sleep(until: deadline)
-                try Task.checkCancellation()
-                guard self.drawer === view, view.window != nil else { throw JourneyFailure.unavailableDrawer }
-                maximumLateness = max(maximumLateness, deadline.duration(to: clock.now) / .milliseconds(1))
-                let fraction = min(1, start.duration(to: clock.now) / .seconds(seconds))
-                view.track(CGFloat(travel * fraction))
-                delivered += 1
-                step = max(step + 1, Int(floor(fraction * Double(steps))) + 1)
-            }
-            HapticService.shared.signposter.emitEvent("drawer-gesture-end")
-            view.end(CGFloat(velocity))
-            let deadline = clock.now + .seconds(3)
-            while !view.motion.isAtRest {
-                guard clock.now < deadline else { throw JourneyFailure.timedOut }
-                try await Task.sleep(for: .milliseconds(16))
-            }
-            return ["before": initial, "after": view.motion.progress, "travel": travel,
-                    "seconds": seconds, "velocity": velocity, "samples": delivered, "skippedSamples": steps - delivered,
-                    "maximumInputLatenessMs": maximumLateness]
+            try await self.performDrag(travel: travel, seconds: seconds, velocity: velocity)
         }
+    }
+
+    private func drawerJourney(_ command: [String: Any], commandID: String) {
+        guard let hostID = (command["host"] as? String).flatMap(UUID.init(uuidString:)),
+              let threads = command["threads"] as? [String], !threads.isEmpty else {
+            writeResult(["cmd": "drawer-journey", "id": commandID, "error": "provide host and threads"])
+            return
+        }
+        runJourney("drawer-journey", id: commandID) {
+            let pause = Duration.milliseconds(800)
+            var steps = [try await self.performDrag(travel: 0.8, seconds: 0.25, velocity: 2)]
+            try await Task.sleep(for: pause)
+            steps.append(try await self.performDrag(travel: -0.8, seconds: 0.25, velocity: -2))
+            for thread in threads {
+                try await Task.sleep(for: pause)
+                steps.append(try await self.performDrag(travel: 0.8, seconds: 0.25, velocity: 2))
+                try await Task.sleep(for: pause)
+                steps.append(try await self.performRowSelection(ConversationAddress(hostID: hostID, threadID: thread)))
+            }
+            return ["steps": steps]
+        }
+    }
+
+    private func performDrag(travel: Double, seconds: Double, velocity: Double) async throws -> [String: Any] {
+        guard let view = drawer, view.window != nil, view.motion.isAtRest else {
+            throw JourneyFailure.unavailableDrawer
+        }
+        let initial = view.motion.progress
+        view.begin(view)
+        let clock = ContinuousClock()
+        let start = clock.now
+        let steps = Int(ceil(seconds * 120))
+        var maximumLateness = 0.0
+        var step = 1
+        var delivered = 0
+        while step <= steps {
+            let deadline = start + .seconds(seconds * Double(step) / Double(steps))
+            try await clock.sleep(until: deadline)
+            try Task.checkCancellation()
+            guard drawer === view, view.window != nil else { throw JourneyFailure.unavailableDrawer }
+            maximumLateness = max(maximumLateness, deadline.duration(to: clock.now) / .milliseconds(1))
+            let fraction = min(1, start.duration(to: clock.now) / .seconds(seconds))
+            view.track(CGFloat(travel * fraction))
+            delivered += 1
+            step = max(step + 1, Int(floor(fraction * Double(steps))) + 1)
+        }
+        HapticService.shared.signposter.emitEvent("drawer-gesture-end")
+        view.end(CGFloat(velocity))
+        let deadline = clock.now + .seconds(3)
+        while !view.motion.isAtRest {
+            guard clock.now < deadline else { throw JourneyFailure.timedOut }
+            try await Task.sleep(for: .milliseconds(16))
+        }
+        return ["before": initial, "after": view.motion.progress, "travel": travel,
+                "seconds": seconds, "velocity": velocity, "samples": delivered, "skippedSamples": steps - delivered,
+                "maximumInputLatenessMs": maximumLateness]
     }
 
     private func selectRow(_ address: ConversationAddress?, commandID: String) {

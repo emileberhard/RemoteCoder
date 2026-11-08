@@ -408,6 +408,7 @@ that benchmark scope, so restarting does not collide with an earlier preparation
 | --- | --- | --- |
 | `sidebar` | `open`: Boolean | Published sidebar state and drawer spring have settled. |
 | `drawer-drag` | `travel`: −1…1 drawer widths, `seconds`: 0.05…5, `velocity`: −20…20 widths/second | Production begin/track/end callbacks have run and the spring has settled. |
+| `drawer-journey` | `host`: exact UUID, `threads`: exact thread IDs | From a closed drawer at rest, a swipe open and close, then for each thread a swipe open and its production row selection, 0.8 s apart; the receipt lists each step's drag or selection receipt. |
 | `drawer-switch` | `host`: exact UUID, `thread`: exact thread ID | From a closed drawer, opens through the button action, waits for the spring, then immediately selects the row and waits for content and closed/rest. |
 | `select-row` | `host`: exact UUID, `thread`: exact thread ID | The production row action has selected a different transcript, its first-content callback has fired, and the drawer has closed and settled; receipt reports whether its recent presentation was cached. |
 
@@ -419,6 +420,12 @@ count, skipped samples, maximum scheduling lateness and initial/final progress.
 Late input advances to the elapsed-time position and skips missed samples rather
 than replaying a burst of stale positions. Input cadence is
 synthetic and is not evidence of touch delivery or actuator latency.
+
+`dev-tools/perf-sim --device <UDID> drawer --fixture <scenario.json> --threads <first> <second> --label <name>`
+loads the offline fixture, opens both threads and warms the drawer, then records one 12 s trace around
+`drawer-journey` and prints each drag's input lateness beside the `DrawerMovement` summary. A main-actor
+stall at gesture begin shows as opening lateness without waiting for the trace export. Compare arms only
+with the same fixture, threads and device.
 
 `drawer-switch` keeps the open/select sequence in-process so host command polling
 does not give prefetch an artificial dwell before a cold selection. Its receipt
