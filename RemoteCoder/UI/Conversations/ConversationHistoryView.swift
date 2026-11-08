@@ -109,6 +109,7 @@ struct ConversationHistoryView: View {
         #else
         ConversationHistoryList(workspace: workspace, window: window, snapshot: presented, notice: notice, undo: undo,
                                 actions: actions, onUndo: performUndo, risingRowIDs: rising, onInteractionChanged: interactionChanged)
+            .equatable()
         #endif
     }
 

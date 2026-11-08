@@ -1,6 +1,6 @@
 import SwiftUI
 
-struct ConversationHistoryList: View {
+struct ConversationHistoryList: View, Equatable {
     var workspace: ChatWorkspaceModel
     let window: ChatWindowModel
     let snapshot: ConversationSidebarSnapshot?
@@ -18,6 +18,11 @@ struct ConversationHistoryList: View {
     @Environment(AppThemeStore.self) private var themeStore
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ScaledMetric(relativeTo: .subheadline) private var headerIconWidth: CGFloat = 18
+
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.workspace === rhs.workspace && lhs.window === rhs.window && lhs.snapshot == rhs.snapshot
+            && lhs.notice == rhs.notice && lhs.undo == rhs.undo && lhs.risingRowIDs == rhs.risingRowIDs
+    }
 
     var body: some View {
         ZStack {
