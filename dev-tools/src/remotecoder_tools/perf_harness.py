@@ -161,8 +161,9 @@ class Simulator:
         temporary.write_bytes(data)
         temporary.replace(directory / name)
 
-    def deliver(self, name: str, data: bytes) -> None:
+    def deliver(self, name: str, data: bytes, deadline: float) -> bool:
         self.put(name, data)
+        return True
 
     def results(self) -> str:
         path = self.perf_dir() / "results.jsonl"
@@ -269,13 +270,13 @@ class Device:
             source.chmod(0o600)
             self.copy_to(source, f"{PERF_DIR}/{name}")
 
-    def deliver(self, name: str, data: bytes) -> None:
+    def deliver(self, name: str, data: bytes, deadline: float) -> bool:
         self.put(name, data)
-        deadline = time.monotonic() + 5
         while self.read(name) != data:
             if time.monotonic() > deadline:
-                raise SystemExit(f"{name} was not visible in the app container 5 s after its copy")
+                return False
             time.sleep(0.2)
+        return True
 
     def read(self, name: str) -> bytes | None:
         with tempfile.TemporaryDirectory() as directory:
@@ -480,9 +481,10 @@ def send(device: Simulator | Device, command: dict, timeout: float, quiet_second
     """Deliver one command and wait for its result line. `quiet_seconds` skips
     polling while a measured window is known to be running."""
     command.setdefault("id", uuid.uuid4().hex[:12])
-    device.deliver("command.json", json.dumps(command).encode())
-    device.notify()
     deadline = time.monotonic() + timeout
+    if not device.deliver("command.json", json.dumps(command).encode(), deadline):
+        return None
+    device.notify()
     time.sleep(min(quiet_seconds, timeout))
     interval = 0.2 if isinstance(device, Simulator) else 1.5
     while time.monotonic() < deadline:
