@@ -689,7 +689,7 @@ def drawer(args, device: Simulator | Device) -> None:
         for travel in (0.8, -0.8):
             completed(device, {"cmd": "drawer-drag", "travel": travel, "seconds": 0.25, "velocity": travel * 2.5}, 30)
         verify_scenario_artifact(device, identity)
-        with tracing(device, "Time Profiler", None, args.seconds, str(trace_path)) as recorder:
+        with tracing(device, "Time Profiler", args.instrument, args.seconds, str(trace_path)) as recorder:
             journey = completed(device, {"cmd": "drawer-journey", "host": host, "threads": [second, first]},
                                 args.seconds, quiet_seconds=7)
             finish_trace(recorder, str(trace_path))
@@ -1276,6 +1276,7 @@ def main() -> None:
                                help="two prepared fixture threads; the journey starts on FIRST and switches to SECOND, then back")
     drawer_parser.add_argument("--label", required=True)
     drawer_parser.add_argument("--seconds", type=positive(int), default=12)
+    drawer_parser.add_argument("--instrument", action="append", help="additional Apple instrument, e.g. SwiftUI")
     drawer_parser.add_argument("--trace-dir", default=str(TRACE_DIR))
     drawer_parser.set_defaults(func=drawer)
     stream_parser = commands.add_parser("stream", help="fresh install, open a thread, replay a recording; repeat")
