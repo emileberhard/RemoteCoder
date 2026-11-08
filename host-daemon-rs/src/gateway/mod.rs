@@ -46,6 +46,7 @@ use tracing::{info, warn};
 
 pub(crate) mod calls;
 mod claude_live;
+mod claude_queue;
 mod control;
 mod conversation_changes;
 mod conversation_review;

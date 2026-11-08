@@ -264,6 +264,10 @@ async fn host_info_reports_the_gateway_home_directory() {
     assert_eq!(reply["result"]["homeDirectory"], home);
     assert_eq!(reply["result"]["speechAvailable"], true);
     assert_eq!(
+        reply["result"]["claudeQueue"],
+        gateway.claude_settings.enabled
+    );
+    assert_eq!(
         reply["result"]["automationsAuthority"],
         json!(crate::config::host_profile::AutomationAuthority::authority().unwrap())
     );

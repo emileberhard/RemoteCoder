@@ -188,6 +188,8 @@ pub(crate) struct HostInfoResponse {
     pub speech_available: bool,
     #[serde(default)]
     pub fleet_live_activity: bool,
+    #[serde(default)]
+    pub claude_queue: bool,
 }
 
 #[derive(Debug, Deserialize)]

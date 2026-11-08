@@ -132,7 +132,14 @@ impl Gateway {
 
     pub(super) async fn spawn_claude_restart_recovery(self: &Arc<Self>) {
         let gateway = Arc::clone(self);
-        let task = tokio::spawn(async move { gateway.recover_claude_restart().await });
+        let task = tokio::spawn(async move {
+            gateway.recover_claude_restart().await;
+            if let Some(agent) = gateway.claude_agent()
+                && gateway.claude_recovery_ready.load(Ordering::Acquire)
+            {
+                gateway.claude_queue_loop(agent).await;
+            }
+        });
         *self.claude_recovery_task.lock().await = Some(task);
     }
 

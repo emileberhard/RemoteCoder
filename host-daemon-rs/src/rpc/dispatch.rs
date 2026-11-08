@@ -75,7 +75,7 @@ pub(crate) struct ClaudeSpec {
     pub(crate) method: ClaudeMethod,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ClaudeMethod {
     Status,
     ThreadList,
@@ -91,6 +91,10 @@ pub(crate) enum ClaudeMethod {
     TurnInterrupt,
     ItemsPage,
     TurnsPage,
+    QueueAdd,
+    QueueList,
+    QueueStart,
+    QueueDelete,
 }
 
 #[derive(Clone, Copy)]
@@ -500,21 +504,38 @@ const METHOD_SPECS: &[MethodSpec] = &[
         "thread/queue/add",
         NativeQueue,
         Some(RequestLifetime::Command),
-        NEW_WORK | ADMISSION | IDENTITY
+        ThreadScoped,
+        RequestLifetime::Command,
+        NEW_WORK | ADMISSION | IDENTITY,
+        QueueAdd
     ),
     spec!(
         "thread/queue/start",
         NativeQueue,
         Some(RequestLifetime::Command),
-        NEW_WORK | ADMISSION | IDENTITY
+        ThreadScoped,
+        RequestLifetime::Command,
+        NEW_WORK | ADMISSION | IDENTITY,
+        QueueStart
     ),
     spec!(
         "thread/queue/delete",
         NativeQueue,
         Some(RequestLifetime::Command),
-        ADMISSION | IDENTITY
+        ThreadScoped,
+        RequestLifetime::Command,
+        ADMISSION | IDENTITY,
+        QueueDelete
     ),
-    spec!("thread/queue/list", Native, None, 0),
+    spec!(
+        "thread/queue/list",
+        Native,
+        None,
+        ThreadScoped,
+        RequestLifetime::Query,
+        0,
+        QueueList
+    ),
     spec!(
         "thread/compact/start",
         NativeCompaction,
@@ -876,6 +897,7 @@ fn owned_request(method: &str, object: &Map<String, Value>) -> Option<OwnedReque
 
 fn is_claude_queue_request(method: &str, object: &Map<String, Value>) -> bool {
     method.starts_with("thread/queue/")
+        && method_spec(method).claude.is_none()
         && object
             .get("params")
             .and_then(|params| params.get("threadId"))
@@ -1109,15 +1131,47 @@ mod tests {
     }
 
     #[test]
-    fn queue_methods_on_a_claude_thread_are_refused_before_any_route() {
-        for method in [
-            "thread/queue/add",
-            "thread/queue/list",
-            "thread/queue/start",
-            "thread/queue/delete",
-            "thread/queue/update",
-            "thread/queue/reorder",
+    fn claude_queue_methods_route_to_the_gateway_and_unserved_ones_are_refused() {
+        for (method, handler, lifetime, new_work) in [
+            (
+                "thread/queue/add",
+                ClaudeMethod::QueueAdd,
+                RequestLifetime::Command,
+                true,
+            ),
+            (
+                "thread/queue/start",
+                ClaudeMethod::QueueStart,
+                RequestLifetime::Command,
+                true,
+            ),
+            (
+                "thread/queue/delete",
+                ClaudeMethod::QueueDelete,
+                RequestLifetime::Command,
+                false,
+            ),
+            (
+                "thread/queue/list",
+                ClaudeMethod::QueueList,
+                RequestLifetime::Query,
+                false,
+            ),
         ] {
+            let raw =
+                json!({"id": 7, "method": method, "params": {"threadId": "claude_a"}}).to_string();
+            let request = request(DispatchPlan::parse(&raw));
+            assert_eq!(request.starts_new_work, new_work, "{method}");
+            let owned = request
+                .owned
+                .expect("Claude queue methods are gateway-owned");
+            assert_eq!(owned.lifetime, lifetime, "{method}");
+            assert!(
+                matches!(owned.target, OwnedTarget::Claude(target) if target == handler),
+                "{method}"
+            );
+        }
+        for method in ["thread/queue/update", "thread/queue/reorder"] {
             let raw =
                 json!({"id": 7, "method": method, "params": {"threadId": "claude_a"}}).to_string();
             let (id, error) = refusal(DispatchPlan::parse(&raw));

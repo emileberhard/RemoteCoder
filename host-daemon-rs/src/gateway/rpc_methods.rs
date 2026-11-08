@@ -92,7 +92,10 @@ impl Gateway {
                     .handle_daemon_replay_notifications(out, Some(id), Some(params))
                     .await;
             }
-            OwnedRoute::HostInfo => host_info(self.claude_settings.router.is_some()),
+            OwnedRoute::HostInfo => host_info(
+                self.claude_settings.router.is_some(),
+                self.claude_settings.enabled,
+            ),
             OwnedRoute::ModelList => self.model_list(params).await,
             OwnedRoute::Rename => self.rename_thread(&params).await,
             OwnedRoute::RegenerateTitle => self.regenerate_title_rpc(&params).await,
@@ -692,6 +695,10 @@ impl Gateway {
             ClaudeMethod::ThreadCompactStart => self.claude_compact_start(params).await,
             ClaudeMethod::TurnSteer => self.claude_turn_steer(&params).await,
             ClaudeMethod::TurnInterrupt => self.claude_turn_interrupt(&params).await,
+            ClaudeMethod::QueueAdd => self.claude_queue_add(&params).await,
+            ClaudeMethod::QueueList => self.claude_queue_list(&params).await,
+            ClaudeMethod::QueueStart => self.claude_queue_start(out_tx.id, &params).await,
+            ClaudeMethod::QueueDelete => self.claude_queue_delete(&params).await,
             ClaudeMethod::ItemsPage | ClaudeMethod::TurnsPage => {
                 return self
                     .claude_history_page(out_tx, req_id, method, params)
@@ -703,6 +710,7 @@ impl Gateway {
                 ClaudeMethod::Message => Some("claude/message"),
                 ClaudeMethod::TurnStart => Some("turn/start"),
                 ClaudeMethod::TurnSteer => Some("turn/steer"),
+                ClaudeMethod::QueueAdd => Some("thread/queue/add"),
                 _ => None,
             };
             if let Some(method) = input_method {
@@ -1652,7 +1660,7 @@ pub(super) fn claude_history_error(
     }
 }
 
-fn host_info(speech_available: bool) -> RpcResult {
+fn host_info(speech_available: bool, claude_queue: bool) -> RpcResult {
     let paths = crate::config::HostPaths::from_env()
         .map_err(|error| RpcError::new(RpcCode::Internal, format!("{error:#}")))?;
     let home_directory = paths
@@ -1675,7 +1683,8 @@ fn host_info(speech_available: bool) -> RpcResult {
         hostname,
         automations_authority,
         speech_available,
-        fleet_live_activity: true
+        fleet_live_activity: true,
+        claude_queue,
     }))
 }
 
