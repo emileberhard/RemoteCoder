@@ -4,15 +4,18 @@ import Observation
 @Observable
 final class DrawerPresentation {
     var isOpen: Bool {
-        didSet { if !isOpen { isSettledOpen = false } }
+        didSet { if isOpen != oldValue { restingOpen = nil } }
     }
-    private(set) var isSettledOpen = false
+    private(set) var restingOpen: Bool?
+
+    var isSettledOpen: Bool { restingOpen == true }
 
     init(isOpen: Bool) {
         self.isOpen = isOpen
+        restingOpen = isOpen
     }
 
     func rest(open: Bool) {
-        isSettledOpen = open && isOpen
+        restingOpen = open == isOpen ? open : nil
     }
 }

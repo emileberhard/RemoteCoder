@@ -9,7 +9,7 @@ struct ConversationHistoryView: View {
     var workspace: ChatWorkspaceModel
     let window: ChatWindowModel
     let presentation: DrawerPresentation
-    let isWindowAvailable: Bool
+    let isVisible: Bool
     @Binding var layout: ConversationDrawerLayout?
     @Binding var notice: DrawerNotice?
 
@@ -43,7 +43,7 @@ struct ConversationHistoryView: View {
                     .chatPresentationDiagnostics("sheet-move-agent")
             }
             .safeAreaInset(edge: .top) {
-                if presentation.isOpen { ClusterCoverageStrip(coverage: workspace.agentCoverage).padding(.horizontal) }
+                if isVisible { ClusterCoverageStrip(coverage: workspace.agentCoverage).padding(.horizontal) }
             }
             .alert(pinNamePromptTitle, item: $pinNameIntent) { intent in
                 TextField("Pinned chat name", text: $pinNameDraft)
@@ -94,12 +94,21 @@ struct ConversationHistoryView: View {
                 do { try await Task.sleep(for: DrawerUndo.lifetime) } catch { return }
                 undo = nil
             }
+            .task {
+                for await restsClosed in Observations({ @MainActor [presentation] in presentation.restingOpen == false })
+                where restsClosed {
+                    prepareForOpening()
+                }
+            }
             .onChange(of: isVisible, initial: true) { _, visible in visibility.isVisible = visible }
             .environment(\.surfaceVisibility, SurfaceVisibility(visibility))
     }
 
-    private var isVisible: Bool {
-        isWindowAvailable && presentation.isOpen
+    private func prepareForOpening() {
+        window.collapseDrawerReveals()
+        pending = nil
+        isInteracting = false
+        apply(workspace.sidebarSnapshot(arrangedBy: .live(at: .now), in: window), animated: false)
     }
 
     private var historyList: some View {
@@ -117,10 +126,10 @@ struct ConversationHistoryView: View {
         guard snapshot != sidebar else { pending = nil; return }
         if isInteracting, let sidebar, sidebar.items.map(\.id) != snapshot.items.map(\.id) {
             pending = snapshot
-            apply(snapshot.heldInLayout(of: sidebar))
+            apply(snapshot.heldInLayout(of: sidebar), animated: true)
         } else {
             pending = nil
-            apply(snapshot)
+            apply(snapshot, animated: true)
         }
     }
 
@@ -128,10 +137,10 @@ struct ConversationHistoryView: View {
         isInteracting = interacting
         guard !interacting, let pending else { return }
         self.pending = nil
-        apply(pending)
+        apply(pending, animated: true)
     }
 
-    private func apply(_ snapshot: ConversationSidebarSnapshot) {
+    private func apply(_ snapshot: ConversationSidebarSnapshot, animated: Bool) {
         guard snapshot != sidebar else { return }
         #if os(macOS)
         var transaction = Transaction(animation: nil)
@@ -140,7 +149,7 @@ struct ConversationHistoryView: View {
         #else
         let previous = sidebar?.items ?? []
         let changesOrder = previous.map(\.id) != snapshot.items.map(\.id)
-        guard changesOrder, sidebar != nil, !reduceMotion else {
+        guard animated, changesOrder, sidebar != nil, !reduceMotion else {
             var transaction = Transaction(animation: nil)
             transaction.disablesAnimations = true
             withTransaction(transaction) {

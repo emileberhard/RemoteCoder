@@ -2833,8 +2833,11 @@ done"; live rows and Settled-shelf rows do not. The suggestion is only that
 badge: it never changes a row's rank, because a wrong suggestion that moved a
 row down lost it among the others. The badge updates immediately.
 
-Ranks are captured when the drawer opens and held until the next opening, so a
-completing turn or a changing badge never moves a row under the finger. A
+Ranks are captured when the drawer comes to rest open and held until the next
+opening, so a completing turn or a changing badge never moves a row under the
+finger. While the drawer slides open it shows the rows it prepared when it last
+came to rest closed, ranked as of then; a rank change since then reorders once
+it settles open. A
 settlement mark change from any device or agent re-ranks its row at once. Pins
 change order through snapshot assignment. New rows keep their first admitted
 rank. Order

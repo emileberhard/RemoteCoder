@@ -1455,7 +1455,8 @@ entrypoint linked above.
   Pinned, Automations and Settled folds, and the present projects only in
   Projects mode. Pinning a chat unfolds Pinned;
   revealed "Show N more" sections, revealed Automations rows and the Settled
-  row limit belong to the window and reset when the drawer opens.
+  row limit belong to the window and reset between openings: when the drawer
+  opens and when it comes to rest closed.
 - Probably done is a gateway suggestion in the marks replica, queried by
   `ConversationMarks.isProbablyDone`: no purpose or pin and activity at or before
   `doneThrough`. It is a badge only and never changes the row's rank. Its green
@@ -1514,17 +1515,18 @@ entrypoint linked above.
   - `DrawerMotion` owns progress: 1:1 drag, a velocity-carrying spring on
     release, and `isOpen` requests from the current position.
   - `DrawerPresentation` owns the open state: `isOpen` flips when a drag or
-    request begins, `isSettledOpen` once the motion rests open, and closing
-    clears both. Opening first only reveals the drawer: only the drawer and
-    `ConversationHistoryView` read `isOpen`, so its rows are captured and shown
-    while the chat stays uncovered and `ChatScreen`'s body does not run.
-    `ChatScreen` reads `isSettledOpen` (and `isOpen` only for the persistent
-    sidebar) to cover the chat (its `SurfaceVisibility`, composer and
-    file-presentation blocks) and mark the window's drawer open for refresh,
-    warming and the transcript-cover policy; its open-side effects run in the
-    `DrawerOpenChange` modifier. Closing uncovers it at once. Keep
-    gesture-begin work to motion, haptics and the reveal: anything added there
-    delays the first moved frame.
+    request begins, and `restingOpen` follows the motion (`nil` while it
+    moves). Only `ConversationDrawer` and the `DrawerOpenChange` modifier
+    react to `isOpen`, so a drag runs neither `ChatScreen`'s body nor the
+    history list before its first moved frame. `ConversationHistoryView`
+    prepares its rows once each time the drawer comes to rest closed (one
+    snapshot, no live observation), so the reveal shows current rows; it goes
+    live, recaptures the drawer rank and animates its surface only once the
+    drawer rests open. Then `ChatScreen` covers the chat (its
+    `SurfaceVisibility`, composer and file-presentation blocks) and marks the
+    window's drawer open for refresh, warming and the transcript-cover
+    policy. Closing uncovers it at once. Keep gesture-begin work to motion
+    and haptics: anything added there delays the first moved frame.
   - Both panels move in whole device pixels (`pixelAligned`). A sub-pixel
     offset re-rounds UIKit-backed descendants by a pixel per frame, which
     re-wraps or truncates text that fits within a pixel during the slide.

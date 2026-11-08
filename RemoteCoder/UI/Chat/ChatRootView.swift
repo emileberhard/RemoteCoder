@@ -778,7 +778,7 @@ private struct ChatScreen: View {
             workspace: workspace,
             window: window,
             presentation: drawerPresentation,
-            isWindowAvailable: isWindowVisible && !isVoiceModePresented,
+            isVisible: isWindowVisible && isHistorySettledOpen && !isVoiceModePresented,
             layout: $drawerLayout,
             notice: $drawerNotice,
             onSelect: selectConversation,
