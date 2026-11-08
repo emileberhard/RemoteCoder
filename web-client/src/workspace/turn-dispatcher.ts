@@ -54,6 +54,7 @@ export class TurnDispatcher {
       choices(): ModelChoice[];
       selectStarted(address: Address, fence: number): void;
       isRetired(): boolean;
+      claudeQueue(hostId: string): boolean;
       publish(): void;
       report(error: unknown): void;
     },
@@ -315,8 +316,8 @@ export class TurnDispatcher {
     if (!host) throw new Error("Choose a configured host first");
     const draftKey = this.current().draftKey;
     const draft = { ...this.current().draft, ...(override ? { text: override, attachments: [] } : {}) };
-    if (mode === "queue" && draft.provider === "claude")
-      throw new Error("Queued submissions are unavailable for Claude.");
+    if (mode === "queue" && draft.provider === "claude" && !this.actions.claudeQueue(host.host.id))
+      throw new Error("This host does not support queued Claude messages.");
     const input = this.inputs(draft);
     const fence = this.current().selection;
     if (!draft.cwd) throw new Error("Choose a host working directory before sending");

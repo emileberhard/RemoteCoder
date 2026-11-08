@@ -93,9 +93,9 @@ microphone permission and audio autoplay follow the browser's policy.
 
 Claude content subscriptions use the gateway's read-only live checkpoint, with
 exact epoch/sequence filtering. An unknown or interrupted prefix never accepts
-appended text until a live start or complete snapshot restores it. Codex queue,
-archive and native observation features stay unavailable for Claude where its
-gateway does not support them. Recovery errors stay with their owning host or
+appended text until a live start or complete snapshot restores it. Claude
+queueing follows `host/info.claudeQueue`; archive and native observation
+features stay unavailable for Claude where its gateway does not support them. Recovery errors stay with their owning host or
 conversation.
 
 ## Owners and contracts

@@ -138,18 +138,19 @@ test("command and reasoning wire deltas use their exact notification names", asy
   });
 });
 
-test("Claude history uses its scoped content route and never asks Codex for observation, queue or questions", async () => {
+test("Claude history uses its scoped content route, reads its gateway queue and never asks Codex for observation or questions", async () => {
   const { workspace, harness } = await setupClaude();
   harness.calls = [];
   await workspace.selectConversation({ hostId: "mini", threadId: "claude_owned" });
   expect(workspace.selectedConversation?.status).toBe("ready");
-  expect(workspace.selectedConversation?.queue.status).toBe("failed");
+  expect(workspace.selectedConversation?.queue.status).toBe("ready");
   expect(workspace.selectedConversation?.questions.status).toBe("failed");
   expect(harness.calls.map((call) => call.method)).toEqual([
     "conversation/subscriptions/set",
     "thread/items/list",
     "daemon/activeTurns",
     "claude/thread/liveCheckpoint",
+    "thread/queue/list",
   ]);
   expect(harness.calls[0]?.params).toEqual({ threadIds: ["claude_owned"] });
   expect(workspace.getSnapshot().error).toBeUndefined();

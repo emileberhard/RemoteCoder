@@ -100,6 +100,7 @@ export class Harness implements Rpc {
   marks: ConversationMarks = { schemaVersion: 3, revision: 0, readBaseline: 0, threads: {} };
   favoritePaths: string[] = [];
   favoriteRevision = 0;
+  claudeQueue = true;
   calls: { method: string; params: Record<string, unknown> }[] = [];
   handler?: (method: string, params: Record<string, unknown>) => Promise<unknown> | unknown;
   constructor(readonly event: (frame: Frame) => void) {}
@@ -139,7 +140,7 @@ export class Harness implements Rpc {
             : [...this.favoritePaths.filter((entry) => entry !== path), path];
       return { revision: ++this.favoriteRevision, paths: this.favoritePaths };
     }
-    if (method === "host/info") return { homeDirectory: "/home/fixture" };
+    if (method === "host/info") return { homeDirectory: "/home/fixture", claudeQueue: this.claudeQueue };
     if (method === "conversation/projects/resolve")
       return {
         projects: (params.directories as string[]).map((cwd) => ({
@@ -180,10 +181,11 @@ export class Harness implements Rpc {
   notify() {}
 }
 export const workspaces: Workspace[] = [];
-export async function setup(ids = ["mini"], storage?: Storage) {
+export async function setup(ids = ["mini"], storage?: Storage, claudeQueue = true) {
   const harnesses = new Map<string, Harness>();
   const workspace = new Workspace((host, event) => {
     const harness = new Harness(event);
+    harness.claudeQueue = claudeQueue;
     harnesses.set(host.id, harness);
     return harness;
   }, storage);
@@ -248,8 +250,8 @@ export async function setupContexts() {
   };
 }
 
-export async function setupClaude(ids = ["mini"], storage?: Storage) {
-  const result = await setup(ids, storage);
+export async function setupClaude(ids = ["mini"], storage?: Storage, claudeQueue = true) {
+  const result = await setup(ids, storage, claudeQueue);
   const previous = result.harness.handler;
   result.harness.handler = (method, params) => {
     if (method === "claude/thread/list") return { data: [header("claude_owned")], nextCursor: null };

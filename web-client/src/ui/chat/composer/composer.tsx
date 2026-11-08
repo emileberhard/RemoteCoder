@@ -339,17 +339,19 @@ export function Composer({
               <AudioLines size={20} />
             </IconButton>
             <DictationControl />
-            {conversation?.activeTurnId && conversation.header.provider !== "claude" && (
-              <IconButton
-                label="Queue message"
-                disabled={
-                  uploading || workspace.isSubmitting || (!draft.text.trim() && !draft.attachments.length)
-                }
-                onClick={() => send("queue")}
-              >
-                <Clock size={18} />
-              </IconButton>
-            )}
+            {conversation?.activeTurnId &&
+              (conversation.header.provider !== "claude" ||
+                (workspace.selectedHost && workspace.claudeQueue(workspace.selectedHost.host.id))) && (
+                <IconButton
+                  label="Queue message"
+                  disabled={
+                    uploading || workspace.isSubmitting || (!draft.text.trim() && !draft.attachments.length)
+                  }
+                  onClick={() => send("queue")}
+                >
+                  <Clock size={18} />
+                </IconButton>
+              )}
             {conversation?.activeTurnId && !draft.text.trim() && !draft.attachments.length ? (
               <button
                 type="button"

@@ -188,6 +188,7 @@ export class Workspace {
           if (this.selection === fence) this.state.selected = address;
         },
         isRetired: () => this.disposed,
+        claudeQueue: (hostId) => this.claudeQueue(hostId),
         publish: () => this.publish(),
         report: (error) => this.report(error),
       },
@@ -694,6 +695,8 @@ export class Workspace {
     if (selection === this.selection) await this.selectConversation({ ...host.target, threadId: header.id });
     else this.publish();
   }
+  readonly claudeQueue = (hostId: string) =>
+    this.directoryOwners.get(hostId)?.directories.claudeQueue === true;
   readonly homePath = (hostId: string) => {
     const state = this.directoryOwners.get(hostId)?.directories.home;
     return state?.status === "ready" ? state.value : undefined;

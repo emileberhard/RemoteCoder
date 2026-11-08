@@ -32,6 +32,7 @@ export class HostDirectories {
   private acknowledgedGeneration = 0;
   private homeTask?: Promise<string>;
   private homeState: Load<string> = { status: "unread" };
+  private queuesClaude?: boolean;
   private syncState: Load<DirectoryFavorites> = { status: "unread" };
   private persistenceError?: string;
   private readonly storageKey: string;
@@ -64,6 +65,9 @@ export class HostDirectories {
 
   get home() {
     return this.homeState;
+  }
+  get claudeQueue() {
+    return this.queuesClaude;
   }
   get favoritesState() {
     return this.syncState;
@@ -212,6 +216,7 @@ export class HostDirectories {
         const result = object(await this.rpc.call("host/info", {}, { signal: this.controller.signal }));
         this.controller.signal.throwIfAborted();
         const path = absolutePath(result.homeDirectory);
+        this.queuesClaude = result.claudeQueue === true;
         this.homeState = { status: "ready", value: path };
         this.publish();
         return path;

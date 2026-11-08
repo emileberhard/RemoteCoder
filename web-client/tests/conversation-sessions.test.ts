@@ -175,3 +175,25 @@ test("session-only delegated agent headers are classified and excluded from draw
   expect(workspace.selectedConversationRowState).toBeUndefined();
   expect(() => workspace.settleConversation(child)).toThrow("The conversation cannot be settled");
 });
+
+test("Claude queueing follows the host's claudeQueue capability", async () => {
+  for (const claudeQueue of [false, true]) {
+    const { workspace, harness } = await setupClaude(["mini"], undefined, claudeQueue);
+    await workspace.selectConversation({ hostId: "mini", threadId: "claude_owned" });
+    const choice = workspace.choices().find((choice) => choice.provider === "claude");
+    if (!choice) throw new Error("The native Claude catalog is unavailable");
+    workspace.updateDraft({ model: choice.id, provider: "claude", text: "A queued Claude follow-up" });
+    harness.calls = [];
+    if (!claudeQueue) {
+      await expect(workspace.send("queue")).rejects.toThrow("does not support queued Claude messages");
+      expect(harness.calls.map((call) => call.method)).not.toContain("thread/queue/add");
+      continue;
+    }
+    await workspace.send("queue");
+    const add = harness.calls.find((call) => call.method === "thread/queue/add");
+    expect(add?.params).toMatchObject({ threadId: "claude_owned", input: [{ type: "text" }] });
+    expect(typeof add?.params.clientUserMessageId).toBe("string");
+    expect(harness.calls.map((call) => call.method)).not.toContain("turn/start");
+    expect(harness.calls.at(-1)?.method).toBe("thread/queue/list");
+  }
+});

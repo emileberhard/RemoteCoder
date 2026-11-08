@@ -561,12 +561,6 @@ export class ConversationSession {
   }
   async refreshQueue() {
     const conversation = this.state;
-    if (conversation.header.provider === "claude") {
-      conversation.queueRead += 1;
-      conversation.queue = { status: "failed", error: "Queued submissions are unavailable for Claude." };
-      this.publish();
-      return;
-    }
     const controller = conversation.controller;
     const read = ++conversation.queueRead;
     try {
