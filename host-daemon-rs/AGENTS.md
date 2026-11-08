@@ -775,6 +775,11 @@ blocks startup or provider journal retirement.
   reads live state rather than freezing a snapshot, so clients merge by exact
   id and refresh newer coverage separately. Responses share the 24 MiB history
   page budget.
+- The header index behind that list re-parses only session files whose
+  identity, size, mtime or ctime changed, spread over half the host's cores.
+  It lives in memory, so the first list after a restart parses every session
+  file; keep that scan parallel, because a serial one passed the deploy
+  probe's 12-second read deadline once the Mini held 17 GB of sessions.
 - `src/providers/claude/projection.rs` owns those pages. It scans the session file once
   into a projection of byte spans plus index identity and materializes only the
   page's records with positioned reads, so a page never re-parses the session.

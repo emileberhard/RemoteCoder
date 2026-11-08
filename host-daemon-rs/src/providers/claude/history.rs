@@ -4,6 +4,7 @@ use std::fs::File;
 use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
@@ -150,10 +151,9 @@ impl HistoryIndex {
             .canonicalize()
             .context("Could not resolve Claude projects directory")?;
         anyhow::ensure!(projects.is_dir(), "Claude projects path is not a directory");
-        let mut seen = HashSet::new();
         let mut session_files = super::timeline::SessionFiles::default();
         let scans_before = self.header_scans;
-        let mut threads = Vec::new();
+        let mut paths = Vec::new();
         for entry in WalkDir::new(&projects).min_depth(2).max_depth(2) {
             let entry = entry.context("Could not enumerate Claude sessions")?;
             let path = entry.path();
@@ -162,14 +162,17 @@ impl HistoryIndex {
             {
                 continue;
             }
-            if !session_files.register(path)? {
-                continue;
+            if session_files.register(path)? {
+                paths.push(entry.into_path());
             }
-            seen.insert(path.to_path_buf());
-            if let Some(header) = self.header_with_admission(path, CacheAdmission::Scan)? {
+        }
+        let mut threads = Vec::new();
+        for (path, indexed) in paths.iter().zip(self.look_up_all(&paths)) {
+            if let Some(header) = self.admit(path, indexed?, CacheAdmission::Scan) {
                 threads.push(header);
             }
         }
+        let seen: HashSet<_> = paths.into_iter().collect();
         self.entries.retain(|path, _| seen.contains(path));
         self.cache_bytes = self.entries.values().map(|entry| entry.bytes).sum();
         threads.sort_by(|a, b| {
@@ -233,56 +236,127 @@ impl HistoryIndex {
         path: &Path,
         admission: CacheAdmission,
     ) -> Result<Option<Value>> {
+        let indexed = self.look_up(path)?;
+        Ok(self.admit(path, indexed, admission))
+    }
+
+    fn look_up_all(&self, paths: &[PathBuf]) -> Vec<Result<Indexed>> {
+        let workers = std::thread::available_parallelism()
+            .map_or(1, |cores| cores.get() / 2)
+            .clamp(1, paths.len().max(1));
+        let next = AtomicUsize::new(0);
+        let mut results: Vec<_> = std::thread::scope(|scope| {
+            let workers: Vec<_> = (0..workers)
+                .map(|_| {
+                    scope.spawn(|| {
+                        let mut results = Vec::new();
+                        loop {
+                            let position = next.fetch_add(1, Ordering::Relaxed);
+                            let Some(path) = paths.get(position) else {
+                                return results;
+                            };
+                            results.push((position, self.look_up(path)));
+                        }
+                    })
+                })
+                .collect();
+            workers
+                .into_iter()
+                .flat_map(|worker| {
+                    worker
+                        .join()
+                        .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+                })
+                .collect()
+        });
+        results.sort_unstable_by_key(|(position, _)| *position);
+        results.into_iter().map(|(_, indexed)| indexed).collect()
+    }
+
+    fn look_up(&self, path: &Path) -> Result<Indexed> {
         let file = match File::open(path) {
             Ok(file) => file,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                self.remove_cached_header(path);
-                return Ok(None);
+                return Ok(Indexed::Missing);
             }
             Err(error) => {
                 return Err(error).with_context(|| format!("Could not open {}", path.display()));
             }
         };
         let revision = FileRevision::from(file.metadata()?);
-        if let Some(entry) = self.entries.shift_remove(path) {
-            if entry.revision.can_reuse(&revision, entry.sampled) {
-                let header = entry.header.clone();
-                self.entries.insert(path.to_path_buf(), entry);
-                return Ok(header);
-            }
-            self.cache_bytes -= entry.bytes;
+        if let Some(entry) = self.entries.get(path)
+            && entry.revision.can_reuse(&revision, entry.sampled)
+        {
+            return Ok(Indexed::Cached(entry.header.clone()));
         }
 
         // Rebuild changed files, including in-place rewrites and truncations.
         // An append-only cursor cannot safely represent Claude's mutable logs.
-        self.header_scans = self.header_scans.wrapping_add(1);
         let header = read_header(&file, revision.length)
             .with_context(|| format!("Could not index {}", path.display()))?
             .thread(path);
-        if FileRevision::from(file.metadata()?) == revision {
-            let bytes = header
-                .as_ref()
-                .map_or(0, |header| header.to_string().len())
-                .saturating_mul(4)
-                .saturating_add(path.as_os_str().len())
-                .saturating_add(1_024);
-            self.store(
-                path.to_path_buf(),
-                Some(Arc::new(CachedHeader {
-                    revision,
-                    sampled: tokio::time::Instant::now(),
-                    header: header.clone(),
-                    bytes,
-                })),
-                admission,
-            );
-        } else {
-            // A writer advanced during this bounded read. The next request must
-            // scan it again rather than reuse this complete-record prefix.
-            self.remove_cached_header(path);
-        }
-        Ok(header)
+        let unchanged = FileRevision::from(file.metadata()?) == revision;
+        Ok(Indexed::Read {
+            revision,
+            header,
+            unchanged,
+        })
     }
+
+    fn admit(&mut self, path: &Path, indexed: Indexed, admission: CacheAdmission) -> Option<Value> {
+        match indexed {
+            Indexed::Missing => {
+                self.remove_cached_header(path);
+                None
+            }
+            Indexed::Cached(header) => {
+                if let Some(entry) = self.entries.shift_remove(path) {
+                    self.entries.insert(path.to_path_buf(), entry);
+                }
+                header
+            }
+            Indexed::Read {
+                revision,
+                header,
+                unchanged,
+            } => {
+                self.header_scans = self.header_scans.wrapping_add(1);
+                if unchanged {
+                    let bytes = header
+                        .as_ref()
+                        .map_or(0, |header| header.to_string().len())
+                        .saturating_mul(4)
+                        .saturating_add(path.as_os_str().len())
+                        .saturating_add(1_024);
+                    self.store(
+                        path.to_path_buf(),
+                        Some(Arc::new(CachedHeader {
+                            revision,
+                            sampled: tokio::time::Instant::now(),
+                            header: header.clone(),
+                            bytes,
+                        })),
+                        admission,
+                    );
+                } else {
+                    // A writer advanced during this bounded read. The next request must
+                    // scan it again rather than reuse this complete-record prefix.
+                    self.remove_cached_header(path);
+                }
+                header
+            }
+        }
+    }
+}
+
+enum Indexed {
+    Missing,
+    Cached(Option<Value>),
+    Read {
+        revision: FileRevision,
+        header: Option<Value>,
+        unchanged: bool,
+    },
 }
 
 #[derive(Default)]
