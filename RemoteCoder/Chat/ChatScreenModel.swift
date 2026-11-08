@@ -664,7 +664,11 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
     }
 
     var canQueueCurrentMessage: Bool {
-        composerSendState == .steer && currentAgentProvider == .codex
+        composerSendState == .steer && currentConversationSupportsQueue
+    }
+
+    var currentConversationSupportsQueue: Bool {
+        activeSessionID.map(target.supportsQueue(threadID:)) ?? false
     }
 
     func queue() async -> Bool {

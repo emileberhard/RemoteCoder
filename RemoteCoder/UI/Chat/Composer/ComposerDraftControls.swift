@@ -11,7 +11,7 @@ struct ComposerSendControl: View {
         let state = screen.composerSendState(input: input, command: command)
         let label = accessibilityLabel(input: input, command: command, state: state)
         ComposerSendButton(state: state, action: send,
-                           queue: state == .steer && screen.currentAgentProvider == .codex ? queue : nil)
+                           queue: state == .steer && screen.currentConversationSupportsQueue ? queue : nil)
             .accessibilityLabel(label)
             .tooltip(LocalizedStringKey(label))
     }

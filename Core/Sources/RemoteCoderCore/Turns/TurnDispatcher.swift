@@ -14,6 +14,7 @@ protocol TurnDispatchHost: AnyObject {
     func threadStarted(_ thread: CodexAppServerV2.Thread, session: ConversationSession, settingsRevision: UInt64,
                        requestedServiceTier: CodexAppServerV2.ServiceTierOverride?, admittedSettings: TurnDispatcher.Settings?) async
     func selectionIsCurrent(revision: UInt64, threadID: String) -> Bool
+    func supportsQueue(threadID: String) -> Bool
 }
 
 @MainActor
@@ -207,7 +208,7 @@ final class TurnDispatcher {
                 startTurn(Submission(draft: followUp.draft, conversationID: followUp.conversationID,
                     userMessageID: steers.message.id, input: steers.input, interactionMode: .text,
                     settings: followUp.settings), sessionID: key.threadID)
-            } else if AgentProvider.provider(forThreadID: key.threadID) == .codex {
+            } else if host?.supportsQueue(threadID: key.threadID) == true {
                 guard !isClosed, !Task.isCancelled, stoppedTurns[key]?.id == stopped.id else { return }
                 startQueued(.first, conversationID: followUp.conversationID, threadID: key.threadID, settings: followUp.settings)
             }
@@ -290,7 +291,7 @@ final class TurnDispatcher {
     }
 
     func reconcileQueue(threadID: String) {
-        guard AgentProvider.provider(forThreadID: threadID) == .codex, !isClosed else { return }
+        guard host?.supportsQueue(threadID: threadID) == true, !isClosed else { return }
         queueReads.start(threadID) { [self] in
             guard await conversations.openThreadIDs().contains(threadID) else { return }
             let session = await conversations.session(threadID: threadID)
@@ -342,7 +343,8 @@ final class TurnDispatcher {
                 try Task.checkCancellation()
                 guard !isClosed else { return }
                 let thread = try await gateway.startOrResumeThread(threadID: threadID, model: settings.model.id,
-                    cwd: settings.workingDirectory, serviceTier: settings.serviceTier, provider: .codex)
+                    cwd: settings.workingDirectory, serviceTier: settings.serviceTier,
+                    provider: AgentProvider.provider(forThreadID: threadID))
                 await host.threadStarted(thread, session: session, settingsRevision: settings.selectionRevision,
                                          requestedServiceTier: settings.serviceTier, admittedSettings: nil)
                 try Task.checkCancellation()

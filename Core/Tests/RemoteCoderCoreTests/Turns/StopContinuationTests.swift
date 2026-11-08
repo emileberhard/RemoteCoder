@@ -214,6 +214,23 @@ struct StopContinuationTests {
         #expect(await fixture.socket.count("thread/queue/start") == 1)
     }
 
+    @Test func claudeContinuesTheGatewayQueueWhenTheGatewayAdvertisesIt() async throws {
+        let fixture = try await StopFixture.open(threadID: "claude_queued")
+        fixture.claudeQueueSupported = true
+        await fixture.socket.setQueue([CodexAppServerV2.QueuedSubmission(id: "claude-first", clientUserMessageId: "other-client")])
+        fixture.stop()
+        let stop = try await fixture.socket.request("turn/interrupt")
+        await fixture.complete()
+        try await fixture.socket.reply(stop, result: .object([:]))
+        let next = try await fixture.socket.request("thread/queue/start")
+        #expect(next.params?.objectValue?["queuedSubmissionId"]?.stringValue == "claude-first")
+        #expect(next.params?.objectValue?["threadId"]?.stringValue == "claude_queued")
+        let resume = try await fixture.socket.request("thread/resume")
+        #expect(resume.params?.objectValue?["threadId"]?.stringValue == "claude_queued")
+        await fixture.waitForSuccessor()
+        await fixture.close()
+    }
+
     @Test func retirementCancelsStopOwnershipAndLateSteerReceiptsCannotDispatch() async throws {
         let fixture = try await StopFixture.open()
         let steer = try await fixture.submit("Continue", steering: true)
@@ -326,7 +343,7 @@ private final class StopFixture: TurnDispatchHost {
     let temporary = TemporaryHostStorage()
     let hostID = UUID()
     let conversationID = UUID()
-    let turn = RunningTurn(threadID: "thread", turnID: "turn")
+    let turn: RunningTurn
     let turns = TurnRegistry()
     let socket: StopSocket
     let gateway: GatewayClient
@@ -336,6 +353,7 @@ private final class StopFixture: TurnDispatchHost {
     let settings = TurnDispatcher.Settings(model: .unlisted(id: "gpt-6.1-sol", modelProvider: nil, reportedEffort: .medium, reportedFastMode: false),
         reasoning: .automatic, serviceTier: nil, fastModeState: .selection(false), workingDirectory: "/tmp", selectionRevision: 0)
     var selectionCurrent = false
+    var claudeQueueSupported = false
     var admittedSettings: TurnDispatcher.Settings?
     var isRetired = false
     var refreshed = false
@@ -349,7 +367,8 @@ private final class StopFixture: TurnDispatchHost {
     var session: ConversationSession
     var draft: ComposerDraft
 
-    private init(socket: StopSocket, gateway: GatewayClient) async throws {
+    private init(socket: StopSocket, gateway: GatewayClient, threadID: String) async throws {
+        turn = RunningTurn(threadID: threadID, turnID: "turn")
         self.socket = socket
         self.gateway = gateway
         stops = TurnStops(gateway: gateway)
@@ -357,18 +376,18 @@ private final class StopFixture: TurnDispatchHost {
         conversations = ConversationSessions(hostID: hostID, sessionIndex: index, contentSubscriptions: RecordingContentSubscriptions(), storage: temporary.storage)
         metadata = ConversationMetadataService(remote: gateway, store: ConversationMetadataStore(hostID: hostID, storage: temporary.storage))
         drafts = ComposerDraftStore(directory: temporary.storage.root.appending(path: "drafts"))
-        draft = try #require(await drafts.draft(for: .thread("thread")))
-        session = await conversations.session(conversationID: conversationID, threadID: "thread")
+        draft = try #require(await drafts.draft(for: .thread(threadID)))
+        session = await conversations.session(conversationID: conversationID, threadID: threadID)
         try await session.restore()
         _ = turns.adopt(threadID: turn.threadID, turnID: turn.turnID)
     }
 
-    static func open() async throws -> StopFixture {
+    static func open(threadID: String = "thread") async throws -> StopFixture {
         let socket = try StopSocket()
         let port = try await socket.start()
         let gateway = GatewayClient(config: .init(url: try #require(URL(string: "ws://127.0.0.1:\(port)")), authToken: "fixture", hostLabel: "Stop fixture"), routes: nil)
         try await gateway.connectIfNeeded()
-        return try await StopFixture(socket: socket, gateway: gateway)
+        return try await StopFixture(socket: socket, gateway: gateway, threadID: threadID)
     }
 
     func submit(_ text: String, steering: Bool, input: String? = nil) async throws -> ChatMessage {
@@ -431,6 +450,9 @@ private final class StopFixture: TurnDispatchHost {
     func threadStarted(_ thread: CodexAppServerV2.Thread, session: ConversationSession, settingsRevision: UInt64,
                        requestedServiceTier: CodexAppServerV2.ServiceTierOverride?, admittedSettings: TurnDispatcher.Settings?) async { self.admittedSettings = admittedSettings }
     func selectionIsCurrent(revision: UInt64, threadID: String) -> Bool { selectionCurrent }
+    func supportsQueue(threadID: String) -> Bool {
+        AgentProvider.provider(forThreadID: threadID) == .codex || claudeQueueSupported
+    }
 }
 
 private actor StopSocket {
