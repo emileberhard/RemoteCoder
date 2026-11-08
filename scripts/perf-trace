@@ -1467,7 +1467,13 @@ def slice_trace(trace: str, signpost: str, until: str | None, tail_ms: float, fr
         slices.append((end if from_end else start, start, end, follow, stop))
     windows = [(anchor, stop) for anchor, _, _, _, stop in slices]
     _, _, samples, _, _ = time_profile(trace)
-    contains = within(sorted(windows))
+    merged: list[tuple[float, float]] = []
+    for left, right in sorted(windows):
+        if merged and left <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(right, merged[-1][1]))
+        else:
+            merged.append((left, right))
+    contains = within(merged)
     main = sorted((sample for sample in samples if sample.thread == "main" and sample.time_ns is not None and contains(sample.time_ns)),
                   key=lambda sample: sample.time_ns)
     names, _ = symbolicate({frame for sample in main for frame in sample.stack}, apps)
@@ -1483,20 +1489,17 @@ def slice_trace(trace: str, signpost: str, until: str | None, tail_ms: float, fr
         return "<system only>"
 
     phases = [(re.compile(pattern), label) for pattern, label in (
+        (r"__handleEventQueue|_UIApplicationHandleEvent|UIGestureEnvironment", "touch and gesture handling"),
+        (r"swift_job_run|runJobInEstablishedExecutorContext", "main-actor task"),
         (r"ViewGraphDisplayLink\.displayLinkTimer", "SwiftUI animation tick"),
         (r"GraphHost\.flushTransactions|UpdateGroup\.dispatchImmediately", "SwiftUI transaction flush"),
         (r"CA::Transaction::commit|_UIApplicationFlushCATransaction", "Core Animation commit and layout"),
-        (r"CA::Display::DisplayLink::dispatch", "display link callback"),
-        (r"__handleEventQueue|_UIApplicationHandleEvent|UIGestureEnvironment", "touch and gesture handling"),
-        (r"swift_job_run|runJobInEstablishedExecutorContext", "main-actor task"),
+        (r"CA::Display::DisplayLink::dispatch", "other display link callback"),
     )]
 
     def phase(sample: Sample) -> str:
-        for frame in reversed(sample.stack):
-            for name in names.get(frame, ()):
-                if label := next((label for pattern, label in phases if pattern.search(name)), None):
-                    return label
-        return "other"
+        stack = [name for frame in sample.stack for name in names.get(frame, ())]
+        return next((label for pattern, label in phases if any(map(pattern.search, stack))), "other")
 
     hitch_rows = [row for row in app_hitch_rows(trace, run.schemas) or [] if row.start_ns is not None]
     frames = display_frames(trace, run.schemas, windows)

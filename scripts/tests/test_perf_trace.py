@@ -234,6 +234,33 @@ class SliceTests(unittest.TestCase):
         self.assertEqual(result["phases"], {"SwiftUI transaction flush": 12})
         self.assertEqual([frame["offsetMs"] for frame in from_end["slices"][0]["frames"]], [0, 10])
 
+    def test_slice_phases_name_the_most_specific_mechanism_and_merge_overlapping_windows(self):
+        import xml.etree.ElementTree as ET
+        from collections import Counter
+
+        def value(tag, text):
+            element = ET.Element(tag)
+            element.text = str(text)
+            return element
+
+        app = ET.Element("process", fmt="RemoteCoder (12)")
+        quartz = trace.Binary("QuartzCore", "B", "arm64", 0, "/System/QuartzCore")
+        timer = trace.Frame(1, quartz, "CA::Display::DisplayLink::dispatch_items")
+        swiftui = trace.Frame(2, quartz, "ViewGraphDisplayLink.displayLinkTimer(_:)")
+        ms = 1_000_000
+        rows = {"OSSignpostIntervals": [
+            {"name": value("name", name), "subsystem": value("subsystem", "RemoteCoder"), "process": app,
+             "start": value("start", start * ms), "duration": value("duration", (end - start) * ms)}
+            for name, start, end in (("DrawerMovement", 0, 100), ("DrawerMovement", 10, 20))]}
+        samples = [trace.Sample(50 * ms, "main", 4, (swiftui, timer), False), trace.Sample(60 * ms, "main", 3, (timer,), False)]
+        run = trace.Run(1, trace.TRACE_COMPLETE, "iOS", frozenset({"time-profile", *rows}), "")
+        with (patch.object(trace, "recorded_run", return_value=run),
+              patch.object(trace, "table_rows", side_effect=lambda _trace, schema, _columns: iter(rows[schema])),
+              patch.object(trace, "time_profile", return_value=(Counter(), Counter(), samples, Counter(), [])),
+              patch.object(trace, "symbolicate", side_effect=lambda frames, _apps: ({frame: (frame.name,) for frame in frames}, {}))):
+            result = trace.slice_trace("trace", "DrawerMovement", None, 0, False, [], 5, 2)
+        self.assertEqual(result["phases"], {"SwiftUI animation tick": 4, "other display link callback": 3})
+
 
 class ExplicitSymbolsTests(unittest.TestCase):
     def test_dsym_and_direct_binary(self):
