@@ -705,9 +705,11 @@ def drawer(args, device: Simulator | Device) -> None:
         for travel in (0.8, -0.8):
             completed(device, {"cmd": "drawer-drag", "travel": travel, "seconds": 0.25, "velocity": travel * 2.5}, 30)
         verify_scenario_artifact(device, identity)
-        with tracing(device, "Time Profiler", args.instrument, args.seconds, str(trace_path)) as recorder:
-            journey = completed(device, {"cmd": "drawer-journey", "host": host, "threads": [second, first]},
-                                args.seconds, quiet_seconds=7)
+        seconds = args.seconds or 6 + 3 * args.switches
+        switches = [(second, first)[index % 2] for index in range(args.switches)]
+        with tracing(device, "Time Profiler", args.instrument, seconds, str(trace_path)) as recorder:
+            journey = completed(device, {"cmd": "drawer-journey", "host": host, "threads": switches},
+                                seconds, quiet_seconds=7)
             finish_trace(recorder, str(trace_path))
     finally:
         send(device, {"cmd": "scenario-stop"}, 120)
@@ -1286,13 +1288,14 @@ def main() -> None:
     trace_parser.add_argument("--scenario", help="shell command run while recording")
     trace_parser.set_defaults(func=trace)
     drawer_parser = commands.add_parser(
-        "drawer", help="offline fixture, then trace one in-process drawer journey: a swipe open and close, then a swipe "
-                       "open and row switch to each thread")
+        "drawer", help="offline fixture, then trace one in-process drawer journey: a swipe open and close, then "
+                       "--switches rounds of a swipe open and a row switch, alternating between the two threads")
     drawer_parser.add_argument("--fixture", required=True)
     drawer_parser.add_argument("--threads", nargs=2, required=True, metavar=("FIRST", "SECOND"),
                                help="two prepared fixture threads; the journey starts on FIRST and switches to SECOND, then back")
     drawer_parser.add_argument("--label", required=True)
-    drawer_parser.add_argument("--seconds", type=positive(int), default=12)
+    drawer_parser.add_argument("--switches", type=positive(int), default=2)
+    drawer_parser.add_argument("--seconds", type=positive(int), help="trace length; default 6 plus 3 per switch")
     drawer_parser.add_argument("--instrument", action="append", help="additional Apple instrument, e.g. SwiftUI")
     drawer_parser.add_argument("--trace-dir", default=str(TRACE_DIR))
     drawer_parser.set_defaults(func=drawer)

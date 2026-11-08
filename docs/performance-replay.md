@@ -428,10 +428,13 @@ than replaying a burst of stale positions. Input cadence is
 synthetic and is not evidence of touch delivery or actuator latency.
 
 `dev-tools/perf-sim --device <UDID> drawer --fixture <scenario.json> --threads <first> <second> --label <name>`
-loads the offline fixture, opens both threads and warms the drawer, then records one 12 s trace around
-`drawer-journey` and prints each drag's input lateness beside the `DrawerMovement` summary. A main-actor
-stall at gesture begin shows as opening lateness without waiting for the trace export. Compare arms only
-with the same fixture, threads and device.
+loads the offline fixture, opens both threads and warms the drawer, then records one trace around
+`drawer-journey` (a swipe open and close, then `--switches` rounds, default 2, of a swipe open and a row
+switch alternating between the threads; 6 s plus 3 s per switch unless `--seconds` is given) and prints each
+drag's input lateness beside the `DrawerMovement` summary. A main-actor stall at gesture begin shows as
+opening lateness without waiting for the trace export. Six switches give enough repeats to see a switch's
+spread with `perf-trace slice --signpost ConversationSwitch --until DrawerMovement`. Compare arms only with
+the same fixture, threads, switch count and device.
 
 `drawer-switch` keeps the open/select sequence in-process so host command polling
 does not give prefetch an artificial dwell before a cold selection. Its receipt
