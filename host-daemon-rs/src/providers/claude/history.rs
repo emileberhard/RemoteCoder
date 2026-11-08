@@ -241,22 +241,30 @@ impl HistoryIndex {
     }
 
     fn look_up_all(&self, paths: &[PathBuf]) -> Vec<Result<Indexed>> {
+        let mut results: Vec<_> = paths
+            .iter()
+            .map(|path| self.resolved_without_reading(path))
+            .collect();
+        let unresolved: Vec<_> = results
+            .iter()
+            .enumerate()
+            .filter_map(|(position, result)| result.is_none().then_some(position))
+            .collect();
         let workers = std::thread::available_parallelism()
             .map_or(1, |cores| cores.get() / 2)
-            .clamp(1, paths.len().max(1));
+            .clamp(1, unresolved.len().max(1));
         let next = AtomicUsize::new(0);
-        let mut results: Vec<_> = std::thread::scope(|scope| {
+        let read: Vec<_> = std::thread::scope(|scope| {
             let workers: Vec<_> = (0..workers)
                 .map(|_| {
                     scope.spawn(|| {
-                        let mut results = Vec::new();
-                        loop {
-                            let position = next.fetch_add(1, Ordering::Relaxed);
-                            let Some(path) = paths.get(position) else {
-                                return results;
-                            };
-                            results.push((position, self.look_up(path)));
+                        let mut read = Vec::new();
+                        while let Some(&position) =
+                            unresolved.get(next.fetch_add(1, Ordering::Relaxed))
+                        {
+                            read.push((position, read_session(&paths[position])));
                         }
+                        read
                     })
                 })
                 .collect();
@@ -269,38 +277,37 @@ impl HistoryIndex {
                 })
                 .collect()
         });
-        results.sort_unstable_by_key(|(position, _)| *position);
-        results.into_iter().map(|(_, indexed)| indexed).collect()
+        for (position, indexed) in read {
+            results[position] = Some(indexed);
+        }
+        results
+            .into_iter()
+            .map(|result| result.expect("every unresolved session was read"))
+            .collect()
     }
 
     fn look_up(&self, path: &Path) -> Result<Indexed> {
-        let file = match File::open(path) {
-            Ok(file) => file,
+        self.resolved_without_reading(path)
+            .unwrap_or_else(|| read_session(path))
+    }
+
+    fn resolved_without_reading(&self, path: &Path) -> Option<Result<Indexed>> {
+        let metadata = match std::fs::metadata(path) {
+            Ok(metadata) => metadata,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(Indexed::Missing);
+                return Some(Ok(Indexed::Missing));
             }
             Err(error) => {
-                return Err(error).with_context(|| format!("Could not open {}", path.display()));
+                return Some(
+                    Err(error).with_context(|| format!("Could not open {}", path.display())),
+                );
             }
         };
-        let revision = FileRevision::from(file.metadata()?);
-        if let Some(entry) = self.entries.get(path)
-            && entry.revision.can_reuse(&revision, entry.sampled)
-        {
-            return Ok(Indexed::Cached(entry.header.clone()));
-        }
-
-        // Rebuild changed files, including in-place rewrites and truncations.
-        // An append-only cursor cannot safely represent Claude's mutable logs.
-        let header = read_header(&file, revision.length)
-            .with_context(|| format!("Could not index {}", path.display()))?
-            .thread(path);
-        let unchanged = FileRevision::from(file.metadata()?) == revision;
-        Ok(Indexed::Read {
-            revision,
-            header,
-            unchanged,
-        })
+        let entry = self.entries.get(path)?;
+        entry
+            .revision
+            .can_reuse(&FileRevision::from(metadata), entry.sampled)
+            .then(|| Ok(Indexed::Cached(entry.header.clone())))
     }
 
     fn admit(&mut self, path: &Path, indexed: Indexed, admission: CacheAdmission) -> Option<Value> {
@@ -347,6 +354,30 @@ impl HistoryIndex {
             }
         }
     }
+}
+
+fn read_session(path: &Path) -> Result<Indexed> {
+    let file = match File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(Indexed::Missing);
+        }
+        Err(error) => {
+            return Err(error).with_context(|| format!("Could not open {}", path.display()));
+        }
+    };
+    let revision = FileRevision::from(file.metadata()?);
+    // Rebuild changed files, including in-place rewrites and truncations.
+    // An append-only cursor cannot safely represent Claude's mutable logs.
+    let header = read_header(&file, revision.length)
+        .with_context(|| format!("Could not index {}", path.display()))?
+        .thread(path);
+    let unchanged = FileRevision::from(file.metadata()?) == revision;
+    Ok(Indexed::Read {
+        revision,
+        header,
+        unchanged,
+    })
 }
 
 enum Indexed {
