@@ -161,6 +161,9 @@ class Simulator:
         temporary.write_bytes(data)
         temporary.replace(directory / name)
 
+    def deliver(self, name: str, data: bytes) -> None:
+        self.put(name, data)
+
     def results(self) -> str:
         path = self.perf_dir() / "results.jsonl"
         return path.read_text() if path.exists() else ""
@@ -266,14 +269,26 @@ class Device:
             source.chmod(0o600)
             self.copy_to(source, f"{PERF_DIR}/{name}")
 
-    def results(self) -> str:
+    def deliver(self, name: str, data: bytes) -> None:
+        self.put(name, data)
+        deadline = time.monotonic() + 5
+        while self.read(name) != data:
+            if time.monotonic() > deadline:
+                raise SystemExit(f"{name} was not visible in the app container 5 s after its copy")
+            time.sleep(0.2)
+
+    def read(self, name: str) -> bytes | None:
         with tempfile.TemporaryDirectory() as directory:
-            destination = Path(directory) / "results.jsonl"
+            destination = Path(directory) / name
             status = subprocess.run(
                 ["xcrun", "devicectl", "device", "copy", "from", "--device", self.udid, "--domain-type",
-                 "appDataContainer", "--domain-identifier", BUNDLE, "--source", f"{PERF_DIR}/results.jsonl",
+                 "appDataContainer", "--domain-identifier", BUNDLE, "--source", f"{PERF_DIR}/{name}",
                  "--destination", str(destination), "--quiet"], env=ENV, capture_output=True).returncode
-            return destination.read_text() if status == 0 and destination.exists() else ""
+            return destination.read_bytes() if status == 0 and destination.exists() else None
+
+    def results(self) -> str:
+        data = self.read("results.jsonl")
+        return data.decode() if data is not None else ""
 
     def clear_results(self) -> None:
         self.put("results.jsonl", b"")
@@ -465,7 +480,7 @@ def send(device: Simulator | Device, command: dict, timeout: float, quiet_second
     """Deliver one command and wait for its result line. `quiet_seconds` skips
     polling while a measured window is known to be running."""
     command.setdefault("id", uuid.uuid4().hex[:12])
-    device.put("command.json", json.dumps(command).encode())
+    device.deliver("command.json", json.dumps(command).encode())
     device.notify()
     deadline = time.monotonic() + timeout
     time.sleep(min(quiet_seconds, timeout))

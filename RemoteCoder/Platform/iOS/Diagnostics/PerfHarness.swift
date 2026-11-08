@@ -33,6 +33,7 @@ final class PerfHarness {
     private var switchInterval: OSSignpostIntervalState?
     private var switchAddress: ConversationAddress?
     private var appearedAddress: ConversationAddress?
+    private var lastCommandID: String?
 
     private struct StagedReplay {
         let address: ConversationAddress
@@ -79,6 +80,11 @@ final class PerfHarness {
             return
         }
         let id = command["id"] as? String ?? UUID().uuidString
+        guard id != lastCommandID else {
+            logger.error("perf command repeated id=\(id) cmd=\(name)")
+            return
+        }
+        lastCommandID = id
         logger.notice("perf command id=\(id) cmd=\(name)")
         switch name {
         case "begin":
