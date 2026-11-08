@@ -631,6 +631,22 @@ struct ChatWorkspaceModelTests {
         #expect(rows.first?.address.threadID == "book-only")
     }
 
+    @Test func anUnchangedDrawerReopensWithTheSnapshotPreparedWhileClosed() async throws {
+        let fixture = await WorkspaceFixture()
+        defer { await fixture.cleanUp() }
+        let mini = try #require(fixture.workspace.screen(for: fixture.mini.id))
+        var completed = try fixture.thread("done", updatedAt: 30)
+        completed.lastTurnCompletedAt = 30
+        await mini.target.conversationList.record(try fixture.thread("open", updatedAt: 50))
+        await mini.target.conversationList.record(completed)
+        let window = fixture.workspace.keyWindow
+
+        let prepared = fixture.workspace.sidebarSnapshot(arrangedBy: .live(at: Date(timeIntervalSince1970: 1_000)), in: window)
+        let opening = fixture.workspace.captureDrawerOpening(at: Date(timeIntervalSince1970: 1_005), in: window)
+
+        #expect(fixture.workspace.arrangeSidebar(by: opening, in: window).snapshot == prepared)
+    }
+
     @Test func aThreadNameUpdateRetitlesOnlyItsOwnHostsRowAndAPinStillWins() async throws {
         let fixture = await WorkspaceFixture()
         defer { await fixture.cleanUp() }

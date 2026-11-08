@@ -166,12 +166,11 @@ struct ConversationSidebarSnapshot: Equatable, Sendable {
     let hiddenDraftCount: Int
     let items: [ConversationSidebarItem]
     let hostStates: [ConversationSidebarHostState]
-    var admittedLayout: ConversationDrawerLayout? = nil
 
     func heldInLayout(of displayed: Self) -> Self {
         let updated = Dictionary(uniqueKeysWithValues: items.map { ($0.id, $0) })
         return Self(drafts: drafts, hiddenDraftCount: hiddenDraftCount, items: displayed.items.map { shown in updated[shown.id]?.keepingFold(of: shown) ?? shown },
-                    hostStates: hostStates, admittedLayout: admittedLayout)
+                    hostStates: hostStates)
     }
 }
 

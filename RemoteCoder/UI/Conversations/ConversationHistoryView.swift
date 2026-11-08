@@ -71,12 +71,12 @@ struct ConversationHistoryView: View {
                 }
                 pending = nil
                 isInteracting = false
-                for await snapshot in Observations({ @MainActor [workspace, window] in
-                    workspace.sidebarSnapshot(arrangedBy: layout ?? capturedLayout, in: window)
+                for await arranged in Observations({ @MainActor [workspace, window] in
+                    workspace.arrangeSidebar(by: layout ?? capturedLayout, in: window)
                 }) {
                     guard !Task.isCancelled else { return }
-                    if let admitted = snapshot.admittedLayout, admitted != layout { layout = admitted }
-                    receive(snapshot)
+                    if arranged.admittedLayout != layout { layout = arranged.admittedLayout }
+                    receive(arranged.snapshot)
                 }
             }
             .task(id: SearchRequest(isVisible: isVisible, query: window.drawerQuery)) {

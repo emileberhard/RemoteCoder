@@ -1061,17 +1061,23 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
     }
 
     func sidebarSnapshot(arrangedBy layout: ConversationDrawerLayout, in window: ChatWindowModel) -> ConversationSidebarSnapshot {
+        arrangeSidebar(by: layout, in: window).snapshot
+    }
+
+    func arrangeSidebar(by layout: ConversationDrawerLayout, in window: ChatWindowModel)
+        -> (snapshot: ConversationSidebarSnapshot, admittedLayout: ConversationDrawerLayout) {
         let now = Date.now
         let inputs = sidebarInputs(in: window)
         let admitted = ConversationSidebarProjection.admittingLayout(hosts: inputs, layout: layout)
         let drafts = unsentDraftRows(in: window, now: now)
         let shownDraftCount = window.revealsAllDrafts || !window.drawerQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? drafts.count : min(drafts.count, UnsentDraftRow.collapsedLimit)
-        return ConversationSidebarSnapshot(
+        let snapshot = ConversationSidebarSnapshot(
             drafts: Array(drafts.prefix(shownDraftCount)), hiddenDraftCount: drafts.count - shownDraftCount,
             items: sidebarItems(inputs, in: window, layout: admitted, arrangement: drawerArrangement(in: window), now: now),
-            hostStates: ConversationSidebarProjection.hostStates(hosts: inputs), admittedLayout: admitted
+            hostStates: ConversationSidebarProjection.hostStates(hosts: inputs)
         )
+        return (snapshot, admitted)
     }
 
     func unfoldedSidebarRows(arrangedBy layout: ConversationDrawerLayout, in window: ChatWindowModel) -> [ConversationSidebarRow] {
