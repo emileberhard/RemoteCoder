@@ -183,10 +183,11 @@ class Device:
     derived = ROOT / "build/perf-device-derived"
     app = derived / "Build/Products/Release-iphoneos/RemoteCoder.app"
 
-    def __init__(self, name: str, launch_arguments: list[str], signing: str) -> None:
+    def __init__(self, name: str, launch_arguments: list[str], signing: str, compilation: str) -> None:
         self.udid = self.resolve(name)
         self.launch_arguments = launch_arguments
         self.signing = signing
+        self.compilation = compilation
 
     @staticmethod
     def resolve(name: str) -> str:
@@ -221,6 +222,7 @@ class Device:
         return ["-configuration", "Release", "-destination", "generic/platform=iOS",
                 f"DEVELOPMENT_TEAM={TEAM_ID}", f"OTHER_CODE_SIGN_FLAGS=--keychain {keychain}",
                 "CODE_SIGN_STYLE=Manual", "CODE_SIGN_IDENTITY=" + ("Apple Development" if self.signing == "development" else "Apple Distribution"),
+                f"SWIFT_COMPILATION_MODE={self.compilation}",
                 "RC_APP_ENTITLEMENTS=RemoteCoder/Entitlements/RemoteCoder." + ("Debug" if self.signing == "development" else "Release") + ".entitlements",
                 *(f"{setting}={bundle} {suffix}" for setting, bundle in DEVICE_BUNDLES.items())]
 
@@ -287,9 +289,10 @@ def target(args) -> Simulator | Device:
     if unknown := set(filter(None, (args.disable or "").split(","))) - SWITCHES:
         raise SystemExit(f"unknown --disable switch {sorted(unknown)}; known: {sorted(SWITCHES)}")
     launch_arguments = ["-rcPerfDisable", args.disable] if args.disable else []
-    if getattr(args, "command", None) in ("scenario", "footprint"):
+    if getattr(args, "command", None) in ("scenario", "footprint", "drawer"):
         launch_arguments += ["-rcPerfOffline"]
-    return Device(args.device, launch_arguments, getattr(args, "signing", "distribution")) if args.device else Simulator(launch_arguments)
+    return (Device(args.device, launch_arguments, getattr(args, "signing", "distribution"), getattr(args, "compilation", "wholemodule"))
+            if args.device else Simulator(launch_arguments))
 
 
 def build_commands(device: Simulator | Device) -> list[list[str]]:
@@ -1228,6 +1231,9 @@ def main() -> None:
     build_parser = commands.add_parser("build")
     build_parser.add_argument("--signing", choices=["distribution", "development"], default="distribution",
                               help="development keeps Release optimization and permits allocation profiling")
+    build_parser.add_argument("--compilation", choices=["wholemodule", "singlefile"], default="wholemodule",
+                              help="device Swift compilation mode; singlefile keeps -O but rebuilds only changed files, "
+                                   "for iteration loops whose final comparison uses wholemodule")
     build_parser.set_defaults(func=build)
     commands.add_parser("install").set_defaults(func=install)
     launch_parser = commands.add_parser("launch")
