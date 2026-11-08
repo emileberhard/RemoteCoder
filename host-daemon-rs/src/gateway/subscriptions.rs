@@ -111,6 +111,7 @@ fn audience(message: &Value) -> Audience<'_> {
             "turn/plan/updated"
                 | "turn/diff/updated"
                 | "thread/tokenUsage/updated"
+                | "thread/queue/changed"
                 | "error"
                 | "daemon/claudeStderr"
                 | "gateway/warning"
@@ -242,12 +243,13 @@ mod tests {
             "item/agentMessage/delta",
             "turn/plan/updated",
             "thread/tokenUsage/updated",
+            "thread/queue/changed",
             "error",
             "daemon/claudeStderr",
         ] {
             let floor = gateway.notification_floor().await;
             gateway.ingest_agent_notification(json!({"method":method,"params":{"threadId":"claude_a","turnId":"turn-a","delta":"private"}})).await;
-            if method == "turn/plan/updated" {
+            if matches!(method, "turn/plan/updated" | "thread/queue/changed") {
                 assert_eq!(gateway.notification_floor().await, floor + 1);
             }
             assert_eq!(receive(&mut a)["method"], method);
