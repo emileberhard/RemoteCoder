@@ -436,7 +436,8 @@ The harness holds the current attached drawer weakly. A sibling probe can extend
 Each haptic probe must schedule its trigger on a separate main run-loop turn;
 the transport does not synthesize native button presses.
 
-`DrawerMovement` spans tracking and settling, and `DrawerSpring` isolates settling.
+`DrawerMovement` spans tracking and settling, and `DrawerSpring` isolates settling;
+every build publishes both, so a hand-driven trace of any install selects them.
 `ConversationSwitch` starts at the production row action and ends at the target's
 first-content callback. Existing `HistorySelectionToFirstContent` begins when the
 target resume starts. These intervals share the trace clock and reveal overlap

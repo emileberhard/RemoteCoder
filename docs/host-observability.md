@@ -938,6 +938,9 @@ reports' history entries are not comparable.
 `TranscriptScroll` (iOS) is both a Points of Interest interval, which
 `perf-trace` reads, and a MetricKit animation interval in category
 `Transcript`, which gives scroll hitch ratio, hitch and animation time.
+`DrawerMovement` (iOS) does the same for the conversation drawer's drag and
+settle in category `Drawer`; its `DrawerSpring` sub-interval is Points of
+Interest only.
 `HistorySelectionToFirstContent` uses `mxSignpost`, so MetricKit measures CPU,
 memory and logical writes for it; `OSSignposter` intervals report those as 0.
 Signpost CPU is whole-process during the interval, so it is association, not

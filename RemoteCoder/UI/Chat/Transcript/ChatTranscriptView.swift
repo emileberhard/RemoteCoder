@@ -1281,7 +1281,7 @@ final class TranscriptVisibility {
     @ObservationIgnored fileprivate private(set) var visibleRowIDs: Set<String> = []
     fileprivate private(set) var isFarFromLatest = false
     @ObservationIgnored private var scrollPhase = ScrollPhase.idle
-    @ObservationIgnored private var motion: TranscriptScrollSignpost?
+    @ObservationIgnored private var motion: MotionSignpost?
     private var isScrolling: Bool { scrollPhase != .idle }
     #if os(iOS)
     fileprivate func attachReadingPosition(_ position: TranscriptReadingPosition, source: TranscriptRowPresentations, scope: UUID,
@@ -1355,7 +1355,7 @@ final class TranscriptVisibility {
     private func signpostMotion(_ phase: ScrollPhase) {
         guard phase != .idle, phase != .tracking else { return endMotion() }
         guard motion == nil else { return }
-        motion = TranscriptScrollSignpost()
+        motion = .transcriptScroll()
     }
 
     private func endMotion() {

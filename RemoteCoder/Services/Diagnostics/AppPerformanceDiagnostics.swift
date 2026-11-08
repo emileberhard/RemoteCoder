@@ -10,6 +10,7 @@ actor AppPerformanceDiagnostics {
     static let shared = AppPerformanceDiagnostics()
     nonisolated static let historyLog = MetricManager.logHandle(category: "History")
     nonisolated static let transcriptLog = MetricManager.logHandle(category: "Transcript")
+    nonisolated static let drawerLog = MetricManager.logHandle(category: "Drawer")
     nonisolated static let signposter = OSSignposter(logHandle: historyLog)
     nonisolated static let pointsOfInterest = OSSignposter(subsystem: "RemoteCoder", category: .pointsOfInterest)
 
@@ -173,20 +174,31 @@ struct HistoryOpenSignpost {
     }
 }
 
-struct TranscriptScrollSignpost {
-    private static let name: StaticString = "TranscriptScroll"
+struct MotionSignpost {
+    private let name: StaticString
+    private let log: OSLog
     private let pointOfInterest: OSSignpostIntervalState
     private let animation: OSSignpostID
 
-    init() {
+    static func transcriptScroll() -> MotionSignpost {
+        MotionSignpost(name: "TranscriptScroll", log: AppPerformanceDiagnostics.transcriptLog)
+    }
+
+    static func drawerMovement() -> MotionSignpost {
+        MotionSignpost(name: "DrawerMovement", log: AppPerformanceDiagnostics.drawerLog)
+    }
+
+    private init(name: StaticString, log: OSLog) {
+        self.name = name
+        self.log = log
         let signposter = AppPerformanceDiagnostics.pointsOfInterest
-        pointOfInterest = signposter.beginInterval(Self.name, id: signposter.makeSignpostID())
-        animation = OSSignpostID(log: AppPerformanceDiagnostics.transcriptLog)
-        mxSignpostAnimationIntervalBegin(log: AppPerformanceDiagnostics.transcriptLog, name: Self.name, signpostID: animation)
+        pointOfInterest = signposter.beginInterval(name, id: signposter.makeSignpostID())
+        animation = OSSignpostID(log: log)
+        mxSignpostAnimationIntervalBegin(log: log, name: name, signpostID: animation)
     }
 
     func end() {
-        mxSignpost(.end, log: AppPerformanceDiagnostics.transcriptLog, name: Self.name, signpostID: animation)
-        AppPerformanceDiagnostics.pointsOfInterest.endInterval(Self.name, pointOfInterest)
+        mxSignpost(.end, log: log, name: name, signpostID: animation)
+        AppPerformanceDiagnostics.pointsOfInterest.endInterval(name, pointOfInterest)
     }
 }
