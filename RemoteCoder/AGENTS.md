@@ -1516,7 +1516,7 @@ entrypoint linked above.
     release, and `isOpen` requests from the current position.
   - `DrawerPresentation` owns the open state: `isOpen` flips when a drag or
     request begins, and `isSettledOpen` and `isSettledClosed` follow the
-    motion's resting state; each is written only when it changes, because
+    motion's resting state as stored flags, so each notifies only when it changes, because
     `ChatScreen` reads `isSettledOpen` and must not run when a drag starts. Only `ConversationDrawer` and the `DrawerOpenChange` modifier
     react to `isOpen`, so a drag runs neither `ChatScreen`'s body nor the
     history list before its first moved frame. `ConversationHistoryView`

@@ -20,7 +20,7 @@ final class DrawerPresentation {
     }
 
     private func settle(resting: Bool?) {
-        if isSettledOpen != (resting == true) { isSettledOpen = resting == true }
-        if isSettledClosed != (resting == false) { isSettledClosed = resting == false }
+        isSettledOpen = resting == true
+        isSettledClosed = resting == false
     }
 }
