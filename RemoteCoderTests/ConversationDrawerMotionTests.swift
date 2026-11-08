@@ -1,4 +1,6 @@
 import CoreGraphics
+import Observation
+import Synchronization
 import Testing
 @testable import RemoteCoder
 
@@ -38,5 +40,27 @@ struct ConversationDrawerMotionTests {
         #expect(motion.progress == 1)
         motion.track(by: -3)
         #expect(motion.progress == 0)
+    }
+
+    @Test func onlyARestOnTheRequestedSideSettlesThePresentation() {
+        let presentation = DrawerPresentation(isOpen: false)
+        #expect(presentation.isSettledClosed && !presentation.isSettledOpen)
+        presentation.isOpen = true
+        #expect(!presentation.isSettledClosed && !presentation.isSettledOpen)
+        presentation.rest(open: false)
+        #expect(!presentation.isSettledClosed && !presentation.isSettledOpen)
+        presentation.rest(open: true)
+        #expect(presentation.isSettledOpen && !presentation.isSettledClosed)
+        presentation.isOpen = false
+        #expect(!presentation.isSettledOpen && !presentation.isSettledClosed)
+    }
+
+    @Test func openingFromRestDoesNotNotifyReadersOfTheSettledOpenState() {
+        let presentation = DrawerPresentation(isOpen: false)
+        let notified = Mutex(false)
+        withObservationTracking { _ = presentation.isSettledOpen } onChange: { notified.withLock { $0 = true } }
+        presentation.isOpen = true
+        presentation.rest(open: false)
+        #expect(!notified.withLock { $0 })
     }
 }
